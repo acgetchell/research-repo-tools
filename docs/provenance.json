@@ -1,0 +1,426 @@
+{
+  "schema": 2,
+  "purpose": "Attribution for retained shared implementations; source repositories and historical test trees are not shipped. Tests now exercise shared capability contracts.",
+  "sources": [
+    {
+      "repository": "dotfiles",
+      "commit": "f3d797a58f18f9df13ebe3e3bed200550d883bff",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "repository": "la-stack",
+      "commit": "d9434f2cfcf20c05a898228e563fd0d1eee63632",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "repository": "delaunay",
+      "commit": "48e02e5726c3d5ab398bae1ae3fbbac0061472f6",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "repository": "causal-triangulations",
+      "commit": "fd29c223faf9884181181301967fe3cee54b63f7",
+      "license": "BSD-3-Clause"
+    },
+    {
+      "repository": "markov-chain-monte-carlo",
+      "commit": "03918d860c91908eb6224c93d677c8bc17c739eb",
+      "license": "BSD-3-Clause"
+    }
+  ],
+  "files": [
+    {
+      "repository": "dotfiles",
+      "path": "scripts/semgrep_fixture_config.py",
+      "sha256": "63ac2ae361ddfc8ad66e131b25eee27d5d5e7e595481eba2ee8bb265bbc687a6",
+      "test_sha256": "59e73f78e6ee5aa452d2b6b6f344c6972e5e501b2ddda525a2287e49df30630d",
+      "shared_modules": [
+        "src/research_repo_tools/semgrep.py"
+      ]
+    },
+    {
+      "repository": "dotfiles",
+      "path": "scripts/update_tool_pins.py",
+      "sha256": "56ed085bc63767859a08d1a3faa5880fec250b4a6411dd7ca50ecaa52fd9f1bc",
+      "test_sha256": "8873d37ad3c8bff69242e6042ff4f43c03e9906b5731f63647f07c363f80a815",
+      "shared_modules": [
+        "src/research_repo_tools/tool_pins.py",
+        "src/research_repo_tools/process.py"
+      ]
+    },
+    {
+      "repository": "la-stack",
+      "path": "scripts/archive_changelog.py",
+      "sha256": "9ee7f6d833b919e3c627d94acfb36d9d45b9afd97b7c29d5a37dd46bca32649c",
+      "test_sha256": "9621e8f3afee41054809e5c47b42b971b91cf10a02cf6bd4803659233abbe699",
+      "shared_modules": [
+        "src/research_repo_tools/archive_changelog.py",
+        "src/research_repo_tools/files.py",
+        "src/research_repo_tools/markdown.py"
+      ]
+    },
+    {
+      "repository": "la-stack",
+      "path": "scripts/check_docs_version_sync.py",
+      "sha256": "828b14198dd4ca5fa34a16c456ac1b660b73d0614a3946dd00c35dc615952874",
+      "test_sha256": "6a26e87e0b966625d1fb0c02476ab77b6b374634f0a679d9bf1253cf0c0f979f",
+      "shared_modules": [
+        "src/research_repo_tools/release_metadata.py"
+      ]
+    },
+    {
+      "repository": "la-stack",
+      "path": "scripts/check_markdown_lines.py",
+      "sha256": "43ce925be8520e6db15b5b81ef0d4a9fb224acf9dbbb92e131ee8cd8019fa04d",
+      "test_sha256": "b4382bff61920128bcfe4de38800a049152bdfc52c8c2d73948ea6a860177819",
+      "shared_modules": [
+        "src/research_repo_tools/markdown_lines.py"
+      ]
+    },
+    {
+      "repository": "la-stack",
+      "path": "scripts/check_semgrep_fixtures.py",
+      "sha256": "4b51ce05c742b073b77615183eb73576d768bbfbf79d6bc576b9221ec9e20701",
+      "test_sha256": "612aa152af15c2156f37d849898618fa4ef3e9af513541517b75c897ce8ad711",
+      "shared_modules": [
+        "src/research_repo_tools/semgrep.py",
+        "src/research_repo_tools/semgrep_findings.py"
+      ]
+    },
+    {
+      "repository": "la-stack",
+      "path": "scripts/postprocess_changelog.py",
+      "sha256": "86c49319ab998f237f60e8790d38dc866071b3709395fdae8ac232de8c5212b9",
+      "test_sha256": "a3ebc0707c49a826ea3b1862e77ab27dc1e85a4f0549eed45655b4aba19ea273",
+      "shared_modules": [
+        "src/research_repo_tools/postprocess_changelog.py"
+      ]
+    },
+    {
+      "repository": "la-stack",
+      "path": "scripts/subprocess_utils.py",
+      "sha256": "991c0a869533c7b9e1968559092f79e154106e131c27aa60bbef8d704edaa5f5",
+      "test_sha256": "18b8e9bfa7485edc1294cd9a4527be8fda45f8cb044efd7e1eac27dcf641d71c",
+      "shared_modules": [
+        "src/research_repo_tools/process.py",
+        "src/research_repo_tools/files.py"
+      ]
+    },
+    {
+      "repository": "la-stack",
+      "path": "scripts/tag_release.py",
+      "sha256": "39ffdd60df0daae45d9fd55a798e5c389eef0ee68cd44ccffa0a7c697f9ac25a",
+      "test_sha256": "ad9c667b650c2198dc4b88bd70649b4a5e494f351abd37e8d0315b095024b5fa",
+      "shared_modules": [
+        "src/research_repo_tools/changelog.py",
+        "src/research_repo_tools/release_tags.py"
+      ]
+    },
+    {
+      "repository": "la-stack",
+      "path": "scripts/update_cargo_tool_pins.py",
+      "sha256": "970c17f775d78016bbf18fa36811eb7358df07ecf3310d2cea08ddd293836b73",
+      "test_sha256": "dc1198a2117ede25e09e4429440e7fc41812d45cc866aa1d51c410adceadf2a9",
+      "shared_modules": [
+        "src/research_repo_tools/tool_pins.py",
+        "src/research_repo_tools/process.py"
+      ]
+    },
+    {
+      "repository": "la-stack",
+      "path": "scripts/update_python_dev_pins.py",
+      "sha256": "5a192cf84598a18f88de115ae8e7192832dfc6824e08c7fa260341da2ddc01e5",
+      "test_sha256": "05b628201d2545daa51df2aaced43ba16881ca5723511b2601a9388f1ff11a6b",
+      "shared_modules": [
+        "src/research_repo_tools/dependencies.py"
+      ]
+    },
+    {
+      "repository": "la-stack",
+      "path": "scripts/update_release_version.py",
+      "sha256": "76a0329b5b30c9e3ddfd4ae7ca9f75d52f04d5d35cb0d4e5776b14b58358face",
+      "test_sha256": "decb0c094e0b4a27c65677dc61bb814995e6b107708386177b37df065b0122a6",
+      "shared_modules": [
+        "src/research_repo_tools/update_release.py",
+        "src/research_repo_tools/release_metadata.py",
+        "src/research_repo_tools/release_discovery.py",
+        "src/research_repo_tools/files.py"
+      ]
+    },
+    {
+      "repository": "delaunay",
+      "path": "scripts/archive_changelog.py",
+      "sha256": "f0b394b774bd4362333802194d4a71773180e60edeca10da949e44e315b78374",
+      "test_sha256": "7d4a90f035c0aee7689ed9f2a1e4bb456ea68c711f0b898ae0bbb592cce80dfc",
+      "shared_modules": [
+        "src/research_repo_tools/archive_changelog.py",
+        "src/research_repo_tools/files.py",
+        "src/research_repo_tools/markdown.py"
+      ]
+    },
+    {
+      "repository": "delaunay",
+      "path": "scripts/check_docs_version_sync.py",
+      "sha256": "1bad4e5611ca767fe1984647c64ff8279e75abaacc74b545e5de3559be8c943f",
+      "test_sha256": "aecc47ff067a9fe2af895d7563067b9708554fdb5e03512179ac643ec9e25b30",
+      "shared_modules": [
+        "src/research_repo_tools/release_metadata.py"
+      ]
+    },
+    {
+      "repository": "delaunay",
+      "path": "scripts/postprocess_changelog.py",
+      "sha256": "089bea8fd5e1a498f42b047c2578ca69a38d9a6cbedc1a2b193482eb547abd5d",
+      "test_sha256": "3ffd098706002020967c0b77dd7d3bc1512dcb0ff81c520f749c87e523cc94b9",
+      "shared_modules": [
+        "src/research_repo_tools/postprocess_changelog.py"
+      ]
+    },
+    {
+      "repository": "delaunay",
+      "path": "scripts/semgrep_fixture_config.py",
+      "sha256": "d3b6a042bc724581db118742ec3f54b991b13ab6f4df80b8563c9e6e14273060",
+      "test_sha256": "6beac7b82ae1e7035e0a5fbded1ee6b87e152d05c49275ad377995fc9605cd7f",
+      "shared_modules": [
+        "src/research_repo_tools/semgrep.py"
+      ]
+    },
+    {
+      "repository": "delaunay",
+      "path": "scripts/semgrep_targets.py",
+      "sha256": "9667b47a8acf4c4efd6687451875868fb4f5a847d2e80c7ebcccf007e65dcee6",
+      "test_sha256": "a1e214d831b40ebcc52aa2823e1aa4131ab2d85074b05c1c8eea2ce6773d8366",
+      "shared_modules": [
+        "src/research_repo_tools/semgrep.py"
+      ]
+    },
+    {
+      "repository": "delaunay",
+      "path": "scripts/subprocess_utils.py",
+      "sha256": "09755767888fb98205897e5d0fb0ef312f9ad2a8913ad39b744c2a7466092c2f",
+      "test_sha256": "718058fa34e072a3821eab6e0b5af43049be5f0e6a7faf8f5f6af166ccf0de08",
+      "shared_modules": [
+        "src/research_repo_tools/process.py",
+        "src/research_repo_tools/files.py"
+      ]
+    },
+    {
+      "repository": "delaunay",
+      "path": "scripts/tag_release.py",
+      "sha256": "475160a87c3271f0fdd54e466d764bdd991bf6ead69d2cfcc016cd84eabc1d4e",
+      "test_sha256": "3fa94c02d50dacc3a61250bfad547eee4e51db2bf8f65b046066c31624999794",
+      "shared_modules": [
+        "src/research_repo_tools/changelog.py",
+        "src/research_repo_tools/release_tags.py"
+      ]
+    },
+    {
+      "repository": "delaunay",
+      "path": "scripts/update_cargo_tool_pins.py",
+      "sha256": "fc66ad4059c0b47610afdfe0b3553a5f5338c588ee0d6e03353f764056aabd8b",
+      "test_sha256": "6741cb76733ffcf85ec74a95404db06febba481035ba720c995f21ce96e26890",
+      "shared_modules": [
+        "src/research_repo_tools/tool_pins.py",
+        "src/research_repo_tools/process.py"
+      ]
+    },
+    {
+      "repository": "delaunay",
+      "path": "scripts/update_python_dev_pins.py",
+      "sha256": "617432984f01572a0a684e5983561d68152779c14e5e1279ebcbd199eff526c4",
+      "test_sha256": "85a8fe88f6a7ecc03886150d251a0e3bffc7cc15528d64f2250cc8c12e8fb2c5",
+      "shared_modules": [
+        "src/research_repo_tools/dependencies.py"
+      ]
+    },
+    {
+      "repository": "delaunay",
+      "path": "scripts/update_release_version.py",
+      "sha256": "b630263d1900fd4383b7611f881c877a0b092fa5b1f6f124eccef8390757a200",
+      "test_sha256": "f4ecb786958a2de0d1db36bffb86ad01bee7ceda3b97a916305c06bd8aa73ba2",
+      "shared_modules": [
+        "src/research_repo_tools/update_release.py",
+        "src/research_repo_tools/release_metadata.py",
+        "src/research_repo_tools/release_discovery.py",
+        "src/research_repo_tools/files.py"
+      ]
+    },
+    {
+      "repository": "causal-triangulations",
+      "path": "scripts/archive_changelog.py",
+      "sha256": "ddea075140850ef70b153bfe8ac8d0a3d5a8f2410461fba7283ba2e1ffa419a9",
+      "test_sha256": "504ef3d40496a95c3954d9692102bcd99576b4fe48b5917a1cc7a725f3d10d06",
+      "shared_modules": [
+        "src/research_repo_tools/archive_changelog.py",
+        "src/research_repo_tools/files.py",
+        "src/research_repo_tools/markdown.py"
+      ]
+    },
+    {
+      "repository": "causal-triangulations",
+      "path": "scripts/check_release_metadata.py",
+      "sha256": "ed0144c7d8d3ef527f310ad204de30831264e0f8a78d1de1f56a44aefbe35240",
+      "test_sha256": "6d2562d4f671907700a36f3a78bf26539d972f3aa3b338c0e2138c356f5c3945",
+      "shared_modules": [
+        "src/research_repo_tools/release_metadata.py"
+      ]
+    },
+    {
+      "repository": "causal-triangulations",
+      "path": "scripts/check_semgrep_fixtures.py",
+      "sha256": "003a016fa981ec77810ac3a6c87dcf4d9be4be423f6dc1483874b04cfcaa8e0b",
+      "test_sha256": "2431de8a916e2a3eff07cf6504f7d2b26f80bf7563bd7fb9df5a286e7f29e70e",
+      "shared_modules": [
+        "src/research_repo_tools/semgrep.py",
+        "src/research_repo_tools/semgrep_findings.py"
+      ]
+    },
+    {
+      "repository": "causal-triangulations",
+      "path": "scripts/coverage_report.py",
+      "sha256": "be1ea80c5bb457d60c3ed98736c3fb00cf76aa82ffac02fcdcce64bb36fa819d",
+      "test_sha256": "421758ba24bafae2a2afa0ea4696bd4013a21764a3d37cf5df67e4b0aab66b62",
+      "shared_modules": [
+        "src/research_repo_tools/coverage.py"
+      ]
+    },
+    {
+      "repository": "causal-triangulations",
+      "path": "scripts/postprocess_changelog.py",
+      "sha256": "725bb509ab752251b615842a9bfcb27e0ed5917bdcafa96e597e2a88a75f382e",
+      "test_sha256": "93e4efac0cf60a794bbdac5b2b1cda3e38ed91ffaa3f5244c294aa2e49d86990",
+      "shared_modules": [
+        "src/research_repo_tools/postprocess_changelog.py"
+      ]
+    },
+    {
+      "repository": "causal-triangulations",
+      "path": "scripts/release_performance.py",
+      "sha256": "a5d68241476d36d255f16bb86763accc28c8366acc6c355b2327604f8143afe3",
+      "test_sha256": "b5f572af9d80cf48fa88dbce7ebd7e5844f6c4ebdbda9d593d3953f519484395",
+      "shared_modules": [
+        "src/research_repo_tools/release_discovery.py"
+      ]
+    },
+    {
+      "repository": "causal-triangulations",
+      "path": "scripts/subprocess_utils.py",
+      "sha256": "9a29fc30de9b5532f0be5027e8eb7ff3a974a3af2f64caaf3fda12cd307f0531",
+      "test_sha256": "bbf0f756f2c232a35881c90b0fdb38931b2514305404c686028ef0208bb3b773",
+      "shared_modules": [
+        "src/research_repo_tools/process.py",
+        "src/research_repo_tools/files.py"
+      ]
+    },
+    {
+      "repository": "causal-triangulations",
+      "path": "scripts/tag_release.py",
+      "sha256": "b9e439d6ffa4eb8fa60a698448f0f588fde8146bb28574e9c19520f6ad7b6250",
+      "test_sha256": "1d963bad35b8c52281ee4c5375a5d9de4b06e0db8c19cdcc3068fc4faa1b32cb",
+      "shared_modules": [
+        "src/research_repo_tools/changelog.py",
+        "src/research_repo_tools/release_tags.py"
+      ]
+    },
+    {
+      "repository": "causal-triangulations",
+      "path": "scripts/update_cargo_tool_pins.py",
+      "sha256": "c8dbaffd91c0608a7756d140d9396ab28d4906f2e32e77ced7d9abba1d8ae729",
+      "test_sha256": "1da6416048d2dbd6222040cd90bee4af892c30ed8ae85a185a37cb5b0f1ffa69",
+      "shared_modules": [
+        "src/research_repo_tools/tool_pins.py",
+        "src/research_repo_tools/process.py"
+      ]
+    },
+    {
+      "repository": "causal-triangulations",
+      "path": "scripts/update_python_dev_pins.py",
+      "sha256": "9e897e1896c373e9143200c5e6a1b5316fcc330963d7a431cb936a409d51a8ba",
+      "test_sha256": "503c087734bca48aa22f0656dc9935fbc7ed31a05db980986b865f1c9a599597",
+      "shared_modules": [
+        "src/research_repo_tools/dependencies.py"
+      ]
+    },
+    {
+      "repository": "causal-triangulations",
+      "path": "scripts/update_release_version.py",
+      "sha256": "1584af4491577e62bb03f8dba0627d28106bbb12c3eec3990f2fbbcf8b8e17e8",
+      "test_sha256": "0e8aee37461726706104cd9f6ac483223e3b71053ee12e1247cacffc01d08d3c",
+      "shared_modules": [
+        "src/research_repo_tools/update_release.py",
+        "src/research_repo_tools/release_metadata.py",
+        "src/research_repo_tools/release_discovery.py",
+        "src/research_repo_tools/files.py"
+      ]
+    },
+    {
+      "repository": "markov-chain-monte-carlo",
+      "path": "scripts/postprocess_changelog.py",
+      "sha256": "6be61d806737c5fd91e1b4b0a9e715b8514ca95a4c8a307f0f4e527e9ec3fb16",
+      "test_sha256": "43bbcc077dec5024b7e4da20b741abedac8c62c53560737af7989d66a3d60e2d",
+      "shared_modules": [
+        "src/research_repo_tools/postprocess_changelog.py"
+      ]
+    },
+    {
+      "repository": "markov-chain-monte-carlo",
+      "path": "scripts/release_check.py",
+      "sha256": "0698c33fe51d3073ef9e1093548bda72839dfbca480cd830b7cae5ffc0ed7a4a",
+      "test_sha256": "46031391dba3a813dd739a6adf19af0252b49f2716ada17e89eaaaaf83609375",
+      "shared_modules": [
+        "src/research_repo_tools/release_metadata.py"
+      ]
+    },
+    {
+      "repository": "markov-chain-monte-carlo",
+      "path": "scripts/subprocess_utils.py",
+      "sha256": "fb339703cae743f6c14aa81d94c7420c75e386e3e1d070ced9ba53b7a7928d3f",
+      "test_sha256": "450dc2cc49f6b75a26a19b775d67ff36b8d6cb5c69d3a537e50f23a638d659d9",
+      "shared_modules": [
+        "src/research_repo_tools/process.py",
+        "src/research_repo_tools/files.py"
+      ]
+    },
+    {
+      "repository": "markov-chain-monte-carlo",
+      "path": "scripts/tag_release.py",
+      "sha256": "50af4237b79ad535bfdbd6b009804540ffb8ca57d0b0cee06a4ad98a7d96b7b5",
+      "test_sha256": "232a07f0cbd42256e9637b12741be0818c630a1d98064f030546254da57e67ce",
+      "shared_modules": [
+        "src/research_repo_tools/changelog.py",
+        "src/research_repo_tools/release_tags.py"
+      ]
+    },
+    {
+      "repository": "markov-chain-monte-carlo",
+      "path": "scripts/update_cargo_tool_pins.py",
+      "sha256": "075c7f556624174348a7cc99d58ef1f33351b5f8ab905329258812fddc071836",
+      "test_sha256": "8581f73affbdf6858c8cc50fc969d04bfb34f1dc88e4eaf0060f8c1d6bfdab27",
+      "shared_modules": [
+        "src/research_repo_tools/tool_pins.py",
+        "src/research_repo_tools/process.py"
+      ]
+    },
+    {
+      "repository": "markov-chain-monte-carlo",
+      "path": "scripts/update_python_dev_pins.py",
+      "sha256": "9e897e1896c373e9143200c5e6a1b5316fcc330963d7a431cb936a409d51a8ba",
+      "test_sha256": "503c087734bca48aa22f0656dc9935fbc7ed31a05db980986b865f1c9a599597",
+      "shared_modules": [
+        "src/research_repo_tools/dependencies.py"
+      ]
+    },
+    {
+      "repository": "markov-chain-monte-carlo",
+      "path": "scripts/update_release_version.py",
+      "sha256": "77a2dca7304170d50271020e74729c4b299febb170790c74ad28d78c8c46635e",
+      "test_sha256": "0be935587cfb024b2212f22db820d9f3ea6583c16681b59c3bd07f58991438d8",
+      "shared_modules": [
+        "src/research_repo_tools/update_release.py",
+        "src/research_repo_tools/release_metadata.py",
+        "src/research_repo_tools/release_discovery.py",
+        "src/research_repo_tools/files.py"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,40 @@
+[build-system]
+requires = ["hatchling==1.31.0"]
+build-backend = "hatchling.build"
+
+[project]
+name = "research-repo-tools"
+version = "0.1.0"
+description = "Shared maintenance and validation for research software repositories"
+readme = "README.md"
+requires-python = ">=3.14"
+license = "BSD-3-Clause"
+license-files = ["LICENSE"]
+authors = [{name = "Adam Getchell", email = "adam@adamgetchell.org"}]
+dependencies = ["packaging>=25", "PyYAML>=6"]
+
+[project.scripts]
+research-repo-tools = "research_repo_tools.cli:main"
+
+[project.optional-dependencies]
+just = ["rust-just==1.58.0"]
+
+[dependency-groups]
+dev = ["pytest==9.1.1", "ruff==0.16.6", "ty==0.0.78"]
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/research_repo_tools"]
+
+[tool.hatch.build.targets.sdist]
+include = ["src", "tests", "docs", "scripts", "pyproject.toml", "uv.lock", "README.md", "CONTRIBUTING.md", "AGENTS.md", "CHANGELOG.md", "LICENSE", "NOTICE.md", "justfile", ".python-version"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = ["--import-mode=importlib", "--strict-markers"]
+
+[tool.ruff]
+target-version = "py314"
+line-length = 160
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "I"]

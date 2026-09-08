@@ -1,0 +1,29 @@
+# Retain these small wrappers in each consuming repository.
+# uv run --locked just ... selects the project's locked rust-just executable.
+
+semgrep-check:
+    uv run --locked research-repo-tools semgrep check-fixtures
+
+update-python-deps:
+    uv run --locked research-repo-tools deps update-python
+
+update-tool-pins:
+    uv run --locked research-repo-tools deps update-tools
+
+release-check:
+    uv run --locked research-repo-tools release check
+
+changelog:
+    uv run --locked research-repo-tools changelog generate
+
+changelog-release tag date:
+    uv run --locked research-repo-tools changelog generate --tag {{quote(tag)}} --date {{quote(date)}}
+
+changelog-archive:
+    uv run --locked research-repo-tools changelog archive
+
+release-notes tag:
+    uv run --locked research-repo-tools changelog notes {{quote(tag)}}
+
+tag-release tag:
+    uv run --locked research-repo-tools changelog tag {{quote(tag)}}

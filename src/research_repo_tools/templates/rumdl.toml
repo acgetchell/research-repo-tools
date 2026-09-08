@@ -1,0 +1,12 @@
+# Shared generated-changelog formatting policy. Consumer rules may be stricter.
+[global]
+line-length = 160
+disable = ["MD024", "MD053"]
+
+[MD013]
+line-length = 160
+code-blocks = false
+tables = false
+
+[MD029]
+style = "ordered"

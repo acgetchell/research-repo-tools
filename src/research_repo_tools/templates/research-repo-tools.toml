@@ -1,0 +1,20 @@
+# Standalone config: research-repo-tools --config research-repo-tools.toml ...
+# In pyproject.toml, prefix these tables with tool.research-repo-tools.
+schema = 1
+
+[changelog]
+# Shared changelog commands always use CHANGELOG.md in the repository root.
+# Changelog archives always live in docs/archives/changelog/.
+owner = "__OWNER__"
+repository = "__REPOSITORY__"
+# Optional final lint/format gate using this repository's rules:
+# formatter = "rumdl.toml"
+# Optional custom git-cliff policy instead of the packaged template:
+# cliff-config = "cliff.toml"
+
+[deps]
+pyproject = "pyproject.toml"
+justfile = "justfile"
+# [deps.tools]
+# git_cliff_version = "git-cliff"
+# rumdl_version = "rumdl"
