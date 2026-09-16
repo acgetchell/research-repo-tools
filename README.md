@@ -11,29 +11,50 @@ This package consolidates shared utilities from `la-stack`, `delaunay`,
 Its goal is to simplify that stack around a correct, performant, orthogonal,
 and simple toolchain, keeping consuming repositories focused on Rust.
 
-Python 3.14+ is required. See [release status and publishing][publishing]
+**uv is required.** Install it using [Astral's instructions](https://docs.astral.sh/uv/getting-started/installation/)
+and make it available on PATH. This package uses uv to obtain Python 3.14+ and
+Python tooling. Git and platform build prerequisites are listed in the
+[toolchain guide][toolchain]. See [release status and publishing][publishing]
 and the [supported CLI and Python interfaces][api].
 
 ## Install with uv
 
-Users install pinned releases directly from PyPI with uv in their own projects.
-Cloning this repository is for developing or fixing the package. Once the desired
-version is published, replace `X.Y.Z` with that version:
+Users install pinned releases directly from PyPI in their own projects.
+**Consumers never need to clone research-repo-tools.** Cloning this repository is
+for developing or fixing the package.
+
+Once the desired version is published, the consuming project's maintainer adds
+it to a `tooling` dependency group, replacing `X.Y.Z` with that version:
 
 ```sh
-uv add --dev "research-repo-tools==X.Y.Z"
-uv run --locked research-repo-tools --help
+uv add --group tooling --no-sync "research-repo-tools==X.Y.Z"
 ```
 
-For managed Python/Rust/Cargo setup, follow the [toolchain setup guide][toolchain]
-to put the package in a tooling dependency group and generate launchers in the
-consuming project. On a fresh machine without uv, that project's launcher obtains
-uv and installs its locked package from PyPI. The shared package's source checkout
-is not needed.
+Include `tooling` in `dev`, retaining the project's other development dependencies:
 
-Every installation supplies the pinned `just` executable through `rust-just`,
-alongside `packaging` and PyYAML. No extra is needed. Before publication,
-contributors can use [local development installs][contributing] for validation.
+```toml
+[dependency-groups]
+tooling = ["research-repo-tools==X.Y.Z"]
+dev = [{include-group = "tooling"}]
+```
+
+Follow the [toolchain guide][toolchain] to declare uv, Python, and Rust tool
+versions, merge the [consumer justfile template][just-template], and commit the
+manifest and refreshed lockfile. Adding the dependency installs the package;
+setup is one explicit command, with no installation hooks or generated scripts.
+
+In a configured consumer checkout, run this once on Linux, macOS, or Windows:
+
+```sh
+uv run --locked --managed-python --only-group tooling research-repo-tools setup
+```
+
+Setup installs the declared tools, installs a pinned user-level Just through uv,
+configures PATH, and synchronizes the locked Python environment with managed
+Cargo available for native builds. Open a new terminal if PATH changed.
+From then on, use `just help` and `just <recipe>` without environment activation.
+Recipes select the locked project environment internally. Package contributors
+use the setup command described in [CONTRIBUTING.md][contributing].
 
 ## Common workflows
 
@@ -41,25 +62,24 @@ contributors can use [local development installs][contributing] for validation.
 | --- | --- | --- |
 | Changelog | `changelog archive`, `generate`, `normalize`, `notes`, `tag` | Root `CHANGELOG.md`; completed minor series in `docs/archives/changelog/` |
 | Coverage | `coverage report` | Cobertura summaries with deduplicated source lines |
-| Dependencies | `deps check-uv`, `update-python`, `update-tools` | Exact development pins; canonical Cargo SemVer; stable uv pins |
+| Dependencies | `deps check-uv`, `update-python`, `update-tools`, `update-uv` | Exact development pins; canonical Cargo SemVer; stable uv pins |
 | Documentation | `docs check-lines` | UTF-8 Markdown line checks with table exemptions |
 | Release metadata | `release check`, `release update` | Infer Cargo or Python metadata; validate before replacing files |
 | Semgrep fixtures | `semgrep check-fixtures` | Validate consumer-supplied rules and positive fixture coverage |
+| Setup | `setup` | Require uv; install user Just and declared tools; sync the locked environment |
 | Templates | `templates NAME` | Shared changelog, git-cliff, just, TOML, and rumdl resources |
-| Toolchain | `toolchain bootstrap`, `check`, `run`, `sync` | Exact declarations; managed installations; generated uv launchers |
+| Toolchain | `toolchain check`, `run`, `sync` | Exact declarations; managed installations; verified execution |
 
 ### Just recipes
 
 For routine workflows, merge the [consumer justfile template][just-template] into
 the consuming repository's justfile. These thin recipes invoke its locked package
-version. Use `uv run --locked just ...` to select the bundled just executable.
+version. After initialization, use `just` directly.
 Run `just help`, `just help-workflows`, or bare `just` to list commands and their
 arguments in lexicographic order.
 
 | Consumer recipe | Purpose |
 | --- | --- |
-| `just bootstrap` | Generate bootstrap launchers from declarations |
-| `just bootstrap-check` | Check that bootstrap launchers match declarations |
 | `just changelog` | Generate, normalize, and archive completed minor series |
 | `just changelog-archive` | Archive existing notes without regenerating history |
 | `just changelog-preview` | Validate the generated root and archives without writing; print the root candidate |
@@ -75,6 +95,7 @@ arguments in lexicographic order.
 | `just tag-force TAG` | Explicitly replace an existing local tag |
 | `just tag-release TAG` | Create a local annotated tag from validated release notes |
 | `just tools-check` | Check installed tools and versions without installing them |
+| `just update` | Upgrade uv, reconcile its pin, update Python development pins and locked dependencies, and synchronize tools |
 | `just update-python-deps` | Update exact direct Python development pins |
 
 To preview a prospective release, run
@@ -82,25 +103,28 @@ To preview a prospective release, run
 Follow the [toolchain guide][toolchain] for declarations, first-time setup, and
 strictly read-only tool checks.
 
-### Direct CLI examples
-
-The command groups above are subcommands of `research-repo-tools`. Prefix direct
-invocations with `uv run --locked` when using the project-installed package:
+### Workflow examples
 
 ```sh
-research-repo-tools --help
-research-repo-tools changelog archive
-research-repo-tools changelog generate --help
-research-repo-tools changelog generate --tag v1.2.3 --date 2026-09-07 --dry-run
-research-repo-tools changelog normalize
-research-repo-tools changelog notes v1.2.3
-research-repo-tools coverage report --prefix src --limit 10
-research-repo-tools deps update-tools --dry-run
-research-repo-tools docs check-lines README.md CHANGELOG.md
-research-repo-tools release check
-research-repo-tools release update --help
-research-repo-tools release update 1.2.3 --previous-release v1.2.2 --dry-run
+just changelog-archive
+just changelog-preview --tag v1.2.3 --date 2026-09-07
+just help
+just release-check
+just release-notes v1.2.3
+just tools-check
+just update
 ```
+
+`just update` upgrades uv first. Standalone uv installations use
+`uv self update`; Homebrew installations use `brew upgrade uv`. Other installation
+owners must update uv themselves. The updater records the resulting stable version
+in `pyproject.toml`. This changes the shared
+user installation; other projects with different exact uv pins must be reconciled
+before their commands will run. Review the generated changes before committing.
+`just setup` installs declared versions without upgrading them.
+
+The underlying CLI remains available for integrations and custom recipes; see
+[supported interfaces][api].
 
 `changelog tag TAG` creates a local annotated tag when explicitly invoked.
 `--dry-run` previews it. Generation needs git-cliff; tagging needs Git. Optional
@@ -114,7 +138,7 @@ series to `docs/archives/changelog/`. The root file keeps Unreleased, the newest
 minor series, and archive links. The same [changelog recipes][changelog] are
 available here and in the consumer justfile template.
 
-External-tool installation is explicit through `toolchain sync`; managed
+External-tool installation is explicit through `setup` or `toolchain sync`; managed
 execution selects the checked versions. Generic notebook setup, execution, and
 validation remain planned capabilities.
 Scientific benchmarks, evidence schemas, plotting, and deployment workflows are
@@ -176,10 +200,10 @@ The Cargo package is named `just`; the Python dependency that supplies the bundl
 executable is named `rust-just`.
 
 ```sh
-research-repo-tools templates CHANGELOG.md
-research-repo-tools templates cliff.toml --owner example --repository consumer
-research-repo-tools templates justfile
-research-repo-tools templates research-repo-tools.toml
+uv run --locked research-repo-tools templates CHANGELOG.md
+uv run --locked research-repo-tools templates cliff.toml --owner example --repository consumer
+uv run --locked research-repo-tools templates justfile
+uv run --locked research-repo-tools templates research-repo-tools.toml
 ```
 
 Templates print to stdout. `--output PATH` creates a file and refuses to replace

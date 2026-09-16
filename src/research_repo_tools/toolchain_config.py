@@ -94,9 +94,13 @@ def load(settings: Config) -> Toolchain:
     if not isinstance(requires, str):
         raise ValueError("project.requires-python must be a version specifier string")
     constraints = SpecifierSet(requires)
-    # A minor selector is a range, not patch zero. uv resolves its intersection
-    # with requires-python, and Runtime verifies the resulting interpreter.
-    if python.count(".") == 2 and python not in constraints:
+    # A minor selector is a range, not patch zero. Reject empty intersections
+    # before uv resolves an available interpreter and Runtime verifies it.
+    if python.count(".") == 1:
+        compatible = not (SpecifierSet(f"=={python}.*") & constraints).is_unsatisfiable()
+    else:
+        compatible = python in constraints
+    if not compatible:
         raise ValueError(".python-version must satisfy project.requires-python")
     rust = None
     rust_file = root / "rust-toolchain.toml"
@@ -116,9 +120,7 @@ def load(settings: Config) -> Toolchain:
         if profile == "default":
             components = tuple(sorted(set(components) | {"clippy", "rustfmt", "rust-docs"}))
         rust = RustToolchain(channel, components, _names(table.get("targets", []), "toolchain.targets"), profile)
-    tools = settings.section("toolchain").get("cargo", {})
-    if not isinstance(tools, dict):
-        raise ValueError("toolchain.cargo must map supported Cargo package names to exact versions")
+    tools = settings.toolchain.cargo
     cargo = []
     for package, version in sorted(tools.items()):
         if package not in CARGO_TOOLS:
@@ -143,7 +145,7 @@ def host_target() -> str:
 
 
 def home() -> Path:
-    """Use one cache convention shared with both generated bootstrap launchers."""
+    """Locate the shared cache for managed Rust and Cargo installations."""
     override = os.environ.get("RESEARCH_REPO_TOOLS_HOME")
     if override:
         result = Path(override).expanduser()

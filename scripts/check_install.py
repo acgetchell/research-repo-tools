@@ -42,9 +42,6 @@ for optional in ("nbformat", "nbclient", "matplotlib", "numpy", "pandas", "polar
 from research_repo_tools.changelog import TEMPLATES, template
 for name in TEMPLATES:
     assert template(name).strip()
-from research_repo_tools.toolchain_bootstrap import render
-assert "0.12.15" in render("bootstrap.sh", "0.12.15")
-assert "0.12.15" in render("bootstrap.ps1", "0.12.15")
 assert len(importlib.metadata.distribution("research-repo-tools").entry_points) == 1
 from research_repo_tools.cli import main
 consumer = pathlib.Path.cwd() / "minimal consumer"
@@ -69,6 +66,7 @@ def check(dist: Path) -> None:
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
         assert "research_repo_tools/templates/cliff.toml" in names
+        assert "research_repo_tools/toolchain_setup.py" in names
         assert "research_repo_tools/py.typed" in names
         assert not any("/compat/" in name or name.startswith("tests/") for name in names)
         assert sum(name.endswith("/LICENSE") for name in names) == 1
@@ -79,7 +77,19 @@ def check(dist: Path) -> None:
     uv = shutil.which("uv")
     if uv is None:
         raise RuntimeError("uv must be installed to check distributions")
-    env = {key: value for key, value in os.environ.items() if key not in {"PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"}}
+    # Keep network/cache settings, but never let the caller redirect these
+    # temporary consumers into another project, environment, or working directory.
+    external_locations = {
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "VIRTUAL_ENV",
+        "UV_ENV_FILE",
+        "UV_PROJECT",
+        "UV_PROJECT_ENVIRONMENT",
+        "UV_WORKING_DIR",
+        "UV_WORKING_DIRECTORY",
+    }
+    env = {key: value for key, value in os.environ.items() if key not in external_locations}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     with tempfile.TemporaryDirectory(prefix="research-repo-tools-installed-") as directory:
         temporary = Path(directory)
@@ -97,17 +107,17 @@ def check(dist: Path) -> None:
             command = scripts / ("research-repo-tools.exe" if os.name == "nt" else "research-repo-tools")
             assert run([str(command), "--version"], cwd=consumer, env=local_env).strip() == version
             assert "changelog" in run([str(command), "--help"], cwd=consumer, env=local_env)
-            assert "bootstrap" in run([str(command), "toolchain", "--help"], cwd=consumer, env=local_env)
+            assert "setup" in run([str(command), "--help"], cwd=consumer, env=local_env)
             just = scripts / ("just.exe" if os.name == "nt" else "just")
             assert run([str(just), "--version"], cwd=consumer, env=local_env).strip() == f"just {expected_just}"
             # A real locked tooling group must start before the consumer's native
             # build backend exists. A full installation of this project would fail.
-            bootstrap_consumer = consumer / "bootstrap consumer"
-            bootstrap_consumer.mkdir()
+            setup_consumer = consumer / "setup consumer"
+            setup_consumer.mkdir()
             uv_version = run([uv, "--version"], cwd=consumer, env=local_env).split()[1]
-            (bootstrap_consumer / ".python-version").write_text("3.14\n", encoding="utf-8")
-            (bootstrap_consumer / "pyproject.toml").write_text(
-                '[project]\nname="bootstrap-consumer"\nversion="0.1.0"\nrequires-python=">=3.14"\n'
+            (setup_consumer / ".python-version").write_text("3.14\n", encoding="utf-8")
+            (setup_consumer / "pyproject.toml").write_text(
+                '[project]\nname="setup-consumer"\nversion="0.1.0"\nrequires-python=">=3.14"\n'
                 '[build-system]\nrequires=[]\nbuild-backend="intentionally_missing_native_backend"\n'
                 f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}]\n'
                 f'[tool.uv]\nrequired-version="=={uv_version}"\n'
@@ -115,11 +125,18 @@ def check(dist: Path) -> None:
                 encoding="utf-8",
             )
             # The artifact path is an isolated pre-publication test fixture only.
-            bootstrap_env = {key: value for key, value in local_env.items() if key != "VIRTUAL_ENV"}
-            run([uv, "lock", "--python", str(python)], cwd=bootstrap_consumer, env=bootstrap_env)
-            setup = [uv, "run", "--locked", "--only-group", "tooling", "research-repo-tools", "toolchain", "bootstrap"]
-            run(setup, cwd=bootstrap_consumer, env=bootstrap_env)
-            run([*setup, "--check"], cwd=bootstrap_consumer, env=bootstrap_env)
+            setup_env = {key: value for key, value in local_env.items() if key != "VIRTUAL_ENV"}
+            run([uv, "lock", "--python", str(python)], cwd=setup_consumer, env=setup_env)
+            setup = [uv, "run", "--locked", "--only-group", "tooling", "research-repo-tools", "setup"]
+            assert "setup" in run([*setup, "--help"], cwd=setup_consumer, env=setup_env)
+            # Exercise the installed command's prerequisite failure without
+            # installing user tools or modifying shell startup files.
+            setup_scripts = setup_consumer / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+            prerequisite_env = {**setup_env, "PATH": str(setup_scripts)}
+            result = subprocess.run(setup, cwd=setup_consumer, env=prerequisite_env, capture_output=True, encoding="utf-8", timeout=TIMEOUT)
+            assert result.returncode == 1, result.stderr
+            assert "must be installed and available on PATH" in result.stderr, result.stderr
+            assert not (setup_consumer / "scripts").exists()
             print(f"PASS: installed {name} outside checkout; bundled just")
 
 

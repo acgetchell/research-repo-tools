@@ -20,6 +20,8 @@
 
 - Keep consumer installation, commands, and usage examples in README.md;
   keep coding and package-development guidance in CONTRIBUTING.md.
+- Document uv as a prerequisite and setup that installs a user-level Just command, then
+  use `just ...` for routine commands without environment activation. Keep uv invocation details inside recipes.
 - Name documents containing operational commands with UPPERCASE gerunds,
   such as `INSTALLING.md` and `VALIDATING.md`. Use lowercase filenames for
   informational documents, such as `api.md` and `migration.md`.

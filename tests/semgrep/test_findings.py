@@ -2,6 +2,8 @@
 
 import collections
 import json
+from dataclasses import FrozenInstanceError
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 import pytest
@@ -17,7 +19,7 @@ if TYPE_CHECKING:
 
 
 def _result(check_id: str, line: int, end_line: int | None = None) -> dict[str, object]:
-    return {"check_id": check_id, "start": {"line": line}, "end": {"line": line if end_line is None else end_line}}
+    return {"check_id": check_id, "path": "fixture.rs", "start": {"line": line}, "end": {"line": line if end_line is None else end_line}}
 
 
 def _run_main(monkeypatch: pytest.MonkeyPatch, fixture: Path, payload: object) -> int:
@@ -26,12 +28,36 @@ def _run_main(monkeypatch: pytest.MonkeyPatch, fixture: Path, payload: object) -
     return check_semgrep_fixtures.main()
 
 
+def test_parsed_findings_carry_immutable_rule_path_and_span():
+    parsed = check_semgrep_fixtures.parse_results(json.dumps({"results": [_result("shared.rule", 2, 4)]}))
+    (finding,) = parsed.results
+    assert finding.check_id == "shared.rule"
+    assert finding.path == Path("fixture.rs")
+    assert (finding.start_line, finding.end_line) == (2, 4)
+    with pytest.raises(FrozenInstanceError):
+        setattr(finding, "start_line", 0)
+    with pytest.raises(FrozenInstanceError):
+        setattr(parsed, "results", ())
+
+
+@pytest.mark.parametrize("changes", [{"check_id": ""}, {"path": ""}, {"path": None}, {"start": {"line": True}}, {"start": {"line": 0}}, {"end": {"line": 1}}])
+def test_result_parser_rejects_invalid_finding_fields_at_the_boundary(changes):
+    finding = {**_result("shared.rule", 2), **changes}
+    with pytest.raises(ValueError, match="malformed Semgrep findings"):
+        check_semgrep_fixtures.parse_results(json.dumps({"results": [finding]}))
+
+
+def test_result_parser_rejects_missing_fields_before_returning_a_model():
+    with pytest.raises(ValueError, match="check_id"):
+        check_semgrep_fixtures.parse_results('{"results":[{}]}')
+
+
 def test_semgrep_results_parses_valid_result_objects(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SEMGREP_JSON", json.dumps({"results": [_result("rust.foo", 2), _result("rust.bar", 4)]}))
     results = check_semgrep_fixtures._semgrep_results()
     assert results is not None
     assert len(results.results) == 2
-    assert [result["check_id"] for result in results.results] == ["rust.foo", "rust.bar"]
+    assert [result.check_id for result in results.results] == ["rust.foo", "rust.bar"]
 
 
 @pytest.mark.parametrize("errors", [[{"type": "ParseError"}], {}, "", None, False, 0])
@@ -115,7 +141,10 @@ def test_main_matches_overlapping_spans_by_shortest_span(monkeypatch: pytest.Mon
 
 def test_finding_mismatches_consumes_earliest_end_to_allow_later_points() -> None:
     expected = collections.Counter({("rust.foo", 4): 1})
-    actual = (("rust.foo", 1, 4), ("rust.foo", 3, 5))
+    actual = (
+        check_semgrep_fixtures.Finding("rust.foo", Path("fixture.rs"), 1, 4),
+        check_semgrep_fixtures.Finding("rust.foo", Path("fixture.rs"), 3, 5),
+    )
     assert check_semgrep_fixtures._finding_mismatches(expected, actual) == ("rust.foo at lines 3-5: unexpected finding",)
     expected["rust.foo", 5] = 1
     assert check_semgrep_fixtures._finding_mismatches(expected, actual) == ()

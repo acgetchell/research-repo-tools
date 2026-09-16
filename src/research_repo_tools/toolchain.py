@@ -61,7 +61,6 @@ class Runtime:
         self.host = host_target()
         self.manager = self.base / "rustup" / RUSTUP_VERSION / self.host
         self.rustup = executable(self.manager / "cargo" / "bin", "rustup")
-        self.uv = executable(self.base / "uv" / plan.uv, "uv")
 
     def cargo_root(self, tool: CargoTool) -> Path:
         assert self.plan.rust is not None
@@ -74,10 +73,7 @@ class Runtime:
     def _environment(self, python: Status | None = None) -> dict[str, str]:
         """Build probe environments without recursively looking up Python."""
         env = dict(os.environ)
-        paths = [str(self.uv.parent)]
-        if python is not None and python.ok:
-            paths.append(str(Path(python.path).parent))
-        paths.extend(str(self.cargo_root(tool) / "bin") for tool in self.plan.cargo)
+        paths = [str(self.cargo_root(tool) / "bin") for tool in self.plan.cargo]
         if self.plan.rust:
             paths.append(str(self.rustup.parent))
             env.update(
@@ -87,15 +83,16 @@ class Runtime:
                 RUSTUP_AUTO_INSTALL="0",
                 RUSTUP_NO_UPDATE_CHECK="1",
             )
+        if python is not None and python.ok:
+            paths.append(str(Path(python.path).parent))
+        uv = self.uv_status()
+        if uv.ok:
+            paths.append(str(Path(uv.path).parent))
         env["PATH"] = os.pathsep.join([*paths, env.get("PATH", "")])
         return env
 
     def uv_status(self) -> Status:
-        # A matching existing uv is reusable; an incompatible one is never replaced.
-        env = self._environment()
-        local = _probe(self.uv, "uv", self.plan.uv, env=env, cwd=self.plan.root)
-        if local.ok or self.uv.exists():
-            return local
+        # uv is an external prerequisite, never installed or replaced by setup.
         return _probe("uv", "uv", self.plan.uv, env=dict(os.environ), cwd=self.plan.root)
 
     def python_status(self, uv: Status) -> Status:
@@ -185,12 +182,7 @@ class Runtime:
         """Converge on declared versions, then verify every selected executable."""
         uv = self.uv_status()
         if not uv.ok:
-            from research_repo_tools.toolchain_bootstrap import install_uv
-
-            install_uv(self.plan.uv, self.base)
-            uv = self.uv_status()
-            if not uv.ok:
-                raise RuntimeError(f"uv installation did not supply {self.plan.uv}: {uv.actual}")
+            raise RuntimeError(f"uv {self.plan.uv} must be installed and available on PATH before setup; found {uv.actual}")
         if not self.python_status(uv).ok:
             self._install(uv.path, ["python", "install", "--no-bin", "--no-registry", self.plan.python_request])
             if not self.python_status(uv).ok:

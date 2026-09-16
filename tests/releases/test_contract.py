@@ -5,6 +5,7 @@ from pathlib import Path
 import pytest
 
 from research_repo_tools import cli, release_metadata, update_release
+from research_repo_tools.config import ReleasePolicy
 from tests.releases.test_metadata import _write_project
 
 
@@ -190,9 +191,9 @@ def test_release_update_preserves_heading_links_and_fenced_example_bytes(tmp_pat
     text = f"# Changelog\r\n\r\n{example}## [1.2.3]{link} - 2026-09-01\r\n\r\n- Current.\r\n"
     changelog.write_bytes(text.encode())
     assert release_metadata.find_version_mismatches(tmp_path) == []
-    update_release.update_release_version(tmp_path, "v1.2.3", previous_tag="v1.2.2", release_date="2026-09-07", policy={"final-changelog": True})
+    update_release.update_release_version(tmp_path, "v1.2.3", previous_tag="v1.2.2", release_date="2026-09-07", policy=ReleasePolicy(final_changelog=True))
     assert changelog.read_bytes() == text.replace("2026-09-01", "2026-09-07").encode()
-    assert release_metadata.check(tmp_path, policy={"final-changelog": True}) == 0
+    assert release_metadata.check(tmp_path, policy=ReleasePolicy(final_changelog=True)) == 0
 
 
 def test_fenced_target_cannot_satisfy_final_release_or_change_examples(tmp_path):
@@ -201,11 +202,11 @@ def test_fenced_target_cannot_satisfy_final_release_or_change_examples(tmp_path)
     changelog.write_text("# Changelog\n\n~~~markdown\n## [1.2.4] - 1999-01-01\n~~~\n\n" + changelog.read_text())
     before = snapshot(tmp_path)
     with pytest.raises(ValueError, match="final release requires"):
-        update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3", policy={"final-changelog": True})
+        update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3", policy=ReleasePolicy(final_changelog=True))
     assert snapshot(tmp_path) == before
     update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3")
     assert changelog.read_bytes() == before["CHANGELOG.md"]
-    assert release_metadata.check(tmp_path, policy={"final-changelog": True}) == 1
+    assert release_metadata.check(tmp_path, policy=ReleasePolicy(final_changelog=True)) == 1
 
 
 @pytest.mark.parametrize("quote", ['"', "'"])
@@ -246,3 +247,22 @@ def test_malformed_optional_doi_references_fail_without_publication(tmp_path, fi
     with pytest.raises(ValueError, match="malformed"):
         update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3")
     assert snapshot(tmp_path) == before
+
+
+def test_workspace_release_respects_excluded_glob_matches(tmp_path):
+    (tmp_path / "Cargo.toml").write_text('[workspace]\nmembers=["crates/*"]\nexclude=["crates/fixtures"]\n[workspace.package]\nversion="1.2.3"\n')
+    member = tmp_path / "crates/member/Cargo.toml"
+    member.parent.mkdir(parents=True)
+    member.write_text('[package]\nname="member"\nversion.workspace=true\n')
+    excluded = tmp_path / "crates/fixtures/README.md"
+    excluded.parent.mkdir()
+    excluded.write_text("Fixture data, not a workspace crate.\n")
+    lock = tmp_path / "Cargo.lock"
+    lock.write_text('version=4\n[[package]]\nname="member"\nversion="1.2.3"\n')
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Current.\n")
+    before = snapshot(tmp_path)
+    assert release_metadata.check(tmp_path) == 0
+    update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3", release_date="2026-09-16")
+    assert lock.read_bytes() == before["Cargo.lock"].replace(b"1.2.3", b"1.2.4")
+    assert member.read_bytes() == before["crates/member/Cargo.toml"]
+    assert excluded.read_bytes() == before["crates/fixtures/README.md"]

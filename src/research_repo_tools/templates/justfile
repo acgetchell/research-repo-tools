@@ -1,14 +1,6 @@
 # Retain these small wrappers in each consuming repository.
-# uv run --locked just ... selects the project's locked rust-just executable.
+# Setup installs Just; recipes select the locked Python environment.
 set positional-arguments
-
-# Generate bootstrap launchers from the declared uv pin.
-bootstrap:
-    uv run --locked --only-group tooling research-repo-tools toolchain bootstrap
-
-# Check bootstrap launchers without changing files or syncing the environment.
-bootstrap-check:
-    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain bootstrap --check
 
 # Generate, normalize, and rotate completed minor series into docs/archives/changelog.
 changelog:
@@ -51,10 +43,9 @@ release-notes tag:
 semgrep-check:
     uv run --locked research-repo-tools semgrep check-fixtures
 
-# Run once after installing uv, or use the generated bootstrap launcher.
+# Repeat the package setup after tool declarations change.
 setup:
-    uv run --locked --managed-python --only-group tooling research-repo-tools toolchain sync
-    uv run --locked --managed-python --only-group tooling research-repo-tools toolchain run -- uv sync --locked --managed-python --group tooling
+    uv run --locked --managed-python --only-group tooling research-repo-tools setup
 
 # Create a local annotated tag using tag-release.
 tag tag: (tag-release tag)
@@ -70,6 +61,13 @@ tag-release tag:
 # The environment must already exist; checking never syncs or downloads Python.
 tools-check:
     uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain check
+
+# Upgrade uv, update exact development pins, refresh dependencies, and sync tools.
+update:
+    uv run --no-config --no-sync --no-python-downloads research-repo-tools deps update-uv
+    uv run --locked research-repo-tools deps update-python
+    uv lock --upgrade
+    uv run --locked --managed-python --only-group tooling research-repo-tools setup
 
 # Update exact direct Python development pins.
 update-python-deps:

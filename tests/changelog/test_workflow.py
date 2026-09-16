@@ -1,6 +1,7 @@
 """Generation publishes the root and minor archives as one recoverable update."""
 
 import subprocess
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -40,7 +41,7 @@ HISTORY = """# Changelog
 def consumer(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> config.Config:
     (tmp_path / "CHANGELOG.md").write_bytes(b"# Changelog\r\n\r\n## [Unreleased]\r\n\r\n- Existing notes.\r\n")
     monkeypatch.setattr(changelog, "run_safe_command", lambda *args, **kwargs: subprocess.CompletedProcess([], 0, HISTORY, ""))
-    return config.Config(tmp_path, {"changelog": {"owner": "example", "repository": "consumer"}})
+    return config.parse({"changelog": {"owner": "example", "repository": "consumer"}}, root=tmp_path)
 
 
 def snapshot(root: Path) -> dict[Path, bytes | None]:
@@ -99,7 +100,7 @@ def test_generation_rolls_back_archives_when_root_publication_fails(consumer: co
 
 
 def test_generation_formats_every_output_before_publication(consumer: config.Config, monkeypatch: pytest.MonkeyPatch) -> None:
-    consumer.sections["changelog"]["formatter"] = "rumdl.toml"
+    consumer = replace(consumer, changelog=replace(consumer.changelog, formatter="rumdl.toml"))
     formatted: set[Path] = set()
 
     def format_candidate(text: str, path: Path, _config: Path) -> str:
@@ -154,3 +155,26 @@ def test_changelog_recipes_expose_the_common_command_surface(tmp_path: Path, con
     for arguments, expected in commands:
         result = run_safe_command("just", ["--justfile", str(justfile), "--dry-run", *arguments], cwd=tmp_path)
         assert expected in result.stderr
+
+
+@pytest.mark.parametrize("target", ["CHANGELOG.md", "0.9.md"])
+@pytest.mark.parametrize("damage", ["drop", "version", "date"])
+def test_formatter_cannot_remove_or_change_release_identity(consumer, monkeypatch, target, damage):
+    consumer = replace(consumer, changelog=replace(consumer.changelog, formatter="rumdl.toml"))
+    # Include a prior archive to prove both existing artifacts survive rejection.
+    changelog.generate(replace(consumer, changelog=replace(consumer.changelog, formatter=None)))
+    before = snapshot(consumer.root)
+
+    def format_candidate(text, path, _config):
+        if path.name != target:
+            return text
+        if damage == "drop":
+            return "# Formatter returned only a title\n"
+        if damage == "date":
+            return text.replace("2026-09-", "2025-09-")
+        return text.replace("[1.0.0]", "[9.0.0]").replace("[0.9.2]", "[0.9.3]")
+
+    monkeypatch.setattr(changelog, "format_markdown", format_candidate)
+    with pytest.raises(ValueError, match="release headings"):
+        changelog.generate(consumer)
+    assert snapshot(consumer.root) == before

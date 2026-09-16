@@ -21,10 +21,10 @@ history are recorded in the generated
 Historical feature-name or sentence migrations remain consumer-owned;
 normalization preserves those names in prose, code spans, and link destinations.
 
-[Shared toolchain setup](INSTALLING.md) provides generated uv launchers and
-explicit installation and verification of declared Python, Rust, and Cargo tools.
+[Shared toolchain setup](INSTALLING.md) requires uv and provides explicit
+installation and verification of declared Python, Rust, and Cargo tools.
 Native installer and isolated installed-package validation are required before
-closing issue #2. Issue #1 covers publication and a clean PyPI bootstrap check;
+closing issue #2. Issue #1 covers publication and a clean PyPI setup check;
 consumer migrations are separate downstream issues. Generic notebook infrastructure remains
 planned: environment/kernel setup, execution, cleanup, and validation. Scientific
 notebook content and experiment choices remain consumer-owned.
@@ -37,7 +37,7 @@ belong to the consumer.
 
 To adopt the package:
 
-1. Configure the tooling group and bootstrap using the [toolchain guide](INSTALLING.md).
+1. Configure the tooling group and setup using the [toolchain guide](INSTALLING.md).
    Install a pinned PyPI release with uv and commit the consumer's lockfile.
 2. Replace one duplicate script with a thin call to the shared command.
 3. Run the consumer's own checks against that command before removing its old script.

@@ -271,6 +271,14 @@ def parse_changelog(text: str) -> ParsedChangelog:
     return ParsedChangelog(preamble, unreleased, tuple(version_blocks), tuple(release_headings))
 
 
+def require_preserved_releases(before: ParsedChangelog, after: ParsedChangelog) -> None:
+    """Require text transformations to preserve every release identity and date."""
+    if tuple((heading.version, heading.date) for heading in after.release_headings) != tuple(
+        (heading.version, heading.date) for heading in before.release_headings
+    ) or (after.unreleased is None) != (before.unreleased is None):
+        raise ValueError("processing changed release headings")
+
+
 def replace_release_date(text: str, version: str, released: str, *, required: bool = False) -> str:
     """Change only a real release heading's date, preserving links and examples."""
     if date.fromisoformat(released).isoformat() != released:

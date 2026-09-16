@@ -25,7 +25,7 @@ def check(root: Path, tag: str) -> int:
             raise ValueError("publication requires project.name = research-repo-tools")
         if tag != f"v{package.version}":
             raise ValueError(f"tag {tag} does not match package version {package.version!r}")
-        if release_metadata.check(root, policy={"final-changelog": True}):
+        if release_metadata.check(root, policy=config.ReleasePolicy(final_changelog=True)):
             return 1
         changelog.notes(config.load(root=root), tag)
     except (OSError, ValueError) as error:

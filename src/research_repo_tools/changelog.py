@@ -40,10 +40,10 @@ def write_template(path: Path, text: str) -> None:
 
 
 def _paths(config: Config) -> tuple[Path, Path, Path | None]:
-    section = config.section("changelog")
+    section = config.changelog
     path = config.root / "CHANGELOG.md"
     archives = config.root / "docs/archives/changelog"
-    formatter = config.path(section["formatter"]) if "formatter" in section else None
+    formatter = config.path(section.formatter) if section.formatter is not None else None
     return path, archives, formatter
 
 
@@ -56,7 +56,7 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
     without creating directories or replacing root/archive files.
     """
     path, archives, formatter = _paths(config)
-    section = config.section("changelog")
+    section = config.changelog
     if path.is_symlink():
         raise ValueError(f"Changelog output must not be a symlink: {path}")
     if bool(tag) != bool(released):
@@ -66,12 +66,12 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
         assert released is not None
         if date.fromisoformat(released).isoformat() != released:
             raise ValueError("release date must be YYYY-MM-DD")
-    if "cliff-config" in section:
-        rendered = config.path(section["cliff-config"]).read_text(encoding="utf-8")
+    if section.cliff_config is not None:
+        rendered = config.path(section.cliff_config).read_text(encoding="utf-8")
     else:
-        if "owner" not in section or "repository" not in section:
+        if section.owner is None or section.repository is None:
             raise ValueError("changelog generation requires owner and repository, or cliff-config")
-        rendered = template("cliff.toml", owner=section["owner"], repository=section["repository"])
+        rendered = template("cliff.toml", owner=section.owner, repository=section.repository)
     tomllib.loads(rendered)
     with tempfile.TemporaryDirectory(prefix="research-repo-tools-cliff-") as directory:
         cliff = Path(directory) / "cliff.toml"
@@ -92,9 +92,11 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
     candidates = dict(archive.plan_archives(path, result, archives))
     candidates.setdefault(path, result)
     for target, candidate in candidates.items():
+        expected = archive.parse_changelog(archive._extract_link_defs(candidate)[0])
         if formatter is not None:
             candidate = format_markdown(candidate, target, formatter)
         parsed = archive.parse_changelog(archive._extract_link_defs(candidate)[0])
+        archive.require_preserved_releases(expected, parsed)
         if target == path and parsed.unreleased is None and not parsed.version_blocks:
             raise ValueError("formatted changelog must contain at least one release or Unreleased section")
         candidates[target] = candidate
@@ -133,7 +135,7 @@ def tag(config: Config, version: str, *, force: bool = False, dry_run: bool = Fa
     the previous tag is not deleted before the replacement object exists.
     """
     validate_semver(version)
-    policy = config.section("release")
+    policy = config.release
     from research_repo_tools.release_metadata import read_package_info
 
     package = read_package_info(config.root)
@@ -145,7 +147,7 @@ def tag(config: Config, version: str, *, force: bool = False, dry_run: bool = Fa
     released = match.group("date")
     if released is None:
         raise ValueError("tagging requires a dated changelog release heading")
-    if policy.get("date-policy", "today") == "today" and released != datetime.now(UTC).date().isoformat():
+    if policy.date_policy == "today" and released != datetime.now(UTC).date().isoformat():
         raise ValueError("release heading date must equal the current UTC date before tagging")
     citation = config.root / "CITATION.cff"
     if citation.exists():
@@ -156,8 +158,8 @@ def tag(config: Config, version: str, *, force: bool = False, dry_run: bool = Fa
     if len(body.encode("utf-8")) > _GITHUB_TAG_ANNOTATION_LIMIT:
         from research_repo_tools.release_tags import _github_repo_url
 
-        section = config.section("changelog")
-        owner, repository = section.get("owner"), section.get("repository")
+        section = config.changelog
+        owner, repository = section.owner, section.repository
         if not owner or not repository:
             raise ValueError("oversized tag notes require explicit changelog.owner and changelog.repository")
         template("cliff.toml", owner=owner, repository=repository)

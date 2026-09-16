@@ -11,7 +11,7 @@ requires-python = ">=3.14"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
 authors = [{name = "Adam Getchell", email = "adam@adamgetchell.org"}]
-dependencies = ["packaging>=25", "PyYAML>=6", "rust-just==1.58.0"]
+dependencies = ["packaging>=26.1", "PyYAML>=6", "rust-just==1.58.0"]
 
 [project.scripts]
 research-repo-tools = "research_repo_tools.cli:main"
@@ -36,6 +36,9 @@ packages = ["src/research_repo_tools"]
 
 [tool.hatch.build.targets.sdist]
 include = ["src", "tests", "docs", "scripts", "pyproject.toml", "uv.lock", "README.md", "CONTRIBUTING.md", "AGENTS.md", "CHANGELOG.md", "LICENSE", "justfile", ".python-version"]
+
+[tool.uv]
+required-version = "==0.12.15"
 
 [tool.research-repo-tools.changelog]
 owner = "acgetchell"

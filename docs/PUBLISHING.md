@@ -13,7 +13,7 @@ or setup. Building or merging this preparation does not publish a package.
 Issue [#2](https://github.com/acgetchell/research-repo-tools/issues/2) now blocks
 the first release: complete the [toolchain setup](INSTALLING.md) implementation,
 native installer validation, and isolated consumer-fixture validation before
-tagging. The final PyPI installation check must also exercise the bootstrap path
+tagging. The final PyPI installation check must also exercise the setup command
 in a clean fixture. Migration of existing consumer repositories is separate work
 after publication and does not block the release.
 
@@ -88,12 +88,18 @@ After committing substantive changes, generate release notes from their history
 using this package's implementation and git-cliff:
 
 ```sh
-uv sync --locked
-uv run --locked just changelog-preview --tag v0.1.0 --date YYYY-MM-DD
-uv run --locked just changelog-release v0.1.0 YYYY-MM-DD
-uv run --locked just release-check v0.1.0
-uv run --locked just ci
-uv run --locked --group audit just audit
+just sync
+```
+
+After [contributor initialization](../CONTRIBUTING.md#development-environment),
+run the release recipes:
+
+```sh
+just changelog-preview --tag v0.1.0 --date YYYY-MM-DD
+just changelog-release v0.1.0 YYYY-MM-DD
+just release-check v0.1.0
+just ci
+just audit
 ```
 
 Replace `YYYY-MM-DD` with the intended UTC release date. Review and commit the
@@ -117,7 +123,7 @@ Use a clean checkout of the reviewed `main` commit with final generated notes.
 The maintainer previews the shared tag operation, then creates and pushes it:
 
 ```sh
-uv run --locked just release-check v0.1.0
+just release-check v0.1.0
 uv run --locked research-repo-tools changelog tag v0.1.0 --dry-run
 uv run --locked research-repo-tools changelog tag v0.1.0
 git push origin v0.1.0
@@ -159,9 +165,9 @@ PY
 Confirm `uv.lock` resolves the package from PyPI and the commands work without a
 source checkout, local wheel, or editable/path source. Also inspect the release's
 file hashes and attestations on PyPI. In that disposable fixture, follow the
-[toolchain guide](INSTALLING.md) to configure the tooling group, generate the
-launchers from the installed package, and verify the bootstrap path. Record the
-tag/run, published version, and clean-install/bootstrap results in issue #1 before
+[toolchain guide](INSTALLING.md) to configure the tooling group and run setup from the
+installed package. Record the
+tag/run, published version, and clean-install/setup results in issue #1 before
 closing it.
 
 ## Adopt after publication
@@ -169,7 +175,8 @@ closing it.
 Publication is required before consumer adoption. Track each migration in its
 consumer repository; these migrations are not release acceptance criteria.
 
-In an existing consumer, use `uv add --dev "research-repo-tools==0.1.0"`, remove
+In an existing consumer, use `uv add --group tooling "research-repo-tools==0.1.0"`, include
+that group from `dev`, remove
 any temporary local source override, and commit its manifest and lockfile after
 validation. Thin just recipes or Python wrappers call the [supported API](api.md).
 For upgrades, choose the next published version explicitly with the same command,

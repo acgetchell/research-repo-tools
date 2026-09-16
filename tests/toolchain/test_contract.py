@@ -13,7 +13,7 @@ from pathlib import Path
 import pytest
 from packaging.specifiers import SpecifierSet
 
-from research_repo_tools import cli, config, files, process, toolchain, toolchain_bootstrap, toolchain_config
+from research_repo_tools import cli, config, process, toolchain, toolchain_config
 from research_repo_tools.toolchain_config import RUSTUP_VERSION, executable
 
 
@@ -204,10 +204,20 @@ def test_run_refuses_incomplete_state_without_installing(runtime):
     assert not any("install" in args for _, args, _ in fake.calls)
 
 
-def test_invalid_private_uv_is_not_shadowed_by_good_global_uv(runtime):
+@pytest.mark.parametrize("available", [False, True])
+def test_uv_prerequisite_failure_never_installs_a_replacement(runtime, available):
     instance, fake = runtime
-    fake.add(instance.uv, "uv 0.12.14")
+    uv = executable(fake.directory, "uv")
+    if available:
+        fake.add(uv, "uv 0.12.14")
+    else:
+        uv.unlink()
+    # Even a matching private copy cannot satisfy the external prerequisite.
+    fake.add(executable(instance.base / "uv" / instance.plan.uv, "uv"), "uv 0.12.15")
     assert not instance.uv_status().ok
+    with pytest.raises(RuntimeError, match="must be installed and available on PATH"):
+        instance.sync()
+    assert not any("install" in args for _, args, _ in fake.calls)
 
 
 @pytest.mark.parametrize(
@@ -314,64 +324,8 @@ def test_python_only_plan_and_missing_rust_prerequisite(consumer):
     with pytest.raises(ValueError, match="require a pinned"):
         toolchain_config.load(config.load(root=consumer))
     settings = config.load(root=consumer)
-    plan = toolchain_config.load(replace(settings, sections={}))
+    plan = toolchain_config.load(replace(settings, toolchain=config.ToolchainSettings()))
     assert plan.rust is None and not plan.cargo
-
-
-def test_bootstrap_generation_check_and_explicit_refresh(consumer):
-    plan = toolchain_config.load(config.load(root=consumer))
-    toolchain_bootstrap.generate(plan)
-    toolchain_bootstrap.generate(plan, check=True)
-    assert "__UV_VERSION__" not in (consumer / "bootstrap.sh").read_text()
-    updated = replace(plan, uv="0.12.16")
-    with pytest.raises(ValueError, match="stale"):
-        toolchain_bootstrap.generate(updated, check=True)
-    with pytest.raises(ValueError, match="exists"):
-        toolchain_bootstrap.generate(updated)
-    toolchain_bootstrap.generate(updated, force=True)
-    toolchain_bootstrap.generate(updated, check=True)
-
-
-def test_bootstrap_refuses_overwriting_any_file_before_writing_the_pair(consumer):
-    (consumer / "bootstrap.ps1").write_text("maintainer content")
-    plan = toolchain_config.load(config.load(root=consumer))
-    with pytest.raises(ValueError, match="exists"):
-        toolchain_bootstrap.generate(plan)
-    assert not (consumer / "bootstrap.sh").exists()
-
-
-@pytest.mark.parametrize("existing", [False, True])
-def test_bootstrap_rolls_back_both_launchers_on_publication_failure(consumer, monkeypatch, existing):
-    plan = toolchain_config.load(config.load(root=consumer))
-    if existing:
-        toolchain_bootstrap.generate(plan)
-    before = {path: path.read_bytes() for path in consumer.iterdir() if path.is_file()}
-    original_replace = files._replace_path
-
-    def fail_second(source, destination):
-        if source.suffix == ".tmp" and destination.name == "bootstrap.ps1":
-            raise PermissionError("second launcher is locked")
-        original_replace(source, destination)
-
-    with monkeypatch.context() as patch:
-        patch.setattr(files, "_replace_path", fail_second)
-        with pytest.raises(PermissionError, match="second launcher is locked"):
-            toolchain_bootstrap.generate(replace(plan, uv="0.12.16"), force=True)
-    assert {path: path.read_bytes() for path in consumer.iterdir() if path.is_file()} == before
-    toolchain_bootstrap.generate(replace(plan, uv="0.12.16"), force=True)
-    toolchain_bootstrap.generate(replace(plan, uv="0.12.16"), check=True)
-
-
-def test_bootstrap_rejects_directory_before_replacing_either_launcher(consumer):
-    plan = toolchain_config.load(config.load(root=consumer))
-    shell = consumer / "bootstrap.sh"
-    shell.write_bytes(b"previous launcher\n")
-    (consumer / "bootstrap.ps1").mkdir()
-    with pytest.raises(IsADirectoryError):
-        toolchain_bootstrap.generate(plan, force=True)
-    assert shell.read_bytes() == b"previous launcher\n"
-    assert not list(consumer.glob(".*.tmp"))
-    assert not list(consumer.glob(".*.bak"))
 
 
 @pytest.mark.parametrize("environment_name", [None, "custom environment", "absolute"])
@@ -463,12 +417,34 @@ def test_missing_python_install_respects_project_patch_constraints(runtime):
     assert instance.python_status(instance.uv_status()).ok
 
 
-def test_incompatible_exact_python_pin_is_rejected(consumer):
+@pytest.mark.parametrize(
+    "pin,requires,matching_version",
+    [
+        ("3.14.0", ">=3.14.1", None),
+        ("3.14", ">=3.15", None),
+        ("3.15", "<3.15", None),
+        ("3.14", "==3.15.*", None),
+        ("3.14", "~=3.15.1", None),
+        ("3.14", ">=3.14.2,<3.14.2", None),
+        ("3.14", ">=3.14,!=3.14.*", None),
+        ("3.14", ">=3.14.1,<=3.14.1,!=3.14.1", None),
+        ("3.14", ">=3.14.1,<3.15", "3.14.1"),
+        ("3.14", ">=3.14.1,!=3.14.1,<3.14.3", "3.14.2"),
+        ("3.14", "~=3.14.5", "3.14.5"),
+        ("3.14", ">3.14.1000000", "3.14.1000001"),
+        ("3.14.7", ">=3.14.1,<3.15", "3.14.7"),
+    ],
+)
+def test_python_pin_requires_nonempty_project_constraint_intersection(consumer, pin, requires, matching_version):
     manifest = consumer / "pyproject.toml"
-    manifest.write_text(manifest.read_text().replace('requires-python = ">=3.14"', 'requires-python = ">=3.14.1"'))
-    (consumer / ".python-version").write_text("3.14.0")
-    with pytest.raises(ValueError, match="must satisfy"):
-        toolchain_config.load(config.load(root=consumer))
+    manifest.write_text(manifest.read_text().replace('requires-python = ">=3.14"', f'requires-python = "{requires}"'))
+    (consumer / ".python-version").write_text(pin)
+    if matching_version is None:
+        with pytest.raises(ValueError, match=r"\.python-version must satisfy project\.requires-python"):
+            toolchain_config.load(config.load(root=consumer))
+    else:
+        plan = toolchain_config.load(config.load(root=consumer))
+        assert matching_version in SpecifierSet(plan.python_request)
 
 
 def test_checksum_mismatch_prevents_installer_execution(runtime, monkeypatch):
@@ -503,3 +479,150 @@ def test_unsupported_platform_fails_before_installation(monkeypatch):
     monkeypatch.setattr(toolchain_config.platform, "libc_ver", lambda: ("musl", ""))
     with pytest.raises(ValueError, match="glibc"):
         toolchain_config.host_target()
+
+
+def setup_fake(runtime, monkeypatch, *, just_version=None, failure=None, directory=None):
+    """Model uv's user-tool boundary without touching real shell profiles."""
+    from research_repo_tools import toolchain_setup
+
+    instance, fake = runtime
+    user_bin = instance.plan.root.parent / "user bin"
+    original = fake.run
+
+    def run(command, args, **kwargs):
+        if args[:1] not in (["tool"], ["sync"]):
+            return original(command, args, **kwargs)
+        fake.calls.append((command, args, kwargs))
+        assert kwargs["cwd"] == instance.plan.root
+        if failure == args[:2]:
+            raise subprocess.CalledProcessError(1, [command, *args], stderr="synthetic setup failure")
+        output = ""
+        if args[:2] == ["tool", "install"]:
+            fake.add(executable(user_bin, "just"), f"just {just_version or toolchain.version('rust-just')}")
+        elif args[:2] == ["tool", "dir"]:
+            output = str(user_bin) if directory is None else directory
+        elif args[:2] == ["tool", "update-shell"]:
+            assert str(user_bin) not in kwargs["env"]["PATH"].split(os.pathsep)
+        elif args[0] == "sync":
+            assert fake.installed_rust
+            assert kwargs["env"]["RUSTUP_TOOLCHAIN"] == "1.98.0"
+            assert shutil.which("python", path=kwargs["env"]["PATH"]) == str(fake.python)
+            for tool in instance.plan.cargo:
+                assert shutil.which(tool.binary, path=kwargs["env"]["PATH"]) == str(executable(instance.cargo_root(tool) / "bin", tool.binary))
+        else:
+            raise AssertionError(args)
+        return subprocess.CompletedProcess([command, *args], 0, output, "")
+
+    monkeypatch.setattr(toolchain_setup, "run_safe_command", run)
+    return toolchain_setup
+
+
+def test_setup_installs_user_just_and_tools_before_locked_project_sync(runtime, monkeypatch, capsys):
+    instance, fake = runtime
+    setup_module = setup_fake(runtime, monkeypatch)
+    # A stale system Just must not mask the verified user installation.
+    fake.add(executable(fake.directory, "just"), "just 1.0.0")
+    fake.add(executable(fake.directory, "git-cliff"), "git-cliff 1.0.0")
+    originals = {path: path.read_bytes() for path in instance.plan.root.iterdir()}
+    setup_module.setup(instance)
+    actions = [args for _, args, _ in fake.calls if "install" in args or args[0] in {"tool", "sync"}]
+    assert actions[-4:] == [
+        ["tool", "install", "--no-config", "--managed-python", "--python", "==3.14.*,>=3.14", f"rust-just=={toolchain.version('rust-just')}"],
+        ["tool", "dir", "--bin", "--no-config"],
+        ["tool", "update-shell", "--no-config"],
+        ["sync", "--locked", "--managed-python", "--group", "dev"],
+    ]
+    assert any("cargo" in args and "install" in args for args in actions[:-4])
+    assert "Setup complete" in capsys.readouterr().out
+    assert {path: path.read_bytes() for path in instance.plan.root.iterdir()} == originals
+
+
+@pytest.mark.parametrize("failure", [["tool", "install"], ["tool", "update-shell"], ["sync", "--locked"]])
+def test_setup_failure_is_reported_without_success(runtime, monkeypatch, capsys, failure):
+    instance, fake = runtime
+    setup_fake(runtime, monkeypatch, failure=failure)
+    monkeypatch.setattr(toolchain, "Runtime", lambda plan: instance)
+    assert cli.main(["--root", str(instance.plan.root), "setup"]) == 1
+    captured = capsys.readouterr()
+    assert "synthetic setup failure" in captured.err
+    assert "Setup complete" not in captured.out
+    if failure[0] == "tool":
+        assert not any(args[0] == "sync" for _, args, _ in fake.calls)
+
+
+def test_setup_verifies_user_just_instead_of_project_just(runtime, monkeypatch):
+    instance, fake = runtime
+    setup_module = setup_fake(runtime, monkeypatch, just_version="1.0.0")
+    with pytest.raises(RuntimeError, match="Just installation failed verification"):
+        setup_module.setup(instance)
+    assert not any(args[0] == "sync" or args[:2] == ["tool", "update-shell"] for _, args, _ in fake.calls)
+
+
+@pytest.mark.parametrize("directory", ["", "relative/path"])
+def test_setup_rejects_invalid_user_tool_directory(runtime, monkeypatch, directory):
+    instance, fake = runtime
+    setup_module = setup_fake(runtime, monkeypatch, directory=directory)
+    with pytest.raises(ValueError, match="absolute executable directory"):
+        setup_module.setup(instance)
+    assert not any(args[0] == "sync" for _, args, _ in fake.calls)
+
+
+def test_setup_requires_lockfile_before_installing(runtime, monkeypatch):
+    instance, fake = runtime
+    setup_module = setup_fake(runtime, monkeypatch)
+    (instance.plan.root / "uv.lock").unlink()
+    with pytest.raises(ValueError, match="requires a committed uv.lock"):
+        setup_module.setup(instance)
+    assert not fake.calls
+
+
+def test_setup_requires_tooling_group_to_survive_full_sync(runtime, monkeypatch):
+    instance, fake = runtime
+    setup_module = setup_fake(runtime, monkeypatch)
+    manifest = instance.plan.root / "pyproject.toml"
+    manifest.write_text(manifest.read_text().replace('dev = [{include-group="tooling"}]', "dev = []"))
+    with pytest.raises(ValueError, match="dev to include the tooling group"):
+        setup_module.setup(instance)
+    assert not fake.calls
+
+
+@pytest.mark.parametrize("tooling", ["42", '["invalid @"]', '[{include-group="missing"}]', '[{include-group="dev"}]', "[{include-group=1}]"])
+def test_setup_rejects_malformed_groups_before_installing(runtime, monkeypatch, tooling):
+    instance, fake = runtime
+    manifest = instance.plan.root / "pyproject.toml"
+    manifest.write_text(manifest.read_text().replace('["research-repo-tools==0.1.0"]', tooling))
+    original = manifest.read_bytes()
+    setup_module = setup_fake(runtime, monkeypatch)
+    monkeypatch.setattr(instance, "sync", lambda: pytest.fail("must reject before tool synchronization"))
+    with pytest.raises((TypeError, ValueError)):
+        setup_module.setup(instance)
+    assert not fake.calls
+    assert manifest.read_bytes() == original
+
+
+def test_managed_cargo_tools_take_precedence_over_python_environment_binaries(runtime, monkeypatch):
+    instance, fake = runtime
+    instance.sync()
+    fake.add(executable(fake.python.parent, "git-cliff"), "git-cliff 1.0.0")
+    calls = []
+    original = fake.run
+
+    def run(command, args, **kwargs):
+        if args == ["--help"]:
+            calls.append(Path(command))
+            return subprocess.CompletedProcess([], 0)
+        return original(command, args, **kwargs)
+
+    monkeypatch.setattr(toolchain, "run_safe_command", run)
+    assert toolchain.run_command(instance, ["git-cliff", "--help"]) == 0
+    assert calls == [executable(instance.cargo_root(instance.plan.cargo[1]) / "bin", "git-cliff")]
+
+
+def test_setup_keeps_dev_when_default_groups_are_disabled(runtime, monkeypatch):
+    instance, fake = runtime
+    manifest = instance.plan.root / "pyproject.toml"
+    manifest.write_text(manifest.read_text().replace("[tool.uv]", "[tool.uv]\ndefault-groups=[]"))
+    setup_module = setup_fake(runtime, monkeypatch)
+    setup_module.setup(instance)
+    sync_arguments = next(args for _, args, _ in fake.calls if args[0] == "sync")
+    assert "--group" in sync_arguments and sync_arguments[sync_arguments.index("--group") + 1] == "dev"

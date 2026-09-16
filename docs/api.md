@@ -21,7 +21,7 @@ Package development and publication preflight recipes belong to
 
 ## Command line and configuration
 
-The [README](../README.md#direct-cli-examples) contains runnable examples and
+The [README](../README.md#workflow-examples) contains runnable examples and
 help commands for inspecting CLI arguments.
 
 Place global `--root` and `--config` options before the command group. Configuration
@@ -38,7 +38,8 @@ use stdout. Human-readable diagnostics and progress messages are not a structure
 machine API. Template output and extracted release notes are intended for reuse.
 
 File-changing commands operate only when invoked: dependency and release updates,
-changelog generation/normalization/archiving, template output, and local tagging.
+changelog generation/normalization/archiving, template output, local tagging,
+and explicit setup/toolchain synchronization.
 Dry runs are available only where command help lists them. Importing the package
 does not install tools, access the network, or modify consumer files.
 
@@ -69,8 +70,12 @@ Later Python versions are allowed by metadata but are not yet in the test matrix
 Installed-package checks cover these public imports and representative CLI use
 outside the source checkout.
 
-The runtime dependency `rust-just` supplies `just`. Generated bootstrap launchers
-obtain uv and managed Python. Explicit toolchain synchronization installs pinned
+uv is a hard prerequisite and must be available on PATH. The runtime dependency
+`rust-just` supplies Just in the project environment. The explicit `setup` command
+also installs a persistent user-level Just command through uv and configures PATH.
+Recipes select the locked project environment without activation. Setup then
+synchronizes Python dependencies with the declared managed Rust tools available.
+Explicit toolchain synchronization installs pinned
 Rust/Cargo and supported declared Cargo tools, including git-cliff and rumdl.
 See [toolchain setup](INSTALLING.md) for declarations, host support, installation
 ownership, and remaining native validation gates. Git is a system prerequisite;

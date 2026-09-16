@@ -485,7 +485,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "packaging", specifier = ">=25" },
+    { name = "packaging", specifier = ">=26.1" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "rust-just", specifier = "==1.58.0" },
 ]

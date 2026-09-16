@@ -1814,12 +1814,16 @@ def format_markdown(text: str, path: Path, config: Path) -> str:
 
 def postprocess(path: Path, *, formatter: Path | None = None) -> None:
     """Read *path*, apply hygiene fixes, and write it back."""
+    from research_repo_tools.archive_changelog import parse_changelog, require_preserved_releases
+
     if path.is_symlink():
         raise ValueError(f"Changelog output must not be a symlink: {path}")
     text = path.read_text(encoding="utf-8")
+    original = parse_changelog(text)
     text = postprocess_text(text)
     if formatter is not None:
         text = format_markdown(text, path, formatter)
+    require_preserved_releases(original, parse_changelog(text))
 
     tmp_path: Path | None = None
     try:

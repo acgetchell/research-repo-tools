@@ -38,6 +38,10 @@ check: workflow-check
 check-dist:
     uv run --locked python scripts/check_install.py
 
+# Install real tools and verify setup on disposable GitHub-hosted runners only.
+check-setup:
+    uv run --locked python scripts/check_setup.py
+
 # Run checks, tests, builds, and isolated installation checks.
 ci: check test install-check
 
@@ -63,6 +67,10 @@ release-check tag:
 release-notes tag:
     uv run --locked research-repo-tools changelog notes "$1"
 
+# Install user Just and synchronize the declared development environment.
+setup:
+    uv run --locked research-repo-tools setup
+
 # Synchronize the locked development environment.
 sync:
     uv sync --locked
@@ -82,11 +90,12 @@ tag-release tag:
 test:
     uv run --locked pytest
 
-# Update exact development pins, refresh locked dependencies, and sync.
+# Upgrade uv, update exact development pins, refresh locked dependencies, and sync.
 update:
+    uv run --no-config --no-sync --no-python-downloads research-repo-tools deps update-uv
     uv run --locked research-repo-tools deps update-python
     uv lock --upgrade
-    uv sync --locked
+    uv run --locked research-repo-tools setup
 
 # Run actionlint and offline zizmor workflow checks.
 workflow-check:

@@ -6,22 +6,33 @@ Users install releases from PyPI with uv in their own projects; see
 
 ## Development environment
 
-Use Python 3.14+, uv, Ruff, ty, pytest, and just. The project manifest and lockfile
-own the environment.
+Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first,
+using the version declared in `pyproject.toml`. From this checkout, run the
+package setup command. It installs the pinned user-level Just command,
+configures PATH, and synchronizes the locked development environment.
 
 ```sh
-uv sync --locked
-uv run --locked just check
+uv run --locked --managed-python research-repo-tools setup
 ```
 
-Use `uv run --locked just ...` to select the project's bundled just executable.
+Open a new terminal if PATH changed, then use the recipes directly:
+
+```sh
+just help
+just check
+```
+
+No virtual-environment activation is required. The manifest and lockfile own
+Python, Ruff, ty, pytest, and the other development dependencies; recipes invoke
+uv internally. Run `just setup` again after changing tool declarations.
 
 ## Maintainer commands
 
 These recipes belong to this package's root justfile. Consumer setup and daily
 commands are documented in the [README](README.md#just-recipes).
-Run `just help`, `just help-workflows`, or bare `just` for the complete
-lexicographically sorted command list, including changelog recipes and aliases.
+Run `just help`, `just help-workflows`, or
+`just` for the complete lexicographically sorted command list,
+including changelog recipes and aliases.
 
 | Recipe | Purpose |
 | --- | --- |
@@ -29,48 +40,55 @@ lexicographically sorted command list, including changelog recipes and aliases.
 | `just build` | Build the wheel and source distribution |
 | `just check` | Check the lockfile, Python linting, formatting, types, and workflows |
 | `just check-dist` | Check isolated installations of existing build artifacts |
+| `just check-setup` | Exercise real setup on disposable GitHub-hosted runners only |
 | `just ci` | Run checks, tests, builds, and installation checks for final review |
 | `just help` | List available commands and arguments in lexicographic order |
 | `just help-workflows` | Alias for `help` |
 | `just install-check` | Build and check isolated installations |
 | `just release-check TAG` | Run the read-only PyPI publication preflight |
+| `just setup` | Install user Just and synchronize the declared development environment |
 | `just sync` | Synchronize the locked development environment |
 | `just test` | Run the Python test suite |
-| `just update` | Update exact development pins, refresh the lockfile, and sync |
+| `just update` | Upgrade uv, reconcile its pin, update Python development pins, refresh the lockfile, and sync |
 | `just workflow-check` | Run actionlint and offline zizmor checks |
 
 The maintainer justfile also exposes the [shared changelog recipes](README.md#just-recipes).
 Its `just release-check TAG` performs the package publication preflight;
 the consumer recipe `just release-check` validates consumer release metadata.
 
-Use `just check` while iterating, with targeted regressions when a behavioral
-change needs verification. Run `just ci` once the work is ready for final review.
+Use `just check` while iterating, with targeted regressions when
+a behavioral change needs verification. Run `just ci` once the
+work is ready for final review.
 It runs checks and tests, builds wheel and sdist artifacts, and installs both
 outside the checkout with uv. Installation checks exercise the console entry
 point, imports, packaged templates, runtime dependencies, and the bundled `just` executable.
 See [Validation](docs/VALIDATING.md) for check coverage and agent restrictions.
 Hosted CI builds once and installs the same wheel and sdist on all three platforms
-using `just check-dist`. The [release workflow](docs/PUBLISHING.md) publishes that
-validated artifact after environment approval.
+using `just check-dist`. Its required platform jobs also run `just check-setup`
+against the built wheel, installing real tools and updating the disposable
+runner user's shell configuration. This check is excluded from local `just ci`.
+The [release workflow](docs/PUBLISHING.md)
+publishes that validated artifact after environment approval.
 
-`just check` lints, formats, and type-checks `src`, `scripts`, and `tests`. It also
-runs the locked actionlint and zizmor workflow validators.
+`just check` lints, formats, and type-checks `src`, `scripts`, and
+`tests`. It also runs the locked actionlint and zizmor workflow validators.
 `just audit` performs the separate network-backed Python dependency audit.
 GitHub repository settings and required checks are documented in
 [GitHub setup](docs/CONFIGURING_GITHUB.md); their API payloads live in `.github/settings/`.
 
-Run `just update` to advance exact development-tool pins through this package's
-`deps update-python` command, refresh `uv.lock` within the resulting manifest
+Run `just update` to upgrade uv through its owner, reconcile its manifest pin,
+then advance exact development-tool pins through
+this package's `deps update-python` command, refresh `uv.lock` within the resulting manifest
 constraints, and sync the development environment. Review the manifest and lockfile
-changes, then validate them with `just ci`. Exact runtime, build, and audit pins
-remain unchanged by this recipe.
+changes, then validate them with `just ci`. Exact runtime, build,
+and audit pins remain unchanged by this recipe.
 
 ## Local package evaluation
 
 For pre-publication checks or debugging across local checkouts, build a wheel:
 
 ```sh
-uv run --locked just build
+just build
 ```
 
 Then install it in a disposable consuming project:
@@ -81,7 +99,7 @@ uv run --locked research-repo-tools --help
 ```
 
 An editable install with `uv add --dev --editable /path/to/research-repo-tools`
-also supports local development. For bootstrap evaluation, use the `tooling`
+also supports local development. For setup evaluation, use the `tooling`
 group described in the [toolchain guide](docs/INSTALLING.md). Local wheels and
 editable installs are development aids; normal consumer setup and CI use a
 pinned PyPI release.
@@ -146,6 +164,9 @@ Documents containing operational commands use UPPERCASE gerund filenames, such
 as `INSTALLING.md` and `VALIDATING.md`. Informational documents use lowercase
 names, such as `api.md` and `migration.md`. Preserve established root filenames
 such as README.md, AGENTS.md, SECURITY.md, and the generated CHANGELOG.md.
+
+Document uv as a prerequisite and setup that installs a user-level Just command, then
+use `just ...` for routine commands without environment activation. Keep uv invocation details inside the recipes.
 
 Keep recipe definitions, CLI help, and command-reference lists in lexicographic
 order. Generate Just help from recipe descriptions so it stays current.
