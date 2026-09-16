@@ -188,9 +188,12 @@ review its release notes, then rerun setup.
 
 `just update` upgrades uv before the Python dependency update.
 Standalone uv uses its official self-updater; Homebrew uv is upgraded through
-Homebrew. Other installation owners are left to their package manager, with
-uv's diagnostic propagated to the caller. An externally updated uv can run
-`just update` even while the old project pin differs: that recipe starts the
+Homebrew. Self-update requires a matching standalone installation receipt.
+Other installation owners receive a diagnostic before any upgrade is attempted;
+upgrade uv through that manager and reconcile its project pin manually, or use
+the official standalone installer to enable automatic updates. A supported,
+externally updated uv can run `just update` even while the old project pin differs:
+that recipe starts the
 already-installed package without syncing or enforcing the stale uv configuration.
 
 Upgrading the user-level uv affects other checkouts using it. Their exact uv pins

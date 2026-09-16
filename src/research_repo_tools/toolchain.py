@@ -9,6 +9,9 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from importlib.metadata import version
 from pathlib import Path
@@ -30,6 +33,18 @@ class Status:
     actual: str
     path: str
     ok: bool
+
+
+def _probe_key(paths: list[Path]) -> tuple[object, ...]:
+    """Notice environment edits, symlink changes, and replaced managed files."""
+    files = []
+    for path in paths:
+        try:
+            stat = path.stat()
+            files.append((path, path.resolve(), stat.st_dev, stat.st_ino, stat.st_size, stat.st_mtime_ns, stat.st_ctime_ns, stat.st_mode))
+        except OSError as error:
+            files.append((path, error.errno))
+    return tuple(sorted(os.environ.items())), tuple(files)
 
 
 def _probe(path: str | Path, name: str, required: str, args: tuple[str, ...] = ("--version",), *, env: dict[str, str], cwd: Path) -> Status:
@@ -61,14 +76,46 @@ class Runtime:
         self.host = host_target()
         self.manager = self.base / "rustup" / RUSTUP_VERSION / self.host
         self.rustup = executable(self.manager / "cargo" / "bin", "rustup")
+        self._probes: ContextVar[dict[str, tuple[tuple[object, ...], Status]] | None] = ContextVar("toolchain_probes", default=None)
+
+    @contextmanager
+    def _operation(self) -> Iterator[None]:
+        """Share probes only within this operation, including nested helpers."""
+        if self._probes.get() is not None:
+            yield
+            return
+        token = self._probes.set({})
+        try:
+            yield
+        finally:
+            self._probes.reset(token)
+
+    def _cached_probe(self, name: str, paths: list[Path], probe: Callable[[], Status]) -> Status:
+        cache = self._probes.get()
+        if cache is None:
+            return probe()
+        previous = cache.get(name)
+        if previous is not None:
+            key, status = previous
+            if key == _probe_key([*paths, *([Path(status.path)] if status.path else [])]):
+                return status
+        status = probe()
+        # Failed discovery may be repaired outside the selected paths, so retry
+        # failures rather than caching evidence about an absent interpreter.
+        if status.ok:
+            cache[name] = (_probe_key([*paths, *([Path(status.path)] if status.path else [])]), status)
+        else:
+            cache.pop(name, None)
+        return status
 
     def cargo_root(self, tool: CargoTool) -> Path:
         assert self.plan.rust is not None
         return self.base / "cargo" / self.host / self.plan.rust.channel / tool.package / tool.version
 
     def environment(self) -> dict[str, str]:
-        python = self.python_status(self.uv_status())
-        return self._environment(python)
+        with self._operation():
+            python = self.python_status(self.uv_status())
+            return self._environment(python)
 
     def _environment(self, python: Status | None = None) -> dict[str, str]:
         """Build probe environments without recursively looking up Python."""
@@ -93,15 +140,27 @@ class Runtime:
 
     def uv_status(self) -> Status:
         # uv is an external prerequisite, never installed or replaced by setup.
-        return _probe("uv", "uv", self.plan.uv, env=dict(os.environ), cwd=self.plan.root)
+        selected = shutil.which("uv", path=os.environ.get("PATH", ""))
+        return self._cached_probe(
+            "uv", [Path(selected)] if selected else [], lambda: _probe("uv", "uv", self.plan.uv, env=dict(os.environ), cwd=self.plan.root)
+        )
 
     def python_status(self, uv: Status) -> Status:
-        required = self.plan.python_request
-        if not uv.ok:
-            return Status("Python", required, "uv unavailable", "", False)
         environment = Path(os.environ.get("UV_PROJECT_ENVIRONMENT") or ".venv")
         if not environment.is_absolute():
             environment = self.plan.root / environment
+        paths = [environment, environment / "pyvenv.cfg", executable(environment / ("Scripts" if os.name == "nt" else "bin"), "python")]
+        if directory := os.environ.get("UV_PYTHON_INSTALL_DIR"):
+            paths.append(Path(directory))
+        # Include the uv executable: changing it can change interpreter discovery.
+        if uv.path:
+            paths.append(Path(uv.path))
+        return self._cached_probe("python", paths, lambda: self._python_status(uv, environment))
+
+    def _python_status(self, uv: Status, environment: Path) -> Status:
+        required = self.plan.python_request
+        if not uv.ok:
+            return Status("Python", required, "uv unavailable", "", False)
         if (environment / "pyvenv.cfg").is_file():
             status = self._python_probe(executable(environment / ("Scripts" if os.name == "nt" else "bin"), "python"))
             if status.ok:
@@ -167,6 +226,10 @@ class Runtime:
         )
 
     def inspect(self) -> list[Status]:
+        with self._operation():
+            return self._inspect()
+
+    def _inspect(self) -> list[Status]:
         uv = self.uv_status()
         just = _probe("just", "just", version("rust-just"), env=dict(os.environ), cwd=self.plan.root)
         # Git is a system prerequisite; no implicit installation or repository mutation.
@@ -180,6 +243,10 @@ class Runtime:
 
     def sync(self) -> None:
         """Converge on declared versions, then verify every selected executable."""
+        with self._operation():
+            self._sync()
+
+    def _sync(self) -> None:
         uv = self.uv_status()
         if not uv.ok:
             raise RuntimeError(f"uv {self.plan.uv} must be installed and available on PATH before setup; found {uv.actual}")
@@ -238,6 +305,10 @@ class Runtime:
                 "Native builds require Xcode Command Line Tools on macOS, a C/C++ compiler and development libraries on Linux, "
                 "or Visual Studio C++ Build Tools and a Windows SDK on Windows."
             ) from error
+        finally:
+            # Failed installers can also leave partially changed environments.
+            if (cache := self._probes.get()) is not None:
+                cache.clear()
 
     def _install_rustup(self) -> None:
         suffix = ".exe" if os.name == "nt" else ""

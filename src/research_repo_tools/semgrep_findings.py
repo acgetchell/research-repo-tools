@@ -175,6 +175,11 @@ def main() -> int:
     if semgrep is None:
         return 1
 
+    target = path.resolve()
+    for finding in semgrep.results:
+        if finding.path.resolve() != target:
+            print(f"Semgrep finding path does not identify fixture {path}: {finding.path}", file=sys.stderr)
+            return 1
     mismatches = _finding_mismatches(expected, semgrep.results)
     if not mismatches:
         return 0

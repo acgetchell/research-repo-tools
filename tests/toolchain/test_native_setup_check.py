@@ -76,3 +76,15 @@ def test_native_shell_check_rejects_system_just_even_when_version_matches(harnes
     monkeypatch.setattr(harness, "run", lambda *args, **kwargs: "/system/just\njust 1.58.0\n")
     with pytest.raises(AssertionError):
         harness.verify_shell(tmp_path, env, "1.58.0")
+
+
+@pytest.mark.skipif(os.name == "nt", reason="POSIX shell selection; Windows setup updates the user PATH registry")
+@pytest.mark.parametrize("platform,expected_shell", [("linux", "/bin/bash"), ("darwin", "/bin/zsh")])
+def test_native_environment_removes_markers_that_override_the_selected_shell(harness, tmp_path, monkeypatch, platform, expected_shell):
+    markers = ("NU_VERSION", "FISH_VERSION", "BASH_VERSION", "ZSH_VERSION", "KSH_VERSION", "PSModulePath")
+    for name in markers:
+        monkeypatch.setenv(name, "inherited-shell")
+    monkeypatch.setattr(harness.sys, "platform", platform)
+    env = harness.isolated_environment(tmp_path)
+    assert env["SHELL"] == expected_shell
+    assert not set(markers).intersection(env)

@@ -18,8 +18,13 @@ if TYPE_CHECKING:
     import pytest
 
 
-def _result(check_id: str, line: int, end_line: int | None = None) -> dict[str, object]:
-    return {"check_id": check_id, "path": "fixture.rs", "start": {"line": line}, "end": {"line": line if end_line is None else end_line}}
+@pytest.fixture(autouse=True)
+def fixture_working_directory(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+
+
+def _result(check_id: str, line: int, end_line: int | None = None, *, path: str = "fixture.rs") -> dict[str, object]:
+    return {"check_id": check_id, "path": path, "start": {"line": line}, "end": {"line": line if end_line is None else end_line}}
 
 
 def _run_main(monkeypatch: pytest.MonkeyPatch, fixture: Path, payload: object) -> int:
@@ -64,7 +69,7 @@ def test_semgrep_results_parses_valid_result_objects(monkeypatch: pytest.MonkeyP
 def test_matching_findings_cannot_hide_incomplete_or_malformed_scan(tmp_path, monkeypatch, capsys, errors):
     fixture = tmp_path / "fixture.py"
     fixture.write_text("# ruleid: shared.rule\nbad()\n")
-    payload = {"results": [_result("shared.rule", 2)], "errors": errors}
+    payload = {"results": [_result("shared.rule", 2, path=fixture.name)], "errors": errors}
     assert _run_main(monkeypatch, fixture, payload) == 1
     assert "errors must be an empty list" in capsys.readouterr().err
     payload["errors"] = []
@@ -153,7 +158,26 @@ def test_finding_mismatches_consumes_earliest_end_to_allow_later_points() -> Non
 def test_main_matches_markdown_finding_after_blank_line_and_code_fence(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fixture = tmp_path / "fixture.md"
     fixture.write_text("<!-- ruleid: docs.foo -->\n\n```bash\nbad-command\n```\n", encoding="utf-8")
-    assert _run_main(monkeypatch, fixture, {"results": [_result("docs.foo", 4)]}) == 0
+    assert _run_main(monkeypatch, fixture, {"results": [_result("docs.foo", 4, path=fixture.name)]}) == 0
+
+
+@pytest.mark.parametrize("include_matching", [False, True])
+def test_main_rejects_findings_from_another_file(tmp_path, monkeypatch, capsys, include_matching):
+    fixture = tmp_path / "fixture.rs"
+    fixture.write_text("// ruleid: shared.rule\nbad();\n")
+    findings = [_result("shared.rule", 2, path="other/fixture.rs")]
+    if include_matching:
+        findings.append(_result("shared.rule", 2))
+    assert _run_main(monkeypatch, fixture, {"results": findings}) == 1
+    assert "does not identify fixture" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize("absolute", [False, True])
+def test_main_accepts_resolved_paths_to_the_selected_fixture(tmp_path, monkeypatch, absolute):
+    fixture = tmp_path / "fixture.rs"
+    fixture.write_text("// ruleid: shared.rule\nbad();\n")
+    reported = str(fixture) if absolute else "./fixture.rs"
+    assert _run_main(monkeypatch, fixture, {"results": [_result("shared.rule", 2, path=reported)]}) == 0
 
 
 def test_semgrep_results_rejects_malformed_result_objects(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:

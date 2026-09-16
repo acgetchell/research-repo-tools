@@ -1,5 +1,7 @@
 """Update the active uv through its owner and reconcile the project declaration."""
 
+import json
+import os
 import re
 import shutil
 import tomllib
@@ -8,6 +10,47 @@ from pathlib import Path
 from research_repo_tools.files import replace_many
 from research_repo_tools.process import run_safe_command
 from research_repo_tools.tool_pins import STABLE, check_uv
+
+
+def _standalone_installation(executable: Path) -> bool:
+    """Require the first uv install receipt to identify this exact executable.
+
+    Follow uv/axoupdater's receipt search order, including explicit overrides.
+    Unknown receipt layouts fail closed; uv still validates the full receipt
+    before self-updating. A receipt for another installation grants no ownership.
+    """
+    if "AXOUPDATER_CONFIG_WORKING_DIR" in os.environ:
+        prefixes = [Path.cwd()]
+    elif "AXOUPDATER_CONFIG_PATH" in os.environ:
+        prefixes = [Path(os.environ["AXOUPDATER_CONFIG_PATH"])]
+    else:
+        prefixes = []
+        if "XDG_CONFIG_HOME" in os.environ:
+            prefixes.append(Path(os.environ["XDG_CONFIG_HOME"]) / "uv")
+        if os.name == "nt":
+            if "LOCALAPPDATA" in os.environ:
+                prefixes.append(Path(os.environ["LOCALAPPDATA"]) / "uv")
+        else:
+            prefixes.append(Path.home() / ".config" / "uv")
+    for prefix in prefixes:
+        receipt = prefix / "uv-receipt.json"
+        try:
+            data = json.loads(receipt.read_text(encoding="utf-8-sig"))
+        except FileNotFoundError:
+            continue
+        except OSError, ValueError:
+            return False
+        if not isinstance(data, dict) or data.get("install_layout") != "flat":
+            return False
+        install_prefix = data.get("install_prefix")
+        binaries = data.get("binaries")
+        if not isinstance(install_prefix, str) or not install_prefix or "\x00" in install_prefix or not Path(install_prefix).is_absolute():
+            return False
+        name = "uv.exe" if os.name == "nt" else "uv"
+        if not isinstance(binaries, list) or name not in binaries:
+            return False
+        return (Path(install_prefix) / name).resolve() == executable.resolve()
+    return False
 
 
 def updated_manifest(text: str, new: str) -> str:
@@ -59,7 +102,12 @@ def update(root: Path, *, uv: str = "uv") -> str:
             raise ValueError("active uv does not belong to the detected Homebrew installation")
         run_safe_command("brew", ["upgrade", "uv"], timeout=600, capture_output=False)
     else:
-        # uv checks its own installation receipt and refuses other package managers.
+        if not _standalone_installation(Path(executable)):
+            raise ValueError(
+                f"No matching standalone uv installation receipt for {executable}; automatic upgrades support standalone and Homebrew installations. "
+                "For pip, pipx, WinGet, Scoop, MacPorts, Cargo, or another owner, upgrade uv with its original package manager and reconcile "
+                "[tool.uv].required-version with uv --version. Alternatively, use the official standalone installer. No upgrade was attempted."
+            )
         run_safe_command(executable, ["self", "update", "--no-config"], timeout=600, capture_output=False)
     new = check_uv(executable=executable)
     payloads = {manifest: updated_manifest(text, new).encode("utf-8")}

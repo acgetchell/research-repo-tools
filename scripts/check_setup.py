@@ -38,6 +38,10 @@ def isolated_environment(directory: Path) -> dict[str, str]:
         RESEARCH_REPO_TOOLS_HOME=str(directory / "managed-tools"),
     )
     if os.name != "nt":
+        # uv checks shell-specific markers before SHELL. Hosted runners can
+        # inherit PowerShell's marker even when this check is launched by Bash.
+        for marker in ("NU_VERSION", "FISH_VERSION", "BASH_VERSION", "ZSH_VERSION", "KSH_VERSION", "PSModulePath"):
+            env.pop(marker, None)
         env["SHELL"] = "/bin/zsh" if sys.platform == "darwin" else "/bin/bash"
     # Drop the outer `uv run` environment from PATH as well as VIRTUAL_ENV.
     excluded = {Path(sys.executable).parent, ROOT / ".venv" / "bin", ROOT / ".venv" / "Scripts"}
@@ -87,7 +91,7 @@ def verify_shell(consumer: Path, env: dict[str, str], expected_just: str) -> dic
     else:
         command = [env["SHELL"], "-ic", "command -v just && just --version"]
     output = run(command, cwd=consumer, env=env).strip().splitlines()
-    assert output[-2:] == [str(binary(user_bin, "just")), f"just {expected_just}"], output
+    assert len(output) >= 2 and Path(output[-2]) == binary(user_bin, "just") and output[-1] == f"just {expected_just}", output
     # Use the now-verified user command for subsequent checks and repeat setup.
     return {**env, "PATH": str(user_bin) + os.pathsep + env["PATH"]}
 

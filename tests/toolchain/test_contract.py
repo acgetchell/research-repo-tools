@@ -506,9 +506,11 @@ def setup_fake(runtime, monkeypatch, *, just_version=None, failure=None, directo
         elif args[0] == "sync":
             assert fake.installed_rust
             assert kwargs["env"]["RUSTUP_TOOLCHAIN"] == "1.98.0"
-            assert shutil.which("python", path=kwargs["env"]["PATH"]) == str(fake.python)
+            selected_python = shutil.which("python", path=kwargs["env"]["PATH"])
+            assert selected_python is not None and Path(selected_python) == fake.python
             for tool in instance.plan.cargo:
-                assert shutil.which(tool.binary, path=kwargs["env"]["PATH"]) == str(executable(instance.cargo_root(tool) / "bin", tool.binary))
+                selected_tool = shutil.which(tool.binary, path=kwargs["env"]["PATH"])
+                assert selected_tool is not None and Path(selected_tool) == executable(instance.cargo_root(tool) / "bin", tool.binary)
         else:
             raise AssertionError(args)
         return subprocess.CompletedProcess([command, *args], 0, output, "")
@@ -626,3 +628,91 @@ def test_setup_keeps_dev_when_default_groups_are_disabled(runtime, monkeypatch):
     setup_module.setup(instance)
     sync_arguments = next(args for _, args, _ in fake.calls if args[0] == "sync")
     assert "--group" in sync_arguments and sync_arguments[sync_arguments.index("--group") + 1] == "dev"
+
+
+@pytest.mark.parametrize("operation", ["inspect", "sync"])
+def test_operations_probe_unchanged_uv_and_python_once(runtime, operation):
+    instance, fake = runtime
+    instance.sync()
+    fake.calls.clear()
+    getattr(instance, operation)()
+    uv = executable(fake.directory, "uv")
+    assert sum(Path(command) == uv and args == ["--version"] for command, args, _ in fake.calls) == 1
+    assert sum(args[:2] == ["python", "find"] for _, args, _ in fake.calls) == 1
+    assert sum(Path(command) == fake.python and args == ["--version"] for command, args, _ in fake.calls) == 1
+    assert instance._probes.get() is None
+
+
+def test_independent_operations_do_not_retain_probe_results(runtime):
+    instance, fake = runtime
+    instance.inspect()
+    # Change the modeled executable without touching its file metadata: a new
+    # independent operation must probe again even if all fingerprints match.
+    fake.outputs[fake.python] = "Python 3.13.7"
+    python = next(status for status in instance.inspect() if status.name == "Python")
+    assert not python.ok and python.actual == "3.13.7"
+
+
+def test_probe_cache_tracks_path_and_selected_executable_changes(runtime, monkeypatch, tmp_path):
+    instance, fake = runtime
+    with instance._operation():
+        assert instance.python_status(instance.uv_status()).actual == "3.14.7"
+        fake.outputs[fake.python] = "Python 3.14.8"
+        fake.python.write_bytes(b"a replaced interpreter with different metadata")
+        assert instance.python_status(instance.uv_status()).actual == "3.14.8"
+        other = tmp_path / "other bin"
+        fake.add(executable(other, "uv"), "uv 0.12.14")
+        monkeypatch.setenv("PATH", str(other) + os.pathsep + os.environ["PATH"])
+        assert not instance.uv_status().ok
+        assert not instance.python_status(instance.uv_status()).ok
+
+
+@pytest.mark.parametrize("override", [False, True])
+def test_probe_cache_notices_new_project_environment_and_config_edits(runtime, monkeypatch, override):
+    instance, fake = runtime
+    with instance._operation():
+        assert instance.python_status(instance.uv_status()).path == str(fake.python)
+        environment = instance.plan.root / ("other environment" if override else ".venv")
+        if override:
+            monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(environment))
+        python = executable(environment / ("Scripts" if os.name == "nt" else "bin"), "python")
+        fake.add(python, "Python 3.14.6")
+        configuration = environment / "pyvenv.cfg"
+        configuration.write_text("synthetic virtual environment\n")
+        assert instance.python_status(instance.uv_status()).actual == "3.14.6"
+        fake.outputs[python] = "Python 3.14.9"
+        configuration.write_text("changed virtual environment configuration\n")
+        assert instance.python_status(instance.uv_status()).actual == "3.14.9"
+
+
+@pytest.mark.parametrize("failed", [False, True])
+def test_installer_attempt_invalidates_cached_probes(runtime, monkeypatch, failed):
+    instance, fake = runtime
+    original = fake.run
+
+    def install(command, args, **kwargs):
+        if args == ["repair"]:
+            fake.outputs[fake.python] = "Python 3.14.8"
+            if failed:
+                raise subprocess.CalledProcessError(1, [command, *args], stderr="partial repair")
+            return subprocess.CompletedProcess([], 0, "", "")
+        return original(command, args, **kwargs)
+
+    monkeypatch.setattr(toolchain, "run_safe_command", install)
+    with instance._operation():
+        uv = instance.uv_status()
+        assert instance.python_status(uv).actual == "3.14.7"
+        if failed:
+            with pytest.raises(RuntimeError, match="partial repair"):
+                instance._install(uv.path, ["repair"])
+        else:
+            instance._install(uv.path, ["repair"])
+        assert instance.python_status(instance.uv_status()).actual == "3.14.8"
+
+
+def test_failed_operation_discards_cached_probes(runtime):
+    instance, fake = runtime
+    fake.fail_package = "git-cliff"
+    with pytest.raises(RuntimeError, match="registry unavailable"):
+        instance.sync()
+    assert instance._probes.get() is None

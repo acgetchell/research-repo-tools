@@ -40,8 +40,10 @@ dev = [{include-group = "tooling"}]
 
 Follow the [toolchain guide][toolchain] to declare uv, Python, and Rust tool
 versions, merge the [consumer justfile template][just-template], and commit the
-manifest and refreshed lockfile. Adding the dependency installs the package;
-setup is one explicit command, with no installation hooks or generated scripts.
+manifest and refreshed lockfile. The `uv add --no-sync` command records the
+dependency without installing or synchronizing it. The setup invocation below
+installs research-repo-tools before running setup, with no installation hooks
+or generated scripts.
 
 In a configured consumer checkout, run this once on Linux, macOS, or Windows:
 
