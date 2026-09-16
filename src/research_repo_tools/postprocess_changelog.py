@@ -1600,6 +1600,56 @@ def _protect_fenced_blocks(text: str) -> tuple[str, dict[str, str]]:
     return "\n".join(result), blocks
 
 
+def _table_cells(line: str) -> list[str]:
+    """Split pipe-table cells, respecting escaped pipes and optional borders."""
+    cells: list[str] = []
+    start = position = 0
+    while position < len(line):
+        if line[position] == "\\":
+            position += 2
+            continue
+        if line[position] == "|":
+            cells.append(line[start:position].strip())
+            start = position + 1
+        position += 1
+    cells.append(line[start:].strip())
+    if len(cells) == 1:
+        return []
+    if cells[0] == "":
+        cells.pop(0)
+    if cells and cells[-1] == "":
+        cells.pop()
+    return cells
+
+
+def _table_line_indices(lines: list[str]) -> set[int]:
+    """Recognize pipe tables before applying prose-only transformations."""
+    preserved: set[int] = set()
+    index = 0
+    while index + 1 < len(lines):
+        header = _table_cells(lines[index])
+        separator = _table_cells(lines[index + 1])
+        if not header or len(header) != len(separator) or not all(re.fullmatch(r":?-+:?", cell) for cell in separator):
+            index += 1
+            continue
+        preserved.update((index, index + 1))
+        index += 2
+        # Rows may omit cells and even all pipes. A blank or a new Markdown
+        # block ends the table; prose reflow must never split an existing row.
+        while index < len(lines) and lines[index].strip():
+            row = lines[index].strip()
+            if (
+                _ATX_HEADING_RE.match(row)
+                or row.startswith(">")
+                or re.match(r"(?:[-+*]|[0-9]{1,9}[.)])(?:\s|$)", row)
+                or re.fullmatch(r"(?:-\s*){3,}|(?:_\s*){3,}|(?:\*\s*){3,}", row)
+            ):
+                break
+            preserved.add(index)
+            index += 1
+    return preserved
+
+
 def postprocess_text(text: str) -> str:
     """Apply one common Markdown policy, preserving fenced code and reference links."""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
@@ -1613,6 +1663,7 @@ def postprocess_text(text: str) -> str:
     text = _inject_summary_sections(text)
 
     lines = text.split("\n")
+    table_lines = _table_line_indices(lines)
     result: list[str] = []
     active_fence: _CodeFence | None = None
     current_entry_summary: str | None = None
@@ -1620,6 +1671,9 @@ def postprocess_text(text: str) -> str:
     drop_next_blank = False
 
     for idx, line in enumerate(lines):
+        if idx in table_lines:
+            result.append(line)
+            continue
         # --- fenced code-block tracking ---
         next_line = lines[idx + 1] if idx + 1 < len(lines) else None
         handled, active_fence = _process_code_fence(line, result, active_fence, next_line)

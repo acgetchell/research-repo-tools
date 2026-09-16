@@ -103,6 +103,8 @@ fixtures = "tests/semgrep"
 Paths are relative to the consumer root, which defaults to the configuration
 directory; `--root PATH` overrides that root. Explicit executable paths such as
 `deps.uv = "./bin/uv"` use the same root; bare names use `PATH`.
+The selected uv executable is used for dependency resolution, Python pin updates,
+and uv version checks.
 Unknown settings fail. There are no repository profiles.
 
 `deps.tools` values name packages installed separately with Cargo, as listed by
@@ -125,6 +127,9 @@ Cargo pins accept canonical prereleases and build metadata, such as
 before replacement. Comments, line endings, permissions, and symlink targets
 are preserved. `deps update-python` updates exact development requirements
 while retaining ranges, markers, extras, and other unmanaged constraints.
+Before uv changes the manifest and lockfile, the updater saves both originals.
+A failed update restores them; if restoration also fails, the command reports
+the retained backup paths for recovery.
 
 See [changelog behavior](docs/changelog.md), [release behavior](docs/release.md),
 [scope and adoption](docs/migration.md), and [validation](docs/validation.md).

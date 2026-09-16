@@ -11,6 +11,8 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeGuard
 
+from packaging.utils import canonicalize_name
+
 from research_repo_tools.archive_changelog import ParsedChangelog, parse_changelog
 from research_repo_tools.release_tags import SEMVER_PATTERN
 from research_repo_tools.toml_source import key_line
@@ -298,7 +300,13 @@ def _uv_lock_reference(path: Path, project: PythonProjectInfo) -> VersionReferen
     candidates: list[int] = []
     for index, entry in enumerate(entries):
         source = entry.get("source")
-        if entry.get("name") == project.name and _is_parsed_object(source) and (source.get("editable") == "." or source.get("virtual") == "."):
+        name = entry.get("name")
+        if (
+            isinstance(name, str)
+            and canonicalize_name(name) == canonicalize_name(project.name)
+            and _is_parsed_object(source)
+            and (source.get("editable") == "." or source.get("virtual") == ".")
+        ):
             candidates.append(index)
     return _single_package_reference(path, entries, candidates, project.name, ReferenceKind.UV_LOCK)
 

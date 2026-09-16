@@ -1,11 +1,9 @@
 """Advance exact Python development-tool pins with uv's resolver."""
 
 import argparse
-import os
 import re
 import subprocess
 import sys
-import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -14,7 +12,8 @@ from typing import cast
 from packaging.requirements import InvalidRequirement, Requirement
 from packaging.version import InvalidVersion, Version
 
-from research_repo_tools.process import ExecutableNotFoundError, run_safe_command
+from research_repo_tools.files import preserve_files
+from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics, run_safe_command
 
 RESOLVED_REQUIREMENT = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)==(?P<version>[^;\s]+)(?:\s*;\s*.+)?$",
@@ -183,12 +182,12 @@ def _resolution_requirements(text: str, pins: list[DevPin]) -> str:
     return "".join(f"{requirement}\n" for requirement in requirements)
 
 
-def resolve_latest_pins(pins: list[DevPin], python_version: str, project_root: Path) -> list[DevPin]:
+def resolve_latest_pins(pins: list[DevPin], python_version: str, project_root: Path, *, uv: str = "uv") -> list[DevPin]:
     """Resolve the latest mutually compatible cross-platform set without writes."""
     manifest = project_root / "pyproject.toml"
     requirements = _resolution_requirements(manifest.read_text(encoding="utf-8"), pins)
     result = run_safe_command(
-        "uv",
+        uv,
         [
             "pip",
             "compile",
@@ -229,37 +228,6 @@ def _conventional_manifest(pyproject: Path) -> Path:
             msg = f"--pyproject must not select a uv workspace member; use the workspace-root manifest instead: {resolved}"
             raise TypeError(msg)
     return resolved
-
-
-def _write_bytes_atomic(path: Path, payload: bytes) -> None:
-    """Atomically restore one project file from an in-memory snapshot."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    descriptor, temporary_name = tempfile.mkstemp(prefix=f".{path.name}.", dir=path.parent)
-    temporary = Path(temporary_name)
-    try:
-        with os.fdopen(descriptor, "wb") as stream:
-            stream.write(payload)
-        temporary.chmod(path.stat().st_mode if path.exists() else 0o644)
-        temporary.replace(path)
-    except BaseException:
-        temporary.unlink(missing_ok=True)
-        raise
-
-
-def _restore_snapshots(snapshots: dict[Path, bytes | None]) -> None:
-    """Restore every manifest/lock snapshot after a failed uv mutation."""
-    errors: list[str] = []
-    for path, original in snapshots.items():
-        try:
-            if original is None:
-                path.unlink(missing_ok=True)
-            else:
-                _write_bytes_atomic(path, original)
-        except OSError as error:
-            errors.append(f"{path}: {error}")
-    if errors:
-        msg = f"could not restore Python project files after failed pin update: {'; '.join(errors)}"
-        raise RuntimeError(msg)
 
 
 def _masked_manifest(text: str, managed_names: frozenset[str]) -> dict[str, object]:
@@ -314,7 +282,7 @@ def _require_applied_pins(pyproject: Path, expected: list[DevPin], original: byt
         raise ValueError(msg)
 
 
-def update_dev_pins(pyproject: Path) -> dict[str, tuple[str, str]]:
+def update_dev_pins(pyproject: Path, *, uv: str = "uv") -> dict[str, tuple[str, str]]:
     """Resolve and apply all changed exact direct pins in one uv transaction."""
     manifest = _conventional_manifest(pyproject)
     uv_lock = manifest.parent / "uv.lock"
@@ -324,30 +292,19 @@ def update_dev_pins(pyproject: Path) -> dict[str, tuple[str, str]]:
     python_version, current = parse_project(manifest.read_text(encoding="utf-8"))
     if not current:
         return {}
-    latest = resolve_latest_pins(current, python_version, manifest.parent)
+    latest = resolve_latest_pins(current, python_version, manifest.parent, uv=uv)
     changes = {old.name: (old.version, new.version) for old, new in zip(current, latest, strict=True) if old.version != new.version}
     if not changes:
         return changes
 
-    snapshots = {
-        manifest: manifest.read_bytes(),
-        uv_lock: uv_lock.read_bytes() if uv_lock.exists() else None,
-    }
-    try:
+    with preserve_files((manifest, uv_lock)) as snapshots:
         run_safe_command(
-            "uv",
+            uv,
             ["add", "--dev", "--no-sync", *(f"{pin.name}=={pin.version}" for pin in latest)],
             cwd=manifest.parent,
             timeout=UV_ADD_TIMEOUT_SECONDS,
         )
         _require_applied_pins(manifest, latest, snapshots[manifest] or b"")
-    except BaseException as primary:
-        try:
-            _restore_snapshots(snapshots)
-        except RuntimeError as rollback_error:
-            msg = f"Python development-tool pin update failed ({primary}); rollback also failed: {rollback_error}"
-            raise RuntimeError(msg) from primary
-        raise
     return changes
 
 
@@ -360,6 +317,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default=Path("pyproject.toml"),
         help="project manifest containing dependency-groups.dev",
     )
+    parser.add_argument("--uv-executable", default="uv", help="uv executable used for resolution and updates")
     return parser.parse_args(argv)
 
 
@@ -378,7 +336,14 @@ def main(argv: list[str] | None = None) -> int:
         if not pins:
             print("No exact direct Python development-tool pins to update.")
             return 0
-        changes = update_dev_pins(args.pyproject)
+        changes = update_dev_pins(args.pyproject, uv=args.uv_executable)
+    except ExceptionGroup as error:
+        expected, unexpected = error.split((ExecutableNotFoundError, OSError, RuntimeError, subprocess.SubprocessError, TypeError, ValueError))
+        if expected is not None:
+            print(f"failed to update Python development-tool pins: {format_exception_diagnostics(expected)}", file=sys.stderr)
+        if unexpected is not None:
+            raise unexpected from None
+        return 1
     except subprocess.CalledProcessError as error:
         print(f"failed to update Python development-tool pins: {_subprocess_detail(error)}", file=sys.stderr)
         return 1

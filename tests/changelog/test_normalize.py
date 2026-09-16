@@ -216,6 +216,26 @@ class TestRumdlCompatibility:
 
 
 class TestReflowLine:
+    @pytest.mark.parametrize("indent", ["", "  "])
+    @pytest.mark.parametrize("borders", [False, True])
+    def test_normalization_preserves_pipe_tables(self, indent: str, borders: bool) -> None:
+        rows = ["Case | Description", ":--- | ---:", "A | " + "ordinary words " * 20, r"B | A code span `a\|b` and a [link](docs/a.md)"]
+        table = "\n".join(indent + (f"| {row} |" if borders else row) for row in rows)
+        text = "# Changelog\n\n## [Unreleased]\n\n### Changed\n\n- Results\n\n" + table + "\n"
+        normalized = postprocess_text(text)
+        assert table in normalized
+        assert postprocess_text(normalized) == normalized
+
+    def test_table_preservation_ends_at_blank_or_heading(self) -> None:
+        row = "a single cell " * 20
+        table = "| Description |\n| --- |\n" + row
+        long_prose = "ordinary prose " * 20
+        for boundary in ("\n\n", "\n### Changed\n\n"):
+            result = postprocess_text(table + boundary + long_prose + "\n")
+            assert table in result
+            assert long_prose not in result
+            assert " ".join(result.split()).endswith(long_prose.strip())
+
     def test_short_line_unchanged(self) -> None:
         line = "- Short line `abc1234`"
         assert _reflow_line(line, max_width=160) == line

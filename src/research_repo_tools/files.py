@@ -5,9 +5,11 @@ import os
 import secrets
 import shutil
 import stat
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Never
 
 LOGGER = logging.getLogger(__name__)
 
@@ -131,21 +133,72 @@ def _stage_writes(writes: Sequence[tuple[Path, bytes]]) -> tuple[list[_StagedWri
     return staged_writes, created_directories
 
 
-def _rollback_committed(committed: Sequence[_StagedWrite]) -> tuple[list[OSError], set[Path]]:
+def _restore_backups(backups: Sequence[tuple[Path, Path | None]]) -> tuple[list[OSError], set[Path]]:
     """Restore committed targets, returning rollback failures and saved backups."""
     rollback_errors: list[OSError] = []
     preserved_backups: set[Path] = set()
-    for item in reversed(committed):
+    for target, backup in reversed(backups):
         try:
-            if item.backup is None:
-                item.target.unlink(missing_ok=True)
+            if backup is None:
+                target.unlink(missing_ok=True)
             else:
-                _replace_path(item.backup, item.target)
+                _replace_path(backup, target)
         except OSError as rollback_error:
-            rollback_errors.append(OSError(f"failed to restore {item.target}: {rollback_error}"))
-            if item.backup is not None:
-                preserved_backups.add(item.backup)
+            rollback_errors.append(OSError(f"failed to restore {target}: {rollback_error}"))
+            if backup is not None:
+                preserved_backups.add(backup)
     return rollback_errors, preserved_backups
+
+
+def _raise_incomplete_rollback(
+    error: BaseException, rollback_errors: list[OSError], backups: Sequence[tuple[Path, Path | None]], preserved: set[Path]
+) -> Never:
+    message = "File update failed and rollback was incomplete"
+    if preserved:
+        recovery = "; ".join(f"{target} -> {backup}" for target, backup in backups if backup in preserved)
+        message += f"; original content retained at {recovery}"
+    raise BaseExceptionGroup(message, [error, *rollback_errors]) from None
+
+
+def _validate_targets(targets: Sequence[Path]) -> None:
+    if len({path.resolve() for path in targets}) != len(targets):
+        raise ValueError("A publication transaction cannot contain duplicate target paths")
+    for path in targets:
+        if path.is_symlink():
+            raise ValueError(f"Transaction output must not be a symlink: {path}")
+        if path.exists() and not path.is_file():
+            raise IsADirectoryError(f"output path exists but is not a file: {path}")
+
+
+@contextmanager
+def preserve_files(paths: Sequence[Path]) -> Iterator[Mapping[Path, bytes | None]]:
+    """Back up files before external mutation and restore them on caught failures.
+
+    Yield the original bytes (None for absent files). Backups are fully written
+    before the caller can mutate files. Incomplete rollback retains and reports
+    the original recovery files; successful updates or rollback remove backups.
+    """
+    _validate_targets(paths)
+    backups: list[tuple[Path, Path | None]] = []
+    try:
+        for path in paths:
+            backups.append((path, _stage_backup(path) if path.exists() else None))
+        originals = {target: backup.read_bytes() if backup is not None else None for target, backup in backups}
+    except BaseException:
+        _cleanup_temporary_paths([backup for _, backup in backups if backup is not None])
+        raise
+
+    backup_paths = [backup for _, backup in backups if backup is not None]
+    try:
+        yield originals
+    except BaseException as error:
+        rollback_errors, preserved = _restore_backups(backups)
+        _cleanup_temporary_paths(backup_paths, preserved)
+        if rollback_errors:
+            _raise_incomplete_rollback(error, rollback_errors, backups, preserved)
+        raise
+    else:
+        _cleanup_temporary_paths(backup_paths)
 
 
 def _publish(writes: Sequence[tuple[Path, bytes]]) -> None:
@@ -158,15 +211,7 @@ def _publish(writes: Sequence[tuple[Path, bytes]]) -> None:
     if not writes:
         return
 
-    targets = [path for path, _text in writes]
-    if len({path.resolve() for path in targets}) != len(targets):
-        msg = "A publication transaction cannot contain duplicate target paths"
-        raise ValueError(msg)
-    for path in targets:
-        if path.is_symlink():
-            raise ValueError(f"Transaction output must not be a symlink: {path}")
-        if path.exists() and not path.is_file():
-            raise IsADirectoryError(f"output path exists but is not a file: {path}")
+    _validate_targets([path for path, _text in writes])
 
     staged_writes, created_directories = _stage_writes(writes)
 
@@ -176,18 +221,13 @@ def _publish(writes: Sequence[tuple[Path, bytes]]) -> None:
             _replace_path(item.staged, item.target)
             committed.append(item)
     except BaseException as publication_error:
-        rollback_errors, preserved_backups = _rollback_committed(committed)
+        backups = [(item.target, item.backup) for item in committed]
+        rollback_errors, preserved_backups = _restore_backups(backups)
         _cleanup_temporary_paths(_transaction_temporary_paths(staged_writes), preserved_backups)
         _remove_created_directories(created_directories)
 
         if rollback_errors:
-            publication_error.add_note("One or more rollback backups were preserved beside their target files")
-            recovery = "; ".join(f"{item.target} -> {item.backup}" for item in committed if item.backup in preserved_backups)
-            message = f"Publication failed and rollback was incomplete; original content retained at {recovery}"
-            raise BaseExceptionGroup(
-                message,
-                [publication_error, *rollback_errors],
-            ) from None
+            _raise_incomplete_rollback(publication_error, rollback_errors, backups, preserved_backups)
         raise
 
     backup_paths = [item.backup for item in staged_writes if item.backup is not None]

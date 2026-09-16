@@ -65,8 +65,13 @@ footer = """
                 /tree/{{ release.version }}
         {% endif -%}
     {% else -%}
-        [Unreleased]: https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}\
-            /compare/{{ release.previous.version }}...HEAD
+        {% if release.previous.version -%}
+            [Unreleased]: https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}\
+                /compare/{{ release.previous.version }}...HEAD
+        {% else -%}
+            [Unreleased]: https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}\
+                /commits/HEAD
+        {% endif -%}
     {% endif -%}
 {% endfor -%}
 """

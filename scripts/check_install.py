@@ -26,6 +26,7 @@ def run(command: list[str], *, cwd: Path, env: dict[str, str]) -> str:
 BASE_SMOKE = r"""
 import importlib, importlib.metadata, importlib.resources, importlib.util, json, pathlib, pkgutil, socket, sys
 import research_repo_tools
+assert research_repo_tools.__version__ == importlib.metadata.version("research-repo-tools")
 root = pathlib.Path(sys.argv[1]).resolve()
 assert not pathlib.Path(research_repo_tools.__file__).is_relative_to(root)
 def no_network(*args, **kwargs):

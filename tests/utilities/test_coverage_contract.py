@@ -1,6 +1,6 @@
 """Coverage reporting uses unique source lines and explicit input paths."""
 
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from xml.etree import ElementTree as ET
 
 import pytest
@@ -23,6 +23,15 @@ def test_invalid_coverage_counts_are_rejected(attributes: str) -> None:
     root = ET.fromstring(f'<coverage><class filename="src/a.rs"><lines><line {attributes}/></lines></class></coverage>')
     with pytest.raises(ValueError, match="src/a.rs"):
         list(coverage.coverage_entries(root))
+
+
+@pytest.mark.parametrize("consumer_root", [PurePosixPath("/consumer"), PureWindowsPath("C:/consumer")], ids=["posix", "windows"])
+def test_formatted_report_uses_forward_slashes_on_both_platforms(consumer_root, monkeypatch: pytest.MonkeyPatch) -> None:
+    # Model native path parsing without depending on the host filesystem.
+    monkeypatch.setattr(coverage, "Path", type(consumer_root))
+    report = ET.fromstring(f'<coverage><class filename="{consumer_root.as_posix()}/src/a.rs"><lines><line number="1" hits="1"/></lines></class></coverage>')
+    (entry,) = coverage.coverage_entries(report)
+    assert entry.format(relative_to=consumer_root) == "100.00%  src/a.rs"
 
 
 def test_cli_uses_consumer_root_and_deterministic_ties(tmp_path: Path, capsys) -> None:

@@ -1,14 +1,12 @@
 """Shared update python dev pins behavior and regression cases."""
 
 import subprocess
-from typing import TYPE_CHECKING
+from pathlib import Path
 
 import pytest
 
+from research_repo_tools import cli
 from research_repo_tools import dependencies as update_python_dev_pins
-
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 def project_text(*requirements: str) -> str:
@@ -286,29 +284,78 @@ def test_main_rejects_symlinked_lock_without_mutating_link_or_target(
     assert pyproject.read_text(encoding="utf-8") == original_manifest
 
 
-def test_main_reports_primary_and_rollback_failures_without_traceback(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
+@pytest.mark.parametrize("failed_file", ["pyproject.toml", "uv.lock"])
+def test_failed_update_retains_recovery_bytes_after_rollback_failure(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], failed_file: str
 ) -> None:
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(project_text("ruff==0.16.2"), encoding="utf-8")
+    lock = tmp_path / "uv.lock"
+    lock.write_bytes(b"original lock\r\n")
+    originals = {path: path.read_bytes() for path in (pyproject, lock)}
 
     def fail_update(command: str, args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         if args[:2] == ["pip", "compile"]:
             return subprocess.CompletedProcess([command, *args], 0, stdout="ruff==0.16.4\n", stderr="")
+        pyproject.write_text("partial manifest\n", encoding="utf-8")
+        lock.write_text("partial lock\n", encoding="utf-8")
         msg = "primary update failure"
         raise OSError(msg)
 
-    def fail_restore(_snapshots: object) -> None:
-        msg = "rollback failure"
-        raise RuntimeError(msg)
+    original_replace = Path.replace
+
+    def fail_restore(source: Path, target: Path) -> Path:
+        if target == tmp_path / failed_file:
+            raise PermissionError("rollback failure")
+        return original_replace(source, target)
 
     monkeypatch.setattr(update_python_dev_pins, "run_safe_command", fail_update)
-    monkeypatch.setattr(update_python_dev_pins, "_restore_snapshots", fail_restore)
+    monkeypatch.setattr(Path, "replace", fail_restore)
     assert update_python_dev_pins.main(["--pyproject", str(pyproject)]) == 1
     captured = capsys.readouterr()
     assert captured.out == ""
     assert "primary update failure" in captured.err
     assert "rollback failure" in captured.err
+    assert "Traceback" not in captured.err
+    retained = set(tmp_path.iterdir()) - originals.keys()
+    assert len(retained) == 1
+    backup = retained.pop()
+    assert backup.read_bytes() == originals[tmp_path / failed_file]
+    assert str(backup) in captured.err
+    for path, payload in originals.items():
+        if path.name != failed_file:
+            assert path.read_bytes() == payload
+
+
+@pytest.mark.parametrize("executable", ["custom-uv", "./tools/uv"])
+@pytest.mark.parametrize("explicit_root", [False, True])
+def test_update_python_uses_selected_uv_for_resolution_and_mutation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, executable: str, explicit_root: bool
+) -> None:
+    root = tmp_path / "consumer"
+    root.mkdir()
+    elsewhere = tmp_path / "elsewhere"
+    elsewhere.mkdir()
+    manifest = root / "pyproject.toml"
+    manifest.write_text(project_text("ruff==0.16.2"), encoding="utf-8")
+    settings = (elsewhere if explicit_root else root) / "tools.toml"
+    settings.write_text(f'[deps]\nuv="{executable}"\n', encoding="utf-8")
+    calls = []
+
+    def run(command: str, args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        assert kwargs["cwd"] == root
+        calls.append((command, args[0]))
+        if args[0] == "add":
+            manifest.write_text(project_text("ruff==0.16.4"), encoding="utf-8")
+        return subprocess.CompletedProcess([command, *args], 0, "ruff==0.16.4\n", "")
+
+    monkeypatch.setattr(update_python_dev_pins, "run_safe_command", run)
+    monkeypatch.chdir(elsewhere)
+    args = ["--config", str(settings)] + (["--root", str(root)] if explicit_root else [])
+    assert cli.main([*args, "deps", "update-python"]) == 0
+    selected = str(root / "tools/uv") if executable.startswith(".") else executable
+    assert calls == [(selected, "pip"), (selected, "add")]
+    assert manifest.read_text(encoding="utf-8") == project_text("ruff==0.16.4")
 
 
 def test_parse_project_leaves_compound_wildcard_and_marked_requirements_unmanaged() -> None:
