@@ -10,6 +10,12 @@ development only. A public GitHub repository is not required by PyPI.
 The workflow and instructions are present; PyPI ownership, the Trusted Publisher,
 the protected GitHub environment, and the first upload still need verification
 or setup. Building or merging this preparation does not publish a package.
+Issue [#2](https://github.com/acgetchell/research-repo-tools/issues/2) now blocks
+the first release: complete the [toolchain setup](toolchain.md) implementation,
+native installer validation, and isolated consumer-fixture validation before
+tagging. The final PyPI installation check must also exercise the bootstrap path
+in a clean fixture. Migration of existing consumer repositories is separate work
+after publication and does not block the release.
 
 ## Release workflow
 
@@ -130,9 +136,10 @@ does not skip existing files. A content correction needs a new version. Never
 move a published release tag. See [PyPI's Trusted Publishing documentation](https://docs.pypi.org/trusted-publishers/using-a-publisher/)
 for publisher-identity failures.
 
-## Verify installation and adopt in consumers
+## Verify the published package
 
-After PyPI lists both distributions, run from a new directory outside this checkout:
+After PyPI lists both distributions, run in a new disposable directory outside
+this checkout:
 
 ```sh
 uv init --bare --python 3.14
@@ -151,8 +158,16 @@ PY
 
 Confirm `uv.lock` resolves the package from PyPI and the commands work without a
 source checkout, local wheel, or editable/path source. Also inspect the release's
-file hashes and attestations on PyPI. Record the tag/run, published version, and
-clean-install result in issue #1 before closing it.
+file hashes and attestations on PyPI. In that disposable fixture, follow the
+[toolchain guide](toolchain.md) to configure the tooling group, generate the
+launchers from the installed package, and verify the bootstrap path. Record the
+tag/run, published version, and clean-install/bootstrap results in issue #1 before
+closing it.
+
+## Adopt after publication
+
+Publication is required before consumer adoption. Track each migration in its
+consumer repository; these migrations are not release acceptance criteria.
 
 In an existing consumer, use `uv add --dev "research-repo-tools==0.1.0"`, remove
 any temporary local source override, and commit its manifest and lockfile after

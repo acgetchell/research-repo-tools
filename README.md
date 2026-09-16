@@ -3,48 +3,38 @@
 Shared development and maintenance tooling for Rust research repositories using
 Python scripting and Jupyter notebooks. Each
 capability has one implementation and one set of contracts, with tests grouped
-by capability. Start with changelog handling and a small maintenance core; add
-further workflows only after their shared contract is clear.
+by capability. Shared toolchain setup supports changelog handling and the
+maintenance core; further workflows require a clear shared contract.
 
 Python 3.14+ is required. See [release status and publishing][publishing]
 and the [supported CLI and Python interfaces][api].
 
 ## Install with uv
 
-Consumers install pinned releases directly from PyPI. Once the desired version
-is published, replace `X.Y.Z` with that version:
+Users install pinned releases directly from PyPI with uv in their own projects.
+Cloning this repository is for developing or fixing the package. Once the desired
+version is published, replace `X.Y.Z` with that version:
 
 ```sh
 uv add --dev "research-repo-tools==X.Y.Z"
 uv run --locked research-repo-tools --help
 ```
 
-Until then, local wheels and editable installs support development and pilot
-validation. They are not the intended dependency source for consumer CI.
+For managed Python/Rust/Cargo setup, follow the [toolchain setup guide][toolchain]
+to put the package in a tooling dependency group and generate launchers in the
+consuming project. On a fresh machine without uv, that project's launcher obtains
+uv and installs its locked package from PyPI. The shared package's source checkout
+is not needed.
 
-Build a wheel locally:
-
-```sh
-uv sync --locked
-uv run --locked just build
-```
-
-Then, from a consuming project, install the local wheel:
-
-```sh
-uv add --dev /path/to/research-repo-tools/dist/research_repo_tools-0.1.0-py3-none-any.whl
-uv run --locked research-repo-tools --help
-```
-
-For development across local checkouts, use
-`uv add --dev --editable /path/to/research-repo-tools` instead. Neither form
-requires publication. Every installation supplies the pinned `just` executable
-through `rust-just`, alongside `packaging` and PyYAML. No extra is needed.
+Every installation supplies the pinned `just` executable through `rust-just`,
+alongside `packaging` and PyYAML. No extra is needed. Before publication,
+contributors can use [local development installs][contributing] for validation.
 
 ## Common workflows
 
 | Capability | Commands | Contract |
 | --- | --- | --- |
+| Toolchain | `toolchain check`, `sync`, `run`, `bootstrap` | Exact declarations; managed installations; generated uv launchers |
 | Changelog | `changelog generate`, `normalize`, `archive`, `notes`, `tag` | Root `CHANGELOG.md`; completed minor series in `docs/archives/changelog/` |
 | Release metadata | `release check`, `release update` | Infer Cargo or Python metadata; validate before replacing files |
 | Dependencies | `deps update-python`, `update-tools`, `check-uv` | Exact development pins; canonical Cargo SemVer; stable uv pins |
@@ -72,8 +62,9 @@ updates need uv or Cargo. These executables are required only by the commands
 that invoke them. The CLI does not publish packages or hosted releases; this
 repository's tagged-release workflow publishes the tooling package to PyPI.
 
-External-tool installation and generic notebook setup, execution, and validation
-are planned shared capabilities. They are not implemented in this first version.
+External-tool installation is explicit through `toolchain sync`; managed
+execution selects the checked versions. Generic notebook setup, execution, and
+validation remain planned capabilities.
 Scientific benchmarks, evidence schemas, plotting, and deployment workflows are
 also outside this first version. Scientific algorithms,
 case inventories, repository rules, and custom release commands stay in their
@@ -146,7 +137,9 @@ BSD-3-Clause, with one top-level [LICENSE][license]. [NOTICE.md][notice] and
 [source provenance][provenance] provide attribution.
 
 [publishing]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/publishing.md
+[contributing]: https://github.com/acgetchell/research-repo-tools/blob/main/CONTRIBUTING.md
 [api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/api.md
+[toolchain]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/toolchain.md
 [changelog]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/changelog.md
 [release]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/release.md
 [migration]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/migration.md

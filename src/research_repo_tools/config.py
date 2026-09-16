@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any
 
 FIELDS = {
+    "toolchain": {"cargo"},
     "deps": {"pyproject", "justfile", "tools", "uv"},
     "semgrep": {"config", "fixtures", "namespace", "timeout", "cwd", "counts"},
     "release": {"date-policy", "final-changelog"},
@@ -62,7 +63,7 @@ def load(path: Path | None = None, root: Path | None = None) -> Config:
                 valid = type(value) is bool
             elif key == "timeout":
                 valid = type(value) is int and value > 0
-            elif key == "tools":
+            elif key in {"tools", "cargo"}:
                 valid = isinstance(value, dict) and all(isinstance(k, str) and k and isinstance(v, str) and v for k, v in value.items())
             elif key == "counts":
                 valid = isinstance(value, dict) and all(

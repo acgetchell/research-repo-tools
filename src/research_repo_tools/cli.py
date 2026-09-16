@@ -38,6 +38,14 @@ def parser() -> argparse.ArgumentParser:
     uv = deps.add_parser("check-uv")
     uv.add_argument("--uv-executable")
     uv.add_argument("--output", help="validate captured output without running an executable")
+    toolchain = groups.add_parser("toolchain", help="check, install, and select declared development tools").add_subparsers(dest="action", required=True)
+    toolchain.add_parser("check", help="inspect installed tools without installing anything").add_argument("--json", action="store_true")
+    toolchain.add_parser("sync", help="install and verify declared versions").add_argument("--dry-run", action="store_true")
+    toolchain.add_parser("run", help="run a command with verified managed tools; never installs").add_argument("command", nargs=argparse.REMAINDER)
+    bootstrap = toolchain.add_parser("bootstrap", help="generate small uv launchers in the consumer root")
+    mode = bootstrap.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true", help="verify generated launchers without modifying files")
+    mode.add_argument("--force", action="store_true", help="replace existing generated launchers")
     release = groups.add_parser("release").add_subparsers(dest="action", required=True)
     release.add_parser("check").add_argument("--final-release", action="store_true")
     command = release.add_parser("update")
@@ -63,6 +71,23 @@ def parser() -> argparse.ArgumentParser:
 
 def run(args: argparse.Namespace, settings: config.Config) -> int:
     section = settings.section(args.group)
+    if args.group == "toolchain":
+        from research_repo_tools import toolchain, toolchain_bootstrap, toolchain_config
+
+        plan = toolchain_config.load(settings)
+        if args.action == "bootstrap":
+            toolchain_bootstrap.generate(plan, check=args.check, force=args.force)
+            return 0
+        runtime = toolchain.Runtime(plan)
+        if args.action == "run":
+            return toolchain.run_command(runtime, args.command)
+        if args.action == "sync" and not args.dry_run:
+            runtime.sync()
+        ok = toolchain.report(runtime.inspect(), json_output=getattr(args, "json", False))
+        if args.action == "sync" and args.dry_run:
+            print("Dry run: FAIL entries need installation or prerequisite repair; no changes made.")
+            return 0
+        return 0 if ok else 1
     if args.group == "docs":
         from research_repo_tools.markdown_lines import main
 

@@ -35,6 +35,34 @@ def test_parse_project_accepts_group_without_exact_pins() -> None:
     assert pins == []
 
 
+def test_tooling_group_is_a_retained_constraint_not_an_upgrade_target():
+    text = project_text("ruff==0.16.2").replace("dev = [", 'tooling = ["research-repo-tools==0.1.0", "ruff<0.17"]\ndev = [{include-group="tooling"},')
+    _, pins = update_python_dev_pins.parse_project(text)
+    assert pins == [update_python_dev_pins.DevPin("ruff", "0.16.2")]
+    requirements = update_python_dev_pins._resolution_requirements(text, pins)
+    assert requirements == "packaging>=26\nresearch-repo-tools==0.1.0\nruff<0.17\nruff\n"
+    masked_groups = update_python_dev_pins._masked_manifest(text, frozenset({"ruff"}))["dependency-groups"]
+    assert isinstance(masked_groups, dict)
+    assert masked_groups["tooling"] == [
+        "research-repo-tools==0.1.0",
+        "ruff<0.17",
+    ]
+
+
+@pytest.mark.parametrize(
+    "groups",
+    [
+        'dev=[{include-group="absent"}]',
+        'dev=[{include-group="tools"}]\ntools=[{include-group="dev"}]',
+        'dev=[{include-group="tools", extra=true}]\ntools=[]',
+    ],
+)
+def test_invalid_dependency_group_includes_rejected(groups):
+    text = '[project]\nrequires-python=">=3.14"\n[dependency-groups]\n' + groups
+    with pytest.raises((ValueError, TypeError)):
+        update_python_dev_pins.parse_project(text)
+
+
 def test_parse_resolution_preserves_direct_order_and_ignores_transitives() -> None:
     pins = [update_python_dev_pins.DevPin("ruff", "0.16.2"), update_python_dev_pins.DevPin("semgrep", "1.172.0")]
     output = "packaging==26.3\nsemgrep==1.174.0\nruff==0.16.4\nmcp==1.29.0\n"

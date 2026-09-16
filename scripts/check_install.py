@@ -5,6 +5,7 @@ No user-wide tools, sibling repositories, or project lockfiles are modified.
 """
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -41,6 +42,9 @@ for optional in ("nbformat", "nbclient", "matplotlib", "numpy", "pandas", "polar
 from research_repo_tools.changelog import TEMPLATES, template
 for name in TEMPLATES:
     assert template(name).strip()
+from research_repo_tools.toolchain_bootstrap import render
+assert "0.12.15" in render("bootstrap.sh", "0.12.15")
+assert "0.12.15" in render("bootstrap.ps1", "0.12.15")
 assert len(importlib.metadata.distribution("research-repo-tools").entry_points) == 1
 resources = importlib.resources.files("research_repo_tools")
 assert "Adam Getchell" in resources.joinpath("NOTICE.md").read_text(encoding="utf-8")
@@ -101,8 +105,29 @@ def check(dist: Path) -> None:
             command = scripts / ("research-repo-tools.exe" if os.name == "nt" else "research-repo-tools")
             assert run([str(command), "--version"], cwd=consumer, env=local_env).strip() == version
             assert "changelog" in run([str(command), "--help"], cwd=consumer, env=local_env)
+            assert "bootstrap" in run([str(command), "toolchain", "--help"], cwd=consumer, env=local_env)
             just = scripts / ("just.exe" if os.name == "nt" else "just")
             assert run([str(just), "--version"], cwd=consumer, env=local_env).strip() == f"just {expected_just}"
+            # A real locked tooling group must start before the consumer's native
+            # build backend exists. A full installation of this project would fail.
+            bootstrap_consumer = consumer / "bootstrap consumer"
+            bootstrap_consumer.mkdir()
+            uv_version = run([uv, "--version"], cwd=consumer, env=local_env).split()[1]
+            (bootstrap_consumer / ".python-version").write_text("3.14\n", encoding="utf-8")
+            (bootstrap_consumer / "pyproject.toml").write_text(
+                '[project]\nname="bootstrap-consumer"\nversion="0.1.0"\nrequires-python=">=3.14"\n'
+                '[build-system]\nrequires=[]\nbuild-backend="intentionally_missing_native_backend"\n'
+                f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}]\n'
+                f'[tool.uv]\nrequired-version="=={uv_version}"\n'
+                f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(artifact.resolve()))}}}\n",
+                encoding="utf-8",
+            )
+            # The artifact path is an isolated pre-publication test fixture only.
+            bootstrap_env = {key: value for key, value in local_env.items() if key != "VIRTUAL_ENV"}
+            run([uv, "lock", "--python", str(python)], cwd=bootstrap_consumer, env=bootstrap_env)
+            setup = [uv, "run", "--locked", "--only-group", "tooling", "research-repo-tools", "toolchain", "bootstrap"]
+            run(setup, cwd=bootstrap_consumer, env=bootstrap_env)
+            run([*setup, "--check"], cwd=bootstrap_consumer, env=bootstrap_env)
             print(f"PASS: installed {name} outside checkout; bundled just")
 
 

@@ -24,6 +24,11 @@ installed package; the consumer owns the recipe that invokes it. If just is not
 on `PATH`, or to select the locked `rust-just` executable explicitly, invoke the
 recipe with `uv run --locked just ...`.
 
+The template's `setup`, `tools-check`, `bootstrap`, and `bootstrap-check` recipes
+implement the [shared toolchain contract](toolchain.md). Its changelog-generation
+recipes use `toolchain run` to select the verified managed git-cliff. Other recipes
+that invoke managed external tools should use the same execution wrapper.
+
 These names describe the consumer template. This package's own [maintainer
 justfile](../justfile) also has packaging-specific recipes; its `release-check`
 requires a tag argument for the PyPI publication preflight.
@@ -95,10 +100,11 @@ Later Python versions are allowed by metadata but are not yet in the test matrix
 Installed-package checks cover these public imports and representative CLI use
 outside the source checkout.
 
-The runtime dependency `rust-just` supplies `just`. Install uv separately to manage
-the environment. Install git-cliff for changelog generation, Git for history and
-tagging, Cargo for Cargo-tool discovery, and Semgrep or rumdl when their optional
-commands are used. GitHub CLI is needed for automatic discovery of a previous
-release; an explicit previous release permits offline preparation. Automatic
-tool installation and notebook infrastructure are tracked separately and are
-not part of the `0.1.0` contract.
+The runtime dependency `rust-just` supplies `just`. Generated bootstrap launchers
+obtain uv and managed Python. Explicit toolchain synchronization installs pinned
+Rust/Cargo and supported declared Cargo tools, including git-cliff and rumdl.
+See [toolchain setup](toolchain.md) for declarations, host support, installation
+ownership, and remaining native validation gates. Git is a system prerequisite;
+Semgrep belongs in the consumer's Python dependencies. GitHub CLI is needed for
+automatic discovery of a previous release; an explicit previous release permits
+offline preparation. Notebook infrastructure remains separate future work.

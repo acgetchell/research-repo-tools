@@ -1,5 +1,9 @@
 # Contributing
 
+Clone this repository to develop features or fix bugs in the shared package.
+Users install releases from PyPI with uv in their own projects; see
+[installation](README.md#install-with-uv).
+
 Use Python 3.14+, uv, Ruff, ty, pytest, and just. The project manifest and lockfile
 own the environment.
 
@@ -29,6 +33,27 @@ constraints, and sync the development environment. Review the manifest and lockf
 changes, then validate them with `just ci`. Exact runtime, build, and audit pins
 remain unchanged by this recipe.
 
+## Local package evaluation
+
+For pre-publication checks or debugging across local checkouts, build a wheel:
+
+```sh
+uv run --locked just build
+```
+
+Then install it in a disposable consuming project:
+
+```sh
+uv add --dev /path/to/research-repo-tools/dist/research_repo_tools-0.1.0-py3-none-any.whl
+uv run --locked research-repo-tools --help
+```
+
+An editable install with `uv add --dev --editable /path/to/research-repo-tools`
+also supports local development. For bootstrap evaluation, use the `tooling`
+group described in the [toolchain guide](docs/toolchain.md). Local wheels and
+editable installs are development aids; normal consumer setup and CI use a
+pinned PyPI release.
+
 ## Generated changelog
 
 This repository uses its own shared changelog implementation and packaged
@@ -55,7 +80,7 @@ See [Supported interfaces](docs/api.md) for the CLI, configuration, and public
 Python entry-point contract.
 
 Maintain one implementation per common capability under `src/research_repo_tools/`.
-Organize tests under `tests/changelog`, `dependencies`, `releases`, `semgrep`, and
+Organize tests under `tests/changelog`, `dependencies`, `releases`, `semgrep`, `toolchain`, and
 `utilities`. Fixtures should be small representative inputs generated in temporary
 directories. Preserve meaningful regression assertions against this package;
 merge duplicates instead of maintaining historical implementations or repository

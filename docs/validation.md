@@ -1,5 +1,47 @@
 # Validation
 
+## Toolchain implementation — 2026-09-16
+
+Validated on macOS arm64 with Python 3.14.7, against base commit
+`2600a9d7d42f449f761f4b575e527f09aa507bc9` plus the toolchain implementation and
+the existing staged development-dependency update. Source fingerprint:
+`7faa367e91345f30422ed6ad42335c8d95782e8b7d63b2798eb6476d83084773`.
+This uses the complete source-file scheme below and includes `.gitattributes`.
+
+- `just ci` passed static/workflow checks, **661 tests**, builds, and isolated
+  wheel/sdist installation checks. The four Git-mutating tests listed below were
+  deselected under the agent policy.
+- Both installed artifacts started a real locked tooling-only environment whose
+  consumer build backend was deliberately unavailable, and generated/verified
+  the bootstrap resources without building that consumer project.
+- Native POSIX launcher tests used a fake uv to verify argument transport,
+  consumer working directories, setup ordering, and early failure. PowerShell
+  syntax parsed successfully using PowerShell on macOS. Its native execution
+  tests are selected on Windows by the existing CI matrix.
+- A live isolated installation started with empty managed tool directories and
+  installed uv 0.12.10, managed Python 3.14.7, rustup 1.29.1, Rust/Cargo 1.98.0,
+  rustfmt, and git-cliff 2.14.1. Every selected path/version verified. Repeat sync
+  performed no installations, and managed execution selected Cargo 1.98.0.
+- Live verification exposed uv's default Python alias creation. The installer now
+  passes `--no-bin --no-registry`; a fresh managed Python installation verified
+  that no alias directory was created. The alias created by the initial test was
+  removed. Cargo-edit and typos version banners were also checked against real
+  executables and their differences are covered by regression tests.
+- A synthetic consumer installed the built wheel, generated its bootstrap, and
+  ran that launcher from outside the consumer directory. The full setup sequence
+  completed with the managed environment. This used a local artifact for
+  pre-publication validation; it was not a PyPI installation.
+- Consumer just recipes parsed and the updated documentation passed the shared
+  line checker. Manifest and lock changes were not made by toolchain sync.
+
+Live installations on native Linux and Windows remain outstanding for issue #2.
+The final published-PyPI bootstrap check belongs to issue #1; migrations of
+existing consumer repositories belong to separate downstream issues and do not
+block publication. No consumer repository was edited and no claim is made that
+issue #2 is complete.
+
+## Validation commands
+
 Run `just check` during development and `just ci` for final validation. The
 latter runs actionlint, zizmor, Ruff, formatting, ty, pytest, local distribution builds, and isolated
 uv installation of both the wheel and the source distribution.

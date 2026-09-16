@@ -63,6 +63,7 @@ def _python_floor(project: dict[str, object]) -> str:
 
 def _dev_pins(groups: dict[str, object]) -> list[DevPin]:
     """Return exact simple pins while leaving every other dev requirement alone."""
+    _group_requirements(groups, "dev")  # Validate included groups before any resolver call.
     dev = groups.get("dev")
     if not isinstance(dev, list):
         msg = "dependency-groups.dev must be an array"
@@ -71,6 +72,8 @@ def _dev_pins(groups: dict[str, object]) -> list[DevPin]:
     pins: list[DevPin] = []
     normalized_names: set[str] = set()
     for raw_requirement in dev:
+        if isinstance(raw_requirement, dict):
+            continue  # Included groups retain their pins and are resolved as constraints.
         if not isinstance(raw_requirement, str):
             msg = "dependency-groups.dev entries must be strings"
             raise TypeError(msg)
@@ -93,6 +96,25 @@ def _dev_pins(groups: dict[str, object]) -> list[DevPin]:
         normalized_names.add(normalized)
         pins.append(pin)
     return pins
+
+
+def _group_requirements(groups: dict[str, object], name: str, ancestors: tuple[str, ...] = ()) -> list[str]:
+    """Expand PEP 735 includes without granting ownership of their version pins."""
+    if name in ancestors:
+        raise ValueError(f"dependency group cycle: {' -> '.join((*ancestors, name))}")
+    entries = groups.get(name)
+    if not isinstance(entries, list):
+        raise TypeError(f"dependency-groups.{name} must be an array")
+    result: list[str] = []
+    for entry in entries:
+        if isinstance(entry, str):
+            Requirement(entry)
+            result.append(entry)
+        elif isinstance(entry, dict) and set(entry) == {"include-group"} and isinstance(entry["include-group"], str):
+            result.extend(_group_requirements(groups, entry["include-group"], (*ancestors, name)))
+        else:
+            raise TypeError(f"dependency-groups.{name} entries must be requirements or include-group tables")
+    return result
 
 
 def parse_project(text: str) -> tuple[str, list[DevPin]]:
@@ -156,6 +178,9 @@ def _resolution_requirements(text: str, pins: list[DevPin]) -> str:
         raise TypeError(msg)
     managed = {canonicalize_name(pin.name): pin for pin in pins}
     for raw_requirement in dev:
+        if isinstance(raw_requirement, dict):
+            requirements.extend(_group_requirements(groups, raw_requirement["include-group"], ("dev",)))
+            continue
         if not isinstance(raw_requirement, str):
             msg = "dependency-groups.dev entries must be strings"
             raise TypeError(msg)

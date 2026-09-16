@@ -25,7 +25,7 @@ Issues = "https://github.com/acgetchell/research-repo-tools/issues"
 dev = [
     "actionlint-py==1.7.12.24",
     "pytest==9.1.1",
-    "ruff==0.16.7",
+    "ruff==0.16.8",
     "ty==0.0.81",
     "zizmor==1.30.1",
 ]
