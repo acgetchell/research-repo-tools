@@ -1,5 +1,5 @@
 {
   "github_owned_allowed": true,
   "verified_allowed": false,
-  "patterns_allowed": ["github/codeql-action@*", "astral-sh/setup-uv@*"]
+  "patterns_allowed": ["github/codeql-action@*", "astral-sh/setup-uv@*", "pypa/gh-action-pypi-publish@*"]
 }

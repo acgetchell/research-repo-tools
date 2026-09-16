@@ -1,0 +1,4 @@
+# These resources are compared byte-for-byte with Linux-built distributions.
+# Keep their checkout bytes identical even when core.autocrlf=true on Windows.
+/NOTICE.md text eol=lf
+/docs/provenance.json text eol=lf

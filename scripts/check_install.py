@@ -62,6 +62,9 @@ def check(dist: Path) -> None:
     expected_just = next(item.removeprefix("rust-just==") for item in metadata["project"]["dependencies"] if item.startswith("rust-just=="))
     wheel = dist / f"research_repo_tools-{version}-py3-none-any.whl"
     sdist = dist / f"research_repo_tools-{version}.tar.gz"
+    artifacts = set(dist.glob("*.whl")) | set(dist.glob("*.tar.gz"))
+    if artifacts != {wheel, sdist}:
+        raise ValueError(f"Expected only {wheel.name} and {sdist.name}; found {sorted(path.name for path in artifacts)}")
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
         assert "research_repo_tools/templates/cliff.toml" in names

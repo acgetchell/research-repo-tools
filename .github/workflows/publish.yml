@@ -1,0 +1,57 @@
+name: Publish to PyPI
+
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: publish-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  preflight:
+    if: github.repository == 'acgetchell/research-repo-tools'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require a commit on the protected main branch
+        run: git --no-pager merge-base --is-ancestor "$GITHUB_SHA" origin/main
+      - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
+        with:
+          version: "0.12.10"
+          python-version: "3.14"
+      - name: Check tag, metadata, and generated release notes
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: uv run --locked just release-check "$RELEASE_TAG"
+      - name: Audit locked Python dependencies
+        run: uv run --locked --group audit just audit
+
+  validate:
+    needs: preflight
+    uses: $/.github/workflows/ci.yml
+
+  publish:
+    needs: [preflight, validate]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    environment:
+      name: pypi
+      url: https://pypi.org/p/research-repo-tools
+    permissions:
+      id-token: write # Exchange this job's identity for short-lived PyPI credentials.
+    steps:
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          artifact-ids: ${{ needs.validate.outputs.artifact-id }}
+          path: dist
+          merge-multiple: true
+      - name: Publish validated distributions with attestations
+        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2

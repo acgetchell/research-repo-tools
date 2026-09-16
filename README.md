@@ -6,12 +6,13 @@ capability has one implementation and one set of contracts, with tests grouped
 by capability. Start with changelog handling and a small maintenance core; add
 further workflows only after their shared contract is clear.
 
-Python 3.14+ is required. This package has not been published to PyPI.
+Python 3.14+ is required. See [release status and publishing][publishing]
+and the [supported CLI and Python interfaces][api].
 
 ## Install with uv
 
-Consumers will install pinned releases directly from PyPI. After the first
-publication, replace `X.Y.Z` with the chosen released version:
+Consumers install pinned releases directly from PyPI. Once the desired version
+is published, replace `X.Y.Z` with that version:
 
 ```sh
 uv add --dev "research-repo-tools==X.Y.Z"
@@ -68,7 +69,8 @@ research-repo-tools coverage report --prefix src --limit 10
 `--dry-run` previews it. Generation needs git-cliff; tagging needs Git. Optional
 formatting needs rumdl, fixture validation needs Semgrep, and dependency
 updates need uv or Cargo. These executables are required only by the commands
-that invoke them. Nothing here publishes packages or hosted releases.
+that invoke them. The CLI does not publish packages or hosted releases; this
+repository's tagged-release workflow publishes the tooling package to PyPI.
 
 External-tool installation and generic notebook setup, execution, and validation
 are planned shared capabilities. They are not implemented in this first version.
@@ -131,14 +133,25 @@ Before uv changes the manifest and lockfile, the updater saves both originals.
 A failed update restores them; if restoration also fails, the command reports
 the retained backup paths for recovery.
 
-See [changelog behavior](docs/changelog.md), [release behavior](docs/release.md),
-[scope and adoption](docs/migration.md), and [validation](docs/validation.md).
+See [changelog behavior][changelog], [release behavior][release],
+[scope and adoption][migration], and [validation][validation].
 For development, run `just check` during iteration and `just ci` at the end.
 `just audit` separately checks exported locked third-party requirements against online
-Python vulnerability advisories. See [GitHub setup](docs/github.md) for repository
-security, the initial push, and the later PyPI publishing boundary.
+Python vulnerability advisories. See [GitHub setup][github] for repository
+security and the PyPI publishing boundary.
 
 ## License
 
-BSD-3-Clause, with one top-level [LICENSE](LICENSE). [NOTICE.md](NOTICE.md) and
-[source provenance](docs/provenance.json) provide attribution.
+BSD-3-Clause, with one top-level [LICENSE][license]. [NOTICE.md][notice] and
+[source provenance][provenance] provide attribution.
+
+[publishing]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/publishing.md
+[api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/api.md
+[changelog]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/changelog.md
+[release]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/release.md
+[migration]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/migration.md
+[validation]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/validation.md
+[github]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/github.md
+[license]: https://github.com/acgetchell/research-repo-tools/blob/main/LICENSE
+[notice]: https://github.com/acgetchell/research-repo-tools/blob/main/NOTICE.md
+[provenance]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/provenance.json
