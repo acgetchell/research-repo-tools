@@ -37,9 +37,16 @@ test:
 
 build:
     uv lock --check
-    uv build
+    uv build --no-sources
 
-install-check: build
+# Validate existing artifacts without rebuilding them (also used by native CI).
+check-dist:
     uv run --locked python scripts/check_install.py
+
+install-check: build check-dist
+
+# Read-only publication preflight; does not create or push a tag.
+release-check tag:
+    uv run --locked python scripts/check_release.py "$1"
 
 ci: check test install-check

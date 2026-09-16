@@ -17,6 +17,7 @@ dependencies = ["packaging>=25", "PyYAML>=6", "rust-just==1.58.0"]
 research-repo-tools = "research_repo_tools.cli:main"
 
 [project.urls]
+Documentation = "https://github.com/acgetchell/research-repo-tools/blob/main/README.md"
 Repository = "https://github.com/acgetchell/research-repo-tools"
 Issues = "https://github.com/acgetchell/research-repo-tools/issues"
 

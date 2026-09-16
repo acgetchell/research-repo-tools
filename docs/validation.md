@@ -112,7 +112,10 @@ source-file scheme above:
 The final command was:
 
 ```sh
-PYTEST_ADDOPTS='-k "not test_generate_real_git_history_with_packaged_template and not test_tag_preserves_utf8_notes_and_force_replaces_atomically and not test_repository_identity_and_history_are_read_from_the_consumer and not test_runs_simple_git_command"' uv run --locked just ci
+PYTEST_ADDOPTS='-k "not test_generate_real_git_history_with_packaged_template
+and not test_tag_preserves_utf8_notes_and_force_replaces_atomically
+and not test_repository_identity_and_history_are_read_from_the_consumer
+and not test_runs_simple_git_command"' uv run --locked just ci
 ```
 
 The validation record was appended after the build; the fingerprint excludes
@@ -135,3 +138,70 @@ macOS, and changelog integration passed. Those results precede the local fixes.
 The release PR must establish passing native checks and CodeRabbit review for
 the submitted source state before publication. At inspection, GitHub had no
 publishing environment and the repository had no publishing workflow.
+
+## PyPI workflow preparation
+
+Validated locally on 2026-09-16 using macOS arm64 and Python 3.14.7, against
+base commit `d891eeee9ed6e30be2f73f917fd70c945da4c360` plus the publishing changes.
+The source fingerprint using the complete source-file scheme above is
+`ac27d61b292abf89a0ef1fd69df70e5ce0d467a9d1d858525ec5428a637e09f2`.
+A separate fingerprint over all files under `.github`, using the same
+path/NUL/binary-digest scheme, is
+`4c9e42f80819a13e4661d45a72eaaa65251ee6a5f22395a12f3244c84390e98f`.
+
+- Eighteen new focused cases passed: the publication preflight accepts a matching
+  stable release without modifying files, rejects incorrect tags/identity/metadata
+  and missing release notes, and installation validation rejects stale or missing
+  distribution files before attempting to install them.
+- `just check` passed actionlint, zizmor, lock, Ruff, formatting, and ty checks.
+  GitHub supports `$/` reusable-workflow references, but actionlint 1.7.12 rejects
+  that syntax. `.github/actionlint.yaml` filters only that exact diagnostic for
+  the CI reference in `publish.yml`; zizmor validates the self-repository reference.
+  No general workflow or security rule was disabled.
+- Final `just ci`, using the same `PYTEST_ADDOPTS` exclusions listed above, passed
+  **616 tests, four deselected**, built wheel and sdist with `uv build --no-sources`,
+  and installed both outside the checkout. Installed imports, console entry points,
+  templates, attribution, and the bundled just executable passed.
+- `just release-check v0.1.0` passed against the generated release draft.
+  The changelog was generated through the shared CLI from committed history;
+  it must be regenerated after the publishing implementation is committed.
+- `just audit` reported no known vulnerabilities in the evaluated locked Python
+  dependencies. The shared Markdown line-length check passed for the release docs.
+
+Review covered the just build/install split, required-check failure propagation,
+same-run artifact IDs, tag/version/main-ancestry gates, OIDC permissions, publishing
+action pins, and the intended Actions allowlist. New action SHAs were resolved
+from their upstream release tags. Existing tool pins were retained. The protected
+environment and PyPI publisher remain account setup steps, not effects of this PR.
+
+The README's PyPI-safe absolute links and this validation record were finalized
+after the full run; only distributions were rebuilt to include those documentation
+changes. Tests and installation checks were not repeated for that documentation-only
+delta. No Git state or remote account settings were changed. Native Linux/Windows
+execution, Git-mutating integrations, reusable-workflow execution, environment
+approval, OIDC upload, and installation from PyPI require the subsequent PR/release.
+
+## Shared-artifact checkout line endings
+
+On 2026-09-16, the support-script review reproduced a failure when Linux-built
+archives were compared with CRLF checkout copies of `NOTICE.md` and
+`docs/provenance.json`. `.gitattributes` now enforces LF for those two resources,
+preserving the existing byte-for-byte archive integrity checks.
+
+Both new regression cases failed before the attributes were added and passed
+afterward. They use read-only `git cat-file --filters` with `core.autocrlf=true`
+and compare the rendered bytes with the canonical tracked blob. No checkout,
+index, object database, or ref is modified. These are Git integration checks;
+they skip outside a source checkout or when Git is unavailable.
+
+Final `just ci` on macOS arm64/Python 3.14.7 passed **618 tests, four deselected**,
+all workflow/static checks, package builds, and isolated wheel/sdist installation.
+The same four Git-mutating tests listed above remain excluded. The two new
+read-only Git cases ran successfully. This exercises Windows newline settings
+on macOS; native Windows CI remains pending for the submitted PR.
+
+Source fingerprint:
+`73f9bd64988875be4d6d00cb1b06e1bb38daffe69c1f9cf7e205ca7c430ba8d3`.
+This uses the complete source-file scheme above with `.gitattributes` added to
+the top-level inputs. This documentation-only validation record was appended
+after building and is outside that fingerprint.

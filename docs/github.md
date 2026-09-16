@@ -18,7 +18,8 @@ The baseline follows Delaunay and la-stack, adapted to this Python package:
   CodeRabbit status. The initial CodeRabbit rule uses its status name, matching
   MCMC; GitHub rejects its App binding until the App has repository access.
 - Read-only default workflow tokens; write permissions are limited to specific
-  security-upload and Dependabot jobs. Actions cannot approve pull requests.
+  security-upload and Dependabot jobs, plus OIDC identity in the PyPI publishing
+  job. Actions cannot approve pull requests.
 - Selected Actions only, with full commit SHA pinning required. Dependabot updates
   GitHub Actions and the uv lockfile weekly, with separate security-update groups.
 - Dependabot alerts/security updates, secret scanning, push protection, and private
@@ -98,32 +99,17 @@ review per head, waits for that exact head's approval and required checks, and
 enables squash auto-merge with a head-commit guard. It never checks out PR code.
 Missing credentials, review, or required checks prevent completion.
 
-## First commit and push
+## Release configuration
 
-The public repository has been created without an initial README or license
-commit. This checkout already has Git history and uses `main`. The maintainer
-must run Git mutations under this repository's agent policy.
+The repository is pushed and normal changes go through pull requests. The
+maintainer performs Git mutations under [AGENTS.md](../AGENTS.md).
 
-Review both staged and unstaged changes, then commit and push the intended set:
-
-```sh
-git --no-pager status --short
-git --no-pager diff
-git --no-pager diff --cached
-git add -A
-git commit -m "feat: prepare shared repository tooling for adoption"
-git remote add origin https://github.com/acgetchell/research-repo-tools.git
-git push -u origin main
-```
-
-`git add -A` stages every local change; review that full set before running it.
-If a remote was added in the meantime, inspect `git --no-pager remote -v` and use
-the existing correct remote instead of adding it again. Normal subsequent changes
-should go through pull requests.
-
-The first push activates the committed workflows and Dependabot configuration.
-Until then, the repository settings exist but the source and workflows remain
-local. PyPI Trusted Publishing is a later release task.
+The desired Actions allowlist includes `pypa/gh-action-pypi-publish@*` for the
+tagged-release workflow; apply that payload before the first release tag. The
+`pypi` environment protections and PyPI Trusted Publisher are separate account
+settings. Follow [Publishing to PyPI](publishing.md) to configure them and verify
+the first release. Committing workflow YAML does not configure those accounts
+or publish distributions.
 
 ## Follow-up work
 

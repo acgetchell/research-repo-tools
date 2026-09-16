@@ -1,5 +1,8 @@
 # Shared release behavior
 
+These commands maintain consumer metadata. For publishing this tooling package
+itself, follow [Publishing to PyPI](publishing.md).
+
 Normal release commands need no separate configuration file:
 
 ```sh
