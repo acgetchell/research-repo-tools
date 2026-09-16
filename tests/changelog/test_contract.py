@@ -1,5 +1,6 @@
 """Independent common contracts, including real Git mutations in disposable repos."""
 
+import re
 import shutil
 import subprocess
 import tomllib
@@ -35,6 +36,35 @@ def test_templates_are_common_valid_package_resources(tmp_path: Path) -> None:
 def test_template_rejects_interpolation_and_path_syntax(component: str) -> None:
     with pytest.raises(ValueError):
         changelog.template("cliff.toml", owner=component, repository="repo")
+
+
+@pytest.mark.parametrize(
+    "tag,accepted",
+    [(tag, True) for tag in ("v0.0.0", "v1.2.3", "v1.2.3-rc.1+build.007", "v1.2.3-0", "v1.2.3-01a", "v1.2.3+01")]
+    + [
+        (tag, False)
+        for tag in (
+            "preview",
+            "dev",
+            "v",
+            "v1",
+            "v1.2",
+            "v01.2.3",
+            "1.2.3",
+            "release-v1.2.3",
+            "v1.2.3junk",
+            "v1.2.3-01",
+            "v1.2.3-rc..1",
+            "v1.2.3+build..1",
+            "v1.2.3\n",
+            "v1.2.3-junk!",
+            "v1.2.3-β",
+        )
+    ],
+)
+def test_template_selects_only_complete_semver_tags(tag: str, accepted: bool) -> None:
+    pattern = tomllib.loads(changelog.template("cliff.toml"))["git"]["tag_pattern"]
+    assert (re.search(pattern, tag) is not None) is accepted
 
 
 def test_changelog_filename_is_a_shared_convention(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:

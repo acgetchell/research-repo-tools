@@ -8,49 +8,28 @@ documented breaking change while the package remains below `1.0`.
 
 ## Consumer just recipes
 
-Use just recipes for routine repository workflows. The [packaged justfile
-template](../src/research_repo_tools/templates/justfile) supplies thin wrappers
-that consumers retain in their own justfiles:
+The [packaged justfile template](../src/research_repo_tools/templates/justfile)
+supplies thin wrappers that consumers retain in their own justfiles. Each recipe
+selects the consumer's locked package version. The shared implementation stays
+in the installed package; the consumer owns its configuration and invocation.
 
-```sh
-just changelog
-just changelog-archive
-just release-check
-```
-
-Each recipe delegates to `uv run --locked research-repo-tools ...`, which selects
-the consumer's locked package version. The shared implementation stays in the
-installed package; the consumer owns the recipe that invokes it. If just is not
-on `PATH`, or to select the locked `rust-just` executable explicitly, invoke the
-recipe with `uv run --locked just ...`.
-
-The template's `setup`, `tools-check`, `bootstrap`, and `bootstrap-check` recipes
-implement the [shared toolchain contract](toolchain.md). Its changelog-generation
-recipes use `toolchain run` to select the verified managed git-cliff. Other recipes
-that invoke managed external tools should use the same execution wrapper.
-
-These names describe the consumer template. This package's own [maintainer
-justfile](../justfile) also has packaging-specific recipes; its `release-check`
-requires a tag argument for the PyPI publication preflight.
+The [README command reference](../README.md#just-recipes) covers routine use.
+The [toolchain guide](INSTALLING.md) defines managed execution, and the
+[changelog guide](GENERATING_CHANGELOGS.md) describes generation and archiving.
+Package development and publication preflight recipes belong to
+[Contributing](../CONTRIBUTING.md#maintainer-commands).
 
 ## Command line and configuration
 
-Use the [command overview](../README.md#common-workflows) and command-specific
-help for the CLI arguments that recipes wrap. Direct invocation is useful for
-inspecting that interface without adding a recipe for each help command:
-
-```sh
-uv run --locked research-repo-tools --help
-uv run --locked research-repo-tools changelog generate --help
-uv run --locked research-repo-tools release update --help
-```
+The [README](../README.md#direct-cli-examples) contains runnable examples and
+help commands for inspecting CLI arguments.
 
 Place global `--root` and `--config` options before the command group. Configuration
 defaults to `[tool.research-repo-tools]` in the consumer's `pyproject.toml`.
-A standalone configuration uses unprefixed tables and `schema = 1`; print the
-example with `research-repo-tools templates research-repo-tools.toml`. Unknown
-settings fail. Relative paths and explicit executable paths resolve against the
-consumer root; bare executable names use `PATH`.
+A standalone configuration uses unprefixed tables and `schema = 1`, as shown in
+the [packaged template](../src/research_repo_tools/templates/research-repo-tools.toml).
+Unknown settings fail. Relative paths and explicit executable paths resolve
+against the consumer root; bare executable names use `PATH`.
 
 Commands return zero on success. Validation failures and handled operational
 errors return nonzero; argument errors return `2`. Help and version output are
@@ -65,18 +44,8 @@ does not install tools, access the network, or modify consumer files.
 
 ## Python entry point
 
-Thin Python scripts can reuse the same command contract without a subprocess:
-
-```python
-from pathlib import Path
-
-from research_repo_tools import __version__
-from research_repo_tools.cli import main
-
-root = Path(__file__).resolve().parents[1]
-print(f"Using research-repo-tools {__version__}")
-raise SystemExit(main(["--root", str(root), "release", "check"]))
-```
+Thin Python scripts can reuse the same command contract without a subprocess;
+see the [README example](../README.md#calling-from-python).
 
 - `research_repo_tools.__version__` is a string read from installed distribution
   metadata. `project.version` in this package's `pyproject.toml` is its authority.
@@ -103,7 +72,7 @@ outside the source checkout.
 The runtime dependency `rust-just` supplies `just`. Generated bootstrap launchers
 obtain uv and managed Python. Explicit toolchain synchronization installs pinned
 Rust/Cargo and supported declared Cargo tools, including git-cliff and rumdl.
-See [toolchain setup](toolchain.md) for declarations, host support, installation
+See [toolchain setup](INSTALLING.md) for declarations, host support, installation
 ownership, and remaining native validation gates. Git is a system prerequisite;
 Semgrep belongs in the consumer's Python dependencies. GitHub CLI is needed for
 automatic discovery of a previous release; an explicit previous release permits

@@ -1,41 +1,76 @@
 # Retain these small wrappers in each consuming repository.
 # uv run --locked just ... selects the project's locked rust-just executable.
+set positional-arguments
+
+# Generate bootstrap launchers from the declared uv pin.
+bootstrap:
+    uv run --locked --only-group tooling research-repo-tools toolchain bootstrap
+
+# Check bootstrap launchers without changing files or syncing the environment.
+bootstrap-check:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain bootstrap --check
+
+# Generate, normalize, and rotate completed minor series into docs/archives/changelog.
+changelog:
+    uv run --locked research-repo-tools toolchain run -- research-repo-tools changelog generate
+
+# Archive completed minor series without regenerating Git history.
+changelog-archive:
+    uv run --locked research-repo-tools changelog archive
+
+# Generate, normalize, and rotate completed minor series without publishing files.
+changelog-preview *args:
+    uv run --locked research-repo-tools toolchain run -- research-repo-tools changelog generate --dry-run "$@"
+
+# Generate and archive a prospective release with an explicit YYYY-MM-DD date.
+changelog-release tag date:
+    uv run --locked research-repo-tools toolchain run -- research-repo-tools changelog generate --tag {{quote(tag)}} --date {{quote(date)}}
+
+alias changelog-unreleased := changelog-release
+
+# Show command help when invoked without a recipe.
+[default]
+[private]
+default: help
+
+# List available commands and arguments in lexicographic order.
+help:
+    @just --justfile {{quote(justfile())}} --alias-style separate --list
+
+alias help-workflows := help
+
+# Check consumer release metadata.
+release-check:
+    uv run --locked research-repo-tools release check
+
+# Print release notes from the root changelog or an archive.
+release-notes tag:
+    uv run --locked research-repo-tools changelog notes {{quote(tag)}}
+
+# Validate the consumer's Semgrep rules and fixtures.
+semgrep-check:
+    uv run --locked research-repo-tools semgrep check-fixtures
 
 # Run once after installing uv, or use the generated bootstrap launcher.
 setup:
     uv run --locked --managed-python --only-group tooling research-repo-tools toolchain sync
     uv run --locked --managed-python --only-group tooling research-repo-tools toolchain run -- uv sync --locked --managed-python --group tooling
 
+# Create a local annotated tag using tag-release.
+tag tag: (tag-release tag)
+
+# Explicitly replace an existing local annotated tag.
+tag-force tag:
+    uv run --locked research-repo-tools changelog tag {{quote(tag)}} --force
+
+# Create a local annotated tag from validated release notes.
+tag-release tag:
+    uv run --locked research-repo-tools changelog tag {{quote(tag)}}
+
 # The environment must already exist; checking never syncs or downloads Python.
 tools-check:
     uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain check
 
-bootstrap:
-    uv run --locked --only-group tooling research-repo-tools toolchain bootstrap
-
-bootstrap-check:
-    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain bootstrap --check
-
-semgrep-check:
-    uv run --locked research-repo-tools semgrep check-fixtures
-
+# Update exact direct Python development pins.
 update-python-deps:
     uv run --locked research-repo-tools deps update-python
-
-release-check:
-    uv run --locked research-repo-tools release check
-
-changelog:
-    uv run --locked research-repo-tools toolchain run -- research-repo-tools changelog generate
-
-changelog-release tag date:
-    uv run --locked research-repo-tools toolchain run -- research-repo-tools changelog generate --tag {{quote(tag)}} --date {{quote(date)}}
-
-changelog-archive:
-    uv run --locked research-repo-tools changelog archive
-
-release-notes tag:
-    uv run --locked research-repo-tools changelog notes {{quote(tag)}}
-
-tag-release tag:
-    uv run --locked research-repo-tools changelog tag {{quote(tag)}}

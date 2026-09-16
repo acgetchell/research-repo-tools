@@ -25,7 +25,7 @@ def run(command: list[str], *, cwd: Path, env: dict[str, str]) -> str:
 
 
 BASE_SMOKE = r"""
-import importlib, importlib.metadata, importlib.resources, importlib.util, json, pathlib, pkgutil, socket, sys
+import importlib, importlib.metadata, importlib.util, pathlib, pkgutil, socket, sys
 import research_repo_tools
 assert research_repo_tools.__version__ == importlib.metadata.version("research-repo-tools")
 root = pathlib.Path(sys.argv[1]).resolve()
@@ -46,9 +46,6 @@ from research_repo_tools.toolchain_bootstrap import render
 assert "0.12.15" in render("bootstrap.sh", "0.12.15")
 assert "0.12.15" in render("bootstrap.ps1", "0.12.15")
 assert len(importlib.metadata.distribution("research-repo-tools").entry_points) == 1
-resources = importlib.resources.files("research_repo_tools")
-assert "Adam Getchell" in resources.joinpath("NOTICE.md").read_text(encoding="utf-8")
-assert json.loads(resources.joinpath("docs/provenance.json").read_text(encoding="utf-8"))
 from research_repo_tools.cli import main
 consumer = pathlib.Path.cwd() / "minimal consumer"
 consumer.mkdir()
@@ -75,15 +72,10 @@ def check(dist: Path) -> None:
         assert "research_repo_tools/py.typed" in names
         assert not any("/compat/" in name or name.startswith("tests/") for name in names)
         assert sum(name.endswith("/LICENSE") for name in names) == 1
-        for source, target in (("NOTICE.md", "research_repo_tools/NOTICE.md"), ("docs/provenance.json", "research_repo_tools/docs/provenance.json")):
-            assert archive.read(target) == (ROOT / source).read_bytes()
     with tarfile.open(sdist) as archive:
         names = archive.getnames()
         assert any(name.endswith("/tests/changelog/test_contract.py") for name in names)
         assert sum(name.endswith("/LICENSE") for name in names) == 1
-        for source in ("NOTICE.md", "docs/provenance.json"):
-            member = archive.extractfile(f"research_repo_tools-{version}/{source}")
-            assert member is not None and member.read() == (ROOT / source).read_bytes()
     uv = shutil.which("uv")
     if uv is None:
         raise RuntimeError("uv must be installed to check distributions")

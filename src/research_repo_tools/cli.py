@@ -15,48 +15,15 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--config", type=Path, help="TOML config; defaults to [tool.research-repo-tools] in pyproject.toml")
     result.add_argument("--root", type=Path, help="consumer root; defaults to the configuration directory")
     groups = result.add_subparsers(dest="group", required=True)
-    templates = groups.add_parser("templates", help="print or explicitly create shared package resources")
-    from research_repo_tools.changelog import TEMPLATES
-
-    templates.add_argument("name", choices=TEMPLATES)
-    templates.add_argument("--owner")
-    templates.add_argument("--repository")
-    templates.add_argument("--output", type=Path, help="create a new file; existing files are never overwritten")
-    docs = groups.add_parser("docs").add_subparsers(dest="action", required=True)
-    docs.add_parser("check-lines").add_argument("files", nargs="+")
-    coverage = groups.add_parser("coverage").add_subparsers(dest="action", required=True).add_parser("report")
-    coverage.add_argument("--report", default="coverage/cobertura.xml")
-    coverage.add_argument("--prefix", default="")
-    coverage.add_argument("--limit", type=int)
-    coverage.add_argument("--descending", action="store_true")
-    semgrep = groups.add_parser("semgrep").add_subparsers(dest="action", required=True)
-    semgrep.add_parser("check-fixtures")
-    deps = groups.add_parser("deps").add_subparsers(dest="action", required=True)
-    deps.add_parser("update-python")
-    tools = deps.add_parser("update-tools")
-    tools.add_argument("--dry-run", action="store_true")
-    uv = deps.add_parser("check-uv")
-    uv.add_argument("--uv-executable")
-    uv.add_argument("--output", help="validate captured output without running an executable")
-    toolchain = groups.add_parser("toolchain", help="check, install, and select declared development tools").add_subparsers(dest="action", required=True)
-    toolchain.add_parser("check", help="inspect installed tools without installing anything").add_argument("--json", action="store_true")
-    toolchain.add_parser("sync", help="install and verify declared versions").add_argument("--dry-run", action="store_true")
-    toolchain.add_parser("run", help="run a command with verified managed tools; never installs").add_argument("command", nargs=argparse.REMAINDER)
-    bootstrap = toolchain.add_parser("bootstrap", help="generate small uv launchers in the consumer root")
-    mode = bootstrap.add_mutually_exclusive_group()
-    mode.add_argument("--check", action="store_true", help="verify generated launchers without modifying files")
-    mode.add_argument("--force", action="store_true", help="replace existing generated launchers")
-    release = groups.add_parser("release").add_subparsers(dest="action", required=True)
-    release.add_parser("check").add_argument("--final-release", action="store_true")
-    command = release.add_parser("update")
-    command.add_argument("version")
-    command.add_argument("--date")
-    command.add_argument("--dry-run", action="store_true")
-    command.add_argument("--final-release", action="store_true")
-    command.add_argument("--previous-release")
-    changelog = groups.add_parser("changelog").add_subparsers(dest="action", required=True)
-    for name in ("generate", "archive", "normalize", "notes", "tag"):
-        command = changelog.add_parser(name)
+    changelog = groups.add_parser("changelog", help="generate, normalize, archive, and extract release history").add_subparsers(dest="action", required=True)
+    for name, help_text in {
+        "archive": "rotate completed minor series from the existing changelog",
+        "generate": "generate and normalize history, then rotate completed minor series",
+        "normalize": "normalize the existing changelog without regenerating history",
+        "notes": "extract release notes from the root changelog or an archive",
+        "tag": "create a local annotated tag from validated release notes",
+    }.items():
+        command = changelog.add_parser(name, help=help_text, description=help_text)
         if name in {"notes", "tag"}:
             command.add_argument("tag")
         if name == "generate":
@@ -66,6 +33,45 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--dry-run", action="store_true", help="print candidate output without publishing")
         if name == "tag":
             command.add_argument("--force", action="store_true", help="replace an existing local tag")
+    coverage = groups.add_parser("coverage", help="summarize Cobertura coverage").add_subparsers(dest="action", required=True).add_parser("report")
+    coverage.add_argument("--report", default="coverage/cobertura.xml")
+    coverage.add_argument("--prefix", default="")
+    coverage.add_argument("--limit", type=int)
+    coverage.add_argument("--descending", action="store_true")
+    deps = groups.add_parser("deps", help="maintain dependency and tool pins").add_subparsers(dest="action", required=True)
+    uv = deps.add_parser("check-uv")
+    uv.add_argument("--uv-executable")
+    uv.add_argument("--output", help="validate captured output without running an executable")
+    deps.add_parser("update-python")
+    tools = deps.add_parser("update-tools")
+    tools.add_argument("--dry-run", action="store_true")
+    docs = groups.add_parser("docs", help="check Markdown source files").add_subparsers(dest="action", required=True)
+    docs.add_parser("check-lines").add_argument("files", nargs="+")
+    release = groups.add_parser("release", help="check and synchronize release metadata").add_subparsers(dest="action", required=True)
+    release.add_parser("check").add_argument("--final-release", action="store_true")
+    command = release.add_parser("update")
+    command.add_argument("version")
+    command.add_argument("--date")
+    command.add_argument("--dry-run", action="store_true")
+    command.add_argument("--final-release", action="store_true")
+    command.add_argument("--previous-release")
+    semgrep = groups.add_parser("semgrep", help="validate consumer rules and fixtures").add_subparsers(dest="action", required=True)
+    semgrep.add_parser("check-fixtures")
+    templates = groups.add_parser("templates", help="print or explicitly create shared package resources")
+    from research_repo_tools.changelog import TEMPLATES
+
+    templates.add_argument("name", choices=TEMPLATES)
+    templates.add_argument("--owner")
+    templates.add_argument("--repository")
+    templates.add_argument("--output", type=Path, help="create a new file; existing files are never overwritten")
+    toolchain = groups.add_parser("toolchain", help="check, install, and select declared development tools").add_subparsers(dest="action", required=True)
+    bootstrap = toolchain.add_parser("bootstrap", help="generate small uv launchers in the consumer root")
+    mode = bootstrap.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true", help="verify generated launchers without modifying files")
+    mode.add_argument("--force", action="store_true", help="replace existing generated launchers")
+    toolchain.add_parser("check", help="inspect installed tools without installing anything").add_argument("--json", action="store_true")
+    toolchain.add_parser("run", help="run a command with verified managed tools; never installs").add_argument("command", nargs=argparse.REMAINDER)
+    toolchain.add_parser("sync", help="install and verify declared versions").add_argument("--dry-run", action="store_true")
     return result
 
 
@@ -84,7 +90,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         if args.action == "sync" and not args.dry_run:
             runtime.sync()
         ok = toolchain.report(runtime.inspect(), json_output=getattr(args, "json", False))
-        if args.action == "sync" and args.dry_run:
+        if args.action == "sync" and args.dry_run and not ok:
             print("Dry run: FAIL entries need installation or prerequisite repair; no changes made.")
             return 0
         return 0 if ok else 1

@@ -88,9 +88,14 @@ _BULLET_SYMBOL_RE = re.compile(r"^(\s*)•\s+")
 # Extra spaces after list marker: ``-   `` → ``- `` (MD030).
 _LIST_MARKER_SPACE_RE = re.compile(r"^(\s*-)\s{2,}")
 
-# git-cliff HTML-escapes co-author email angle brackets. Markdown wants real
-# angle brackets for email autolinks, otherwise rumdl treats the address as bare.
+# Historical configurations HTML-escaped co-author email angle brackets.
+# Markdown needs real brackets for email autolinks, including during rumdl checks.
 _ESCAPED_EMAIL_RE = re.compile(r"&lt;(?P<email>[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,})&gt;", re.IGNORECASE)
+
+# Angle brackets used by Markdown syntax must survive prose escaping.
+_AUTOLINK_RE = re.compile(r"<(?:[A-Za-z][A-Za-z0-9+.-]{1,31}:[^\s<>]*|[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+@[A-Za-z0-9.-]+)>")
+_REFERENCE_DEFINITION_RE = re.compile(r" {0,3}\[[^\]\n]+\]:[^\n]*")
+_BLOCKQUOTE_PREFIX_RE = re.compile(r"[ \t]*(?:>[ \t]*)+")
 
 # Indented ATX headings from commit bodies: ``  ## Title`` → ``#### Title``.
 _INDENTED_ATX_HEADING_RE = re.compile(r"^(?P<indent>\s+)#{1,6}\s+(?P<title>.*?)(?:\s+#+\s*)?$")
@@ -1650,11 +1655,48 @@ def _table_line_indices(lines: list[str]) -> set[int]:
     return preserved
 
 
+def _escape_prose_angles(text: str) -> str:
+    """Escape prose angles while retaining code, links, and Markdown delimiters.
+
+    Fenced blocks have already been protected. Scanning the complete text also
+    keeps multiline code spans opaque and never decodes literal HTML entities.
+    """
+    result: list[str] = []
+    position = 0
+    while position < len(text):
+        end: int | None = None
+        if position == 0 or text[position - 1] == "\n":
+            if match := _REFERENCE_DEFINITION_RE.match(text, position) or _BLOCKQUOTE_PREFIX_RE.match(text, position):
+                end = match.end()
+        if end is None:
+            if text[position] == "\\":
+                end = min(position + 2, len(text))
+            elif text[position] == "`":
+                end = _backtick_span_end(text, position)
+                # Code spans cannot cross paragraph boundaries. Keep an
+                # unmatched delimiter run together instead of reopening it
+                # at its second backtick and consuming a later code span.
+                if end is None or re.search(r"\n[ \t]*\n", text[position:end]):
+                    end = _delimiter_run_end(text, position, "`")
+            elif text.startswith("](", position):
+                end = _balanced_delimiter_end(text, position + 1, "(", ")")
+            elif text[position] == "<" and (match := _AUTOLINK_RE.match(text, position)):
+                end = match.end()
+        if end is not None:
+            result.append(text[position:end])
+            position = end
+        else:
+            result.append({"<": "&lt;", ">": "&gt;"}.get(text[position], text[position]))
+            position += 1
+    return "".join(result)
+
+
 def postprocess_text(text: str) -> str:
     """Apply one common Markdown policy, preserving fenced code and reference links."""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text, fenced_blocks = _protect_fenced_blocks(text)
     text = _strip_dependabot_metadata(text)
+    text = _escape_prose_angles(text)
 
     # Mirror squash-body conventional commit headings before summaries/reflow.
     text = _mirror_squash_body_entries(text)

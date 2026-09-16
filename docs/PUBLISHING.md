@@ -11,7 +11,7 @@ The workflow and instructions are present; PyPI ownership, the Trusted Publisher
 the protected GitHub environment, and the first upload still need verification
 or setup. Building or merging this preparation does not publish a package.
 Issue [#2](https://github.com/acgetchell/research-repo-tools/issues/2) now blocks
-the first release: complete the [toolchain setup](toolchain.md) implementation,
+the first release: complete the [toolchain setup](INSTALLING.md) implementation,
 native installer validation, and isolated consumer-fixture validation before
 tagging. The final PyPI installation check must also exercise the bootstrap path
 in a clean fixture. Migration of existing consumer repositories is separate work
@@ -49,7 +49,7 @@ required CI and is merged. Repository files describe the intended configuration;
 they do not apply it automatically.
 
 1. Reconcile the selected-Actions policy using
-   [GitHub setup](github.md#apply-or-reconcile-github-settings). The desired
+   [GitHub setup](CONFIGURING_GITHUB.md#apply-or-reconcile-github-settings). The desired
    `allowed-actions.json` adds `pypa/gh-action-pypi-publish@*`; full SHA pinning
    remains required. The workflow uses GitHub's exact-commit
    [self-repository syntax](https://github.blog/changelog/2026-07-30-reference-same-repository-actions-with-self-repository-syntax/)
@@ -89,8 +89,8 @@ using this package's implementation and git-cliff:
 
 ```sh
 uv sync --locked
-uv run --locked research-repo-tools changelog generate --tag v0.1.0 --date YYYY-MM-DD --dry-run
-uv run --locked research-repo-tools changelog generate --tag v0.1.0 --date YYYY-MM-DD
+uv run --locked just changelog-preview --tag v0.1.0 --date YYYY-MM-DD
+uv run --locked just changelog-release v0.1.0 YYYY-MM-DD
 uv run --locked just release-check v0.1.0
 uv run --locked just ci
 uv run --locked --group audit just audit
@@ -108,7 +108,7 @@ clean-consumer check below also succeed. Git operations are performed by the
 maintainer under [AGENTS.md](../AGENTS.md).
 
 For later releases, first run the shared `release update X.Y.Z` command with the
-actual previous release and chosen date; see [Shared release behavior](release.md).
+actual previous release and chosen date; see [Shared release behavior](UPDATING_RELEASE_METADATA.md).
 The first release needs no invented previous version.
 
 ## Publish after review and account setup
@@ -159,7 +159,7 @@ PY
 Confirm `uv.lock` resolves the package from PyPI and the commands work without a
 source checkout, local wheel, or editable/path source. Also inspect the release's
 file hashes and attestations on PyPI. In that disposable fixture, follow the
-[toolchain guide](toolchain.md) to configure the tooling group, generate the
+[toolchain guide](INSTALLING.md) to configure the tooling group, generate the
 launchers from the installed package, and verify the bootstrap path. Record the
 tag/run, published version, and clean-install/bootstrap results in issue #1 before
 closing it.

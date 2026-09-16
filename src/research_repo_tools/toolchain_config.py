@@ -55,6 +55,13 @@ class Toolchain:
     python: str
     rust: RustToolchain | None
     cargo: tuple[CargoTool, ...]
+    requires_python: str = ">=3.14"
+
+    @property
+    def python_request(self) -> str:
+        """Resolve a minor selector within the project's Python constraints."""
+        suffix = ".*" if self.python.count(".") == 1 else ""
+        return str(SpecifierSet(f"=={self.python}{suffix}") & SpecifierSet(self.requires_python))
 
 
 def _names(value: object, field: str) -> tuple[str, ...]:
@@ -84,7 +91,12 @@ def load(settings: Config) -> Toolchain:
     if not isinstance(project, dict):
         raise ValueError("project must be a table")
     requires = project.get("requires-python", ">=3.14")
-    if not isinstance(requires, str) or python not in SpecifierSet(requires):
+    if not isinstance(requires, str):
+        raise ValueError("project.requires-python must be a version specifier string")
+    constraints = SpecifierSet(requires)
+    # A minor selector is a range, not patch zero. uv resolves its intersection
+    # with requires-python, and Runtime verifies the resulting interpreter.
+    if python.count(".") == 2 and python not in constraints:
         raise ValueError(".python-version must satisfy project.requires-python")
     rust = None
     rust_file = root / "rust-toolchain.toml"
@@ -117,7 +129,7 @@ def load(settings: Config) -> Toolchain:
         cargo.append(CargoTool(package, version, binary, args))
     if cargo and rust is None:
         raise ValueError("Cargo tools require a pinned rust-toolchain.toml")
-    return Toolchain(root, uv[2:], python, rust, tuple(cargo))
+    return Toolchain(root, uv[2:], python, rust, tuple(cargo), requires)
 
 
 def host_target() -> str:

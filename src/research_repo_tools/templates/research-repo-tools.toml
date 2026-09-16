@@ -3,7 +3,7 @@
 schema = 1
 
 # Toolchain setup also reads the consumer pyproject.toml [tool.uv] required-version,
-# .python-version, and rust-toolchain.toml. See docs/toolchain.md.
+# .python-version, and rust-toolchain.toml. See docs/INSTALLING.md.
 # [toolchain.cargo]
 # git-cliff = "2.14.1"
 

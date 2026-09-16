@@ -1,9 +1,9 @@
-# GitHub setup
+# Configuring GitHub
 
 Source and issues live at
 [acgetchell/research-repo-tools](https://github.com/acgetchell/research-repo-tools).
 Consumers will install released packages from PyPI. Local wheels are for pilot
-evaluation and installation checks; see [publishing](publishing.md).
+evaluation and installation checks; see [publishing](PUBLISHING.md).
 
 ## Repository controls
 
@@ -107,7 +107,7 @@ maintainer performs Git mutations under [AGENTS.md](../AGENTS.md).
 The desired Actions allowlist includes `pypa/gh-action-pypi-publish@*` for the
 tagged-release workflow; apply that payload before the first release tag. The
 `pypi` environment protections and PyPI Trusted Publisher are separate account
-settings. Follow [Publishing to PyPI](publishing.md) to configure them and verify
+settings. Follow [Publishing to PyPI](PUBLISHING.md) to configure them and verify
 the first release. Committing workflow YAML does not configure those accounts
 or publish distributions.
 

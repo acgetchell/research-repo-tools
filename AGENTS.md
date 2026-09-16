@@ -12,7 +12,22 @@
   not retain copied repositories, their lockfiles, old script implementations,
   or tests of those old implementations as the shared package's test suite.
 - Preserve applicable regression behavior in tests of the shared implementation.
-  Record provenance and deliberately superseded policies in documentation.
+  Document deliberately superseded policies in the relevant guides.
+- Test and validate shared tooling here. Consumers retain Rust and domain checks
+  plus focused integration checks for their pinned package and configuration.
+
+## Documentation conventions
+
+- Keep consumer installation, commands, and usage examples in README.md;
+  keep coding and package-development guidance in CONTRIBUTING.md.
+- Name documents containing operational commands with UPPERCASE gerunds,
+  such as `INSTALLING.md` and `VALIDATING.md`. Use lowercase filenames for
+  informational documents, such as `api.md` and `migration.md`.
+- Preserve established root filenames such as README.md, AGENTS.md,
+  SECURITY.md, and the generated CHANGELOG.md. Update links when renaming docs.
+- Keep recipe definitions, CLI help, and command-reference lists lexicographically
+  sorted. Expose generated command listings through `just help` and the default
+  recipe. Multi-step workflow examples retain their required execution order.
 
 ## Git operations
 
@@ -36,3 +51,7 @@
   or verify a specific behavioral change.
 - Record unfinished or failed checks accurately. A passing `just check` is
   not evidence that the full tests or package installation checks passed.
+- Record validation results in PR descriptions, review notes, or CI logs.
+  Keep documentation focused on current guidance. Link to the generated
+  [CHANGELOG.md](CHANGELOG.md) for fixes and release history; do not maintain
+  parallel fix or validation logs in other documents.

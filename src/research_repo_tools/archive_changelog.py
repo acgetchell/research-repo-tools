@@ -506,10 +506,22 @@ def archive_changelog(
         archive_dir: Directory for archive files.  Defaults to
             ``docs/archives/changelog`` relative to *changelog_path*'s parent.
     """
+    text = changelog_path.read_text(encoding="utf-8")
+    _write_texts_transactionally(plan_archives(changelog_path, text, archive_dir))
+
+
+def plan_archives(
+    changelog_path: Path,
+    text: str,
+    archive_dir: Path | None = None,
+) -> list[tuple[Path, str]]:
+    """Plan root and archive replacements from a candidate without writing files.
+
+    Generation and standalone archiving share the same rotation, retained-history
+    checks, and link relocation. Callers publish the complete plan together.
+    """
     if archive_dir is None:
         archive_dir = changelog_path.parent / _DEFAULT_ARCHIVE_DIR
-
-    text = changelog_path.read_text(encoding="utf-8")
 
     # Separate trailing reference-style link definitions before parsing
     # so they can be distributed to the correct output files.
@@ -518,8 +530,7 @@ def archive_changelog(
     parsed = parse_changelog(text)
 
     if not parsed.version_blocks:
-        _postprocess_existing_archives(archive_dir)
-        return  # nothing to archive
+        return _existing_archive_updates(archive_dir)
 
     groups = group_by_minor(parsed.version_blocks)
     minor_keys = list(groups.keys())
@@ -539,8 +550,7 @@ def archive_changelog(
         archived_minors.append(minor)
 
     if not archived_minors:
-        _postprocess_existing_archives(archive_dir)
-        return  # only one minor series — nothing to archive yet
+        return _existing_archive_updates(archive_dir)
 
     archive_dir_rel = _archive_dir_link_prefix(archive_dir, changelog_path.parent)
 
@@ -564,7 +574,7 @@ def archive_changelog(
     planned_writes.append((changelog_path, root_text))
     planned_targets = {path for path, _text in planned_writes}
     planned_writes.extend(_existing_archive_updates(archive_dir, planned_targets))
-    _write_texts_transactionally(planned_writes)
+    return planned_writes
 
 
 # ---------------------------------------------------------------------------

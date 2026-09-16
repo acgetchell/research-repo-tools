@@ -13,6 +13,8 @@ from dataclasses import asdict, dataclass
 from importlib.metadata import version
 from pathlib import Path
 
+from packaging.specifiers import SpecifierSet
+
 from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics, run_safe_command
 from research_repo_tools.tool_pins import SEMVER
 from research_repo_tools.toolchain_config import RUSTUP_VERSION, CargoTool, Toolchain, executable, home, host_target
@@ -66,8 +68,16 @@ class Runtime:
         return self.base / "cargo" / self.host / self.plan.rust.channel / tool.package / tool.version
 
     def environment(self) -> dict[str, str]:
+        python = self.python_status(self.uv_status())
+        return self._environment(python)
+
+    def _environment(self, python: Status | None = None) -> dict[str, str]:
+        """Build probe environments without recursively looking up Python."""
         env = dict(os.environ)
-        paths = [str(self.uv.parent), *(str(self.cargo_root(tool) / "bin") for tool in self.plan.cargo)]
+        paths = [str(self.uv.parent)]
+        if python is not None and python.ok:
+            paths.append(str(Path(python.path).parent))
+        paths.extend(str(self.cargo_root(tool) / "bin") for tool in self.plan.cargo)
         if self.plan.rust:
             paths.append(str(self.rustup.parent))
             env.update(
@@ -82,33 +92,42 @@ class Runtime:
 
     def uv_status(self) -> Status:
         # A matching existing uv is reusable; an incompatible one is never replaced.
-        env = self.environment()
+        env = self._environment()
         local = _probe(self.uv, "uv", self.plan.uv, env=env, cwd=self.plan.root)
         if local.ok or self.uv.exists():
             return local
         return _probe("uv", "uv", self.plan.uv, env=dict(os.environ), cwd=self.plan.root)
 
     def python_status(self, uv: Status) -> Status:
-        required = self.plan.python
+        required = self.plan.python_request
         if not uv.ok:
             return Status("Python", required, "uv unavailable", "", False)
+        environment = Path(os.environ.get("UV_PROJECT_ENVIRONMENT") or ".venv")
+        if not environment.is_absolute():
+            environment = self.plan.root / environment
+        if (environment / "pyvenv.cfg").is_file():
+            status = self._python_probe(executable(environment / ("Scripts" if os.name == "nt" else "bin"), "python"))
+            if status.ok:
+                return status
         try:
             result = run_safe_command(
                 uv.path,
                 ["python", "find", "--system", "--managed-python", "--no-python-downloads", required],
                 cwd=self.plan.root,
-                env=self.environment(),
+                env=self._environment(),
                 timeout=30,
             )
             path = result.stdout.strip()
             if not path or not Path(path).is_absolute():
                 raise ValueError("uv python find did not return an absolute interpreter path")
-            status = _probe(path, "Python", "", env=self.environment(), cwd=self.plan.root)
-            return Status(
-                "Python", required, status.actual, status.path, status.ok and status.actual.split(".")[: len(required.split("."))] == required.split(".")
-            )
+            return self._python_probe(path)
         except FAILURES as error:
             return Status("Python", required, format_exception_diagnostics(error, single_line=True), "", False)
+
+    def _python_probe(self, path: str | Path) -> Status:
+        required = self.plan.python_request
+        status = _probe(path, "Python", "", env=self._environment(), cwd=self.plan.root)
+        return Status("Python", required, status.actual, status.path, status.ok and status.actual in SpecifierSet(required))
 
     def rust_statuses(self) -> list[Status]:
         rust = self.plan.rust
@@ -173,7 +192,7 @@ class Runtime:
             if not uv.ok:
                 raise RuntimeError(f"uv installation did not supply {self.plan.uv}: {uv.actual}")
         if not self.python_status(uv).ok:
-            self._install(uv.path, ["python", "install", "--no-bin", "--no-registry", self.plan.python])
+            self._install(uv.path, ["python", "install", "--no-bin", "--no-registry", self.plan.python_request])
             if not self.python_status(uv).ok:
                 raise RuntimeError("Python installation did not supply the declared interpreter")
         rust = self.plan.rust

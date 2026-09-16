@@ -11,21 +11,24 @@ function Test-RrtUvVersion([string]$Executable) {
     $rrtOutput = & $Executable --version
     return ($LASTEXITCODE -eq 0 -and $rrtOutput -match ('^uv ' + [regex]::Escape($rrtUvVersion) + '(\s|$)'))
 }
-$rrtExisting = Get-Command uv -CommandType Application -ErrorAction SilentlyContinue
+$rrtExisting = Get-Command uv -CommandType Application -TotalCount 1 -ErrorAction SilentlyContinue
 if (-not (Test-Path -LiteralPath $rrtUv) -and $rrtExisting -and (Test-RrtUvVersion $rrtExisting.Source)) {
     $rrtUv = $rrtExisting.Source
 } elseif (-not (Test-RrtUvVersion $rrtUv)) {
     $rrtInstaller = Join-Path ([IO.Path]::GetTempPath()) ([guid]::NewGuid().ToString() + '.ps1')
     $rrtOldInstall = $env:UV_UNMANAGED_INSTALL
     $rrtOldPathPolicy = $env:UV_NO_MODIFY_PATH
+    $rrtOldTls = [Net.ServicePointManager]::SecurityProtocol
     try {
-        Invoke-WebRequest -Uri "https://astral.sh/uv/$rrtUvVersion/install.ps1" -OutFile $rrtInstaller -TimeoutSec 300
+        [Net.ServicePointManager]::SecurityProtocol = $rrtOldTls -bor [Net.SecurityProtocolType]::Tls12
+        Invoke-WebRequest -UseBasicParsing -Uri "https://astral.sh/uv/$rrtUvVersion/install.ps1" -OutFile $rrtInstaller -TimeoutSec 300
         $env:UV_UNMANAGED_INSTALL = Join-Path $rrtCache "uv/$rrtUvVersion"
         $env:UV_NO_MODIFY_PATH = '1'
         & powershell.exe -NoProfile -ExecutionPolicy Bypass -File $rrtInstaller
         if ($LASTEXITCODE -ne 0) { throw 'uv installer failed' }
         if (-not (Test-RrtUvVersion $rrtUv)) { throw 'uv installation failed version verification' }
     } finally {
+        [Net.ServicePointManager]::SecurityProtocol = $rrtOldTls
         $env:UV_UNMANAGED_INSTALL = $rrtOldInstall
         $env:UV_NO_MODIFY_PATH = $rrtOldPathPolicy
         Remove-Item -LiteralPath $rrtInstaller -Force -ErrorAction SilentlyContinue

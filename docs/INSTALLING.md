@@ -1,4 +1,4 @@
-# Shared toolchain setup
+# Installing and managing toolchains
 
 Issue [#2](https://github.com/acgetchell/research-repo-tools/issues/2) is a
 prerequisite for the first PyPI release. This implementation provides explicit
@@ -42,6 +42,8 @@ Keep the consumer's other development dependencies in `dev` and its notebook
 dependencies in a separate group. `dev` must include `tooling` so full environment
 sync retains the shared package. Set `.python-version` to `3.14` (or a patch pin).
 Its selection must satisfy `project.requires-python`.
+Minor selectors such as `3.14` resolve within that constraint, including patch
+minimums, upper bounds, and exclusions. Checks verify the resolved patch version.
 
 Use the consumer's existing `rust-toolchain.toml`. Cargo includes its own version
 within that Rust distribution; do not introduce an independent Cargo version pin.
@@ -111,11 +113,16 @@ updates locks, authenticates services, or modifies shell startup files.
 
 The consumer template provides:
 
-- `just setup`: synchronize declared tools and then the default Python environment.
-- `just tools-check`: inspect without syncing the environment or downloading Python.
 - `just bootstrap`: generate the launchers.
 - `just bootstrap-check`: verify launchers match the declared uv pin.
 - `just changelog`: run the shared generator with the checked managed git-cliff.
+- `just help`: list all available commands and arguments in lexicographic order.
+- `just help-workflows`: alias for `help`.
+- `just setup`: synchronize declared tools and then the default Python environment.
+- `just tools-check`: inspect without syncing the environment or downloading Python.
+
+Bare `just` shows help. When merging the template, reconcile its default recipe
+with the consuming repository's existing default.
 
 Use `uv run --locked just ...` when just is not already on PATH. For a strictly
 read-only check of an existing environment, use
@@ -126,10 +133,10 @@ The underlying commands are:
 
 | Command | Behavior |
 | --- | --- |
-| `toolchain check [--json]` | Report expected/actual versions and selected paths; nonzero if incomplete |
-| `toolchain sync [--dry-run]` | Install declared versions and verify results; dry run reports without installation |
-| `toolchain run -- COMMAND ...` | Check tools, then run with their selected paths; propagate failure/exit status |
 | `toolchain bootstrap [--check \| --force]` | Generate, verify, or explicitly refresh the two launchers |
+| `toolchain check [--json]` | Report expected/actual versions and selected paths; nonzero if incomplete |
+| `toolchain run -- COMMAND ...` | Check tools, then run with their selected paths; propagate failure/exit status |
+| `toolchain sync [--dry-run]` | Install declared versions and verify results; dry run reports without installation |
 
 Global `--root` and `--config` retain the shared CLI contract. Toolchain commands
 also read the conventional files at the consumer root. A standalone configuration
@@ -138,6 +145,11 @@ files. `toolchain run` does not invoke a shell or install missing tools. Adapt
 other recipes that need Cargo tools to use this command, so they select the same
 executables that checks verified. Direct bare Cargo tools on the user's PATH may
 belong to a different installation.
+
+Python commands prefer the consumer's verified virtual environment (`.venv`, or
+the path selected by `UV_PROJECT_ENVIRONMENT`) so its installed dependencies remain
+available. If that environment is missing or incompatible with the declarations,
+the toolchain selects a compatible uv-managed interpreter.
 
 ## Installation ownership and failures
 

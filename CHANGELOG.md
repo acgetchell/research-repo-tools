@@ -5,7 +5,7 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [0.1.0] - 2026-09-16
+## [Unreleased]
 
 ### Merged Pull Requests
 
@@ -23,6 +23,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Preserve changelog content and consistently parse release versions, dates, and TOML metadata.
   - Reject incomplete Semgrep scans and resolve configured tools from the consumer root.
   - Document PyPI distribution and the shared-tooling adoption process.
+- Add uv bootstrap and managed Rust/Python setup [`c74a1a9`](https://github.com/acgetchell/research-repo-tools/commit/c74a1a995a6a4f292fc451f1ae330d1d80a9c2e7)
+
+  - Generate POSIX and PowerShell launchers that obtain uv and start the locked tooling environment before installing project dependencies.
+  - Add read-only checks, explicit synchronization, and managed execution for declared Python, Rust, Cargo components, and development tools.
+  - Isolate versioned tool installations and verify executable selection without replacing user-owned tools.
+  - Add thin just recipes for setup, tool checks, and bootstrap generation.
+  - Support included dependency groups while preserving their pinned tools during Python dependency updates.
+  - Document installation through uv from PyPI and require publication before separate consumer adoption.
+  - Update Ruff to 0.16.8.
 
 ### Fixed
 
@@ -68,5 +77,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   - [Release notes](https://github.com/pypa/hatch/releases)
   - [Commits](https://github.com/pypa/hatch/compare/hatchling-v1.31.0...hatchling-v1.32.0)
+- Prepare PyPI releases with Trusted Publishing [`2036a6c`](https://github.com/acgetchell/research-repo-tools/commit/2036a6c63983b29bc80053e0917bc0fc116485a6)
 
-[0.1.0]: https://github.com/acgetchell/research-repo-tools/tree/v0.1.0
+  - Add tagged publication using OIDC credentials and attestations.
+  - Build distributions once and publish the artifacts validated across Linux, macOS, and Windows.
+  - Gate publication on main-branch ancestry, synchronized release metadata, generated notes, and dependency auditing.
+  - Reject incomplete distribution sets and preserve attribution bytes across Windows checkouts.
+  - Document supported CLI and Python interfaces, consumer just recipes, and publisher setup.
+  - Generate the initial 0.1.0 changelog from committed history.
+
+[Unreleased]: https://github.com/acgetchell/research-repo-tools/commits/HEAD

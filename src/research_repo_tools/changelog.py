@@ -9,10 +9,10 @@ from pathlib import Path
 
 from research_repo_tools import archive_changelog as archive
 from research_repo_tools.config import Config
-from research_repo_tools.files import replace
+from research_repo_tools.files import replace_many
 from research_repo_tools.postprocess_changelog import format_markdown, postprocess_text
 from research_repo_tools.process import run_git_command, run_git_command_with_input, run_safe_command
-from research_repo_tools.release_tags import _GITHUB_TAG_ANNOTATION_LIMIT, _heading_to_anchor, validate_semver
+from research_repo_tools.release_tags import _GITHUB_TAG_ANNOTATION_LIMIT, SEMVER_PATTERN, _heading_to_anchor, validate_semver
 
 TEMPLATES = ("cliff.toml", "justfile", "research-repo-tools.toml", "CHANGELOG.md", "rumdl.toml")
 _COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
@@ -29,7 +29,7 @@ def template(name: str, *, owner: str | None = None, repository: str | None = No
         if not _COMPONENT.fullmatch(value) or value in {".", ".."}:
             raise ValueError("GitHub owner and repository must be single URL path components")
         text = text.replace(placeholder, value)
-    return text
+    return text.replace("__SEMVER_PATTERN__", SEMVER_PATTERN)
 
 
 def write_template(path: Path, text: str) -> None:
@@ -48,12 +48,14 @@ def _paths(config: Config) -> tuple[Path, Path, Path | None]:
 
 
 def generate(config: Config, *, tag: str | None = None, released: str | None = None, dry_run: bool = False) -> str:
-    """Generate from Git history, validate the complete candidate, then atomically publish.
+    """Generate, normalize, and rotate history, then publish with recoverable rollback.
 
     git-cliff runs offline. A prospective release requires an explicit date; it
     does not acquire an accidental release date from this machine's wall clock.
+    Dry runs validate every candidate and return the trimmed root changelog
+    without creating directories or replacing root/archive files.
     """
-    path, _archives, formatter = _paths(config)
+    path, archives, formatter = _paths(config)
     section = config.section("changelog")
     if path.is_symlink():
         raise ValueError(f"Changelog output must not be a symlink: {path}")
@@ -84,14 +86,21 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
         assert released is not None
         generated = archive.replace_release_date(generated, tag.removeprefix("v"), released, required=True)
     result = postprocess_text(generated)
-    if formatter is not None:
-        result = format_markdown(result, path, formatter)
     parsed = archive.parse_changelog(archive._extract_link_defs(result)[0])
     if parsed.unreleased is None and not parsed.version_blocks:
         raise ValueError("git-cliff must generate at least one release or Unreleased section")
+    candidates = dict(archive.plan_archives(path, result, archives))
+    candidates.setdefault(path, result)
+    for target, candidate in candidates.items():
+        if formatter is not None:
+            candidate = format_markdown(candidate, target, formatter)
+        parsed = archive.parse_changelog(archive._extract_link_defs(candidate)[0])
+        if target == path and parsed.unreleased is None and not parsed.version_blocks:
+            raise ValueError("formatted changelog must contain at least one release or Unreleased section")
+        candidates[target] = candidate
     if not dry_run:
-        replace(path, result.encode("utf-8"))
-    return result
+        replace_many({target: candidate.encode("utf-8") for target, candidate in candidates.items()})
+    return candidates[path]
 
 
 def notes(config: Config, tag: str) -> tuple[str, Path, str]:

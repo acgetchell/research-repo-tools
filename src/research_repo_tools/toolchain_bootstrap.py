@@ -8,7 +8,7 @@ from pathlib import Path
 
 from packaging.requirements import Requirement
 
-from research_repo_tools.files import replace
+from research_repo_tools.files import replace_many
 from research_repo_tools.process import run_safe_command
 from research_repo_tools.tool_pins import STABLE
 from research_repo_tools.toolchain_config import Toolchain
@@ -52,9 +52,7 @@ def generate(plan: Toolchain, *, check: bool = False, force: bool = False) -> No
         if not check and path.exists() and not matches and not force:
             raise ValueError(f"{path.name} exists; use --force to regenerate it")
     if not check:
-        for path, payload in outputs:
-            if not path.is_file() or path.read_bytes() != payload:
-                replace(path, payload)
+        replace_many({path: payload for path, payload in outputs if not path.is_file() or path.read_bytes() != payload})
 
 
 def install_uv(uv_version: str, base: Path) -> None:

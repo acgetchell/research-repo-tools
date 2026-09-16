@@ -2,13 +2,18 @@
 
 import io
 import json
+import os
+import shutil
 import subprocess
+import sys
+import venv
 from dataclasses import replace
 from pathlib import Path
 
 import pytest
+from packaging.specifiers import SpecifierSet
 
-from research_repo_tools import cli, config, toolchain, toolchain_bootstrap, toolchain_config
+from research_repo_tools import cli, config, files, process, toolchain, toolchain_bootstrap, toolchain_config
 from research_repo_tools.toolchain_config import RUSTUP_VERSION, executable
 
 
@@ -42,13 +47,14 @@ class FakeTools:
         self.add(directory / executable(Path(), "uv"), "uv 0.12.15")
         self.add(directory / executable(Path(), "just"), f"just {toolchain.version('rust-just')}")
         self.add(directory / executable(Path(), "git"), "git version 2.50.1.windows.1")
-        self.python = self.add(directory / executable(Path(), "python"), "Python 3.14.7")
+        self.python = self.add(executable(directory.parent / "managed python", "python"), "Python 3.14.7")
+        self.add(executable(directory, "python"), "Python 3.13.7")
 
     def add(self, path, output):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_bytes(b"synthetic executable; calls are intercepted")
         path.chmod(0o700)
-        self.outputs[str(path)] = output
+        self.outputs[path] = output
         return path
 
     def install_manager(self):
@@ -56,7 +62,7 @@ class FakeTools:
 
     def run(self, command, args, **kwargs):
         self.calls.append((command, args, kwargs))
-        if command == str(self.runtime.rustup):
+        if Path(command) == self.runtime.rustup:
             if args[:2] == ["toolchain", "install"]:
                 self.installed_rust = True
                 self.add(executable(self.directory, "selected rustc"), "rustc 1.98.0 (abc 2026-08-01)")
@@ -86,13 +92,14 @@ class FakeTools:
         if args[:2] == ["python", "install"]:
             self.python_available = True
             return subprocess.CompletedProcess([], 0, "", "")
-        if command in self.outputs:
-            return subprocess.CompletedProcess([], 0, self.outputs[command], "")
+        if Path(command) in self.outputs:
+            return subprocess.CompletedProcess([], 0, self.outputs[Path(command)], "")
         raise AssertionError(f"unexpected command: {command} {args}")
 
 
 @pytest.fixture
 def runtime(consumer, tmp_path, monkeypatch):
+    monkeypatch.delenv("UV_PROJECT_ENVIRONMENT", raising=False)
     monkeypatch.setenv("RESEARCH_REPO_TOOLS_HOME", str(tmp_path / "managed tools"))
     monkeypatch.setenv("PATH", str(tmp_path / "executables"))
     monkeypatch.setattr(toolchain_config, "host_target", lambda: "aarch64-apple-darwin")
@@ -140,7 +147,7 @@ def test_missing_python_installed_before_rust(runtime):
     fake.python_available = False
     instance.sync()
     installs = [args for _, args, _ in fake.calls if "install" in args]
-    assert installs[0] == ["python", "install", "--no-bin", "--no-registry", "3.14"]
+    assert installs[0] == ["python", "install", "--no-bin", "--no-registry", "==3.14.*,>=3.14"]
 
 
 def test_failure_retains_completed_tools_and_rerun_recovers(runtime):
@@ -166,7 +173,8 @@ def test_distinct_versions_do_not_overwrite_each_other(runtime):
     assert instance.cargo_root(tool) != other.cargo_root(tool)
 
 
-def test_run_selects_verified_paths_preserves_arguments_and_exit_status(runtime, monkeypatch):
+@pytest.mark.parametrize("command_name", ["git-cliff", "python"])
+def test_run_selects_verified_paths_preserves_arguments_and_exit_status(runtime, monkeypatch, command_name):
     instance, fake = runtime
     instance.sync()
     real_fake = fake.run
@@ -179,9 +187,12 @@ def test_run_selects_verified_paths_preserves_arguments_and_exit_status(runtime,
         return real_fake(command, args, **kwargs)
 
     monkeypatch.setattr(toolchain, "run_safe_command", execute)
-    assert toolchain.run_command(instance, ["--", "git-cliff", "a b", "$(no-shell)"]) == 23
+    assert toolchain.run_command(instance, ["--", command_name, "a b", "$(no-shell)"]) == 23
     tool = instance.plan.cargo[1]
-    assert calls[0][0] == str(executable(instance.cargo_root(tool) / "bin", "git-cliff"))
+    expected = fake.python if command_name == "python" else executable(instance.cargo_root(tool) / "bin", "git-cliff")
+    assert Path(calls[0][0]) == expected
+    selected_python = shutil.which("python", path=calls[0][2]["env"]["PATH"])
+    assert selected_python is not None and Path(selected_python) == fake.python
     assert calls[0][2]["env"]["RUSTUP_TOOLCHAIN"] == "1.98.0"
     assert calls[0][2]["env"]["CARGO_HOME"] != str(Path.home() / ".cargo")
 
@@ -241,6 +252,21 @@ def test_check_json_reports_missing_tools_without_installing(runtime, monkeypatc
     statuses = json.loads(capsys.readouterr().out)
     assert next(item for item in statuses if item["name"] == "Python")["ok"]
     assert not next(item for item in statuses if item["name"] == "rustup")["ok"]
+    assert not any("install" in args for _, args, _ in fake.calls)
+
+
+@pytest.mark.parametrize("complete", [False, True])
+def test_sync_dry_run_only_warns_when_tools_need_repair(runtime, monkeypatch, capsys, complete):
+    instance, fake = runtime
+    if complete:
+        instance.sync()
+    fake.calls.clear()
+    capsys.readouterr()
+    monkeypatch.setattr(toolchain, "Runtime", lambda plan: instance)
+    assert cli.main(["--root", str(instance.plan.root), "toolchain", "sync", "--dry-run"]) == 0
+    output = capsys.readouterr().out
+    assert ("Dry run: FAIL entries need installation or prerequisite repair" in output) is not complete
+    assert ("FAIL " in output) is not complete
     assert not any("install" in args for _, args, _ in fake.calls)
 
 
@@ -312,6 +338,137 @@ def test_bootstrap_refuses_overwriting_any_file_before_writing_the_pair(consumer
     with pytest.raises(ValueError, match="exists"):
         toolchain_bootstrap.generate(plan)
     assert not (consumer / "bootstrap.sh").exists()
+
+
+@pytest.mark.parametrize("existing", [False, True])
+def test_bootstrap_rolls_back_both_launchers_on_publication_failure(consumer, monkeypatch, existing):
+    plan = toolchain_config.load(config.load(root=consumer))
+    if existing:
+        toolchain_bootstrap.generate(plan)
+    before = {path: path.read_bytes() for path in consumer.iterdir() if path.is_file()}
+    original_replace = files._replace_path
+
+    def fail_second(source, destination):
+        if source.suffix == ".tmp" and destination.name == "bootstrap.ps1":
+            raise PermissionError("second launcher is locked")
+        original_replace(source, destination)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(files, "_replace_path", fail_second)
+        with pytest.raises(PermissionError, match="second launcher is locked"):
+            toolchain_bootstrap.generate(replace(plan, uv="0.12.16"), force=True)
+    assert {path: path.read_bytes() for path in consumer.iterdir() if path.is_file()} == before
+    toolchain_bootstrap.generate(replace(plan, uv="0.12.16"), force=True)
+    toolchain_bootstrap.generate(replace(plan, uv="0.12.16"), check=True)
+
+
+def test_bootstrap_rejects_directory_before_replacing_either_launcher(consumer):
+    plan = toolchain_config.load(config.load(root=consumer))
+    shell = consumer / "bootstrap.sh"
+    shell.write_bytes(b"previous launcher\n")
+    (consumer / "bootstrap.ps1").mkdir()
+    with pytest.raises(IsADirectoryError):
+        toolchain_bootstrap.generate(plan, force=True)
+    assert shell.read_bytes() == b"previous launcher\n"
+    assert not list(consumer.glob(".*.tmp"))
+    assert not list(consumer.glob(".*.bak"))
+
+
+@pytest.mark.parametrize("environment_name", [None, "custom environment", "absolute"])
+def test_run_python_preserves_consumer_dependencies(runtime, tmp_path, monkeypatch, environment_name):
+    instance, fake = runtime
+    instance.plan = replace(instance.plan, rust=None, cargo=(), python=f"{sys.version_info.major}.{sys.version_info.minor}")
+    environment = instance.plan.root / (environment_name or ".venv")
+    if environment_name == "absolute":
+        environment = tmp_path / "external environment"
+        monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(environment))
+    elif environment_name:
+        monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", environment_name)
+    else:
+        monkeypatch.delenv("UV_PROJECT_ENVIRONMENT", raising=False)
+    managed = tmp_path / "standalone interpreter"
+    for directory in (environment, managed):
+        venv.EnvBuilder(with_pip=False).create(directory)
+    scripts = "Scripts" if os.name == "nt" else "bin"
+    python = executable(environment / scripts, "python")
+    fake.python = executable(managed / scripts, "python")
+    real_run = process.run_safe_command
+
+    def execute(command, args, **kwargs):
+        if Path(command) in {python, fake.python}:
+            return real_run(command, args, **kwargs)
+        return fake.run(command, args, **kwargs)
+
+    monkeypatch.setattr(toolchain, "run_safe_command", execute)
+    monkeypatch.setenv("PATH", os.pathsep.join([str(python.parent), str(fake.directory)]))
+    monkeypatch.setenv("VIRTUAL_ENV", str(environment))
+    site = Path(real_run(str(python), ["-c", 'import sysconfig; print(sysconfig.get_path("purelib"))']).stdout.strip())
+    (site / "consumer_dependency.py").write_text('VALUE = "installed only in the consumer"\n')
+    output = tmp_path / "result.txt"
+    code = "import sys, consumer_dependency; from pathlib import Path; Path(sys.argv[1]).write_text(consumer_dependency.VALUE)"
+    assert toolchain.run_command(instance, ["python", "-c", code, str(output)]) == 0
+    assert output.read_text() == "installed only in the consumer"
+    assert Path(instance.python_status(instance.uv_status()).path) == python
+
+
+@pytest.mark.parametrize(
+    "pin,requires,actual,ok",
+    [
+        ("3.14", ">=3.14.1", "3.14.7", True),
+        ("3.14", ">=3.14.1", "3.14.0", False),
+        ("3.14", ">=3.14.1", "3.15.0", False),
+        ("3.14", ">=3.14,<3.14.7", "3.14.7", False),
+        ("3.14", ">=3.14,!=3.14.7", "3.14.7", False),
+        ("3.14.7", ">=3.14.1", "3.14.7", True),
+        ("3.14.7", ">=3.14.1", "3.14.8", False),
+    ],
+)
+def test_python_selection_enforces_resolved_patch_constraints(runtime, pin, requires, actual, ok):
+    instance, fake = runtime
+    manifest = instance.plan.root / "pyproject.toml"
+    manifest.write_text(manifest.read_text().replace('requires-python = ">=3.14"', f'requires-python = "{requires}"'))
+    (instance.plan.root / ".python-version").write_text(pin)
+    instance.plan = toolchain_config.load(config.load(root=instance.plan.root))
+    fake.outputs[fake.python] = f"Python {actual}"
+    status = instance.python_status(instance.uv_status())
+    assert status.ok is ok
+    assert status.actual == actual
+    lookup = next(args for _, args, _ in fake.calls if args[:2] == ["python", "find"])
+    assert (actual in SpecifierSet(lookup[-1])) is ok
+
+
+@pytest.mark.parametrize("actual", ["3.13.7", "3.14.0"])
+def test_incompatible_consumer_python_falls_back_to_verified_managed_python(runtime, actual):
+    instance, fake = runtime
+    instance.plan = replace(instance.plan, requires_python=">=3.14.1")
+    environment = instance.plan.root / ".venv"
+    python = executable(environment / ("Scripts" if os.name == "nt" else "bin"), "python")
+    fake.add(python, f"Python {actual}")
+    (environment / "pyvenv.cfg").write_text("synthetic virtual environment\n")
+    status = instance.python_status(instance.uv_status())
+    assert status.ok and Path(status.path) == fake.python
+    selected = shutil.which("python", path=instance.environment()["PATH"])
+    assert selected is not None and Path(selected) == fake.python
+
+
+def test_missing_python_install_respects_project_patch_constraints(runtime):
+    instance, fake = runtime
+    instance.plan = replace(instance.plan, rust=None, cargo=(), requires_python=">=3.14.1,<3.14.9")
+    fake.python_available = False
+    instance.sync()
+    installs = [args for _, args, _ in fake.calls if "install" in args]
+    assert len(installs) == 1
+    assert installs[0][:4] == ["python", "install", "--no-bin", "--no-registry"]
+    assert SpecifierSet(installs[0][-1]) == SpecifierSet("==3.14.*,>=3.14.1,<3.14.9")
+    assert instance.python_status(instance.uv_status()).ok
+
+
+def test_incompatible_exact_python_pin_is_rejected(consumer):
+    manifest = consumer / "pyproject.toml"
+    manifest.write_text(manifest.read_text().replace('requires-python = ">=3.14"', 'requires-python = ">=3.14.1"'))
+    (consumer / ".python-version").write_text("3.14.0")
+    with pytest.raises(ValueError, match="must satisfy"):
+        toolchain_config.load(config.load(root=consumer))
 
 
 def test_checksum_mismatch_prevents_installer_execution(runtime, monkeypatch):
