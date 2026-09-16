@@ -14,10 +14,40 @@ It runs checks and tests, builds wheel and sdist artifacts, and installs both
 outside the checkout with uv. Installation checks exercise the console entry
 point, imports, packaged templates, runtime dependencies, and the bundled `just` executable.
 
-`just check` also runs the locked actionlint and zizmor workflow validators.
+`just check` lints, formats, and type-checks `src`, `scripts`, and `tests`. It also
+runs the locked actionlint and zizmor workflow validators.
 `just audit` performs the separate network-backed Python dependency audit.
 GitHub repository settings and required checks are documented in
 [GitHub setup](docs/github.md); their API payloads live in `.github/settings/`.
+
+Run `just update` to advance exact development-tool pins through this package's
+`deps update-python` command, refresh `uv.lock` within the resulting manifest
+constraints, and sync the development environment. Review the manifest and lockfile
+changes, then validate them with `just ci`. Exact runtime, build, and audit pins
+remain unchanged by this recipe.
+
+## Generated changelog
+
+This repository uses its own shared changelog implementation and packaged
+git-cliff template. Write Conventional Commit subjects and useful commit bodies;
+they are the source of release notes. Generate `CHANGELOG.md` rather than adding
+entries by hand:
+
+```sh
+just changelog-preview
+just changelog
+```
+
+These commands require git-cliff. Run them after committing substantive changes
+when preparing release notes, then review and commit the generated file.
+Uncommitted changes cannot appear in a changelog generated from Git history.
+Generation includes the shared normalization and validation steps.
+
+## Shared implementation
+
+The package's runtime `__version__` and CLI `--version` come from installed
+distribution metadata, whose source is `project.version` in `pyproject.toml`.
+Use the uv environment so imports see the matching installed distribution.
 
 Maintain one implementation per common capability under `src/research_repo_tools/`.
 Organize tests under `tests/changelog`, `dependencies`, `releases`, `semgrep`, and

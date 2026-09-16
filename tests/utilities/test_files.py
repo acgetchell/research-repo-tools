@@ -81,3 +81,36 @@ def test_duplicate_targets_are_rejected_before_directory_creation(tmp_path: Path
     with pytest.raises(ValueError, match="duplicate target"):
         files.replace_many({destination: b"a", destination.parent / "../new/file": b"b"})
     assert not list(tmp_path.iterdir())
+
+
+def test_external_update_cannot_begin_if_any_backup_fails(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    first, second = tmp_path / "manifest", tmp_path / "lock"
+    for path in (first, second):
+        path.write_bytes(b"original\r\n")
+    original = files._stage_backup
+
+    def fail_second_backup(path: Path) -> Path:
+        if path == second:
+            raise OSError("backup storage unavailable")
+        return original(path)
+
+    monkeypatch.setattr(files, "_stage_backup", fail_second_backup)
+    with pytest.raises(OSError, match="backup storage unavailable"), files.preserve_files((first, second)):
+        pytest.fail("external update began without complete recovery backups")
+    assert set(tmp_path.iterdir()) == {first, second}
+    assert first.read_bytes() == second.read_bytes() == b"original\r\n"
+
+
+def test_successful_external_update_removes_backups(tmp_path: Path) -> None:
+    first, new = tmp_path / "manifest", tmp_path / "lock"
+    first.write_bytes(b"original\r\n")
+    with files.preserve_files((first, new)) as originals:
+        assert originals == {first: b"original\r\n", new: None}
+        backups = set(tmp_path.iterdir()) - {first}
+        assert len(backups) == 1
+        assert backups.pop().read_bytes() == b"original\r\n"
+        first.write_bytes(b"updated\n")
+        new.write_bytes(b"new lock\n")
+    assert set(tmp_path.iterdir()) == {first, new}
+    assert first.read_bytes() == b"updated\n"
+    assert new.read_bytes() == b"new lock\n"

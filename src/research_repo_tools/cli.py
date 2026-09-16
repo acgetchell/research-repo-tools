@@ -93,7 +93,14 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         if args.action == "update-python":
             from research_repo_tools.dependencies import main
 
-            return main(["--pyproject", str(settings.path(section.get("pyproject", "pyproject.toml")))])
+            return main(
+                [
+                    "--pyproject",
+                    str(settings.path(section.get("pyproject", "pyproject.toml"))),
+                    "--uv-executable",
+                    settings.executable(section.get("uv", "uv")),
+                ]
+            )
         from research_repo_tools.tool_pins import check_uv, update
 
         if args.action == "check-uv":

@@ -14,7 +14,9 @@ Python project. Declared Python package versions follow that version. Existing
 local Cargo and uv lock entries are synchronized; a lockfile is not required.
 Cargo workspace members inheriting the workspace version participate, while
 registry dependencies and independently versioned members retain their versions.
-Python lock entries are selected by project name and editable or virtual source.
+Python lock entries are selected by normalized distribution name and editable or
+virtual source. Name matching ignores case and treats runs of hyphens, underscores,
+and periods alike. Multiple matching local entries fail validation.
 
 Existing CITATION version and date fields are synchronized. The citation's
 top-level DOI is the source of truth for existing README DOI badges and

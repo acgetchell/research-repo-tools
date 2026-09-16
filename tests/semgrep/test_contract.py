@@ -43,7 +43,7 @@ def test_span_scan_keeps_original_filename_and_uses_fixture_path_semantics(tmp_p
     def scan(command: str, arguments: list[str], **kwargs) -> subprocess.CompletedProcess:
         calls.append(arguments)
         assert command == "semgrep"
-        assert arguments[-1] == "tests/semgrep/.hidden/named.py"
+        assert Path(arguments[-1]) == fixture.relative_to(tmp_path)
         assert kwargs["cwd"] == tmp_path
         assert kwargs["env"]["OTEL_SDK_DISABLED"] == "true"
         generated = yaml.safe_load(Path(arguments[arguments.index("--config") + 1]).read_text())

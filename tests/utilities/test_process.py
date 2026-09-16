@@ -388,7 +388,7 @@ class TestSecurityFeatures:
         """Resolved codec options govern both input encoding and subprocess output."""
         observed: dict[str, object] = {}
 
-        def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
+        def fake_run(args: list[str], **kwargs: object) -> subprocess.CompletedProcess[bytes]:
             observed["payload"] = kwargs["input"]
             assert kwargs["text"] is False
             assert "encoding" not in kwargs
@@ -512,7 +512,7 @@ class TestRunGitCommandWithInput:
         """Verify stdin bytes preserve LF even when subprocess output is text."""
         observed_input = b""
 
-        def capture_run(*_args: object, **kwargs: object) -> subprocess_utils.subprocess.CompletedProcess[str]:
+        def capture_run(*_args: object, **kwargs: object) -> subprocess_utils.subprocess.CompletedProcess[bytes]:
             nonlocal observed_input
             observed_input = cast(bytes, kwargs["input"])
             return subprocess_utils.subprocess.CompletedProcess(args=["git"], returncode=0, stdout=b"", stderr=b"")
@@ -532,7 +532,7 @@ class TestRunGitCommandWithInput:
     def test_binary_input_forwarded_without_newline_or_encoding_changes(self) -> None:
         observed_input = b""
 
-        def capture_run(*_args: object, **kwargs: object) -> subprocess_utils.subprocess.CompletedProcess[str]:
+        def capture_run(*_args: object, **kwargs: object) -> subprocess_utils.subprocess.CompletedProcess[bytes]:
             nonlocal observed_input
             observed_input = cast(bytes, kwargs["input"])
             return subprocess_utils.subprocess.CompletedProcess(args=["git"], returncode=0, stdout=b"", stderr=b"")

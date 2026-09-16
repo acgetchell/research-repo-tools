@@ -46,11 +46,10 @@ def test_final_release_requires_generated_current_heading_before_update(tmp_path
 
 def test_dry_run_and_publication_have_identical_changed_path_inventory(tmp_path: Path) -> None:
     _write_project(tmp_path)
-    options = {"previous_tag": "v1.2.3", "release_date": "2026-09-07"}
-    preview = update_release.update_release_version(tmp_path, "v1.2.4", dry_run=True, **options)
-    published = update_release.update_release_version(tmp_path, "v1.2.4", **options)
+    preview = update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3", release_date="2026-09-07", dry_run=True)
+    published = update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3", release_date="2026-09-07")
     assert preview == published
-    assert not update_release.update_release_version(tmp_path, "v1.2.4", **options).changed_paths
+    assert not update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3", release_date="2026-09-07").changed_paths
 
 
 def test_standard_cargo_release_needs_no_release_configuration(tmp_path: Path) -> None:
@@ -72,6 +71,37 @@ def test_standard_python_release_needs_no_configuration(tmp_path: Path) -> None:
     assert cli.main(["--root", str(tmp_path), "release", "update", "1.2.4", "--previous-release", "v1.2.3", "--date", "2026-09-07"]) == 0
     assert 'version="1.2.4"' in (tmp_path / "pyproject.toml").read_text()
     assert 'version="1.2.4"' in (tmp_path / "uv.lock").read_text()
+
+
+@pytest.mark.parametrize("name", ["My_Tools", "my..tools", "MY-tools"])
+@pytest.mark.parametrize("source", ["editable", "virtual"])
+def test_release_accepts_normalized_python_distribution_names(tmp_path: Path, name: str, source: str) -> None:
+    manifest = tmp_path / "pyproject.toml"
+    lock = tmp_path / "uv.lock"
+    manifest.write_text(f'[project]\nname="{name}"\nversion="1.2.3"\n', encoding="utf-8")
+    lock.write_text(
+        f'version=1\n[[package]]\nname="my-tools"\nversion="1.2.3"\nsource={{{source}="."}}\n'
+        '[[package]]\nname="my-tools"\nversion="9.8.7"\nsource={registry="https://example.invalid"}\n',
+        encoding="utf-8",
+    )
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.3] - 2026-09-15\n\n- Current.\n", encoding="utf-8")
+    assert release_metadata.check(tmp_path) == 0
+    update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3", release_date="2026-09-15")
+    assert f'name="{name}"' in manifest.read_text(encoding="utf-8")
+    assert 'version="1.2.4"' in lock.read_text(encoding="utf-8")
+    assert 'version="9.8.7"' in lock.read_text(encoding="utf-8")
+
+
+def test_release_rejects_normalized_local_package_ambiguity(tmp_path: Path) -> None:
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="My_Tools"\nversion="1.2.3"\n', encoding="utf-8")
+    lock = tmp_path / "uv.lock"
+    lock.write_text(
+        'version=1\n[[package]]\nname="My_Tools"\nversion="1.2.3"\nsource={editable="."}\n'
+        '[[package]]\nname="my-tools"\nversion="1.2.3"\nsource={virtual="."}\n',
+        encoding="utf-8",
+    )
+    with pytest.raises(release_metadata.ReleaseCheckError, match="found 2"):
+        release_metadata.python_version_references(tmp_path)
 
 
 def test_workspace_release_updates_all_inherited_versions_but_not_dependencies(tmp_path: Path) -> None:

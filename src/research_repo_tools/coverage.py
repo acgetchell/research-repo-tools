@@ -33,8 +33,9 @@ class CoverageEntry:
     path: Path
 
     def format(self, relative_to: Path | None = None) -> str:
+        """Render report paths with forward slashes on every platform."""
         display_path = self.relative_path(relative_to)
-        return f"{self.coverage:6.2f}%  {display_path}"
+        return f"{self.coverage:6.2f}%  {display_path.as_posix()}"
 
     def relative_path(self, relative_to: Path | None) -> Path:
         if relative_to is None:

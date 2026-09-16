@@ -13,6 +13,8 @@ A prospective tag requires an explicit ISO date, keeping output independent
 of an accidental wall-clock date.
 Generated output must contain at least one valid release or Unreleased section
 before it can replace existing history.
+Before the first release tag, the Unreleased reference links to the repository's
+commit history. Once a release exists, it links to the comparison with that tag.
 
 The packaged template preserves complete breaking-change footer descriptions,
 including compiler requirements, multiline migration instructions, and dependency
@@ -27,6 +29,8 @@ entry headings beneath release categories. Breaking-change and pull-request
 summaries retain their links. Fenced code is opaque to prose transformations;
 backtick and tilde delimiters, delimiter lengths, and fence-contained examples
 of releases are preserved. A missing code language becomes `text`.
+Markdown pipe tables retain their rows and cells, including rows longer than
+the prose width limit.
 Feature names and consumer-specific wording are preserved rather than migrated.
 
 This adopts level-four headings for entry-local titles instead of the bold

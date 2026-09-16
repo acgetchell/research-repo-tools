@@ -1,5 +1,6 @@
 """Render packaged release summaries with the real, read-only git-cliff CLI."""
 
+import json
 import shutil
 from pathlib import Path
 
@@ -22,7 +23,7 @@ def render(tmp_path: Path, message: str) -> str:
         pytest.skip("custom commit parsing requires an existing HEAD")
     configuration = tmp_path / "cliff.toml"
     configuration.write_text(template("cliff.toml", owner="example", repository="consumer"), encoding="utf-8")
-    arguments = ["--offline", "--no-exec", "--config", str(configuration), "--strip", "footer"]
+    arguments = ["--offline", "--no-exec", "--config", str(configuration)]
     arguments += ["--with-commit", message, "--with-commit", "fix: retain linked entry (#987)", "HEAD..HEAD"]
     result = run_safe_command("git-cliff", arguments, cwd=root, check=False)
     assert result.returncode == 0, result.stderr
@@ -69,3 +70,34 @@ def test_ordinary_commit_does_not_create_a_breaking_summary(tmp_path: Path) -> N
     result = render(tmp_path, "fix: preserve result storage")
     assert "### ⚠️ Breaking Changes" not in result
     assert "### Merged Pull Requests" in result
+
+
+@pytest.mark.parametrize(
+    "version,previous,expected",
+    [
+        (None, None, "[Unreleased]: https://github.com/example/consumer/commits/HEAD"),
+        (None, "v1.0.0", "[Unreleased]: https://github.com/example/consumer/compare/v1.0.0...HEAD"),
+        ("v1.0.0", None, "[1.0.0]: https://github.com/example/consumer/tree/v1.0.0"),
+        ("v1.1.0", "v1.0.0", "[1.1.0]: https://github.com/example/consumer/compare/v1.0.0...v1.1.0"),
+    ],
+    ids=["unreleased-before-first-tag", "unreleased-after-tag", "first-release", "subsequent-release"],
+)
+def test_template_release_links(tmp_path: Path, version: str | None, previous: str | None, expected: str) -> None:
+    configuration = tmp_path / "cliff.toml"
+    configuration.write_text(template("cliff.toml", owner="example", repository="consumer"), encoding="utf-8")
+    empty_release = {
+        "commits": [],
+        "timestamp": 0,
+        "submodule_commits": {},
+        **{host: {"contributors": []} for host in ("github", "gitlab", "gitea", "bitbucket", "azure_devops")},
+    }
+    release = {**empty_release, "version": version, "previous": None}
+    if previous is not None:
+        release["previous"] = {**empty_release, "version": previous}
+    context = tmp_path / "context.json"
+    context.write_text(json.dumps([release]), encoding="utf-8")
+    result = run_safe_command(
+        "git-cliff", ["--offline", "--no-exec", "--config", str(configuration), "--from-context", str(context)], cwd=tmp_path, check=False
+    )
+    assert result.returncode == 0, result.stderr
+    assert expected in postprocess_text(result.stdout)

@@ -141,10 +141,11 @@ def test_validation_failure_precedes_repository_replacement(tmp_path: Path, monk
     assert _snapshot(tmp_path) == original
 
 
-def test_mid_transaction_failure_restores_original_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_mid_transaction_failure_restores_original_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, newline: str) -> None:
     _write_project(tmp_path)
     for path in tmp_path.iterdir():
-        path.write_bytes(path.read_bytes().replace(b"\n", b"\r\n"))
+        path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8", newline=newline)
     original = _snapshot(tmp_path)
     write = files._replace_path
     writes = 0

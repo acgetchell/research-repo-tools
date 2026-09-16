@@ -582,7 +582,7 @@ class TestArchiveChangelog:
         real_replace = file_module._replace_path
         root_failure_injected = False
 
-        def fail_when_publishing_root(source: Path, destination: Path) -> Path:
+        def fail_when_publishing_root(source: Path, destination: Path) -> None:
             nonlocal root_failure_injected
             if destination == changelog and (not root_failure_injected):
                 root_failure_injected = True
@@ -615,7 +615,7 @@ class TestArchiveChangelog:
         real_replace = file_module._replace_path
         root_failure_injected = False
 
-        def fail_publication_and_rollback(source: Path, destination: Path) -> Path:
+        def fail_publication_and_rollback(source: Path, destination: Path) -> None:
             nonlocal root_failure_injected
             if destination == changelog and (not root_failure_injected):
                 root_failure_injected = True
@@ -765,7 +765,7 @@ class TestArchiveChangelog:
         second = tmp_path / "second.md"
         real_stage_text = file_module._stage_bytes
 
-        def fail_second_stage(path: Path, text: str) -> Path:
+        def fail_second_stage(path: Path, text: bytes) -> Path:
             if path == second:
                 msg = "simulated second staging failure"
                 raise OSError(msg)
