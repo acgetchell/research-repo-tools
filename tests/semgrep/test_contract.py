@@ -105,6 +105,8 @@ def test_namespace_filter_does_not_require_foreign_findings(tmp_path: Path, monk
     "result",
     [
         {"results": [], "errors": [{"type": "ParseError"}]},
+        {"results": [], "errors": {}},
+        {"results": [], "errors": None},
         {"results": [1]},
         {"results": [{"check_id": "shared.rule", "start": {"line": True}, "end": {"line": 2}}]},
     ],

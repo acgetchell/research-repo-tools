@@ -81,14 +81,14 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
     if not generated.strip():
         raise ValueError("git-cliff returned empty changelog output")
     if tag:
-        heading = re.compile(rf"^(## \[{re.escape(tag.removeprefix('v'))}\]) - \d{{4}}-\d{{2}}-\d{{2}}$", re.MULTILINE)
-        generated, count = heading.subn(rf"\g<1> - {released}", generated)
-        if count != 1:
-            raise ValueError("git-cliff must generate exactly one heading for the prospective release")
+        assert released is not None
+        generated = archive.replace_release_date(generated, tag.removeprefix("v"), released, required=True)
     result = postprocess_text(generated)
     if formatter is not None:
         result = format_markdown(result, path, formatter)
-    archive.parse_changelog(archive._extract_link_defs(result)[0])
+    parsed = archive.parse_changelog(archive._extract_link_defs(result)[0])
+    if parsed.unreleased is None and not parsed.version_blocks:
+        raise ValueError("git-cliff must generate at least one release or Unreleased section")
     if not dry_run:
         replace(path, result.encode("utf-8"))
     return result

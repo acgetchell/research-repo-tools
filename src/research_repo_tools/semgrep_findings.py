@@ -50,18 +50,23 @@ def _semgrep_results() -> SemgrepResults | None:
         print("Missing required SEMGREP_JSON environment variable", file=sys.stderr)
         return None
     try:
-        data: object = json.loads(semgrep_json)
-    except json.JSONDecodeError as error:
-        print(f"Invalid JSON in SEMGREP_JSON: {error}", file=sys.stderr)
+        return parse_results(semgrep_json)
+    except ValueError as error:
+        print(f"Invalid SEMGREP_JSON: {error}", file=sys.stderr)
         return None
 
+
+def parse_results(text: str) -> SemgrepResults:
+    """Reject malformed or incomplete scan output before trusting its findings."""
+    data: object = json.loads(text)
     if not _is_parsed_object(data):
-        print("Invalid SEMGREP_JSON shape: expected a JSON object", file=sys.stderr)
-        return None
+        raise ValueError("expected a JSON object")
+    errors = data.get("errors", [])
+    if not isinstance(errors, list) or errors:
+        raise ValueError("malformed or incomplete Semgrep output: errors must be an empty list when present")
     results = data.get("results")
     if not isinstance(results, list):
-        print("Invalid SEMGREP_JSON shape: expected 'results' to be a list", file=sys.stderr)
-        return None
+        raise ValueError("expected 'results' to be a list")
 
     parsed_results: list[ParsedObject] = []
     malformed_results: list[str] = []
@@ -72,10 +77,7 @@ def _semgrep_results() -> SemgrepResults | None:
             malformed_results.append(f"result {index} is not an object")
 
     if malformed_results:
-        print("Invalid SEMGREP_JSON shape:", file=sys.stderr)
-        for malformed in malformed_results:
-            print(f"  {malformed}", file=sys.stderr)
-        return None
+        raise ValueError("malformed Semgrep findings: " + "; ".join(malformed_results))
 
     return SemgrepResults(results=tuple(parsed_results))
 

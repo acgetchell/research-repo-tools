@@ -1,0 +1,134 @@
+# GitHub setup
+
+Source and issues live at
+[acgetchell/research-repo-tools](https://github.com/acgetchell/research-repo-tools).
+Consumers will install released packages from PyPI. Local wheels are for pilot
+evaluation and installation checks; see [publishing](publishing.md).
+
+## Repository controls
+
+The baseline follows Delaunay and la-stack, adapted to this Python package:
+
+- Pull requests, one approval, resolved review threads, and up-to-date required
+  checks on the default branch; deletion and force pushes are blocked.
+- The same administrator bypass as the reference repositories permits initial
+  setup and maintainer recovery.
+- Required checks cover all three package-check platforms, changelog integration,
+  CodeQL for Python and Actions, zizmor, the Python dependency audit, and the
+  CodeRabbit status. The initial CodeRabbit rule uses its status name, matching
+  MCMC; GitHub rejects its App binding until the App has repository access.
+- Read-only default workflow tokens; write permissions are limited to specific
+  security-upload and Dependabot jobs. Actions cannot approve pull requests.
+- Selected Actions only, with full commit SHA pinning required. Dependabot updates
+  GitHub Actions and the uv lockfile weekly, with separate security-update groups.
+- Dependabot alerts/security updates, secret scanning, push protection, and private
+  vulnerability reporting are enabled through repository settings.
+
+The checked-in payloads in `.github/settings/` are the desired API configuration.
+The Actions policy deliberately requires SHA pins in addition to the reference
+repositories' selected-action policy. Rust-only Clippy/Cargo scans do not apply
+to this package. Codacy's project-specific Delaunay scan is not a required check
+here; CodeQL, Ruff, ty, and zizmor cover the currently configured analysis.
+
+## Apply or reconcile GitHub settings
+
+Run from the checkout with an administrator-authenticated `gh` CLI. These
+commands manage repository metadata, not local Git state:
+
+```sh
+gh api --method PUT repos/acgetchell/research-repo-tools/vulnerability-alerts
+gh api --method PUT repos/acgetchell/research-repo-tools/automated-security-fixes
+gh api --method PUT repos/acgetchell/research-repo-tools/private-vulnerability-reporting
+gh api --method PATCH repos/acgetchell/research-repo-tools --input .github/settings/repository.json
+gh api --method PUT repos/acgetchell/research-repo-tools/actions/permissions --input .github/settings/actions.json
+gh api --method PUT repos/acgetchell/research-repo-tools/actions/permissions/selected-actions --input .github/settings/allowed-actions.json
+gh api --method PUT repos/acgetchell/research-repo-tools/actions/permissions/workflow --input .github/settings/workflow-permissions.json
+```
+
+Find the existing `main` ruleset before changing it:
+
+```sh
+gh api repos/acgetchell/research-repo-tools/rulesets --jq '.[] | {id,name,enforcement}'
+```
+
+If it exists, replace `RULESET_ID` below and update it:
+
+```sh
+gh api --method PUT repos/acgetchell/research-repo-tools/rulesets/RULESET_ID --input .github/settings/main-ruleset.json
+```
+
+Only if it does not exist, create it:
+
+```sh
+gh api --method POST repos/acgetchell/research-repo-tools/rulesets --input .github/settings/main-ruleset.json
+```
+
+Required check names must remain synchronized with workflow job names. Verify
+native check results on the first PR; local validation does not establish that
+the hosted services are connected or passing.
+
+## CodeRabbit and Dependabot
+
+### App access and review credentials
+
+Grant the existing CodeRabbit GitHub App installation access to this repository
+through [installed GitHub Apps](https://github.com/settings/installations).
+The repository's `.coderabbit.yaml` enables reviews, approval on resolved findings,
+and the legacy `CodeRabbit` status used by the branch rule.
+After the App is connected, add `"integration_id": 347564` to its entry in
+`.github/settings/main-ruleset.json` and update the existing ruleset to bind that
+status to CodeRabbit's identity, as Delaunay does.
+
+Configure `CODERABBIT_REVIEW_TOKEN` as a **Dependabot secret**, using an acgetchell
+token that can read the repository/PR metadata and create PR conversation comments.
+For a fine-grained token, grant this repository Metadata read, Issues write, and
+Pull requests read. The CLI prompts for the value without putting it in shell
+history:
+
+```sh
+gh secret set CODERABBIT_REVIEW_TOKEN --app dependabot --repo acgetchell/research-repo-tools
+```
+
+An existing token may need its selected-repository access updated. GitHub does not
+expose stored secret values, so a secret in another repository cannot be copied
+out through the API.
+
+The automation handles same-repository Dependabot PRs, requests one CodeRabbit
+review per head, waits for that exact head's approval and required checks, and
+enables squash auto-merge with a head-commit guard. It never checks out PR code.
+Missing credentials, review, or required checks prevent completion.
+
+## First commit and push
+
+The public repository has been created without an initial README or license
+commit. This checkout already has Git history and uses `main`. The maintainer
+must run Git mutations under this repository's agent policy.
+
+Review both staged and unstaged changes, then commit and push the intended set:
+
+```sh
+git --no-pager status --short
+git --no-pager diff
+git --no-pager diff --cached
+git add -A
+git commit -m "feat: prepare shared repository tooling for adoption"
+git remote add origin https://github.com/acgetchell/research-repo-tools.git
+git push -u origin main
+```
+
+`git add -A` stages every local change; review that full set before running it.
+If a remote was added in the meantime, inspect `git --no-pager remote -v` and use
+the existing correct remote instead of adding it again. Normal subsequent changes
+should go through pull requests.
+
+The first push activates the committed workflows and Dependabot configuration.
+Until then, the repository settings exist but the source and workflows remain
+local. PyPI Trusted Publishing is a later release task.
+
+## Follow-up work
+
+- [First PyPI release and Trusted Publishing](https://github.com/acgetchell/research-repo-tools/issues/1).
+- [External Rust and Python tool installation](https://github.com/acgetchell/research-repo-tools/issues/2).
+- [Shared Jupyter notebook infrastructure](https://github.com/acgetchell/research-repo-tools/issues/3).
+- [MCMC changelog pilot](https://github.com/acgetchell/markov-chain-monte-carlo/issues/157),
+  after its current work is complete; durable adoption requires the first PyPI release.

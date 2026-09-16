@@ -4,10 +4,14 @@ import re
 
 _GITHUB_TAG_ANNOTATION_LIMIT = 125000
 _GITHUB_REPO_COMPONENT_RE = re.compile("^[A-Za-z0-9_.-]+$")
-_ALNUM_ID = "(?:(?=[0-9A-Za-z-]*[A-Za-z-])[0-9A-Za-z-]+)"
-_SEMVER_RE = re.compile(
-    f"^v(0|[1-9]\\d*)\\.(0|[1-9]\\d*)\\.(0|[1-9]\\d*)(?:-(?:(?:0|[1-9]\\d*)|{_ALNUM_ID})(?:\\.(?:(?:0|[1-9]\\d*)|{_ALNUM_ID}))*)?(?:\\+[0-9A-Za-z-]+(?:\\.[0-9A-Za-z-]+)*)?$"
+_NUMERIC_ID = r"(?:0|[1-9][0-9]*)"
+_PRERELEASE_ID = rf"(?:{_NUMERIC_ID}|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
+SEMVER_PATTERN = (
+    rf"{_NUMERIC_ID}\.{_NUMERIC_ID}\.{_NUMERIC_ID}"
+    rf"(?:-{_PRERELEASE_ID}(?:\.{_PRERELEASE_ID})*)?"
+    r"(?:\+[0-9A-Za-z-]+(?:\.[0-9A-Za-z-]+)*)?"
 )
+_SEMVER_RE = re.compile(rf"v{SEMVER_PATTERN}")
 
 
 def validate_semver(tag_version: str) -> None:

@@ -2,6 +2,7 @@
 
 import os
 import subprocess
+from pathlib import Path
 
 import pytest
 
@@ -11,7 +12,7 @@ from research_repo_tools.process import ExecutableNotFoundError
 
 @pytest.fixture
 def policy():
-    return {"tools": {"rumdl_version": "rumdl", "uv_version": "uv", "just_version": "rust-just"}}
+    return {"tools": {"rumdl_version": "rumdl", "uv_version": "uv", "just_version": "just"}}
 
 
 def just_text(mapping):
@@ -173,6 +174,37 @@ def test_cli_adopts_cargo_prerelease_without_a_policy_setting(tmp_path, monkeypa
     captured = capsys.readouterr()
     assert "rumdl_version: 1.0.0 -> 2.0.0-rc.1+build.5" in captured.out
     assert captured.err == ""
+
+
+@pytest.mark.parametrize("action", ["check-uv", "update-tools"])
+@pytest.mark.parametrize("executable", ["uv", "./tools/uv"])
+@pytest.mark.parametrize("explicit_root", [False, True])
+def test_configured_uv_uses_consumer_root_from_any_working_directory(tmp_path, monkeypatch, capsys, action, executable, explicit_root):
+    root = tmp_path / "consumer"
+    root.mkdir()
+    unrelated = tmp_path / "elsewhere"
+    unrelated.mkdir()
+    settings = (unrelated if explicit_root else root) / "config.toml"
+    settings.write_text(f'[deps]\nuv="{executable}"\n[deps.tools]\nuv_version="uv"\n')
+    pins = root / "justfile"
+    pins.write_bytes(b'uv_version := "1.0.0"\r\n')
+    selected = []
+
+    def run(command, args, **kwargs):
+        selected.append(command)
+        version = "2.0.0" if command == "uv" or Path(command) == root / "tools/uv" else "9.9.9"
+        return subprocess.CompletedProcess([], 0, f"uv {version}", "")
+
+    monkeypatch.setattr(tool_pins, "run_safe_command", run)
+    arguments = ["--config", str(settings)] + (["--root", str(root)] if explicit_root else []) + ["deps", action]
+    if action == "update-tools":
+        arguments.append("--dry-run")
+    for cwd in (root, unrelated):
+        monkeypatch.chdir(cwd)
+        assert cli.main(arguments) == 0
+        assert "2.0.0" in capsys.readouterr().out
+        assert pins.read_bytes() == b'uv_version := "1.0.0"\r\n'
+    assert selected == [executable if executable == "uv" else str(root / "tools/uv")] * 2
 
 
 @pytest.mark.parametrize(

@@ -10,12 +10,12 @@ from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
 
+from research_repo_tools.archive_changelog import replace_release_date
 from research_repo_tools.process import ExecutableNotFoundError, get_safe_executable
 from research_repo_tools.release_discovery import _publish_texts, _published_releases, _tag_version, normalize_tag
 from research_repo_tools.release_metadata import (
     ReferenceKind,
     _cargo_add_regex,
-    _changelog_date_reference,
     _citation_date_reference,
     _citation_reference,
     _dependency_regex,
@@ -27,8 +27,9 @@ from research_repo_tools.release_metadata import (
     python_version_references,
     read_package_info,
 )
+from research_repo_tools.toml_source import KEY_PATTERN
 
-_VERSION_ASSIGNMENT = re.compile(r"^(?:\s*version\s*=\s*|version:\s*)(?P<quote>[\"\']?)(?P<value>[0-9]+\.[0-9]+\.[0-9]+)(?P=quote)\s*(?:#.*)?$")
+_VERSION_ASSIGNMENT = re.compile(rf"^(?:\s*{KEY_PATTERN}\s*=\s*|version:\s*)(?P<quote>[\"\']?)(?P<value>[0-9]+\.[0-9]+\.[0-9]+)(?P=quote)\s*(?:#.*)?$")
 _DATE_ASSIGNMENT = re.compile(r"^date-released:\s*(?P<quote>[\"\']?)(?P<value>\d{4}-\d{2}-\d{2})(?P=quote)\s*(?:#.*)?$")
 
 
@@ -91,15 +92,7 @@ def _replace_version_match(match: re.Match[str], value: str, allowed: frozenset[
 
 
 def _changelog_with_date(path: Path, version: str, release_date: str, *, required: bool = False) -> str:
-    original = _read_text(path)
-    heading = _changelog_date_reference(path, version)
-    if heading is None:
-        if required:
-            msg = f"CHANGELOG.md has no release heading for {version}"
-            raise ValueError(msg)
-        return original
-    pattern = re.compile(rf"^##\s+\[?v?{re.escape(version)}\]?\s+-\s+(?P<value>\d{{4}}-\d{{2}}-\d{{2}})\s*$")
-    return _replace_scalar(original, heading.line, pattern, release_date, allowed=frozenset({heading.value}))
+    return replace_release_date(_read_text(path), version, release_date, required=required)
 
 
 def sync_changelog_date(root: Path, tag: str) -> None:
@@ -157,21 +150,33 @@ def _prepare_updates(root: Path, tag: str, previous: str, release_date: str) -> 
 
 def _validate_prepared(updates: dict[Path, str], root: Path, previous: str, *, policy: dict | None = None) -> None:
     """Validate the complete proposed file set without replacing any repository file."""
+    root = root.resolve()
     with tempfile.TemporaryDirectory(prefix="research-release-validation-") as directory:
-        staged = Path(directory)
+        # Preserve the root name so contained ../<root>/member spellings also
+        # resolve within the isolated copy when the manifest is validated.
+        staged = Path(directory).resolve() / root.name
+        staged.mkdir()
+
+        def destination_for(source: Path) -> Path:
+            resolved = source.resolve()
+            if source.is_symlink() or not resolved.is_relative_to(root):
+                raise ValueError(f"release metadata must be a repository-contained regular file: {source}")
+            destination = (staged / resolved.relative_to(root)).resolve()
+            if not destination.is_relative_to(staged):
+                raise ValueError(f"release staging destination escapes temporary tree: {destination}")
+            return destination
+
         cargo = root / "Cargo.toml"
         if cargo.is_file():
             manifest = tomllib.loads(_read_text(cargo))
             for pattern in manifest.get("workspace", {}).get("members", []):
                 for member in root.glob(pattern):
                     source = member / "Cargo.toml"
-                    if not source.resolve().is_relative_to(root) or source.is_symlink():
-                        raise ValueError(f"workspace member must be a repository-contained regular file: {source}")
-                    destination = staged / source.relative_to(root)
+                    destination = destination_for(source)
                     destination.parent.mkdir(parents=True, exist_ok=True)
                     destination.write_bytes(source.read_bytes())
         for path, text in updates.items():
-            destination = staged / path.relative_to(root)
+            destination = destination_for(path)
             destination.parent.mkdir(parents=True, exist_ok=True)
             destination.write_bytes(text.encode("utf-8"))
         mismatches = [

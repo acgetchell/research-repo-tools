@@ -79,11 +79,12 @@ def test_incremental_archives_retain_older_patches_links_and_introduction(tmp_pa
     path = tmp_path / "CHANGELOG.md"
     archive = tmp_path / "docs/archives/changelog"
     archive.mkdir(parents=True)
-    (archive / "1.0.md").write_text("# Changelog - 1.0.x\n\nHand-curated context.\n\n## [1.0.0]\n\n- First patch.\n")
+    (archive / "1.0.md").write_text("# Changelog - 1.0.x\n\nHand-curated [context].\n\n## [1.0.0]\n\n- First patch.\n\n[context]: https://example.com/guide\n")
     path.write_text("# Changelog\n\n## [1.1.0]\n\n- Current.\n\n## [1.0.1]\n\n- Fix [method](docs/method.md#proof).\n")
     archive_changelog.archive_changelog(path)
     retained = (archive / "1.0.md").read_text()
-    assert "Hand-curated context." in retained
+    assert "Hand-curated [context]." in retained
+    assert "[context]: https://example.com/guide" in retained
     assert "## [1.0.1]" in retained and "## [1.0.0]" in retained
     assert "[method](../../../docs/method.md#proof)" in retained
     path.write_text("# Changelog\n\n## [1.2.0]\n\n- New.\n\n## [1.1.0]\n\n- Current.\n")
@@ -136,6 +137,43 @@ def test_final_formatter_validation_preserves_original_on_unfixable_output(tmp_p
     assert len(calls) == 2
     assert path.read_bytes() == original
     assert set(tmp_path.iterdir()) == {path, rules}
+
+
+@pytest.mark.parametrize("output", ["# Unexpected producer output\n", "# Changelog\n\n## [Unreleased\n", "# Changelog\n\n## [1.2.03]\n"])
+def test_successful_producer_cannot_replace_history_with_invalid_output(tmp_path, monkeypatch, output):
+    path = tmp_path / "CHANGELOG.md"
+    original = b"# Changelog\r\n\r\n## [1.0.0]\r\n\r\n- Existing history.\r\n"
+    path.write_bytes(original)
+    monkeypatch.setattr(changelog, "run_safe_command", lambda *args, **kwargs: subprocess.CompletedProcess([], 0, output, ""))
+    with pytest.raises(ValueError):
+        changelog.generate(settings(tmp_path))
+    assert path.read_bytes() == original
+
+
+def test_generator_accepts_an_unreleased_only_project(tmp_path, monkeypatch):
+    output = "# Changelog\n\n## [Unreleased]\n\n- Initial work.\n"
+    monkeypatch.setattr(changelog, "run_safe_command", lambda *args, **kwargs: subprocess.CompletedProcess([], 0, output, ""))
+    assert changelog.generate(settings(tmp_path)) == output
+
+
+def test_prospective_generation_dates_linked_heading_without_rewriting_example(tmp_path, monkeypatch):
+    example = "```markdown\n## [1.2.0] - 1999-01-01\n```"
+    output = f"# Changelog\n\n{example}\n\n## [1.2.0](https://example.org/v1.2.0) - 2000-01-01\n\n- Release.\n"
+    monkeypatch.setattr(changelog, "run_safe_command", lambda *args, **kwargs: subprocess.CompletedProcess([], 0, output, ""))
+    result = changelog.generate(settings(tmp_path), tag="v1.2.0", released="2026-09-07")
+    assert example in result
+    assert "## [1.2.0](https://example.org/v1.2.0) - 2026-09-07" in result
+
+
+@pytest.mark.parametrize("version", ["1٢.2.3", "1.2.3-1٢"])
+def test_invalid_unicode_versions_cannot_publish_archives(tmp_path, version):
+    path = tmp_path / "CHANGELOG.md"
+    path.write_text(f"# Changelog\n\n## [2.0.0]\n\n- Current.\n\n## [{version}]\n\n- Invalid.\n")
+    before = path.read_bytes()
+    with pytest.raises(ValueError, match="Unrecognized changelog heading"):
+        archive_changelog.archive_changelog(path)
+    assert path.read_bytes() == before
+    assert not (tmp_path / "docs").exists()
 
 
 @pytest.fixture

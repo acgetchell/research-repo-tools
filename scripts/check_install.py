@@ -1,4 +1,4 @@
-"""Build-independent wheel/sdist consumer and optional-extra checks using uv.
+"""Build-independent wheel/sdist consumer checks using uv.
 
 Run after `uv build`. Every environment and consumer lives outside the checkout.
 No user-wide tools, sibling repositories, or project lockfiles are modified.
@@ -24,7 +24,7 @@ def run(command: list[str], *, cwd: Path, env: dict[str, str]) -> str:
 
 
 BASE_SMOKE = r"""
-import importlib, importlib.metadata, importlib.util, pathlib, pkgutil, socket, sys
+import importlib, importlib.metadata, importlib.resources, importlib.util, json, pathlib, pkgutil, socket, sys
 import research_repo_tools
 root = pathlib.Path(sys.argv[1]).resolve()
 assert not pathlib.Path(research_repo_tools.__file__).is_relative_to(root)
@@ -41,6 +41,9 @@ from research_repo_tools.changelog import TEMPLATES, template
 for name in TEMPLATES:
     assert template(name).strip()
 assert len(importlib.metadata.distribution("research-repo-tools").entry_points) == 1
+resources = importlib.resources.files("research_repo_tools")
+assert "Adam Getchell" in resources.joinpath("NOTICE.md").read_text(encoding="utf-8")
+assert json.loads(resources.joinpath("docs/provenance.json").read_text(encoding="utf-8"))
 from research_repo_tools.cli import main
 consumer = pathlib.Path.cwd() / "minimal consumer"
 consumer.mkdir()
@@ -55,6 +58,7 @@ assert main(["--root", str(consumer), "changelog", "notes", "v1.0.0"]) == 0
 def check(dist: Path) -> None:
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     version = metadata["project"]["version"]
+    expected_just = next(item.removeprefix("rust-just==") for item in metadata["project"]["dependencies"] if item.startswith("rust-just=="))
     wheel = dist / f"research_repo_tools-{version}-py3-none-any.whl"
     sdist = dist / f"research_repo_tools-{version}.tar.gz"
     with zipfile.ZipFile(wheel) as archive:
@@ -63,10 +67,15 @@ def check(dist: Path) -> None:
         assert "research_repo_tools/py.typed" in names
         assert not any("/compat/" in name or name.startswith("tests/") for name in names)
         assert sum(name.endswith("/LICENSE") for name in names) == 1
+        for source, target in (("NOTICE.md", "research_repo_tools/NOTICE.md"), ("docs/provenance.json", "research_repo_tools/docs/provenance.json")):
+            assert archive.read(target) == (ROOT / source).read_bytes()
     with tarfile.open(sdist) as archive:
         names = archive.getnames()
         assert any(name.endswith("/tests/changelog/test_contract.py") for name in names)
         assert sum(name.endswith("/LICENSE") for name in names) == 1
+        for source in ("NOTICE.md", "docs/provenance.json"):
+            member = archive.extractfile(f"research_repo_tools-{version}/{source}")
+            assert member is not None and member.read() == (ROOT / source).read_bytes()
     uv = shutil.which("uv")
     if uv is None:
         raise RuntimeError("uv must be installed to check distributions")
@@ -88,12 +97,9 @@ def check(dist: Path) -> None:
             command = scripts / ("research-repo-tools.exe" if os.name == "nt" else "research-repo-tools")
             assert run([str(command), "--version"], cwd=consumer, env=local_env).strip() == version
             assert "changelog" in run([str(command), "--help"], cwd=consumer, env=local_env)
-            if artifact == wheel:
-                run([uv, "pip", "install", "--python", str(python), f"{artifact}[just]"], cwd=consumer, env=env)
-                expected_just = metadata["project"]["optional-dependencies"]["just"][0].split("==")[1]
-                just = scripts / ("just.exe" if os.name == "nt" else "just")
-                assert run([str(just), "--version"], cwd=consumer, env=local_env).strip() == f"just {expected_just}"
-            print(f"PASS: installed {name} outside checkout" + ("; just extra" if artifact == wheel else "; minimal dependencies"))
+            just = scripts / ("just.exe" if os.name == "nt" else "just")
+            assert run([str(just), "--version"], cwd=consumer, env=local_env).strip() == f"just {expected_just}"
+            print(f"PASS: installed {name} outside checkout; bundled just")
 
 
 def main() -> int:

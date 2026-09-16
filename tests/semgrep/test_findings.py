@@ -34,6 +34,17 @@ def test_semgrep_results_parses_valid_result_objects(monkeypatch: pytest.MonkeyP
     assert [result["check_id"] for result in results.results] == ["rust.foo", "rust.bar"]
 
 
+@pytest.mark.parametrize("errors", [[{"type": "ParseError"}], {}, "", None, False, 0])
+def test_matching_findings_cannot_hide_incomplete_or_malformed_scan(tmp_path, monkeypatch, capsys, errors):
+    fixture = tmp_path / "fixture.py"
+    fixture.write_text("# ruleid: shared.rule\nbad()\n")
+    payload = {"results": [_result("shared.rule", 2)], "errors": errors}
+    assert _run_main(monkeypatch, fixture, payload) == 1
+    assert "errors must be an empty list" in capsys.readouterr().err
+    payload["errors"] = []
+    assert _run_main(monkeypatch, fixture, payload) == 0
+
+
 @pytest.mark.parametrize(
     ("payload", "diagnostic"),
     [

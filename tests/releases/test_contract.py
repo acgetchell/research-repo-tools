@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from research_repo_tools import cli, update_release
+from research_repo_tools import cli, release_metadata, update_release
 from tests.releases.test_metadata import _write_project
 
 
@@ -127,3 +127,92 @@ def test_workspace_root_and_members_follow_one_inherited_version(tmp_path):
     assert cli.main(["--root", str(tmp_path), "release", "update", "1.2.4", "--previous-release", "v1.2.3"]) == 0
     assert '[workspace.package]\nversion="1.2.4"' in manifest.read_text()
     assert lock.read_text().count('version="1.2.4"') == 2
+
+
+def test_contained_dotdot_workspace_members_stay_inside_validation_tree(tmp_path, monkeypatch):
+    root = tmp_path / "consumer"
+    root.mkdir()
+    (root / "Cargo.toml").write_text('[workspace]\nmembers=["../consumer/member"]\n[workspace.package]\nversion="1.2.3"\n')
+    member = root / "member/Cargo.toml"
+    member.parent.mkdir()
+    member.write_text('[package]\nname="member"\nversion.workspace=true\n')
+    (root / "Cargo.lock").write_text('version=4\n[[package]]\nname="member"\nversion="1.2.3"\n')
+    (root / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Current.\n")
+    validation = tmp_path / "validation"
+    validation.mkdir()
+    sentinel = validation / "consumer/member/Cargo.toml"
+    sentinel.parent.mkdir(parents=True)
+    sentinel.write_bytes(b"outside sentinel")
+    before = snapshot(tmp_path)
+    temporary_directory = update_release.tempfile.TemporaryDirectory
+    monkeypatch.setattr(update_release.tempfile, "TemporaryDirectory", lambda **kwargs: temporary_directory(dir=validation, **kwargs))
+    result = update_release.update_release_version(root, "v1.2.4", previous_tag="v1.2.3", release_date="2026-09-07", dry_run=True)
+    assert result.changed_paths
+    assert snapshot(tmp_path) == before
+    assert sentinel.read_bytes() == b"outside sentinel"
+
+
+@pytest.mark.parametrize("link", ["", "(https://example.org/releases/v1.2.3)"])
+def test_release_update_preserves_heading_links_and_fenced_example_bytes(tmp_path, link):
+    _write_project(tmp_path)
+    changelog = tmp_path / "CHANGELOG.md"
+    example = "```markdown\r\n## [1.2.3] - 1999-01-01\r\n```\r\n\r\n"
+    text = f"# Changelog\r\n\r\n{example}## [1.2.3]{link} - 2026-09-01\r\n\r\n- Current.\r\n"
+    changelog.write_bytes(text.encode())
+    assert release_metadata.find_version_mismatches(tmp_path) == []
+    update_release.update_release_version(tmp_path, "v1.2.3", previous_tag="v1.2.2", release_date="2026-09-07", policy={"final-changelog": True})
+    assert changelog.read_bytes() == text.replace("2026-09-01", "2026-09-07").encode()
+    assert release_metadata.check(tmp_path, policy={"final-changelog": True}) == 0
+
+
+def test_fenced_target_cannot_satisfy_final_release_or_change_examples(tmp_path):
+    _write_project(tmp_path)
+    changelog = tmp_path / "CHANGELOG.md"
+    changelog.write_text("# Changelog\n\n~~~markdown\n## [1.2.4] - 1999-01-01\n~~~\n\n" + changelog.read_text())
+    before = snapshot(tmp_path)
+    with pytest.raises(ValueError, match="final release requires"):
+        update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3", policy={"final-changelog": True})
+    assert snapshot(tmp_path) == before
+    update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3")
+    assert changelog.read_bytes() == before["CHANGELOG.md"]
+    assert release_metadata.check(tmp_path, policy={"final-changelog": True}) == 1
+
+
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_release_update_handles_commented_headers_and_quoted_keys_without_touching_examples(tmp_path, quote):
+    _write_project(tmp_path)
+    examples = f'example = {quote * 3}\n[project]\nversion = "9.9.9"\n[[package]]\nversion = "9.9.9"\n{quote * 3}\n'
+    originals = {}
+    for name in ("Cargo.toml", "pyproject.toml", "Cargo.lock", "uv.lock"):
+        path = tmp_path / name
+        text = path.read_text().replace("[project]", f"[{quote}project{quote}] # metadata")
+        text = text.replace("[[package]]", f"[[{quote}package{quote}]] # locked package").replace("[package]", f"[{quote}package{quote}] # metadata")
+        key = r'"\u0076ersion"' if quote == '"' else "'version'"
+        text = text.replace('version = "1.2.3"', f'{key} = "1.2.3" # release')
+        originals[name] = (examples + text).replace("\n", "\r\n").encode()
+        path.write_bytes(originals[name])
+    assert release_metadata.check(tmp_path) == 0
+    update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3", release_date="2026-09-07")
+    for name, original in originals.items():
+        assert (tmp_path / name).read_bytes() == original.replace(b"1.2.3", b"1.2.4")
+
+
+def test_optional_doi_references_do_not_restrict_unrelated_bibliographies(tmp_path):
+    _write_project(tmp_path, readme="# Consumer\n")
+    references = tmp_path / "REFERENCES.md"
+    references.write_text("- Author. Method. https://doi.org/10.1234/other-paper\n")
+    before = references.read_bytes()
+    assert release_metadata.check(tmp_path) == 0
+    update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3")
+    assert references.read_bytes() == before
+
+
+@pytest.mark.parametrize("filename,text", [("README.md", "[![DOI](badge)](broken)"), ("REFERENCES.md", "- DOI: broken")])
+def test_malformed_optional_doi_references_fail_without_publication(tmp_path, filename, text):
+    _write_project(tmp_path)
+    (tmp_path / filename).write_text(text + "\n")
+    before = snapshot(tmp_path)
+    assert release_metadata.check(tmp_path) == 1
+    with pytest.raises(ValueError, match="malformed"):
+        update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3")
+    assert snapshot(tmp_path) == before

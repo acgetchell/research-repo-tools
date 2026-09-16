@@ -26,6 +26,10 @@ class Config:
         path = Path(value)
         return path if path.is_absolute() else self.root / path
 
+    def executable(self, value: str) -> str:
+        """Resolve explicit executable paths at the consumer root; keep PATH names."""
+        return str(self.path(value)) if "/" in value or "\\" in value else value
+
 
 def load(path: Path | None = None, root: Path | None = None) -> Config:
     filename = path or (root or Path.cwd()) / "pyproject.toml"

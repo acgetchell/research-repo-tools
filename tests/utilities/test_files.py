@@ -1,5 +1,6 @@
 """Byte-level publication evidence independent of any consumer implementation."""
 
+import os
 import stat
 from pathlib import Path
 
@@ -11,7 +12,8 @@ from research_repo_tools import files
 def test_all_candidates_and_backups_are_staged_before_any_replacement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     first, second = (tmp_path / "first", tmp_path / "nested/second")
     first.write_bytes(b"old\r\n\xff")
-    first.chmod(416)
+    first.chmod(0o640)
+    original_mode = stat.S_IMODE(first.stat().st_mode)
     original = files._replace_path
 
     def publish(source: Path, target: Path) -> None:
@@ -24,8 +26,17 @@ def test_all_candidates_and_backups_are_staged_before_any_replacement(tmp_path: 
     files.replace_many({first: b"new\r\n\xff", second: b"new\x00data"})
     assert first.read_bytes() == b"new\r\n\xff"
     assert second.read_bytes() == b"new\x00data"
-    assert stat.S_IMODE(first.stat().st_mode) == 416
+    assert stat.S_IMODE(first.stat().st_mode) == original_mode
     assert not list(tmp_path.rglob("*.bak"))
+
+
+@pytest.mark.skipif(os.name == "nt", reason="exact POSIX permission bits are not supported on Windows")
+def test_publication_preserves_posix_permissions(tmp_path: Path) -> None:
+    path = tmp_path / "private"
+    path.write_bytes(b"original")
+    path.chmod(0o640)
+    files.replace(path, b"updated")
+    assert stat.S_IMODE(path.stat().st_mode) == 0o640
 
 
 def test_late_failure_restores_existing_bytes_and_removes_new_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

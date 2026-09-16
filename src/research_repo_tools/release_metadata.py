@@ -11,6 +11,10 @@ from enum import StrEnum
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeGuard
 
+from research_repo_tools.archive_changelog import ParsedChangelog, parse_changelog
+from research_repo_tools.release_tags import SEMVER_PATTERN
+from research_repo_tools.toml_source import key_line
+
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
@@ -225,16 +229,10 @@ def cargo_lock_references(root: Path, package: PackageInfo) -> list[VersionRefer
 
 def _toml_table_key_line(path: Path, table_name: str, key: str) -> int:
     """Return the line number for *key* in a TOML table."""
-    current_table: str | None = None
-    key_re = re.compile(f"^{re.escape(key)}\\s*=")
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        stripped = line.strip()
-        if stripped.startswith("[") and stripped.endswith("]"):
-            current_table = stripped.strip("[]")
-        elif current_table == table_name and key_re.match(stripped):
-            return line_number
-    msg = f"{path} [{table_name}] is missing {key}"
-    raise ReleaseCheckError(msg)
+    try:
+        return key_line(path.read_text(encoding="utf-8"), table_name, key)
+    except ValueError as error:
+        raise ReleaseCheckError(f"{path} {error}") from error
 
 
 def _version_reference(path: Path, line: int, version: str, kind: ReferenceKind) -> VersionReference:
@@ -257,20 +255,10 @@ def _package_entries(path: Path) -> list[ParsedObject]:
 
 def _array_table_key_line(path: Path, table_name: str, table_index: int, key: str) -> int:
     """Return the line for *key* inside the requested array-table entry."""
-    current_index = -1
-    in_target_table = False
-    key_re = re.compile(f"^{re.escape(key)}\\s*=")
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        stripped = line.strip()
-        if stripped == f"[[{table_name}]]":
-            current_index += 1
-            in_target_table = current_index == table_index
-        elif stripped.startswith("[["):
-            in_target_table = False
-        elif in_target_table and key_re.match(stripped):
-            return line_number
-    msg = f"{path} [[{table_name}]] entry {table_index + 1} is missing {key}"
-    raise ReleaseCheckError(msg)
+    try:
+        return key_line(path.read_text(encoding="utf-8"), table_name, key, index=table_index)
+    except ValueError as error:
+        raise ReleaseCheckError(f"{path} {error}") from error
 
 
 def _single_package_reference(
@@ -335,18 +323,20 @@ def _citation_reference(path: Path) -> VersionReference:
     return references[0]
 
 
-_VERSION_PATTERN = r"[0-9]+\.[0-9]+\.[0-9]+(?:-[0-9A-Za-z.-]+)?(?:\+[0-9A-Za-z.-]+)?"
-_CHANGELOG_RELEASE_RE = re.compile(
-    f"^##\\s+(?P<opening_bracket>\\[)?v?(?P<version>{_VERSION_PATTERN})(?(opening_bracket)\\])\\s+-\\s+(?P<date>\\d{{4}}-\\d{{2}}-\\d{{2}})\\s*$"
-)
+def _parsed_changelog(path: Path) -> ParsedChangelog:
+    """Use the same validated, fence-aware heading grammar as archiving."""
+    try:
+        return parse_changelog(path.read_text(encoding="utf-8"))
+    except ValueError as error:
+        raise ReleaseCheckError(f"{path}: {error}") from error
 
 
 def _changelog_reference(path: Path) -> VersionReference:
     """Return the first generated release heading from CHANGELOG.md."""
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        match = _CHANGELOG_RELEASE_RE.match(line)
-        if match is not None:
-            return _version_reference(path, line_number, match.group("version"), ReferenceKind.CHANGELOG)
+    parsed = _parsed_changelog(path)
+    if parsed.release_headings:
+        heading = parsed.release_headings[0]
+        return _version_reference(path, heading.line, heading.version, ReferenceKind.CHANGELOG)
     msg = f"{path} has no generated release heading"
     raise ReleaseCheckError(msg)
 
@@ -397,64 +387,52 @@ def _citation_date_reference(path: Path) -> MetadataReference:
     return reference
 
 
-def _current_changelog_heading_candidate_re(version: str) -> re.Pattern[str]:
-    """Recognize even malformed level-two headings for one package version."""
-    escaped = re.escape(version)
-    return re.compile(f"^##\\s+\\[?v?{escaped}\\]?(?:\\s|$)")
-
-
 def _changelog_date_reference(path: Path, version: str) -> MetadataReference | None:
     """Return the validated date on the current package-version heading."""
-    heading_candidate_re = _current_changelog_heading_candidate_re(version)
-    references: list[MetadataReference] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        match = _CHANGELOG_RELEASE_RE.fullmatch(line)
-        if match is not None and match.group("version") == version:
-            reference = _metadata_reference(path, line_number, match.group("date"), MetadataKind.CHANGELOG_DATE, line)
-            try:
-                date.fromisoformat(reference.value)
-            except ValueError as error:
-                msg = f"{path}:{line_number}: changelog release date is not a valid calendar date: {reference.value}"
-                raise ReleaseCheckError(msg) from error
-            references.append(reference)
+    for heading in _parsed_changelog(path).release_headings:
+        if heading.version != version:
             continue
-        if heading_candidate_re.match(line) is not None:
-            msg = f"{path}:{line_number}: current-version heading must contain exactly one ISO release date"
-            raise ReleaseCheckError(msg)
-    if not references:
-        return None
-    return _single_reference(references, path, f"dated changelog heading for version {version}")
+        if heading.date is None:
+            raise ReleaseCheckError(f"{path}:{heading.line}: current-version heading must contain exactly one ISO release date")
+        line = path.read_text(encoding="utf-8").splitlines()[heading.line - 1]
+        return _metadata_reference(path, heading.line, heading.date, MetadataKind.CHANGELOG_DATE, line)
+    return None
 
 
 _README_DOI_RE = re.compile(r"\[!\[DOI\]\([^)]*\)\]\(https://doi\.org/(?P<doi>10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)\)")
 
 
-def _readme_doi_reference(path: Path) -> MetadataReference:
+def _readme_doi_reference(path: Path) -> MetadataReference | None:
     """Return the DOI targeted by the README badge."""
     references: list[MetadataReference] = []
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
-        for match in _README_DOI_RE.finditer(line):
+        matches = list(_README_DOI_RE.finditer(line))
+        if line.count("[![DOI]") != len(matches):
+            raise ReleaseCheckError(f"{path}:{line_number}: malformed DOI badge target")
+        for match in matches:
             references.append(_metadata_reference(path, line_number, match.group("doi"), MetadataKind.README_DOI, line))
-    return _single_reference(references, path, "DOI badge target")
+    return _single_reference(references, path, "DOI badge target") if references else None
 
 
 _REFERENCES_DOI_RE = re.compile(r"^- DOI: <https://doi\.org/(?P<doi>10\.\d{4,9}/[-._;()/:A-Za-z0-9]+)>\s*$")
 
 
-def _references_doi_reference(path: Path) -> MetadataReference:
+def _references_doi_reference(path: Path) -> MetadataReference | None:
     """Return the concept DOI entry from REFERENCES.md."""
     dois: list[MetadataReference] = []
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         match = _REFERENCES_DOI_RE.fullmatch(line)
         if match is None:
+            if line.startswith("- DOI:"):
+                raise ReleaseCheckError(f"{path}:{line_number}: malformed concept DOI entry; expected - DOI: <https://doi.org/...>")
             continue
         dois.append(_metadata_reference(path, line_number, match.group("doi"), MetadataKind.REFERENCES_DOI, line))
-    return _single_reference(dois, path, "concept DOI entry")
+    return _single_reference(dois, path, "concept DOI entry") if dois else None
 
 
 def _changelog_comparison_references(path: Path, version: str) -> list[VersionReference]:
     """Return comparison targets whose link label is the current version."""
-    comparison_re = re.compile(f"^\\[{re.escape(version)}\\]:\\s+\\S+/compare/v{_VERSION_PATTERN}\\.\\.\\.v(?P<version>{_VERSION_PATTERN})(?:\\s|$)")
+    comparison_re = re.compile(rf"^\[{re.escape(version)}\]:\s+\S+/compare/v{SEMVER_PATTERN}\.\.\.v(?P<version>{SEMVER_PATTERN})(?:\s|$)")
     references: list[VersionReference] = []
     for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
         match = comparison_re.match(line)
@@ -566,7 +544,9 @@ def find_release_metadata_mismatches(root: Path, *, policy: dict | None = None) 
             (root / "REFERENCES.md", _references_doi_reference),
         ):
             if path.is_file():
-                expected.append((reader(path), doi))
+                reference = reader(path)
+                if reference is not None:
+                    expected.append((reference, doi))
     if policy.get("final-changelog", False) and changelog_date is None:
         raise ReleaseCheckError("final release requires the current changelog heading")
     if policy.get("final-changelog", False) and citation.is_file() and citation_date is None:

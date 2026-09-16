@@ -32,6 +32,12 @@ from research_repo_tools.process import (
 
 
 @pytest.fixture(autouse=True)
+def invocation_directory(tmp_path, monkeypatch):
+    """Keep generic subprocess tests independent of Git and the checkout."""
+    monkeypatch.chdir(tmp_path)
+
+
+@pytest.fixture
 def invocation_repository(tmp_path, monkeypatch):
     """Exercise Git helpers in a minimal disposable repository."""
     root = tmp_path / "repository"
@@ -136,7 +142,7 @@ class TestRunGitCommand:
         assert result.returncode != 0
         assert isinstance(result.stdout, str)
 
-    def test_runs_simple_git_command(self) -> None:
+    def test_runs_simple_git_command(self, invocation_repository) -> None:
         result = run_git_command(["rev-parse", "--git-dir"])
         assert result.returncode == 0
         assert result.stdout.strip()
@@ -215,20 +221,20 @@ class TestRunCargoCommand:
 class TestRunSafeCommand:
     def test_basic_command_execution(self) -> None:
         """Test basic command execution with default parameters."""
-        result = run_safe_command("echo", ["hello world"])
+        result = run_safe_command(sys.executable, ["-c", "import sys; print(sys.argv[1])", "hello world"])
         assert result.returncode == 0
         assert result.stdout.strip() == "hello world"
         assert isinstance(result.stdout, str)
 
     def test_secure_defaults_are_applied(self) -> None:
         """Test that secure defaults are applied."""
-        result = run_safe_command("echo", ["test"])
+        result = run_safe_command(sys.executable, ["-c", "import sys; print(sys.argv[1])", "test"])
         assert isinstance(result.stdout, str)
         assert result.stdout.strip() == "test"
 
     def test_text_parameter_enforced(self) -> None:
         """Test that text parameter is enforced for security/stability."""
-        result = run_safe_command("echo", ["test output"], text=False)
+        result = run_safe_command(sys.executable, ["-c", "import sys; print(sys.argv[1])", "test output"], text=False)
         assert isinstance(result.stdout, str)
         assert "test output" in result.stdout
 
@@ -239,14 +245,12 @@ class TestRunSafeCommand:
 
     def test_custom_capture_output_parameter(self) -> None:
         """Test overriding capture_output parameter."""
-        if sys.platform.startswith("win"):
-            pytest.skip("echo may not be an external executable on Windows")
-        result = run_safe_command("echo", ["no capture"], capture_output=False)
+        result = run_safe_command(sys.executable, ["-c", "import sys; print(sys.argv[1])", "no capture"], capture_output=False)
         assert result.stdout is None
 
     def test_multiple_custom_parameters(self) -> None:
         """Test multiple custom parameters at once (text is enforced)."""
-        result = run_safe_command("echo", ["multi param test"], text=False, check=False, capture_output=True)
+        result = run_safe_command(sys.executable, ["-c", "import sys; print(sys.argv[1])", "multi param test"], text=False, check=False, capture_output=True)
         assert isinstance(result.stdout, str)
         assert result.returncode == 0
         assert "multi param test" in result.stdout
@@ -258,7 +262,7 @@ class TestRunSafeCommand:
 
     def test_additional_kwargs_passed_through(self) -> None:
         """Test that additional kwargs are passed through to subprocess.run."""
-        result = run_safe_command("echo", ["timeout test"], timeout=10)
+        result = run_safe_command(sys.executable, ["-c", "import sys; print(sys.argv[1])", "timeout test"], timeout=10)
         assert result.returncode == 0
         assert "timeout test" in result.stdout
 
@@ -324,7 +328,7 @@ class TestSecurityFeatures:
 
     def test_no_shell_execution(self) -> None:
         """Test that commands don't use shell=True."""
-        result = run_safe_command("echo", ["$HOME"])
+        result = run_safe_command(sys.executable, ["-c", "import sys; print(sys.argv[1])", "$HOME"])
         assert result.stdout.strip() == "$HOME"
 
     @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed in PATH")
@@ -725,6 +729,6 @@ class TestAdditionalHelpers:
             ["log", "--oneline", "-n", "1"],
         ]
 
-    def test_find_project_root(self, invocation_repository) -> None:
-        (invocation_repository / "Cargo.toml").write_text('[package]\nname = "consumer"\nversion = "1.0.0"\n')
+    def test_find_project_root(self, tmp_path) -> None:
+        (tmp_path / "Cargo.toml").write_text('[package]\nname = "consumer"\nversion = "1.0.0"\n')
         assert (find_project_root() / "Cargo.toml").is_file()

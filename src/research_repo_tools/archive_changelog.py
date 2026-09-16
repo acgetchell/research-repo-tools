@@ -25,30 +25,22 @@ import sys
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING
 
 from research_repo_tools.files import _write_text_atomic, _write_texts_transactionally
 from research_repo_tools.markdown import relocate_links
 from research_repo_tools.postprocess_changelog import _closes_code_fence, _opening_code_fence, normalize_entry_headings_text, postprocess_text
 from research_repo_tools.process import format_exception_diagnostics
+from research_repo_tools.release_tags import SEMVER_PATTERN
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
 
-# Matches any bracketed level-2 heading reserved for changelog versions.
-_BRACKETED_HEADING_RE = re.compile(r"^## \[")
-
-_SEMVER_NUMERIC_IDENTIFIER = r"(?:0|[1-9]\d*)"
-_SEMVER_PRERELEASE_IDENTIFIER = r"(?:0|[1-9]\d*|[0-9A-Za-z-]*[A-Za-z-][0-9A-Za-z-]*)"
-_SEMVER_BUILD_IDENTIFIER = r"[0-9A-Za-z-]+"
-_SEMVER_PATTERN = (
-    rf"{_SEMVER_NUMERIC_IDENTIFIER}\.{_SEMVER_NUMERIC_IDENTIFIER}\.{_SEMVER_NUMERIC_IDENTIFIER}"
-    rf"(?:-{_SEMVER_PRERELEASE_IDENTIFIER}(?:\.{_SEMVER_PRERELEASE_IDENTIFIER})*)?"
-    rf"(?:\+{_SEMVER_BUILD_IDENTIFIER}(?:\.{_SEMVER_BUILD_IDENTIFIER})*)?"
-)
+# Includes malformed version-like headings so they cannot become silent prose.
+_VERSION_HEADING_CANDIDATE_RE = re.compile(r"^##\s+(?:\[|v?[0-9])")
 
 # Matches one exact release heading with an optional ISO date.
-_RELEASE_HEADING_RE = re.compile(rf"^## \[v?(?P<version>{_SEMVER_PATTERN})\](?:\([^\s]+\))?(?: - (?P<date>\d{{4}}-\d{{2}}-\d{{2}}))?\s*$")
+_RELEASE_HEADING_RE = re.compile(rf"^## \[v?(?P<version>{SEMVER_PATTERN})\](?:\([^\s]+\))?(?: - (?P<date>[0-9]{{4}}-[0-9]{{2}}-[0-9]{{2}}))?\s*$")
 _UNRELEASED_HEADING_RE = re.compile(r"^## \[Unreleased\](?:\([^\s]+\))?\s*$")
 
 # Matches a reference-style link definition: ``[label]: URL``
@@ -61,12 +53,23 @@ LOGGER = logging.getLogger(__name__)
 
 
 @dataclass(frozen=True, slots=True)
+class ReleaseHeading:
+    """Validated release identity and date location outside Markdown fences."""
+
+    version: str
+    line: int
+    date: str | None
+    date_span: tuple[int, int] | None
+
+
+@dataclass(frozen=True, slots=True)
 class ParsedChangelog:
     """A changelog whose version-heading invariants have been established."""
 
     preamble: str
     unreleased: str | None
     version_blocks: tuple[tuple[str, str], ...]
+    release_headings: tuple[ReleaseHeading, ...] = ()
 
 
 # ---------------------------------------------------------------------------
@@ -168,8 +171,8 @@ def _extract_link_defs(text: str) -> tuple[str, dict[str, str]]:
     return cleaned.rstrip("\n") + "\n", link_defs
 
 
-def _parse_release_heading(heading_line: str, line_number: int) -> str:
-    """Return the trusted SemVer label from one release heading."""
+def _parse_release_heading(heading_line: str, line_number: int) -> ReleaseHeading:
+    """Return a trusted release label, date, and source location."""
     release_match = _RELEASE_HEADING_RE.fullmatch(heading_line)
     if release_match is None:
         msg = f"Unrecognized changelog heading at line {line_number}: {heading_line!r}"
@@ -183,7 +186,7 @@ def _parse_release_heading(heading_line: str, line_number: int) -> str:
             msg = f"Invalid release date at line {line_number}: {release_date!r}"
             raise ValueError(msg) from err
 
-    return cast("str", release_match.group("version"))
+    return ReleaseHeading(release_match.group("version"), line_number, release_date, release_match.span("date") if release_date else None)
 
 
 def parse_changelog(text: str) -> ParsedChangelog:
@@ -219,7 +222,7 @@ def parse_changelog(text: str) -> ParsedChangelog:
         if line == "## Archives":
             lines = lines[:i]
             break
-        if _BRACKETED_HEADING_RE.match(line):
+        if _VERSION_HEADING_CANDIDATE_RE.match(line):
             headings.append(i)
 
     if not headings:
@@ -229,6 +232,7 @@ def parse_changelog(text: str) -> ParsedChangelog:
 
     unreleased: str | None = None
     version_blocks: list[tuple[str, str]] = []
+    release_headings: list[ReleaseHeading] = []
     seen_versions: dict[str, int] = {}
     previous_version: str | None = None
 
@@ -248,7 +252,8 @@ def parse_changelog(text: str) -> ParsedChangelog:
             unreleased = block
             continue
 
-        version = _parse_release_heading(heading_line, line_number)
+        heading = _parse_release_heading(heading_line, line_number)
+        version = heading.version
 
         if version in seen_versions:
             msg = f"Duplicate release heading {version!r} at line {line_number}; first seen at line {seen_versions[version]}"
@@ -261,8 +266,27 @@ def parse_changelog(text: str) -> ParsedChangelog:
         seen_versions[version] = line_number
         previous_version = version
         version_blocks.append((version, block))
+        release_headings.append(heading)
 
-    return ParsedChangelog(preamble, unreleased, tuple(version_blocks))
+    return ParsedChangelog(preamble, unreleased, tuple(version_blocks), tuple(release_headings))
+
+
+def replace_release_date(text: str, version: str, released: str, *, required: bool = False) -> str:
+    """Change only a real release heading's date, preserving links and examples."""
+    if date.fromisoformat(released).isoformat() != released:
+        raise ValueError("release date must use YYYY-MM-DD form")
+    heading = next((heading for heading in parse_changelog(text).release_headings if heading.version == version), None)
+    if heading is None:
+        if required:
+            raise ValueError(f"CHANGELOG.md has no release heading for {version}")
+        return text
+    if heading.date_span is None:
+        raise ValueError(f"current-version heading at line {heading.line} must contain exactly one ISO release date")
+    lines = text.splitlines(keepends=True)
+    start, end = heading.date_span
+    line = lines[heading.line - 1]
+    lines[heading.line - 1] = line[:start] + released + line[end:]
+    return "".join(lines)
 
 
 def group_by_minor(
@@ -305,9 +329,11 @@ def _render_archive(
     minor: str,
     blocks: Sequence[tuple[str, str]],
     link_defs: dict[str, str] | None = None,
+    *,
+    preamble: str | None = None,
 ) -> str:
     """Render a single minor-series archive without publishing it."""
-    parts = [f"# Changelog - {minor}.x\n"]
+    parts = [f"# Changelog - {minor}.x\n" if preamble is None else preamble]
     for _ver, block in blocks:
         parts.append(block)
 
@@ -404,10 +430,7 @@ def _merge_archive(path: Path, minor: str, blocks: list[tuple[str, str]], defini
             raise ValueError(f"conflicting retained reference {label!r} in {path}")
         retained_definitions[label] = definitions[label]
     ordered = sorted(merged.items(), key=lambda item: _version_sort_key(item[0]), reverse=True)
-    rendered = _render_archive(minor, ordered, retained_definitions)
-    # Preserve an existing archive introduction in addition to release bodies.
-    generated_preamble = parse_changelog(rendered).preamble
-    return retained.preamble + rendered[len(generated_preamble) :]
+    return _render_archive(minor, ordered, retained_definitions, preamble=retained.preamble)
 
 
 def build_root(

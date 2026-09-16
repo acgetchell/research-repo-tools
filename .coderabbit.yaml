@@ -1,0 +1,40 @@
+# yaml-language-server: $schema=https://coderabbit.ai/integrations/schema.v2.json
+language: en-US
+early_access: false
+reviews:
+  profile: chill
+  request_changes_workflow: true
+  review_progress: false
+  commit_status: true
+  fail_commit_status: true
+  auto_review:
+    enabled: true
+    auto_incremental_review: true
+    drafts: true
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+  path_instructions:
+    - path: "src/research_repo_tools/**"
+      instructions: >-
+        Maintain one common implementation per capability for Rust repositories
+        using Python scripting and Jupyter. Preserve validated input contracts,
+        portable file handling, and rollback diagnostics. Consumer-specific
+        scientific algorithms and experiment choices belong in consumers.
+    - path: "tests/**"
+      instructions: >-
+        Tests use small synthetic fixtures and deliberate malformed input.
+        Assess assertions against observable behavior and failure guarantees.
+        Git-mutating integration tests must use disposable repositories.
+  tools:
+    ruff:
+      enabled: true
+    actionlint:
+      enabled: true
+    shellcheck:
+      enabled: true
+    gitleaks:
+      enabled: true
+    github-checks:
+      enabled: true
+      timeout_ms: 90000

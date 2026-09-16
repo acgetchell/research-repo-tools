@@ -427,6 +427,27 @@ class TestSummarySections:
         summary_block = _merged_pr_summary_block(result)
         assert summary_block.count(f"- Feature A {_pr(10)}") == 1
 
+    def test_existing_breaking_description_does_not_block_or_pollute_pr_summary(self) -> None:
+        description = f"- Require a new runtime; migration guide {_pr(99)}.\n\n  Keep explicit conversions."
+        content = f"# Changelog\n\n## [1.0.0]\n\n### ⚠️ Breaking Changes\n\n{description}\n\n### Changed\n\n- [**breaking**] Update API {_pr(5)} {_commit()}\n"
+        result = postprocess_text(content)
+        assert description in result
+        assert f"- Update API {_pr(5)}" in _merged_pr_summary_block(result)
+        assert _pr(99) not in _merged_pr_summary_block(result)
+        assert result.index("### ⚠️ Breaking Changes") < result.index("### Merged Pull Requests") < result.index("### Changed")
+        assert postprocess_text(result) == result
+
+    def test_existing_pr_summary_does_not_block_missing_breaking_summary(self) -> None:
+        content = (
+            f"# Changelog\n\n## [1.0.0]\n\n### Merged Pull Requests\n\n- Update API {_pr(5)}\n\n"
+            f"### Changed\n\n- [**breaking**] Update API {_pr(5)} {_commit()}\n"
+        )
+        result = _inject_summary_sections(content)
+        assert result.count("### Merged Pull Requests") == 1
+        assert result.count("### ⚠️ Breaking Changes") == 1
+        assert result.index("### ⚠️ Breaking Changes") < result.index("### Merged Pull Requests")
+        assert _inject_summary_sections(result) == result
+
 
 class TestListMarkerNormalization:
     def test_star_to_dash_at_column_zero(self, tmp_path: Path) -> None:
@@ -754,12 +775,22 @@ class TestSquashHeadingNormalization:
         assert "#### Added: Instrument large-scale debugging" not in result
         assert "  - Keep this detail under the parent entry." in result
 
-    def test_full_pipeline_canonicalizes_feature_names_before_deduplication(self) -> None:
+    def test_full_pipeline_preserves_consumer_feature_names(self) -> None:
         content = f"# Changelog\n\n## [1.0.0]\n\n### Fixed\n\n- Gate diagnostics behind test-debug {_commit('5d8a9ff', '5d8a9ffdeadbeef')}\n\n  - Replace profile-based public diagnostic exports with the documented test-debug feature.\n"
         result = postprocess_text(content)
-        assert "test-debug" not in result
-        assert "Gate public diagnostic exports behind diagnostics" in result
-        assert "documented diagnostics feature" in result
+        assert "Gate diagnostics behind test-debug" in result
+        assert "documented test-debug feature" in result
+
+    def test_feature_names_in_prose_code_spans_and_links_remain_distinct(self) -> None:
+        content = (
+            "# Changelog\n\n## [1.0.0]\n\n### Fixed\n\n"
+            "- Preserve `test-debug` and [test-debug](docs/test-debug.md).\n\n"
+            "- Preserve `diagnostics` and [diagnostics](docs/diagnostics.md).\n"
+        )
+        result = postprocess_text(content)
+        assert "- Preserve `test-debug` and [test-debug](docs/test-debug.md)." in result
+        assert "- Preserve `diagnostics` and [diagnostics](docs/diagnostics.md)." in result
+        assert postprocess_text(result) == result
 
     def test_full_pipeline_prefers_contextual_duplicate_squash_body_entry(self) -> None:
         content = f"# Changelog\n\n## [1.0.0]\n\n### Changed\n\n- Avoid panic in stack-matrix dispatch {_commit('3ac8b11', '3ac8b11deadbeef')}\n\n  - Add StackMatrixDispatchError.\n\n### Performance\n\n- Migrate geometry predicates to consumer {_commit('3ac8b11', '3ac8b11deadbeef')}\n\n#### Fixed: Avoid panic in stack-matrix dispatch\n\n- Add StackMatrixDispatchError.\n"

@@ -1,6 +1,5 @@
 """Fixture-specific Semgrep configuration and fail-closed finding checks."""
 
-import json
 import os
 import re
 import tempfile
@@ -11,7 +10,7 @@ import yaml
 
 from research_repo_tools.config import Config
 from research_repo_tools.process import run_safe_command
-from research_repo_tools.semgrep_findings import SemgrepResults, _actual_findings, _expected_findings, _finding_mismatches
+from research_repo_tools.semgrep_findings import _actual_findings, _expected_findings, _finding_mismatches, parse_results
 
 ANNOTATION = re.compile(r"(?<![A-Za-z0-9_])(?P<kind>ruleid|ok):\s*(?P<ids>[A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*)")
 
@@ -159,12 +158,11 @@ def check(config: Config) -> int:
                 env=env,
                 timeout=section.get("timeout", 300),
             )
-            parsed = json.loads(result.stdout)
-            if not isinstance(parsed, dict) or not isinstance(parsed.get("results"), list) or parsed.get("errors"):
-                raise ValueError(f"{path}: malformed or incomplete Semgrep output")
-            if any(not isinstance(item, dict) for item in parsed["results"]):
-                raise ValueError(f"{path}: malformed Semgrep findings")
-            actual = _actual_findings(SemgrepResults(tuple(parsed["results"])))
+            try:
+                parsed = parse_results(result.stdout)
+            except ValueError as error:
+                raise ValueError(f"{path}: {error}") from error
+            actual = _actual_findings(parsed)
             if actual is None:
                 raise ValueError(f"{path}: malformed Semgrep findings")
             if count_mode:

@@ -23,6 +23,12 @@ explicit ISO date. Active Cargo dependency snippets and `cargo add` examples
 track the owning package. Archived documentation under `docs/archives/` is excluded.
 Other links and custom commands retain their original contents.
 
+DOI references are optional. When present, the supported forms are a README
+`[![DOI](badge-image-url)](https://doi.org/...)` badge and a REFERENCES entry
+`- DOI: <https://doi.org/...>`. Each file may contain at most one such reference;
+malformed or duplicate references fail validation. Other bibliography entries
+are left alone and do not create a requirement to add a project DOI.
+
 Without `--previous-release`, GitHub CLI discovers the previous published stable
 release, excluding drafts and prereleases. An explicit prior release allows
 offline preparation. Release metadata updates require canonical stable SemVer;

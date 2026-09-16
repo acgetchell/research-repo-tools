@@ -11,6 +11,15 @@ sets `changelog.cliff-config`. Owner and repository identify links; they do not
 select a policy profile. Generation is offline and disables template commands.
 A prospective tag requires an explicit ISO date, keeping output independent
 of an accidental wall-clock date.
+Generated output must contain at least one valid release or Unreleased section
+before it can replace existing history.
+
+The packaged template preserves complete breaking-change footer descriptions,
+including compiler requirements, multiline migration instructions, and dependency
+breaks. Commits marked only with `!` use their subject as the fallback summary.
+Postprocessing retains those descriptions and independently adds a missing
+Merged Pull Requests summary. Existing summary text is not used as a source of
+new PR entries.
 
 Normalization uses UTF-8 and LF, one final newline, consistent list markers,
 160-column prose reflow, intact Markdown links/code spans, and level-four
@@ -18,6 +27,7 @@ entry headings beneath release categories. Breaking-change and pull-request
 summaries retain their links. Fenced code is opaque to prose transformations;
 backtick and tilde delimiters, delimiter lengths, and fence-contained examples
 of releases are preserved. A missing code language becomes `text`.
+Feature names and consumer-specific wording are preserved rather than migrated.
 
 This adopts level-four headings for entry-local titles instead of the bold
 prose used by some sources. Shared tests cover text, duplicate-heading,
@@ -29,11 +39,13 @@ The candidate must pass both the fixing invocation and a final check before
 replacement. Formatter failure or unexpectedly empty output preserves the
 original. The base package does not require rumdl for pure normalization.
 
-Archive parsing rejects malformed versions/dates, duplicate release headings,
+Shared heading parsing rejects malformed versions/dates, duplicate release headings,
 out-of-order versions, and misplaced Unreleased sections. SemVer prerelease
 and build labels and inline/reference release links are supported. Fenced
-example headings do not create release blocks. Body reference definitions are
-retained with their notes. Cross-volume paths that cannot form portable links
+example headings do not create release blocks. Version digits must be ASCII.
+Generation and release metadata use the same parsed headings and date locations.
+Body and archive-introduction reference definitions are retained with their text.
+Cross-volume paths that cannot form portable links
 fail before publication rather than embedding developer-specific absolute paths.
 
 Archive publication stages every candidate and backup before replacing any

@@ -4,7 +4,7 @@ Use Python 3.14+, uv, Ruff, ty, pytest, and just. The project manifest and lockf
 own the environment.
 
 ```sh
-uv sync --locked --all-extras
+uv sync --locked
 uv run --locked just check
 ```
 
@@ -12,7 +12,12 @@ Use `just check` while iterating, with targeted regressions when a behavioral
 change needs verification. Run `just ci` once the work is ready for final review.
 It runs checks and tests, builds wheel and sdist artifacts, and installs both
 outside the checkout with uv. Installation checks exercise the console entry
-point, imports, packaged templates, minimal dependencies, and the `just` extra.
+point, imports, packaged templates, runtime dependencies, and the bundled `just` executable.
+
+`just check` also runs the locked actionlint and zizmor workflow validators.
+`just audit` performs the separate network-backed Python dependency audit.
+GitHub repository settings and required checks are documented in
+[GitHub setup](docs/github.md); their API payloads live in `.github/settings/`.
 
 Maintain one implementation per common capability under `src/research_repo_tools/`.
 Organize tests under `tests/changelog`, `dependencies`, `releases`, `semgrep`, and

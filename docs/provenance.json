@@ -28,6 +28,32 @@
       "license": "BSD-3-Clause"
     }
   ],
+  "updates": [
+    {
+      "repository": "la-stack",
+      "base_commit": "d36a9e99ec223c4cbbf8a9191818f186159c27f7",
+      "source_state": "staged changes",
+      "date": "2026-09-07",
+      "purpose": "Preserve full breaking-change descriptions in the shared git-cliff template and independently fill missing PR or breaking summaries. Adapted tests use synthetic consumer identities.",
+      "files": [
+        {
+          "path": "cliff.toml",
+          "sha256": "69fafa198f309bd1afc7833ad3a490eae08cd033cc3c67e332bfb8878b8230b9",
+          "shared_path": "src/research_repo_tools/templates/cliff.toml"
+        },
+        {
+          "path": "scripts/postprocess_changelog.py",
+          "sha256": "71c1ab994a055fc8cb98d0f829372277920824c64a93bcc141be73fffa02eb08",
+          "shared_path": "src/research_repo_tools/postprocess_changelog.py"
+        },
+        {
+          "path": "scripts/tests/test_postprocess_changelog.py",
+          "sha256": "2d72cd50ea184fe914c74ce8b692d2d3075162cd61dc6d14fb1eefa9490b8a58",
+          "shared_paths": ["tests/changelog/test_cliff_template.py", "tests/changelog/test_normalize.py"]
+        }
+      ]
+    }
+  ],
   "files": [
     {
       "repository": "dotfiles",

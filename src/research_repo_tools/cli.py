@@ -97,14 +97,14 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         from research_repo_tools.tool_pins import check_uv, update
 
         if args.action == "check-uv":
-            version = check_uv(executable=args.uv_executable or section.get("uv", "uv"), output=args.output)
+            version = check_uv(executable=settings.executable(args.uv_executable or section.get("uv", "uv")), output=args.output)
             print(f"uv {version} satisfies the stable X.Y.Z contract")
             return 0
 
         changes = update(
             settings.path(section.get("justfile", "justfile")),
             section.get("tools", {}),
-            uv=section.get("uv", "uv"),
+            uv=settings.executable(section.get("uv", "uv")),
             dry_run=args.dry_run,
         )
         for pin, (old, new) in changes.items():

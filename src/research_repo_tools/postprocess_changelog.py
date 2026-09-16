@@ -172,28 +172,10 @@ _CHANGELOG_CATEGORY_ORDER = [
     "Dependencies",
 ]
 
-_CANONICAL_TEXT_REPLACEMENTS = {
-    "so `test-debug` cannot be reintroduced": "so pre-rename wording cannot be reintroduced",
-    "Rename test-debug feature to diagnostics": "Rename diagnostics feature flag",
-    "Rename diagnostics feature to diagnostics": "Rename diagnostics feature flag",
-    "Gate diagnostics behind test-debug": "Gate public diagnostic exports behind diagnostics",
-    "Gate diagnostics behind diagnostics": "Gate public diagnostic exports behind diagnostics",
-    "Replace the test-debug feature with diagnostics": "Use the diagnostics feature flag",
-    "test-debug": "diagnostics",
-}
-
-
 type SyntheticEntries = dict[str, list[list[str]]]
 type DuplicateEntryKey = tuple[str, str, str]
 type ContextualEntryRanges = dict[DuplicateEntryKey, dict[int, list[tuple[int, int]]]]
 _TOP_LEVEL_LIST_MARKERS = ("- ", "* ", "• ")
-
-
-def _canonicalize_changelog_terms(text: str) -> str:
-    """Apply canonical wording to generated changelog text."""
-    for old, new in _CANONICAL_TEXT_REPLACEMENTS.items():
-        text = text.replace(old, new)
-    return text
 
 
 def _strip_code_spans(text: str) -> str:
@@ -669,7 +651,6 @@ def _duplicate_body_key(lines: list[str]) -> str:
     """Return a stable comparison key for changelog entry body lines."""
     key_lines: list[str] = []
     for line in lines:
-        line = _canonicalize_changelog_terms(line)
         line = _BULLET_SYMBOL_RE.sub(r"\1- ", line)
         line = _STAR_LIST_RE.sub(r"\1- ", line)
         line = _LIST_MARKER_SPACE_RE.sub(r"\1 ", line)
@@ -923,10 +904,13 @@ def _extract_section_summaries(
     """
     pr_entries: list[str] = []
     breaking_entries: list[str] = []
+    in_summary = False
 
     for sline in section:
+        if sline.startswith("### "):
+            in_summary = sline in {"### Merged Pull Requests", "### ⚠️ Breaking Changes"}
         # Only top-level list items (no leading whitespace).
-        if not sline.startswith(("- ", "* ")):
+        if in_summary or not sline.startswith(("- ", "* ")):
             continue
 
         is_breaking = bool(_BREAKING_MARKER_RE.search(sline))
@@ -938,6 +922,19 @@ def _extract_section_summaries(
             _append_unique(pr_entries, _compact_entry(sline, strip_breaking=True))
 
     return pr_entries, breaking_entries
+
+
+def _summary_insertion_index(section: list[str]) -> int:
+    """Place new summaries after the version heading or an existing breaking summary."""
+    if "### ⚠️ Breaking Changes" in section:
+        index = section.index("### ⚠️ Breaking Changes") + 1
+        while index < len(section) and not section[index].startswith("### "):
+            index += 1
+    else:
+        index = 1
+        while index < len(section) and not section[index].strip():
+            index += 1
+    return index
 
 
 def _inject_summary_sections(text: str) -> str:
@@ -969,11 +966,14 @@ def _inject_summary_sections(text: str) -> str:
         end = boundaries[sec_idx + 1] if sec_idx + 1 < len(boundaries) else len(lines)
         section = lines[start:end]
 
-        # Guard against double-injection.
-        if any("### Merged Pull Requests" in s or "### ⚠️ Breaking Changes" in s for s in section):
-            continue
-
+        # Preserve full template-rendered descriptions while filling either missing summary.
+        has_pr_summary = "### Merged Pull Requests" in section
+        has_breaking_summary = "### ⚠️ Breaking Changes" in section
         pr_entries, breaking_entries = _extract_section_summaries(section)
+        if has_pr_summary:
+            pr_entries = []
+        if has_breaking_summary:
+            breaking_entries = []
 
         if not pr_entries and not breaking_entries:
             continue
@@ -981,10 +981,7 @@ def _inject_summary_sections(text: str) -> str:
         # Sort PRs by highest PR number, descending (newest first).
         pr_entries.sort(key=_max_pr_number, reverse=True)
 
-        # Insertion point: first non-blank line after the heading.
-        insert_at = start + 1
-        while insert_at < end and lines[insert_at].strip() == "":
-            insert_at += 1
+        insert_at = start + _summary_insertion_index(section)
 
         block: list[str] = []
         if breaking_entries:
@@ -1608,7 +1605,6 @@ def postprocess_text(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text, fenced_blocks = _protect_fenced_blocks(text)
     text = _strip_dependabot_metadata(text)
-    text = _canonicalize_changelog_terms(text)
 
     # Mirror squash-body conventional commit headings before summaries/reflow.
     text = _mirror_squash_body_entries(text)

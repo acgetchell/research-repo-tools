@@ -32,7 +32,7 @@ jobs:
           python-version: "3.14"
           enable-cache: true
       - name: Install locked development environment
-        run: uv sync --locked --all-extras
+        run: uv sync --locked
       - name: Validate, test, build, and install both distributions
         run: uv run --locked just ci
 
@@ -49,5 +49,5 @@ jobs:
           python-version: "3.14"
       - name: Install the external generator
         run: cargo install git-cliff --version 2.14.1 --locked
-      - name: Exercise generation and tagging in disposable repositories
-        run: uv run --locked pytest tests/changelog/test_contract.py
+      - name: Exercise generation, breaking summaries, and tagging
+        run: uv run --locked pytest tests/changelog/test_contract.py tests/changelog/test_cliff_template.py

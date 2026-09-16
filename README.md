@@ -1,6 +1,7 @@
 # research-repo-tools
 
-Common Python tools for maintaining research software repositories. Each
+Shared development and maintenance tooling for Rust research repositories using
+Python scripting and Jupyter notebooks. Each
 capability has one implementation and one set of contracts, with tests grouped
 by capability. Start with changelog handling and a small maintenance core; add
 further workflows only after their shared contract is clear.
@@ -9,10 +10,21 @@ Python 3.14+ is required. This package has not been published to PyPI.
 
 ## Install with uv
 
+Consumers will install pinned releases directly from PyPI. After the first
+publication, replace `X.Y.Z` with the chosen released version:
+
+```sh
+uv add --dev "research-repo-tools==X.Y.Z"
+uv run --locked research-repo-tools --help
+```
+
+Until then, local wheels and editable installs support development and pilot
+validation. They are not the intended dependency source for consumer CI.
+
 Build a wheel locally:
 
 ```sh
-uv sync --locked --all-extras
+uv sync --locked
 uv run --locked just build
 ```
 
@@ -25,8 +37,8 @@ uv run --locked research-repo-tools --help
 
 For development across local checkouts, use
 `uv add --dev --editable /path/to/research-repo-tools` instead. Neither form
-requires publication. The optional `just` extra supplies the pinned `rust-just`
-executable; the base package requires only `packaging` and PyYAML.
+requires publication. Every installation supplies the pinned `just` executable
+through `rust-just`, alongside `packaging` and PyYAML. No extra is needed.
 
 ## Common workflows
 
@@ -58,8 +70,10 @@ formatting needs rumdl, fixture validation needs Semgrep, and dependency
 updates need uv or Cargo. These executables are required only by the commands
 that invoke them. Nothing here publishes packages or hosted releases.
 
-Notebook execution, scientific benchmarks, evidence schemas, plotting, and
-deployment workflows are outside this first version. Scientific algorithms,
+External-tool installation and generic notebook setup, execution, and validation
+are planned shared capabilities. They are not implemented in this first version.
+Scientific benchmarks, evidence schemas, plotting, and deployment workflows are
+also outside this first version. Scientific algorithms,
 case inventories, repository rules, and custom release commands stay in their
 consuming repositories.
 
@@ -76,7 +90,7 @@ repository = "consumer"
 # formatter = "rumdl.toml"  # optional external formatting
 
 [tool.research-repo-tools.deps.tools]
-just_version = "rust-just"
+just_version = "just"
 rumdl_version = "rumdl"
 uv_version = "uv"
 
@@ -86,8 +100,15 @@ fixtures = "tests/semgrep"
 ```
 
 `--config PATH` reads unprefixed tables from a separate TOML file when needed.
-Paths are relative to the configuration directory; `--root PATH` selects an
-explicit consumer root. Unknown settings fail. There are no repository profiles.
+Paths are relative to the consumer root, which defaults to the configuration
+directory; `--root PATH` overrides that root. Explicit executable paths such as
+`deps.uv = "./bin/uv"` use the same root; bare names use `PATH`.
+Unknown settings fail. There are no repository profiles.
+
+`deps.tools` values name packages installed separately with Cargo, as listed by
+`cargo install --list`. The special `uv` entry reads the selected uv executable.
+The Cargo package is named `just`; the Python dependency that supplies the bundled
+executable is named `rust-just`.
 
 ```sh
 research-repo-tools templates CHANGELOG.md
@@ -108,6 +129,9 @@ while retaining ranges, markers, extras, and other unmanaged constraints.
 See [changelog behavior](docs/changelog.md), [release behavior](docs/release.md),
 [scope and adoption](docs/migration.md), and [validation](docs/validation.md).
 For development, run `just check` during iteration and `just ci` at the end.
+`just audit` separately checks exported locked third-party requirements against online
+Python vulnerability advisories. See [GitHub setup](docs/github.md) for repository
+security, the initial push, and the later PyPI publishing boundary.
 
 ## License
 
