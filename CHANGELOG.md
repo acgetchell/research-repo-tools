@@ -5,7 +5,13 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.1.0] - 2026-09-17
+
+### ⚠️ Breaking Changes
+
+- Remove toolchain bootstrap and its generated shell and PowerShell launchers. uv must already be installed. Consumers must invoke research-repo-tools setup
+  through their locked tooling group before using just recipes. Python callers must use typed configuration fields and ReleasePolicy instead of section
+  dictionaries.
 
 ### Merged Pull Requests
 
@@ -32,6 +38,32 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Support included dependency groups while preserving their pinned tools during Python dependency updates.
   - Document installation through uv from PyPI and require publication before separate consumer adoption.
   - Update Ruff to 0.16.8.
+- Unify changelog workflows and command discovery [`b1737d0`](https://github.com/acgetchell/research-repo-tools/commit/b1737d05607f0c5621807474fdcd2b6321bc5028)
+
+  - Generate, normalize, and archive completed minor series together, validating candidates before replacement with recoverable rollback.
+  - Share preview, release-note, archive, and local-tag recipes between maintainers and consumers.
+  - Preserve Rust code in changelog entries, group dependency bump scopes, and recognize only complete v-prefixed SemVer tags.
+  - Preserve consumer Python dependencies during managed execution and resolve minor Python pins within project constraints.
+  - Roll back bootstrap launcher updates together and support unattended PowerShell downloads with TLS 1.2.
+  - Suppress dry-run failure warnings when the toolchain is complete.
+  - Add lexicographically sorted Just and CLI help, with bare just displaying available commands.
+  - Separate consumer usage from contributor guidance and replace provenance and fix-history logs with current documentation.
+- [**breaking**] Replace bootstrap launchers with explicit setup
+  [`314227a`](https://github.com/acgetchell/research-repo-tools/commit/314227a6f09a97825f6ecfbc6e0ecf2a548bc6a2)
+
+  - Install user-level Just, configure PATH, and synchronize declared tools before installing consumer project dependencies.
+  - Include uv upgrades through its installation owner in just update, reconcile the project pin, and use that pin in CI.
+  - Reject invalid dependency groups and incompatible Python selections before installation, and prioritize verified managed Cargo tools.
+  - Keep dependency updates in the selected repository and preserve complete Python version constraints during resolution.
+  - Preserve release headings and dates during changelog processing.
+  - Respect Cargo workspace exclusions during release preparation.
+  - Parse configuration and Semgrep findings into immutable records; reject ambiguous fixture paths, unrelated findings, and empty rule selections.
+  - Add required native setup checks on Linux, macOS, and Windows for managed execution, Rust compilation, user Just, and repeat setup.
+  - Document PyPI installation, explicit setup, and bare just commands.
+- Display project status badges in README [`bf8814e`](https://github.com/acgetchell/research-repo-tools/commit/bf8814e6f3193890591de7f80fb50858cf4db8ba)
+
+  Add badges for license, CI, CodeQL, Zizmor, Codecov, and dependency audit
+  workflows to provide immediate visibility into project health.
 
 ### Fixed
 
@@ -44,6 +76,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Render coverage paths consistently across platforms.
   - Add just update and changelog recipes using the shared tooling, and regenerate the repository changelog from commit history.
   - Extend type checking to scripts and tests, and refresh Ruff, ty, and locked dependencies.
+- Verify uv ownership and stabilize native checks [`95a2686`](https://github.com/acgetchell/research-repo-tools/commit/95a26864c0cfa20589cebfbfc648496ad00be845)
+
+  - Require a standalone receipt matching the active uv executable before self-update, with recovery guidance for other package managers.
+  - Reuse successful uv and Python probes within each operation, invalidating them after installation attempts or environment changes.
+  - Compare executable paths using Windows case rules and remove inherited shell markers from native POSIX setup checks.
+  - Reject Semgrep findings that do not belong to the selected fixture.
+  - Clarify that uv add --no-sync records the dependency and the later setup invocation installs the package.
+- Enforce recipe prerequisites and dependency groups
+  [`8909370`](https://github.com/acgetchell/research-repo-tools/commit/89093702275c77f2f430acf59f6b2d9e0be9d13b)
+
+  - Check for a working POSIX shell before installing tools and explain the Git for Windows PATH requirement.
+  - Select the dev dependency group explicitly in consumer recipes when default groups are disabled.
+  - Shorten native CI setup paths to avoid Windows linker path limits.
+  - Add just coverage for branch and Python subprocess coverage.
+  - Upload Linux coverage through a reusable Codecov workflow using OIDC, with advisory statuses and retained reports.
+  - Avoid duplicate package checks for branch pushes with open PRs.
 
 ### Maintenance
 
@@ -86,4 +134,4 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Document supported CLI and Python interfaces, consumer just recipes, and publisher setup.
   - Generate the initial 0.1.0 changelog from committed history.
 
-[Unreleased]: https://github.com/acgetchell/research-repo-tools/commits/HEAD
+[0.1.0]: https://github.com/acgetchell/research-repo-tools/tree/v0.1.0
