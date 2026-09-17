@@ -13,10 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 # Tera template for each release section.
 #
-# Release sections are generated from commit ranges. Angle brackets in commit
-# text are escaped so Rust generics like Foo<T> do not render as HTML tags on
-# GitHub. Breaking footers are separate from commit.body; render their full
-# descriptions in the release summary before grouping ordinary entries.
+# Release sections are generated from commit ranges. The normalizer escapes
+# prose angle brackets after protecting Markdown code, so Rust generics remain
+# literal inside code spans and fences. Breaking footers are separate from
+# commit.body; render their full descriptions before grouping ordinary entries.
 body = """
 {% if version -%}
     ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
@@ -28,9 +28,9 @@ body = """
     ### ⚠️ Breaking Changes
     {% for commit in breaking_commits %}
         {% if commit.breaking_description and commit.breaking_description != commit.message %}
-            - {{ commit.breaking_description | trim | replace(from="<", to="&lt;") | replace(from=">", to="&gt;") | indent(prefix="  ", first=false) }}
+            - {{ commit.breaking_description | trim | indent(prefix="  ", first=false) }}
         {% else %}
-            - {{ commit.message | split(pat="\n") | first | upper_first | trim | replace(from="<", to="&lt;") | replace(from=">", to="&gt;") }}
+            - {{ commit.message | split(pat="\n") | first | upper_first | trim }}
         {% endif %}
     {% endfor %}
 {% endif %}
@@ -38,13 +38,13 @@ body = """
     ### {{ group | upper_first }}
     {% for commit in commits %}
         - {% if commit.breaking %}[**breaking**] {% endif %}\
-            {{ commit.message | split(pat="\n") | first | upper_first | trim | replace(from="<", to="&lt;") | replace(from=">", to="&gt;") }} \
+            {{ commit.message | split(pat="\n") | first | upper_first | trim }} \
             [`{{ commit.id | truncate(length=7, end="") }}`]\
             (https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}\
             /commit/{{ commit.id }})
         {%- if commit.body and group != "Dependencies" %}
 
-        {{ commit.body | replace(from="<", to="&lt;") | replace(from=">", to="&gt;") | indent(prefix="  ", first=true) }}
+        {{ commit.body | indent(prefix="  ", first=true) }}
         {%- endif %}
     {%- endfor %}
 {% endfor %}\n
@@ -90,7 +90,8 @@ conventional_commits = true
 filter_unconventional = false
 filter_commits = false
 protect_breaking_commits = true
-tag_pattern = "v[0-9]*"
+# Expanded from the package's shared SemVer grammar when this template is read.
+tag_pattern = '\Av__SEMVER_PATTERN__\z'
 topo_order = false
 sort_commits = "oldest"
 
@@ -111,7 +112,7 @@ commit_parsers = [
 
     # Dependency bumps: keep all bump commits so archived release history
     # preserves CI/action/tooling dependency updates as well as Rust crates.
-    { message = "^chore\\(deps\\): bump ", group = "Dependencies" },
+    { message = "^chore\\(deps(?:-[^)]+)?\\)!?: bump ", group = "Dependencies" },
     { message = "(?i)^bump\\s+(deps?\\b|dependencies\\b|[A-Za-z0-9_.-]+/[A-Za-z0-9_./-]+|[A-Za-z0-9_.-]+\\s+from\\s+)", group = "Dependencies" },
 
     # Conventional commit types

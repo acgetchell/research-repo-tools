@@ -1,8 +1,37 @@
-# Shared changelog contract
+# Generating and maintaining changelogs
 
 The public commands always operate on root-level `CHANGELOG.md`. Completed
 minor series go to `docs/archives/changelog/MAJOR.MINOR.md`. There is no
 repository-specific implementation or filename setting.
+
+## Commands
+
+The maintainer justfile and packaged consumer template expose the same changelog
+recipes. `just changelog` generates history, normalizes it, and rotates completed
+minor series in one operation. It keeps Unreleased and the newest minor series
+in the root file and adds links to the archives. Before a second minor series
+exists, there is nothing to archive.
+Run `just help` for the complete command list and arguments.
+
+| Recipe | Behavior |
+| --- | --- |
+| `just changelog` | Generate, normalize, and archive |
+| `just changelog-archive` | Archive existing notes without regenerating Git history |
+| `just changelog-preview` | Validate all candidate files and print the resulting root changelog without writing |
+| `just changelog-release TAG DATE` | Generate and archive a prospective release with an explicit ISO date |
+| `just changelog-unreleased TAG DATE` | Alias for `changelog-release` |
+| `just release-notes TAG` | Print notes from the root file or an archive |
+| `just tag TAG` | Forward to `tag-release`; create a local annotated tag |
+| `just tag-force TAG` | Explicitly replace an existing local tag |
+| `just tag-release TAG` | Create a local annotated tag from validated release notes |
+
+For a prospective-release preview, use
+`just changelog-preview --tag v1.2.0 --date YYYY-MM-DD`.
+Both release-generation names require the chosen date; they do not silently use
+the current date or update other release metadata. Generation never creates tags.
+Standalone `research-repo-tools changelog generate` runs the same complete workflow.
+
+## Generation and normalization
 
 The installed templates comprise a git-cliff configuration, a starter
 changelog, small just wrappers, consumer TOML, and optional rumdl rules.
@@ -19,9 +48,18 @@ commit history. Once a release exists, it links to the comparison with that tag.
 The packaged template preserves complete breaking-change footer descriptions,
 including compiler requirements, multiline migration instructions, and dependency
 breaks. Commits marked only with `!` use their subject as the fallback summary.
+Across summaries and ordinary entries, angle brackets in prose are escaped while
+inline code spans and fenced code retain their literal contents. Markdown links,
+autolinks, and blockquote markers remain intact.
 Postprocessing retains those descriptions and independently adds a missing
 Merged Pull Requests summary. Existing summary text is not used as a source of
 new PR entries.
+
+Release tags must match the complete `vMAJOR.MINOR.PATCH` SemVer form, including
+valid optional prerelease and build identifiers. Unrelated or malformed tags do
+not delimit releases. Dependency bumps with `chore(deps)` or `chore(deps-*)`
+scopes share the Dependencies category; breaking migration instructions remain
+in the breaking-change summary.
 
 Normalization uses UTF-8 and LF, one final newline, consistent list markers,
 160-column prose reflow, intact Markdown links/code spans, and level-four
@@ -39,9 +77,10 @@ link, nesting, and idempotence assertions with the common heading syntax.
 It avoids keeping separate formatter implementations for individual consumers.
 
 `changelog.formatter` optionally names the consumer's rumdl configuration.
-The candidate must pass both the fixing invocation and a final check before
-replacement. Formatter failure or unexpectedly empty output preserves the
-original. The base package does not require rumdl for pure normalization.
+Every generated root and archive candidate must pass both the fixing invocation
+and a final check before any replacement. Formatter failure or unexpectedly empty
+output preserves the originals. The base package does not require rumdl for pure
+normalization.
 
 Shared heading parsing rejects malformed versions/dates, duplicate release headings,
 out-of-order versions, and misplaced Unreleased sections. SemVer prerelease
@@ -52,7 +91,11 @@ Body and archive-introduction reference definitions are retained with their text
 Cross-volume paths that cannot form portable links
 fail before publication rather than embedding developer-specific absolute paths.
 
-Archive publication stages every candidate and backup before replacing any
+## Archive publication
+
+Generation and standalone archiving share one planner. Dry-run generation checks
+archive conflicts and formatting without creating directories or changing files.
+Publication stages every candidate and backup before replacing any
 file. Caught failures trigger rollback; an incomplete rollback preserves recovery
 files and reports their locations and each failure. Multiple files are not
 crash-atomic: process termination or power loss still requires inspection.
@@ -61,6 +104,8 @@ Incremental archiving merges previously retained patches and keeps existing
 archive introductions and index links. Different content for an already
 retained release fails before publication. Relative Markdown links are rebased
 when notes move into the archive; fenced examples and inline code stay intact.
+
+## Release notes and tags
 
 `changelog notes TAG` finds the release in the root file or its conventional
 archive and emits only notes and their reference definitions. `changelog tag`

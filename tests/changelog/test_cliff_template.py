@@ -40,7 +40,7 @@ def render(tmp_path: Path, message: str) -> str:
         ),
         pytest.param(
             "fix: change result storage\n\nBREAKING CHANGE: Return `Result<T>`.\nUse `convert()` for old storage.\n\nKeep explicit conversions.",
-            "- Return `Result&lt;T&gt;`.\n  Use `convert()` for old storage.\n\n  Keep explicit conversions.",
+            "- Return `Result<T>`.\n  Use `convert()` for old storage.\n\n  Keep explicit conversions.",
             id="multiline-footer",
         ),
         pytest.param(
@@ -52,6 +52,26 @@ def render(tmp_path: Path, message: str) -> str:
             "chore(deps): bump toolkit\n\nBREAKING CHANGE: Require a newer runtime.",
             "- Require a newer runtime.",
             id="dependency-footer",
+        ),
+        pytest.param(
+            "refactor!: change generic API\n\nBREAKING CHANGE: Replace <Old> with ``Vector<T>`` and `Result<T, E>`.",
+            "- Replace &lt;Old&gt; with ``Vector<T>`` and `Result<T, E>`.",
+            id="code-spans",
+        ),
+        pytest.param(
+            "refactor!: replace <Old> with `Vector<T>`",
+            "- Replace &lt;Old&gt; with `Vector<T>`",
+            id="bang-only-code-span",
+        ),
+        pytest.param(
+            "refactor!: change generic API\n\nBREAKING CHANGE: Use this signature:\n\n```rust\nfn solve<T>() -> Result<T, Error>;\n```",
+            "- Use this signature:\n\n  ```rust\n  fn solve<T>() -> Result<T, Error>;\n  ```",
+            id="backtick-fenced-code",
+        ),
+        pytest.param(
+            "refactor!: change generic API\n\nBREAKING CHANGE: Use this signature:\n\n~~~~rust\nfn solve<T>() -> Result<T, Error>;\n~~~~",
+            "- Use this signature:\n\n  ~~~~rust\n  fn solve<T>() -> Result<T, Error>;\n  ~~~~",
+            id="tilde-fenced-code",
         ),
     ],
 )
@@ -70,6 +90,35 @@ def test_ordinary_commit_does_not_create_a_breaking_summary(tmp_path: Path) -> N
     result = render(tmp_path, "fix: preserve result storage")
     assert "### ⚠️ Breaking Changes" not in result
     assert "### Merged Pull Requests" in result
+
+
+@pytest.mark.parametrize("fence", ["```", "~~~~"])
+def test_ordinary_entries_preserve_rust_code_and_escape_prose(tmp_path: Path, fence: str) -> None:
+    result = render(
+        tmp_path,
+        "feat: return `Result<T>` instead of <Legacy>\n\n"
+        "Use ``Vec<T>``; keep literal `&lt;T&gt;`.\n\n"
+        f"{fence}rust\nfn value<T>() -> Result<T, Error>;\n{fence}",
+    )
+    assert "Return `Result<T>` instead of &lt;Legacy&gt;" in result
+    assert "Use ``Vec<T>``; keep literal `&lt;T&gt;`." in result
+    assert f"{fence}rust\n  fn value<T>() -> Result<T, Error>;\n  {fence}" in result
+    assert postprocess_text(result) == result
+
+
+@pytest.mark.parametrize("scope", ["deps", "deps-dev", "deps-ci"])
+def test_dependency_scopes_share_one_category(tmp_path: Path, scope: str) -> None:
+    result = render(tmp_path, f"chore({scope}): bump pytest from 9.0 to 9.1\n\nDependency release details.")
+    dependencies = result.split("### Dependencies\n\n", 1)[1].split("\n### ", 1)[0]
+    assert "Bump pytest from 9.0 to 9.1" in dependencies
+    assert "Dependency release details." not in result
+    assert "### Maintenance" not in result
+
+
+def test_breaking_dependency_scope_retains_migration_instructions(tmp_path: Path) -> None:
+    result = render(tmp_path, "chore(deps-dev)!: bump toolkit\n\nBREAKING CHANGE: Require compiler 2.0.")
+    assert "### Dependencies" in result
+    assert "### ⚠️ Breaking Changes\n\n- Require compiler 2.0." in result
 
 
 @pytest.mark.parametrize(

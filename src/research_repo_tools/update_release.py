@@ -11,6 +11,7 @@ from datetime import UTC, date, datetime
 from pathlib import Path
 
 from research_repo_tools.archive_changelog import replace_release_date
+from research_repo_tools.config import ReleasePolicy, load
 from research_repo_tools.process import ExecutableNotFoundError, get_safe_executable
 from research_repo_tools.release_discovery import _publish_texts, _published_releases, _tag_version, normalize_tag
 from research_repo_tools.release_metadata import (
@@ -26,6 +27,7 @@ from research_repo_tools.release_metadata import (
     package_version_reference,
     python_version_references,
     read_package_info,
+    workspace_member_manifests,
 )
 from research_repo_tools.toml_source import KEY_PATTERN
 
@@ -148,7 +150,7 @@ def _prepare_updates(root: Path, tag: str, previous: str, release_date: str) -> 
     return updates
 
 
-def _validate_prepared(updates: dict[Path, str], root: Path, previous: str, *, policy: dict | None = None) -> None:
+def _validate_prepared(updates: dict[Path, str], root: Path, previous: str, *, policy: ReleasePolicy | None = None) -> None:
     """Validate the complete proposed file set without replacing any repository file."""
     root = root.resolve()
     with tempfile.TemporaryDirectory(prefix="research-release-validation-") as directory:
@@ -168,13 +170,10 @@ def _validate_prepared(updates: dict[Path, str], root: Path, previous: str, *, p
 
         cargo = root / "Cargo.toml"
         if cargo.is_file():
-            manifest = tomllib.loads(_read_text(cargo))
-            for pattern in manifest.get("workspace", {}).get("members", []):
-                for member in root.glob(pattern):
-                    source = member / "Cargo.toml"
-                    destination = destination_for(source)
-                    destination.parent.mkdir(parents=True, exist_ok=True)
-                    destination.write_bytes(source.read_bytes())
+            for source in workspace_member_manifests(root):
+                destination = destination_for(source)
+                destination.parent.mkdir(parents=True, exist_ok=True)
+                destination.write_bytes(source.read_bytes())
         for path, text in updates.items():
             destination = destination_for(path)
             destination.parent.mkdir(parents=True, exist_ok=True)
@@ -197,7 +196,7 @@ def update_release_version(
     previous_tag: str | None = None,
     release_date: str | None = None,
     dry_run: bool = False,
-    policy: dict | None = None,
+    policy: ReleasePolicy | None = None,
 ) -> UpdateSummary:
     """Validate then atomically replace owned metadata; restore prior contents on failure."""
     root = root.resolve()
@@ -218,9 +217,7 @@ def update_release_version(
         raise ValueError(msg)
     updates = _prepare_updates(root, tag, previous, today)
     if policy is None:
-        from research_repo_tools.config import load
-
-        policy = load(root=root).section("release")
+        policy = load(root=root).release
     _validate_prepared(updates, root, previous, policy=policy)
     changed = tuple((path, updates[path]) for path in sorted(updates, key=lambda path: path.relative_to(root).as_posix()) if _read_text(path) != updates[path])
     if not dry_run:

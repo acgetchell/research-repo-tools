@@ -1,26 +1,75 @@
-"""Validated, checkout-independent TOML configuration."""
+"""Parse checkout-independent TOML into immutable, typed settings."""
 
 import tomllib
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from types import MappingProxyType
+from typing import Literal, TypeIs
 
 FIELDS = {
+    "toolchain": {"cargo"},
     "deps": {"pyproject", "justfile", "tools", "uv"},
     "semgrep": {"config", "fixtures", "namespace", "timeout", "cwd", "counts"},
     "release": {"date-policy", "final-changelog"},
     "changelog": {"formatter", "cliff-config", "owner", "repository"},
 }
-BOOLS = {"final-changelog"}
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
+class ToolchainSettings:
+    cargo: Mapping[str, str] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "cargo", MappingProxyType(dict(self.cargo)))
+
+
+@dataclass(frozen=True, slots=True)
+class DependencySettings:
+    pyproject: str = "pyproject.toml"
+    justfile: str = "justfile"
+    tools: Mapping[str, str] = field(default_factory=dict)
+    uv: str = "uv"
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "tools", MappingProxyType(dict(self.tools)))
+
+
+@dataclass(frozen=True, slots=True)
+class SemgrepSettings:
+    config: str | None = None
+    fixtures: str | None = None
+    namespace: str = ""
+    timeout: int = 300
+    cwd: str = "."
+    counts: Mapping[Path, Mapping[str, int]] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "counts", MappingProxyType({path: MappingProxyType(dict(counts)) for path, counts in self.counts.items()}))
+
+
+@dataclass(frozen=True, slots=True)
+class ReleasePolicy:
+    date_policy: Literal["today", "declared"] = "today"
+    final_changelog: bool = False
+
+
+@dataclass(frozen=True, slots=True)
+class ChangelogSettings:
+    formatter: str | None = None
+    cliff_config: str | None = None
+    owner: str | None = None
+    repository: str | None = None
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     root: Path
-    sections: dict[str, dict[str, Any]]
-
-    def section(self, name: str) -> dict[str, Any]:
-        return dict(self.sections.get(name, {}))
+    toolchain: ToolchainSettings = field(default_factory=ToolchainSettings)
+    deps: DependencySettings = field(default_factory=DependencySettings)
+    semgrep: SemgrepSettings = field(default_factory=SemgrepSettings)
+    release: ReleasePolicy = field(default_factory=ReleasePolicy)
+    changelog: ChangelogSettings = field(default_factory=ChangelogSettings)
 
     def path(self, value: str) -> Path:
         path = Path(value)
@@ -31,53 +80,116 @@ class Config:
         return str(self.path(value)) if "/" in value or "\\" in value else value
 
 
-def load(path: Path | None = None, root: Path | None = None) -> Config:
-    filename = path or (root or Path.cwd()) / "pyproject.toml"
-    data: dict[str, Any] = {}
-    if filename.is_file():
-        parsed = tomllib.loads(filename.read_text(encoding="utf-8"))
-        if filename.name == "pyproject.toml":
-            tool = parsed.get("tool", {})
-            if not isinstance(tool, dict):
-                raise ValueError(f"{filename}: tool must be a table")
-            data = tool.get("research-repo-tools", {})
-        else:
-            data = parsed
-    elif path is not None:
-        raise ValueError(f"configuration not found: {path}")
-    if not isinstance(data, dict):
-        raise ValueError("research-repo-tools configuration must be a table")
-    unknown = set(data) - {"schema", *FIELDS}
+def _is_table(value: object) -> TypeIs[dict[str, object]]:
+    return isinstance(value, dict) and all(isinstance(key, str) for key in value)
+
+
+def _table(value: object, context: str) -> dict[str, object]:
+    if not _is_table(value):
+        raise ValueError(f"{context} must be a table")
+    return value
+
+
+def _section(data: dict[str, object], name: str) -> dict[str, object]:
+    value = _table(data.get(name, {}), name)
+    if value.keys() - FIELDS[name]:
+        raise ValueError(f"invalid or unknown fields in {name} configuration")
+    return value
+
+
+def _string(value: object, context: str) -> str:
+    if not isinstance(value, str) or not value:
+        raise ValueError(f"invalid value for {context}: {value!r}; expected a nonempty string")
+    return value
+
+
+def _optional_string(section: dict[str, object], key: str, context: str) -> str | None:
+    return _string(section[key], f"{context}.{key}") if key in section else None
+
+
+def _strings(value: object, context: str) -> dict[str, str]:
+    return {_string(key, context): _string(item, f"{context}.{key}") for key, item in _table(value, context).items()}
+
+
+def _counts(value: object, root: Path) -> dict[Path, Mapping[str, int]]:
+    result: dict[Path, Mapping[str, int]] = {}
+    for raw_path, raw_counts in _table(value, "semgrep.counts").items():
+        path = (root / _string(raw_path, "semgrep.counts path")).resolve()
+        if path in result:
+            raise ValueError(f"duplicate semgrep.counts fixture path: {raw_path!r} resolves to {path}")
+        counts = _table(raw_counts, f"semgrep.counts.{raw_path}")
+        if not counts:
+            raise ValueError(f"semgrep.counts.{raw_path} must contain rule counts")
+        parsed: dict[str, int] = {}
+        for rule, count in counts.items():
+            rule = _string(rule, "semgrep.counts rule")
+            if type(count) is not int or count < 0:
+                raise ValueError(f"semgrep.counts.{raw_path}.{rule} must be a nonnegative integer")
+            parsed[rule] = count
+        result[path] = parsed
+    return result
+
+
+def parse(value: object, *, root: Path) -> Config:
+    """Reject invalid fields and ambiguous paths before publishing trusted settings."""
+    data = _table(value, "research-repo-tools configuration")
+    unknown = data.keys() - {"schema", *FIELDS}
     if unknown:
         raise ValueError(f"unknown configuration keys: {', '.join(sorted(unknown))}")
     if type(data.get("schema", 1)) is not int or data.get("schema", 1) != 1:
         raise ValueError("configuration schema must be integer 1")
-    sections: dict[str, dict[str, Any]] = {}
-    for name, allowed in FIELDS.items():
-        section = data.get(name, {})
-        if not isinstance(section, dict) or set(section) - allowed:
-            raise ValueError(f"invalid or unknown fields in {name} configuration")
-        for key, value in section.items():
-            if key in BOOLS:
-                valid = type(value) is bool
-            elif key == "timeout":
-                valid = type(value) is int and value > 0
-            elif key == "tools":
-                valid = isinstance(value, dict) and all(isinstance(k, str) and k and isinstance(v, str) and v for k, v in value.items())
-            elif key == "counts":
-                valid = isinstance(value, dict) and all(
-                    isinstance(path, str)
-                    and path
-                    and isinstance(counts, dict)
-                    and counts
-                    and all(isinstance(rule, str) and rule and type(count) is int and count >= 0 for rule, count in counts.items())
-                    for path, counts in value.items()
-                )
-            else:
-                valid = isinstance(value, str) and bool(value)
-            if not valid:
-                raise ValueError(f"invalid value for {name}.{key}: {value!r}")
-        if name == "release" and section.get("date-policy", "today") not in {"today", "declared"}:
-            raise ValueError("release.date-policy must be today or declared")
-        sections[name] = section
-    return Config((root or filename.parent).resolve(), sections)
+    root = root.resolve()
+    toolchain = _section(data, "toolchain")
+    deps = _section(data, "deps")
+    semgrep = _section(data, "semgrep")
+    release = _section(data, "release")
+    changelog = _section(data, "changelog")
+    timeout = semgrep.get("timeout", 300)
+    if type(timeout) is not int or timeout <= 0:
+        raise ValueError("semgrep.timeout must be a positive integer")
+    raw_policy = release.get("date-policy", "today")
+    if raw_policy == "today":
+        date_policy: Literal["today", "declared"] = "today"
+    elif raw_policy == "declared":
+        date_policy = "declared"
+    else:
+        raise ValueError("release.date-policy must be today or declared")
+    final = release.get("final-changelog", False)
+    if type(final) is not bool:
+        raise ValueError("release.final-changelog must be a boolean")
+    return Config(
+        root=root,
+        toolchain=ToolchainSettings(_strings(toolchain.get("cargo", {}), "toolchain.cargo")),
+        deps=DependencySettings(
+            pyproject=_string(deps.get("pyproject", "pyproject.toml"), "deps.pyproject"),
+            justfile=_string(deps.get("justfile", "justfile"), "deps.justfile"),
+            tools=_strings(deps.get("tools", {}), "deps.tools"),
+            uv=_string(deps.get("uv", "uv"), "deps.uv"),
+        ),
+        semgrep=SemgrepSettings(
+            config=_optional_string(semgrep, "config", "semgrep"),
+            fixtures=_optional_string(semgrep, "fixtures", "semgrep"),
+            namespace=_optional_string(semgrep, "namespace", "semgrep") or "",
+            timeout=timeout,
+            cwd=_string(semgrep.get("cwd", "."), "semgrep.cwd"),
+            counts=_counts(semgrep.get("counts", {}), root),
+        ),
+        release=ReleasePolicy(date_policy, final),
+        changelog=ChangelogSettings(
+            formatter=_optional_string(changelog, "formatter", "changelog"),
+            cliff_config=_optional_string(changelog, "cliff-config", "changelog"),
+            owner=_optional_string(changelog, "owner", "changelog"),
+            repository=_optional_string(changelog, "repository", "changelog"),
+        ),
+    )
+
+
+def load(path: Path | None = None, root: Path | None = None) -> Config:
+    filename = path or (root or Path.cwd()) / "pyproject.toml"
+    data: object = {}
+    if filename.is_file():
+        document = tomllib.loads(filename.read_text(encoding="utf-8"))
+        data = _table(document.get("tool", {}), f"{filename}: tool").get("research-repo-tools", {}) if filename.name == "pyproject.toml" else document
+    elif path is not None:
+        raise ValueError(f"configuration not found: {path}")
+    return parse(data, root=root or filename.parent)

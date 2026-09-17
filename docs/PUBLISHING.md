@@ -10,6 +10,12 @@ development only. A public GitHub repository is not required by PyPI.
 The workflow and instructions are present; PyPI ownership, the Trusted Publisher,
 the protected GitHub environment, and the first upload still need verification
 or setup. Building or merging this preparation does not publish a package.
+Issue [#2](https://github.com/acgetchell/research-repo-tools/issues/2) now blocks
+the first release: complete the [toolchain setup](INSTALLING.md) implementation,
+native installer validation, and isolated consumer-fixture validation before
+tagging. The final PyPI installation check must also exercise the setup command
+in a clean fixture. Migration of existing consumer repositories is separate work
+after publication and does not block the release.
 
 ## Release workflow
 
@@ -27,8 +33,11 @@ or setup. Building or merging this preparation does not publish a package.
    immutable artifact by its ID from that workflow run and publish it with OIDC
    credentials and attestations. The publishing job does not rebuild the package.
 
-Only the publishing job receives `id-token: write`; it has no source checkout or
-package installation step. No PyPI API token is stored in GitHub. The standalone
+The publishing job receives `id-token: write`; it has no source checkout or
+package installation step. The reusable validation call also permits OIDC for its
+isolated Codecov upload job, which is skipped for release tags. Test and build
+jobs retain read-only permissions, and the validation workflow has no `pypi`
+environment access. No PyPI API token is stored in GitHub. The standalone
 publishing job follows the [PyPA action's Trusted Publishing guidance](https://github.com/pypa/gh-action-pypi-publish#trusted-publishing).
 The reusable CI workflow itself has no publishing credentials.
 
@@ -43,7 +52,7 @@ required CI and is merged. Repository files describe the intended configuration;
 they do not apply it automatically.
 
 1. Reconcile the selected-Actions policy using
-   [GitHub setup](github.md#apply-or-reconcile-github-settings). The desired
+   [GitHub setup](CONFIGURING_GITHUB.md#apply-or-reconcile-github-settings). The desired
    `allowed-actions.json` adds `pypa/gh-action-pypi-publish@*`; full SHA pinning
    remains required. The workflow uses GitHub's exact-commit
    [self-repository syntax](https://github.blog/changelog/2026-07-30-reference-same-repository-actions-with-self-repository-syntax/)
@@ -82,12 +91,18 @@ After committing substantive changes, generate release notes from their history
 using this package's implementation and git-cliff:
 
 ```sh
-uv sync --locked
-uv run --locked research-repo-tools changelog generate --tag v0.1.0 --date YYYY-MM-DD --dry-run
-uv run --locked research-repo-tools changelog generate --tag v0.1.0 --date YYYY-MM-DD
-uv run --locked just release-check v0.1.0
-uv run --locked just ci
-uv run --locked --group audit just audit
+just sync
+```
+
+After [contributor initialization](../CONTRIBUTING.md#development-environment),
+run the release recipes:
+
+```sh
+just changelog-preview --tag v0.1.0 --date YYYY-MM-DD
+just changelog-release v0.1.0 YYYY-MM-DD
+just release-check v0.1.0
+just ci
+just audit
 ```
 
 Replace `YYYY-MM-DD` with the intended UTC release date. Review and commit the
@@ -102,7 +117,7 @@ clean-consumer check below also succeed. Git operations are performed by the
 maintainer under [AGENTS.md](../AGENTS.md).
 
 For later releases, first run the shared `release update X.Y.Z` command with the
-actual previous release and chosen date; see [Shared release behavior](release.md).
+actual previous release and chosen date; see [Shared release behavior](UPDATING_RELEASE_METADATA.md).
 The first release needs no invented previous version.
 
 ## Publish after review and account setup
@@ -111,7 +126,7 @@ Use a clean checkout of the reviewed `main` commit with final generated notes.
 The maintainer previews the shared tag operation, then creates and pushes it:
 
 ```sh
-uv run --locked just release-check v0.1.0
+just release-check v0.1.0
 uv run --locked research-repo-tools changelog tag v0.1.0 --dry-run
 uv run --locked research-repo-tools changelog tag v0.1.0
 git push origin v0.1.0
@@ -130,9 +145,10 @@ does not skip existing files. A content correction needs a new version. Never
 move a published release tag. See [PyPI's Trusted Publishing documentation](https://docs.pypi.org/trusted-publishers/using-a-publisher/)
 for publisher-identity failures.
 
-## Verify installation and adopt in consumers
+## Verify the published package
 
-After PyPI lists both distributions, run from a new directory outside this checkout:
+After PyPI lists both distributions, run in a new disposable directory outside
+this checkout:
 
 ```sh
 uv init --bare --python 3.14
@@ -151,10 +167,19 @@ PY
 
 Confirm `uv.lock` resolves the package from PyPI and the commands work without a
 source checkout, local wheel, or editable/path source. Also inspect the release's
-file hashes and attestations on PyPI. Record the tag/run, published version, and
-clean-install result in issue #1 before closing it.
+file hashes and attestations on PyPI. In that disposable fixture, follow the
+[toolchain guide](INSTALLING.md) to configure the tooling group and run setup from the
+installed package. Record the
+tag/run, published version, and clean-install/setup results in issue #1 before
+closing it.
 
-In an existing consumer, use `uv add --dev "research-repo-tools==0.1.0"`, remove
+## Adopt after publication
+
+Publication is required before consumer adoption. Track each migration in its
+consumer repository; these migrations are not release acceptance criteria.
+
+In an existing consumer, use `uv add --group tooling "research-repo-tools==0.1.0"`, include
+that group from `dev`, remove
 any temporary local source override, and commit its manifest and lockfile after
 validation. Thin just recipes or Python wrappers call the [supported API](api.md).
 For upgrades, choose the next published version explicitly with the same command,

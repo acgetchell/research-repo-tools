@@ -10,7 +10,7 @@ import yaml
 
 from research_repo_tools.config import Config
 from research_repo_tools.process import run_safe_command
-from research_repo_tools.semgrep_findings import _actual_findings, _expected_findings, _finding_mismatches, parse_results
+from research_repo_tools.semgrep_findings import _expected_findings, _finding_mismatches, parse_results
 
 ANNOTATION = re.compile(r"(?<![A-Za-z0-9_])(?P<kind>ruleid|ok):\s*(?P<ids>[A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*)")
 
@@ -79,17 +79,20 @@ def build_fixture_config(path: Path, configuration: Path, *, namespace: str = ""
 
 
 def check(config: Config) -> int:
-    section = config.section("semgrep")
-    if not {"config", "fixtures"} <= section.keys():
+    section = config.semgrep
+    if section.config is None or section.fixtures is None:
         raise ValueError("semgrep.config and semgrep.fixtures must be explicit")
-    source = rules(config.path(section["config"]))
-    paths = fixtures(config.path(section["fixtures"]))
-    cwd = config.path(section.get("cwd", "."))
-    counts = {config.path(path).resolve(): values for path, values in section.get("counts", {}).items()}
+    source = rules(config.path(section.config))
+    paths = fixtures(config.path(section.fixtures))
+    cwd = config.path(section.cwd)
+    counts = section.counts
     missing_paths = counts.keys() - {path.resolve() for path in paths}
     if missing_paths:
         raise ValueError(f"Semgrep count expectations reference missing fixtures: {', '.join(map(str, sorted(missing_paths)))}")
-    namespace = section.get("namespace", "")
+    namespace = section.namespace
+    selected_rules = {name for name in source if name.startswith(namespace)}
+    if not selected_rules:
+        raise ValueError(f"Semgrep configuration has no rules in namespace {namespace!r}")
     positives: set[str] = set()
     selected: list[tuple[Path, list[str], bool]] = []
     for path in paths:
@@ -107,7 +110,7 @@ def check(config: Config) -> int:
             if names:
                 selected.append((path, names, True))
                 positives.update(name for name in names if expected_counts[name] > 0)
-    missing = {name for name in source if name.startswith(namespace)} - positives
+    missing = selected_rules - positives
     if missing:
         raise ValueError(f"Semgrep rules without positive fixtures: {', '.join(sorted(missing))}")
     with tempfile.TemporaryDirectory(prefix="research-repo-semgrep-") as directory:
@@ -156,17 +159,22 @@ def check(config: Config) -> int:
                 ],
                 cwd=cwd,
                 env=env,
-                timeout=section.get("timeout", 300),
+                timeout=section.timeout,
             )
             try:
                 parsed = parse_results(result.stdout)
             except ValueError as error:
                 raise ValueError(f"{path}: {error}") from error
-            actual = _actual_findings(parsed)
-            if actual is None:
-                raise ValueError(f"{path}: malformed Semgrep findings")
+            actual = parsed.results
+            for finding in parsed.results:
+                reported_path = finding.path
+                if (cwd / reported_path).resolve() != path.resolve():
+                    raise ValueError(f"{path}: Semgrep finding path does not identify the selected fixture: {reported_path!r}")
+            unexpected = {finding.check_id for finding in actual} - set(names)
+            if unexpected:
+                raise ValueError(f"{path}: unexpected Semgrep rules: {', '.join(sorted(unexpected))}")
             if count_mode:
-                found = Counter(name for name, _start, _end in actual)
+                found = Counter(finding.check_id for finding in actual)
                 mismatches = tuple(
                     f"{name}: expected {counts[path.resolve()][name]} findings, got {found[name]}"
                     for name in names
@@ -185,6 +193,6 @@ def check(config: Config) -> int:
                     ["scan", "--disable-version-check", "--metrics", "off", "--test", "--strict", "--config", str(generated), target],
                     cwd=cwd,
                     env=env,
-                    timeout=section.get("timeout", 300),
+                    timeout=section.timeout,
                 )
     return 0

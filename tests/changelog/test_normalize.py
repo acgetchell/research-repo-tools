@@ -74,6 +74,40 @@ def _merged_pr_summary_block(text: str) -> str:
     return text[start:] if end == -1 else text[start:end]
 
 
+@pytest.mark.parametrize("fence", ["```", "~~~~"])
+def test_prose_escaping_preserves_code_across_section_boundaries(fence: str) -> None:
+    code = f"{fence}rust\nfn solve<T>() -> Result<T, Error>;\n### Changed\n{fence}"
+    content = (
+        "# Changelog\n\n## [Unreleased]\n\n### ⚠️ Breaking Changes\n\n"
+        "- Replace <Old> with ``Vector<T>`` and `Result<T, E>`; retain &lt;Literal&gt;.\n\n"
+        f"{code}\n\n- Adopt <New>.\n\n### Changed\n\n- Preserve existing <Other> prose.\n"
+    )
+    result = postprocess_text(content)
+    assert "- Replace &lt;Old&gt; with ``Vector<T>`` and `Result<T, E>`; retain &lt;Literal&gt;." in result
+    assert code in result
+    assert "- Adopt &lt;New&gt;." in result
+    assert "- Preserve existing &lt;Other&gt; prose." in result
+    assert postprocess_text(result) == result
+
+
+def test_prose_escaping_preserves_markdown_syntax_and_literal_code() -> None:
+    source = (
+        "# Changelog\n\n## [Unreleased]\n\n### Added\n\n"
+        "- Replace <Old> with `Result<T>`; keep `&lt;T&gt;`.\n\n"
+        "  > Read <https://example.com/guide> or <dev@example.com>.\n\n"
+        "  [<Guide>](<docs/a b.md>) and [reference].\n\n"
+        "  Escape \\<Literal\\>.\n\n"
+        "[reference]: <docs/a b.md>\n"
+    )
+    result = postprocess_text(source)
+    assert "- Replace &lt;Old&gt; with `Result<T>`; keep `&lt;T&gt;`." in result
+    assert "> Read <https://example.com/guide> or <dev@example.com>." in result
+    assert "[&lt;Guide&gt;](<docs/a b.md>)" in result
+    assert "Escape \\<Literal\\>." in result
+    assert "[reference]: <docs/a b.md>" in result
+    assert postprocess_text(result) == result
+
+
 class TestStripTrailingBlanks:
     def test_strips_trailing_blank_lines(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"

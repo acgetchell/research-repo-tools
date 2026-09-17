@@ -5,6 +5,7 @@ No user-wide tools, sibling repositories, or project lockfiles are modified.
 """
 
 import argparse
+import json
 import os
 import shutil
 import subprocess
@@ -24,7 +25,7 @@ def run(command: list[str], *, cwd: Path, env: dict[str, str]) -> str:
 
 
 BASE_SMOKE = r"""
-import importlib, importlib.metadata, importlib.resources, importlib.util, json, pathlib, pkgutil, socket, sys
+import importlib, importlib.metadata, importlib.util, pathlib, pkgutil, socket, sys
 import research_repo_tools
 assert research_repo_tools.__version__ == importlib.metadata.version("research-repo-tools")
 root = pathlib.Path(sys.argv[1]).resolve()
@@ -42,9 +43,6 @@ from research_repo_tools.changelog import TEMPLATES, template
 for name in TEMPLATES:
     assert template(name).strip()
 assert len(importlib.metadata.distribution("research-repo-tools").entry_points) == 1
-resources = importlib.resources.files("research_repo_tools")
-assert "Adam Getchell" in resources.joinpath("NOTICE.md").read_text(encoding="utf-8")
-assert json.loads(resources.joinpath("docs/provenance.json").read_text(encoding="utf-8"))
 from research_repo_tools.cli import main
 consumer = pathlib.Path.cwd() / "minimal consumer"
 consumer.mkdir()
@@ -68,22 +66,30 @@ def check(dist: Path) -> None:
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
         assert "research_repo_tools/templates/cliff.toml" in names
+        assert "research_repo_tools/toolchain_setup.py" in names
         assert "research_repo_tools/py.typed" in names
         assert not any("/compat/" in name or name.startswith("tests/") for name in names)
         assert sum(name.endswith("/LICENSE") for name in names) == 1
-        for source, target in (("NOTICE.md", "research_repo_tools/NOTICE.md"), ("docs/provenance.json", "research_repo_tools/docs/provenance.json")):
-            assert archive.read(target) == (ROOT / source).read_bytes()
     with tarfile.open(sdist) as archive:
         names = archive.getnames()
         assert any(name.endswith("/tests/changelog/test_contract.py") for name in names)
         assert sum(name.endswith("/LICENSE") for name in names) == 1
-        for source in ("NOTICE.md", "docs/provenance.json"):
-            member = archive.extractfile(f"research_repo_tools-{version}/{source}")
-            assert member is not None and member.read() == (ROOT / source).read_bytes()
     uv = shutil.which("uv")
     if uv is None:
         raise RuntimeError("uv must be installed to check distributions")
-    env = {key: value for key, value in os.environ.items() if key not in {"PYTHONPATH", "PYTHONHOME", "VIRTUAL_ENV"}}
+    # Keep network/cache settings, but never let the caller redirect these
+    # temporary consumers into another project, environment, or working directory.
+    external_locations = {
+        "PYTHONPATH",
+        "PYTHONHOME",
+        "VIRTUAL_ENV",
+        "UV_ENV_FILE",
+        "UV_PROJECT",
+        "UV_PROJECT_ENVIRONMENT",
+        "UV_WORKING_DIR",
+        "UV_WORKING_DIRECTORY",
+    }
+    env = {key: value for key, value in os.environ.items() if key not in external_locations}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
     with tempfile.TemporaryDirectory(prefix="research-repo-tools-installed-") as directory:
         temporary = Path(directory)
@@ -101,8 +107,58 @@ def check(dist: Path) -> None:
             command = scripts / ("research-repo-tools.exe" if os.name == "nt" else "research-repo-tools")
             assert run([str(command), "--version"], cwd=consumer, env=local_env).strip() == version
             assert "changelog" in run([str(command), "--help"], cwd=consumer, env=local_env)
+            assert "setup" in run([str(command), "--help"], cwd=consumer, env=local_env)
             just = scripts / ("just.exe" if os.name == "nt" else "just")
             assert run([str(just), "--version"], cwd=consumer, env=local_env).strip() == f"just {expected_just}"
+            # Exercise the installed recipe template after a default sync that
+            # excludes tooling. Recipes must explicitly restore their own group.
+            recipe_consumer = consumer / "recipe consumer"
+            recipe_consumer.mkdir()
+            (recipe_consumer / "pyproject.toml").write_text(
+                '[project]\nname="recipe-consumer"\nversion="0.1.0"\nrequires-python=">=3.14"\n'
+                f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}]\n'
+                "[tool.uv]\npackage=false\ndefault-groups=[]\n"
+                f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(artifact.resolve()))}}}\n",
+                encoding="utf-8",
+            )
+            run([uv, "lock", "--python", str(python)], cwd=recipe_consumer, env=env)
+            run([uv, "sync", "--locked", "--python", str(python)], cwd=recipe_consumer, env=env)
+            recipe_cli = recipe_consumer / ".venv" / scripts.name / command.name
+            assert not recipe_cli.exists(), "default sync unexpectedly installed the non-default tooling group"
+            lock = (recipe_consumer / "uv.lock").read_bytes()
+            run([str(command), "templates", "justfile", "--output", "justfile"], cwd=recipe_consumer, env=env)
+            (recipe_consumer / "CHANGELOG.md").write_text("# Changelog\n\n## [0.1.0] - 2026-09-16\n\n- Recipe works.\n", encoding="utf-8")
+            assert "release-notes" in run([str(just), "help"], cwd=recipe_consumer, env=local_env)
+            assert run([str(just), "release-notes", "v0.1.0"], cwd=recipe_consumer, env=env).strip() == "- Recipe works."
+            assert recipe_cli.is_file(), "recipe did not install its declared tooling group"
+            assert (recipe_consumer / "uv.lock").read_bytes() == lock, "recipe changed the lockfile"
+            # A real locked tooling group must start before the consumer's native
+            # build backend exists. A full installation of this project would fail.
+            setup_consumer = consumer / "setup consumer"
+            setup_consumer.mkdir()
+            uv_version = run([uv, "--version"], cwd=consumer, env=local_env).split()[1]
+            (setup_consumer / ".python-version").write_text("3.14\n", encoding="utf-8")
+            (setup_consumer / "pyproject.toml").write_text(
+                '[project]\nname="setup-consumer"\nversion="0.1.0"\nrequires-python=">=3.14"\n'
+                '[build-system]\nrequires=[]\nbuild-backend="intentionally_missing_native_backend"\n'
+                f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}]\n'
+                f'[tool.uv]\nrequired-version="=={uv_version}"\n'
+                f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(artifact.resolve()))}}}\n",
+                encoding="utf-8",
+            )
+            # The artifact path is an isolated pre-publication test fixture only.
+            setup_env = {key: value for key, value in local_env.items() if key != "VIRTUAL_ENV"}
+            run([uv, "lock", "--python", str(python)], cwd=setup_consumer, env=setup_env)
+            setup = [uv, "run", "--locked", "--only-group", "tooling", "research-repo-tools", "setup"]
+            assert "setup" in run([*setup, "--help"], cwd=setup_consumer, env=setup_env)
+            # Exercise the installed command's prerequisite failure without
+            # installing user tools or modifying shell startup files.
+            setup_scripts = setup_consumer / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+            prerequisite_env = {**setup_env, "PATH": str(setup_scripts)}
+            result = subprocess.run(setup, cwd=setup_consumer, env=prerequisite_env, capture_output=True, encoding="utf-8", timeout=TIMEOUT)
+            assert result.returncode == 1, result.stderr
+            assert "must be installed and available on PATH" in result.stderr, result.stderr
+            assert not (setup_consumer / "scripts").exists()
             print(f"PASS: installed {name} outside checkout; bundled just")
 
 

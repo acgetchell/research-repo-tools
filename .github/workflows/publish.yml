@@ -25,7 +25,7 @@ jobs:
         run: git --no-pager merge-base --is-ancestor "$GITHUB_SHA" origin/main
       - uses: astral-sh/setup-uv@20cfd1bf945f4377ade1205e4dbc17946fc9a30d # v10.0.1
         with:
-          version: "0.12.10"
+          version-file: "pyproject.toml"
           python-version: "3.14"
       - name: Check tag, metadata, and generated release notes
         env:
@@ -36,6 +36,10 @@ jobs:
 
   validate:
     needs: preflight
+    # The reusable workflow declares an OIDC upload job, skipped for release tags.
+    permissions:
+      contents: read
+      id-token: write
     uses: $/.github/workflows/ci.yml
 
   publish:

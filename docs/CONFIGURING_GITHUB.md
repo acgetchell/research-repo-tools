@@ -1,9 +1,9 @@
-# GitHub setup
+# Configuring GitHub
 
 Source and issues live at
 [acgetchell/research-repo-tools](https://github.com/acgetchell/research-repo-tools).
 Consumers will install released packages from PyPI. Local wheels are for pilot
-evaluation and installation checks; see [publishing](publishing.md).
+evaluation and installation checks; see [publishing](PUBLISHING.md).
 
 ## Repository controls
 
@@ -18,8 +18,8 @@ The baseline follows Delaunay and la-stack, adapted to this Python package:
   CodeRabbit status. The initial CodeRabbit rule uses its status name, matching
   MCMC; GitHub rejects its App binding until the App has repository access.
 - Read-only default workflow tokens; write permissions are limited to specific
-  security-upload and Dependabot jobs, plus OIDC identity in the PyPI publishing
-  job. Actions cannot approve pull requests.
+  security-upload and Dependabot jobs, plus OIDC identity in the Codecov upload
+  and PyPI publishing jobs. Actions cannot approve pull requests.
 - Selected Actions only, with full commit SHA pinning required. Dependabot updates
   GitHub Actions and the uv lockfile weekly, with separate security-update groups.
 - Dependabot alerts/security updates, secret scanning, push protection, and private
@@ -68,6 +68,29 @@ Required check names must remain synchronized with workflow job names. Verify
 native check results on the first PR; local validation does not establish that
 the hosted services are connected or passing.
 
+## Codecov
+
+The Linux package check collects Python branch and subprocess coverage with
+`just coverage`; macOS and Windows use `just test`. CI calls the reusable
+`.github/workflows/codecov.yml` upload workflow, which has no independent push or
+pull-request trigger and does not rerun tests. It uses the SHA-pinned Codecov
+action and GitHub OIDC, so no `CODECOV_TOKEN` secret is needed. Forks use the action's public
+tokenless support; Dependabot uses a prefixed unprotected branch for tokenless
+uploads because its GitHub token cannot request OIDC credentials.
+
+Enable `research-repo-tools` in the existing
+[Codecov account](https://app.codecov.io/gh/acgetchell/research-repo-tools), and
+ensure the Codecov GitHub App has access to this repository for PR checks. The
+selected-Actions allowlist includes `codecov/codecov-action@*`; full SHA pinning
+remains required. Apply the allowlist command above when reconciling settings.
+
+The checked-in `.codecov.yml` starts with advisory project and patch statuses and
+disables bot comments. Coverage is visible without becoming a new merge gate
+before the first `main` baseline exists. Revisit thresholds after reviewing that
+baseline. The upload job reports upload failures, while coverage thresholds are
+not added to the branch ruleset. Reports remain available as Actions artifacts
+even when the service cannot accept an upload.
+
 ## CodeRabbit and Dependabot
 
 ### App access and review credentials
@@ -107,7 +130,7 @@ maintainer performs Git mutations under [AGENTS.md](../AGENTS.md).
 The desired Actions allowlist includes `pypa/gh-action-pypi-publish@*` for the
 tagged-release workflow; apply that payload before the first release tag. The
 `pypi` environment protections and PyPI Trusted Publisher are separate account
-settings. Follow [Publishing to PyPI](publishing.md) to configure them and verify
+settings. Follow [Publishing to PyPI](PUBLISHING.md) to configure them and verify
 the first release. Committing workflow YAML does not configure those accounts
 or publish distributions.
 

@@ -1,8 +1,10 @@
 """Independent common contracts, including real Git mutations in disposable repos."""
 
+import re
 import shutil
 import subprocess
 import tomllib
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
@@ -13,7 +15,25 @@ from research_repo_tools.process import run_git_command
 
 
 def settings(root: Path, **changes: object) -> config.Config:
-    return config.Config(root, {"changelog": {"owner": "example", "repository": "research", **changes}})
+    return config.parse({"changelog": {"owner": "example", "repository": "research", **changes}}, root=root)
+
+
+@pytest.mark.parametrize("candidate", ["# Changelog\n", "## [9.0.0] - 2026-09-07\n", "## [1.2.3] - 2025-09-07\n"])
+def test_normalize_rejects_changed_release_identity_before_publication(tmp_path, monkeypatch, capsys, candidate):
+    (tmp_path / "pyproject.toml").write_text('[tool.research-repo-tools.changelog]\nformatter="rumdl.toml"\n')
+    (tmp_path / "rumdl.toml").write_text("[global]\n")
+    path = tmp_path / "CHANGELOG.md"
+    original = b"# Changelog\r\n\r\n## [1.2.3] - 2026-09-07\r\n\r\n- Retained notes.\r\n"
+    path.write_bytes(original)
+    before = {item.name: item.read_bytes() for item in tmp_path.iterdir()}
+    monkeypatch.setattr(
+        postprocess_changelog,
+        "run_safe_command",
+        lambda _command, args, **_kwargs: subprocess.CompletedProcess([], 0, candidate if "--fix" in args else "", ""),
+    )
+    assert cli.main(["--root", str(tmp_path), "changelog", "normalize"]) == 1
+    assert "release headings" in capsys.readouterr().err
+    assert {item.name: item.read_bytes() for item in tmp_path.iterdir()} == before
 
 
 def test_templates_are_common_valid_package_resources(tmp_path: Path) -> None:
@@ -35,6 +55,35 @@ def test_templates_are_common_valid_package_resources(tmp_path: Path) -> None:
 def test_template_rejects_interpolation_and_path_syntax(component: str) -> None:
     with pytest.raises(ValueError):
         changelog.template("cliff.toml", owner=component, repository="repo")
+
+
+@pytest.mark.parametrize(
+    "tag,accepted",
+    [(tag, True) for tag in ("v0.0.0", "v1.2.3", "v1.2.3-rc.1+build.007", "v1.2.3-0", "v1.2.3-01a", "v1.2.3+01")]
+    + [
+        (tag, False)
+        for tag in (
+            "preview",
+            "dev",
+            "v",
+            "v1",
+            "v1.2",
+            "v01.2.3",
+            "1.2.3",
+            "release-v1.2.3",
+            "v1.2.3junk",
+            "v1.2.3-01",
+            "v1.2.3-rc..1",
+            "v1.2.3+build..1",
+            "v1.2.3\n",
+            "v1.2.3-junk!",
+            "v1.2.3-β",
+        )
+    ],
+)
+def test_template_selects_only_complete_semver_tags(tag: str, accepted: bool) -> None:
+    pattern = tomllib.loads(changelog.template("cliff.toml"))["git"]["tag_pattern"]
+    assert (re.search(pattern, tag) is not None) is accepted
 
 
 def test_changelog_filename_is_a_shared_convention(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
@@ -203,7 +252,7 @@ def test_generate_real_git_history_with_packaged_template(git_consumer: Path) ->
 
 def test_tag_preserves_utf8_notes_and_force_replaces_atomically(git_consumer: Path) -> None:
     cfg = settings(git_consumer)
-    cfg.sections["release"] = {"date-policy": "declared"}
+    cfg = replace(cfg, release=config.ReleasePolicy(date_policy="declared"))
     (git_consumer / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.0] - 2026-09-07\n\n- Preserve β → γ.\n")
     preview = changelog.tag(cfg, "v1.2.0", dry_run=True)
     assert run_git_command(["tag", "--list"], cwd=git_consumer).stdout == ""

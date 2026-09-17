@@ -842,7 +842,7 @@ class TestTagReleaseArchiveFallback:
         archive_dir = tmp_path / "docs" / "archives" / "changelog"
         archive_dir.mkdir(parents=True)
         (archive_dir / "0.6.md").write_text("# Changelog - 0.6.x\n\n" + _V062 + _V061, encoding="utf-8")
-        body, source, _ = notes(Config(changelog.parent, {}), "v0.6.2")
+        body, source, _ = notes(Config(changelog.parent), "v0.6.2")
         assert "Bump dep in 0.6.2" in body
         assert source == archive_dir / "0.6.md"
 
@@ -850,7 +850,7 @@ class TestTagReleaseArchiveFallback:
         """Release notes return the root changelog as source when found there."""
         changelog = tmp_path / "CHANGELOG.md"
         changelog.write_text(_PREAMBLE + _V072, encoding="utf-8")
-        body, source, _ = notes(Config(changelog.parent, {}), "v0.7.2")
+        body, source, _ = notes(Config(changelog.parent), "v0.7.2")
         assert "Bug fix in 0.7.2" in body
         assert source == changelog
 
@@ -861,7 +861,7 @@ class TestTagReleaseArchiveFallback:
         archive_dir = tmp_path / "docs" / "archives" / "changelog"
         archive_dir.mkdir(parents=True)
         (archive_dir / "0.6.md").write_text("# Changelog - 0.6.x\n\n" + _V062, encoding="utf-8")
-        anchor = _heading_to_anchor(notes(Config(changelog.parent, {}), "v0.6.2")[2])
+        anchor = _heading_to_anchor(notes(Config(changelog.parent), "v0.6.2")[2])
         assert "062" in anchor
 
 

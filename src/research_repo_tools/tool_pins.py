@@ -38,6 +38,8 @@ def parse_installed_packages(output: str) -> dict[str, str]:
 
 
 def parse_tool_version(output: str, tool: str) -> str:
+    if re.match(rf"^{re.escape(tool)}[ \t]+{STABLE.pattern}(?=\s|$)", output.strip()) is None:
+        raise ValueError(f"expected {tool} version output starting with '{tool} X.Y.Z'")
     versions = [match["version"] for match in TOOL_VERSION.finditer(output)]
     if len(versions) != 1:
         raise ValueError(f"expected exactly one {tool} version, found {len(versions)}")

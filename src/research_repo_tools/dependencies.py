@@ -1,15 +1,18 @@
 """Advance exact Python development-tool pins with uv's resolver."""
 
 import argparse
+import json
 import re
 import subprocess
 import sys
+import tempfile
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
 from packaging.requirements import InvalidRequirement, Requirement
+from packaging.specifiers import SpecifierSet
 from packaging.version import InvalidVersion, Version
 
 from research_repo_tools.files import preserve_files
@@ -18,11 +21,10 @@ from research_repo_tools.process import ExecutableNotFoundError, format_exceptio
 RESOLVED_REQUIREMENT = re.compile(
     r"^(?P<name>[A-Za-z0-9][A-Za-z0-9._-]*)==(?P<version>[^;\s]+)(?:\s*;\s*.+)?$",
 )
-PYTHON_FLOOR = re.compile(r"^>=(?P<version>[0-9]+\.[0-9]+)$")
 
 # Dependency resolution may involve network access, but neither phase may block
 # the release/update workflow indefinitely.
-UV_PIP_COMPILE_TIMEOUT_SECONDS = 300
+UV_RESOLVE_TIMEOUT_SECONDS = 300
 UV_ADD_TIMEOUT_SECONDS = 300
 
 
@@ -48,21 +50,21 @@ def _required_table(data: dict[str, object], name: str) -> dict[str, object]:
     return cast("dict[str, object]", table)
 
 
-def _python_floor(project: dict[str, object]) -> str:
-    """Return the repository's single supported Python lower bound."""
-    requires_python = project.get("requires-python")
+def _python_constraints(project: dict[str, object]) -> SpecifierSet:
+    """Parse the same Python version specifiers accepted by toolchain setup."""
+    requires_python = project.get("requires-python", ">=3.14")
     if not isinstance(requires_python, str):
         msg = "project.requires-python must be a string"
         raise TypeError(msg)
-    python_match = PYTHON_FLOOR.fullmatch(requires_python)
-    if python_match is None:
-        msg = f"expected project.requires-python to be a single lower bound, found: {requires_python}"
-        raise ValueError(msg)
-    return cast("str", python_match.group("version"))
+    constraints = SpecifierSet(requires_python)
+    if constraints.is_unsatisfiable():
+        raise ValueError(f"project.requires-python has no matching versions: {requires_python}")
+    return constraints
 
 
 def _dev_pins(groups: dict[str, object]) -> list[DevPin]:
     """Return exact simple pins while leaving every other dev requirement alone."""
+    _group_requirements(groups, "dev")  # Validate included groups before any resolver call.
     dev = groups.get("dev")
     if not isinstance(dev, list):
         msg = "dependency-groups.dev must be an array"
@@ -71,6 +73,8 @@ def _dev_pins(groups: dict[str, object]) -> list[DevPin]:
     pins: list[DevPin] = []
     normalized_names: set[str] = set()
     for raw_requirement in dev:
+        if isinstance(raw_requirement, dict):
+            continue  # Included groups retain their pins and are resolved as constraints.
         if not isinstance(raw_requirement, str):
             msg = "dependency-groups.dev entries must be strings"
             raise TypeError(msg)
@@ -95,10 +99,29 @@ def _dev_pins(groups: dict[str, object]) -> list[DevPin]:
     return pins
 
 
-def parse_project(text: str) -> tuple[str, list[DevPin]]:
-    """Parse the Python floor and exact direct development-tool pins."""
+def _group_requirements(groups: dict[str, object], name: str, ancestors: tuple[str, ...] = ()) -> list[str]:
+    """Expand PEP 735 includes without granting ownership of their version pins."""
+    if name in ancestors:
+        raise ValueError(f"dependency group cycle: {' -> '.join((*ancestors, name))}")
+    entries = groups.get(name)
+    if not isinstance(entries, list):
+        raise TypeError(f"dependency-groups.{name} must be an array")
+    result: list[str] = []
+    for entry in entries:
+        if isinstance(entry, str):
+            Requirement(entry)
+            result.append(entry)
+        elif isinstance(entry, dict) and set(entry) == {"include-group"} and isinstance(entry["include-group"], str):
+            result.extend(_group_requirements(groups, entry["include-group"], (*ancestors, name)))
+        else:
+            raise TypeError(f"dependency-groups.{name} entries must be requirements or include-group tables")
+    return result
+
+
+def parse_project(text: str) -> tuple[SpecifierSet, list[DevPin]]:
+    """Parse Python constraints and exact direct development-tool pins."""
     data = tomllib.loads(text)
-    return _python_floor(_required_table(data, "project")), _dev_pins(_required_table(data, "dependency-groups"))
+    return _python_constraints(_required_table(data, "project")), _dev_pins(_required_table(data, "dependency-groups"))
 
 
 def parse_resolution(output: str, pins: list[DevPin]) -> list[DevPin]:
@@ -133,7 +156,7 @@ def parse_resolution(output: str, pins: list[DevPin]) -> list[DevPin]:
     return latest
 
 
-def _resolution_requirements(text: str, pins: list[DevPin]) -> str:
+def _resolution_requirements(text: str, pins: list[DevPin]) -> list[str]:
     """Return project and retained dev constraints with managed pins unpinned."""
     data = tomllib.loads(text)
     project = _required_table(data, "project")
@@ -156,6 +179,9 @@ def _resolution_requirements(text: str, pins: list[DevPin]) -> str:
         raise TypeError(msg)
     managed = {canonicalize_name(pin.name): pin for pin in pins}
     for raw_requirement in dev:
+        if isinstance(raw_requirement, dict):
+            requirements.extend(_group_requirements(groups, raw_requirement["include-group"], ("dev",)))
+            continue
         if not isinstance(raw_requirement, str):
             msg = "dependency-groups.dev entries must be strings"
             raise TypeError(msg)
@@ -179,29 +205,41 @@ def _resolution_requirements(text: str, pins: list[DevPin]) -> str:
             requirements.append(pin.name)
         else:
             requirements.append(raw_requirement)
-    return "".join(f"{requirement}\n" for requirement in requirements)
+    return requirements
 
 
-def resolve_latest_pins(pins: list[DevPin], python_version: str, project_root: Path, *, uv: str = "uv") -> list[DevPin]:
-    """Resolve the latest mutually compatible cross-platform set without writes."""
+def resolve_latest_pins(pins: list[DevPin], requires_python: SpecifierSet, project_root: Path, *, uv: str = "uv") -> list[DevPin]:
+    """Resolve a universal set without changing the consumer's files."""
     manifest = project_root / "pyproject.toml"
     requirements = _resolution_requirements(manifest.read_text(encoding="utf-8"), pins)
-    result = run_safe_command(
-        uv,
-        [
-            "pip",
-            "compile",
-            "-",
-            "--universal",
-            "--no-header",
-            "--no-annotate",
-            "--python-version",
-            python_version,
-        ],
-        cwd=project_root,
-        input=requirements,
-        timeout=UV_PIP_COMPILE_TIMEOUT_SECONDS,
-    )
+    # pip compile only conveys a Python lower bound. Exporting a temporary
+    # script lock preserves the full range without changing the consumer lock.
+    # uv reads this metadata; the script is never executed.
+    with tempfile.TemporaryDirectory(prefix="research-repo-tools-resolve-") as directory:
+        source = Path(directory) / "requirements.py"
+        source.write_text(
+            f"# /// script\n# requires-python = {json.dumps(str(requires_python))}\n# dependencies = {json.dumps(requirements)}\n# ///\n",
+            encoding="utf-8",
+        )
+        result = run_safe_command(
+            uv,
+            [
+                "export",
+                "--script",
+                str(source),
+                "--format",
+                "requirements.txt",
+                "--no-header",
+                "--no-annotate",
+                "--no-hashes",
+                "--directory",
+                str(project_root),
+                "--project",
+                str(project_root),
+            ],
+            cwd=project_root,
+            timeout=UV_RESOLVE_TIMEOUT_SECONDS,
+        )
     return parse_resolution(result.stdout, pins)
 
 
@@ -269,7 +307,7 @@ def _masked_manifest(text: str, managed_names: frozenset[str]) -> dict[str, obje
 def _require_applied_pins(pyproject: Path, expected: list[DevPin], original: bytes) -> None:
     """Require uv to have changed only the exact requested manifest pins."""
     updated_text = pyproject.read_text(encoding="utf-8")
-    _python_version, actual = parse_project(updated_text)
+    _requires_python, actual = parse_project(updated_text)
     expected_versions = {canonicalize_name(pin.name): pin.version for pin in expected}
     actual_versions = {canonicalize_name(pin.name): pin.version for pin in actual}
     if actual_versions != expected_versions:
@@ -289,10 +327,10 @@ def update_dev_pins(pyproject: Path, *, uv: str = "uv") -> dict[str, tuple[str, 
     if uv_lock.is_symlink():
         msg = f"uv.lock must not be a symbolic link: {uv_lock}"
         raise ValueError(msg)
-    python_version, current = parse_project(manifest.read_text(encoding="utf-8"))
+    requires_python, current = parse_project(manifest.read_text(encoding="utf-8"))
     if not current:
         return {}
-    latest = resolve_latest_pins(current, python_version, manifest.parent, uv=uv)
+    latest = resolve_latest_pins(current, requires_python, manifest.parent, uv=uv)
     changes = {old.name: (old.version, new.version) for old, new in zip(current, latest, strict=True) if old.version != new.version}
     if not changes:
         return changes
@@ -300,7 +338,16 @@ def update_dev_pins(pyproject: Path, *, uv: str = "uv") -> dict[str, tuple[str, 
     with preserve_files((manifest, uv_lock)) as snapshots:
         run_safe_command(
             uv,
-            ["add", "--dev", "--no-sync", *(f"{pin.name}=={pin.version}" for pin in latest)],
+            [
+                "add",
+                "--dev",
+                "--no-sync",
+                *(f"{pin.name}=={pin.version}" for pin in latest),
+                "--directory",
+                str(manifest.parent),
+                "--project",
+                str(manifest.parent),
+            ],
             cwd=manifest.parent,
             timeout=UV_ADD_TIMEOUT_SECONDS,
         )
@@ -332,7 +379,7 @@ def main(argv: list[str] | None = None) -> int:
     """Advance exact development-tool pins without touching other requirements."""
     args = parse_args(argv)
     try:
-        _python_version, pins = parse_project(args.pyproject.read_text(encoding="utf-8"))
+        _requires_python, pins = parse_project(args.pyproject.read_text(encoding="utf-8"))
         if not pins:
             print("No exact direct Python development-tool pins to update.")
             return 0

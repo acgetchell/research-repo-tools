@@ -90,6 +90,9 @@ def test_duplicate_or_malformed_headers_rejected(output):
     [
         "uv 1.2.3 using runtime 3.14.0",
         "uv unknown",
+        "cargo 1.2.3",
+        "error: installer requires uv 1.2.3",
+        "1.2.3",
         "uv 1.2.3-rc.1",
         "uv 1.2.3+meta",
         "uv 1.2.3.4",

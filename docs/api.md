@@ -8,44 +8,28 @@ documented breaking change while the package remains below `1.0`.
 
 ## Consumer just recipes
 
-Use just recipes for routine repository workflows. The [packaged justfile
-template](../src/research_repo_tools/templates/justfile) supplies thin wrappers
-that consumers retain in their own justfiles:
+The [packaged justfile template](../src/research_repo_tools/templates/justfile)
+supplies thin wrappers that consumers retain in their own justfiles. Each recipe
+selects the consumer's locked package version. The shared implementation stays
+in the installed package; the consumer owns its configuration and invocation.
 
-```sh
-just changelog
-just changelog-archive
-just release-check
-```
-
-Each recipe delegates to `uv run --locked research-repo-tools ...`, which selects
-the consumer's locked package version. The shared implementation stays in the
-installed package; the consumer owns the recipe that invokes it. If just is not
-on `PATH`, or to select the locked `rust-just` executable explicitly, invoke the
-recipe with `uv run --locked just ...`.
-
-These names describe the consumer template. This package's own [maintainer
-justfile](../justfile) also has packaging-specific recipes; its `release-check`
-requires a tag argument for the PyPI publication preflight.
+The [README command reference](../README.md#just-recipes) covers routine use.
+The [toolchain guide](INSTALLING.md) defines managed execution, and the
+[changelog guide](GENERATING_CHANGELOGS.md) describes generation and archiving.
+Package development and publication preflight recipes belong to
+[Contributing](../CONTRIBUTING.md#maintainer-commands).
 
 ## Command line and configuration
 
-Use the [command overview](../README.md#common-workflows) and command-specific
-help for the CLI arguments that recipes wrap. Direct invocation is useful for
-inspecting that interface without adding a recipe for each help command:
-
-```sh
-uv run --locked research-repo-tools --help
-uv run --locked research-repo-tools changelog generate --help
-uv run --locked research-repo-tools release update --help
-```
+The [README](../README.md#workflow-examples) contains runnable examples and
+help commands for inspecting CLI arguments.
 
 Place global `--root` and `--config` options before the command group. Configuration
 defaults to `[tool.research-repo-tools]` in the consumer's `pyproject.toml`.
-A standalone configuration uses unprefixed tables and `schema = 1`; print the
-example with `research-repo-tools templates research-repo-tools.toml`. Unknown
-settings fail. Relative paths and explicit executable paths resolve against the
-consumer root; bare executable names use `PATH`.
+A standalone configuration uses unprefixed tables and `schema = 1`, as shown in
+the [packaged template](../src/research_repo_tools/templates/research-repo-tools.toml).
+Unknown settings fail. Relative paths and explicit executable paths resolve
+against the consumer root; bare executable names use `PATH`.
 
 Commands return zero on success. Validation failures and handled operational
 errors return nonzero; argument errors return `2`. Help and version output are
@@ -54,24 +38,15 @@ use stdout. Human-readable diagnostics and progress messages are not a structure
 machine API. Template output and extracted release notes are intended for reuse.
 
 File-changing commands operate only when invoked: dependency and release updates,
-changelog generation/normalization/archiving, template output, and local tagging.
+changelog generation/normalization/archiving, template output, local tagging,
+and explicit setup/toolchain synchronization.
 Dry runs are available only where command help lists them. Importing the package
 does not install tools, access the network, or modify consumer files.
 
 ## Python entry point
 
-Thin Python scripts can reuse the same command contract without a subprocess:
-
-```python
-from pathlib import Path
-
-from research_repo_tools import __version__
-from research_repo_tools.cli import main
-
-root = Path(__file__).resolve().parents[1]
-print(f"Using research-repo-tools {__version__}")
-raise SystemExit(main(["--root", str(root), "release", "check"]))
-```
+Thin Python scripts can reuse the same command contract without a subprocess;
+see the [README example](../README.md#calling-from-python).
 
 - `research_repo_tools.__version__` is a string read from installed distribution
   metadata. `project.version` in this package's `pyproject.toml` is its authority.
@@ -95,10 +70,15 @@ Later Python versions are allowed by metadata but are not yet in the test matrix
 Installed-package checks cover these public imports and representative CLI use
 outside the source checkout.
 
-The runtime dependency `rust-just` supplies `just`. Install uv separately to manage
-the environment. Install git-cliff for changelog generation, Git for history and
-tagging, Cargo for Cargo-tool discovery, and Semgrep or rumdl when their optional
-commands are used. GitHub CLI is needed for automatic discovery of a previous
-release; an explicit previous release permits offline preparation. Automatic
-tool installation and notebook infrastructure are tracked separately and are
-not part of the `0.1.0` contract.
+uv is a hard prerequisite and must be available on PATH. The runtime dependency
+`rust-just` supplies Just in the project environment. The explicit `setup` command
+also installs a persistent user-level Just command through uv and configures PATH.
+Recipes select the locked project environment without activation. Setup then
+synchronizes Python dependencies with the declared managed Rust tools available.
+Explicit toolchain synchronization installs pinned
+Rust/Cargo and supported declared Cargo tools, including git-cliff and rumdl.
+See [toolchain setup](INSTALLING.md) for declarations, host support, installation
+ownership, and remaining native validation gates. Git is a system prerequisite;
+Semgrep belongs in the consumer's Python dependencies. GitHub CLI is needed for
+automatic discovery of a previous release; an explicit previous release permits
+offline preparation. Notebook infrastructure remains separate future work.

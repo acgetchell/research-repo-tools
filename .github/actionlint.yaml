@@ -1,7 +1,10 @@
 # actionlint 1.7.12 predates GitHub's self-repository workflow syntax.
-# Keep this exact-path exception until actionlint supports it; zizmor checks it.
+# Keep these exact-path exceptions until actionlint supports it; zizmor checks them.
 # https://github.blog/changelog/2026-07-30-reference-same-repository-actions-with-self-repository-syntax/
 paths:
+  .github/workflows/ci.yml:
+    ignore:
+      - '^reusable workflow call "\$/\.github/workflows/codecov\.yml" at "uses" is not following the format '
   .github/workflows/publish.yml:
     ignore:
       - '^reusable workflow call "\$/\.github/workflows/ci\.yml" at "uses" is not following the format '

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, TypeGuard
 from packaging.utils import canonicalize_name
 
 from research_repo_tools.archive_changelog import ParsedChangelog, parse_changelog
+from research_repo_tools.config import ReleasePolicy, load
 from research_repo_tools.release_tags import SEMVER_PATTERN
 from research_repo_tools.toml_source import key_line
 
@@ -196,6 +197,33 @@ def package_version_reference(root: Path, package: PackageInfo) -> tuple[Path, i
     return project, _toml_table_key_line(project, "project", "version")
 
 
+def workspace_member_manifests(root: Path) -> list[Path]:
+    """Expand declared workspace members and exclusions once for release tooling."""
+    workspace = _read_toml(root / "Cargo.toml").get("workspace", {})
+    workspace = _require_parsed_object(workspace, "workspace")
+
+    def path_patterns(field: str) -> list[str]:
+        patterns = workspace.get(field, [])
+        if not isinstance(patterns, list) or any(not isinstance(pattern, str) or not pattern for pattern in patterns):
+            raise ReleaseCheckError(f"workspace.{field} must be an array of nonempty path patterns")
+        return patterns
+
+    excluded_paths = {path.resolve() for pattern in path_patterns("exclude") for path in root.glob(pattern)}
+    manifests: set[Path] = set()
+    for pattern in path_patterns("members"):
+        matched = sorted(root.glob(pattern))
+        if not matched:
+            raise ReleaseCheckError(f"workspace member not found: {pattern}")
+        for directory in matched:
+            if directory.resolve() in excluded_paths:
+                continue
+            manifest = directory / "Cargo.toml"
+            if not manifest.resolve().is_relative_to(root.resolve()) or manifest.is_symlink():
+                raise ReleaseCheckError(f"workspace member must be a repository-contained regular file: {manifest}")
+            manifests.add(manifest)
+    return sorted(manifests)
+
+
 def cargo_lock_references(root: Path, package: PackageInfo) -> list[VersionReference]:
     """Locate release-owned Cargo lock entries without touching dependencies."""
     cargo = root / "Cargo.toml"
@@ -207,25 +235,17 @@ def cargo_lock_references(root: Path, package: PackageInfo) -> list[VersionRefer
     if isinstance(root_package, dict) and root_package.get("version") != {"workspace": True}:
         return references
     workspace = _require_table(data, "workspace", cargo)
-    members = workspace.get("members")
-    if not isinstance(members, list) or not members or any(not isinstance(member, str) for member in members):
+    if not workspace.get("members"):
         raise ReleaseCheckError("workspace.members must explicitly name member paths")
     seen = {package.name} if root_package is not None else set()
-    for member in members:
-        matched = sorted(root.glob(member))
-        if not matched:
-            raise ReleaseCheckError(f"workspace member not found: {member}")
-        for directory in matched:
-            manifest = directory / "Cargo.toml"
-            if not manifest.resolve().is_relative_to(root.resolve()) or manifest.is_symlink():
-                raise ReleaseCheckError(f"workspace member must be a repository-contained regular file: {manifest}")
-            data = _require_table(_read_toml(manifest), "package", manifest)
-            if data.get("version") != {"workspace": True}:
-                continue
-            name = _require_string(data, "name", str(manifest))
-            if name not in seen:
-                references.append(_cargo_lock_reference(root / "Cargo.lock", PackageInfo(name, package.version)))
-                seen.add(name)
+    for manifest in workspace_member_manifests(root):
+        data = _require_table(_read_toml(manifest), "package", manifest)
+        if data.get("version") != {"workspace": True}:
+            continue
+        name = _require_string(data, "name", str(manifest))
+        if name not in seen:
+            references.append(_cargo_lock_reference(root / "Cargo.lock", PackageInfo(name, package.version)))
+            seen.add(name)
     return references
 
 
@@ -533,12 +553,10 @@ def find_version_mismatches(root: Path) -> list[VersionMismatch]:
     return [VersionMismatch(reference=reference, package=package) for reference in _version_references(root, package) if reference.version != package.version]
 
 
-def find_release_metadata_mismatches(root: Path, *, policy: dict | None = None) -> list[MetadataMismatch]:
+def find_release_metadata_mismatches(root: Path, *, policy: ReleasePolicy | None = None) -> list[MetadataMismatch]:
     """Return DOI and release-date references that disagree across release surfaces."""
     package = read_package_info(root)
-    from research_repo_tools.config import load
-
-    policy = load(root=root).section("release") if policy is None else policy
+    policy = load(root=root).release if policy is None else policy
     citation = root / "CITATION.cff"
     citation_text = citation.read_text(encoding="utf-8") if citation.is_file() else ""
     citation_date = _citation_date_reference(citation) if citation.is_file() else None
@@ -555,9 +573,9 @@ def find_release_metadata_mismatches(root: Path, *, policy: dict | None = None) 
                 reference = reader(path)
                 if reference is not None:
                     expected.append((reference, doi))
-    if policy.get("final-changelog", False) and changelog_date is None:
+    if policy.final_changelog and changelog_date is None:
         raise ReleaseCheckError("final release requires the current changelog heading")
-    if policy.get("final-changelog", False) and citation.is_file() and citation_date is None:
+    if policy.final_changelog and citation.is_file() and citation_date is None:
         raise ReleaseCheckError("final release requires CITATION.cff date-released")
     if changelog_date is not None and citation_date is not None:
         expected.insert(0, (citation_date, changelog_date.value))
@@ -576,7 +594,7 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def check(root: Path, *, policy: dict | None = None) -> int:
+def check(root: Path, *, policy: ReleasePolicy | None = None) -> int:
     """Validate one consumer with the caller's explicitly selected policy."""
     root = root.resolve()
     try:
