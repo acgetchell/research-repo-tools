@@ -1,5 +1,12 @@
 # research-repo-tools
 
+[![License][license-badge]][license]
+[![CI][ci-badge]][ci-workflow]
+[![CodeQL][codeql-badge]][codeql-workflow]
+[![zizmor][zizmor-badge]][zizmor-workflow]
+[![Codecov][codecov-badge]][codecov-dashboard]
+[![Audit dependencies][audit-badge]][audit-workflow]
+
 Shared development and maintenance tooling for Rust research repositories using
 Python scripting and Jupyter notebooks. Each
 capability has one implementation and one set of contracts, with tests grouped
@@ -246,3 +253,14 @@ BSD-3-Clause. See [LICENSE][license].
 [migration]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/migration.md
 [license]: https://github.com/acgetchell/research-repo-tools/blob/main/LICENSE
 [just-template]: https://github.com/acgetchell/research-repo-tools/blob/main/src/research_repo_tools/templates/justfile
+[license-badge]: https://badgen.net/github/license/acgetchell/research-repo-tools
+[ci-badge]: https://github.com/acgetchell/research-repo-tools/actions/workflows/ci.yml/badge.svg?branch=main
+[ci-workflow]: https://github.com/acgetchell/research-repo-tools/actions/workflows/ci.yml
+[codeql-badge]: https://github.com/acgetchell/research-repo-tools/actions/workflows/codeql.yml/badge.svg?branch=main
+[codeql-workflow]: https://github.com/acgetchell/research-repo-tools/actions/workflows/codeql.yml
+[zizmor-badge]: https://github.com/acgetchell/research-repo-tools/actions/workflows/zizmor.yml/badge.svg?branch=main
+[zizmor-workflow]: https://github.com/acgetchell/research-repo-tools/actions/workflows/zizmor.yml
+[codecov-badge]: https://codecov.io/gh/acgetchell/research-repo-tools/branch/main/graph/badge.svg
+[codecov-dashboard]: https://app.codecov.io/gh/acgetchell/research-repo-tools
+[audit-badge]: https://github.com/acgetchell/research-repo-tools/actions/workflows/audit.yml/badge.svg?branch=main
+[audit-workflow]: https://github.com/acgetchell/research-repo-tools/actions/workflows/audit.yml
