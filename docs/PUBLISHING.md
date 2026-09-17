@@ -33,8 +33,11 @@ after publication and does not block the release.
    immutable artifact by its ID from that workflow run and publish it with OIDC
    credentials and attestations. The publishing job does not rebuild the package.
 
-Only the publishing job receives `id-token: write`; it has no source checkout or
-package installation step. No PyPI API token is stored in GitHub. The standalone
+The publishing job receives `id-token: write`; it has no source checkout or
+package installation step. The reusable validation call also permits OIDC for its
+isolated Codecov upload job, which is skipped for release tags. Test and build
+jobs retain read-only permissions, and the validation workflow has no `pypi`
+environment access. No PyPI API token is stored in GitHub. The standalone
 publishing job follows the [PyPA action's Trusted Publishing guidance](https://github.com/pypa/gh-action-pypi-publish#trusted-publishing).
 The reusable CI workflow itself has no publishing credentials.
 

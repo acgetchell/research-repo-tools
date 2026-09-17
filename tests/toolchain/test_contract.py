@@ -47,6 +47,7 @@ class FakeTools:
         self.add(directory / executable(Path(), "uv"), "uv 0.12.15")
         self.add(directory / executable(Path(), "just"), f"just {toolchain.version('rust-just')}")
         self.add(directory / executable(Path(), "git"), "git version 2.50.1.windows.1")
+        self.add(executable(directory, "sh"), "")
         self.python = self.add(executable(directory.parent / "managed python", "python"), "Python 3.14.7")
         self.add(executable(directory, "python"), "Python 3.13.7")
 
@@ -576,6 +577,29 @@ def test_setup_requires_lockfile_before_installing(runtime, monkeypatch):
     with pytest.raises(ValueError, match="requires a committed uv.lock"):
         setup_module.setup(instance)
     assert not fake.calls
+
+
+@pytest.mark.parametrize("available", [False, True])
+def test_setup_requires_working_recipe_shell_before_installing(runtime, monkeypatch, available):
+    instance, fake = runtime
+    setup_module = setup_fake(runtime, monkeypatch)
+    shell = executable(fake.directory, "sh")
+    original = fake.run
+    if not available:
+        shell.unlink()
+
+    def run(command, args, **kwargs):
+        if Path(command) == shell:
+            raise subprocess.CalledProcessError(2, [command, *args], stderr="unsupported shell options")
+        return original(command, args, **kwargs)
+
+    monkeypatch.setattr(toolchain, "run_safe_command", run)
+    status = instance.shell_status()
+    assert not status.ok
+    assert ("unsupported shell options" if available else "missing") in status.actual
+    with pytest.raises(RuntimeError, match="working POSIX sh on PATH"):
+        setup_module.setup(instance)
+    assert not any("install" in args or args[0] in {"tool", "sync"} for _, args, _ in fake.calls)
 
 
 def test_setup_requires_tooling_group_to_survive_full_sync(runtime, monkeypatch):

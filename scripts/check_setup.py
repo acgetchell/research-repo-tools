@@ -109,7 +109,9 @@ def check(dist: Path) -> None:
     uv = shutil.which("uv")
     if uv is None:
         raise RuntimeError("uv must already be installed")
-    with tempfile.TemporaryDirectory(prefix="research-repo-tools-native-") as temporary:
+    # Windows' user TEMP plus the managed Rust hierarchy can exceed link.exe's
+    # path limit. RUNNER_TEMP provides a short, runner-owned workspace on all hosts.
+    with tempfile.TemporaryDirectory(prefix="rrt-", dir=os.environ["RUNNER_TEMP"]) as temporary:
         directory = Path(temporary).resolve()
         consumer = directory / "consumer with spaces"
         consumer.mkdir()
@@ -117,7 +119,7 @@ def check(dist: Path) -> None:
         (consumer / "pyproject.toml").write_text(
             '[project]\nname="native-setup-consumer"\nversion="0.1.0"\nrequires-python=">=3.14,<3.15"\n'
             f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}, "{dev_pin}"]\n'
-            f'[tool.uv]\npackage=false\nrequired-version="{uv_version}"\n'
+            f'[tool.uv]\npackage=false\ndefault-groups=[]\nrequired-version="{uv_version}"\n'
             f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(wheel.resolve()))}}}\n"
             '[tool.research-repo-tools.toolchain.cargo]\ngit-cliff="2.14.1"\n',
             encoding="utf-8",
@@ -164,10 +166,12 @@ def check(dist: Path) -> None:
         program = binary(consumer, "smoke")
         run([cli, "toolchain", "run", "--", "rustc", "smoke.rs", "-o", str(program)], cwd=consumer, env=active)
         assert run([str(program)], cwd=consumer, env=active).strip() == "native setup works"
-        (consumer / "justfile").write_text('help:\n    @echo "native just works"\n', encoding="utf-8")
+        run([cli, "templates", "justfile", "--output", "justfile"], cwd=consumer, env=active)
+        (consumer / "CHANGELOG.md").write_text("# Changelog\n\n## [0.1.0] - 2026-09-16\n\n- Native recipes work.\n", encoding="utf-8")
         just = shutil.which("just", path=active["PATH"])
         assert just is not None
-        assert run([just, "help"], cwd=consumer, env=active).strip() == "native just works"
+        assert "release-notes" in run([just, "help"], cwd=consumer, env=active)
+        assert run([just, "release-notes", "v0.1.0"], cwd=consumer, env=active).strip() == "- Native recipes work."
         # Compare installed executable identities, declarations, and shell state.
         # Checks may access caches; access timestamps are deliberately excluded.
         installed = {path: (path.stat().st_ino, path.stat().st_size, path.stat().st_mtime_ns) for path in selected.values()}

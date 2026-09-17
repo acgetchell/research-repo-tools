@@ -24,7 +24,9 @@ Issues = "https://github.com/acgetchell/research-repo-tools/issues"
 [dependency-groups]
 dev = [
     "actionlint-py==1.7.12.24",
+    "coverage==7.16.1",
     "pytest==9.1.1",
+    "pytest-cov==7.1.0",
     "ruff==0.16.8",
     "ty==0.0.81",
     "zizmor==1.30.1",
@@ -47,6 +49,18 @@ repository = "research-repo-tools"
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--import-mode=importlib", "--strict-markers"]
+
+[tool.coverage.run]
+branch = true
+source = ["."]
+omit = ["*/tests/*", "*/.venv/*"]
+relative_files = true
+patch = ["subprocess"]
+
+[tool.coverage.report]
+include = ["src/research_repo_tools/*", "scripts/*"]
+include_namespace_packages = true
+show_missing = true
 
 [tool.ruff]
 target-version = "py314"

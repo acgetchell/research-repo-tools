@@ -2,7 +2,7 @@ name: Package checks
 
 on:
   push:
-    branches: ["**"]
+    branches: [main]
   pull_request:
   workflow_dispatch:
   workflow_call:
@@ -52,6 +52,13 @@ jobs:
       fail-fast: false
       matrix:
         os: [ubuntu-24.04, macos-15, windows-2025]
+        include:
+          - os: ubuntu-24.04
+            test-recipe: coverage
+          - os: macos-15
+            test-recipe: test
+          - os: windows-2025
+            test-recipe: test
     runs-on: ${{ matrix.os }}
     timeout-minutes: 60
     env:
@@ -76,9 +83,29 @@ jobs:
           path: dist
           merge-multiple: true
       - name: Validate, test, and install the shared distributions
-        run: uv run --locked just check test check-dist
+        run: uv run --locked just check ${{ matrix.test-recipe }} check-dist
+      - name: Retain coverage even when later checks fail
+        if: ${{ !cancelled() && runner.os == 'Linux' && hashFiles('coverage/cobertura.xml') != '' }}
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: coverage-${{ matrix.os }}
+          path: coverage/cobertura.xml
+          if-no-files-found: error
+          overwrite: true
+          retention-days: 7
       - name: Exercise native setup and repeat setup from the built wheel
         run: uv run --locked just check-setup
+
+  codecov:
+    name: Upload coverage
+    needs: [build, check]
+    # Upload the Linux report even if a later native check failed.
+    # Release validation retains reports but does not depend on Codecov availability.
+    if: ${{ !cancelled() && needs.build.result == 'success' && github.ref_type != 'tag' && github.repository == 'acgetchell/research-repo-tools' }}
+    permissions:
+      contents: read
+      id-token: write
+    uses: $/.github/workflows/codecov.yml
 
   changelog-integration:
     runs-on: ubuntu-24.04

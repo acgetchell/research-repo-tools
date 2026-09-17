@@ -10,6 +10,8 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/) first,
 using the version declared in `pyproject.toml`. From this checkout, run the
 package setup command. It installs the pinned user-level Just command,
 configures PATH, and synchronizes the locked development environment.
+Recipes require a POSIX `sh` on PATH; on Windows, expose Git for Windows' `bin`
+directory as described in the [toolchain guide](docs/INSTALLING.md).
 
 ```sh
 uv run --locked --managed-python research-repo-tools setup
@@ -42,6 +44,7 @@ including changelog recipes and aliases.
 | `just check-dist` | Check isolated installations of existing build artifacts |
 | `just check-setup` | Exercise real setup on disposable GitHub-hosted runners only |
 | `just ci` | Run checks, tests, builds, and installation checks for final review |
+| `just coverage` | Run tests with branch and subprocess coverage; write `coverage/cobertura.xml` |
 | `just help` | List available commands and arguments in lexicographic order |
 | `just help-workflows` | Alias for `help` |
 | `just install-check` | Build and check isolated installations |
@@ -59,12 +62,14 @@ the consumer recipe `just release-check` validates consumer release metadata.
 Use `just check` while iterating, with targeted regressions when
 a behavioral change needs verification. Run `just ci` once the
 work is ready for final review.
-It runs checks and tests, builds wheel and sdist artifacts, and installs both
+It runs checks and tests with coverage, builds wheel and sdist artifacts, and installs both
 outside the checkout with uv. Installation checks exercise the console entry
 point, imports, packaged templates, runtime dependencies, and the bundled `just` executable.
 See [Validation](docs/VALIDATING.md) for check coverage and agent restrictions.
 Hosted CI builds once and installs the same wheel and sdist on all three platforms
-using `just check-dist`. Its required platform jobs also run `just check-setup`
+using `just check-dist`. Linux uses `just coverage`; macOS and Windows use
+`just test`. CI calls the reusable `codecov.yml` workflow to upload the Linux
+report without rerunning tests. The required platform jobs also run `just check-setup`
 against the built wheel, installing real tools and updating the disposable
 runner user's shell configuration. This check is excluded from local `just ci`.
 The [release workflow](docs/PUBLISHING.md)

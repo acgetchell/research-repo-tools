@@ -64,6 +64,12 @@ Install [uv](https://docs.astral.sh/uv/getting-started/installation/) separately
 and make the declared version available on PATH. Setup never installs uv or
 substitutes a private copy when the installed version differs.
 
+The packaged Just recipes require a working POSIX `sh` on PATH on every platform.
+On Windows, install Git for Windows and add its `bin` directory containing
+`sh.exe` to PATH (typically `C:\Program Files\Git\bin`). Having `git.exe` on
+PATH alone is insufficient. Setup checks the shell before installing tools;
+`just tools-check` includes the same read-only shell check.
+
 The consuming project's maintainer adds the published package to `tooling`,
 includes that group from `dev`, and refreshes the lockfile. Merge the packaged
 just recipes into the existing justfile, or create one if the project has none:
@@ -100,7 +106,8 @@ available. uv supplies managed Python when needed. The command then:
    including `dev` even when uv defaults exclude it, with the managed Cargo paths.
 
 Open a new terminal if PATH changed, then use `just help` and `just <recipe>`.
-Recipes select the locked environment; activation is unnecessary. Setup can be
+Recipes explicitly select the locked `dev` group, including when
+`tool.uv.default-groups` excludes it; activation is unnecessary. Setup can be
 repeated with `just setup`. Failures stop the sequence; fix the reported cause and
 rerun it. Setup does not rewrite declarations, locks, or existing recipes.
 `uv tool update-shell` may modify shell startup files or the Windows user PATH.
@@ -156,6 +163,12 @@ without activating that environment.
 Managed Rust/Cargo installations live under `~/.cache/research-repo-tools`,
 overridden by an absolute `RESEARCH_REPO_TOOLS_HOME`. Python installation through
 uv disables user-level executable aliases and Windows registry entries.
+
+On Windows, keep a custom `RESEARCH_REPO_TOOLS_HOME` short: Rust adds nested
+toolchain and library directories, and native build tools can still hit the
+[Windows path-length limit](https://learn.microsoft.com/en-us/windows/win32/fileio/maximum-file-path-limitation).
+If a linker reports a library path that exceeds that limit, select a shorter
+absolute cache path and rerun setup.
 
 Rustup 1.29.1 is the package-owned installer version. Rustup/Cargo homes are isolated
 by that version and host target. Cargo tool roots include host, Rust version,

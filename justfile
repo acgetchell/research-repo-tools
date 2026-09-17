@@ -43,7 +43,11 @@ check-setup:
     uv run --locked python scripts/check_setup.py
 
 # Run checks, tests, builds, and isolated installation checks.
-ci: check test install-check
+ci: check coverage install-check
+
+# Run tests once with branch/subprocess coverage and write a Cobertura report.
+coverage:
+    uv run --locked pytest --cov --cov-report=term-missing --cov-report=xml:coverage/cobertura.xml
 
 # Show command help when invoked without a recipe.
 [default]

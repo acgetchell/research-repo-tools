@@ -1,0 +1,14 @@
+coverage:
+  status:
+    project:
+      default:
+        target: auto
+        threshold: 1%
+        informational: true
+    patch:
+      default:
+        target: 70%
+        informational: true
+
+# Show coverage in checks without adding a bot comment on every PR update.
+comment: false

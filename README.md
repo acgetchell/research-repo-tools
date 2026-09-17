@@ -45,6 +45,10 @@ dependency without installing or synchronizing it. The setup invocation below
 installs research-repo-tools before running setup, with no installation hooks
 or generated scripts.
 
+Just recipes require `sh` on PATH. On Windows, expose Git for Windows' `bin`
+directory as described in the [toolchain guide][toolchain]; setup checks this
+prerequisite before installing tools.
+
 In a configured consumer checkout, run this once on Linux, macOS, or Windows:
 
 ```sh

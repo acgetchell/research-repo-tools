@@ -11,6 +11,7 @@ history belong in the generated [CHANGELOG.md](../CHANGELOG.md). See
 | `just audit` | Check locked third-party Python dependencies against online vulnerability advisories |
 | `just check` | Workflow, lockfile, lint, format, and type checks during development |
 | `just ci` | Final checks, tests, wheel/sdist builds, and isolated installation checks |
+| `just coverage` | Run tests with branch and subprocess coverage; write `coverage/cobertura.xml` |
 | `just test` | Run the test suite |
 
 Run the [contributor setup](../CONTRIBUTING.md#development-environment)
@@ -34,13 +35,28 @@ and the bundled just executable. They also exercise a locked tooling-only
 environment before the consumer project's native build backend is available,
 including setup startup and its missing-uv failure. These checks do not install
 user tools or modify shell profiles.
+They run the installed Just template against a consumer with default dependency
+groups disabled, verifying that recipes restore their required tooling group.
 `just check-dist` validates existing wheel and sdist artifacts without rebuilding.
 
 GitHub runs package checks on Linux, macOS, and Windows, plus a git-cliff
-integration job. Separate workflows run dependency auditing, CodeQL, and zizmor
-security analysis. Local results do not establish that hosted jobs passed.
+integration job, for pull requests and pushes to `main`. Branch pushes with an
+open pull request do not duplicate the matrix. Separate workflows run dependency
+auditing, CodeQL, and zizmor security analysis. Local results do not establish that
+hosted jobs passed.
 Platform models and fake executables do not substitute for native installer
 verification; see the [toolchain contract](INSTALLING.md) for prerequisites.
+
+The Linux test pass collects coverage of package code and repository scripts,
+including Python subprocesses, and omits tests and the development environment.
+Linux retains its Cobertura report as a seven-day Actions artifact. A
+reusable `codecov.yml` workflow uploads the report using OIDC; forks
+and Dependabot use public-repository tokenless uploads. No additional test run is
+scheduled for coverage. macOS and Windows run ordinary tests and the same
+installation checks. Release-tag validation retains reports without uploading.
+Codecov project and patch statuses are initially advisory while a baseline is
+established; test failures still fail the required platform checks. Setup and
+account activation are documented in [GitHub configuration](CONFIGURING_GITHUB.md#codecov).
 
 The required platform jobs run `just check-setup` against the built wheel in a
 temporary consumer with fresh managed-tool directories. This downloads managed

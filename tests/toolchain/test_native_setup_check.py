@@ -3,6 +3,7 @@
 import importlib.util
 import os
 import sys
+import tomllib
 from pathlib import Path
 
 import pytest
@@ -34,6 +35,39 @@ def test_native_check_refuses_local_and_self_hosted_execution(harness, tmp_path,
     monkeypatch.setattr(harness.tempfile, "TemporaryDirectory", unexpected)
     with pytest.raises(RuntimeError, match="disposable GitHub-hosted runner"):
         harness.check(tmp_path / "nonexistent distributions")
+
+
+def test_native_workspace_uses_runner_temp_instead_of_nested_user_temp(harness, tmp_path, monkeypatch):
+    runner_temp = tmp_path / "runner temp"
+    runner_temp.mkdir()
+    user_temp = tmp_path / "Users" / "runneradmin" / "AppData" / "Local" / "Temp"
+    user_temp.mkdir(parents=True)
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
+    monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
+    monkeypatch.setattr(harness.tempfile, "tempdir", str(user_temp))
+    monkeypatch.setattr(harness.shutil, "which", lambda _name: "uv")
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    (tmp_path / f"research_repo_tools-{version}-py3-none-any.whl").touch()
+    workspaces = []
+
+    class StopBeforeInstalling(Exception):
+        pass
+
+    def stop(command, *, cwd, env, **kwargs):
+        assert command == ["uv", "lock", "--managed-python"]
+        assert cwd.name == "consumer with spaces"
+        assert cwd.parent.parent == runner_temp.resolve()
+        assert Path(env["RESEARCH_REPO_TOOLS_HOME"]).is_relative_to(cwd.parent)
+        assert (cwd / "pyproject.toml").is_file()
+        workspaces.append(cwd.parent)
+        raise StopBeforeInstalling
+
+    monkeypatch.setattr(harness, "run", stop)
+    with pytest.raises(StopBeforeInstalling):
+        harness.check(tmp_path)
+    assert len(workspaces) == 1 and not workspaces[0].exists()
+    assert not list(user_temp.iterdir())
 
 
 def test_native_environment_replaces_inherited_installation_and_project_overrides(harness, tmp_path, monkeypatch):

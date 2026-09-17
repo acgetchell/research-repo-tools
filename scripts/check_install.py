@@ -110,6 +110,28 @@ def check(dist: Path) -> None:
             assert "setup" in run([str(command), "--help"], cwd=consumer, env=local_env)
             just = scripts / ("just.exe" if os.name == "nt" else "just")
             assert run([str(just), "--version"], cwd=consumer, env=local_env).strip() == f"just {expected_just}"
+            # Exercise the installed recipe template after a default sync that
+            # excludes tooling. Recipes must explicitly restore their own group.
+            recipe_consumer = consumer / "recipe consumer"
+            recipe_consumer.mkdir()
+            (recipe_consumer / "pyproject.toml").write_text(
+                '[project]\nname="recipe-consumer"\nversion="0.1.0"\nrequires-python=">=3.14"\n'
+                f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}]\n'
+                "[tool.uv]\npackage=false\ndefault-groups=[]\n"
+                f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(artifact.resolve()))}}}\n",
+                encoding="utf-8",
+            )
+            run([uv, "lock", "--python", str(python)], cwd=recipe_consumer, env=env)
+            run([uv, "sync", "--locked", "--python", str(python)], cwd=recipe_consumer, env=env)
+            recipe_cli = recipe_consumer / ".venv" / scripts.name / command.name
+            assert not recipe_cli.exists(), "default sync unexpectedly installed the non-default tooling group"
+            lock = (recipe_consumer / "uv.lock").read_bytes()
+            run([str(command), "templates", "justfile", "--output", "justfile"], cwd=recipe_consumer, env=env)
+            (recipe_consumer / "CHANGELOG.md").write_text("# Changelog\n\n## [0.1.0] - 2026-09-16\n\n- Recipe works.\n", encoding="utf-8")
+            assert "release-notes" in run([str(just), "help"], cwd=recipe_consumer, env=local_env)
+            assert run([str(just), "release-notes", "v0.1.0"], cwd=recipe_consumer, env=env).strip() == "- Recipe works."
+            assert recipe_cli.is_file(), "recipe did not install its declared tooling group"
+            assert (recipe_consumer / "uv.lock").read_bytes() == lock, "recipe changed the lockfile"
             # A real locked tooling group must start before the consumer's native
             # build backend exists. A full installation of this project would fail.
             setup_consumer = consumer / "setup consumer"

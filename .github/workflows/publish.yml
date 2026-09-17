@@ -36,6 +36,10 @@ jobs:
 
   validate:
     needs: preflight
+    # The reusable workflow declares an OIDC upload job, skipped for release tags.
+    permissions:
+      contents: read
+      id-token: write
     uses: $/.github/workflows/ci.yml
 
   publish:

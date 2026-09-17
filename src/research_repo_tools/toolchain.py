@@ -225,6 +225,17 @@ class Runtime:
             cwd=self.plan.root,
         )
 
+    def shell_status(self) -> Status:
+        """Check the shell used by the packaged Just recipes on the user's PATH."""
+        selected = shutil.which("sh")
+        if selected is None:
+            return Status("sh", "POSIX shell", "missing", "", False)
+        try:
+            run_safe_command(selected, ["-cu", ":"], cwd=self.plan.root, env=dict(os.environ), timeout=30)
+        except FAILURES as error:
+            return Status("sh", "POSIX shell", format_exception_diagnostics(error, single_line=True), selected, False)
+        return Status("sh", "POSIX shell", "available", selected, True)
+
     def inspect(self) -> list[Status]:
         with self._operation():
             return self._inspect()
@@ -234,7 +245,7 @@ class Runtime:
         just = _probe("just", "just", version("rust-just"), env=dict(os.environ), cwd=self.plan.root)
         # Git is a system prerequisite; no implicit installation or repository mutation.
         git = _probe("git", "git version", "", ("--no-pager", "--version"), env=dict(os.environ), cwd=self.plan.root)
-        return [uv, self.python_status(uv), just, git, *self.rust_statuses(), *(self.cargo_status(tool) for tool in self.plan.cargo)]
+        return [uv, self.python_status(uv), just, git, self.shell_status(), *self.rust_statuses(), *(self.cargo_status(tool) for tool in self.plan.cargo)]
 
     def _rustup(self, args: list[str], *, install: bool = False) -> subprocess.CompletedProcess[str]:
         return run_safe_command(
@@ -250,6 +261,12 @@ class Runtime:
         uv = self.uv_status()
         if not uv.ok:
             raise RuntimeError(f"uv {self.plan.uv} must be installed and available on PATH before setup; found {uv.actual}")
+        shell = self.shell_status()
+        if not shell.ok:
+            raise RuntimeError(
+                f"Just recipes require a working POSIX sh on PATH before setup; found {shell.actual}. "
+                "On Windows, add Git for Windows' bin directory (containing sh.exe) to PATH, then rerun setup."
+            )
         if not self.python_status(uv).ok:
             self._install(uv.path, ["python", "install", "--no-bin", "--no-registry", self.plan.python_request])
             if not self.python_status(uv).ok:

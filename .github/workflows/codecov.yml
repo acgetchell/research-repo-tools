@@ -1,0 +1,36 @@
+name: Codecov
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  upload:
+    name: Upload Linux coverage
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: coverage-ubuntu-24.04
+          path: reports
+      - name: Upload Linux coverage to Codecov
+        uses: codecov/codecov-action@0b35c9ecc4f0529d0eb674914510c22f85b196b4 # v7.1.0
+        with:
+          files: reports/cobertura.xml
+          disable_search: true
+          flags: unittests
+          name: python-linux
+          fail_ci_if_error: true
+          # Forks use the action's tokenless fallback; Dependabot also has a read-only token.
+          use_oidc: ${{ github.actor != 'dependabot[bot]' }}
+          override_branch: ${{ github.actor == 'dependabot[bot]' && format('dependabot:{0}', github.head_ref) || '' }}
