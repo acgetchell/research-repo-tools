@@ -8,6 +8,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from research_repo_tools import archive_changelog as archive
+from research_repo_tools import changelog_notes
 from research_repo_tools.config import Config
 from research_repo_tools.files import replace_many
 from research_repo_tools.postprocess_changelog import format_markdown, postprocess_text
@@ -47,6 +48,38 @@ def _paths(config: Config) -> tuple[Path, Path, Path | None]:
     return path, archives, formatter
 
 
+def _declared_dates(path: Path, archives: Path) -> dict[str, str]:
+    """Read dated release authorities before generating replacement history."""
+    dates: dict[str, str] = {}
+    for source in (path, *sorted(archives.glob("*.md"))):
+        if not source.exists():
+            continue
+        parsed = archive.parse_changelog(archive._extract_link_defs(source.read_text(encoding="utf-8"))[0])
+        for heading in parsed.release_headings:
+            if heading.date is None:
+                continue
+            if heading.version in dates and dates[heading.version] != heading.date:
+                raise ValueError(f"conflicting declared dates for {heading.version} in {source}")
+            dates[heading.version] = heading.date
+    return dates
+
+
+def _preserve_declared_dates(text: str, dates: dict[str, str]) -> str:
+    """Retain authored dates, including dates missing from generated headings."""
+    lines = text.splitlines(keepends=True)
+    for heading in archive.parse_changelog(text).release_headings:
+        if heading.version not in dates:
+            continue
+        line = lines[heading.line - 1]
+        declared = dates[heading.version]
+        if heading.date_span is None:
+            lines[heading.line - 1] = line.rstrip() + f" - {declared}\n"
+        else:
+            start, end = heading.date_span
+            lines[heading.line - 1] = line[:start] + declared + line[end:]
+    return "".join(lines)
+
+
 def generate(config: Config, *, tag: str | None = None, released: str | None = None, dry_run: bool = False) -> str:
     """Generate, normalize, and rotate history, then publish with recoverable rollback.
 
@@ -59,6 +92,7 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
     section = config.changelog
     if path.is_symlink():
         raise ValueError(f"Changelog output must not be a symlink: {path}")
+    dates = _declared_dates(path, archives)
     if bool(tag) != bool(released):
         raise ValueError("prospective changelog generation requires both --tag and --date")
     if tag:
@@ -66,6 +100,8 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
         assert released is not None
         if date.fromisoformat(released).isoformat() != released:
             raise ValueError("release date must be YYYY-MM-DD")
+        if tag.removeprefix("v") in dates and dates[tag.removeprefix("v")] != released:
+            raise ValueError(f"prospective date conflicts with declared date for {tag}")
     if section.cliff_config is not None:
         rendered = config.path(section.cliff_config).read_text(encoding="utf-8")
     else:
@@ -85,13 +121,13 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
     if tag:
         assert released is not None
         generated = archive.replace_release_date(generated, tag.removeprefix("v"), released, required=True)
+    generated = _preserve_declared_dates(generated, dates)
     result = postprocess_text(generated)
     parsed = archive.parse_changelog(archive._extract_link_defs(result)[0])
     if parsed.unreleased is None and not parsed.version_blocks:
         raise ValueError("git-cliff must generate at least one release or Unreleased section")
-    candidates = dict(archive.plan_archives(path, result, archives))
-    candidates.setdefault(path, result)
-    for target, candidate in candidates.items():
+
+    def format_candidate(candidate: str, target: Path) -> str:
         expected = archive.parse_changelog(archive._extract_link_defs(candidate)[0])
         if formatter is not None:
             candidate = format_markdown(candidate, target, formatter)
@@ -99,7 +135,11 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
         archive.require_preserved_releases(expected, parsed)
         if target == path and parsed.unreleased is None and not parsed.version_blocks:
             raise ValueError("formatted changelog must contain at least one release or Unreleased section")
-        candidates[target] = candidate
+        return candidate
+
+    candidates = dict(archive.plan_archives(path, result, archives, formatter=format_candidate if formatter is not None else None))
+    candidates.setdefault(path, result)
+    candidates = {target: format_candidate(candidate, target) for target, candidate in candidates.items()}
     if not dry_run:
         replace_many({target: candidate.encode("utf-8") for target, candidate in candidates.items()})
     return candidates[path]
@@ -111,21 +151,37 @@ def notes(config: Config, tag: str) -> tuple[str, Path, str]:
     version = tag.removeprefix("v")
     path, archive_dir, _formatter = _paths(config)
     candidates = (path, archive_dir / f"{archive._minor_key(version)}.md")
+    matches: list[tuple[str, Path, str]] = []
     for candidate in candidates:
         if not candidate.is_file():
             continue
-        content, definitions = archive._extract_link_defs(candidate.read_text(encoding="utf-8"))
-        parsed = archive.parse_changelog(content)
-        for label, block in parsed.version_blocks:
-            if label != version:
-                continue
-            heading, _, body = block.partition("\n")
-            body = body.strip()
-            if not body:
-                raise ValueError(f"empty release notes for {tag} in {candidate}")
-            links = archive._format_link_defs(definitions, archive._referenced_labels(body))
-            return body + ("\n\n" + links if links else "") + "\n", candidate, heading
+        extracted = changelog_notes.extract(candidate.read_text(encoding="utf-8"), version)
+        if extracted is not None:
+            body, heading = extracted
+            matches.append((body, candidate, heading))
+    if len(matches) > 1:
+        raise ValueError(f"Duplicate release {tag} across root and archive")
+    if matches:
+        return matches[0]
     raise ValueError(f"release notes for {tag} not found in configured changelog or archive")
+
+
+def check(config: Config) -> None:
+    """Validate the whole root changelog and all archives without changing files."""
+    path, archives, _formatter = _paths(config)
+    seen: dict[str, Path] = {}
+    for source in (path, *sorted(archives.glob("*.md"))):
+        text = source.read_text(encoding="utf-8")
+        changelog_notes.reference_definitions(text)
+        parsed = archive.parse_changelog(archive._extract_link_defs(text)[0])
+        if not parsed.version_blocks and parsed.unreleased is None:
+            raise ValueError(f"no release or Unreleased section in {source}")
+        if source != path and (parsed.unreleased is not None or any(archive._minor_key(version) != source.stem for version, _ in parsed.version_blocks)):
+            raise ValueError(f"archive contains releases outside its minor series: {source}")
+        for version, _block in parsed.version_blocks:
+            if version in seen:
+                raise ValueError(f"Duplicate release {version} in {seen[version]} and {source}")
+            seen[version] = source
 
 
 def tag(config: Config, version: str, *, force: bool = False, dry_run: bool = False) -> str:
@@ -135,6 +191,7 @@ def tag(config: Config, version: str, *, force: bool = False, dry_run: bool = Fa
     the previous tag is not deleted before the replacement object exists.
     """
     validate_semver(version)
+    check(config)
     policy = config.release
     from research_repo_tools.release_metadata import read_package_info
 
