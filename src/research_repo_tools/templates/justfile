@@ -44,6 +44,14 @@ release-check:
 release-notes tag:
     uv run --locked --group dev research-repo-tools changelog notes {{quote(tag)}}
 
+# Review branch and local changes with CodeRabbit against a verified origin/main by default.
+review base="origin/main":
+    uv run --locked --group dev research-repo-tools review branch --base="$1"
+
+# Review only staged, unstaged, and non-ignored untracked changes with CodeRabbit.
+review-uncommitted:
+    uv run --locked --group dev research-repo-tools review uncommitted
+
 # Validate the consumer's Semgrep rules and fixtures.
 semgrep-check:
     uv run --locked --group dev research-repo-tools semgrep check-fixtures

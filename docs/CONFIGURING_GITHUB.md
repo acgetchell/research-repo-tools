@@ -3,7 +3,7 @@
 Source and issues live at
 [acgetchell/research-repo-tools](https://github.com/acgetchell/research-repo-tools).
 Consumers will install released packages from PyPI. Local wheels are for pilot
-evaluation and installation checks; see [publishing](PUBLISHING.md).
+evaluation and installation checks; see [publishing](RELEASING.md).
 
 ## Repository controls
 
@@ -18,8 +18,9 @@ The baseline follows Delaunay and la-stack, adapted to this Python package:
   CodeRabbit status. The initial CodeRabbit rule uses its status name, matching
   MCMC; GitHub rejects its App binding until the App has repository access.
 - Read-only default workflow tokens; write permissions are limited to specific
-  security-upload and Dependabot jobs, plus OIDC identity in the Codecov upload
-  and PyPI publishing jobs. Actions cannot approve pull requests.
+  security-upload, Dependabot, and draft-release staging jobs. OIDC identity is
+  limited to Codecov, validated-release signing, and PyPI upload jobs. Actions
+  cannot approve pull requests.
 - Selected Actions only, with full commit SHA pinning required. Dependabot updates
   GitHub Actions and the uv lockfile weekly, with separate security-update groups.
 - Dependabot alerts/security updates, secret scanning, push protection, and private
@@ -128,9 +129,10 @@ The repository is pushed and normal changes go through pull requests. The
 maintainer performs Git mutations under [AGENTS.md](../AGENTS.md).
 
 The desired Actions allowlist includes `pypa/gh-action-pypi-publish@*` for the
-tagged-release workflow; apply that payload before the first release tag. The
+publication workflow; apply that payload before the first release. GitHub-owned
+`actions/attest` is covered by `github_owned_allowed`, with its full SHA pin. The
 `pypi` environment protections and PyPI Trusted Publisher are separate account
-settings. Follow [Publishing to PyPI](PUBLISHING.md) to configure them and verify
+settings. Follow [Releasing research-repo-tools](RELEASING.md) to configure them and verify
 the first release. Committing workflow YAML does not configure those accounts
 or publish distributions.
 

@@ -37,6 +37,14 @@ successful exits. Diagnostics use stderr, while reports and generated content
 use stdout. Human-readable diagnostics and progress messages are not a structured
 machine API. Template output and extracted release notes are intended for reuse.
 
+Review commands require Git and an externally installed, authenticated CodeRabbit
+CLI. `review branch --base origin/main` verifies the cached base against the remote;
+`review uncommitted` does not query a remote. Both use the configured consumer root
+and require its `AGENTS.md` and exactly one CodeRabbit YAML configuration. See the
+[review contract and recipes](../README.md#coderabbit-review). CodeRabbit output is
+streamed without a wrapper timeout. Its exit status propagates; signal termination
+maps to 128 plus the signal number, and keyboard interruption returns 130.
+
 File-changing commands operate only when invoked: dependency and release updates,
 changelog generation/normalization/archiving, template output, local tagging,
 and explicit setup/toolchain synchronization.

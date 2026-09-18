@@ -58,6 +58,9 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--dry-run", action="store_true")
     command.add_argument("--final-release", action="store_true")
     command.add_argument("--previous-release")
+    review = groups.add_parser("review", help="run an opt-in CodeRabbit review").add_subparsers(dest="action", required=True)
+    review.add_parser("branch", help="review branch and local changes against a verified base").add_argument("--base", default="origin/main")
+    review.add_parser("uncommitted", help="review only staged, unstaged, and untracked changes")
     semgrep = groups.add_parser("semgrep", help="validate consumer rules and fixtures").add_subparsers(dest="action", required=True)
     semgrep.add_parser("check-fixtures")
     groups.add_parser("setup", help="install Just and declared tools, configure PATH, and sync the locked environment")
@@ -155,6 +158,10 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         for pin, (old, new) in changes.items():
             print(f"{pin}: {old} -> {new}")
         return 0
+    if args.group == "review":
+        from research_repo_tools import review
+
+        return review.run(settings.root, base=args.base if args.action == "branch" else None)
     if args.group == "release":
         policy = replace(settings.release, final_changelog=True) if args.final_release else settings.release
         from research_repo_tools import release_metadata, update_release

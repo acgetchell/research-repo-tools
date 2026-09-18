@@ -74,7 +74,7 @@ runner's native compiler and SDK; they do not install operating-system build
 prerequisites or prove compatibility with every supported shell or Cargo tool.
 
 Consumer adoption, native Semgrep rule execution, and published-package
-verification require their own checks. Follow the [publishing guide](PUBLISHING.md)
+verification require their own checks. Follow the [publishing guide](RELEASING.md)
 for a clean PyPI installation and setup check before closing the release issue.
 
 ## Validation under the agent Git policy
