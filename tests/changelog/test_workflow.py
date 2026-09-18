@@ -1,5 +1,6 @@
 """Generation publishes the root and minor archives as one recoverable update."""
 
+import shutil
 import subprocess
 from dataclasses import replace
 from pathlib import Path
@@ -148,6 +149,7 @@ def test_changelog_recipes_expose_the_common_command_surface(tmp_path: Path, con
         (["changelog-release", "v1.0.0", "2026-09-17"], "--tag"),
         (["changelog-unreleased", "v1.0.0", "2026-09-17"], "--date"),
         (["changelog-archive"], "changelog archive"),
+        (["changelog-check"], "changelog check"),
         (["release-notes", "v1.0.0"], "changelog notes"),
         (["tag", "v1.0.0"], "changelog tag"),
         (["tag-force", "v1.0.0"], "--force"),
@@ -178,3 +180,92 @@ def test_formatter_cannot_remove_or_change_release_identity(consumer, monkeypatc
     with pytest.raises(ValueError, match="release headings"):
         changelog.generate(consumer)
     assert snapshot(consumer.root) == before
+
+
+@pytest.mark.parametrize("dry_run", [False, True])
+def test_generation_retains_declared_dates_in_root_and_archives(consumer, monkeypatch, dry_run):
+    root = consumer.root / "CHANGELOG.md"
+    root.write_text(HISTORY.replace("2026-09-16", "2026-08-31").split("## [0.9.2]")[0])
+    archive = consumer.root / "docs/archives/changelog/0.9.md"
+    archive.parent.mkdir(parents=True)
+    archive.write_text("# Changelog - 0.9.x\n\n## [0.9.2] - 2026-08-30\n\n### Fixed\n\n- Read the [guide](../../../docs/guide.md).\n")
+    before = snapshot(consumer.root)
+    preview = changelog.generate(consumer, dry_run=dry_run)
+    assert "## [1.0.0] - 2026-08-31" in preview
+    if dry_run:
+        assert snapshot(consumer.root) == before
+    else:
+        assert "## [0.9.2] - 2026-08-30" in archive.read_text()
+        once = snapshot(consumer.root)
+        assert changelog.generate(consumer) == preview
+        assert snapshot(consumer.root) == once
+
+
+def test_regenerated_declared_date_still_passes_release_metadata_check(tmp_path, monkeypatch):
+    from research_repo_tools import release_metadata
+    from tests.releases.test_metadata import _write_project
+
+    _write_project(tmp_path)
+    path = tmp_path / "CHANGELOG.md"
+    generated = path.read_text().replace("2026-08-04", "2026-08-05")
+    monkeypatch.setattr(changelog, "run_safe_command", lambda *args, **kwargs: subprocess.CompletedProcess([], 0, generated, ""))
+    settings = config.parse({"changelog": {"owner": "example", "repository": "consumer"}}, root=tmp_path)
+    citation = (tmp_path / "CITATION.cff").read_bytes()
+    changelog.generate(settings)
+    assert release_metadata.check(tmp_path) == 0
+    assert (tmp_path / "CITATION.cff").read_bytes() == citation
+
+
+@pytest.mark.parametrize("authority", ["archive", "prospective"])
+def test_conflicting_date_authorities_fail_without_changes(consumer, authority):
+    (consumer.root / "CHANGELOG.md").write_text(HISTORY)
+    tag = released = None
+    if authority == "archive":
+        archive = consumer.root / "docs/archives/changelog/0.9.md"
+        archive.parent.mkdir(parents=True)
+        archive.write_text("# Changelog\n\n## [0.9.2] - 2000-01-01\n\n- Retained.\n")
+    else:
+        tag, released = "v1.0.0", "2000-01-01"
+    before = snapshot(consumer.root)
+    with pytest.raises(ValueError, match="conflict.*date"):
+        changelog.generate(consumer, tag=tag, released=released)
+    assert snapshot(consumer.root) == before
+
+
+def test_generation_retains_date_after_prospective_release_is_tagged(consumer):
+    first = changelog.generate(consumer, tag="v1.0.0", released="2026-08-31")
+    before = snapshot(consumer.root)
+    # Producer returns its original Git-derived date on later ordinary runs.
+    assert changelog.generate(consumer) == first
+    assert snapshot(consumer.root) == before
+
+
+@pytest.mark.parametrize(
+    "formatted", [False, "stub", pytest.param("rumdl", marks=pytest.mark.skipif(shutil.which("rumdl") is None, reason="external rumdl required"))]
+)
+def test_formatted_regeneration_and_next_release_are_stable(consumer, monkeypatch, formatted):
+    # List-marker conversion and prose wrapping reproduce the comparison across
+    # raw generated blocks and formatter-produced retained archives.
+    history = HISTORY.replace("Earlier correction.", " ".join(["Long historical explanation."] * 12))
+    monkeypatch.setattr(changelog, "run_safe_command", lambda *args, **kwargs: subprocess.CompletedProcess([], 0, history, ""))
+    if formatted:
+        consumer = replace(consumer, changelog=replace(consumer.changelog, formatter="rumdl.toml"))
+        (consumer.root / "rumdl.toml").write_text(changelog.template("rumdl.toml").replace('"MD053"', '"MD053", "MD057"') + '\n[MD004]\nstyle = "asterisk"\n')
+    if formatted == "stub":
+        monkeypatch.setattr(changelog, "format_markdown", lambda text, path, rules: text.replace("\n- ", "\n* "))
+    changelog.generate(consumer)
+    before = snapshot(consumer.root)
+    changelog.generate(consumer)
+    assert snapshot(consumer.root) == before
+    if formatted:
+        assert "* Long historical" in (consumer.root / "docs/archives/changelog/0.8.md").read_text()
+    history = history.replace("## [Unreleased]", "## [1.1.0] - 2026-09-18")
+    changelog.generate(consumer, tag="v1.1.0", released="2026-09-18")
+    assert (consumer.root / "docs/archives/changelog/1.0.md").exists()
+    after_release = snapshot(consumer.root)
+    changelog.generate(consumer)
+    assert snapshot(consumer.root) == after_release
+    history = history.replace("Current series.", "Conflicting history.")
+    with pytest.raises(ValueError, match="conflicting retained release"):
+        changelog.generate(consumer)
+    assert snapshot(consumer.root) == after_release

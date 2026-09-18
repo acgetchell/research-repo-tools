@@ -17,6 +17,10 @@ changelog:
 changelog-archive:
     uv run --locked research-repo-tools changelog archive
 
+# Validate the entire changelog and all archives without writing files.
+changelog-check:
+    uv run --locked research-repo-tools changelog check
+
 # Generate, normalize, and rotate completed minor series without publishing files.
 changelog-preview *args:
     uv run --locked research-repo-tools changelog generate --dry-run "$@"

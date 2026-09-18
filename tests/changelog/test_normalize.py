@@ -14,7 +14,6 @@ from research_repo_tools.postprocess_changelog import (
     _CodeFence,
     _compact_entry,
     _inject_summary_sections,
-    _is_duplicate_squash_heading,
     _is_isolated_body_heading,
     _max_pr_number,
     _normalize_email_autolinks,
@@ -665,7 +664,7 @@ class TestIndentedHeadingNormalization:
         result = f.read_text(encoding="utf-8")
         assert "  **Performance Optimization**" not in result
         assert "#### Performance Optimization\n" in result
-        assert "#### Performance Improvements" in result
+        assert result.count("#### Performance Optimization") == 2
 
     def test_column_zero_entry_heading_becomes_level_four_without_parent(self) -> None:
         assert _normalize_entry_heading("## Duplicate Item Handling") == "#### Duplicate Item Handling"
@@ -714,35 +713,27 @@ class TestSquashHeadingNormalization:
         assert _plain_summary(line) == "remove old api"
 
     def test_squash_heading_parts_maps_kind_to_changelog_label(self) -> None:
-        assert _squash_heading_parts("  - perf(core): speed up predicates") == ("  ", "Performance", "Speed up predicates")
+        assert _squash_heading_parts("  - perf(core): speed up predicates") == ("  ", "perf(core)", "speed up predicates")
 
     def test_squash_heading_parts_ignores_commit_entries(self) -> None:
         assert _squash_heading_parts(f"- fix: actual commit {_commit()}") is None
 
     def test_conventional_squash_heading_becomes_bold_prose(self) -> None:
-        assert _normalize_squash_heading("- fix: close the 4D retry collapse") == "#### Fixed: Close the 4D retry collapse"
+        assert _normalize_squash_heading("- fix: close the 4D retry collapse") == "#### fix: close the 4D retry collapse"
 
     def test_nested_squash_heading_is_indented(self) -> None:
-        assert _normalize_squash_heading("- Changed: harden flip diagnostics", nested=True) == "#### Changed: Harden flip diagnostics"
+        assert _normalize_squash_heading("- Changed: harden flip diagnostics", nested=True) == "#### Changed: harden flip diagnostics"
 
     def test_commit_entry_is_preserved(self) -> None:
         line = f"- fix: actual commit {_commit()}"
         assert _normalize_squash_heading(line) == line
-
-    def test_duplicate_squash_heading_matches_parent_summary(self) -> None:
-        parent = _plain_summary("- Instrument large-scale 4D debugging")
-        assert _is_duplicate_squash_heading("- feat: instrument large-scale 4D debugging", parent)
-
-    def test_duplicate_squash_heading_rejects_distinct_heading(self) -> None:
-        parent = _plain_summary("- Instrument large-scale 4D debugging")
-        assert not _is_duplicate_squash_heading("- fix: close the 4D retry collapse", parent)
 
     def test_isolated_body_heading_requires_blank_neighbors(self) -> None:
         lines = ["- Parent entry", "", "- fix: child heading", "", "  - detail"]
         assert _is_isolated_body_heading(lines, 2)
         assert not _is_isolated_body_heading(lines, 4)
 
-    def test_full_pipeline_drops_duplicate_squash_heading(self, tmp_path: Path) -> None:
+    def test_full_pipeline_preserves_repeated_squash_heading(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
         f.write_text(
             f"# Changelog\n\n## [1.0.0]\n\n### Added\n\n- Instrument large-scale 4D debugging {_commit('3af976e', '3af976ec2f7c33d49803b24ab8f1a7da598fea0b')}\n\n* feat: instrument large-scale 4D debugging\n\n  - Thread cavity-touched cells through insertion.\n\n* fix: close the 4D bulk repair retry collapse\n\n  - Raise the D>=4 per-insertion repair budget.\n",
@@ -750,8 +741,8 @@ class TestSquashHeadingNormalization:
         )
         postprocess(f)
         result = f.read_text(encoding="utf-8")
-        assert "feat: instrument large-scale 4D debugging" not in result
-        assert "#### Fixed: Close the 4D bulk repair retry collapse" in result
+        assert "#### feat: instrument large-scale 4D debugging" in result
+        assert "#### fix: close the 4D bulk repair retry collapse" in result
         assert "  - Thread cavity-touched cells through insertion." in result
 
     def test_full_pipeline_resets_parent_summary_at_version_heading(self, tmp_path: Path) -> None:
@@ -763,7 +754,7 @@ class TestSquashHeadingNormalization:
         )
         postprocess(f)
         result = f.read_text(encoding="utf-8")
-        assert "#### Fixed: Repeatable summary" in result
+        assert "#### fixed: repeatable summary" in result
         assert "  - Preserve this historical squash-body heading." in result
 
     def test_full_pipeline_preserves_non_isolated_conventional_bullets(self, tmp_path: Path) -> None:
@@ -781,40 +772,40 @@ class TestSquashHeadingNormalization:
     def test_full_pipeline_deindents_children_after_squash_heading(self) -> None:
         content = f"# Changelog\n\n## [1.0.0]\n\n### Added\n\n- Identity-based item sorting {_pr(272)} {_commit('a125d98', 'a125d98deadbeef')}\n\n  - feat: Canonical item ordering details {_pr(266)}\n\n    - Add canonical_items module with sorted_items helpers\n"
         result = postprocess_text(content)
-        assert f"#### Added: Canonical item ordering details {_pr(266)}" in result
+        assert f"#### feat: Canonical item ordering details {_pr(266)}" in result
         assert "\n  - Add canonical_items module with sorted_items helpers\n" in result
         assert "\n    - Add canonical_items module" not in result
 
-    def test_full_pipeline_mirrors_squash_body_heading_into_matching_section(self) -> None:
+    def test_full_pipeline_keeps_squash_body_in_parent_section(self) -> None:
         content = f"# Changelog\n\n## [1.0.0]\n\n### Maintenance\n\n- Replace Node markdown tooling with rumdl {_pr(394)} {_commit('5654d14', '5654d14deadbeef')}\n\n  * fix(tooling): align markdown lint policy\n\n    - Scope Codacy markdownlint to active Markdown docs.\n\n  * docs: refresh release guidance\n\n    - Document the changelog workflow.\n"
         result = postprocess_text(content)
         assert f"- Align markdown lint policy {_commit('5654d14', '5654d14deadbeef')}" not in result
         assert "  - Scope Codacy markdownlint to active Markdown docs." in result
         assert f"- Refresh release guidance {_commit('5654d14', '5654d14deadbeef')}" not in result
         assert "- Replace Node markdown tooling with rumdl" in result
-        assert "#### Fixed: Align markdown lint policy" in result
-        assert "#### Documentation: Refresh release guidance" in result
+        assert "#### fix(tooling): align markdown lint policy" in result
+        assert "#### docs: refresh release guidance" in result
 
-    def test_full_pipeline_mirrors_squash_body_from_non_maintenance_section(self) -> None:
+    def test_full_pipeline_keeps_squash_body_in_non_maintenance_section(self) -> None:
         content = f"# Changelog\n\n## [1.0.0]\n\n### Changed\n\n- Refine insertion behavior {_commit('a6ec3fa', 'a6ec3fadeadbeef')}\n\n  * fix: add rollback on cell creation failure\n\n    - Keep failed insertions atomic.\n"
         result = postprocess_text(content)
         assert f"- Add rollback on cell creation failure {_commit('a6ec3fa', 'a6ec3fadeadbeef')}" not in result
-        assert "#### Fixed: Add rollback on cell creation failure" in result
+        assert "#### fix: add rollback on cell creation failure" in result
         assert "  - Keep failed insertions atomic." in result
 
     def test_full_pipeline_stops_squash_children_at_star_top_level_entries(self) -> None:
         content = f"# Changelog\n\n## [1.0.0]\n\n### Maintenance\n\n- Refresh tooling {_commit('1111111', '1111111deadbeef')}\n\n  * fix: align markdown lint policy\n\n    - Scope linting to active docs.\n\n* Bump helper tools {_commit('2222222', '2222222deadbeef')}\n\n  - Keep dependency updates as a separate generated entry.\n"
         result = postprocess_text(content)
         assert result.count("Bump helper tools") == 1
-        assert "#### Fixed: Align markdown lint policy" in result
-        assert result.index("#### Fixed: Align markdown lint policy") < result.index("- Bump helper tools")
+        assert "#### fix: align markdown lint policy" in result
+        assert result.index("#### fix: align markdown lint policy") < result.index("- Bump helper tools")
 
     def test_full_pipeline_stops_squash_children_at_unicode_top_level_entries(self) -> None:
         content = f"# Changelog\n\n## [1.0.0]\n\n### Maintenance\n\n- Refresh tooling {_commit('1111111', '1111111deadbeef')}\n\n  * docs: refresh release guidance\n\n    - Document the changelog workflow.\n\n• Update helper docs {_commit('3333333', '3333333deadbeef')}\n\n  - Keep the unicode-list entry separate.\n"
         result = postprocess_text(content)
         assert result.count("Update helper docs") == 1
-        assert "#### Documentation: Refresh release guidance" in result
-        assert result.index("#### Documentation: Refresh release guidance") < result.index("- Update helper docs")
+        assert "#### docs: refresh release guidance" in result
+        assert result.index("#### docs: refresh release guidance") < result.index("- Update helper docs")
 
     def test_full_pipeline_keeps_dependencies_heading_as_category_boundary(self) -> None:
         content = f"# Changelog\n\n## [1.0.0]\n\n### Fixed\n\n- Fix parser boundaries {_commit('4444444', '4444444deadbeef')}\n\n### Dependencies\n\n- Bump helper crate {_commit('5555555', '5555555deadbeef')}\n"
@@ -826,7 +817,7 @@ class TestSquashHeadingNormalization:
         content = f"# Changelog\n\n## [1.0.0]\n\n### Added\n\n- Instrument large-scale debugging {_commit('3af976e', '3af976edeadbeef')}\n\n  * feat: instrument large-scale debugging\n\n    - Keep this detail under the parent entry.\n"
         result = postprocess_text(content)
         assert result.count("- Instrument large-scale debugging") == 1
-        assert "#### Added: Instrument large-scale debugging" not in result
+        assert "#### feat: instrument large-scale debugging" in result
         assert "  - Keep this detail under the parent entry." in result
 
     def test_full_pipeline_preserves_consumer_feature_names(self) -> None:
@@ -846,10 +837,10 @@ class TestSquashHeadingNormalization:
         assert "- Preserve `diagnostics` and [diagnostics](docs/diagnostics.md)." in result
         assert postprocess_text(result) == result
 
-    def test_full_pipeline_prefers_contextual_duplicate_squash_body_entry(self) -> None:
+    def test_full_pipeline_preserves_contextual_squash_body_entry(self) -> None:
         content = f"# Changelog\n\n## [1.0.0]\n\n### Changed\n\n- Avoid panic in stack-matrix dispatch {_commit('3ac8b11', '3ac8b11deadbeef')}\n\n  - Add StackMatrixDispatchError.\n\n### Performance\n\n- Migrate geometry predicates to consumer {_commit('3ac8b11', '3ac8b11deadbeef')}\n\n#### Fixed: Avoid panic in stack-matrix dispatch\n\n- Add StackMatrixDispatchError.\n"
         result = postprocess_text(content)
-        assert result.count("Avoid panic in stack-matrix dispatch") == 1
+        assert result.count("Avoid panic in stack-matrix dispatch") == 2
         assert "#### Fixed: Avoid panic in stack-matrix dispatch" in result
         assert "### Changed\n\n### Performance" not in result
 
@@ -860,11 +851,11 @@ class TestSquashHeadingNormalization:
         assert "Keep the public docs wording." in result
         assert "Keep the internal test comments aligned." in result
 
-    def test_full_pipeline_strips_followup_suffix_after_duplicate_removal(self) -> None:
+    def test_full_pipeline_preserves_authored_followup_suffix(self) -> None:
         content = f"# Changelog\n\n## [1.0.0]\n\n### Changed\n\n- Improve insertion errors {_commit('a6ec3fa', 'a6ec3fadeadbeef')}\n\n#### Early Exit for Empty Input\n\n- Return a clear empty-handle error.\n\n### Fixed\n\n- Handle degenerate insertion {_commit('a6ec3fa', 'a6ec3fadeadbeef')}\n\n#### Changed: Improve insertion errors\n\n#### Early Exit for Empty Input - Follow-up\n\n- Return a clear empty-handle error.\n"
         result = postprocess_text(content)
-        assert "- Improve insertion errors" not in result
-        assert "#### Early Exit for Empty Input - Follow-up" not in result
+        assert "- Improve insertion errors" in result
+        assert "#### Early Exit for Empty Input - Follow-up" in result
         assert "#### Early Exit for Empty Input" in result
 
     def test_full_pipeline_preserves_distinct_followup_heading_without_duplicate_removal(self) -> None:
@@ -872,15 +863,15 @@ class TestSquashHeadingNormalization:
         result = postprocess_text(content)
         assert "#### Migration Guide - Follow-up" in result
 
-    def test_full_pipeline_deduplicates_nested_contextual_excerpt(self) -> None:
+    def test_full_pipeline_preserves_nested_contextual_excerpt(self) -> None:
         content = f"# Changelog\n\n## [0.6.0]\n\n### Changed\n\n- Reduce duplication and clarify tolerance/degeneracy docs {_commit('3ac8b11', '3ac8b11deadbeef')}\n\n  - Compute adaptive tolerance before consuming matrices for determinant evaluation.\n  - Clarify CoordinateConversionError::ConversionFailed coordinate_index semantics.\n\n### Fixed\n\n- Avoid panic in stack-matrix dispatch {_commit('3ac8b11', '3ac8b11deadbeef')}\n\n  - Add StackMatrixDispatchError (UnsupportedDim/La) and try_with_consumer_matrix! helper.\n  - Switch predicate/utility call sites to fallible dispatch.\n\n### Performance\n\n- Migrate geometry predicates to consumer {_commit('3ac8b11', '3ac8b11deadbeef')}\n\n  - Replace nalgebra-backed dynamic matrices with consumer fixed-size matrices.\n\n#### Fixed: Avoid panic in stack-matrix dispatch\n\n- Add StackMatrixDispatchError (UnsupportedDim/La) and try_with_consumer_matrix! helper.\n- Switch predicate/utility call sites to fallible dispatch.\n\n#### Changed: Reduce duplication and clarify tolerance/degeneracy docs\n\n- Compute adaptive tolerance before consuming matrices for determinant evaluation.\n- Clarify CoordinateConversionError::ConversionFailed coordinate_index semantics.\n"
         result = postprocess_text(content)
-        assert result.count("Avoid panic in stack-matrix dispatch") == 1
-        assert result.count("Reduce duplication and clarify tolerance/degeneracy docs") == 1
+        assert result.count("Avoid panic in stack-matrix dispatch") == 2
+        assert result.count("Reduce duplication and clarify tolerance/degeneracy docs") == 2
         assert "#### Fixed: Avoid panic in stack-matrix dispatch" in result
         assert "#### Changed: Reduce duplication and clarify tolerance/degeneracy docs" in result
-        assert "\n### Changed\n" not in result
-        assert "\n### Fixed\n" not in result
+        assert "\n### Changed\n" in result
+        assert "\n### Fixed\n" in result
 
 
 class TestCodeBlockLanguage:
@@ -1157,3 +1148,25 @@ class TestPostprocess:
         assert captured.out == ""
         assert captured.err == f"postprocess-changelog: error: {changelog}: injected replace failure\n"
         assert "Traceback" not in captured.err
+
+
+def test_authored_squash_structure_survives_without_inferred_release_entries() -> None:
+    content = (
+        f"# Changelog\n\n## [1.0.0]\n\n### Maintenance\n\n- chore: finalize release workflow {_pr(42)} {_commit()}\n\n"
+        "  * fix: temporary workaround\n\n    - Abandoned in the final implementation.\n\n"
+        "  * feat: alternate approach\n\n    - Replaced after review; retain this historical context.\n\n"
+        "  **Repeated title**\n\n  - First context.\n\n  **Repeated title**\n\n  - Second context.\n\n"
+        "  ```markdown\n  * fix: literal example\n  ```\n\n"
+        f"- Finalize the release workflow {_pr(43)} {_commit('bbbbbbb', 'bbbbbbbdeadbeef')}\n"
+    )
+    result = postprocess_text(content)
+    assert "### Fixed" not in result and "### Added" not in result
+    assert result.count("#### fix: temporary workaround") == 1
+    assert result.count("#### feat: alternate approach") == 1
+    assert result.count("#### Repeated title") == 2
+    assert "  * fix: literal example" in result
+    assert "Abandoned in the final implementation." in result
+    assert "Replaced after review; retain this historical context." in result
+    assert "### Merged Pull Requests" in result
+    assert "- chore: finalize release workflow" in result and "- Finalize the release workflow" in result
+    assert postprocess_text(result) == result

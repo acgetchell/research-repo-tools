@@ -73,7 +73,7 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 
 | Capability | Commands | Contract |
 | --- | --- | --- |
-| Changelog | `changelog archive`, `generate`, `normalize`, `notes`, `tag` | Root `CHANGELOG.md`; completed minor series in `docs/archives/changelog/` |
+| Changelog | `changelog archive`, `check`, `generate`, `normalize`, `notes`, `tag` | Root `CHANGELOG.md`; completed minor series in `docs/archives/changelog/` |
 | Coverage | `coverage report` | Cobertura summaries with deduplicated source lines |
 | Dependencies | `deps check-uv`, `update-python`, `update-tools`, `update-uv` | Exact development pins; canonical Cargo SemVer; stable uv pins |
 | Documentation | `docs check-lines` | UTF-8 Markdown line checks with table exemptions |
@@ -95,6 +95,7 @@ arguments in lexicographic order.
 | --- | --- |
 | `just changelog` | Generate, normalize, and archive completed minor series |
 | `just changelog-archive` | Archive existing notes without regenerating history |
+| `just changelog-check` | Validate the whole root changelog and all archives without writing |
 | `just changelog-preview` | Validate the generated root and archives without writing; print the root candidate |
 | `just changelog-release TAG DATE` | Generate a prospective release with an explicit `YYYY-MM-DD` date |
 | `just changelog-unreleased TAG DATE` | Alias for `changelog-release` |

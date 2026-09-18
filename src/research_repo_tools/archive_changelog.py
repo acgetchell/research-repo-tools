@@ -34,7 +34,7 @@ from research_repo_tools.process import format_exception_diagnostics
 from research_repo_tools.release_tags import SEMVER_PATTERN
 
 if TYPE_CHECKING:
-    from collections.abc import Sequence
+    from collections.abc import Callable, Sequence
 
 # Includes malformed version-like headings so they cannot become silent prose.
 _VERSION_HEADING_CANDIDATE_RE = re.compile(r"^##\s+(?:\[|v?[0-9])")
@@ -211,6 +211,7 @@ def parse_changelog(text: str) -> ParsedChangelog:
     # Locate all ``## [`` headings.
     headings: list[int] = []
     active_fence = None
+    archives_start: int | None = None
     for i, line in enumerate(lines):
         if active_fence is not None:
             if _closes_code_fence(line, active_fence):
@@ -220,10 +221,16 @@ def parse_changelog(text: str) -> ParsedChangelog:
         if active_fence is not None:
             continue
         if line == "## Archives":
-            lines = lines[:i]
-            break
+            archives_start = i if archives_start is None else archives_start
         if _VERSION_HEADING_CANDIDATE_RE.match(line):
+            if archives_start is not None:
+                raise ValueError(f"Release heading after Archives section at line {i + 1}")
             headings.append(i)
+
+    if active_fence is not None:
+        raise ValueError("unclosed changelog fence makes release boundaries ambiguous")
+    if archives_start is not None:
+        lines = lines[:archives_start]
 
     if not headings:
         return ParsedChangelog(text, None, ())
@@ -415,7 +422,13 @@ def _postprocess_existing_archives(archive_dir: Path) -> None:
     _write_texts_transactionally(_existing_archive_updates(archive_dir))
 
 
-def _merge_archive(path: Path, minor: str, blocks: list[tuple[str, str]], definitions: dict[str, str]) -> str:
+def _merge_archive(
+    path: Path,
+    minor: str,
+    blocks: list[tuple[str, str]],
+    definitions: dict[str, str],
+    formatter: Callable[[str, Path], str] | None = None,
+) -> str:
     """Retain earlier patches and reject conflicting already-retained content."""
     if path.is_symlink():
         raise ValueError(f"Changelog output must not be a symlink: {path}")
@@ -427,14 +440,26 @@ def _merge_archive(path: Path, minor: str, blocks: list[tuple[str, str]], defini
     retained = parse_changelog(original)
     if retained.unreleased or any(_minor_key(version) != minor for version, _ in retained.version_blocks):
         raise ValueError(f"archive contains releases outside its minor series: {path}")
+    # Compare complete documents through the same formatter, with the same
+    # introduction and output path. Formatting isolated blocks loses context
+    # (reference links, heading levels, and list layout).
+    incoming = _render_archive(minor, blocks, definitions, preamble=retained.preamble)
+    existing = _render_archive(minor, retained.version_blocks, retained_definitions, preamble=retained.preamble)
+    if formatter is not None:
+        incoming = formatter(incoming, path)
+        existing = formatter(existing, path)
+    incoming, incoming_definitions = _extract_link_defs(incoming)
+    existing, existing_definitions = _extract_link_defs(existing)
+    incoming_blocks = dict(parse_changelog(incoming).version_blocks)
+    existing_blocks = dict(parse_changelog(existing).version_blocks)
     merged = dict(retained.version_blocks)
     for version, block in blocks:
-        if version in merged and postprocess_text(merged[version]) != postprocess_text(block):
+        if version in merged and existing_blocks[version].strip() != incoming_blocks[version].strip():
             raise ValueError(f"conflicting retained release {version} in {path}")
-        merged[version] = block
+        merged.setdefault(version, block)
     used = _referenced_labels("\n".join(block for _, block in blocks))
     for label in used & definitions.keys():
-        if label in retained_definitions and retained_definitions[label] != definitions[label]:
+        if label in existing_definitions and existing_definitions[label] != incoming_definitions.get(label):
             raise ValueError(f"conflicting retained reference {label!r} in {path}")
         retained_definitions[label] = definitions[label]
     ordered = sorted(merged.items(), key=lambda item: _version_sort_key(item[0]), reverse=True)
@@ -522,6 +547,8 @@ def plan_archives(
     changelog_path: Path,
     text: str,
     archive_dir: Path | None = None,
+    *,
+    formatter: Callable[[str, Path], str] | None = None,
 ) -> list[tuple[Path, str]]:
     """Plan root and archive replacements from a candidate without writing files.
 
@@ -554,7 +581,7 @@ def plan_archives(
         archive_path = archive_dir / f"{minor}.md"
         blocks = [(version, relocate_links(block, relocation)) for version, block in groups[minor]]
         definitions = {label: relocate_links(line, relocation) for label, line in link_defs.items()}
-        planned_writes.append((archive_path, _merge_archive(archive_path, minor, blocks, definitions)))
+        planned_writes.append((archive_path, _merge_archive(archive_path, minor, blocks, definitions, formatter)))
         archived_minors.append(minor)
 
     if not archived_minors:

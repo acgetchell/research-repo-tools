@@ -19,6 +19,7 @@ def parser() -> argparse.ArgumentParser:
     changelog = groups.add_parser("changelog", help="generate, normalize, archive, and extract release history").add_subparsers(dest="action", required=True)
     for name, help_text in {
         "archive": "rotate completed minor series from the existing changelog",
+        "check": "validate the whole changelog and all archives without changing files",
         "generate": "generate and normalize history, then rotate completed minor series",
         "normalize": "normalize the existing changelog without regenerating history",
         "notes": "extract release notes from the root changelog or an archive",
@@ -179,6 +180,9 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         from research_repo_tools import archive_changelog, changelog, postprocess_changelog
 
         path = settings.root / "CHANGELOG.md"
+        if args.action == "check":
+            changelog.check(settings)
+            return 0
         if args.action == "generate":
             rendered = changelog.generate(settings, tag=args.tag, released=args.date, dry_run=args.dry_run)
             if args.dry_run:
