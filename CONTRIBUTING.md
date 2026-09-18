@@ -49,8 +49,12 @@ including changelog recipes and aliases.
 | `just help-workflows` | Alias for `help` |
 | `just install-check` | Build and check isolated installations |
 | `just release-check TAG` | Run the read-only PyPI publication preflight |
+| `just release-update VERSION PREVIOUS DATE` | Synchronize release metadata before generating notes |
+| `just review [base]` | Run opt-in CodeRabbit review of branch and local changes |
+| `just review-uncommitted` | Run opt-in CodeRabbit review of local changes only |
 | `just setup` | Install user Just and synchronize the declared development environment |
 | `just sync` | Synchronize the locked development environment |
+| `just tag-preview TAG` | Preview the annotated release tag without changing Git state |
 | `just test` | Run the Python test suite |
 | `just update` | Upgrade uv, reconcile its pin, update Python development pins, refresh the lockfile, and sync |
 | `just workflow-check` | Run actionlint and offline zizmor checks |
@@ -72,8 +76,9 @@ using `just check-dist`. Linux uses `just coverage`; macOS and Windows use
 report without rerunning tests. The required platform jobs also run `just check-setup`
 against the built wheel, installing real tools and updating the disposable
 runner user's shell configuration. This check is excluded from local `just ci`.
-The [release workflow](docs/PUBLISHING.md)
-publishes that validated artifact after environment approval.
+The [release workflows](docs/RELEASING.md) attach the validated distributions
+and signed provenance to a draft GitHub Release. Publishing that release triggers
+asset verification and the approval-gated PyPI upload without rebuilding.
 
 `just check` lints, formats, and type-checks `src`, `scripts`, and
 `tests`. It also runs the locked actionlint and zizmor workflow validators.
@@ -135,7 +140,7 @@ See [Supported interfaces](docs/api.md) for the CLI, configuration, and public
 Python entry-point contract.
 
 Maintain one implementation per common capability under `src/research_repo_tools/`.
-Organize tests under `tests/changelog`, `dependencies`, `releases`, `semgrep`, `toolchain`, and
+Organize tests under `tests/changelog`, `dependencies`, `releases`, `review`, `semgrep`, `toolchain`, and
 `utilities`. Fixtures should be small representative inputs generated in temporary
 directories. Preserve meaningful regression assertions against this package;
 merge duplicates instead of maintaining historical implementations or repository
@@ -156,7 +161,7 @@ Follow [AGENTS.md](AGENTS.md): agents must not run mutating Git commands in this
 or consumer repositories. Leave staging, commits, tags, pushes, and branch changes
 to the user. Tests exercise Git mutations only in disposable fixtures. Source
 repositories remain read-only. Package publication requires an explicit request;
-follow [Publishing to PyPI](docs/PUBLISHING.md) for account setup, review, tagging,
+follow [Releasing research-repo-tools](docs/RELEASING.md) for account setup, review, tagging,
 and deployment approval.
 
 ## Documentation conventions

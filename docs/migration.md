@@ -65,3 +65,19 @@ replaced by the package.
 
 Rust builds, domain tests, repository-specific Python or notebook checks, and
 validation of each consumer's generated artifacts remain in that consumer.
+
+## CodeRabbit review adoption
+
+The shared review contract follows the branch/uncommitted scopes and live-base
+checks in markov-chain-monte-carlo's Just review helper. Consumer adoption is
+separate from maintenance-tool migration and requires a published package version
+containing the review capability. See the [review recipes](../README.md#coderabbit-review).
+
+Replace duplicated review helpers with the packaged thin recipes. The common
+default is verified `origin/main`, superseding local `main` defaults; explicit local
+bases remain available. Instructions are discovered only at the configured root,
+with `AGENTS.md` and exactly one CodeRabbit YAML configuration required. Keep
+repository instructions and scientific validation local. Move common regressions
+upstream before removing local helpers and retain focused integration checks for
+the pinned package, recipes, and configuration. Live reviews remain explicitly
+authorized work, outside routine checks and CI.

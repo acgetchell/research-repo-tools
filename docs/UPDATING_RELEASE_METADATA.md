@@ -1,7 +1,7 @@
 # Updating release metadata
 
 These commands maintain consumer metadata. For publishing this tooling package
-itself, follow [Publishing to PyPI](PUBLISHING.md).
+itself, follow [Releasing research-repo-tools](RELEASING.md).
 
 Normal release commands need no separate configuration file:
 

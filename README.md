@@ -78,6 +78,7 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | Dependencies | `deps check-uv`, `update-python`, `update-tools`, `update-uv` | Exact development pins; canonical Cargo SemVer; stable uv pins |
 | Documentation | `docs check-lines` | UTF-8 Markdown line checks with table exemptions |
 | Release metadata | `release check`, `release update` | Infer Cargo or Python metadata; validate before replacing files |
+| Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
 | Semgrep fixtures | `semgrep check-fixtures` | Validate consumer-supplied rules and positive fixture coverage |
 | Setup | `setup` | Require uv; install user Just and declared tools; sync the locked environment |
 | Templates | `templates NAME` | Shared changelog, git-cliff, just, TOML, and rumdl resources |
@@ -103,6 +104,8 @@ arguments in lexicographic order.
 | `just help-workflows` | Alias for `help` |
 | `just release-check` | Check consumer release metadata |
 | `just release-notes TAG` | Print release notes from the root changelog or an archive |
+| `just review [base]` | Review branch and local changes; default to verified `origin/main` |
+| `just review-uncommitted` | Review staged, unstaged, and non-ignored untracked changes |
 | `just semgrep-check` | Validate the consumer's Semgrep rules and fixtures |
 | `just setup` | Install and verify declared tools, then synchronize the Python environment |
 | `just tag TAG` | Forward to `tag-release` |
@@ -116,6 +119,37 @@ To preview a prospective release, run
 `just changelog-preview --tag v1.2.3 --date YYYY-MM-DD`.
 Follow the [toolchain guide][toolchain] for declarations, first-time setup, and
 strictly read-only tool checks.
+
+### CodeRabbit review
+
+Install and authenticate the [CodeRabbit CLI](https://docs.coderabbit.ai/cli)
+explicitly and ensure `coderabbit` is on PATH. The package does not install it,
+authenticate, enable usage credits, or retry reviews automatically. These recipes
+are opt-in and remain outside `just check` and `just ci`. Agents must have an
+explicit maintainer request before invoking a live review.
+
+```sh
+just review
+just review main
+just review-uncommitted
+```
+
+`just review` includes committed branch changes plus staged, unstaged, and
+non-ignored untracked files. Before invoking CodeRabbit, it compares the local
+`origin/main` commit with the live `origin` main branch. Missing or stale refs
+stop with fetch guidance; failed or malformed remote lookups also stop review.
+The wrapper never fetches or changes Git state. Verification applies at invocation,
+not throughout a long review. An explicit local base such as `main` is checked
+locally without a remote query. Uncommitted review skips the base check entirely.
+
+The configured consumer root must contain `AGENTS.md` and exactly one of
+`.coderabbit.yaml` or `.coderabbit.yml`; missing files, directories in place of
+files, or both configuration names are errors. Both files are passed as additional
+instructions. Output uses CodeRabbit's structured `--agent` mode and streams directly
+to the terminal without the usual five-minute subprocess timeout. Nonzero exit
+statuses propagate, and interruption returns 130. Service or authentication errors
+are unavailable reviews, not clean results. Verify findings and suggested changes
+against current code before acting on them.
 
 ### Workflow examples
 
@@ -245,7 +279,7 @@ setup, coding conventions, maintainer recipes, testing, and release preparation.
 
 BSD-3-Clause. See [LICENSE][license].
 
-[publishing]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/PUBLISHING.md
+[publishing]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RELEASING.md
 [contributing]: https://github.com/acgetchell/research-repo-tools/blob/main/CONTRIBUTING.md
 [api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/api.md
 [toolchain]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/INSTALLING.md

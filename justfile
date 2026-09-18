@@ -75,6 +75,18 @@ release-check tag:
 release-notes tag:
     uv run --locked research-repo-tools changelog notes "$1"
 
+# Update release metadata using an explicit previous tag and UTC release date.
+release-update version previous date:
+    uv run --locked research-repo-tools release update "$1" --previous-release "$2" --date "$3"
+
+# Review branch and local changes with CodeRabbit against a verified origin/main by default.
+review base="origin/main":
+    uv run --locked research-repo-tools review branch --base="$1"
+
+# Review only staged, unstaged, and non-ignored untracked changes with CodeRabbit.
+review-uncommitted:
+    uv run --locked research-repo-tools review uncommitted
+
 # Install user Just and synchronize the declared development environment.
 setup:
     uv run --locked research-repo-tools setup
@@ -89,6 +101,10 @@ tag tag: (tag-release tag)
 # Explicitly replace an existing local annotated tag.
 tag-force tag:
     uv run --locked research-repo-tools changelog tag "$1" --force
+
+# Preview the annotated tag without changing Git state.
+tag-preview tag:
+    uv run --locked research-repo-tools changelog tag "$1" --dry-run
 
 # Create a local annotated tag from validated release notes.
 tag-release tag:
