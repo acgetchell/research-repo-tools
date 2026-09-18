@@ -4,10 +4,10 @@ set positional-arguments
 audit:
     uv run --locked --group audit python scripts/audit_dependencies.py
 
-# Build the wheel and source distribution.
+# Replace stale build artifacts with the current wheel and source distribution.
 build:
     uv lock --check
-    uv build --no-sources
+    uv build --no-sources --clear
 
 # Generate, normalize, and rotate completed minor series into docs/archives/changelog.
 changelog:
