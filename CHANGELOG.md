@@ -5,6 +5,30 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.1] - 2026-09-19
+
+### Added
+
+- Add CodeRabbit review and publish verified release assets to PyPI
+  [`e9f9b7d`](https://github.com/acgetchell/research-repo-tools/commit/e9f9b7d04740f792da9bb218dccbfaa5edb98282)
+
+  - Add shared branch and uncommitted review commands with thin Just  recipes, verified origin/main freshness, and streamed CodeRabbit output.
+  - Require repository instructions and unambiguous review configuration; keep live reviews opt-in and outside routine validation.
+  - Attach validated distributions and signed provenance to draft GitHub releases, then publish the verified assets to PyPI without rebuilding.
+  - Preserve environment approval and verify release identity, asset inventory, and provenance before upload.
+  - Add release-update and tag-preview recipes, and consolidate metadata, changelog, tagging, and publication guidance in docs/RELEASING.md.
+
+### Fixed
+
+- Preserve authored history and stabilize regeneration
+  [`c22d1be`](https://github.com/acgetchell/research-repo-tools/commit/c22d1be4a95d4393c2a3f95932b7487ed4883165)
+
+  - Retain declared release dates instead of replacing them with Git dates.
+  - Preserve squash-entry structure and wording without promoting embedded headings or removing semantically similar content.
+  - Compare archives through the same formatter to make regeneration idempotent while retaining genuine conflict detection.
+  - Validate extracted notes against the requested release, rejecting duplicate targets, ambiguous boundaries, and conflicting references.
+  - Add changelog check and just changelog-check for strict validation of the root changelog and all archives.
+
 ## [0.1.0] - 2026-09-17
 
 ### ⚠️ Breaking Changes
@@ -64,6 +88,20 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Add badges for license, CI, CodeQL, Zizmor, Codecov, and dependency audit
   workflows to provide immediate visibility into project health.
+
+### Changed
+
+- Finalize 0.1.0 release notes with breaking changes
+  [`1969816`](https://github.com/acgetchell/research-repo-tools/commit/1969816f5e6befa4f23f97eb1b3e87010d4c9906)
+
+  This release formalizes version 0.1.0, including significant functional
+  additions, fixes, and a major breaking change.
+
+  The toolchain bootstrap and its generated launchers have been removed.
+  Consumers must now ensure `uv` is pre-installed and explicitly invoke
+  `research-repo-tools setup` via their locked tooling group. Python
+  callers are required to use typed configuration fields and the
+  `ReleasePolicy` instead of previous dictionary-based sections.
 
 ### Fixed
 
@@ -134,4 +172,5 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Document supported CLI and Python interfaces, consumer just recipes, and publisher setup.
   - Generate the initial 0.1.0 changelog from committed history.
 
+[0.1.1]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/acgetchell/research-repo-tools/tree/v0.1.0
