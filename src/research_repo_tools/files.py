@@ -249,6 +249,23 @@ def replace(path: Path, payload: bytes) -> None:
     replace_many({path.resolve(): payload})
 
 
+def replace_if_unchanged(path: Path, expected: bytes, payload: bytes) -> None:
+    """Stage bytes, then check the source immediately before atomic replacement.
+
+    Preserve permissions and symlinks. This optimistic guard detects edits during
+    staging; it does not serialize independent writers with the final rename.
+    """
+    target = path.resolve()
+    _validate_targets((target,))
+    staged = _stage_bytes(target, payload)
+    try:
+        if path.resolve() != target or target.read_bytes() != expected:
+            raise ValueError(f"file changed before publication: {path}; refusing to overwrite it")
+        _replace_path(staged, target)
+    finally:
+        _cleanup_temporary_paths((staged,))
+
+
 def _write_texts_transactionally(writes: Sequence[tuple[Path, str]]) -> None:
     """Publish explicitly UTF-8 text without platform newline translation."""
     _publish(tuple((path, text.encode("utf-8")) for path, text in writes))

@@ -121,7 +121,8 @@ The consumer template provides:
 - `just help-workflows`: alias for `help`.
 - `just setup`: synchronize declared tools and then the default Python environment.
 - `just tools-check`: inspect without syncing the environment or downloading Python.
-- `just update`: upgrade uv, reconcile its pin, update Python pins and locks, and synchronize tools.
+- `just update`: upgrade uv and declared Cargo tools, update Python pins and locks, and synchronize tools.
+- `just update-cargo-tools`: upgrade declared Cargo tools and publish verified TOML pins.
 
 Bare `just` shows help. When merging the template, reconcile its default recipe
 with the consuming repository's existing default.
@@ -138,6 +139,7 @@ The underlying commands are:
 | `toolchain check [--json]` | Report expected/actual versions and selected paths; nonzero if incomplete |
 | `toolchain run -- COMMAND ...` | Check tools, then run with their selected paths; propagate failure/exit status |
 | `toolchain sync [--dry-run]` | Install declared versions and verify results; dry run reports without installation |
+| `toolchain upgrade [--dry-run]` | Resolve stable Cargo upgrades, install and verify them, then publish the exact pins |
 
 Global `--root` and `--config` retain the shared CLI contract. Toolchain commands
 also read the conventional files at the consumer root. A standalone configuration
@@ -176,7 +178,7 @@ package name, and package version. Distinct consumers can keep distinct pins;
 sync never upgrades the selected release or rewrites the user's default Rust
 toolchain. Old cache entries remain available until deliberately removed.
 
-Installers run only during explicit setup or toolchain sync. Rustup uses its
+Installers run only during explicit setup, toolchain sync, or toolchain upgrade. Rustup uses its
 versioned upstream binary and verifies the
 published SHA-256 before execution. Cargo installs use exact versions and
 `--locked`; their build dependencies come from each crate's published lockfile.
@@ -213,10 +215,36 @@ Upgrading the user-level uv affects other checkouts using it. Their exact uv pin
 must also be reconciled before running their locked commands. An installed uv
 upgrade cannot be rolled back if
 writing the project pin fails. Fix the reported cause and rerun `just update`.
-The remaining `just update` steps retain declared Rust/Cargo versions and the
-shared package pin; changing those remains an explicit reviewed operation.
+The remaining `just update` steps upgrade declared Cargo tools, retaining the
+Rust compiler and shared package pins. Changing those pins remains a manual,
+reviewed operation.
 The Python pin updater preserves included tooling-group pins as resolver
 constraints; it updates only direct exact `dev` requirements.
+
+Use `just update-cargo-tools` for only the managed Cargo upgrade. It resolves the
+latest non-yanked stable release of each declared supported package from the
+crates.io sparse index. It never downgrades a pin or opts into a prerelease;
+an existing prerelease advances when a newer stable release exists. Build
+metadata does not change SemVer precedence, so equal-precedence pins are retained.
+No undeclared package is queried or installed. Rust compatibility is verified by
+the exact `cargo install --locked --version =VERSION` build, not guessed from
+registry metadata. An incompatible release fails without publishing new pins.
+
+The command checks the exact stable uv prerequisite before resolution, reports
+proposed changes, installs in distinct managed version directories, and verifies
+every selected executable before changing the TOML source. `toolchain upgrade
+--dry-run` performs resolution and prints changes without installing or writing.
+Current declarations produce a no-op; use sync to repair missing installations.
+Comments, unrelated configuration, line endings, permissions, and symlink targets
+are preserved. Standalone configuration updates its own `[toolchain.cargo]`
+table. Dotted and quoted keys work; inline-table Cargo declarations must first be
+expanded into standalone assignments. Unsupported source forms fail before installation.
+
+If resolution, installation, or publication fails, old declarations and old
+versioned installations remain usable. Successful candidate installations stay
+cached. Fix the cause and rerun the upgrade. Concurrent configuration edits are
+detected before publication and are never deliberately overwritten. No lockfile,
+user Cargo installation, or Rust compiler pin is changed by this command.
 
 The older `deps update-tools` command updates legacy Just variables from
 user-installed Cargo tools. It does not manage this new TOML toolchain contract

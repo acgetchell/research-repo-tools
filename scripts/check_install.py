@@ -51,6 +51,10 @@ changelog.write_text("# Changelog\n\n## [1.1.0] - 2026-09-07\n\n- Current.\n\n##
 assert main(["--root", str(consumer), "changelog", "archive"]) == 0
 assert (consumer / "docs/archives/changelog/1.0.md").is_file()
 assert main(["--root", str(consumer), "changelog", "notes", "v1.0.0"]) == 0
+notebook = consumer / "minimal.ipynb"
+notebook.write_text('{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[]}')
+assert main(["--root", str(consumer), "notebooks", "group"]) == 0
+assert main(["--root", str(consumer), "notebooks", "check", str(notebook)]) == 1
 """
 
 
@@ -58,6 +62,9 @@ def check(dist: Path) -> None:
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     version = metadata["project"]["version"]
     expected_just = next(item.removeprefix("rust-just==") for item in metadata["project"]["dependencies"] if item.startswith("rust-just=="))
+    notebook_checkers = [
+        next(item for item in metadata["dependency-groups"]["dev"] if isinstance(item, str) and item.startswith(f"{tool}==")) for tool in ("ruff", "ty")
+    ]
     wheel = dist / f"research_repo_tools-{version}-py3-none-any.whl"
     sdist = dist / f"research_repo_tools-{version}.tar.gz"
     artifacts = set(dist.glob("*.whl")) | set(dist.glob("*.tar.gz"))
@@ -114,11 +121,15 @@ def check(dist: Path) -> None:
             # excludes tooling. Recipes must explicitly restore their own group.
             recipe_consumer = consumer / "recipe consumer"
             recipe_consumer.mkdir()
+            uv_version = run([uv, "--version"], cwd=consumer, env=local_env).split()[1]
+            notebook_group = "notebook" if artifact == wheel else "analysis"
             (recipe_consumer / "pyproject.toml").write_text(
                 '[project]\nname="recipe-consumer"\nversion="0.1.0"\nrequires-python=">=3.14"\n'
-                f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}]\n'
-                "[tool.uv]\npackage=false\ndefault-groups=[]\n"
-                f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(artifact.resolve()))}}}\n",
+                f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}, {", ".join(map(json.dumps, notebook_checkers))}]\n'
+                f'{notebook_group}=["research-repo-tools[notebooks]=={version}"]\n'
+                f'[tool.uv]\npackage=false\ndefault-groups=[]\nrequired-version="=={uv_version}"\n'
+                f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(artifact.resolve()))}}}\n"
+                f'[tool.research-repo-tools.notebooks]\ngroup="{notebook_group}"\n',
                 encoding="utf-8",
             )
             run([uv, "lock", "--python", str(python)], cwd=recipe_consumer, env=env)
@@ -132,6 +143,42 @@ def check(dist: Path) -> None:
             assert run([str(just), "release-notes", "v0.1.0"], cwd=recipe_consumer, env=env).strip() == "- Recipe works."
             assert recipe_cli.is_file(), "recipe did not install its declared tooling group"
             assert (recipe_consumer / "uv.lock").read_bytes() == lock, "recipe changed the lockfile"
+            (recipe_consumer / ".python-version").write_text("3.14\n", encoding="utf-8")
+            # Install the extra from this same distribution, exercise locked sync
+            # and a real project kernel without touching the user's kernels.
+            run([str(just), "notebook-sync"], cwd=recipe_consumer, env=env)
+            notebook = recipe_consumer / "notebooks" / "smoke.ipynb"
+            notebook.parent.mkdir()
+            notebook.write_text(
+                json.dumps(
+                    {
+                        "nbformat": 4,
+                        "nbformat_minor": 5,
+                        "metadata": {},
+                        "cells": [
+                            {
+                                "cell_type": "code",
+                                "id": "smoke",
+                                "metadata": {},
+                                "source": 'print("installed notebook works")',
+                                "outputs": [],
+                                "execution_count": None,
+                            }
+                        ],
+                    }
+                ),
+                encoding="utf-8",
+            )
+            original_notebook = notebook.read_bytes()
+            run([str(just), "notebook-check", "notebooks/smoke.ipynb"], cwd=recipe_consumer, env=env)
+            run([str(just), "notebook-clear", "notebooks/smoke.ipynb"], cwd=recipe_consumer, env=env)
+            run([str(just), "notebook-lint", "notebooks/smoke.ipynb"], cwd=recipe_consumer, env=env)
+            run([str(just), "notebook-execute", "notebooks/smoke.ipynb"], cwd=recipe_consumer, env=env)
+            report = json.loads((recipe_consumer / "target/notebooks/notebooks/smoke.report.json").read_text(encoding="utf-8"))
+            assert report["status"] == "passed", report
+            assert notebook.read_bytes() == original_notebook
+            assert (recipe_consumer / "uv.lock").read_bytes() == lock
+            assert (recipe_consumer / ".venv/share/jupyter/kernels/research-repo-tools/kernel.json").is_file()
             # A real locked tooling group must start before the consumer's native
             # build backend exists. A full installation of this project would fail.
             setup_consumer = consumer / "setup consumer"

@@ -50,6 +50,17 @@ def parser() -> argparse.ArgumentParser:
     deps.add_parser("update-uv", help="upgrade uv through its owner and reconcile its project pin")
     docs = groups.add_parser("docs", help="check Markdown source files").add_subparsers(dest="action", required=True)
     docs.add_parser("check-lines").add_argument("files", nargs="+")
+    notebooks = groups.add_parser("notebooks", help="validate, clean, execute, and synchronize selected notebooks").add_subparsers(dest="action", required=True)
+    for action in ("check", "clear", "execute", "group", "lint", "sync"):
+        command = notebooks.add_parser(action)
+        if action not in ("group", "sync"):
+            command.add_argument("files", nargs="+", help="explicit notebook paths relative to the consumer root")
+        if action == "execute":
+            command.add_argument("--cwd")
+            command.add_argument("--output-dir")
+            command.add_argument("--timeout", type=int, help="positive per-cell timeout in seconds")
+        if action == "lint":
+            command.add_argument("--timeout", type=int, default=30, help="positive per-checker timeout in seconds (default: 30)")
     release = groups.add_parser("release", help="check and synchronize release metadata").add_subparsers(dest="action", required=True)
     release.add_parser("check").add_argument("--final-release", action="store_true")
     command = release.add_parser("update")
@@ -75,10 +86,32 @@ def parser() -> argparse.ArgumentParser:
     toolchain.add_parser("check", help="inspect installed tools without installing anything").add_argument("--json", action="store_true")
     toolchain.add_parser("run", help="run a command with verified managed tools; never installs").add_argument("command", nargs=argparse.REMAINDER)
     toolchain.add_parser("sync", help="install and verify declared versions").add_argument("--dry-run", action="store_true")
+    toolchain.add_parser("upgrade", help="upgrade declared Cargo tools and publish verified pins").add_argument("--dry-run", action="store_true")
     return result
 
 
 def run(args: argparse.Namespace, settings: config.Config) -> int:
+    if args.group == "notebooks":
+        if args.action == "group":
+            print(settings.notebooks.group)
+            return 0
+        from research_repo_tools import notebooks
+
+        if args.action == "sync":
+            notebooks.sync(settings)
+            return 0
+        paths = [settings.path(path) for path in args.files]
+        if args.action == "check":
+            notebooks.check(paths, outputs=settings.notebooks.outputs)
+        elif args.action == "clear":
+            notebooks.clear(paths)
+        elif args.action == "lint":
+            from research_repo_tools.notebook_lint import lint
+
+            return lint(settings, paths, timeout=args.timeout)
+        else:
+            return notebooks.execute(settings, paths, cwd=args.cwd, output_dir=args.output_dir, timeout=args.timeout)
+        return 0
     if args.group == "setup":
         from research_repo_tools import toolchain, toolchain_config, toolchain_setup
 
@@ -87,6 +120,11 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
     if args.group == "toolchain":
         from research_repo_tools import toolchain, toolchain_config
 
+        if args.action == "upgrade":
+            from research_repo_tools.toolchain_upgrade import upgrade
+
+            upgrade(settings, source=args.config, dry_run=args.dry_run)
+            return 0
         plan = toolchain_config.load(settings)
         runtime = toolchain.Runtime(plan)
         if args.action == "run":

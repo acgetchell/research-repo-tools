@@ -164,6 +164,7 @@ def test_stage_creates_or_resumes_empty_draft_without_publishing(script, monkeyp
     assert len(creations) == (0 if existing else 1)
     if creations:
         assert "--draft" in creations[0] and "--verify-tag" in creations[0] and "--notes-from-tag" in creations[0]
+        assert "--repo" not in creations[0]  # Incompatible with --notes-from-tag.
     upload = calls[-1]
     assert upload[:3] == ("release", "upload", TAG)
     assert "--clobber" not in upload

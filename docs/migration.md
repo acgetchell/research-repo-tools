@@ -25,11 +25,14 @@ normalization preserves those names in prose, code spans, and link destinations.
 installation and verification of declared Python, Rust, and Cargo tools.
 Native installer and isolated installed-package validation are required before
 closing issue #2. Issue #1 covers publication and a clean PyPI setup check;
-consumer migrations are separate downstream issues. Generic notebook infrastructure remains
-planned: environment/kernel setup, execution, cleanup, and validation. Scientific
-notebook content and experiment choices remain consumer-owned.
+consumer migrations are separate downstream issues. Optional [notebook infrastructure](RUNNING_NOTEBOOKS.md)
+provides environment/kernel setup, execution reports, cleanup, structural validation,
+and Python lint/format/type gates using the consumer's Ruff and ty. Scientific
+notebook content and experiment choices remain consumer-owned. Native notebook
+analysis supersedes extracted Python files; migrate notebook-specific checker
+configuration to `.ipynb` paths and validate each consumer's selected workflow.
 
-Notebook, benchmark, plotting, and evidence tooling are deferred. Future additions should
+Benchmark, plotting, and broader evidence tooling are deferred. Future additions should
 first establish a common contract and its minimal representative fixtures. A
 common evidence contract should cover source identity, environment, inputs,
 measurement validity, and comparison compatibility; scientific case definitions

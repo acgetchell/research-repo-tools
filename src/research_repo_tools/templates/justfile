@@ -36,6 +36,26 @@ help:
 
 alias help-workflows := help
 
+# Validate structure, cell identities, and source output policy.
+notebook-check +files:
+    notebook_group="$(uv run --locked --only-group tooling --inexact research-repo-tools notebooks group)" && uv run --locked --group dev --group "$notebook_group" research-repo-tools notebooks check "$@"
+
+# Deliberately clear generated notebook outputs and execution metadata.
+notebook-clear +files:
+    notebook_group="$(uv run --locked --only-group tooling --inexact research-repo-tools notebooks group)" && uv run --locked --group dev --group "$notebook_group" research-repo-tools notebooks clear "$@"
+
+# Execute only the selected notebooks in fresh project kernels.
+notebook-execute +files:
+    notebook_group="$(uv run --locked --only-group tooling --inexact research-repo-tools notebooks group)" && uv run --locked --group dev --group "$notebook_group" research-repo-tools notebooks execute "$@"
+
+# Check structure, Python syntax, Ruff rules/formatting, and ty types.
+notebook-lint +files:
+    notebook_group="$(uv run --locked --only-group tooling --inexact research-repo-tools notebooks group)" && uv run --locked --group dev --group "$notebook_group" research-repo-tools notebooks lint "$@"
+
+# Synchronize the locked notebook environment and register its project kernel.
+notebook-sync:
+    uv run --locked --managed-python --only-group tooling research-repo-tools notebooks sync
+
 # Check consumer release metadata.
 release-check:
     uv run --locked --group dev research-repo-tools release check
@@ -75,12 +95,17 @@ tag-release tag:
 tools-check:
     uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain check
 
-# Upgrade uv, update exact development pins, refresh dependencies, and sync tools.
+# Upgrade uv and declared Cargo tools, update Python pins and locks, and sync.
 update:
     uv run --no-config --no-sync --no-python-downloads research-repo-tools deps update-uv
     uv run --locked --group dev research-repo-tools deps update-python
     uv lock --upgrade
+    uv run --locked --group dev research-repo-tools toolchain upgrade
     uv run --locked --managed-python --only-group tooling research-repo-tools setup
+
+# Upgrade only declared managed Cargo tools and publish verified TOML pins.
+update-cargo-tools:
+    uv run --locked --group dev research-repo-tools toolchain upgrade
 
 # Update exact direct Python development pins.
 update-python-deps:

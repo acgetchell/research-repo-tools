@@ -181,7 +181,20 @@ def check(dist: Path) -> None:
         assert shell_state() == configured, "repeat setup changed shell configuration"
         assert json.loads(run([cli, "toolchain", "check", "--json"], cwd=consumer, env=active)) == statuses
         verify_shell(consumer, env, just_version)
-        print("PASS: native wheel setup, managed execution, Rust compilation, user Just, and repeat setup", flush=True)
+        # Exercise explicit resolution, installation, declaration publication,
+        # and managed execution on every native platform. Never use user Cargo.
+        run([cli, "toolchain", "upgrade", "--dry-run"], cwd=consumer, env=active)
+        assert (consumer / "pyproject.toml").read_bytes() == declarations["pyproject.toml"]
+        run([just, "update-cargo-tools"], cwd=consumer, env=active)
+        upgraded = tomllib.loads((consumer / "pyproject.toml").read_text(encoding="utf-8"))
+        cargo_pins = upgraded["tool"]["research-repo-tools"]["toolchain"]["cargo"]
+        assert set(cargo_pins) == {"git-cliff"}
+        assert cargo_pins["git-cliff"] in run([cli, "toolchain", "run", "--", "git-cliff", "--version"], cwd=consumer, env=active)
+        assert all(status["ok"] for status in json.loads(run([cli, "toolchain", "check", "--json"], cwd=consumer, env=active)))
+        for name in (".python-version", "rust-toolchain.toml", "uv.lock"):
+            assert (consumer / name).read_bytes() == declarations[name]
+        assert all(path.exists() for path in selected.values()), "upgrade removed old versioned tools"
+        print("PASS: native wheel setup, managed execution and upgrade, Rust compilation, user Just, and repeat setup", flush=True)
 
 
 if __name__ == "__main__":
