@@ -37,6 +37,15 @@ including setup startup and its missing-uv failure. These checks do not install
 user tools or modify shell profiles.
 They run the installed Just template against a consumer with default dependency
 groups disabled, verifying that recipes restore their required tooling group.
+Maintenance-only installations must not contain notebook dependencies. Each
+distribution is also installed with its notebook extra through a locked consumer
+group, then checked with project-kernel synchronization, native Ruff/ty linting,
+and real notebook execution. Installed recipes cover both the default notebook
+group and a custom group, including output cleanup.
+Synthetic tests exercise malformed notebooks, stable IDs, output cleanup,
+interpreter selection, cell errors, and timeouts. Native checker tests cover
+syntax, formatting, types, IPython forms, cross-cell references, configuration,
+and diagnostic cell mapping. Kernel tests require local socket access.
 `just check-dist` validates existing wheel and sdist artifacts without rebuilding.
 
 GitHub runs package checks on Linux, macOS, and Windows, plus a git-cliff
@@ -66,6 +75,8 @@ compile/run, user-level Just in a fresh shell, development dependency sync,
 unchanged declarations/lockfiles, and repeat setup without replacing tools or
 duplicating shell configuration. Linux uses Bash, macOS uses Zsh, and Windows
 uses PowerShell with the refreshed user PATH from the registry.
+The same job exercises an explicit Cargo upgrade, verifies the published pins
+and managed executable, and checks that old installations remain available.
 
 `just check-setup` requires a disposable GitHub-hosted runner because it installs
 real tools and changes that runner user's shell configuration or Windows user

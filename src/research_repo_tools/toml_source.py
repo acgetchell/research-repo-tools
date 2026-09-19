@@ -89,3 +89,30 @@ def key_line(text: str, table: str, key: str, *, index: int | None = None) -> in
             return line
     label = f"[[{table}]] entry {index + 1}" if index is not None else f"[{table}]"
     raise ValueError(f"{label} is missing {key}")
+
+
+def replace_string(text: str, table: str, key: str, value: str) -> str:
+    """Replace a standalone string assignment, retaining surrounding TOML bytes.
+
+    Dotted and quoted keys work through key_line. Inline-table declarations are
+    rejected rather than reserializing unrelated configuration and comments.
+    """
+    import json
+
+    line = key_line(text, table, key)
+    lines = text.splitlines(keepends=True)
+    offset = sum(map(len, lines[: line - 1]))
+    declaration = _KEY.match(text, offset + len(lines[line - 1]) - len(lines[line - 1].lstrip()))
+    if declaration is None:
+        raise ValueError(f"[{table}].{key} must use a standalone string assignment")
+    start = declaration.end()
+    while start < len(text) and text[start].isspace():
+        start += 1
+    match = _STRING.match(text, start)
+    if match is None:
+        raise ValueError(f"[{table}].{key} must be a string")
+    # Retain ordinary quote style; multiline values become canonical scalars.
+    quoted = f"'{value}'" if text[start] == "'" and "'" not in value else json.dumps(value)
+    result = text[:start] + quoted + text[match.end() :]
+    tomllib.loads(result)
+    return result

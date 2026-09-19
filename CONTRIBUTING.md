@@ -140,12 +140,16 @@ See [Supported interfaces](docs/api.md) for the CLI, configuration, and public
 Python entry-point contract.
 
 Maintain one implementation per common capability under `src/research_repo_tools/`.
-Organize tests under `tests/changelog`, `dependencies`, `releases`, `review`, `semgrep`, `toolchain`, and
+Organize tests under `tests/changelog`, `dependencies`, `notebooks`, `releases`, `review`, `semgrep`, `toolchain`, and
 `utilities`. Fixtures should be small representative inputs generated in temporary
 directories. Preserve meaningful regression assertions against this package;
 merge duplicates instead of maintaining historical implementations or repository
 snapshots. Use actual child processes for byte transport and minimal disposable
 repositories for Git behavior.
+Notebook tests use synthetic files and real fresh kernels for interpreter,
+working-directory, cell-error, and timeout behavior. They require local socket
+access for Jupyter. Optional notebook dependencies are pinned in the development
+group but remain absent from maintenance-only distribution installations.
 
 A new capability needs a shared purpose and a consistent contract. Repository
 names must never select behavior. Standardize common defaults; leave scientific

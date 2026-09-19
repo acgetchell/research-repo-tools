@@ -23,3 +23,10 @@ justfile = "justfile"
 # [deps.tools]
 # git_cliff_version = "git-cliff"
 # rumdl_version = "rumdl"
+
+[notebooks]
+group = "notebook"
+cwd = "."
+output-dir = "target/notebooks"
+timeout = 600
+outputs = "clear"

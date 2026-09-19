@@ -8,12 +8,22 @@ from types import MappingProxyType
 from typing import Literal, TypeIs
 
 FIELDS = {
+    "notebooks": {"group", "cwd", "output-dir", "timeout", "outputs"},
     "toolchain": {"cargo"},
     "deps": {"pyproject", "justfile", "tools", "uv"},
     "semgrep": {"config", "fixtures", "namespace", "timeout", "cwd", "counts"},
     "release": {"date-policy", "final-changelog"},
     "changelog": {"formatter", "cliff-config", "owner", "repository"},
 }
+
+
+@dataclass(frozen=True, slots=True)
+class NotebookSettings:
+    group: str = "notebook"
+    cwd: str = "."
+    output_dir: str = "target/notebooks"
+    timeout: int = 600
+    outputs: Literal["clear", "preserve"] = "clear"
 
 
 @dataclass(frozen=True, slots=True)
@@ -70,6 +80,7 @@ class Config:
     semgrep: SemgrepSettings = field(default_factory=SemgrepSettings)
     release: ReleasePolicy = field(default_factory=ReleasePolicy)
     changelog: ChangelogSettings = field(default_factory=ChangelogSettings)
+    notebooks: NotebookSettings = field(default_factory=NotebookSettings)
 
     def path(self, value: str) -> Path:
         path = Path(value)
@@ -144,6 +155,13 @@ def parse(value: object, *, root: Path) -> Config:
     semgrep = _section(data, "semgrep")
     release = _section(data, "release")
     changelog = _section(data, "changelog")
+    notebooks = _section(data, "notebooks")
+    notebook_timeout = notebooks.get("timeout", 600)
+    if type(notebook_timeout) is not int or notebook_timeout <= 0:
+        raise ValueError("notebooks.timeout must be a positive integer")
+    notebook_outputs = notebooks.get("outputs", "clear")
+    if notebook_outputs not in ("clear", "preserve"):
+        raise ValueError("notebooks.outputs must be clear or preserve")
     timeout = semgrep.get("timeout", 300)
     if type(timeout) is not int or timeout <= 0:
         raise ValueError("semgrep.timeout must be a positive integer")
@@ -180,6 +198,13 @@ def parse(value: object, *, root: Path) -> Config:
             cliff_config=_optional_string(changelog, "cliff-config", "changelog"),
             owner=_optional_string(changelog, "owner", "changelog"),
             repository=_optional_string(changelog, "repository", "changelog"),
+        ),
+        notebooks=NotebookSettings(
+            group=_string(notebooks.get("group", "notebook"), "notebooks.group"),
+            cwd=_string(notebooks.get("cwd", "."), "notebooks.cwd"),
+            output_dir=_string(notebooks.get("output-dir", "target/notebooks"), "notebooks.output-dir"),
+            timeout=notebook_timeout,
+            outputs="preserve" if notebook_outputs == "preserve" else "clear",
         ),
     )
 

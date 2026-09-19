@@ -47,7 +47,8 @@ maps to 128 plus the signal number, and keyboard interruption returns 130.
 
 File-changing commands operate only when invoked: dependency and release updates,
 changelog generation/normalization/archiving, template output, local tagging,
-and explicit setup/toolchain synchronization.
+explicit setup/toolchain synchronization and upgrades, and notebook synchronization
+or output cleanup. Notebook execution publishes separate artifacts.
 Dry runs are available only where command help lists them. Importing the package
 does not install tools, access the network, or modify consumer files.
 
@@ -89,4 +90,6 @@ See [toolchain setup](INSTALLING.md) for declarations, host support, installatio
 ownership, and remaining native validation gates. Git is a system prerequisite;
 Semgrep belongs in the consumer's Python dependencies. GitHub CLI is needed for
 automatic discovery of a previous release; an explicit previous release permits
-offline preparation. Notebook infrastructure remains separate future work.
+offline preparation. The optional `notebooks` extra supplies notebook validation,
+cleanup, synchronization, and execution. Notebook Python linting also requires
+consumer-declared Ruff and ty; see [the notebook contract](RUNNING_NOTEBOOKS.md).

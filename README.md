@@ -77,12 +77,13 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | Coverage | `coverage report` | Cobertura summaries with deduplicated source lines |
 | Dependencies | `deps check-uv`, `update-python`, `update-tools`, `update-uv` | Exact development pins; canonical Cargo SemVer; stable uv pins |
 | Documentation | `docs check-lines` | UTF-8 Markdown line checks with table exemptions |
+| Notebooks | `notebooks check`, `clear`, `execute`, `group`, `lint`, `sync` | Optional locked environment, cell-aware Ruff/ty checks, and execution reports |
 | Release metadata | `release check`, `release update` | Infer Cargo or Python metadata; validate before replacing files |
 | Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
 | Semgrep fixtures | `semgrep check-fixtures` | Validate consumer-supplied rules and positive fixture coverage |
 | Setup | `setup` | Require uv; install user Just and declared tools; sync the locked environment |
 | Templates | `templates NAME` | Shared changelog, git-cliff, just, TOML, and rumdl resources |
-| Toolchain | `toolchain check`, `run`, `sync` | Exact declarations; managed installations; verified execution |
+| Toolchain | `toolchain check`, `run`, `sync`, `upgrade` | Exact declarations; managed installations; verified execution and explicit Cargo upgrades |
 
 ### Just recipes
 
@@ -102,6 +103,11 @@ arguments in lexicographic order.
 | `just changelog-unreleased TAG DATE` | Alias for `changelog-release` |
 | `just help` | List available commands and arguments in lexicographic order |
 | `just help-workflows` | Alias for `help` |
+| `just notebook-check FILE...` | Validate notebook structure, cell IDs, and output policy |
+| `just notebook-clear FILE...` | Deliberately clear generated notebook state |
+| `just notebook-execute FILE...` | Execute selected notebooks and write results and reports |
+| `just notebook-lint FILE...` | Check structure, output policy, Python syntax, Ruff rules/formatting, and ty types |
+| `just notebook-sync` | Synchronize locked notebook dependencies and the project kernel |
 | `just release-check` | Check consumer release metadata |
 | `just release-notes TAG` | Print release notes from the root changelog or an archive |
 | `just review [base]` | Review branch and local changes; default to verified `origin/main` |
@@ -112,7 +118,8 @@ arguments in lexicographic order.
 | `just tag-force TAG` | Explicitly replace an existing local tag |
 | `just tag-release TAG` | Create a local annotated tag from validated release notes |
 | `just tools-check` | Check installed tools and versions without installing them |
-| `just update` | Upgrade uv, reconcile its pin, update Python development pins and locked dependencies, and synchronize tools |
+| `just update` | Upgrade uv and managed Cargo tools, update Python development pins and locks, and synchronize tools |
+| `just update-cargo-tools` | Upgrade declared managed Cargo tools and publish verified TOML pins |
 | `just update-python-deps` | Update exact direct Python development pins |
 
 To preview a prospective release, run
@@ -186,13 +193,34 @@ series to `docs/archives/changelog/`. The root file keeps Unreleased, the newest
 minor series, and archive links. The same [changelog recipes][changelog] are
 available here and in the consumer justfile template.
 
-External-tool installation is explicit through `setup` or `toolchain sync`; managed
-execution selects the checked versions. Generic notebook setup, execution, and
-validation remain planned capabilities.
-Scientific benchmarks, evidence schemas, plotting, and deployment workflows are
-also outside this first version. Scientific algorithms,
+External-tool installation is explicit through `setup`, `toolchain sync`, or
+`toolchain upgrade`; managed execution selects the checked versions.
+Scientific benchmarks, broader evidence schemas, plotting, and deployment workflows
+remain outside this package. Scientific algorithms,
 case inventories, repository rules, and custom release commands stay in their
 consuming repositories.
+
+### Notebooks
+
+For notebook work, add `research-repo-tools[notebooks]==X.Y.Z` at the same version
+as the tooling pin to a `notebook` dependency group. Keep analysis libraries in
+that group, and declare Ruff 0.16.8 or newer and ty 0.0.82 or newer in `dev` for
+linting. Refresh the lockfile, then use `just notebook-sync`. It registers a
+kernel in the project environment. Maintenance-only users need no Jupyter packages.
+
+```sh
+just notebook-sync
+just notebook-lint notebooks/analysis.ipynb
+just notebook-execute notebooks/analysis.ipynb
+```
+
+Execution leaves source files untouched and writes executed notebooks and JSON
+reports under `target/notebooks`, preserving root-relative paths. Consumers own
+fast/slow selections, input preparation, scientific assertions, and figure
+destinations. See the [notebook contract](docs/RUNNING_NOTEBOOKS.md) for output
+policy, failure reports, and environment configuration. Linting uses the locked
+project's Ruff and ty with the consumer's configuration and preserves cell IDs
+in diagnostics. `notebook-check` provides structure and output checks alone.
 
 ### Calling from Python
 

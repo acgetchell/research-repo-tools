@@ -69,7 +69,8 @@ def stage(tag: str, dist: Path, bundle: Path) -> None:
         if release.get("assets"):
             raise ValueError("draft already has assets; inspect and remove the incomplete draft before retrying; assets are never overwritten")
     else:
-        gh("release", "create", tag, "--repo", REPOSITORY, "--draft", "--verify-tag", "--title", tag, "--notes-from-tag")
+        # --notes-from-tag requires the local checkout; gh rejects --repo with it.
+        gh("release", "create", tag, "--draft", "--verify-tag", "--title", tag, "--notes-from-tag")
     # Use a stable asset name so publication can require an exact inventory.
     attachment = dist.parent / BUNDLE
     with bundle.open("rb") as source, attachment.open("xb") as target:
