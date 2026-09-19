@@ -60,7 +60,7 @@ def upgrade(settings: config.Config, *, source: Path | None = None, dry_run: boo
     if not uv.ok:
         raise ValueError(f"uv {plan.uv} must be installed before Cargo upgrades; found {uv.actual}; no changes made")
     # The selected filename determines the config schema even when it is a
-    # symlink to a differently named target. files.replace preserves the link.
+    # symlink to a differently named target. Guarded publication preserves the link.
     source = (source or settings.root / "pyproject.toml").absolute()
     original = source.read_bytes()
     # Ensure the source being rewritten actually supplied these declarations.
@@ -94,9 +94,7 @@ def upgrade(settings: config.Config, *, source: Path | None = None, dry_run: boo
         return
     try:
         toolchain.Runtime(replace(plan, cargo=tuple(selected))).sync()
-        if source.read_bytes() != original:
-            raise ValueError(f"configuration changed during installation: {source}; refusing to overwrite it")
-        files.replace(source, text.encode("utf-8"))
+        files.replace_if_unchanged(source, original, text.encode("utf-8"))
     except (OSError, ValueError, RuntimeError) as error:
         raise RuntimeError(
             f"Cargo upgrade failed: {error}\n"

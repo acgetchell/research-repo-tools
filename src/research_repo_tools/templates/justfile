@@ -54,7 +54,7 @@ notebook-lint +files:
 
 # Synchronize the locked notebook environment and register its project kernel.
 notebook-sync:
-    uv run --locked --only-group tooling research-repo-tools notebooks sync
+    uv run --locked --managed-python --only-group tooling research-repo-tools notebooks sync
 
 # Check consumer release metadata.
 release-check:

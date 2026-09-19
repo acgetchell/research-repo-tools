@@ -66,19 +66,33 @@ def test_failures_keep_original_declarations(consumer, monkeypatch, phase):
     if phase == "resolve":
         monkeypatch.setattr(upgrade, "latest_stable", resolve)
     if phase == "publish":
-        monkeypatch.setattr(files, "replace", publish)
+        monkeypatch.setattr(files, "_replace_path", publish)
     with pytest.raises((ValueError, RuntimeError)):
         upgrade.upgrade(config.load(root=consumer.parent))
     assert consumer.read_bytes() == original
     assert installed == ([] if phase == "resolve" else ["0.9.101"])
 
 
-def test_concurrent_manifest_edit_is_retained(consumer, monkeypatch):
+@pytest.mark.parametrize("phase", ["install", "stage"])
+def test_concurrent_manifest_edit_is_retained(consumer, monkeypatch, phase):
     changed = consumer.read_bytes() + b"# concurrent edit\r\n"
-    monkeypatch.setattr(toolchain.Runtime, "sync", lambda self: consumer.write_bytes(changed))
-    with pytest.raises(RuntimeError, match="changed during installation"):
+    monkeypatch.setattr(toolchain.Runtime, "sync", lambda self: None)
+    if phase == "install":
+        monkeypatch.setattr(toolchain.Runtime, "sync", lambda self: consumer.write_bytes(changed))
+    else:
+        stage_bytes = files._stage_bytes
+
+        def stage(path, payload):
+            staged = stage_bytes(path, payload)
+            consumer.write_bytes(changed)
+            return staged
+
+        monkeypatch.setattr(files, "_stage_bytes", stage)
+    with pytest.raises(RuntimeError, match="changed"):
         upgrade.upgrade(config.load(root=consumer.parent))
     assert consumer.read_bytes() == changed
+    assert not list(consumer.parent.glob("*.tmp"))
+    assert not list(consumer.parent.glob("*.bak"))
 
 
 @pytest.mark.parametrize("found", ["0.12.15", "0.12.17", "0.12.16-rc.1", "missing"])

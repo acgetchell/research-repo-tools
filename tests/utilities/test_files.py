@@ -39,6 +39,29 @@ def test_publication_preserves_posix_permissions(tmp_path: Path) -> None:
     assert stat.S_IMODE(path.stat().st_mode) == 0o640
 
 
+@pytest.mark.skipif(os.name == "nt", reason="symlink creation needs elevated Windows privileges")
+def test_guarded_publication_rejects_retargeted_symlink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    first, second, link = (tmp_path / name for name in ("first", "second", "link"))
+    first.write_bytes(b"original")
+    second.write_bytes(b"original")
+    link.symlink_to(first)
+    stage_bytes = files._stage_bytes
+
+    def stage(path: Path, payload: bytes) -> Path:
+        staged = stage_bytes(path, payload)
+        link.unlink()
+        link.symlink_to(second)
+        return staged
+
+    monkeypatch.setattr(files, "_stage_bytes", stage)
+    with pytest.raises(ValueError, match="changed before publication"):
+        files.replace_if_unchanged(link, b"original", b"replacement")
+    assert link.is_symlink()
+    assert link.resolve() == second
+    assert first.read_bytes() == second.read_bytes() == b"original"
+    assert set(tmp_path.iterdir()) == {first, second, link}
+
+
 def test_late_failure_restores_existing_bytes_and_removes_new_files(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     first, second, third = (tmp_path / name for name in ("first", "nested/second", "third"))
     first.write_bytes(b"old\r\n\xff")
