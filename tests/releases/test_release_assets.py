@@ -215,6 +215,17 @@ def test_workflows_gate_signing_and_upload_on_validation():
     prepare = yaml.load((ROOT / ".github/workflows/prepare-release.yml").read_text(), Loader=yaml.BaseLoader)
     publish = yaml.load((ROOT / ".github/workflows/publish.yml").read_text(), Loader=yaml.BaseLoader)
     assert prepare["on"] == {"push": {"tags": ["v*"]}}
+    for job in [*prepare["jobs"].values(), *publish["jobs"].values()]:
+        assert job.get("continue-on-error", "false") == "false"
+        for step in job.get("steps", []):
+            assert "if" not in step  # Every release guard and transfer must run after prior success.
+            assert step.get("continue-on-error", "false") == "false"
+    ancestor = 'git --no-pager merge-base --is-ancestor "$GITHUB_SHA" origin/main'
+    unchanged_tag = 'test "$(git --no-pager rev-parse "$GITHUB_REF^{commit}")" = "$GITHUB_SHA"'
+    preflight_runs = [step.get("run", "").strip() for step in prepare["jobs"]["preflight"]["steps"]]
+    assert ancestor in preflight_runs
+    assert prepare["jobs"]["validate"]["needs"] == "preflight"
+    assert "if" not in prepare["jobs"]["validate"]
     stage = prepare["jobs"]["stage"]
     assert set(stage["needs"]) == {"preflight", "validate"}
     assert "if" not in stage  # Default success() must gate signature generation.
@@ -232,7 +243,12 @@ def test_workflows_gate_signing_and_upload_on_validation():
     assert "!github.event.release.draft" in verify["if"]
     assert "permissions" not in verify
     assert publish["permissions"] == {"contents": "read"}
-    assert any("release_assets.py verify" in step.get("run", "") for step in verify["steps"])
+    verify_runs = [step.get("run", "").strip() for step in verify["steps"]]
+    identity = f"{ancestor}\n{unchanged_tag}"
+    provenance = "python3 scripts/release_assets.py verify"
+    assert identity in verify_runs and provenance in verify_runs
+    transfer = next(index for index, step in enumerate(verify["steps"]) if step.get("uses", "").startswith("actions/upload-artifact@"))
+    assert verify_runs.index(identity) < verify_runs.index(provenance) < transfer
     final = publish["jobs"]["publish"]
     assert final["needs"] == "verify" and "if" not in final
     assert final["environment"]["name"] == "pypi"

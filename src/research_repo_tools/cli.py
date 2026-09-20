@@ -4,6 +4,7 @@ import argparse
 import subprocess
 import sys
 from dataclasses import replace
+from io import TextIOWrapper
 from pathlib import Path
 
 from research_repo_tools import __version__, config
@@ -254,6 +255,11 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    # Reporting a completed mutation must not fail on an unencodable path.
+    # Preserve the selected encoding while escaping unsupported characters.
+    for stream in (sys.stdout, sys.stderr):
+        if isinstance(stream, TextIOWrapper):
+            stream.reconfigure(errors="backslashreplace")
     args = parser().parse_args(argv)
     try:
         return run(args, config.load(args.config, args.root))
