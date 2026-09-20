@@ -5,6 +5,61 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.2] - 2026-09-20
+
+### Merged Pull Requests
+
+- Bump astral-sh/setup-uv in the github-actions group [#18](https://github.com/acgetchell/research-repo-tools/pull/18)
+
+### Added
+
+- Add managed Cargo upgrades and notebook workflows
+  [`2ad1023`](https://github.com/acgetchell/research-repo-tools/commit/2ad1023e994071452ce2a9f0e72ce9b03b74d2c4)
+
+  - Add toolchain upgrade and update-cargo-tools, publishing Cargo pins only after installation succeeds and preserving prior pins on failure.
+  - Include managed Cargo upgrades in the consumer update workflow.
+  - Add optional notebook environment setup, validation, output cleanup, and fresh-kernel execution with source-preserving reports.
+  - Check notebook syntax, Ruff rules and formatting, and ty types with diagnostics tied to stable cell IDs.
+  - Honor configured notebook groups and reject numeric overflow before execution or file changes.
+  - Fix draft release creation using annotated tag notes.
+- Complete dependency and tool update workflows [`edf7e34`](https://github.com/acgetchell/research-repo-tools/commit/edf7e3436b9f499fb28a412d2fae9a9a85feb8bd)
+
+  - Add aggregate, dependency-only, Cargo, Python, and tools-only recipes while preserving support for Python-only consumers.
+  - Keep Cargo exclusions and additional resolution roots under consumer control.
+  - Upgrade the full Python lock and synchronize dev with managed tools, retaining update-python-deps as an alias.
+  - Bootstrap updates from the tooling group so native consumer builds wait until the final checked sync.
+  - Support cargo-audit, cargo-machete, samply, tectonic, and tex-fmt with executable verification and native prerequisite guidance.
+  - Document the superseded uv, Just, and cargo-update policies.
+
+### Fixed
+
+- Guard Cargo pin publication and Windows notebook sync
+  [`f28204b`](https://github.com/acgetchell/research-repo-tools/commit/f28204b014782b83ff735ac9933d62af56a8dd64)
+
+  - Recheck source content and symlink targets after staging Cargo pin updates, refusing publication when either has changed.
+  - Start notebook-sync with managed Python to prevent Windows from replacing the environment while its CLI is running.
+- Require a cargo-edit pin for cargo upgrade [`0dc0034`](https://github.com/acgetchell/research-repo-tools/commit/0dc00346c1885b8742da0a7d502099b4e27817d4)
+
+  - Reject cargo upgrade through toolchain run when cargo-edit is undeclared, even if an unmanaged copy is available on PATH.
+  - Direct consumers to declare an exact pin and run just setup to install and verify the tool before upgrading dependencies.
+- Enforce cargo-edit pins for direct upgrades [`bd74456`](https://github.com/acgetchell/research-repo-tools/commit/bd744568008f7f072565718cc39fe700f188dd77)
+
+  - Require a declared cargo-edit pin for direct cargo-upgrade calls and clarify exact version and setup requirements.
+  - Exercise real Cargo requirement and lockfile updates from installed wheels in Linux, macOS, and Windows CI.
+  - Prevent false Windows failures when comparing executable paths.
+
+### Maintenance
+
+- Bump astral-sh/setup-uv in the github-actions group [#18](https://github.com/acgetchell/research-repo-tools/pull/18)
+  [`9867b46`](https://github.com/acgetchell/research-repo-tools/commit/9867b467bc97e6f8e098ebe8f14b1b9437595664)
+
+  Bumps the github-actions group with 1 update: [astral-sh/setup-uv](https://github.com/astral-sh/setup-uv).
+
+  Updates `astral-sh/setup-uv` from 10.0.1 to 10.1.0
+
+  - [Release notes](https://github.com/astral-sh/setup-uv/releases)
+  - [Commits](https://github.com/astral-sh/setup-uv/compare/20cfd1bf945f4377ade1205e4dbc17946fc9a30d...bec219d24cd3e171d82865faccec33120bb574f4)
+
 ## [0.1.1] - 2026-09-19
 
 ### Added
@@ -172,5 +227,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Document supported CLI and Python interfaces, consumer just recipes, and publisher setup.
   - Generate the initial 0.1.0 changelog from committed history.
 
+[0.1.2]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/acgetchell/research-repo-tools/tree/v0.1.0

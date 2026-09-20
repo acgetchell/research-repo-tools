@@ -132,6 +132,47 @@ def test_clear_preserves_sources_ids_attachments_and_user_metadata(tmp_path):
     assert path.read_bytes() == original
 
 
+@pytest.mark.parametrize("encoding,display_name", [("utf-8", "分析.ipynb"), ("cp1252", r"\u5206\u6790.ipynb")])
+def test_clear_cli_reports_success_after_one_publication_with_restricted_stdout(tmp_path, encoding, display_name):
+    path = write(tmp_path / "分析.ipynb")
+    node = json.loads(path.read_bytes())
+    node["cells"][0].update(source="label = '分析 café'\n", execution_count=1, outputs=[{"output_type": "stream", "name": "stdout", "text": "old output\n"}])
+    path.write_text(json.dumps(node, ensure_ascii=False), encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text("", encoding="utf-8")
+    trace = tmp_path / "publications.jsonl"
+    child = """
+import json
+import sys
+from pathlib import Path
+from research_repo_tools import cli, files
+
+publish = files.replace_many
+def record(updates):
+    with Path(sys.argv[1]).open("a", encoding="utf-8") as stream:
+        stream.write(json.dumps({str(path): payload.hex() for path, payload in updates.items()}) + "\\n")
+    publish(updates)
+
+files.replace_many = record
+raise SystemExit(cli.main(sys.argv[2:]))
+"""
+    result = subprocess.run(
+        [sys.executable, "-c", child, str(trace), "--root", str(tmp_path), "notebooks", "clear", str(path)],
+        capture_output=True,
+        env={**os.environ, "PYTHONIOENCODING": f"{encoding}:strict", "PYTHONUTF8": "0"},
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == b""
+    assert result.stdout == f"OK cleared {path.parent}{os.sep}{display_name}{os.linesep}".encode(encoding)
+    published = [json.loads(line) for line in trace.read_text(encoding="utf-8").splitlines()]
+    assert len(published) == 1 and set(published[0]) == {str(path)}
+    assert bytes.fromhex(published[0][str(path)]) == path.read_bytes()
+    node["cells"][0].update(execution_count=None, outputs=[])
+    assert json.loads(path.read_bytes()) == node
+    assert b"\xe5\x88\x86\xe6\x9e\x90 caf\xc3\xa9" in path.read_bytes()
+
+
 def test_clear_validates_entire_selection_before_writing(tmp_path):
     good = write(tmp_path / "good.ipynb")
     node = notebooks.load(good).node

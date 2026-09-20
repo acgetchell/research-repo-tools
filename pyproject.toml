@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "research-repo-tools"
-version = "0.1.1"
+version = "0.1.2"
 description = "Shared maintenance and validation for research software repositories"
 readme = "README.md"
 requires-python = ">=3.14"
