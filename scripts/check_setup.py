@@ -96,6 +96,33 @@ def verify_shell(consumer: Path, env: dict[str, str], expected_just: str) -> dic
     return {**env, "PATH": str(user_bin) + os.pathsep + env["PATH"]}
 
 
+def check_cargo_update(consumer: Path, cli: str, just: str, env: dict[str, str]) -> None:
+    manifest = consumer / "Cargo.toml"
+    manifest.write_text(
+        '[package]\nname="native-update-consumer"\nversion="0.1.0"\nedition="2021"\n[lib]\npath="cargo_smoke.rs"\n[dependencies]\nitoa="0.4.8"\n',
+        encoding="utf-8",
+    )
+    (consumer / "cargo_smoke.rs").write_text("pub use itoa;\n", encoding="utf-8")
+    original = tomllib.loads(manifest.read_text(encoding="utf-8"))
+    cargo = [cli, "toolchain", "run", "--", "cargo"]
+    run([*cargo, "generate-lockfile"], cwd=consumer, env=env)
+    lockfile = consumer / "Cargo.lock"
+    locked = {package["name"]: package["version"] for package in tomllib.loads(lockfile.read_text(encoding="utf-8"))["package"]}
+    assert locked["itoa"].startswith("0.4."), locked
+    # Use the packaged recipe and real cargo-edit. A caret requirement permits
+    # the incompatible upgrade; an exact `=0.4.8` pin would require --pinned.
+    run([just, "update-cargo-dependencies"], cwd=consumer, env=env)
+    updated = tomllib.loads(manifest.read_text(encoding="utf-8"))
+    assert updated["dependencies"]["itoa"] != original["dependencies"]["itoa"], "Cargo requirement did not advance"
+    original["dependencies"]["itoa"] = updated["dependencies"]["itoa"]
+    assert updated == original, "dependency update changed unrelated Cargo declarations"
+    locked = {package["name"]: package["version"] for package in tomllib.loads(lockfile.read_text(encoding="utf-8"))["package"]}
+    assert "itoa" in locked and not locked["itoa"].startswith("0.4."), "Cargo lock resolution did not advance to an incompatible release"
+    # --locked rejects stale resolution, and compilation checks that the real
+    # updated dependency is usable with the declared, managed Rust toolchain.
+    run([*cargo, "check", "--locked"], cwd=consumer, env=env)
+
+
 def check(dist: Path) -> None:
     require_hosted_runner()
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
@@ -121,7 +148,7 @@ def check(dist: Path) -> None:
             f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}, "{dev_pin}"]\n'
             f'[tool.uv]\npackage=false\ndefault-groups=[]\nrequired-version="{uv_version}"\n'
             f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(wheel.resolve()))}}}\n"
-            '[tool.research-repo-tools.toolchain.cargo]\ngit-cliff="2.14.1"\n',
+            '[tool.research-repo-tools.toolchain.cargo]\ncargo-edit="0.13.13"\ngit-cliff="2.14.1"\n',
             encoding="utf-8",
         )
         (consumer / ".python-version").write_text("3.14\n", encoding="utf-8")
@@ -148,12 +175,12 @@ def check(dist: Path) -> None:
         assert selected["just"] == binary(Path(env["UV_TOOL_BIN_DIR"]), "just")
         assert selected["Python"] == binary(scripts, "python")
         # A system installation must never satisfy the managed Rust/Cargo pins.
-        for name in ("rustup", "rustc", "cargo", "git-cliff"):
+        for name in ("rustup", "rustc", "cargo", "cargo-edit-upgrade", "git-cliff"):
             assert selected[name].is_relative_to(env["RESEARCH_REPO_TOOLS_HOME"]), selected[name]
         probe = (
             "import json, shutil, sys, research_repo_tools; "
             "print(json.dumps({'python': sys.executable, 'base_prefix': sys.base_prefix, 'package': research_repo_tools.__file__, "
-            "**{name: shutil.which(name) for name in ('rustc', 'cargo', 'git-cliff')}}))"
+            "**{name: shutil.which(name) for name in ('rustc', 'cargo', 'cargo-upgrade', 'git-cliff')}}))"
         )
         resolved = json.loads(run([cli, "toolchain", "run", "--", "python", "-c", probe], cwd=consumer, env=active))
         assert Path(resolved["python"]) == selected["Python"]
@@ -162,6 +189,7 @@ def check(dist: Path) -> None:
         for name in ("rustc", "cargo"):
             assert Path(resolved[name]) == binary(selected["rustup"].parent, name), resolved
         assert Path(resolved["git-cliff"]) == selected["git-cliff"], resolved
+        assert Path(resolved["cargo-upgrade"]) == selected["cargo-edit-upgrade"], resolved
         (consumer / "smoke.rs").write_text('fn main() { println!("native setup works"); }\n', encoding="utf-8")
         program = binary(consumer, "smoke")
         run([cli, "toolchain", "run", "--", "rustc", "smoke.rs", "-o", str(program)], cwd=consumer, env=active)
@@ -181,6 +209,8 @@ def check(dist: Path) -> None:
         assert shell_state() == configured, "repeat setup changed shell configuration"
         assert json.loads(run([cli, "toolchain", "check", "--json"], cwd=consumer, env=active)) == statuses
         verify_shell(consumer, env, just_version)
+        check_cargo_update(consumer, cli, just, active)
+        assert declarations == {name: (consumer / name).read_bytes() for name in declarations}, "dependency update changed tool or Python declarations"
         # Exercise explicit resolution, installation, declaration publication,
         # and managed execution on every native platform. Never use user Cargo.
         run([cli, "toolchain", "upgrade", "--dry-run"], cwd=consumer, env=active)
@@ -188,13 +218,16 @@ def check(dist: Path) -> None:
         run([just, "update-cargo-tools"], cwd=consumer, env=active)
         upgraded = tomllib.loads((consumer / "pyproject.toml").read_text(encoding="utf-8"))
         cargo_pins = upgraded["tool"]["research-repo-tools"]["toolchain"]["cargo"]
-        assert set(cargo_pins) == {"git-cliff"}
+        assert set(cargo_pins) == {"cargo-edit", "git-cliff"}
+        assert run([cli, "toolchain", "run", "--", "cargo", "upgrade", "--version"], cwd=consumer, env=active).strip() == (
+            f"cargo-edit-upgrade {cargo_pins['cargo-edit']}"
+        )
         assert cargo_pins["git-cliff"] in run([cli, "toolchain", "run", "--", "git-cliff", "--version"], cwd=consumer, env=active)
         assert all(status["ok"] for status in json.loads(run([cli, "toolchain", "check", "--json"], cwd=consumer, env=active)))
         for name in (".python-version", "rust-toolchain.toml", "uv.lock"):
             assert (consumer / name).read_bytes() == declarations[name]
         assert all(path.exists() for path in selected.values()), "upgrade removed old versioned tools"
-        print("PASS: native wheel setup, managed execution and upgrade, Rust compilation, user Just, and repeat setup", flush=True)
+        print("PASS: native wheel setup, managed execution and upgrade, Cargo dependency update, Rust compilation, user Just, and repeat setup", flush=True)
 
 
 if __name__ == "__main__":

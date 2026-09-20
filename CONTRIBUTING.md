@@ -79,7 +79,10 @@ using `just check-dist`. Linux uses `just coverage`; macOS and Windows use
 `just test`. CI calls the reusable `codecov.yml` workflow to upload the Linux
 report without rerunning tests. The required platform jobs also run `just check-setup`
 against the built wheel, installing real tools and updating the disposable
-runner user's shell configuration. This check is excluded from local `just ci`.
+runner user's shell configuration. It also runs the packaged Cargo dependency-update
+recipe with pinned cargo-edit, verifies that a tiny crate's requirements and lock
+resolution advance, and compiles the result with managed Rust and `--locked`.
+This check is excluded from local `just ci`.
 The [release workflows](docs/RELEASING.md) attach the validated distributions
 and signed provenance to a draft GitHub Release. Publishing that release triggers
 asset verification and the approval-gated PyPI upload without rebuilding.

@@ -93,7 +93,7 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 7
-      - name: Exercise native setup and repeat setup from the built wheel
+      - name: Exercise native setup and Cargo updates from the built wheel
         run: uv run --locked just check-setup
 
   codecov:

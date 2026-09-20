@@ -205,18 +205,32 @@ def test_run_refuses_incomplete_state_without_installing(runtime):
     assert not any("install" in args for _, args, _ in fake.calls)
 
 
-def test_cargo_upgrade_requires_declared_cargo_edit_even_when_on_path(runtime):
+@pytest.mark.parametrize("command", [["cargo", "upgrade"], ["cargo-upgrade"]])
+def test_cargo_upgrade_requires_declared_cargo_edit_even_when_on_path(runtime, command):
     instance, fake = runtime
     instance.sync()
     fake.add(executable(instance.rustup.parent, "cargo"), "cargo 1.98.0")
     fake.add(executable(fake.directory, "cargo-upgrade"), "cargo-edit-upgrade 0.13.13")
     fake.calls.clear()
     with pytest.raises(ValueError, match="cargo upgrade requires.*cargo-edit.*just setup"):
-        toolchain.run_command(instance, ["--", "cargo", "upgrade", "--incompatible", "allow"])
+        toolchain.run_command(instance, ["--", *command, "--incompatible", "allow"])
     assert not fake.calls
 
 
-def test_cargo_upgrade_requires_setup_and_selects_the_verified_tool(runtime, monkeypatch):
+@pytest.mark.parametrize("command_name", ["cargo", "cargo-upgrade"])
+@pytest.mark.parametrize("pin", ["0.13", ">=0.13.13"])
+def test_cargo_upgrade_rejects_non_exact_pins_before_operations(runtime, capsys, command_name, pin):
+    instance, fake = runtime
+    manifest = instance.plan.root / "pyproject.toml"
+    manifest.write_text(manifest.read_text() + f'cargo-edit = "{pin}"\n')
+    fake.calls.clear()
+    assert cli.main(["--root", str(instance.plan.root), "toolchain", "run", "--", command_name, "upgrade"]) == 1
+    assert "toolchain.cargo.cargo-edit must pin a canonical SemVer" in capsys.readouterr().err
+    assert not fake.calls
+
+
+@pytest.mark.parametrize("command_name", ["cargo", "cargo-upgrade"])
+def test_cargo_upgrade_requires_setup_and_selects_the_verified_tool(runtime, monkeypatch, command_name):
     instance, fake = runtime
     instance.sync()
     manifest = instance.plan.root / "pyproject.toml"
@@ -227,7 +241,7 @@ def test_cargo_upgrade_requires_setup_and_selects_the_verified_tool(runtime, mon
     fake.add(executable(fake.directory, "cargo-upgrade"), "cargo-edit-upgrade 0.13.13")
     fake.calls.clear()
     with pytest.raises(ValueError, match="toolchain is incomplete"):
-        toolchain.run_command(instance, ["cargo", "upgrade"])
+        toolchain.run_command(instance, [command_name, "upgrade"])
     assert not any("install" in args or args == ["upgrade"] for _, args, _ in fake.calls)
 
     instance.sync()
@@ -240,13 +254,17 @@ def test_cargo_upgrade_requires_setup_and_selects_the_verified_tool(runtime, mon
 
     def execute(command, args, **kwargs):
         if args == ["upgrade", "--incompatible", "allow"]:
-            selected.append(shutil.which("cargo-upgrade", path=kwargs["env"]["PATH"]))
+            directory = instance.rustup.parent if command_name == "cargo" else instance.cargo_root(tool) / "bin"
+            assert Path(command) == executable(directory, command_name)
+            path = shutil.which("cargo-upgrade", path=kwargs["env"]["PATH"])
+            assert path is not None
+            selected.append(Path(path))
             return subprocess.CompletedProcess([], 0)
         return original(command, args, **kwargs)
 
     monkeypatch.setattr(toolchain, "run_safe_command", execute)
-    assert toolchain.run_command(instance, ["cargo", "upgrade", "--incompatible", "allow"]) == 0
-    assert selected == [str(executable(instance.cargo_root(tool) / "bin", "cargo-upgrade"))]
+    assert toolchain.run_command(instance, [command_name, "upgrade", "--incompatible", "allow"]) == 0
+    assert selected == [executable(instance.cargo_root(tool) / "bin", "cargo-upgrade")]
 
 
 @pytest.mark.parametrize("available", [False, True])
