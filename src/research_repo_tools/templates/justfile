@@ -95,18 +95,32 @@ tag-release tag:
 tools-check:
     uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain check
 
-# Upgrade uv and declared Cargo tools, update Python pins and locks, and sync.
-update:
-    uv run --no-config --no-sync --no-python-downloads research-repo-tools deps update-uv
-    uv run --locked --group dev research-repo-tools deps update-python
-    uv lock --upgrade
-    uv run --locked --group dev research-repo-tools toolchain upgrade
-    uv run --locked --managed-python --only-group tooling research-repo-tools setup
+# Upgrade tools, then Cargo and Python dependencies and the dev environment.
+update: update-tools update-dependencies
+
+# Upgrade root Cargo requirements and resolution; retain consumer exclusions/extra roots here.
+update-cargo-dependencies:
+    if [ -f Cargo.toml ]; then uv run --locked --only-group tooling --inexact research-repo-tools toolchain run -- cargo upgrade --incompatible allow; fi
+    if [ -f Cargo.toml ]; then uv run --locked --only-group tooling --inexact research-repo-tools toolchain run -- cargo update; fi
 
 # Upgrade only declared managed Cargo tools and publish verified TOML pins.
 update-cargo-tools:
-    uv run --locked --group dev research-repo-tools toolchain upgrade
+    uv run --locked --only-group tooling --inexact research-repo-tools toolchain upgrade
 
-# Update exact direct Python development pins.
-update-python-deps:
-    uv run --locked --group dev research-repo-tools deps update-python
+# Update Cargo and Python dependencies without upgrading uv or Cargo tools.
+update-dependencies: update-cargo-dependencies update-python-dependencies
+
+# Update direct dev pins, upgrade the full Python lock, and sync dev with managed tools.
+update-python-dependencies:
+    uv run --locked --only-group tooling --inexact research-repo-tools deps update-python
+    uv lock --upgrade
+    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain run -- uv sync --locked --managed-python --group dev
+
+alias update-python-deps := update-python-dependencies
+
+# Upgrade uv and declared Cargo tools, then install Just and sync declared tools.
+update-tools: update-uv update-cargo-tools setup
+
+# Upgrade uv through its installation owner and reconcile the project pin.
+update-uv:
+    uv run --no-config --no-sync --no-python-downloads research-repo-tools deps update-uv

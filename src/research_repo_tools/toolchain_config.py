@@ -13,15 +13,20 @@ from research_repo_tools.config import Config
 from research_repo_tools.tool_pins import SEMVER, STABLE
 
 # Package -> executable and the arguments needed for its version command.
-# Cargo subcommands need their subcommand argument even when invoked directly.
+# Some Cargo subcommands need their subcommand argument even when invoked directly.
 CARGO_TOOLS = {
+    "cargo-audit": ("cargo-audit", ("--version",)),
+    "cargo-edit": ("cargo-upgrade", ("upgrade", "--version")),
+    "cargo-llvm-cov": ("cargo-llvm-cov", ("llvm-cov", "--version")),
+    "cargo-machete": ("cargo-machete", ("--version",)),
+    "cargo-nextest": ("cargo-nextest", ("nextest", "--version")),
+    "dprint": ("dprint", ("--version",)),
     "git-cliff": ("git-cliff", ("--version",)),
     "rumdl": ("rumdl", ("--version",)),
-    "cargo-nextest": ("cargo-nextest", ("nextest", "--version")),
-    "cargo-llvm-cov": ("cargo-llvm-cov", ("llvm-cov", "--version")),
-    "cargo-edit": ("cargo-upgrade", ("upgrade", "--version")),
-    "dprint": ("dprint", ("--version",)),
+    "samply": ("samply", ("--version",)),
     "taplo-cli": ("taplo", ("--version",)),
+    "tectonic": ("tectonic", ("--version",)),
+    "tex-fmt": ("tex-fmt", ("--version",)),
     "typos-cli": ("typos", ("--version",)),
     "zizmor": ("zizmor", ("--version",)),
 }
@@ -37,7 +42,7 @@ class CargoTool:
 
     @property
     def version_label(self) -> str:
-        return {"cargo-edit": "cargo-edit-upgrade", "typos-cli": "typos-cli"}.get(self.package, self.binary)
+        return {"cargo-edit": "cargo-edit-upgrade", "cargo-machete": "", "tectonic": "Tectonic", "typos-cli": "typos-cli"}.get(self.package, self.binary)
 
 
 @dataclass(frozen=True)

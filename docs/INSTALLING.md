@@ -52,8 +52,9 @@ The initial contract supports stable `X.Y.Z` toolchains and the `minimal` or
 profile are rejected explicitly. Python-only consumers can omit the Rust file and
 Cargo tool table.
 
-Supported Cargo packages are `git-cliff`, `rumdl`, `cargo-nextest`, `cargo-llvm-cov`,
-`cargo-edit`, `dprint`, `taplo-cli`, `typos-cli`, and `zizmor`. Versions accept
+Supported Cargo packages are `cargo-audit`, `cargo-edit`, `cargo-llvm-cov`,
+`cargo-machete`, `cargo-nextest`, `dprint`, `git-cliff`, `rumdl`, `samply`,
+`taplo-cli`, `tectonic`, `tex-fmt`, `typos-cli`, and `zizmor`. Versions accept
 canonical Cargo SemVer. `just` is supplied by the Python `rust-just` dependency;
 do not declare another installation of it under Cargo. Other Python tools belong
 in the consumer's dependency groups.
@@ -121,8 +122,14 @@ The consumer template provides:
 - `just help-workflows`: alias for `help`.
 - `just setup`: synchronize declared tools and then the default Python environment.
 - `just tools-check`: inspect without syncing the environment or downloading Python.
-- `just update`: upgrade uv and declared Cargo tools, update Python pins and locks, and synchronize tools.
+- `just update`: upgrade tools, then Cargo and Python dependencies and synchronize dev.
+- `just update-cargo-dependencies`: upgrade root Cargo requirements and lock resolution, if present.
 - `just update-cargo-tools`: upgrade declared Cargo tools and publish verified TOML pins.
+- `just update-dependencies`: run the Cargo and Python dependency workflows.
+- `just update-python-dependencies`: update direct dev pins, upgrade the full Python lock, and synchronize dev.
+- `just update-python-deps`: alias for `update-python-dependencies`.
+- `just update-tools`: upgrade uv and declared Cargo tools, then run setup.
+- `just update-uv`: upgrade uv through its installation owner and reconcile its pin.
 
 Bare `just` shows help. When merging the template, reconcile its default recipe
 with the consuming repository's existing default.
@@ -194,6 +201,41 @@ linkers or libraries are diagnosed by the build/install operation. Initial host
 support is x86_64/aarch64 macOS, glibc Linux, and Windows MSVC. Cross-compilation
 linkers remain consumer/platform prerequisites even when Rust targets are present.
 
+### Additional Cargo tools and native prerequisites
+
+All catalog entries use the same exact `cargo install --locked` contract and
+post-install executable verification. The version probes for the additional tools
+are listed below; probes do not run an audit, dependency scan, profiler, typesetter,
+or formatter.
+
+| Package | Direct executable probe | Expected output |
+| --- | --- | --- |
+| `cargo-audit` | `cargo-audit --version` | `cargo-audit X.Y.Z` |
+| `cargo-machete` | `cargo-machete --version` | `X.Y.Z` |
+| `samply` | `samply --version` | `samply X.Y.Z` |
+| `tectonic` | `tectonic --version` | `Tectonic X.Y.Z` |
+| `tex-fmt` | `tex-fmt --version` | `tex-fmt X.Y.Z` |
+
+The platform compiler/SDK prerequisites above apply to these builds.
+[Tectonic additionally needs native font, Unicode, compression, and TLS libraries](https://tectonic-typesetting.github.io/book/latest/howto/build-tectonic/).
+Provision them before setup: its upstream guide covers
+[system packages and discovery through pkg-config or vcpkg](https://tectonic-typesetting.github.io/book/latest/howto/build-tectonic/external-dep-install.html).
+On macOS, configure pkg-config to find Homebrew's libraries; on glibc Linux,
+provide the development packages; on Windows MSVC, configure the matching vcpkg
+libraries and `TECTONIC_DEP_BACKEND=vcpkg`. Environment settings for native
+dependency discovery pass through to Cargo. This package uses upstream default
+Cargo features and does not install OS libraries or run cargo-vcpkg automatically.
+A failed build retains previous tool declarations and installations; provision
+the missing dependencies and retry. A missing dynamic library also fails the
+version probe, so an unusable executable never counts as a verified installation.
+
+[Samply supports macOS, Linux, and Windows](https://github.com/mstange/samply).
+Profiling permissions, including Linux perf access, remain consumer/platform
+configuration; setup never changes kernel settings or grants privileges.
+Similarly, cargo-audit's advisory database access, Tectonic's document bundles,
+and the actual profiling/typesetting workflows are consumer-owned. A successful
+version probe establishes executable availability, not those workflows' success.
+
 ## Updates
 
 Sync converges on declared versions; changing versions is a separate reviewed
@@ -201,7 +243,8 @@ operation. Edit Cargo pins or `rust-toolchain.toml`, then run setup and the
 consumer's validation. Change the package pin with uv, refresh `uv.lock`, and
 review its release notes, then rerun setup.
 
-`just update` upgrades uv before the Python dependency update.
+`just update` runs the tools workflow before the dependency workflow.
+`just update-tools` and `just update-uv` also start with the uv owner upgrade.
 Standalone uv uses its official self-updater; Homebrew uv is upgraded through
 Homebrew. Self-update requires a matching standalone installation receipt.
 Other installation owners receive a diagnostic before any upgrade is attempted;
@@ -215,9 +258,12 @@ Upgrading the user-level uv affects other checkouts using it. Their exact uv pin
 must also be reconciled before running their locked commands. An installed uv
 upgrade cannot be rolled back if
 writing the project pin fails. Fix the reported cause and rerun `just update`.
-The remaining `just update` steps upgrade declared Cargo tools, retaining the
-Rust compiler and shared package pins. Changing those pins remains a manual,
-reviewed operation.
+The remaining tools steps upgrade declared Cargo tools and run setup, retaining
+the Rust compiler and shared package pins. Changing those pins remains a manual,
+reviewed operation. The dependency steps then update Cargo requirements and
+resolution, update Python pins, refresh the full Python lock, and sync dev.
+See the [consumer update recipes](../README.md#dependency-and-tool-updates) for
+Cargo exclusions, extra manifests, and Python-only behavior.
 The Python pin updater preserves included tooling-group pins as resolver
 constraints; it updates only direct exact `dev` requirements.
 

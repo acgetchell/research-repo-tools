@@ -56,7 +56,11 @@ including changelog recipes and aliases.
 | `just sync` | Synchronize the locked development environment |
 | `just tag-preview TAG` | Preview the annotated release tag without changing Git state |
 | `just test` | Run the Python test suite |
-| `just update` | Upgrade uv, reconcile its pin, update Python development pins, refresh the lockfile, and sync |
+| `just update` | Upgrade tools, then Python dependencies and the development environment |
+| `just update-dependencies` | Run the Python dependency workflow |
+| `just update-python-dependencies` | Update direct dev pins, upgrade the full lock, and synchronize dev |
+| `just update-tools` | Upgrade uv, then install declared Just and synchronize the environment |
+| `just update-uv` | Upgrade uv through its installation owner and reconcile its pin |
 | `just workflow-check` | Run actionlint and offline zizmor checks |
 
 The maintainer justfile also exposes the [shared changelog recipes](README.md#just-recipes).
@@ -87,7 +91,7 @@ GitHub repository settings and required checks are documented in
 [GitHub setup](docs/CONFIGURING_GITHUB.md); their API payloads live in `.github/settings/`.
 
 Run `just update` to upgrade uv through its owner, reconcile its manifest pin,
-then advance exact development-tool pins through
+run setup, then advance exact development-tool pins through
 this package's `deps update-python` command, refresh `uv.lock` within the resulting manifest
 constraints, and sync the development environment. Review the manifest and lockfile
 changes, then validate them with `just ci`. Exact runtime, build,

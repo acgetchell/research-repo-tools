@@ -47,14 +47,25 @@ def _probe_key(paths: list[Path]) -> tuple[object, ...]:
     return tuple(sorted(os.environ.items())), tuple(files)
 
 
-def _probe(path: str | Path, name: str, required: str, args: tuple[str, ...] = ("--version",), *, env: dict[str, str], cwd: Path) -> Status:
+def _probe(
+    path: str | Path,
+    name: str,
+    required: str,
+    args: tuple[str, ...] = ("--version",),
+    *,
+    env: dict[str, str],
+    cwd: Path,
+    version_label: str | None = None,
+) -> Status:
     selected = shutil.which(str(path), path=env.get("PATH", ""))
     if selected is None:
         return Status(name, required, "missing", str(path), False)
     try:
         output = run_safe_command(selected, list(args), env=env, cwd=cwd, timeout=30).stdout.strip()
         platform_suffix = r"(?:\.windows\.\d+)?" if name == "git version" else ""
-        match = re.match(rf"^{re.escape(name)}\s+({SEMVER.pattern}){platform_suffix}(?=\s|$)", output)
+        label = name if version_label is None else version_label
+        prefix = re.escape(label) + r"\s+" if label else ""
+        match = re.match(rf"^{prefix}({SEMVER.pattern}){platform_suffix}(?=\s|$)", output)
         if match is None:
             raise ValueError(f"unrecognized {name} version output: {output[:200]}")
         actual = match[1]
@@ -216,13 +227,18 @@ class Runtime:
         return statuses
 
     def cargo_status(self, tool: CargoTool) -> Status:
+        env = self.environment()
+        # cargo-machete changes argument parsing when CARGO is set. Probes invoke
+        # executables directly, so never inherit Cargo's subcommand dispatch marker.
+        env.pop("CARGO", None)
         return _probe(
             executable(self.cargo_root(tool) / "bin", tool.binary),
-            tool.version_label,
+            tool.version_label or tool.binary,
             tool.version,
             tool.version_args,
-            env=self.environment(),
+            env=env,
             cwd=self.plan.root,
+            version_label=tool.version_label,
         )
 
     def shell_status(self) -> Status:
@@ -316,11 +332,18 @@ class Runtime:
         try:
             run_safe_command(command, args, cwd=self.plan.root, env=self.environment(), timeout=INSTALL_TIMEOUT, capture_output=False)
         except FAILURES as error:
+            native_hint = ""
+            if args[-1:] == ["tectonic"]:
+                native_hint = (
+                    " Tectonic also requires native font/Unicode/compression/TLS libraries discoverable through pkg-config "
+                    "or vcpkg (TECTONIC_DEP_BACKEND=vcpkg on Windows). Provision them using "
+                    "https://tectonic-typesetting.github.io/book/latest/howto/build-tectonic/external-dep-install.html."
+                )
             raise RuntimeError(
                 f"Installation failed: {format_exception_diagnostics(error)}\n"
                 "Earlier successful installations are retained. Fix the reported cause and rerun toolchain sync. "
                 "Native builds require Xcode Command Line Tools on macOS, a C/C++ compiler and development libraries on Linux, "
-                "or Visual Studio C++ Build Tools and a Windows SDK on Windows."
+                f"or Visual Studio C++ Build Tools and a Windows SDK on Windows.{native_hint}"
             ) from error
         finally:
             # Failed installers can also leave partially changed environments.

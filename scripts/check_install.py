@@ -58,6 +58,78 @@ assert main(["--root", str(consumer), "notebooks", "check", str(notebook)]) == 1
 """
 
 
+def check_python_update(consumer: Path, artifact: Path, version: str, uv: str, just: Path, env: dict[str, str]) -> None:
+    """Prove full lock upgrades and explicit dev sync with the installed template."""
+    consumer.mkdir()
+    wheels = consumer / "wheels"
+    wheels.mkdir()
+
+    def fixture(release: str) -> None:
+        info = f"update_fixture-{release}.dist-info"
+        with zipfile.ZipFile(wheels / f"update_fixture-{release}-py3-none-any.whl", "w") as archive:
+            archive.writestr(f"{info}/METADATA", f"Metadata-Version: 2.3\nName: update-fixture\nVersion: {release}\nRequires-Python: >=3.14\n")
+            archive.writestr(f"{info}/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
+            archive.writestr(f"{info}/RECORD", "")
+
+    fixture("1.0.0")
+    uv_version = run([uv, "--version"], cwd=consumer, env=env).split()[1]
+    manifest = consumer / "pyproject.toml"
+    manifest.write_text(
+        '[project]\nname="update-consumer"\nversion="0.1.0"\nrequires-python=">=3.14"\n'
+        f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}, "update-fixture>=1,<3"]\n'
+        f'[tool.uv]\npackage=false\ndefault-groups=[]\nrequired-version="=={uv_version}"\nfind-links=["wheels"]\n'
+        f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(artifact.resolve()))}}}\n",
+        encoding="utf-8",
+    )
+    (consumer / ".python-version").write_text("3.14\n", encoding="utf-8")
+    # Dependencies of this exact artifact are already cached by the other checks.
+    offline = {**env, "UV_OFFLINE": "1"}
+    run([uv, "sync", "--managed-python", "--group", "dev"], cwd=consumer, env=offline)
+    cli = [uv, "run", "--locked", "--no-sync", "research-repo-tools"]
+    run([*cli, "templates", "justfile", "--output", "justfile"], cwd=consumer, env=offline)
+    probe = [uv, "run", "--locked", "--no-sync", "python", "-c", 'from importlib.metadata import version; print(version("update-fixture"))']
+    assert run(probe, cwd=consumer, env=offline).strip() == "1.0.0"
+    original = manifest.read_bytes()
+    fixture("2.0.0")
+    # No exact direct dev pin changes: only a full lock upgrade can select 2.0.0.
+    run([str(just), "update-python-dependencies"], cwd=consumer, env=offline)
+    assert manifest.read_bytes() == original, "update changed retained constraints or the shared package pin"
+    assert run(probe, cwd=consumer, env=offline).strip() == "2.0.0", "updated lock was not synchronized into dev"
+    locked = tomllib.loads((consumer / "uv.lock").read_text(encoding="utf-8"))
+    assert next(package["version"] for package in locked["package"] if package["name"] == "update-fixture") == "2.0.0"
+
+
+def check_update_bootstrap(consumer: Path, uv: str, just: Path, env: dict[str, str]) -> None:
+    """Keep a native build out of update launchers until the checked final sync."""
+    run([uv, "run", "--locked", "--no-sync", "research-repo-tools", "templates", "justfile", "--output", "justfile"], cwd=consumer, env=env)
+    cargo = consumer / "Cargo.toml"
+    cargo.write_text("[workspace]\nmembers=[]\n", encoding="utf-8")
+    # Execute real uv, Just, and toolchain run. Replace only the inner Cargo
+    # workload: this boundary check needs no Rust installation or registry.
+    recorder = consumer / "record_cargo.py"
+    recorder.write_text(
+        "import json, pathlib, sys\n"
+        'cargo = pathlib.Path("Cargo.toml")\n'
+        'if sys.argv[1] == "upgrade": cargo.write_text(cargo.read_text() + "# upgraded\\n")\n'
+        'else: assert "# upgraded" in cargo.read_text()\n'
+        'with pathlib.Path("cargo_calls.jsonl").open("a") as stream: stream.write(json.dumps(sys.argv[1:]) + "\\n")\n',
+        encoding="utf-8",
+    )
+    justfile = consumer / "justfile"
+    justfile.write_text(justfile.read_text(encoding="utf-8").replace("-- cargo ", "-- python record_cargo.py "), encoding="utf-8")
+    # The empty Cargo tool table must also be usable before the project builds.
+    run([str(just), "update-cargo-tools"], cwd=consumer, env=env)
+    result = subprocess.run([str(just), "update-dependencies"], cwd=consumer, env=env, capture_output=True, encoding="utf-8", timeout=TIMEOUT)
+    calls = consumer / "cargo_calls.jsonl"
+    assert calls.is_file(), result.stderr
+    assert [json.loads(line) for line in calls.read_text(encoding="utf-8").splitlines()] == [["upgrade", "--incompatible", "allow"], ["update"]]
+    # The intentionally missing backend must be reached only by the final sync,
+    # after both Cargo commands and the Python pin/lock updates have completed.
+    assert result.returncode != 0, "the unavailable native backend unexpectedly built"
+    assert "toolchain run -- uv sync --locked --managed-python --group dev" in result.stderr, result.stderr
+    assert "intentionally_missing_native_backend" in result.stderr, result.stderr
+
+
 def check(dist: Path) -> None:
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     version = metadata["project"]["version"]
@@ -189,7 +261,7 @@ def check(dist: Path) -> None:
                 '[project]\nname="setup-consumer"\nversion="0.1.0"\nrequires-python=">=3.14"\n'
                 '[build-system]\nrequires=[]\nbuild-backend="intentionally_missing_native_backend"\n'
                 f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}]\n'
-                f'[tool.uv]\nrequired-version="=={uv_version}"\n'
+                f'[tool.uv]\nrequired-version="=={uv_version}"\ndefault-groups=[]\ncache-keys=[{{file="pyproject.toml"}}, {{file="Cargo.toml"}}]\n'
                 f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(artifact.resolve()))}}}\n",
                 encoding="utf-8",
             )
@@ -206,6 +278,8 @@ def check(dist: Path) -> None:
             assert result.returncode == 1, result.stderr
             assert "must be installed and available on PATH" in result.stderr, result.stderr
             assert not (setup_consumer / "scripts").exists()
+            check_update_bootstrap(setup_consumer, uv, just, setup_env)
+            check_python_update(consumer / "update consumer", artifact, version, uv, just, env)
             print(f"PASS: installed {name} outside checkout; bundled just")
 
 

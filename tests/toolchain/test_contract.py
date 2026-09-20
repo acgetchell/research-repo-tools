@@ -83,7 +83,7 @@ class FakeTools:
                 if package == self.fail_package:
                     raise subprocess.CalledProcessError(17, [command, *args], stderr="registry unavailable")
                 tool = next(tool for tool in self.runtime.plan.cargo if tool.package == package)
-                self.add(executable(self.runtime.cargo_root(tool) / "bin", tool.binary), f"{tool.binary} {tool.version}")
+                self.add(executable(self.runtime.cargo_root(tool) / "bin", tool.binary), f"{tool.version_label} {tool.version}".strip())
                 return subprocess.CompletedProcess([], 0, "", "")
         if args[:2] == ["python", "find"]:
             assert "--no-python-downloads" in args and "--managed-python" in args and "--system" in args
@@ -224,20 +224,81 @@ def test_uv_prerequisite_failure_never_installs_a_replacement(runtime, available
 @pytest.mark.parametrize(
     "package,banner,arguments",
     [
+        ("cargo-audit", "cargo-audit 0.22.2", ["--version"]),
         ("cargo-edit", "cargo-edit-upgrade 0.13.13", ["upgrade", "--version"]),
+        ("cargo-machete", "0.9.2", ["--version"]),
+        ("samply", "samply 0.13.1", ["--version"]),
+        ("tectonic", "Tectonic 0.17.0", ["--version"]),
+        ("tex-fmt", "tex-fmt 0.5.7", ["--version"]),
         ("typos-cli", "typos-cli 1.50.2", ["--version"]),
         ("taplo-cli", "taplo 0.10.0", ["--version"]),
         ("cargo-nextest", "cargo-nextest 0.9.144 (9718c77af 2026-09-10)\nrelease: 0.9.144", ["nextest", "--version"]),
         ("cargo-llvm-cov", "cargo-llvm-cov 0.9.1", ["llvm-cov", "--version"]),
     ],
 )
-def test_cargo_package_and_executable_version_contracts(runtime, package, banner, arguments):
+def test_cargo_package_and_executable_version_contracts(runtime, monkeypatch, package, banner, arguments):
     instance, fake = runtime
+    monkeypatch.setenv("CARGO", "/inherited/cargo")
     binary, args = toolchain_config.CARGO_TOOLS[package]
-    tool = toolchain_config.CargoTool(package, banner.split()[1], binary, args)
+    version = banner.split()[0 if package == "cargo-machete" else 1]
+    tool = toolchain_config.CargoTool(package, version, binary, args)
     fake.add(executable(instance.cargo_root(tool) / "bin", binary), banner)
     assert instance.cargo_status(tool).ok
     assert fake.calls[-1][1] == arguments
+    assert "CARGO" not in fake.calls[-1][2]["env"]
+    assert instance.cargo_status(tool).name
+    fake.add(executable(instance.cargo_root(tool) / "bin", binary), banner.replace(version, "99.0.0"))
+    assert not instance.cargo_status(tool).ok
+
+
+def test_complete_catalog_installs_and_verifies_exact_declared_tools(runtime):
+    instance, fake = runtime
+    manifest = instance.plan.root / "pyproject.toml"
+    source = manifest.read_text().split("[tool.research-repo-tools.toolchain.cargo]")[0]
+    source += "[tool.research-repo-tools.toolchain.cargo]\n" + "".join(f'{package} = "1.2.3"\n' for package in toolchain_config.CARGO_TOOLS)
+    manifest.write_text(source)
+    instance.plan = toolchain_config.load(config.load(root=instance.plan.root))
+    instance.sync()
+    installs = [args for _, args, _ in fake.calls if "install" in args and "cargo" in args]
+    assert {args[-1] for args in installs} == {
+        "cargo-audit",
+        "cargo-edit",
+        "cargo-llvm-cov",
+        "cargo-machete",
+        "cargo-nextest",
+        "dprint",
+        "git-cliff",
+        "rumdl",
+        "samply",
+        "taplo-cli",
+        "tectonic",
+        "tex-fmt",
+        "typos-cli",
+        "zizmor",
+    }
+    assert all("--locked" in args and args[args.index("--version") + 1] == "=1.2.3" for args in installs)
+    assert all(instance.cargo_status(tool).ok for tool in instance.plan.cargo)
+    assert manifest.read_text() == source
+
+
+def test_tectonic_native_failure_keeps_pins_and_passes_through_discovery_environment(runtime, monkeypatch):
+    instance, fake = runtime
+    binary, args = toolchain_config.CARGO_TOOLS["tectonic"]
+    tool = toolchain_config.CargoTool("tectonic", "0.17.0", binary, args)
+    instance.plan = replace(instance.plan, cargo=(*instance.plan.cargo, tool))
+    before = instance.plan.root.joinpath("pyproject.toml").read_bytes()
+    monkeypatch.setenv("PKG_CONFIG_PATH", "/consumer/native/pkgconfig")
+    monkeypatch.setenv("TECTONIC_DEP_BACKEND", "vcpkg")
+    monkeypatch.setenv("VCPKG_ROOT", "/consumer/vcpkg")
+    fake.fail_package = "tectonic"
+    with pytest.raises(RuntimeError, match="Tectonic also requires native.*pkg-config.*vcpkg"):
+        instance.sync()
+    install = next(kwargs for _, args, kwargs in fake.calls if "install" in args and args[-1] == "tectonic")
+    for name in ("PKG_CONFIG_PATH", "TECTONIC_DEP_BACKEND", "VCPKG_ROOT"):
+        assert install["env"][name] == os.environ[name]
+    assert instance.plan.root.joinpath("pyproject.toml").read_bytes() == before
+    assert instance.cargo_status(instance.plan.cargo[0]).ok
+    assert not instance.cargo_status(tool).ok
 
 
 def test_wrong_version_after_successful_install_is_failure(runtime, monkeypatch):
