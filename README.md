@@ -204,7 +204,9 @@ including the pinned shared package in `tooling`, retain their declared constrai
 The older `update-python-deps` spelling is an alias for this complete workflow.
 
 For Rust projects, declare `cargo-edit` in the managed Cargo tool table and keep
-the compiler pinned in `rust-toolchain.toml`. The default Cargo recipe upgrades
+the compiler pinned in `rust-toolchain.toml`, then run `just setup` to install and
+verify the declared tool. `cargo upgrade` through `toolchain run` rejects a missing
+`cargo-edit` declaration even when an unmanaged copy is on PATH. The default Cargo recipe upgrades
 requirements with incompatible releases allowed, then updates `Cargo.lock`.
 It skips Cargo when the root has no `Cargo.toml`, keeping Python-only consumers
 supported. Additional resolution roots and coupled dependency exclusions belong

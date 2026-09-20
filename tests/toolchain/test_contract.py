@@ -205,6 +205,50 @@ def test_run_refuses_incomplete_state_without_installing(runtime):
     assert not any("install" in args for _, args, _ in fake.calls)
 
 
+def test_cargo_upgrade_requires_declared_cargo_edit_even_when_on_path(runtime):
+    instance, fake = runtime
+    instance.sync()
+    fake.add(executable(instance.rustup.parent, "cargo"), "cargo 1.98.0")
+    fake.add(executable(fake.directory, "cargo-upgrade"), "cargo-edit-upgrade 0.13.13")
+    fake.calls.clear()
+    with pytest.raises(ValueError, match="cargo upgrade requires.*cargo-edit.*just setup"):
+        toolchain.run_command(instance, ["--", "cargo", "upgrade", "--incompatible", "allow"])
+    assert not fake.calls
+
+
+def test_cargo_upgrade_requires_setup_and_selects_the_verified_tool(runtime, monkeypatch):
+    instance, fake = runtime
+    instance.sync()
+    manifest = instance.plan.root / "pyproject.toml"
+    manifest.write_text(manifest.read_text() + 'cargo-edit = "0.13.13"\n')
+    instance.plan = toolchain_config.load(config.load(root=instance.plan.root))
+    tool = next(tool for tool in instance.plan.cargo if tool.package == "cargo-edit")
+    fake.add(executable(instance.rustup.parent, "cargo"), "cargo 1.98.0")
+    fake.add(executable(fake.directory, "cargo-upgrade"), "cargo-edit-upgrade 0.13.13")
+    fake.calls.clear()
+    with pytest.raises(ValueError, match="toolchain is incomplete"):
+        toolchain.run_command(instance, ["cargo", "upgrade"])
+    assert not any("install" in args or args == ["upgrade"] for _, args, _ in fake.calls)
+
+    instance.sync()
+    installs = [args for _, args, _ in fake.calls if "install" in args]
+    assert len(installs) == 1 and installs[0][-1] == "cargo-edit"
+    assert installs[0][installs[0].index("--version") + 1] == "=0.13.13"
+    assert instance.cargo_status(tool).ok
+    original = fake.run
+    selected = []
+
+    def execute(command, args, **kwargs):
+        if args == ["upgrade", "--incompatible", "allow"]:
+            selected.append(shutil.which("cargo-upgrade", path=kwargs["env"]["PATH"]))
+            return subprocess.CompletedProcess([], 0)
+        return original(command, args, **kwargs)
+
+    monkeypatch.setattr(toolchain, "run_safe_command", execute)
+    assert toolchain.run_command(instance, ["cargo", "upgrade", "--incompatible", "allow"]) == 0
+    assert selected == [str(executable(instance.cargo_root(tool) / "bin", "cargo-upgrade"))]
+
+
 @pytest.mark.parametrize("available", [False, True])
 def test_uv_prerequisite_failure_never_installs_a_replacement(runtime, available):
     instance, fake = runtime

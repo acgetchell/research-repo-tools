@@ -388,6 +388,8 @@ def run_command(runtime: Runtime, command: list[str]) -> int:
         command = command[1:]
     if not command:
         raise ValueError("toolchain run requires a command after --")
+    if command[:2] == ["cargo", "upgrade"] and not any(tool.package == "cargo-edit" for tool in runtime.plan.cargo):
+        raise ValueError("cargo upgrade requires an exact cargo-edit pin in [tool.research-repo-tools.toolchain.cargo]; declare it and run just setup")
     if not report(runtime.inspect(), stream=sys.stderr):
         raise ValueError("toolchain is incomplete; run toolchain sync before running commands")
     env = runtime.environment()
