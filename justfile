@@ -114,12 +114,24 @@ tag-release tag:
 test:
     uv run --locked pytest
 
-# Upgrade uv, update exact development pins, refresh locked dependencies, and sync.
-update:
-    uv run --no-config --no-sync --no-python-downloads research-repo-tools deps update-uv
+# Upgrade tools, then Python dependencies and the development environment.
+update: update-tools update-dependencies
+
+# Update Python dependencies without upgrading uv.
+update-dependencies: update-python-dependencies
+
+# Update direct dev pins, upgrade the full Python lock, and synchronize dev.
+update-python-dependencies:
     uv run --locked research-repo-tools deps update-python
     uv lock --upgrade
-    uv run --locked research-repo-tools setup
+    uv sync --locked --group dev
+
+# Upgrade uv, then install the declared Just and Python environment.
+update-tools: update-uv setup
+
+# Upgrade uv through its installation owner and reconcile the project pin.
+update-uv:
+    uv run --no-config --no-sync --no-python-downloads research-repo-tools deps update-uv
 
 # Run actionlint and offline zizmor workflow checks.
 workflow-check:

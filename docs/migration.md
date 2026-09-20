@@ -58,6 +58,44 @@ dependency order.
 Validate each adoption in the consuming repository. Local package validation
 does not establish that a consumer workflow has migrated successfully.
 
+## Dependency and tool update adoption
+
+Adopt the [complete update recipe contract](../README.md#dependency-and-tool-updates)
+as a unit. Retain consumer exclusions and extra Cargo resolution roots in
+`update-cargo-dependencies`; Python-only consumers use the same template with
+no Rust declarations or root Cargo manifest. The former `update-python-deps`
+name now aliases the full Python update and sync workflow.
+
+The shared contract deliberately supersedes these historical policies:
+
+- uv is upgraded through its installation owner and its resulting stable pin is
+  reconciled. Merely validating an already-installed stable uv is no longer the
+  aggregate update policy.
+- Just comes from the shared package's pinned `rust-just` dependency. It is not
+  independently upgraded through Cargo. Changing the shared package pin remains
+  an explicit consumer change.
+- The managed Cargo updater replaces cargo-update; consumers do not need to keep
+  that implementation dependency for parity.
+- Cargo upgrades publish verified exact TOML declarations and retain old managed
+  installations. They do not feed the legacy Just-variable pin reconciler.
+- Dependency updates stop on failure but do not roll back earlier package-manager
+  steps. Cargo exclusions constrain requirement upgrades, not independent policy
+  for lockfile resolution.
+
+The catalog includes cargo-machete, cargo-audit, samply, tectonic, and tex-fmt.
+Their native build prerequisites and profiling/typesetting runtime configuration
+remain consumer/platform responsibilities; see [tool installation](INSTALLING.md#additional-cargo-tools-and-native-prerequisites).
+Declare tools in TOML only after provisioning those prerequisites. Keep any
+consumer-owned prerequisite operations and checks during migration.
+
+Before removing old helpers, run focused integration checks in each consumer
+against its pinned published package, merged recipes, and configuration. Verify
+the selected tools and their versions, dependency-only and tool-only boundaries,
+failure propagation, full Python lock refresh with dev synchronization, and any
+coupled Cargo exclusions or additional manifests. Keep domain checks in consumers.
+Shared synthetic tests and local wheel evaluation do not replace these pinned
+consumer checks. Release preparation and downstream adoption remain separate work.
+
 ## CI ownership after adoption
 
 This repository owns tests, linting, type checks, and distribution checks for the

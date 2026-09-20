@@ -118,9 +118,14 @@ arguments in lexicographic order.
 | `just tag-force TAG` | Explicitly replace an existing local tag |
 | `just tag-release TAG` | Create a local annotated tag from validated release notes |
 | `just tools-check` | Check installed tools and versions without installing them |
-| `just update` | Upgrade uv and managed Cargo tools, update Python development pins and locks, and synchronize tools |
+| `just update` | Upgrade tools, then Cargo and Python dependencies and the development environment |
+| `just update-cargo-dependencies` | Upgrade root Cargo requirements (including incompatible releases) and lock resolution; skip projects without a root Cargo.toml |
 | `just update-cargo-tools` | Upgrade declared managed Cargo tools and publish verified TOML pins |
-| `just update-python-deps` | Update exact direct Python development pins |
+| `just update-dependencies` | Run the Cargo and Python dependency workflows |
+| `just update-python-dependencies` | Update direct dev pins, upgrade the full Python lock, and synchronize dev |
+| `just update-python-deps` | Alias for `update-python-dependencies` |
+| `just update-tools` | Upgrade uv and managed Cargo tools, then run setup |
+| `just update-uv` | Upgrade uv through its installation owner and reconcile its pin |
 
 To preview a prospective release, run
 `just changelog-preview --tag v1.2.3 --date YYYY-MM-DD`.
@@ -180,6 +185,49 @@ before their commands will run. Review the generated changes before committing.
 
 The underlying CLI remains available for integrations and custom recipes; see
 [supported interfaces][api].
+
+### Dependency and tool updates
+
+`just update` runs `update-tools` before `update-dependencies`. Every recipe stops
+at its first failed command; completed steps remain applied for review and retry.
+The aggregate is not a transaction across package managers. Dependency-only
+recipes use the installed, declared toolchain and leave uv and Cargo tool pins
+unchanged. Run setup first when adopting or changing tool declarations.
+Update launchers synchronize only `tooling` and retain installed consumer
+dependencies, so they can start before a native consumer is ready to rebuild.
+
+`just update-python-dependencies` advances exact direct `dev` pins, upgrades the
+entire lock resolution within the resulting manifest constraints, and explicitly
+synchronizes `dev`, even with `default-groups = []`. The final sync runs with
+checked managed tools so native Python builds can find Rust. Included groups,
+including the pinned shared package in `tooling`, retain their declared constraints.
+The older `update-python-deps` spelling is an alias for this complete workflow.
+
+For Rust projects, pin `cargo-edit` to an exact version in the managed Cargo tool
+table (for example, `cargo-edit = "0.13.13"`) and keep the compiler pinned in
+`rust-toolchain.toml`, then run `just setup` to install and verify the declared tool.
+For both `cargo upgrade` and direct `cargo-upgrade` invocations, `toolchain run`
+rejects missing or non-exact `cargo-edit` declarations even when an unmanaged copy
+is on PATH. The default Cargo recipe upgrades
+requirements with incompatible releases allowed, then updates `Cargo.lock`.
+It skips Cargo when the root has no `Cargo.toml`, keeping Python-only consumers
+supported. Additional resolution roots and coupled dependency exclusions belong
+in the consumer's `update-cargo-dependencies` recipe. When merging the template,
+preserve those decisions; the aggregate calls that recipe by name. For example:
+
+```just
+update-cargo-dependencies:
+    uv run --locked --only-group tooling --inexact research-repo-tools toolchain run -- cargo upgrade --incompatible allow --exclude coupled-a --exclude coupled-b
+    uv run --locked --only-group tooling --inexact research-repo-tools toolchain run -- cargo upgrade --manifest-path "fixtures/extra root/Cargo.toml" --incompatible allow
+    uv run --locked --only-group tooling --inexact research-repo-tools toolchain run -- cargo update
+    uv run --locked --only-group tooling --inexact research-repo-tools toolchain run -- cargo update --manifest-path "fixtures/extra root/Cargo.toml"
+```
+
+Exclusions apply to requirement upgrades; lock resolution still follows all
+declared constraints. Keep the required order of these commands and retain
+consumer checks for coupled dependencies and additional manifests. Review both
+manifests and lockfiles after updating. See [update adoption][update-adoption]
+for superseded policies and consumer integration requirements.
 
 `changelog tag TAG` creates a local annotated tag when explicitly invoked.
 `--dry-run` previews it. Generation needs git-cliff; tagging needs Git. Optional
@@ -314,6 +362,7 @@ BSD-3-Clause. See [LICENSE][license].
 [changelog]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/GENERATING_CHANGELOGS.md
 [release]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_RELEASE_METADATA.md
 [migration]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/migration.md
+[update-adoption]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/migration.md#dependency-and-tool-update-adoption
 [license]: https://github.com/acgetchell/research-repo-tools/blob/main/LICENSE
 [just-template]: https://github.com/acgetchell/research-repo-tools/blob/main/src/research_repo_tools/templates/justfile
 [license-badge]: https://badgen.net/github/license/acgetchell/research-repo-tools

@@ -166,6 +166,24 @@ def test_registry_rejects_yanked_and_prerelease_versions_and_uses_semver_order(m
     assert requests == [("https://index.crates.io/gi/t-/git-cliff", 30)]
 
 
+@pytest.mark.parametrize("package", ["cargo-audit", "cargo-machete", "samply", "tectonic", "tex-fmt"])
+def test_additional_catalog_tools_resolve_verify_and_publish(consumer, monkeypatch, package):
+    consumer.write_text(consumer.read_text().replace("git-cliff", package))
+    monkeypatch.setattr(upgrade, "latest_stable", lambda name: "3.0.0" if name == package else "0.9.100")
+    selected = []
+
+    def sync(runtime):
+        tool = next(tool for tool in runtime.plan.cargo if tool.package == package)
+        assert tool.version == "3.0.0"
+        assert config.load(root=consumer.parent).toolchain.cargo[package] == "2.14.1"
+        selected.append(tool)
+
+    monkeypatch.setattr(toolchain.Runtime, "sync", sync)
+    upgrade.upgrade(config.load(root=consumer.parent))
+    assert len(selected) == 1
+    assert config.load(root=consumer.parent).toolchain.cargo[package] == "3.0.0"
+
+
 @pytest.mark.parametrize(
     "entry",
     [

@@ -59,7 +59,8 @@ def test_native_workspace_uses_runner_temp_instead_of_nested_user_temp(harness, 
         assert cwd.name == "consumer with spaces"
         assert cwd.parent.parent == runner_temp.resolve()
         assert Path(env["RESEARCH_REPO_TOOLS_HOME"]).is_relative_to(cwd.parent)
-        assert (cwd / "pyproject.toml").is_file()
+        manifest = tomllib.loads((cwd / "pyproject.toml").read_text(encoding="utf-8"))
+        assert manifest["tool"]["research-repo-tools"]["toolchain"]["cargo"]["cargo-edit"] == "0.13.13"
         workspaces.append(cwd.parent)
         raise StopBeforeInstalling
 
@@ -110,6 +111,46 @@ def test_native_shell_check_rejects_system_just_even_when_version_matches(harnes
     monkeypatch.setattr(harness, "run", lambda *args, **kwargs: "/system/just\njust 1.58.0\n")
     with pytest.raises(AssertionError):
         harness.verify_shell(tmp_path, env, "1.58.0")
+
+
+@pytest.mark.parametrize(
+    "requirement,locked_version,package_version,error",
+    [
+        ("0.4.8", "1.0.18", "0.1.0", "Cargo requirement did not advance"),
+        ("1.0.18", "0.4.8", "0.1.0", "Cargo lock resolution did not advance"),
+        ("1.0.18", "1.0.18", "0.2.0", "dependency update changed unrelated Cargo declarations"),
+        ("1.0.18", "1.0.18", "0.1.0", None),
+    ],
+)
+def test_native_cargo_update_rejects_incomplete_or_unrelated_changes(harness, tmp_path, monkeypatch, requirement, locked_version, package_version, error):
+    builds = []
+
+    def run(command, *, cwd, env):
+        assert cwd == tmp_path
+        if command[-1] == "generate-lockfile":
+            (cwd / "Cargo.lock").write_text('[[package]]\nname="itoa"\nversion="0.4.8"\n', encoding="utf-8")
+        elif command == ["just", "update-cargo-dependencies"]:
+            manifest = cwd / "Cargo.toml"
+            manifest.write_text(
+                manifest.read_text(encoding="utf-8")
+                .replace('itoa="0.4.8"', f'itoa="{requirement}"')
+                .replace('version="0.1.0"', f'version="{package_version}"'),
+                encoding="utf-8",
+            )
+            (cwd / "Cargo.lock").write_text(f'[[package]]\nname="itoa"\nversion="{locked_version}"\n', encoding="utf-8")
+        else:
+            assert command == ["research-repo-tools", "toolchain", "run", "--", "cargo", "check", "--locked"]
+            builds.append(command)
+        return ""
+
+    monkeypatch.setattr(harness, "run", run)
+    if error:
+        with pytest.raises(AssertionError, match=error):
+            harness.check_cargo_update(tmp_path, "research-repo-tools", "just", {})
+        assert not builds
+    else:
+        harness.check_cargo_update(tmp_path, "research-repo-tools", "just", {})
+        assert len(builds) == 1
 
 
 @pytest.mark.skipif(os.name == "nt", reason="POSIX shell selection; Windows setup updates the user PATH registry")
