@@ -105,6 +105,13 @@ transport failure tests use synthetic responses; release selection and access
 to a particular published asset remain consumer integration checks. The existing
 native platform matrix runs these suites against both distribution formats.
 
+The installed document-publication consumer suite checks selected tables and SVGs,
+exact surrounding document bytes, retained-input snapshots, CLI preview/check modes,
+and tagged artifact/source identity. Disposable Git fixtures exercise stored blob
+bytes, file modes, and replacement objects without mutating source repositories.
+Shared publication regressions also cover malformed markers, portable aliases,
+stale release/report references, and multi-output rollback and recovery failures.
+
 `just check-setup` requires a disposable GitHub-hosted runner because it installs
 real tools and changes that runner user's shell configuration or Windows user
 PATH. It is deliberately excluded from local `just ci`. These checks use the
@@ -118,17 +125,19 @@ for a clean PyPI installation and setup check before closing the release issue.
 ## Validation under the agent Git policy
 
 [AGENTS.md](../AGENTS.md) prohibits agents from mutating Git state, including in
-disposable test repositories. Exclude the four tests that perform such mutations:
+disposable test repositories. Set the shared test control for agent-run validation:
 
 ```sh
-PYTEST_ADDOPTS='-k "not test_generate_real_git_history_with_packaged_template
-and not test_tag_preserves_utf8_notes_and_force_replaces_atomically
-and not test_repository_identity_and_history_are_read_from_the_consumer
-and not test_runs_simple_git_command"' just ci
+RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS=1 just ci
 ```
 
-These exclusions apply to agent-run validation. Maintainers and hosted CI run
-the full suite. Read-only Git checks may still run under the agent policy.
+The value `1` skips the Git-mutating changelog, process, and publication fixtures
+before setup. The installation checker inherits this setting, so the directly
+executed wheel and sdist consumer suites skip their Git-mutating fixtures too.
+Read-only Git checks still run. Tests requiring a disposable Git repository remain
+unverified by this command; report the skips with the validation result.
+
+Maintainers and hosted CI leave this setting unset and run the full suite.
 
 ## Reporting results
 

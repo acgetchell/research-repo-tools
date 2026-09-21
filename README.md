@@ -78,7 +78,7 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | Dependencies | `deps check-uv`, `update-python`, `update-tools`, `update-uv` | Exact development pins; canonical Cargo SemVer; stable uv pins |
 | Documentation | `docs check-lines` | UTF-8 Markdown line checks with table exemptions |
 | Notebooks | `notebooks check`, `clear`, `execute`, `group`, `lint`, `sync` | Optional locked environment, cell-aware Ruff/ty checks, and execution reports |
-| Performance | `performance compare`, `extract`, `fetch`, `render`, `verify` | Typed timing comparisons, bounded archives, and exact-byte retained evidence |
+| Performance | `performance compare`, `extract`, `fetch`, `publish`, `render`, `verify` | Typed timings, bounded archives, exact-byte evidence, and document publication |
 | Release metadata | `release check`, `release update` | Infer metadata, apply declared policies, and validate complete release plans |
 | Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
 | Semgrep fixtures | `semgrep check-fixtures` | Validate consumer-supplied rules and positive fixture coverage |
@@ -109,7 +109,7 @@ arguments in lexicographic order.
 | `just notebook-execute FILE...` | Execute selected notebooks and write results and reports |
 | `just notebook-lint FILE...` | Check structure, output policy, Python syntax, Ruff rules/formatting, and ty types |
 | `just notebook-sync` | Synchronize locked notebook dependencies and the project kernel |
-| `just performance COMMAND...` | Compare Criterion samples, handle assets, and verify or render retained evidence |
+| `just performance COMMAND...` | Compare Criterion samples, handle assets, and verify, render, or publish retained evidence |
 | `just release-check` | Check consumer release metadata |
 | `just release-notes TAG` | Print release notes from the root changelog or an archive |
 | `just review [base]` | Review branch and local changes; default to verified `origin/main` |
@@ -335,6 +335,93 @@ with an independently recorded digest, then
 The extraction parent must exist. See the [performance API](docs/performance-api.md)
 for limits and [retained-evidence migration](docs/performance-migration.md) before
 replacing consumer helpers or changing artifact formats.
+
+### Document publication
+
+Publish a selected timing table and optional SVG into an existing marked section:
+
+```sh
+just performance publish publication.toml --preview
+just performance publish publication.toml
+just performance publish publication.toml --check
+```
+
+Preview prints validated candidate diffs without writing. Check exits `1` for
+stale or invalid outputs and `0` when current. Default mode updates the document
+and figure in one rollback-capable transaction. All modes verify the retained
+payload hash, selected measurements, configured provenance, and release/report
+references. No measurements or network retrieval run. This capability requires
+a published release newer than `0.1.2` containing it.
+
+Place exactly one ordered `<!-- PERFORMANCE:BEGIN -->` and
+`<!-- PERFORMANCE:END -->` pair in the document. Configure shared comparison
+evidence and explicit benchmark selection in `publication.toml`:
+
+```toml
+schema = 1
+document = "README.md"
+payload = "evidence/comparison.json"
+manifest = "evidence/manifest.json"
+begin = "<!-- PERFORMANCE:BEGIN -->"
+end = "<!-- PERFORMANCE:END -->"
+unit = "ns"
+svg = "figures/timings.svg" # Omit for table-only publication.
+rows = [{benchmark = "step/2", label = "Two-dimensional step"}]
+links = [
+    {label = "Report and measurement context", path = "PERFORMANCE.md"},
+    {label = "Retained measurements", path = "evidence/comparison.json"},
+    {label = "Provenance", path = "evidence/manifest.json"},
+]
+
+[provenance.baseline]
+revision = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" # Replace with expected commit.
+release = "v1.0.0"
+
+[provenance.current]
+revision = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb" # Replace with expected commit.
+release = "v1.1.0"
+
+[[references]]
+path = "Cargo.toml"
+pattern = '^version = "(?P<value>[^"]+)"\r?$'
+source = "version"
+
+[[references]]
+path = "PERFORMANCE.md"
+pattern = '^Baseline: (?P<value>[^\r\n]+)'
+source = "previous-tag"
+
+[[references]]
+path = "PERFORMANCE.md"
+pattern = '^Current: (?P<value>[^\r\n]+)'
+source = "tag"
+```
+
+Use the consumer's actual package/report paths and precise capture patterns.
+This example expects `version = "1.1.0"` and report lines `Baseline: v1.0.0`
+and `Current: v1.1.0`. Record each source's release in its evidence
+`Provenance.context`, for example `(("release", "v1.1.0"),)`. Maintain expected
+revisions independently of the files being checked. Add `source-sha256`,
+`harness-sha256`, or a `context` table to a provenance table when those identities
+are required. Unknown or mismatched values fail.
+
+Rows follow configuration order; each must have both baseline and current data.
+The unit must match the recorded unit. Optional `baseline-label` and
+`current-label` change displayed headings without changing release expectations.
+The dependency-free SVG shows point ratios; scientific commentary stays in the
+consumer. Bytes outside the marker interior, including historical links and
+line endings, are preserved.
+
+Links default to document-relative paths. To publish tagged GitHub links, set
+top-level `repository = "owner/repository"`. The current release tag must exist
+locally and contain the exact retained, referenced, linked, and generated figure
+bytes. To assert that a measured source itself is a tagged commit, also set
+`verify-tag = true` in that source's provenance table. These are read-only local
+Git checks; fetching release assets remains a separate explicit operation.
+
+Historical CSV/JSON formats and custom renderers use the Python planner with
+their consumer schema adapter. See the [publication API](docs/publication-api.md)
+and [migration guide](docs/publication-migration.md), including MCMC's adapter path.
 
 ### Clippy SARIF helpers
 

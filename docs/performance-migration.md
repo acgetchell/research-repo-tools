@@ -93,6 +93,11 @@ own the choice to adopt these contracts and any explicit remediation of old evid
 
 ## Execution and downstream acceptance
 
+For README and document publishers, follow the
+[publication migration guide](publication-migration.md). It covers reuse of
+legacy schema adapters and renderers, exact tagged artifact verification, and
+the shared marker/snapshot/transaction contract.
+
 Workload selection, statistical tests, performance acceptance, published-release
 selection, authentication, Cargo commands, worktree lifecycle, and harness
 substitution remain consumer-owned. Inspection of the current consumers shows

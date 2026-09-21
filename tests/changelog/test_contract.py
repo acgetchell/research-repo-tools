@@ -231,7 +231,7 @@ def test_invalid_unicode_versions_cannot_publish_archives(tmp_path, version):
 
 
 @pytest.fixture
-def git_consumer(tmp_path: Path) -> Path:
+def git_consumer(tmp_path: Path, git_mutations_allowed: None) -> Path:
     run_git_command(["init", "-q"], cwd=tmp_path)
     run_git_command(["config", "user.name", "Test Author"], cwd=tmp_path)
     run_git_command(["config", "user.email", "test@example.invalid"], cwd=tmp_path)

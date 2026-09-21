@@ -121,6 +121,11 @@ writer control and is not crash-atomic across files. No Git state is changed.
 
 ## Published archives
 
+For marked document sections, selected tables, and generated figures, use the
+[publication API](publication-api.md). It adds reference and tagged-blob checks,
+preview/check modes, and byte-preserving document replacement on top of these
+retained-evidence and file-transaction primitives.
+
 Import from `research_repo_tools.archives`:
 
 | Name | Contract |

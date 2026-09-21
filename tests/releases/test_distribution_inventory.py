@@ -62,6 +62,7 @@ def test_install_check_does_not_forward_external_project_locations(tmp_path: Pat
     for name in selectors:
         monkeypatch.setenv(name, str(external))
     monkeypatch.setenv("UV_HTTP_TIMEOUT", "123")
+    monkeypatch.setenv("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS", "1")
     monkeypatch.setattr(module.shutil, "which", lambda _: "uv")
 
     class CheckedEnvironment(Exception):
@@ -72,6 +73,7 @@ def test_install_check_does_not_forward_external_project_locations(tmp_path: Pat
         assert not cwd.is_relative_to(external)
         assert not set(selectors).intersection(env)
         assert env["UV_HTTP_TIMEOUT"] == "123"
+        assert env["RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS"] == "1"
         raise CheckedEnvironment
 
     monkeypatch.setattr(module, "run", intercept)

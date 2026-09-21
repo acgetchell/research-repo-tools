@@ -172,6 +172,8 @@ def check(dist: Path) -> None:
     }
     env = {key: value for key, value in os.environ.items() if key not in external_locations}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    if env.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1":
+        print("Git-mutating consumer tests are skipped by RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS=1 (wheel and sdist).")
     with tempfile.TemporaryDirectory(prefix="research-repo-tools-installed-") as directory:
         temporary = Path(directory)
         for artifact in (wheel, sdist):
@@ -196,6 +198,9 @@ def check(dist: Path) -> None:
             performance_suite = consumer / "public_performance_consumer.py"
             performance_suite.write_bytes((ROOT / "tests/performance/public_performance_consumer.py").read_bytes())
             run([str(python), "-I", str(performance_suite)], cwd=consumer, env=local_env)
+            publication_suite = consumer / "public_publication_consumer.py"
+            publication_suite.write_bytes((ROOT / "tests/publication/public_publication_consumer.py").read_bytes())
+            run([str(python), "-I", str(publication_suite)], cwd=consumer, env=local_env)
             command = scripts / ("research-repo-tools.exe" if os.name == "nt" else "research-repo-tools")
             assert run([str(command), "--version"], cwd=consumer, env=local_env).strip() == version
             assert "changelog" in run([str(command), "--help"], cwd=consumer, env=local_env)

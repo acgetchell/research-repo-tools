@@ -38,7 +38,7 @@ def invocation_directory(tmp_path, monkeypatch):
 
 
 @pytest.fixture
-def invocation_repository(tmp_path, monkeypatch):
+def invocation_repository(tmp_path, monkeypatch, git_mutations_allowed):
     """Exercise Git helpers in a minimal disposable repository."""
     root = tmp_path / "repository"
     root.mkdir()

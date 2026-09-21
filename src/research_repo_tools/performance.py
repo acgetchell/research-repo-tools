@@ -8,6 +8,15 @@ from research_repo_tools.config import Config
 from research_repo_tools.files import _paths_alias, replace_many
 
 
+def _write_stdout(output: bytes) -> None:
+    # Real stdout preserves UTF-8 bytes even on Windows. Tests or callers
+    # may provide text-only streams, which receive the decoded text.
+    if hasattr(sys.stdout, "buffer"):
+        sys.stdout.buffer.write(output)
+    else:
+        sys.stdout.write(output.decode("utf-8"))
+
+
 def add_commands(groups) -> None:
     commands = groups.add_parser("performance", help="compare timings and verify retained evidence").add_subparsers(dest="action", required=True)
     compare = commands.add_parser("compare", help="write deterministic comparison JSON from two Criterion sample trees")
@@ -26,6 +35,11 @@ def add_commands(groups) -> None:
     fetch.add_argument("url")
     fetch.add_argument("destination")
     fetch.add_argument("--sha256", required=True)
+    publish = commands.add_parser("publish", help="publish a marked document section and figures from verified retained evidence")
+    publish.add_argument("configuration", help="publication TOML path relative to the consumer root")
+    mode = publish.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true", help="validate and return 1 when outputs differ; write nothing")
+    mode.add_argument("--preview", action="store_true", help="validate and print candidate diffs; write nothing")
     render = commands.add_parser("render", help="render verified retained comparison data without measuring")
     render.add_argument("payload")
     render.add_argument("manifest")
@@ -36,7 +50,24 @@ def add_commands(groups) -> None:
 
 
 def run(args: argparse.Namespace, settings: Config) -> int:
-    if args.action == "extract":
+    if args.action == "publish":
+        from research_repo_tools.publication import preview_publication, publish_publication
+        from research_repo_tools.publication_config import load_publication
+
+        plan = load_publication(settings.root, args.configuration)
+        if args.preview:
+            _write_stdout(preview_publication(plan).encode("utf-8"))
+        elif args.check:
+            for path in plan.changed_paths:
+                print(f"Stale publication: {path.relative_to(plan.root).as_posix()}")
+            return int(bool(plan.changed_paths))
+        else:
+            changed = publish_publication(plan)
+            for path in changed:
+                print(f"Updated {path.relative_to(plan.root).as_posix()}")
+            if not changed:
+                print("Publication is already current.")
+    elif args.action == "extract":
         archives.extract_archive(settings.path(args.archive), settings.path(args.destination), expected_sha256=args.sha256)
     elif args.action == "fetch":
         archives.download_asset(args.url, settings.path(args.destination), expected_sha256=args.sha256)
@@ -66,10 +97,5 @@ def run(args: argparse.Namespace, settings: Config) -> int:
         if args.output:
             replace_many({settings.path(args.output): output})
         else:
-            # Real stdout preserves UTF-8 bytes even on Windows. Tests or callers
-            # may provide text-only streams, which receive the decoded text.
-            if hasattr(sys.stdout, "buffer"):
-                sys.stdout.buffer.write(output)
-            else:
-                sys.stdout.write(output.decode("utf-8"))
+            _write_stdout(output)
     return 0
