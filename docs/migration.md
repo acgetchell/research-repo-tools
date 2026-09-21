@@ -36,11 +36,12 @@ notebook content and experiment choices remain consumer-owned. Native notebook
 analysis supersedes extracted Python files; migrate notebook-specific checker
 configuration to `.ipynb` paths and validate each consumer's selected workflow.
 
-Benchmark, plotting, and broader evidence tooling are deferred. Future additions should
-first establish a common contract and its minimal representative fixtures. A
-common evidence contract should cover source identity, environment, inputs,
-measurement validity, and comparison compatibility; scientific case definitions
-belong to the consumer.
+The [performance APIs](performance-api.md) provide Criterion timing comparisons,
+exact-byte evidence envelopes, provenance comparison, bounded archive retrieval
+and extraction, and transactional promotion. Follow the
+[retained-evidence migration plan](performance-migration.md) before adoption.
+Plotting, scientific case definitions, benchmark execution, and worktree/harness
+orchestration remain in consumers, whose execution contracts differ.
 
 To adopt the package:
 

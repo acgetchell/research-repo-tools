@@ -157,6 +157,27 @@ class TestPublication(ConsumerCase):
             replace_many({target: "text"})  # ty: ignore[invalid-argument-type]
         self.assertEqual(list(self.root.iterdir()), [])
 
+    def test_portable_aliases_are_rejected_before_creating_targets(self) -> None:
+        # Keep different Path keys even on Windows, where a dict collapses
+        # simple case-only duplicates before replace_many can inspect them.
+        for first, second in (("new/file", "NEW/../NEW/FILE"), ("café/data", "cafe\u0301/data")):
+            with self.subTest(first=first, second=second), self.assertRaisesRegex(ValueError, "duplicate"):
+                replace_many({self.root / first: b"payload", self.root / second: b"manifest"})
+            self.assertEqual(list(self.root.iterdir()), [])
+        for first, second in (("NEW", "new/file"), ("café/data", "cafe\u0301")):
+            with self.subTest(first=first, second=second), self.assertRaisesRegex(ValueError, "overlapping"):
+                replace_many({self.root / first: b"payload", self.root / second: b"manifest"})
+            self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_distinct_hard_links_remain_separate_publication_targets(self) -> None:
+        first, second = self.root / "first", self.root / "second"
+        first.write_bytes(b"original")
+        second.hardlink_to(first)
+        self.assertTrue(first.samefile(second))
+        replace_many({first: b"one", second: b"two"})
+        self.assertEqual(first.read_bytes(), b"one")
+        self.assertEqual(second.read_bytes(), b"two")
+
     @unittest.skipIf(os.name == "nt", "Windows symlinks require privileges; Windows CI exercises ordinary paths")
     def test_symlinks_and_resolved_parent_aliases(self) -> None:
         target, link = self.root / "original", self.root / "link"

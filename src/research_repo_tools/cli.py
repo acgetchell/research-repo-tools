@@ -62,6 +62,9 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--timeout", type=int, help="positive per-cell timeout in seconds")
         if action == "lint":
             command.add_argument("--timeout", type=int, default=30, help="positive per-checker timeout in seconds (default: 30)")
+    from research_repo_tools.performance import add_commands
+
+    add_commands(groups)
     release = groups.add_parser("release", help="check and synchronize release metadata").add_subparsers(dest="action", required=True)
     command = release.add_parser("check")
     command.add_argument("--final-release", action="store_true")
@@ -94,6 +97,10 @@ def parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace, settings: config.Config) -> int:
+    if args.group == "performance":
+        from research_repo_tools.performance import run
+
+        return run(args, settings)
     if args.group == "notebooks":
         if args.action == "group":
             print(settings.notebooks.group)

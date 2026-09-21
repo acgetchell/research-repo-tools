@@ -56,6 +56,10 @@ notebook-lint +files:
 notebook-sync:
     uv run --locked --managed-python --only-group tooling research-repo-tools notebooks sync
 
+# Compare timings, handle release assets, and verify or render retained evidence.
+performance +args:
+    uv run --locked --group dev research-repo-tools performance "$@"
+
 # Check consumer release metadata.
 release-check:
     uv run --locked --group dev research-repo-tools release check

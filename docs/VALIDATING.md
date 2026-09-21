@@ -88,6 +88,15 @@ retained recovery backups. Git byte/filter checks use read-only `hash-object`
 without creating a repository or writing objects. POSIX permission and symlink
 assertions do not substitute for the native Windows checks of ordinary paths.
 
+The installed performance consumer suite exercises Criterion estimates, complete
+and incomplete benchmark coverage, exact CRLF/binary bytes, provenance differences,
+immutable evidence, tar/ZIP extraction, and retained rendering using public imports.
+Shared regressions cover unsafe paths and links, resource limits, malformed and
+non-finite estimates, stale provenance, and publication/rollback failures. HTTP
+transport failure tests use synthetic responses; release selection and access
+to a particular published asset remain consumer integration checks. The existing
+native platform matrix runs these suites against both distribution formats.
+
 `just check-setup` requires a disposable GitHub-hosted runner because it installs
 real tools and changes that runner user's shell configuration or Windows user
 PATH. It is deliberately excluded from local `just ci`. These checks use the

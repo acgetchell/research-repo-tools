@@ -48,7 +48,8 @@ maps to 128 plus the signal number, and keyboard interruption returns 130.
 File-changing commands operate only when invoked: dependency and release updates,
 changelog generation/normalization/archiving, template output, local tagging,
 explicit setup/toolchain synchronization and upgrades, and notebook synchronization
-or output cleanup. Notebook execution publishes separate artifacts.
+or output cleanup. Notebook execution publishes separate artifacts. Performance
+output, asset retrieval, and extraction publish only when explicitly invoked.
 Dry runs are available only where command help lists them. Importing the package
 does not install tools, access the network, or modify consumer files.
 
@@ -64,6 +65,16 @@ see the [README example](../README.md#calling-from-python).
   It writes to the process stdout/stderr and returns the command status.
   Argument parsing raises `SystemExit(0)` for help/version and `SystemExit(2)`
   for usage errors. Unexpected programming errors may propagate.
+
+## Python performance APIs
+
+`research_repo_tools.archives`, `research_repo_tools.criterion`, and
+`research_repo_tools.evidence` expose the names listed in the
+[performance API contract](performance-api.md), starting with the release
+containing them; published `0.1.2` does not contain them. These modules require
+no plotting, numeric, or notebook dependencies. See the
+[consumer examples](../README.md#performance-evidence) and
+[retained-evidence migration](performance-migration.md).
 
 ## Python process API
 
@@ -191,9 +202,11 @@ publishes a mapping in iteration order. An empty mapping is a no-op. It is the
 single supported publication entry point; pass one entry for one file.
 
 - All targets and byte payloads are checked before staging or directory creation.
-  Paths resolve relative to the caller's directory. Duplicate resolved paths and
-  ancestor/descendant targets raise `ValueError`. Leaf symlinks, including dangling
-  symlinks, are rejected. Parent symlinks are resolved once before staging, including
+  Paths resolve relative to the caller's directory. Duplicate paths and
+  ancestor/descendant targets raise `ValueError`. Case and Unicode normalization
+  aliases are rejected on every platform, including when targets or parents do
+  not exist yet. Leaf symlinks, including dangling symlinks, are rejected.
+  Parent symlinks are resolved once before staging, including
   for duplicate/overlap checks. Existing non-regular targets raise
   `IsADirectoryError`. Invalid target or payload types raise `TypeError`.
 - Missing parents are created. Every candidate and existing-file backup is written

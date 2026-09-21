@@ -191,6 +191,9 @@ def check(dist: Path) -> None:
             release_suite = consumer / "public_release_consumer.py"
             release_suite.write_bytes((ROOT / "tests/releases/public_release_consumer.py").read_bytes())
             run([str(python), "-I", str(release_suite)], cwd=consumer, env=local_env)
+            performance_suite = consumer / "public_performance_consumer.py"
+            performance_suite.write_bytes((ROOT / "tests/performance/public_performance_consumer.py").read_bytes())
+            run([str(python), "-I", str(performance_suite)], cwd=consumer, env=local_env)
             command = scripts / ("research-repo-tools.exe" if os.name == "nt" else "research-repo-tools")
             assert run([str(command), "--version"], cwd=consumer, env=local_env).strip() == version
             assert "changelog" in run([str(command), "--help"], cwd=consumer, env=local_env)
