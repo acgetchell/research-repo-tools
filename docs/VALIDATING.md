@@ -77,6 +77,16 @@ duplicating shell configuration. Linux uses Bash, macOS uses Zsh, and Windows
 uses PowerShell with the refreshed user PATH from the registry.
 The same job exercises an explicit Cargo upgrade, verifies the published pins
 and managed executable, and checks that old installations remain available.
+It also installs `clippy-sarif` and `sarif-fmt`, passes a small Cargo JSON diagnostic
+through the managed tools, and checks their failure statuses.
+
+Wheel and sdist installation checks run the same public Python consumer suite
+outside the checkout on every platform. It imports only documented process and
+publication APIs and covers byte transport, configured Git clean filters, Unicode
+paths, command errors/timeouts, file permissions, staging failures, rollback, and
+retained recovery backups. Git byte/filter checks use read-only `hash-object`
+without creating a repository or writing objects. POSIX permission and symlink
+assertions do not substitute for the native Windows checks of ordinary paths.
 
 `just check-setup` requires a disposable GitHub-hosted runner because it installs
 real tools and changes that runner user's shell configuration or Windows user

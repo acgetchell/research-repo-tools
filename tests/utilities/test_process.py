@@ -107,9 +107,10 @@ class TestGetSafeExecutable:
         with pytest.raises(ExecutableNotFoundError, match="not found in PATH"):
             get_safe_executable("definitely_not_a_real_command_12345")
 
-    def test_returns_full_executable_path(self, monkeypatch: pytest.MonkeyPatch) -> None:
-        monkeypatch.setattr(subprocess_utils.shutil, "which", lambda command: f"/usr/bin/{command}")
-        assert get_safe_executable("git") == "/usr/bin/git"
+    def test_returns_full_executable_path(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+        selected = str(tmp_path / "bin" / "git")
+        monkeypatch.setattr(subprocess_utils.shutil, "which", lambda _command: selected)
+        assert get_safe_executable("git") == selected
 
     def test_raises_when_executable_is_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(subprocess_utils.shutil, "which", lambda _command: None)

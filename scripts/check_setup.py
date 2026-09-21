@@ -49,9 +49,9 @@ def isolated_environment(directory: Path) -> dict[str, str]:
     return env
 
 
-def run(command: list[str], *, cwd: Path, env: dict[str, str], expected: int = 0) -> str:
+def run(command: list[str], *, cwd: Path, env: dict[str, str], expected: int = 0, input: str | None = None) -> str:
     print(f"Running: {command}", flush=True)
-    result = subprocess.run(command, cwd=cwd, env=env, capture_output=True, encoding="utf-8", errors="replace", timeout=3600)
+    result = subprocess.run(command, cwd=cwd, env=env, input=input, capture_output=True, encoding="utf-8", errors="replace", timeout=3600)
     print(result.stdout, end="", flush=True)
     print(result.stderr, end="", file=sys.stderr, flush=True)
     if result.returncode != expected:
@@ -123,6 +123,63 @@ def check_cargo_update(consumer: Path, cli: str, just: str, env: dict[str, str])
     run([*cargo, "check", "--locked"], cwd=consumer, env=env)
 
 
+def check_clippy_sarif(consumer: Path, cli: str, env: dict[str, str]) -> None:
+    """Exercise the real converters, including failed input, through managed run."""
+    source = consumer / "diagnostic.rs"
+    source.write_text("fn main() { let unused = 1; }\n", encoding="utf-8")
+    diagnostic = {
+        "reason": "compiler-message",
+        "package_id": "path+file:///fixture#diagnostic@0.1.0",
+        "manifest_path": str(consumer / "Cargo.toml"),
+        "target": {
+            "kind": ["bin"],
+            "crate_types": ["bin"],
+            "name": "diagnostic",
+            "src_path": str(source),
+            "edition": "2021",
+            "doc": True,
+            "doctest": False,
+            "test": True,
+        },
+        "message": {
+            "message": "unused variable: `unused`",
+            "code": {"code": "unused_variables", "explanation": None},
+            "level": "warning",
+            "spans": [
+                {
+                    "file_name": "diagnostic.rs",
+                    "byte_start": 16,
+                    "byte_end": 22,
+                    "line_start": 1,
+                    "line_end": 1,
+                    "column_start": 17,
+                    "column_end": 23,
+                    "is_primary": True,
+                    "text": [{"text": "fn main() { let unused = 1; }", "highlight_start": 17, "highlight_end": 23}],
+                    "label": None,
+                    "suggested_replacement": None,
+                    "suggestion_applicability": None,
+                    "expansion": None,
+                }
+            ],
+            "children": [],
+            "rendered": "warning: unused variable: `unused`\n",
+        },
+    }
+    prefix = [cli, "toolchain", "run", "--"]
+    sarif = run([*prefix, "clippy-sarif"], cwd=consumer, env=env, input=json.dumps(diagnostic) + "\n")
+    report = json.loads(sarif)
+    assert report["version"] == "2.1.0", report
+    (result,) = report["runs"][0]["results"]
+    assert result["ruleId"] == "unused_variables", result
+    assert "unused variable" in result["message"]["text"], result
+    assert "unused variable" in run([*prefix, "sarif-fmt"], cwd=consumer, env=env, input=sarif)
+    # clippy-sarif intentionally ignores malformed diagnostic lines upstream;
+    # a missing input file supplies a reliable real converter failure instead.
+    run([*prefix, "clippy-sarif", "--input", "absent-diagnostics.json"], cwd=consumer, env=env, expected=1)
+    run([*prefix, "sarif-fmt"], cwd=consumer, env=env, input="not SARIF", expected=1)
+
+
 def check(dist: Path) -> None:
     require_hosted_runner()
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
@@ -148,7 +205,7 @@ def check(dist: Path) -> None:
             f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}, "{dev_pin}"]\n'
             f'[tool.uv]\npackage=false\ndefault-groups=[]\nrequired-version="{uv_version}"\n'
             f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(wheel.resolve()))}}}\n"
-            '[tool.research-repo-tools.toolchain.cargo]\ncargo-edit="0.13.13"\ngit-cliff="2.14.1"\n',
+            '[tool.research-repo-tools.toolchain.cargo]\ncargo-edit="0.13.13"\nclippy-sarif="0.8.0"\ngit-cliff="2.14.1"\nsarif-fmt="0.8.0"\n',
             encoding="utf-8",
         )
         (consumer / ".python-version").write_text("3.14\n", encoding="utf-8")
@@ -175,7 +232,7 @@ def check(dist: Path) -> None:
         assert selected["just"] == binary(Path(env["UV_TOOL_BIN_DIR"]), "just")
         assert selected["Python"] == binary(scripts, "python")
         # A system installation must never satisfy the managed Rust/Cargo pins.
-        for name in ("rustup", "rustc", "cargo", "cargo-edit-upgrade", "git-cliff"):
+        for name in ("rustup", "rustc", "cargo", "cargo-edit-upgrade", "clippy-sarif", "git-cliff", "sarif-fmt"):
             assert selected[name].is_relative_to(env["RESEARCH_REPO_TOOLS_HOME"]), selected[name]
         probe = (
             "import json, shutil, sys, research_repo_tools; "
@@ -209,6 +266,7 @@ def check(dist: Path) -> None:
         assert shell_state() == configured, "repeat setup changed shell configuration"
         assert json.loads(run([cli, "toolchain", "check", "--json"], cwd=consumer, env=active)) == statuses
         verify_shell(consumer, env, just_version)
+        check_clippy_sarif(consumer, cli, active)
         check_cargo_update(consumer, cli, just, active)
         assert declarations == {name: (consumer / name).read_bytes() for name in declarations}, "dependency update changed tool or Python declarations"
         # Exercise explicit resolution, installation, declaration publication,
@@ -218,11 +276,12 @@ def check(dist: Path) -> None:
         run([just, "update-cargo-tools"], cwd=consumer, env=active)
         upgraded = tomllib.loads((consumer / "pyproject.toml").read_text(encoding="utf-8"))
         cargo_pins = upgraded["tool"]["research-repo-tools"]["toolchain"]["cargo"]
-        assert set(cargo_pins) == {"cargo-edit", "git-cliff"}
+        assert set(cargo_pins) == {"cargo-edit", "clippy-sarif", "git-cliff", "sarif-fmt"}
         assert run([cli, "toolchain", "run", "--", "cargo", "upgrade", "--version"], cwd=consumer, env=active).strip() == (
             f"cargo-edit-upgrade {cargo_pins['cargo-edit']}"
         )
         assert cargo_pins["git-cliff"] in run([cli, "toolchain", "run", "--", "git-cliff", "--version"], cwd=consumer, env=active)
+        check_clippy_sarif(consumer, cli, active)
         assert all(status["ok"] for status in json.loads(run([cli, "toolchain", "check", "--json"], cwd=consumer, env=active)))
         for name in (".python-version", "rust-toolchain.toml", "uv.lock"):
             assert (consumer / name).read_bytes() == declarations[name]
