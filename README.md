@@ -289,6 +289,7 @@ Use `--baseline-sample NAME`, `--current-sample NAME`, `--statistic mean`, or
 `--unit` when the measurement harness requires them. The JSON retains both full
 samples, including added and missing benchmarks. The CLI rejects comparisons
 with no common benchmarks. It does not infer statistical significance.
+Place `--output` outside both Criterion input roots, including path aliases.
 
 Use Python to attach provenance captured by the consumer at measurement time:
 

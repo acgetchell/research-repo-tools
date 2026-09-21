@@ -283,7 +283,7 @@ class TestBuildRoot:
 class TestArchiveChangelog:
     def test_splits_and_archives(self, tmp_path: Path) -> None:
         changelog = tmp_path / "CHANGELOG.md"
-        changelog.write_text(_full_changelog(), encoding="utf-8")
+        changelog.write_text(_full_changelog(), encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "docs" / "archives" / "changelog"
         archive_changelog(changelog, archive_dir)
         root = changelog.read_text(encoding="utf-8")
@@ -301,7 +301,7 @@ class TestArchiveChangelog:
         changelog_dir = tmp_path / "repo"
         changelog_dir.mkdir()
         changelog = changelog_dir / "CHANGELOG.md"
-        changelog.write_text(_full_changelog(), encoding="utf-8")
+        changelog.write_text(_full_changelog(), encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "outside" / "archive"
         with caplog.at_level(logging.WARNING, logger="archive_changelog"):
             archive_changelog(changelog, archive_dir)
@@ -313,7 +313,7 @@ class TestArchiveChangelog:
     def test_idempotent(self, tmp_path: Path) -> None:
         """Running archive twice produces the same output."""
         changelog = tmp_path / "CHANGELOG.md"
-        changelog.write_text(_full_changelog(), encoding="utf-8")
+        changelog.write_text(_full_changelog(), encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "docs" / "archives" / "changelog"
         archive_changelog(changelog, archive_dir)
         first_root = changelog.read_text(encoding="utf-8")
@@ -328,7 +328,7 @@ class TestArchiveChangelog:
         """When only one minor series exists, nothing is archived."""
         changelog = tmp_path / "CHANGELOG.md"
         text = _PREAMBLE + _UNRELEASED + _V072 + _V071
-        changelog.write_text(text, encoding="utf-8")
+        changelog.write_text(text, encoding="utf-8", newline="\n")
         archive_changelog(changelog, tmp_path / "archive")
         assert changelog.read_text(encoding="utf-8") == text
         assert not (tmp_path / "archive").exists()
@@ -337,13 +337,14 @@ class TestArchiveChangelog:
         """Older archive files are normalized even when they are not regenerated."""
         changelog = tmp_path / "CHANGELOG.md"
         text = _PREAMBLE + _UNRELEASED + _V072 + _V071
-        changelog.write_text(text, encoding="utf-8")
+        changelog.write_text(text, encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "docs" / "archives" / "changelog"
         archive_dir.mkdir(parents=True)
         archive = archive_dir / "0.5.md"
         archive.write_text(
             "# Changelog - 0.5.x\n\n## [0.5.3] - 2025-10-31\n\n### Fixed\n\n- Handle invalid inputs [#116](https://github.com/example/consumer/pull/116)\n  [`a6ec3fa`](https://github.com/example/consumer/commit/a6ec3fadeadbeef)\n\n## Duplicate Item Handling\n\n- Add duplicate item detection\n",
             encoding="utf-8",
+            newline="\n",
         )
         archive_changelog(changelog, archive_dir)
         content = archive.read_text(encoding="utf-8")
@@ -353,7 +354,7 @@ class TestArchiveChangelog:
     def test_atomic_replace_failure_preserves_original_and_cleans_temporary_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         path = tmp_path / "CHANGELOG.md"
         original = "# Changelog\n\nOriginal content.\n"
-        path.write_text(original, encoding="utf-8")
+        path.write_text(original, encoding="utf-8", newline="\n")
 
         def reject_replace(_source: Path, _destination: Path) -> None:
             msg = "simulated publication failure"
@@ -368,7 +369,7 @@ class TestArchiveChangelog:
     def test_backup_staging_failure_preserves_original_and_cleans_staged_file(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         path = tmp_path / "CHANGELOG.md"
         original = "# Changelog\n\nOriginal content.\n"
-        path.write_text(original, encoding="utf-8")
+        path.write_text(original, encoding="utf-8", newline="\n")
 
         def reject_backup(_path: Path) -> Path:
             msg = "simulated backup failure"
@@ -396,12 +397,12 @@ class TestArchiveChangelog:
     def test_publication_failure_rolls_back_every_output_and_allows_retry(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_position: int) -> None:
         changelog = tmp_path / "CHANGELOG.md"
         original_root = _full_changelog()
-        changelog.write_text(original_root, encoding="utf-8")
+        changelog.write_text(original_root, encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "archive"
         archive_dir.mkdir()
         existing_archive = archive_dir / "0.6.md"
         original_archive = "# Existing 0.6 archive\n"
-        existing_archive.write_text(original_archive, encoding="utf-8")
+        existing_archive.write_text(original_archive, encoding="utf-8", newline="\n")
         new_archive = archive_dir / "0.2.md"
         real_replace = file_module._replace_path
         replacement_count = 0
@@ -442,12 +443,12 @@ class TestArchiveChangelog:
     )
     def test_invalid_changelog_is_rejected_before_any_file_changes(self, tmp_path: Path, invalid_text: str, error_match: str) -> None:
         changelog = tmp_path / "CHANGELOG.md"
-        changelog.write_text(invalid_text, encoding="utf-8")
+        changelog.write_text(invalid_text, encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "archive"
         archive_dir.mkdir()
         existing_archive = archive_dir / "0.5.md"
         existing_content = "# Existing archive\n\n## Heading that would otherwise be normalized\n"
-        existing_archive.write_text(existing_content, encoding="utf-8")
+        existing_archive.write_text(existing_content, encoding="utf-8", newline="\n")
         with pytest.raises(ValueError, match=error_match):
             archive_changelog(changelog, archive_dir)
         assert changelog.read_text(encoding="utf-8") == invalid_text
@@ -457,7 +458,7 @@ class TestArchiveChangelog:
     def test_cli_reports_invalid_changelog_without_traceback(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         changelog = tmp_path / "CHANGELOG.md"
         invalid_text = _PREAMBLE + "## [CustomLabel]\n\n- Invalid release\n"
-        changelog.write_text(invalid_text, encoding="utf-8")
+        changelog.write_text(invalid_text, encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "archive"
         monkeypatch.setattr(sys, "argv", ["archive-changelog", str(changelog), "--archive-dir", str(archive_dir)])
         status = main()
@@ -473,7 +474,7 @@ class TestArchiveChangelog:
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]
     ) -> None:
         changelog = tmp_path / "CHANGELOG.md"
-        changelog.write_text(_full_changelog(), encoding="utf-8")
+        changelog.write_text(_full_changelog(), encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "archive"
         rollback_failure = BaseExceptionGroup(
             "Changelog publication failed and rollback was incomplete", [OSError("publication failed"), OSError("rollback failed")]
@@ -493,7 +494,7 @@ class TestArchiveChangelog:
 
     def test_cli_reraises_unhandled_exception_group_members(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
         changelog = tmp_path / "CHANGELOG.md"
-        changelog.write_text(_full_changelog(), encoding="utf-8")
+        changelog.write_text(_full_changelog(), encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "archive"
         mixed_failure = BaseExceptionGroup("Changelog publication interrupted during rollback", [OSError("rollback failed"), KeyboardInterrupt()])
 
@@ -511,14 +512,14 @@ class TestArchiveChangelog:
 
     def test_no_versions_no_op(self, tmp_path: Path) -> None:
         changelog = tmp_path / "CHANGELOG.md"
-        changelog.write_text("# Changelog\n\nNo versions yet.\n", encoding="utf-8")
+        changelog.write_text("# Changelog\n\nNo versions yet.\n", encoding="utf-8", newline="\n")
         archive_changelog(changelog, tmp_path / "archive")
         assert changelog.read_text(encoding="utf-8") == "# Changelog\n\nNo versions yet.\n"
 
     def test_distributes_link_defs(self, tmp_path: Path) -> None:
         """Reference-style link definitions are distributed to the correct files."""
         changelog = tmp_path / "CHANGELOG.md"
-        changelog.write_text(_full_changelog_with_links(), encoding="utf-8")
+        changelog.write_text(_full_changelog_with_links(), encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "docs" / "archives" / "changelog"
         archive_changelog(changelog, archive_dir)
         root = changelog.read_text(encoding="utf-8")
@@ -539,7 +540,7 @@ class TestArchiveChangelog:
     def test_idempotent_with_link_defs(self, tmp_path: Path) -> None:
         """Idempotency holds when link definitions are present."""
         changelog = tmp_path / "CHANGELOG.md"
-        changelog.write_text(_full_changelog_with_links(), encoding="utf-8")
+        changelog.write_text(_full_changelog_with_links(), encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "docs" / "archives" / "changelog"
         archive_changelog(changelog, archive_dir)
         first_root = changelog.read_text(encoding="utf-8")
@@ -555,7 +556,7 @@ class TestArchiveChangelog:
         changelog_dir = tmp_path / "repo"
         changelog_dir.mkdir()
         changelog = changelog_dir / "CHANGELOG.md"
-        changelog.write_text(_full_changelog(), encoding="utf-8")
+        changelog.write_text(_full_changelog(), encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "outside" / "archive"
 
         def raise_cross_drive_value_error(_path: Path, _start: Path) -> str:
@@ -573,12 +574,12 @@ class TestArchiveChangelog:
         """A late replacement failure must not leave mixed changelog generations."""
         changelog = tmp_path / "CHANGELOG.md"
         original_root = _full_changelog()
-        changelog.write_text(original_root, encoding="utf-8")
+        changelog.write_text(original_root, encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "docs" / "archives" / "changelog"
         archive_dir.mkdir(parents=True)
         existing_archive = archive_dir / "0.6.md"
         original_archive = "# Changelog - 0.6.x\n\nPrior valid archive\n"
-        existing_archive.write_text(original_archive, encoding="utf-8")
+        existing_archive.write_text(original_archive, encoding="utf-8", newline="\n")
         real_replace = file_module._replace_path
         root_failure_injected = False
 
@@ -603,15 +604,15 @@ class TestArchiveChangelog:
         """A failed rollback must preserve the recovery copy for manual restoration."""
         changelog = tmp_path / "CHANGELOG.md"
         original_root = _full_changelog()
-        changelog.write_text(original_root, encoding="utf-8")
+        changelog.write_text(original_root, encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "docs" / "archives" / "changelog"
         archive_dir.mkdir(parents=True)
         existing_archive = archive_dir / "0.6.md"
         original_archive = "# Changelog - 0.6.x\n\nPrior valid archive\n"
-        existing_archive.write_text(original_archive, encoding="utf-8")
+        existing_archive.write_text(original_archive, encoding="utf-8", newline="\n")
         existing_older_archive = archive_dir / "0.2.md"
         original_older_archive = "# Changelog - 0.2.x\n\nPrior older archive\n"
-        existing_older_archive.write_text(original_older_archive, encoding="utf-8")
+        existing_older_archive.write_text(original_older_archive, encoding="utf-8", newline="\n")
         real_replace = file_module._replace_path
         root_failure_injected = False
 
@@ -642,7 +643,7 @@ class TestArchiveChangelog:
     @pytest.mark.parametrize("invalid_text", [_PREAMBLE + _UNRELEASED + "## [CustomLabel]\n\n- Invalid\n", _PREAMBLE + _UNRELEASED + _V072 + _V072])
     def test_invalid_headings_leave_root_and_archives_unchanged(self, tmp_path: Path, invalid_text: str) -> None:
         changelog = tmp_path / "CHANGELOG.md"
-        changelog.write_text(invalid_text, encoding="utf-8")
+        changelog.write_text(invalid_text, encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "docs" / "archives" / "changelog"
         archive_dir.mkdir(parents=True)
         existing_archive = archive_dir / "0.6.md"
@@ -658,7 +659,7 @@ class TestArchiveChangelog:
         """A directory at an output path must leave every existing file untouched."""
         changelog = tmp_path / "CHANGELOG.md"
         original_root = _full_changelog()
-        changelog.write_text(original_root, encoding="utf-8")
+        changelog.write_text(original_root, encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "docs" / "archives" / "changelog"
         directory_output = archive_dir / "0.2.md"
         directory_output.mkdir(parents=True)
@@ -672,7 +673,7 @@ class TestArchiveChangelog:
     def test_out_of_order_releases_preserve_root_and_archives(self, tmp_path: Path) -> None:
         changelog = tmp_path / "CHANGELOG.md"
         original = _PREAMBLE + _V071 + _V072 + _V062
-        changelog.write_text(original, encoding="utf-8")
+        changelog.write_text(original, encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "docs" / "archives" / "changelog"
         archive_dir.mkdir(parents=True)
         existing_archive = archive_dir / "0.6.md"
@@ -687,7 +688,7 @@ class TestArchiveChangelog:
     def test_cli_reports_order_error_without_traceback(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         changelog = tmp_path / "CHANGELOG.md"
         original = _PREAMBLE + _V071 + _V072 + _V062
-        changelog.write_text(original, encoding="utf-8")
+        changelog.write_text(original, encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "archive"
         status = archive_changelog_module.main([str(changelog), "--archive-dir", str(archive_dir)])
         captured = capsys.readouterr()
@@ -701,12 +702,12 @@ class TestArchiveChangelog:
         """An unknown version-like heading fails before any output is rewritten."""
         changelog = tmp_path / "CHANGELOG.md"
         original = _PREAMBLE + _V072 + "## [CustomLabel]\n\n- Preserve me\n\n" + _V062
-        changelog.write_text(original, encoding="utf-8")
+        changelog.write_text(original, encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "docs" / "archives" / "changelog"
         archive_dir.mkdir(parents=True)
         existing_archive = archive_dir / "0.5.md"
         existing = "# Changelog - 0.5.x\n\nHistorical content\n"
-        existing_archive.write_text(existing, encoding="utf-8")
+        existing_archive.write_text(existing, encoding="utf-8", newline="\n")
         with pytest.raises(ValueError, match="CustomLabel"):
             archive_changelog(changelog, archive_dir)
         assert changelog.read_text(encoding="utf-8") == original
@@ -716,7 +717,7 @@ class TestArchiveChangelog:
     def test_multi_file_publication_rolls_back_on_failure(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         changelog = tmp_path / "CHANGELOG.md"
         original_root = _full_changelog()
-        changelog.write_text(original_root, encoding="utf-8")
+        changelog.write_text(original_root, encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "docs" / "archives" / "changelog"
         archive_dir.mkdir(parents=True)
         existing_archive = archive_dir / "0.6.md"
@@ -784,12 +785,12 @@ class TestArchiveChangelog:
         changelog_dir.mkdir()
         changelog = changelog_dir / "CHANGELOG.md"
         original = _full_changelog()
-        changelog.write_text(original, encoding="utf-8")
+        changelog.write_text(original, encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "outside" / "archive"
         archive_dir.mkdir(parents=True)
         existing_archive = archive_dir / "0.5.md"
         existing = "# Changelog - 0.5.x\n\nHistorical content\n"
-        existing_archive.write_text(existing, encoding="utf-8")
+        existing_archive.write_text(existing, encoding="utf-8", newline="\n")
 
         def raise_cross_drive_value_error(_path: Path, _start: Path) -> str:
             msg = "path is on mount 'D:', start on mount 'C:'"
@@ -838,10 +839,10 @@ class TestTagReleaseArchiveFallback:
     def test_extract_from_archive(self, tmp_path: Path) -> None:
         """Release notes fall back to archive when version not in root."""
         changelog = tmp_path / "CHANGELOG.md"
-        changelog.write_text(_PREAMBLE + _V072, encoding="utf-8")
+        changelog.write_text(_PREAMBLE + _V072, encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "docs" / "archives" / "changelog"
         archive_dir.mkdir(parents=True)
-        (archive_dir / "0.6.md").write_text("# Changelog - 0.6.x\n\n" + _V062 + _V061, encoding="utf-8")
+        (archive_dir / "0.6.md").write_text("# Changelog - 0.6.x\n\n" + _V062 + _V061, encoding="utf-8", newline="\n")
         body, source, _ = notes(Config(changelog.parent), "v0.6.2")
         assert "Bump dep in 0.6.2" in body
         assert source == archive_dir / "0.6.md"
@@ -849,7 +850,7 @@ class TestTagReleaseArchiveFallback:
     def test_extract_from_root_returns_root_source(self, tmp_path: Path) -> None:
         """Release notes return the root changelog as source when found there."""
         changelog = tmp_path / "CHANGELOG.md"
-        changelog.write_text(_PREAMBLE + _V072, encoding="utf-8")
+        changelog.write_text(_PREAMBLE + _V072, encoding="utf-8", newline="\n")
         body, source, _ = notes(Config(changelog.parent), "v0.7.2")
         assert "Bug fix in 0.7.2" in body
         assert source == changelog
@@ -857,10 +858,10 @@ class TestTagReleaseArchiveFallback:
     def test_anchor_from_archive(self, tmp_path: Path) -> None:
         """Anchor lookup falls back to archive for archived versions."""
         changelog = tmp_path / "CHANGELOG.md"
-        changelog.write_text(_PREAMBLE + _V072, encoding="utf-8")
+        changelog.write_text(_PREAMBLE + _V072, encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "docs" / "archives" / "changelog"
         archive_dir.mkdir(parents=True)
-        (archive_dir / "0.6.md").write_text("# Changelog - 0.6.x\n\n" + _V062, encoding="utf-8")
+        (archive_dir / "0.6.md").write_text("# Changelog - 0.6.x\n\n" + _V062, encoding="utf-8", newline="\n")
         anchor = _heading_to_anchor(notes(Config(changelog.parent), "v0.6.2")[2])
         assert "062" in anchor
 
@@ -869,7 +870,7 @@ class TestArchiveChangelogCli:
     def test_malformed_heading_reports_stderr_without_modifying_files(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         changelog = tmp_path / "CHANGELOG.md"
         malformed = _PREAMBLE + _UNRELEASED + "## [CustomLabel]\n\n- Invalid\n"
-        changelog.write_text(malformed, encoding="utf-8")
+        changelog.write_text(malformed, encoding="utf-8", newline="\n")
         archive_dir = tmp_path / "archive"
         status = archive_changelog_module.main([str(changelog), "--archive-dir", str(archive_dir)])
         captured = capsys.readouterr()
@@ -884,7 +885,7 @@ class TestArchiveChangelogCli:
         self, tmp_path: Path, capsys: pytest.CaptureFixture[str], monkeypatch: pytest.MonkeyPatch
     ) -> None:
         changelog = tmp_path / "CHANGELOG.md"
-        changelog.write_text(_PREAMBLE + _V072, encoding="utf-8")
+        changelog.write_text(_PREAMBLE + _V072, encoding="utf-8", newline="\n")
         grouped_error = ExceptionGroup("publication failed and rollback failed", [OSError("root replacement failed"), OSError("archive restoration failed")])
 
         def fail_publication(_changelog: Path, _archive_dir: Path | None) -> None:

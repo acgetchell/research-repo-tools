@@ -57,3 +57,28 @@
   Keep documentation focused on current guidance. Link to the generated
   [CHANGELOG.md](CHANGELOG.md) for fixes and release history; do not maintain
   parallel fix or validation logs in other documents.
+
+## Cross-platform changes and fixtures
+
+- Review runtime code and tests for Linux, macOS, and Windows semantics when
+  changing paths, archives, byte transport, subprocesses, or package installation.
+  Account for separators, case-insensitive Path equality, encodings, newline
+  translation, executable discovery, permissions, and symlink privileges.
+- Verify fixture preconditions before testing behavior. For exact-byte files,
+  use bytes or explicit encoding/newline settings. For malformed archives, assert
+  the original stored member names: standard-library writers can normalize unsafe
+  inputs into safe ones on Windows. Do not assume constructor arguments survive
+  serialization unchanged.
+- Give Python text-file writes an explicit newline policy, including fixture and
+  child-script writers. `just check` runs `just newline-check` to reject implicit
+  translation. Fix detected writers; preserve deliberate violation snippets used
+  to test static-analysis coverage and their expected findings. Keep intentional
+  LF/CRLF byte regressions intact.
+- Add public API regressions to the consumer suites run from isolated wheel and
+  sdist installations. Exercise deterministic platform transformations locally
+  with focused models where useful; avoid changing global OS identity or skipping
+  supported behavior to make a platform pass. Models supplement native checks.
+- Diagnose native failures from the failing job's logs. Before reporting a change
+  as ready to merge, verify the required Linux, macOS, and Windows package jobs
+  for the current commit. If those runs are unavailable or pending, report the
+  remaining native checks explicitly; a local `just ci` covers only its host.

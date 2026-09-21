@@ -68,7 +68,7 @@ def test_semgrep_results_parses_valid_result_objects(monkeypatch: pytest.MonkeyP
 @pytest.mark.parametrize("errors", [[{"type": "ParseError"}], {}, "", None, False, 0])
 def test_matching_findings_cannot_hide_incomplete_or_malformed_scan(tmp_path, monkeypatch, capsys, errors):
     fixture = tmp_path / "fixture.py"
-    fixture.write_text("# ruleid: shared.rule\nbad()\n")
+    fixture.write_text("# ruleid: shared.rule\nbad()\n", newline="\n")
     payload = {"results": [_result("shared.rule", 2, path=fixture.name)], "errors": errors}
     assert _run_main(monkeypatch, fixture, payload) == 1
     assert "errors must be an empty list" in capsys.readouterr().err
@@ -95,7 +95,7 @@ def test_semgrep_results_rejects_malformed_container_shapes(
 
 def test_main_requires_annotation_token_boundaries(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fixture = tmp_path / "fixture.rs"
-    fixture.write_text("// ruleid: rust.foo, rust.bar\nbad_one();\n// todoruleid: rust.foo\nbad_two();\n", encoding="utf-8")
+    fixture.write_text("// ruleid: rust.foo, rust.bar\nbad_one();\n// todoruleid: rust.foo\nbad_two();\n", encoding="utf-8", newline="\n")
     payload = {"results": [_result("rust.foo", 2), _result("rust.bar", 2), _result("rust.foo", 4)]}
     assert _run_main(monkeypatch, fixture, payload) == 1
     payload["results"].pop()
@@ -117,7 +117,7 @@ def test_main_rejects_malformed_finding_fields(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], result: dict[str, object], diagnostic: str
 ) -> None:
     fixture = tmp_path / "fixture.rs"
-    fixture.write_text("// ruleid: rust.foo\nbad();\n", encoding="utf-8")
+    fixture.write_text("// ruleid: rust.foo\nbad();\n", encoding="utf-8", newline="\n")
     assert _run_main(monkeypatch, fixture, {"results": [result]}) == 1
     captured = capsys.readouterr()
     assert captured.out == ""
@@ -128,7 +128,7 @@ def test_main_rejects_findings_at_wrong_lines_even_when_rule_counts_match(
     monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     fixture = tmp_path / "fixture.rs"
-    fixture.write_text("// ruleid: rust.foo\nbad_one();\n// ruleid: rust.foo\nbad_two();\n", encoding="utf-8")
+    fixture.write_text("// ruleid: rust.foo\nbad_one();\n// ruleid: rust.foo\nbad_two();\n", encoding="utf-8", newline="\n")
     payload = {"results": [_result("rust.foo", 2), _result("rust.foo", 5)]}
     assert _run_main(monkeypatch, fixture, payload) == 1
     captured = capsys.readouterr()
@@ -139,7 +139,7 @@ def test_main_rejects_findings_at_wrong_lines_even_when_rule_counts_match(
 
 def test_main_matches_overlapping_spans_by_shortest_span(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fixture = tmp_path / "fixture.rs"
-    fixture.write_text("// ruleid: rust.foo\nbad_one();\n// ruleid: rust.foo\nbad_two();\n", encoding="utf-8")
+    fixture.write_text("// ruleid: rust.foo\nbad_one();\n// ruleid: rust.foo\nbad_two();\n", encoding="utf-8", newline="\n")
     payload = {"results": [_result("rust.foo", 2, 4), _result("rust.foo", 2)]}
     assert _run_main(monkeypatch, fixture, payload) == 0
 
@@ -157,14 +157,14 @@ def test_finding_mismatches_consumes_earliest_end_to_allow_later_points() -> Non
 
 def test_main_matches_markdown_finding_after_blank_line_and_code_fence(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fixture = tmp_path / "fixture.md"
-    fixture.write_text("<!-- ruleid: docs.foo -->\n\n```bash\nbad-command\n```\n", encoding="utf-8")
+    fixture.write_text("<!-- ruleid: docs.foo -->\n\n```bash\nbad-command\n```\n", encoding="utf-8", newline="\n")
     assert _run_main(monkeypatch, fixture, {"results": [_result("docs.foo", 4, path=fixture.name)]}) == 0
 
 
 @pytest.mark.parametrize("include_matching", [False, True])
 def test_main_rejects_findings_from_another_file(tmp_path, monkeypatch, capsys, include_matching):
     fixture = tmp_path / "fixture.rs"
-    fixture.write_text("// ruleid: shared.rule\nbad();\n")
+    fixture.write_text("// ruleid: shared.rule\nbad();\n", newline="\n")
     findings = [_result("shared.rule", 2, path="other/fixture.rs")]
     if include_matching:
         findings.append(_result("shared.rule", 2))
@@ -175,7 +175,7 @@ def test_main_rejects_findings_from_another_file(tmp_path, monkeypatch, capsys, 
 @pytest.mark.parametrize("absolute", [False, True])
 def test_main_accepts_resolved_paths_to_the_selected_fixture(tmp_path, monkeypatch, absolute):
     fixture = tmp_path / "fixture.rs"
-    fixture.write_text("// ruleid: shared.rule\nbad();\n")
+    fixture.write_text("// ruleid: shared.rule\nbad();\n", newline="\n")
     reported = str(fixture) if absolute else "./fixture.rs"
     assert _run_main(monkeypatch, fixture, {"results": [_result("shared.rule", 2, path=reported)]}) == 0
 
@@ -189,7 +189,7 @@ def test_semgrep_results_rejects_malformed_result_objects(monkeypatch: pytest.Mo
 
 def test_main_accepts_matching_annotations(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     fixture = tmp_path / "fixture.rs"
-    fixture.write_text("// ruleid: rust.foo, rust.bar\n// ruleid: rust.foo\n", encoding="utf-8")
+    fixture.write_text("// ruleid: rust.foo, rust.bar\n// ruleid: rust.foo\n", encoding="utf-8", newline="\n")
     monkeypatch.setenv("SEMGREP_JSON", json.dumps({"results": [_result("rust.foo", 2), _result("rust.bar", 2), _result("rust.foo", 3)]}))
     monkeypatch.setattr(check_semgrep_fixtures.sys, "argv", ["check_semgrep_fixtures.py", str(fixture)])
     rc = check_semgrep_fixtures.main()
@@ -201,7 +201,7 @@ def test_main_accepts_matching_annotations(monkeypatch: pytest.MonkeyPatch, tmp_
 
 def test_main_reports_missing_check_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     fixture = tmp_path / "fixture.rs"
-    fixture.write_text("// ruleid: rust.foo\n", encoding="utf-8")
+    fixture.write_text("// ruleid: rust.foo\n", encoding="utf-8", newline="\n")
     monkeypatch.setenv("SEMGREP_JSON", json.dumps({"results": [{}]}))
     monkeypatch.setattr(check_semgrep_fixtures.sys, "argv", ["check_semgrep_fixtures.py", str(fixture)])
     rc = check_semgrep_fixtures.main()
@@ -214,7 +214,7 @@ def test_main_reports_missing_check_id(monkeypatch: pytest.MonkeyPatch, tmp_path
 
 def test_main_rejects_reversed_result_span(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     fixture = tmp_path / "fixture.rs"
-    fixture.write_text("// ruleid: rust.foo\nbad();\n", encoding="utf-8")
+    fixture.write_text("// ruleid: rust.foo\nbad();\n", encoding="utf-8", newline="\n")
     monkeypatch.setenv("SEMGREP_JSON", json.dumps({"results": [_result("rust.foo", 4, 2)]}))
     monkeypatch.setattr(check_semgrep_fixtures.sys, "argv", ["check_semgrep_fixtures.py", str(fixture)])
     assert check_semgrep_fixtures.main() == 1
@@ -223,7 +223,7 @@ def test_main_rejects_reversed_result_span(monkeypatch: pytest.MonkeyPatch, tmp_
 
 def test_main_matches_overlapping_spans_by_earliest_end_line(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
     fixture = tmp_path / "fixture.rs"
-    fixture.write_text("// ruleid: rust.foo\nbad_one();\n// ruleid: rust.foo\nbad_two();\n", encoding="utf-8")
+    fixture.write_text("// ruleid: rust.foo\nbad_one();\n// ruleid: rust.foo\nbad_two();\n", encoding="utf-8", newline="\n")
     monkeypatch.setenv("SEMGREP_JSON", json.dumps({"results": [_result("rust.foo", 2, 4), _result("rust.foo", 2)]}))
     monkeypatch.setattr(check_semgrep_fixtures.sys, "argv", ["check_semgrep_fixtures.py", str(fixture)])
     assert check_semgrep_fixtures.main() == 0

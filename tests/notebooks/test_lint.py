@@ -14,7 +14,7 @@ from research_repo_tools import cli, config, notebook_lint, notebooks
 @pytest.fixture
 def consumer(tmp_path):
     (tmp_path / "pyproject.toml").write_text(
-        '[project]\nrequires-python=">=3.14"\n[tool.ruff]\nline-length=160\n[tool.ruff.lint]\nselect=["E4", "E7", "E9", "F"]\n'
+        '[project]\nrequires-python=">=3.14"\n[tool.ruff]\nline-length=160\n[tool.ruff.lint]\nselect=["E4", "E7", "E9", "F"]\n', newline="\n"
     )
     return config.load(root=tmp_path)
 
@@ -28,7 +28,7 @@ def write(settings, cells, *, name="analysis.ipynb"):
             *[nbformat.v4.new_code_cell(source.removesuffix("\n"), id=cell_id) for cell_id, source in cells],
         ]
     )
-    path.write_text(nbformat.writes(node), encoding="utf-8")
+    path.write_text(nbformat.writes(node), encoding="utf-8", newline="\n")
     return path
 
 
@@ -108,26 +108,28 @@ def test_real_checks_cannot_run_cell_side_effects(consumer):
 
 def test_real_consumer_rule_and_format_configuration_are_honored(consumer, capsys):
     (consumer.root / "notebooks").mkdir()
-    (consumer.root / "notebooks/ruff.toml").write_text('line-length=160\n[lint]\nselect=["F401"]\n[format]\nquote-style="single"\n')
+    (consumer.root / "notebooks/ruff.toml").write_text('line-length=160\n[lint]\nselect=["F401"]\n[format]\nquote-style="single"\n', newline="\n")
     path = write(consumer, [("format", 'print("double quotes")\n')])
     assert run(consumer, path) == 1
     assert "ruff format [unformatted]" in capsys.readouterr().err
     path = write(consumer, [("configured", "import os\n\nprint('single quotes')\n")])
     assert run(consumer, path) == 1
     assert "F401" in capsys.readouterr().err
-    (consumer.root / "notebooks/ruff.toml").write_text('line-length=160\n[lint]\nselect=["F401"]\nignore=["F401"]\n[format]\nquote-style="single"\n')
+    (consumer.root / "notebooks/ruff.toml").write_text(
+        'line-length=160\n[lint]\nselect=["F401"]\nignore=["F401"]\n[format]\nquote-style="single"\n', newline="\n"
+    )
     assert run(consumer, path) == 0, capsys.readouterr().err
 
 
 def test_real_ty_uses_consumer_project_rules_and_installed_environment(consumer, capsys):
-    (consumer.root / "ty.toml").write_text('[rules]\ninvalid-assignment="ignore"\n')
+    (consumer.root / "ty.toml").write_text('[rules]\ninvalid-assignment="ignore"\n', newline="\n")
     path = write(consumer, [("typed", 'import nbformat\n\nvalue: int = "wrong"\nprint(nbformat.__version__, value)\n')])
     assert run(consumer, path) == 0, capsys.readouterr().err
 
 
 def test_real_explicit_selection_overrides_excludes_and_fixes_are_disabled(consumer, capsys):
-    (consumer.root / "ruff.toml").write_text('fix=true\nfix-only=true\nforce-exclude=true\nexclude=["*.ipynb"]\n[lint]\nselect=["F401"]\n')
-    (consumer.root / "ty.toml").write_text('[src]\nexclude=["*.ipynb"]\n')
+    (consumer.root / "ruff.toml").write_text('fix=true\nfix-only=true\nforce-exclude=true\nexclude=["*.ipynb"]\n[lint]\nselect=["F401"]\n', newline="\n")
+    (consumer.root / "ty.toml").write_text('[src]\nexclude=["*.ipynb"]\n', newline="\n")
     path = write(consumer, [("ignored", 'import os\n\nvalue: int = "wrong"\n')])
     original = path.read_bytes()
     assert run(consumer, path) == 1
@@ -227,7 +229,7 @@ def test_non_python_notebook_cannot_be_silently_skipped(consumer, monkeypatch, c
 def test_validates_whole_selection_before_starting_checkers(consumer, monkeypatch, capsys):
     path = write(consumer, [("valid", "value = 1\n")])
     bad = consumer.root / "bad.ipynb"
-    bad.write_text("{}")
+    bad.write_text("{}", newline="\n")
     monkeypatch.setattr(notebook_lint, "run_safe_command", lambda *args, **kwargs: pytest.fail("checker started before parsing selection"))
     assert run(consumer, path, str(bad)) == 1
     assert str(bad) in capsys.readouterr().err

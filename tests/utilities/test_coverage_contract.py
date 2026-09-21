@@ -38,7 +38,8 @@ def test_cli_uses_consumer_root_and_deterministic_ties(tmp_path: Path, capsys) -
     report = tmp_path / "coverage/cobertura.xml"
     report.parent.mkdir()
     report.write_text(
-        '<coverage><class filename="src/z.rs"><lines><line number="1" hits="1"/></lines></class><class filename="src/a.rs"><lines><line number="1" hits="1"/></lines></class></coverage>'
+        '<coverage><class filename="src/z.rs"><lines><line number="1" hits="1"/></lines></class><class filename="src/a.rs"><lines><line number="1" hits="1"/></lines></class></coverage>',
+        newline="\n",
     )
     assert cli.main(["--root", str(tmp_path), "coverage", "report", "--prefix", "src", "--limit", "1"]) == 0
     assert capsys.readouterr().out == "100.00%  src/a.rs\n"

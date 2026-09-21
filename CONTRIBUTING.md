@@ -40,7 +40,7 @@ including changelog recipes and aliases.
 | --- | --- |
 | `just audit` | Audit locked Python dependencies against online vulnerability advisories |
 | `just build` | Build the wheel and source distribution |
-| `just check` | Check the lockfile, Python linting, formatting, types, and workflows |
+| `just check` | Check the lockfile, Python linting, formatting, newlines, types, and workflows |
 | `just check-dist` | Check isolated installations of existing build artifacts |
 | `just check-setup` | Exercise real setup on disposable GitHub-hosted runners only |
 | `just ci` | Run checks, tests, builds, and installation checks for final review |
@@ -48,6 +48,7 @@ including changelog recipes and aliases.
 | `just help` | List available commands and arguments in lexicographic order |
 | `just help-workflows` | Alias for `help` |
 | `just install-check` | Build and check isolated installations |
+| `just newline-check` | Reject implicit newline translation in Python text-file writes |
 | `just release-check TAG` | Run the read-only PyPI publication preflight |
 | `just release-update VERSION PREVIOUS DATE` | Synchronize release metadata before generating notes |
 | `just review [base]` | Run opt-in CodeRabbit review of branch and local changes |
@@ -90,7 +91,7 @@ and signed provenance to a draft GitHub Release. Publishing that release trigger
 asset verification and the approval-gated PyPI upload without rebuilding.
 
 `just check` lints, formats, and type-checks `src`, `scripts`, and
-`tests`. It also runs the locked actionlint and zizmor workflow validators.
+`tests`. It also runs the newline guard and the locked actionlint and zizmor workflow validators.
 `just audit` performs the separate network-backed Python dependency audit.
 GitHub repository settings and required checks are documented in
 [GitHub setup](docs/CONFIGURING_GITHUB.md); their API payloads live in `.github/settings/`.
@@ -159,6 +160,17 @@ Notebook tests use synthetic files and real fresh kernels for interpreter,
 working-directory, cell-error, and timeout behavior. They require local socket
 access for Jupyter. Optional notebook dependencies are pinned in the development
 group but remain absent from maintenance-only distribution installations.
+
+Use `newline="\n"` for portable text-file writes, or bytes for exact serialized
+fixtures. Intentional CRLF output must select that policy explicitly. The AST
+guard in `just newline-check` checks Python under `src`, `scripts`, and `tests`,
+including parseable embedded child-script literals. It rejects missing or literal
+`None` newline arguments on `write_text`, recognized text-writing `open` calls,
+text temporary files, and `TextIOWrapper`. Read-only and binary opens are allowed.
+Computed modes on unknown receivers, method aliases, dynamically assembled code,
+and computed newline values still require review. The guard does not check source
+file line endings or replace native Windows tests. Deliberately invalid snippets
+for the guard live in its data fixture; keep their expected failures intact.
 
 A new capability needs a shared purpose and a consistent contract. Repository
 names must never select behavior. Standardize common defaults; leave scientific

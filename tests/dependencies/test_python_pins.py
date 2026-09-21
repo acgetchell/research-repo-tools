@@ -90,7 +90,7 @@ def test_parse_resolution_rejects_missing_direct_tool() -> None:
 
 def test_resolve_latest_pins_preserves_retained_constraint_for_managed_distribution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(project_text("ruff==0.16.2", "ruff<0.17"), encoding="utf-8")
+    pyproject.write_text(project_text("ruff==0.16.2", "ruff<0.17"), encoding="utf-8", newline="\n")
     calls: list[tuple[str, list[str], dict[str, object]]] = []
 
     def fake_run(command: str, args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -107,9 +107,9 @@ def test_resolve_latest_pins_preserves_retained_constraint_for_managed_distribut
 def test_update_dev_pins_resolves_then_applies_one_exact_transaction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pyproject = tmp_path / "pyproject.toml"
     original = project_text("pytest>=9.1", "ruff==0.16.2", "semgrep==1.172.0", "ty~=0.0.66")
-    pyproject.write_text(original, encoding="utf-8")
+    pyproject.write_text(original, encoding="utf-8", newline="\n")
     uv_lock = tmp_path / "uv.lock"
-    uv_lock.write_text("version = 1\nruff = 0.16.2\nsemgrep = 1.172.0\n", encoding="utf-8")
+    uv_lock.write_text("version = 1\nruff = 0.16.2\nsemgrep = 1.172.0\n", encoding="utf-8", newline="\n")
     calls: list[tuple[str, list[str], dict[str, object]]] = []
 
     def fake_run(command: str, args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -122,9 +122,11 @@ def test_update_dev_pins_resolves_then_applies_one_exact_transaction(tmp_path: P
             output = "ruff==0.16.4\nsemgrep==1.174.0\nmcp==1.29.0\n"
         else:
             pyproject.write_text(
-                pyproject.read_text(encoding="utf-8").replace("ruff==0.16.2", "ruff==0.16.4").replace("semgrep==1.172.0", "semgrep==1.174.0"), encoding="utf-8"
+                pyproject.read_text(encoding="utf-8").replace("ruff==0.16.2", "ruff==0.16.4").replace("semgrep==1.172.0", "semgrep==1.174.0"),
+                encoding="utf-8",
+                newline="\n",
             )
-            uv_lock.write_text("version = 1\nruff = 0.16.4\nsemgrep = 1.174.0\n", encoding="utf-8")
+            uv_lock.write_text("version = 1\nruff = 0.16.4\nsemgrep = 1.174.0\n", encoding="utf-8", newline="\n")
             output = ""
         return subprocess.CompletedProcess([command, *args], 0, stdout=output, stderr="")
 
@@ -160,12 +162,12 @@ def test_update_dev_pins_resolves_then_applies_one_exact_transaction(tmp_path: P
 def test_update_dev_pins_rolls_back_collateral_manifest_changes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pyproject = tmp_path / "pyproject.toml"
     original = project_text("pytest>=9.1", "ruff==0.16.2")
-    pyproject.write_text(original, encoding="utf-8")
+    pyproject.write_text(original, encoding="utf-8", newline="\n")
 
     def mutate_unmanaged_requirement(command: str, args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         if args[:2] == ["export", "--script"]:
             return subprocess.CompletedProcess([command, *args], 0, stdout="ruff==0.16.4\n", stderr="")
-        pyproject.write_text(original.replace("ruff==0.16.2", "ruff==0.16.4").replace("pytest>=9.1", "pytest>=9.2"), encoding="utf-8")
+        pyproject.write_text(original.replace("ruff==0.16.2", "ruff==0.16.4").replace("pytest>=9.1", "pytest>=9.2"), encoding="utf-8", newline="\n")
         return subprocess.CompletedProcess([command, *args], 0, stdout="", stderr="")
 
     monkeypatch.setattr(update_python_dev_pins, "run_safe_command", mutate_unmanaged_requirement)
@@ -177,7 +179,7 @@ def test_update_dev_pins_rolls_back_collateral_manifest_changes(tmp_path: Path, 
 def test_resolver_failure_leaves_manifest_unchanged(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pyproject = tmp_path / "pyproject.toml"
     original = project_text("pytest>=9.1", "ruff==0.16.2")
-    pyproject.write_text(original, encoding="utf-8")
+    pyproject.write_text(original, encoding="utf-8", newline="\n")
 
     def failed_uv(_command: str, args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         raise subprocess.CalledProcessError(1, ["uv", *args], stderr="resolver conflict")
@@ -190,7 +192,7 @@ def test_resolver_failure_leaves_manifest_unchanged(tmp_path: Path, monkeypatch:
 
 def test_main_skips_uv_when_group_has_no_exact_pins(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(project_text("pytest>=9.1", "ruff~=0.16"), encoding="utf-8")
+    pyproject.write_text(project_text("pytest>=9.1", "ruff~=0.16"), encoding="utf-8", newline="\n")
 
     def unexpected_uv(*_args: object, **_kwargs: object) -> None:
         msg = "uv must not run without exact pins"
@@ -203,7 +205,7 @@ def test_main_skips_uv_when_group_has_no_exact_pins(tmp_path: Path, monkeypatch:
 
 def test_main_reports_uv_diagnostics_without_traceback(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(project_text("semgrep==1.172.0"), encoding="utf-8")
+    pyproject.write_text(project_text("semgrep==1.172.0"), encoding="utf-8", newline="\n")
 
     def failed_uv(_command: str, args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         raise subprocess.CalledProcessError(1, ["uv", *args], stderr="resolver conflict")
@@ -217,7 +219,7 @@ def test_main_reports_uv_diagnostics_without_traceback(tmp_path: Path, monkeypat
 
 def test_main_uses_stdout_when_uv_stderr_is_empty(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(project_text("semgrep==1.172.0"), encoding="utf-8")
+    pyproject.write_text(project_text("semgrep==1.172.0"), encoding="utf-8", newline="\n")
 
     def failed_uv(_command: str, args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         raise subprocess.CalledProcessError(1, ["uv", *args], output="actionable resolver conflict", stderr="")
@@ -230,7 +232,7 @@ def test_main_uses_stdout_when_uv_stderr_is_empty(tmp_path: Path, monkeypatch: p
 def test_update_dev_pins_rejects_nonstandard_manifest_before_uv(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     manifest = tmp_path / "release-tools.toml"
     original = project_text("ruff==0.16.2")
-    manifest.write_text(original, encoding="utf-8")
+    manifest.write_text(original, encoding="utf-8", newline="\n")
 
     def unexpected_uv(*_args: object, **_kwargs: object) -> None:
         msg = "uv must not discover a sibling project for a nonstandard manifest"
@@ -244,13 +246,13 @@ def test_update_dev_pins_rejects_nonstandard_manifest_before_uv(tmp_path: Path, 
 
 def test_update_dev_pins_rejects_uv_workspace_member_before_mutation(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     root_manifest = tmp_path / "pyproject.toml"
-    root_manifest.write_text('[tool.uv.workspace]\nmembers = ["member"]\n', encoding="utf-8")
+    root_manifest.write_text('[tool.uv.workspace]\nmembers = ["member"]\n', encoding="utf-8", newline="\n")
     root_lock = tmp_path / "uv.lock"
     root_lock.write_bytes(b"workspace lock\n")
     member = tmp_path / "member"
     member.mkdir()
     member_manifest = member / "pyproject.toml"
-    member_manifest.write_text(project_text("ruff==0.16.2"), encoding="utf-8")
+    member_manifest.write_text(project_text("ruff==0.16.2"), encoding="utf-8", newline="\n")
 
     def unexpected_uv(*_args: object, **_kwargs: object) -> None:
         msg = "uv must not run for a workspace member"
@@ -268,7 +270,7 @@ def test_main_reports_resolver_timeout_and_leaves_project_unchanged(
 ) -> None:
     pyproject = tmp_path / "pyproject.toml"
     original = project_text("ruff==0.16.2")
-    pyproject.write_text(original, encoding="utf-8")
+    pyproject.write_text(original, encoding="utf-8", newline="\n")
 
     def timed_out(_command: str, args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         timeout = kwargs.get("timeout")
@@ -288,7 +290,7 @@ def test_main_reports_resolver_timeout_and_leaves_project_unchanged(
 def test_main_rolls_back_manifest_and_lock_after_uv_add_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     pyproject = tmp_path / "pyproject.toml"
     original_manifest = project_text("ruff==0.16.2")
-    pyproject.write_text(original_manifest, encoding="utf-8")
+    pyproject.write_text(original_manifest, encoding="utf-8", newline="\n")
     uv_lock = tmp_path / "uv.lock"
     original_lock = b"version = 1\n"
     uv_lock.write_bytes(original_lock)
@@ -296,8 +298,8 @@ def test_main_rolls_back_manifest_and_lock_after_uv_add_timeout(tmp_path: Path, 
     def time_out_after_mutation(command: str, args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         if args[:2] == ["export", "--script"]:
             return subprocess.CompletedProcess([command, *args], 0, stdout="ruff==0.16.4\n", stderr="")
-        pyproject.write_text(original_manifest.replace("ruff==0.16.2", "ruff==0.16.4"), encoding="utf-8")
-        uv_lock.write_text("partially updated\n", encoding="utf-8")
+        pyproject.write_text(original_manifest.replace("ruff==0.16.2", "ruff==0.16.4"), encoding="utf-8", newline="\n")
+        uv_lock.write_text("partially updated\n", encoding="utf-8", newline="\n")
         timeout = kwargs.get("timeout")
         if not isinstance(timeout, int | float):
             msg = "expected a finite subprocess timeout"
@@ -318,7 +320,7 @@ def test_main_rejects_symlinked_lock_without_mutating_link_or_target(
 ) -> None:
     pyproject = tmp_path / "pyproject.toml"
     original_manifest = project_text("ruff==0.16.2")
-    pyproject.write_text(original_manifest, encoding="utf-8")
+    pyproject.write_text(original_manifest, encoding="utf-8", newline="\n")
     lock_target = tmp_path / "shared.lock"
     original_lock = b"version = 1\n"
     lock_target.write_bytes(original_lock)
@@ -345,7 +347,7 @@ def test_failed_update_retains_recovery_bytes_after_rollback_failure(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], failed_file: str
 ) -> None:
     pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(project_text("ruff==0.16.2"), encoding="utf-8")
+    pyproject.write_text(project_text("ruff==0.16.2"), encoding="utf-8", newline="\n")
     lock = tmp_path / "uv.lock"
     lock.write_bytes(b"original lock\r\n")
     originals = {path: path.read_bytes() for path in (pyproject, lock)}
@@ -353,8 +355,8 @@ def test_failed_update_retains_recovery_bytes_after_rollback_failure(
     def fail_update(command: str, args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         if args[:2] == ["export", "--script"]:
             return subprocess.CompletedProcess([command, *args], 0, stdout="ruff==0.16.4\n", stderr="")
-        pyproject.write_text("partial manifest\n", encoding="utf-8")
-        lock.write_text("partial lock\n", encoding="utf-8")
+        pyproject.write_text("partial manifest\n", encoding="utf-8", newline="\n")
+        lock.write_text("partial lock\n", encoding="utf-8", newline="\n")
         msg = "primary update failure"
         raise OSError(msg)
 
@@ -393,16 +395,16 @@ def test_update_python_uses_selected_uv_for_resolution_and_mutation(
     elsewhere = tmp_path / "elsewhere"
     elsewhere.mkdir()
     manifest = root / "pyproject.toml"
-    manifest.write_text(project_text("ruff==0.16.2"), encoding="utf-8")
+    manifest.write_text(project_text("ruff==0.16.2"), encoding="utf-8", newline="\n")
     settings = (elsewhere if explicit_root else root) / "tools.toml"
-    settings.write_text(f'[deps]\nuv="{executable}"\n', encoding="utf-8")
+    settings.write_text(f'[deps]\nuv="{executable}"\n', encoding="utf-8", newline="\n")
     calls = []
 
     def run(command: str, args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         assert kwargs["cwd"] == root
         calls.append((command, args[0]))
         if args[0] == "add":
-            manifest.write_text(project_text("ruff==0.16.4"), encoding="utf-8")
+            manifest.write_text(project_text("ruff==0.16.4"), encoding="utf-8", newline="\n")
         return subprocess.CompletedProcess([command, *args], 0, "ruff==0.16.4\n", "")
 
     monkeypatch.setattr(update_python_dev_pins, "run_safe_command", run)
@@ -423,7 +425,7 @@ def test_parse_project_leaves_compound_wildcard_and_marked_requirements_unmanage
 
 def test_resolve_latest_pins_keeps_ranged_constraints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(project_text("pytest>=9.1", "ruff==0.16.2", "ruff<0.17"), encoding="utf-8")
+    pyproject.write_text(project_text("pytest>=9.1", "ruff==0.16.2", "ruff<0.17"), encoding="utf-8", newline="\n")
     calls: list[tuple[str, list[str], dict[str, object]]] = []
 
     def fake_run(command: str, args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -452,7 +454,7 @@ def test_resolution_retains_project_and_compound_constraints_on_managed_distribu
 
 def test_symlinked_lock_is_rejected_before_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     manifest = tmp_path / "pyproject.toml"
-    manifest.write_text(project_text("ruff==0.16.2"), encoding="utf-8")
+    manifest.write_text(project_text("ruff==0.16.2"), encoding="utf-8", newline="\n")
     retained = tmp_path / "retained.lock"
     retained.write_bytes(b"must not change\n")
     lock = tmp_path / "uv.lock"
@@ -472,9 +474,9 @@ def test_symlinked_lock_is_rejected_before_resolution(tmp_path: Path, monkeypatc
 def test_update_dev_pins_resolves_then_applies_one_transaction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pyproject = tmp_path / "pyproject.toml"
     original = project_text("pytest>=9.1", "ruff==0.16.2", "semgrep==1.172.0")
-    pyproject.write_text(original, encoding="utf-8")
+    pyproject.write_text(original, encoding="utf-8", newline="\n")
     uv_lock = tmp_path / "uv.lock"
-    uv_lock.write_text("ruff = 0.16.2\nsemgrep = 1.172.0\n", encoding="utf-8")
+    uv_lock.write_text("ruff = 0.16.2\nsemgrep = 1.172.0\n", encoding="utf-8", newline="\n")
     calls: list[tuple[str, list[str]]] = []
 
     def fake_run(command: str, args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -482,8 +484,10 @@ def test_update_dev_pins_resolves_then_applies_one_transaction(tmp_path: Path, m
         if args[:2] == ["export", "--script"]:
             output = "ruff==0.16.4\nsemgrep==1.174.0\n"
         else:
-            pyproject.write_text(original.replace("ruff==0.16.2", "ruff==0.16.4").replace("semgrep==1.172.0", "semgrep==1.174.0"), encoding="utf-8")
-            uv_lock.write_text("ruff = 0.16.4\nsemgrep = 1.174.0\n", encoding="utf-8")
+            pyproject.write_text(
+                original.replace("ruff==0.16.2", "ruff==0.16.4").replace("semgrep==1.172.0", "semgrep==1.174.0"), encoding="utf-8", newline="\n"
+            )
+            uv_lock.write_text("ruff = 0.16.4\nsemgrep = 1.174.0\n", encoding="utf-8", newline="\n")
             output = ""
         return subprocess.CompletedProcess([command, *args], 0, stdout=output, stderr="")
 
@@ -504,7 +508,7 @@ def test_update_dev_pins_resolves_then_applies_one_transaction(tmp_path: Path, m
 def test_update_dev_pins_rolls_back_manifest_and_lock_after_timeout(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pyproject = tmp_path / "pyproject.toml"
     original_manifest = project_text("ruff==0.16.2")
-    pyproject.write_text(original_manifest, encoding="utf-8")
+    pyproject.write_text(original_manifest, encoding="utf-8", newline="\n")
     uv_lock = tmp_path / "uv.lock"
     original_lock = b"version = 1\n"
     uv_lock.write_bytes(original_lock)
@@ -512,8 +516,8 @@ def test_update_dev_pins_rolls_back_manifest_and_lock_after_timeout(tmp_path: Pa
     def time_out_after_mutation(command: str, args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
         if args[:2] == ["export", "--script"]:
             return subprocess.CompletedProcess([command, *args], 0, stdout="ruff==0.16.4\n", stderr="")
-        pyproject.write_text(original_manifest.replace("ruff==0.16.2", "ruff==0.16.4"), encoding="utf-8")
-        uv_lock.write_text("partially updated\n", encoding="utf-8")
+        pyproject.write_text(original_manifest.replace("ruff==0.16.2", "ruff==0.16.4"), encoding="utf-8", newline="\n")
+        uv_lock.write_text("partially updated\n", encoding="utf-8", newline="\n")
         timeout = kwargs["timeout"]
         assert isinstance(timeout, int | float)
         raise subprocess.TimeoutExpired(["uv", *args], timeout)
@@ -528,14 +532,14 @@ def test_update_dev_pins_rolls_back_manifest_and_lock_after_timeout(tmp_path: Pa
 def test_update_dev_pins_removes_new_lock_after_failed_transaction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pyproject = tmp_path / "pyproject.toml"
     original_manifest = project_text("ruff==0.16.2")
-    pyproject.write_text(original_manifest, encoding="utf-8")
+    pyproject.write_text(original_manifest, encoding="utf-8", newline="\n")
     uv_lock = tmp_path / "uv.lock"
 
     def fail_after_creating_lock(command: str, args: list[str], **_kwargs: object) -> subprocess.CompletedProcess[str]:
         if args[:2] == ["export", "--script"]:
             return subprocess.CompletedProcess([command, *args], 0, stdout="ruff==0.16.4\n", stderr="")
-        pyproject.write_text(original_manifest.replace("ruff==0.16.2", "ruff==0.16.4"), encoding="utf-8")
-        uv_lock.write_text("partially created\n", encoding="utf-8")
+        pyproject.write_text(original_manifest.replace("ruff==0.16.2", "ruff==0.16.4"), encoding="utf-8", newline="\n")
+        uv_lock.write_text("partially created\n", encoding="utf-8", newline="\n")
         raise subprocess.CalledProcessError(1, [command, *args], stderr="injected failure")
 
     monkeypatch.setattr(update_python_dev_pins, "run_safe_command", fail_after_creating_lock)
@@ -564,7 +568,7 @@ def test_parse_project_preserves_non_exact_dev_requirement() -> None:
 
 def test_exact_pin_transaction_without_build_metadata_or_lock(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(minimal_project_text("ruff==0.16.2", "semgrep==1.172.0"), encoding="utf-8")
+    pyproject.write_text(minimal_project_text("ruff==0.16.2", "semgrep==1.172.0"), encoding="utf-8", newline="\n")
     calls: list[tuple[str, list[str], dict[str, object]]] = []
 
     def fake_run(command: str, args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -573,7 +577,7 @@ def test_exact_pin_transaction_without_build_metadata_or_lock(tmp_path: Path, mo
         if args[0] == "export":
             assert resolution_metadata(args) == {"requires-python": ">=3.14", "dependencies": ["ruff", "semgrep"]}
         if args[0] == "add":
-            pyproject.write_text(minimal_project_text("ruff==0.16.4", "semgrep==1.174.0"), encoding="utf-8")
+            pyproject.write_text(minimal_project_text("ruff==0.16.4", "semgrep==1.174.0"), encoding="utf-8", newline="\n")
         return subprocess.CompletedProcess([command, *args], 0, stdout=output, stderr="")
 
     monkeypatch.setattr(update_python_dev_pins, "run_safe_command", fake_run)
@@ -590,7 +594,7 @@ def test_exact_pin_transaction_without_build_metadata_or_lock(tmp_path: Path, mo
 @pytest.mark.parametrize("requires", [">=3.14.1", ">=3.14,<3.15", ">=3.14,!=3.14.1", "~=3.14.1", "==3.14.*"])
 def test_resolver_receives_complete_python_constraints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, requires: str) -> None:
     manifest = tmp_path / "pyproject.toml"
-    manifest.write_text(project_text("ruff==0.16.2").replace(">=3.14", requires), encoding="utf-8")
+    manifest.write_text(project_text("ruff==0.16.2").replace(">=3.14", requires), encoding="utf-8", newline="\n")
     constraints, pins = update_python_dev_pins.parse_project(manifest.read_text())
     sources: list[Path] = []
 
@@ -607,7 +611,7 @@ def test_resolver_receives_complete_python_constraints(tmp_path: Path, monkeypat
 @pytest.mark.parametrize("requires", ["42", '"invalid"', '">=3.15,<3.14"'])
 def test_invalid_python_constraints_fail_before_resolution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, requires: str) -> None:
     manifest = tmp_path / "pyproject.toml"
-    manifest.write_text(project_text("ruff==0.16.2").replace('">=3.14"', requires), encoding="utf-8")
+    manifest.write_text(project_text("ruff==0.16.2").replace('">=3.14"', requires), encoding="utf-8", newline="\n")
     original = manifest.read_bytes()
     monkeypatch.setattr(update_python_dev_pins, "run_safe_command", lambda *_args, **_kwargs: pytest.fail("uv ran with invalid Python constraints"))
 

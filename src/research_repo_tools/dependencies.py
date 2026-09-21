@@ -220,6 +220,7 @@ def resolve_latest_pins(pins: list[DevPin], requires_python: SpecifierSet, proje
         source.write_text(
             f"# /// script\n# requires-python = {json.dumps(str(requires_python))}\n# dependencies = {json.dumps(requirements)}\n# ///\n",
             encoding="utf-8",
+            newline="\n",
         )
         result = run_safe_command(
             uv,

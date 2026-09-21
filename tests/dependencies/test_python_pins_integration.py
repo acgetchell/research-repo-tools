@@ -41,6 +41,7 @@ def consumer(root: Path, requires_python: str = ">=3.14", retained: str = "") ->
     manifest.write_text(
         f'[project]\nname="{root.name}"\nversion="0.1.0"\nrequires-python="{requires_python}"\n[dependency-groups]\ndev=["fixture-tool==1.0.0"{retained}]\n',
         encoding="utf-8",
+        newline="\n",
     )
     return manifest
 
@@ -84,7 +85,7 @@ def test_cli_preserves_full_python_range(registry: Path, tmp_path: Path, require
 def test_resolution_uses_consumer_uv_settings(registry: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     wheel(registry, "2.0.0", ">=3.14")
     manifest = consumer(tmp_path / "consumer")
-    manifest.write_text(manifest.read_text() + '[tool.uv]\nno-index=true\nfind-links=["../wheels"]\n', encoding="utf-8")
+    manifest.write_text(manifest.read_text() + '[tool.uv]\nno-index=true\nfind-links=["../wheels"]\n', encoding="utf-8", newline="\n")
     monkeypatch.delenv("UV_FIND_LINKS")
     monkeypatch.delenv("UV_NO_INDEX")
 

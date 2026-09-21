@@ -1,0 +1,119 @@
+# reject: path write
+path.write_text("first\nsecond\r\n")
+# reject: explicit None
+path.write_text("text", newline=None)
+# reject: positional None
+path.write_text("text", "utf-8", "strict", None)
+# reject: multiline keywords
+path.write_text(
+    data="text",
+    encoding="utf-8",
+)
+# reject: keywords do not establish policy
+path.write_text("text", **options)
+# reject: builtin write
+open("output", "w")
+# reject: keyword append
+open(file="output", mode="a", newline=None)
+# reject: update
+path.open("r+")
+# reject: create
+path.open(mode="x", encoding="utf-8")
+# reject: io alias
+import io as streams
+streams.open("output", "w")
+# reject: imported open alias
+from io import open as file_open
+file_open("output", "w")
+# reject: builtin alias
+from builtins import open as file_open
+file_open("output", "w")
+# reject: file descriptor
+import os
+os.fdopen(fd, "w")
+# reject: named temporary text
+from tempfile import NamedTemporaryFile as temporary
+temporary(mode="w")
+# reject: temporary text
+import tempfile
+tempfile.TemporaryFile("w+")
+# reject: spooled text
+import tempfile
+tempfile.SpooledTemporaryFile(1024, mode="w+")
+# reject: wrapper
+from io import TextIOWrapper
+TextIOWrapper(buffer, encoding="utf-8")
+# reject: unbound path open
+from pathlib import Path
+Path.open(path, "w")
+# reject: unbound path write
+from pathlib import Path as File
+File.write_text(path, "text", "utf-8", "strict", None)
+# reject: known API dynamic mode
+open("output", mode)
+# reject: child script
+script = 'from pathlib import Path\nPath("output").write_text("text")'
+# reject: adjacent child literals
+script = (
+    "from pathlib import Path\n"
+    'with Path("output").open("a") as stream: stream.write("text")\n'
+)
+# reject: indented child
+script = '''
+    from pathlib import Path
+    Path("output").write_text("text")
+'''
+# accept: LF
+path.write_text("first\nsecond\r\n", newline="\n")
+# accept: CRLF
+path.write_text("first\nsecond\n", newline="\r\n")
+# accept: untranslated
+path.write_text("first\nsecond\r\n", newline="")
+# accept: explicit parameter
+path.write_text("text", newline=newline)
+# accept: positional policy
+path.write_text("text", "utf-8", "strict", "\n")
+# accept: unbound positional policy
+from pathlib import Path
+Path.write_text(path, "text", "utf-8", "strict", "\n")
+# accept: builtin positional policy
+open("output", "w", -1, "utf-8", "strict", "\n")
+# accept: path positional policy
+path.open("a", -1, "utf-8", "strict", "\n")
+# accept: unbound path positional policy
+from pathlib import Path
+Path.open(path, "a", -1, "utf-8", "strict", "\n")
+# accept: temporary positional policy
+import tempfile
+tempfile.NamedTemporaryFile("w", -1, "utf-8", "\n")
+# accept: spooled positional policy
+import tempfile
+tempfile.SpooledTemporaryFile(1024, "w", -1, "utf-8", "\n")
+# accept: explicit wrapper
+import io
+io.TextIOWrapper(buffer, newline="\r\n")
+# accept: byte methods
+path.write_bytes(b"first\nsecond\r\n")
+# accept: binary output
+open("output", "wb")
+path.open("r+b")
+# accept: read only
+open("input", "r")
+path.open(encoding="utf-8")
+# accept: binary temporary defaults
+import tempfile
+tempfile.NamedTemporaryFile()
+tempfile.SpooledTemporaryFile()
+# accept: archives and low-level descriptors
+import tarfile
+import os
+tarfile.open(fileobj=buffer, mode="w")
+tarfile.open("output.tar", "w")
+os.open("output", os.O_WRONLY)
+archive.open(member)
+# accept: non-Python data
+data = "# title\n[section]\ntext='arbitrary document'"
+# accept: non-Python escapes
+expression = r"'\s'"
+# accept: checked child script
+script = 'from pathlib import Path\nPath("output").write_text("text", newline="\\n")'

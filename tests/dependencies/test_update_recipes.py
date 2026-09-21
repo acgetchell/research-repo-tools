@@ -18,7 +18,7 @@ def recipes(tmp_path, monkeypatch, request):
     consumer = request.param == "consumer"
     source = changelog.template("justfile") if consumer else Path(__file__).resolve().parents[2].joinpath("justfile").read_text()
     justfile = tmp_path / "justfile"
-    justfile.write_text(source)
+    justfile.write_text(source, newline="\n")
     # Record the outer uv invocations, including the checked toolchain command.
     # No updater, installer, resolver, or Git command is executed.
     python = tmp_path / "Python's executable with spaces"
@@ -28,11 +28,12 @@ def recipes(tmp_path, monkeypatch, request):
         "import json, os, pathlib, sys\n"
         "args = sys.argv[1:]\n"
         "log = pathlib.Path('calls.jsonl')\n"
-        "with log.open('a') as stream: stream.write(json.dumps(args) + '\\n')\n"
-        "sys.exit(23 if len(log.read_text().splitlines()) == int(os.environ.get('FAIL_STEP', '0')) else 0)\n"
+        "with log.open('a', newline='\\n') as stream: stream.write(json.dumps(args) + '\\n')\n"
+        "sys.exit(23 if len(log.read_text().splitlines()) == int(os.environ.get('FAIL_STEP', '0')) else 0)\n",
+        newline="\n",
     )
     uv = tmp_path / "uv"
-    uv.write_text(f'#!/bin/sh\nexec {shlex.quote(str(python))} {shlex.quote(str(recorder))} "$@"\n')
+    uv.write_text(f'#!/bin/sh\nexec {shlex.quote(str(python))} {shlex.quote(str(recorder))} "$@"\n', newline="\n")
     uv.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     monkeypatch.delenv("FAIL_STEP", raising=False)
@@ -101,7 +102,7 @@ def test_update_workflows_compose_once_in_order(recipes, cargo, recipe):
     if not consumer and (cargo or recipe in {"update-cargo-dependencies", "update-cargo-tools", "update-python-deps"}):
         pytest.skip("the maintainer is a Python-only project with no legacy alias")
     if cargo:
-        justfile.with_name("Cargo.toml").write_text("[workspace]\nmembers=[]\n")
+        justfile.with_name("Cargo.toml").write_text("[workspace]\nmembers=[]\n", newline="\n")
     result, calls = invoke(justfile, recipe)
     assert result.returncode == 0, result.stderr
     assert calls == commands(consumer, cargo)[recipe]
@@ -132,7 +133,7 @@ def test_consumer_owns_exclusions_and_additional_resolution_roots(recipes):
     )
     start = source.index("\n# Upgrade only declared managed Cargo tools")
     source = source[:start] + extra.format(command="upgrade", args=" --incompatible allow") + extra.format(command="update", args="") + source[start:]
-    justfile.write_text(source)
+    justfile.write_text(source, newline="\n")
     justfile.with_name("Cargo.toml").touch()
     result, calls = invoke(justfile, "update-dependencies")
     assert result.returncode == 0, result.stderr

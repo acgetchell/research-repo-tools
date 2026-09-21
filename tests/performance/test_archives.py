@@ -11,6 +11,7 @@ import pytest
 from research_repo_tools import archives
 from research_repo_tools.archives import ArchiveLimits, download_asset, extract_archive
 from research_repo_tools.evidence import sha256
+from tests.performance.public_performance_consumer import zip_asset
 
 
 def tar_asset(path: Path, entries: list[tuple[str, bytes | str]]) -> None:
@@ -54,12 +55,16 @@ def test_archive_rejects_unsafe_paths_without_partial_destination(tmp_path: Path
     if kind == "tar":
         tar_asset(asset, [("valid/first", b"valid"), (name, b"unsafe")])
     else:
-        with zipfile.ZipFile(asset, "w") as archive:
-            archive.writestr("valid/first", b"valid")
-            archive.writestr(name, b"unsafe")
+        zip_asset(asset, [("valid/first", b"valid"), (name, b"unsafe")])
     with pytest.raises(ValueError, match="path"):
         extract_archive(asset, tmp_path / "output")
     assert list(tmp_path.iterdir()) == [asset]
+
+
+@pytest.mark.parametrize("name", ["parent/\ud800/file", "parent/\udfff/file"])
+def test_member_paths_reject_surrogates_before_filesystem_use(name: str) -> None:
+    with pytest.raises(ValueError, match="unsafe.*path"):
+        archives._member_path(name, directory=False)
 
 
 @pytest.mark.parametrize("kind", ["symlink", "hardlink", "fifo"])

@@ -47,12 +47,12 @@ from research_repo_tools.cli import main
 consumer = pathlib.Path.cwd() / "minimal consumer"
 consumer.mkdir()
 changelog = consumer / "CHANGELOG.md"
-changelog.write_text("# Changelog\n\n## [1.1.0] - 2026-09-07\n\n- Current.\n\n## [1.0.0] - 2026-08-01\n\n- Prior.\n")
+changelog.write_text("# Changelog\n\n## [1.1.0] - 2026-09-07\n\n- Current.\n\n## [1.0.0] - 2026-08-01\n\n- Prior.\n", newline="\n")
 assert main(["--root", str(consumer), "changelog", "archive"]) == 0
 assert (consumer / "docs/archives/changelog/1.0.md").is_file()
 assert main(["--root", str(consumer), "changelog", "notes", "v1.0.0"]) == 0
 notebook = consumer / "minimal.ipynb"
-notebook.write_text('{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[]}')
+notebook.write_text('{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[]}', newline="\n")
 assert main(["--root", str(consumer), "notebooks", "group"]) == 0
 assert main(["--root", str(consumer), "notebooks", "check", str(notebook)]) == 1
 """
@@ -80,8 +80,9 @@ def check_python_update(consumer: Path, artifact: Path, version: str, uv: str, j
         f'[tool.uv]\npackage=false\ndefault-groups=[]\nrequired-version="=={uv_version}"\nfind-links=["wheels"]\n'
         f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(artifact.resolve()))}}}\n",
         encoding="utf-8",
+        newline="\n",
     )
-    (consumer / ".python-version").write_text("3.14\n", encoding="utf-8")
+    (consumer / ".python-version").write_text("3.14\n", encoding="utf-8", newline="\n")
     # Dependencies of this exact artifact are already cached by the other checks.
     offline = {**env, "UV_OFFLINE": "1"}
     run([uv, "sync", "--managed-python", "--group", "dev"], cwd=consumer, env=offline)
@@ -103,20 +104,21 @@ def check_update_bootstrap(consumer: Path, uv: str, just: Path, env: dict[str, s
     """Keep a native build out of update launchers until the checked final sync."""
     run([uv, "run", "--locked", "--no-sync", "research-repo-tools", "templates", "justfile", "--output", "justfile"], cwd=consumer, env=env)
     cargo = consumer / "Cargo.toml"
-    cargo.write_text("[workspace]\nmembers=[]\n", encoding="utf-8")
+    cargo.write_text("[workspace]\nmembers=[]\n", encoding="utf-8", newline="\n")
     # Execute real uv, Just, and toolchain run. Replace only the inner Cargo
     # workload: this boundary check needs no Rust installation or registry.
     recorder = consumer / "record_cargo.py"
     recorder.write_text(
         "import json, pathlib, sys\n"
         'cargo = pathlib.Path("Cargo.toml")\n'
-        'if sys.argv[1] == "upgrade": cargo.write_text(cargo.read_text() + "# upgraded\\n")\n'
+        'if sys.argv[1] == "upgrade": cargo.write_text(cargo.read_text() + "# upgraded\\n", newline="\\n")\n'
         'else: assert "# upgraded" in cargo.read_text()\n'
-        'with pathlib.Path("cargo_calls.jsonl").open("a") as stream: stream.write(json.dumps(sys.argv[1:]) + "\\n")\n',
+        'with pathlib.Path("cargo_calls.jsonl").open("a", newline="\\n") as stream: stream.write(json.dumps(sys.argv[1:]) + "\\n")\n',
         encoding="utf-8",
+        newline="\n",
     )
     justfile = consumer / "justfile"
-    justfile.write_text(justfile.read_text(encoding="utf-8").replace("-- cargo ", "-- python record_cargo.py "), encoding="utf-8")
+    justfile.write_text(justfile.read_text(encoding="utf-8").replace("-- cargo ", "-- python record_cargo.py "), encoding="utf-8", newline="\n")
     # The empty Cargo tool table must also be usable before the project builds.
     run([str(just), "update-cargo-tools"], cwd=consumer, env=env)
     result = subprocess.run([str(just), "update-dependencies"], cwd=consumer, env=env, capture_output=True, encoding="utf-8", timeout=TIMEOUT)
@@ -214,6 +216,7 @@ def check(dist: Path) -> None:
                 f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(artifact.resolve()))}}}\n"
                 f'[tool.research-repo-tools.notebooks]\ngroup="{notebook_group}"\n',
                 encoding="utf-8",
+                newline="\n",
             )
             run([uv, "lock", "--python", str(python)], cwd=recipe_consumer, env=env)
             run([uv, "sync", "--locked", "--python", str(python)], cwd=recipe_consumer, env=env)
@@ -221,12 +224,12 @@ def check(dist: Path) -> None:
             assert not recipe_cli.exists(), "default sync unexpectedly installed the non-default tooling group"
             lock = (recipe_consumer / "uv.lock").read_bytes()
             run([str(command), "templates", "justfile", "--output", "justfile"], cwd=recipe_consumer, env=env)
-            (recipe_consumer / "CHANGELOG.md").write_text("# Changelog\n\n## [0.1.0] - 2026-09-16\n\n- Recipe works.\n", encoding="utf-8")
+            (recipe_consumer / "CHANGELOG.md").write_text("# Changelog\n\n## [0.1.0] - 2026-09-16\n\n- Recipe works.\n", encoding="utf-8", newline="\n")
             assert "release-notes" in run([str(just), "help"], cwd=recipe_consumer, env=local_env)
             assert run([str(just), "release-notes", "v0.1.0"], cwd=recipe_consumer, env=env).strip() == "- Recipe works."
             assert recipe_cli.is_file(), "recipe did not install its declared tooling group"
             assert (recipe_consumer / "uv.lock").read_bytes() == lock, "recipe changed the lockfile"
-            (recipe_consumer / ".python-version").write_text("3.14\n", encoding="utf-8")
+            (recipe_consumer / ".python-version").write_text("3.14\n", encoding="utf-8", newline="\n")
             # Install the extra from this same distribution, exercise locked sync
             # and a real project kernel without touching the user's kernels.
             run([str(just), "notebook-sync"], cwd=recipe_consumer, env=env)
@@ -251,6 +254,7 @@ def check(dist: Path) -> None:
                     }
                 ),
                 encoding="utf-8",
+                newline="\n",
             )
             original_notebook = notebook.read_bytes()
             run([str(just), "notebook-check", "notebooks/smoke.ipynb"], cwd=recipe_consumer, env=env)
@@ -267,7 +271,7 @@ def check(dist: Path) -> None:
             setup_consumer = consumer / "setup consumer"
             setup_consumer.mkdir()
             uv_version = run([uv, "--version"], cwd=consumer, env=local_env).split()[1]
-            (setup_consumer / ".python-version").write_text("3.14\n", encoding="utf-8")
+            (setup_consumer / ".python-version").write_text("3.14\n", encoding="utf-8", newline="\n")
             (setup_consumer / "pyproject.toml").write_text(
                 '[project]\nname="setup-consumer"\nversion="0.1.0"\nrequires-python=">=3.14"\n'
                 '[build-system]\nrequires=[]\nbuild-backend="intentionally_missing_native_backend"\n'
@@ -275,6 +279,7 @@ def check(dist: Path) -> None:
                 f'[tool.uv]\nrequired-version="=={uv_version}"\ndefault-groups=[]\ncache-keys=[{{file="pyproject.toml"}}, {{file="Cargo.toml"}}]\n'
                 f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(artifact.resolve()))}}}\n",
                 encoding="utf-8",
+                newline="\n",
             )
             # The artifact path is an isolated pre-publication test fixture only.
             setup_env = {key: value for key, value in local_env.items() if key != "VIRTUAL_ENV"}

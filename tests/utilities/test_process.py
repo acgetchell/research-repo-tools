@@ -478,15 +478,15 @@ class TestFindProjectRoot:
         root = tmp_path / "checkout"
         nested = root / "target" / "wheel"
         nested.mkdir(parents=True)
-        (root / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
+        (root / "Cargo.toml").write_text("[package]\n", encoding="utf-8", newline="\n")
         assert find_project_root(nested) == root
 
     def test_accepts_file_start(self, tmp_path: Path) -> None:
         root = tmp_path / "checkout"
         source = root / "scripts" / "tool.py"
         source.parent.mkdir(parents=True)
-        source.write_text("", encoding="utf-8")
-        (root / "Cargo.toml").write_text("[package]\n", encoding="utf-8")
+        source.write_text("", encoding="utf-8", newline="\n")
+        (root / "Cargo.toml").write_text("[package]\n", encoding="utf-8", newline="\n")
         assert find_project_root(source) == root
 
 
@@ -731,5 +731,5 @@ class TestAdditionalHelpers:
         ]
 
     def test_find_project_root(self, tmp_path) -> None:
-        (tmp_path / "Cargo.toml").write_text('[package]\nname = "consumer"\nversion = "1.0.0"\n')
+        (tmp_path / "Cargo.toml").write_text('[package]\nname = "consumer"\nversion = "1.0.0"\n', newline="\n")
         assert (find_project_root() / "Cargo.toml").is_file()

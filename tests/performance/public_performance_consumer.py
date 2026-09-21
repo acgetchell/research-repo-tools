@@ -11,6 +11,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from unittest.mock import patch
 
 from research_repo_tools.archives import ArchiveLimits, extract_archive
 from research_repo_tools.criterion import (
@@ -39,12 +40,25 @@ from research_repo_tools.evidence import (
 )
 
 
+def zip_asset(path: Path, entries: list[tuple[str, bytes]]) -> None:
+    """Write a ZIP fixture and verify its original member names survived."""
+    with zipfile.ZipFile(path, "w") as archive:
+        for name, payload in entries:
+            member = zipfile.ZipInfo(name)
+            # ZipInfo normalizes Windows separators. Malformed fixtures need
+            # the original spelling in both ZIP headers on every platform.
+            member.filename = name
+            archive.writestr(member, payload)
+    with zipfile.ZipFile(path) as archive:
+        assert [member.orig_filename for member in archive.infolist()] == [name for name, _ in entries], "ZIP fixture changed its member names"
+
+
 class TestPerformanceConsumer(unittest.TestCase):
     def test_comparison_and_retained_rendering(self) -> None:
-        # Reduced Criterion shapes used by MCMC and la-stack: median or mean,
+        # Reduced Criterion median shapes used by MCMC and la-stack:
         # complete intervals, optional standard error, plus incomplete coverage.
         baseline = parse_estimate(b'{"median":{"point_estimate":100,"confidence_interval":{"lower_bound":90,"upper_bound":110,"confidence_level":0.95}}}')
-        current = parse_estimate(b'{"mean":{"point_estimate":80,"standard_error":2}}', statistic="mean")
+        current = parse_estimate(b'{"median":{"point_estimate":80,"standard_error":2}}')
         result = compare_samples(Sample((("gone", Estimate(1)), ("step/2", baseline))), Sample((("step/2", current), ("added", Estimate(3)))))
         (row,) = result.comparisons
         self.assertEqual((row.speedup, row.percent_reduction), (1.25, 20.0))
@@ -158,6 +172,74 @@ class TestPerformanceConsumer(unittest.TestCase):
                 comparison = compare_samples(sample, sample)
                 artifact = Evidence(serialize_comparison(comparison), COMPARISON_SCHEMA, (("current", Provenance("a" * 40)),))
                 self.assertEqual(parse_comparison(parse_evidence(*serialize_evidence(artifact)).payload), comparison)
+
+    def test_zip_rejects_original_names_under_windows_normalization(self) -> None:
+        # Model only zipfile's Windows separator conversion, without changing
+        # the host filesystem or claiming a native Windows run.
+        normalize = getattr(zipfile, "_sanitize_filename")
+
+        def windows_name(name: str) -> str:
+            return normalize(name.replace("\\", "/"))
+
+        with tempfile.TemporaryDirectory() as temporary, patch.object(zipfile, "_sanitize_filename", windows_name):
+            root = Path(temporary)
+            asset = root / "asset.zip"
+            zip_asset(asset, [("valid/first", b"valid"), ("folder\\escape", b"unsafe")])
+            with zipfile.ZipFile(asset) as archive:
+                member = archive.infolist()[1]
+                self.assertEqual(member.orig_filename, "folder\\escape")
+                self.assertEqual(member.filename, "folder/escape")
+            with self.assertRaisesRegex(ValueError, "path"):
+                extract_archive(asset, root / "output")
+            self.assertEqual(list(root.iterdir()), [asset])
+
+    def test_tar_rejects_surrogateescaped_member_names(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            asset = root / "asset.tar"
+            names = ["valid/first", "unsafe-\udcff/file"]
+            # USTAR can retain non-UTF-8 name bytes. Verify the reader returns
+            # the intended surrogate rather than letting fixture encoding hide it.
+            with tarfile.open(asset, "w", format=tarfile.USTAR_FORMAT, encoding="utf-8", errors="surrogateescape") as archive:
+                for name in names:
+                    member = tarfile.TarInfo(name)
+                    member.size = 1
+                    archive.addfile(member, io.BytesIO(b"x"))
+            with tarfile.open(asset, "r", encoding="utf-8") as archive:
+                self.assertEqual(archive.getnames(), names)
+            with self.assertRaisesRegex(ValueError, "unsafe.*path"):
+                extract_archive(asset, root / "output")
+            self.assertEqual(list(root.iterdir()), [asset])
+
+    def test_compare_outputs_cannot_change_either_input_tree(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for label, point in (("baseline", 100), ("currént", 80)):
+                estimates = root / label / "bench/new/estimates.json"
+                estimates.parent.mkdir(parents=True)
+                estimates.write_bytes(deterministic_json({"median": {"point_estimate": point}}))
+            before = {path: path.read_bytes() if path.is_file() else None for path in root.rglob("*")}
+            command = [sys.executable, "-I", "-m", "research_repo_tools", "--root", str(root), "performance", "compare", "baseline", "currént"]
+            for output in (
+                "baseline",
+                "currént",
+                "baseline/bench/new/estimates.json",
+                "currént/bench/new/estimates.json",
+                "BASELINE/new/report.json",
+                "curre\u0301nt/new/report.json",
+                "baseline/../currént/new/report.json",
+            ):
+                with self.subTest(output=output):
+                    result = subprocess.run([*command, "--output", output], capture_output=True, check=False, timeout=30)
+                    self.assertEqual(result.returncode, 1)
+                    self.assertIn(b"outside both Criterion input roots", result.stderr)
+                    self.assertEqual({path: path.read_bytes() if path.is_file() else None for path in root.rglob("*")}, before)
+            result = subprocess.run([*command, "--output", "baseline-report/comparison.json"], capture_output=True, check=False, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(parse_comparison((root / "baseline-report/comparison.json").read_bytes()).comparisons[0].speedup, 1.25)
+            result = subprocess.run(command, capture_output=True, check=False, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertEqual(parse_comparison(result.stdout).comparisons[0].speedup, 1.25)
 
     def _assert_corrupt_compressed_tar(self, module_name: str) -> None:
         try:

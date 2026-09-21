@@ -101,8 +101,9 @@ def check_cargo_update(consumer: Path, cli: str, just: str, env: dict[str, str])
     manifest.write_text(
         '[package]\nname="native-update-consumer"\nversion="0.1.0"\nedition="2021"\n[lib]\npath="cargo_smoke.rs"\n[dependencies]\nitoa="0.4.8"\n',
         encoding="utf-8",
+        newline="\n",
     )
-    (consumer / "cargo_smoke.rs").write_text("pub use itoa;\n", encoding="utf-8")
+    (consumer / "cargo_smoke.rs").write_text("pub use itoa;\n", encoding="utf-8", newline="\n")
     original = tomllib.loads(manifest.read_text(encoding="utf-8"))
     cargo = [cli, "toolchain", "run", "--", "cargo"]
     run([*cargo, "generate-lockfile"], cwd=consumer, env=env)
@@ -126,7 +127,7 @@ def check_cargo_update(consumer: Path, cli: str, just: str, env: dict[str, str])
 def check_clippy_sarif(consumer: Path, cli: str, env: dict[str, str]) -> None:
     """Exercise the real converters, including failed input, through managed run."""
     source = consumer / "diagnostic.rs"
-    source.write_text("fn main() { let unused = 1; }\n", encoding="utf-8")
+    source.write_text("fn main() { let unused = 1; }\n", encoding="utf-8", newline="\n")
     diagnostic = {
         "reason": "compiler-message",
         "package_id": "path+file:///fixture#diagnostic@0.1.0",
@@ -207,10 +208,11 @@ def check(dist: Path) -> None:
             f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(wheel.resolve()))}}}\n"
             '[tool.research-repo-tools.toolchain.cargo]\ncargo-edit="0.13.13"\nclippy-sarif="0.8.0"\ngit-cliff="2.14.1"\nsarif-fmt="0.8.0"\n',
             encoding="utf-8",
+            newline="\n",
         )
-        (consumer / ".python-version").write_text("3.14\n", encoding="utf-8")
+        (consumer / ".python-version").write_text("3.14\n", encoding="utf-8", newline="\n")
         (consumer / "rust-toolchain.toml").write_text(
-            '[toolchain]\nchannel="1.98.0"\nprofile="minimal"\ncomponents=["rustfmt"]\ntargets=["wasm32-unknown-unknown"]\n', encoding="utf-8"
+            '[toolchain]\nchannel="1.98.0"\nprofile="minimal"\ncomponents=["rustfmt"]\ntargets=["wasm32-unknown-unknown"]\n', encoding="utf-8", newline="\n"
         )
         run([uv, "lock", "--managed-python"], cwd=consumer, env=env)
         declarations = {name: (consumer / name).read_bytes() for name in (".python-version", "pyproject.toml", "rust-toolchain.toml", "uv.lock")}
@@ -247,12 +249,12 @@ def check(dist: Path) -> None:
             assert Path(resolved[name]) == binary(selected["rustup"].parent, name), resolved
         assert Path(resolved["git-cliff"]) == selected["git-cliff"], resolved
         assert Path(resolved["cargo-upgrade"]) == selected["cargo-edit-upgrade"], resolved
-        (consumer / "smoke.rs").write_text('fn main() { println!("native setup works"); }\n', encoding="utf-8")
+        (consumer / "smoke.rs").write_text('fn main() { println!("native setup works"); }\n', encoding="utf-8", newline="\n")
         program = binary(consumer, "smoke")
         run([cli, "toolchain", "run", "--", "rustc", "smoke.rs", "-o", str(program)], cwd=consumer, env=active)
         assert run([str(program)], cwd=consumer, env=active).strip() == "native setup works"
         run([cli, "templates", "justfile", "--output", "justfile"], cwd=consumer, env=active)
-        (consumer / "CHANGELOG.md").write_text("# Changelog\n\n## [0.1.0] - 2026-09-16\n\n- Native recipes work.\n", encoding="utf-8")
+        (consumer / "CHANGELOG.md").write_text("# Changelog\n\n## [0.1.0] - 2026-09-16\n\n- Native recipes work.\n", encoding="utf-8", newline="\n")
         just = shutil.which("just", path=active["PATH"])
         assert just is not None
         assert "release-notes" in run([just, "help"], cwd=consumer, env=active)

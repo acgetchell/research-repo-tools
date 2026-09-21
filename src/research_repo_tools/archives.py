@@ -101,7 +101,13 @@ def _member_path(name: str, *, directory: bool) -> PurePosixPath:
         raise ValueError(f"unsafe archive path: {name!r}")
     parts = name.split("/")
     for part in parts:
-        if part in {"", ".", ".."} or part.endswith((".", " ")) or "\x7f" in part or ntpath.isreserved(part):
+        if (
+            part in {"", ".", ".."}
+            or part.endswith((".", " "))
+            or "\x7f" in part
+            or ntpath.isreserved(part)
+            or any(unicodedata.category(char) == "Cs" for char in part)
+        ):
             raise ValueError(f"unsafe or nonportable archive path: {name!r}")
     return PurePosixPath(*parts)
 

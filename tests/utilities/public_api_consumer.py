@@ -103,6 +103,7 @@ class TestProcess(ConsumerCase):
         filter_script.write_text(
             "import pathlib,sys\npayload = sys.stdin.buffer.read()\npathlib.Path('filter-input').write_bytes(payload)\nsys.stdout.buffer.write(b'clean:' + payload)\n",
             encoding="utf-8",
+            newline="\n",
         )
         attributes = self.root / "attributes"
         attributes.write_bytes(b"*.txt filter=fixture -text\n")

@@ -14,8 +14,8 @@ SHA = "a" * 40
 
 @pytest.fixture
 def root(tmp_path: Path) -> Path:
-    (tmp_path / "AGENTS.md").write_text("Consumer instructions\n")
-    (tmp_path / ".coderabbit.yaml").write_text("reviews: {}\n")
+    (tmp_path / "AGENTS.md").write_text("Consumer instructions\n", newline="\n")
+    (tmp_path / ".coderabbit.yaml").write_text("reviews: {}\n", newline="\n")
     return tmp_path
 
 
@@ -105,7 +105,7 @@ def test_instruction_errors_stop_before_commands(root: Path, commands: tuple[Moc
     if state == "agents-missing":
         (root / "AGENTS.md").unlink()
     elif state == "ambiguous":
-        (root / ".coderabbit.yml").write_text("reviews: {}\n")
+        (root / ".coderabbit.yml").write_text("reviews: {}\n", newline="\n")
     else:
         (root / ".coderabbit.yaml").unlink()
         if state == "directory":
@@ -140,7 +140,9 @@ def test_real_child_inherits_streams_and_has_no_default_timeout(
     root: Path, commands: tuple[Mock, Mock], monkeypatch: pytest.MonkeyPatch, capfd: pytest.CaptureFixture[str]
 ) -> None:
     script = root / "fake_coderabbit.py"
-    script.write_text("import sys, time\nprint('progress', flush=True)\ntime.sleep(0.1)\nprint('service unavailable', file=sys.stderr)\nsys.exit(9)\n")
+    script.write_text(
+        "import sys, time\nprint('progress', flush=True)\ntime.sleep(0.1)\nprint('service unavailable', file=sys.stderr)\nsys.exit(9)\n", newline="\n"
+    )
     monkeypatch.setattr(process, "DEFAULT_COMMAND_TIMEOUT_SECONDS", 0.001)
 
     def child(command: str, args: list[str], *, cwd: Path, **kwargs: object) -> subprocess.CompletedProcess[str]:
@@ -171,9 +173,9 @@ def test_just_recipe_forwards_arguments_without_shell_expansion(
 
     source_root = Path(__file__).resolve().parents[2]
     source = source_root / ("src/research_repo_tools/templates/justfile" if template else "justfile")
-    (tmp_path / "justfile").write_text(source.read_text())
+    (tmp_path / "justfile").write_text(source.read_text(), newline="\n")
     uv = tmp_path / "uv"
-    uv.write_text(f"#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n")
+    uv.write_text(f"#!{sys.executable}\nimport json, sys\nprint(json.dumps(sys.argv[1:]))\n", newline="\n")
     uv.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     result = process.run_safe_command("just", ["--justfile", str(tmp_path / "justfile"), *recipe], cwd=tmp_path)

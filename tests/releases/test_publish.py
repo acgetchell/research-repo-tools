@@ -10,9 +10,9 @@ SCRIPT = Path(__file__).resolve().parents[2] / "scripts/check_release.py"
 
 
 def project(root: Path, *, name: str = "research-repo-tools", locked: str = "0.1.0", notes: str = "- Initial release.") -> None:
-    (root / "pyproject.toml").write_text(f'[project]\nname = "{name}"\nversion = "0.1.0"\n', encoding="utf-8")
-    (root / "uv.lock").write_text(f'[[package]]\nname = "{name}"\nversion = "{locked}"\nsource = {{ editable = "." }}\n', encoding="utf-8")
-    (root / "CHANGELOG.md").write_text(f"# Changelog\n\n## [0.1.0] - 2026-09-16\n\n{notes}\n", encoding="utf-8")
+    (root / "pyproject.toml").write_text(f'[project]\nname = "{name}"\nversion = "0.1.0"\n', encoding="utf-8", newline="\n")
+    (root / "uv.lock").write_text(f'[[package]]\nname = "{name}"\nversion = "{locked}"\nsource = {{ editable = "." }}\n', encoding="utf-8", newline="\n")
+    (root / "CHANGELOG.md").write_text(f"# Changelog\n\n## [0.1.0] - 2026-09-16\n\n{notes}\n", encoding="utf-8", newline="\n")
 
 
 def preflight(root: Path, tag: str = "v0.1.0") -> subprocess.CompletedProcess[str]:
@@ -56,7 +56,7 @@ def test_rejects_incomplete_release(tmp_path: Path, options: dict[str, str], dia
 @pytest.mark.parametrize("heading", ["## [Unreleased]", "## [0.1.0]", "## [0.1.0] - 2026-02-30"])
 def test_requires_dated_release_notes(tmp_path: Path, heading: str) -> None:
     project(tmp_path)
-    (tmp_path / "CHANGELOG.md").write_text(f"# Changelog\n\n{heading}\n\n- Initial release.\n", encoding="utf-8")
+    (tmp_path / "CHANGELOG.md").write_text(f"# Changelog\n\n{heading}\n\n- Initial release.\n", encoding="utf-8", newline="\n")
     result = preflight(tmp_path)
     assert result.returncode == 1
     assert "changelog" in result.stderr.lower()

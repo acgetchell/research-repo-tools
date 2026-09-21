@@ -9,9 +9,10 @@ history belong in the generated [CHANGELOG.md](../CHANGELOG.md). See
 | Command | Purpose |
 | --- | --- |
 | `just audit` | Check locked third-party Python dependencies against online vulnerability advisories |
-| `just check` | Workflow, lockfile, lint, format, and type checks during development |
+| `just check` | Workflow, lockfile, lint, format, newline, and type checks during development |
 | `just ci` | Final checks, tests, wheel/sdist builds, and isolated installation checks |
 | `just coverage` | Run tests with branch and subprocess coverage; write `coverage/cobertura.xml` |
+| `just newline-check` | Reject implicit newline translation in Python text-file writes |
 | `just test` | Run the test suite |
 
 Run the [contributor setup](../CONTRIBUTING.md#development-environment)
@@ -19,6 +20,13 @@ before using these recipes. Environment activation is not required.
 Run focused regressions when a behavioral change needs verification, then
 `just ci` when the work is ready for review. A passing `just check` does not
 establish that tests, builds, or installation checks passed.
+
+`just check` includes `just newline-check`, so both local `just ci` and every
+native package job enforce explicit newline policies. The guard's positive and
+negative fixtures verify detection; byte assertions exercise mixed LF/CRLF data
+on the native host and a focused Windows translation model. See the
+[contributor guidance](../CONTRIBUTING.md#shared-implementation) for the syntax
+check's scope and limits. Native Windows validation remains required.
 
 `just audit` excludes the local package and evaluates dependency markers on the
 current platform. It does not audit every platform's conditional dependencies.

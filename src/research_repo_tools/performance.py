@@ -45,12 +45,17 @@ def run(args: argparse.Namespace, settings: Config) -> int:
         print(f"Verified envelope and payload SHA-256: {result.payload_schema}")
     else:
         if args.action == "compare":
-            baseline = criterion.collect_sample(settings.path(args.baseline), args.baseline_sample, statistic=args.statistic, unit=args.unit)
-            current = criterion.collect_sample(settings.path(args.current), args.current_sample, statistic=args.statistic, unit=args.unit)
+            roots = (settings.path(args.baseline), settings.path(args.current))
+            baseline = criterion.collect_sample(roots[0], args.baseline_sample, statistic=args.statistic, unit=args.unit)
+            current = criterion.collect_sample(roots[1], args.current_sample, statistic=args.statistic, unit=args.unit)
             comparison = criterion.compare_samples(baseline, current)
             if not comparison.comparisons:
                 raise ValueError("no common Criterion benchmarks; inspect the selected sample directories")
             output = criterion.serialize_comparison(comparison)
+            if args.output:
+                destination = settings.path(args.output).resolve()
+                if any(_paths_alias(ancestor, root) for root in roots for ancestor in (destination, *destination.parents)):
+                    raise ValueError("comparison output must be outside both Criterion input roots")
         else:
             retained = evidence.load_evidence(settings.path(args.payload), settings.path(args.manifest))
             if retained.payload_schema != criterion.COMPARISON_SCHEMA:

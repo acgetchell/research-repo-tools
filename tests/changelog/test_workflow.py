@@ -72,7 +72,7 @@ def test_generation_rotates_minor_series_and_preview_matches_publication(consume
 def test_generation_rejects_archive_conflicts_without_changes(consumer: config.Config, dry_run: bool) -> None:
     archive = consumer.root / "docs/archives/changelog/0.9.md"
     archive.parent.mkdir(parents=True)
-    archive.write_text("# Retained history\n\n## [0.9.2] - 2026-09-15\n\n- Different notes.\n")
+    archive.write_text("# Retained history\n\n## [0.9.2] - 2026-09-15\n\n- Different notes.\n", newline="\n")
     before = snapshot(consumer.root)
     with pytest.raises(ValueError, match="conflicting retained release"):
         changelog.generate(consumer, dry_run=dry_run)
@@ -82,7 +82,7 @@ def test_generation_rejects_archive_conflicts_without_changes(consumer: config.C
 def test_generation_rolls_back_archives_when_root_publication_fails(consumer: config.Config, monkeypatch: pytest.MonkeyPatch) -> None:
     archive = consumer.root / "docs/archives/changelog/0.9.md"
     archive.parent.mkdir(parents=True)
-    archive.write_text("# Retained history\n\n## [0.9.1]\n\n- Retained patch.\n")
+    archive.write_text("# Retained history\n\n## [0.9.1]\n\n- Retained patch.\n", newline="\n")
     before = snapshot(consumer.root)
     replace_path = files._replace_path
     published: list[Path] = []
@@ -124,7 +124,7 @@ def test_generation_formats_every_output_before_publication(consumer: config.Con
 
 def test_cli_generation_archives_prospective_release(consumer: config.Config, capsys: pytest.CaptureFixture[str]) -> None:
     settings = consumer.root / "research-repo-tools.toml"
-    settings.write_text('[changelog]\nowner="example"\nrepository="consumer"\n')
+    settings.write_text('[changelog]\nowner="example"\nrepository="consumer"\n', newline="\n")
     args = ["--config", str(settings), "changelog", "generate", "--tag", "v1.0.0", "--date", "2026-09-17"]
     before = snapshot(consumer.root)
     assert cli.main([*args, "--dry-run"]) == 0
@@ -142,7 +142,7 @@ def test_changelog_recipes_expose_the_common_command_surface(tmp_path: Path, con
     justfile = Path(__file__).resolve().parents[2] / "justfile"
     if consumer_template:
         justfile = tmp_path / "justfile"
-        justfile.write_text(changelog.template("justfile"))
+        justfile.write_text(changelog.template("justfile"), newline="\n")
     commands = [
         (["changelog"], "changelog generate"),
         (["changelog-preview"], "--dry-run"),
@@ -185,10 +185,10 @@ def test_formatter_cannot_remove_or_change_release_identity(consumer, monkeypatc
 @pytest.mark.parametrize("dry_run", [False, True])
 def test_generation_retains_declared_dates_in_root_and_archives(consumer, monkeypatch, dry_run):
     root = consumer.root / "CHANGELOG.md"
-    root.write_text(HISTORY.replace("2026-09-16", "2026-08-31").split("## [0.9.2]")[0])
+    root.write_text(HISTORY.replace("2026-09-16", "2026-08-31").split("## [0.9.2]")[0], newline="\n")
     archive = consumer.root / "docs/archives/changelog/0.9.md"
     archive.parent.mkdir(parents=True)
-    archive.write_text("# Changelog - 0.9.x\n\n## [0.9.2] - 2026-08-30\n\n### Fixed\n\n- Read the [guide](../../../docs/guide.md).\n")
+    archive.write_text("# Changelog - 0.9.x\n\n## [0.9.2] - 2026-08-30\n\n### Fixed\n\n- Read the [guide](../../../docs/guide.md).\n", newline="\n")
     before = snapshot(consumer.root)
     preview = changelog.generate(consumer, dry_run=dry_run)
     assert "## [1.0.0] - 2026-08-31" in preview
@@ -218,12 +218,12 @@ def test_regenerated_declared_date_still_passes_release_metadata_check(tmp_path,
 
 @pytest.mark.parametrize("authority", ["archive", "prospective"])
 def test_conflicting_date_authorities_fail_without_changes(consumer, authority):
-    (consumer.root / "CHANGELOG.md").write_text(HISTORY)
+    (consumer.root / "CHANGELOG.md").write_text(HISTORY, newline="\n")
     tag = released = None
     if authority == "archive":
         archive = consumer.root / "docs/archives/changelog/0.9.md"
         archive.parent.mkdir(parents=True)
-        archive.write_text("# Changelog\n\n## [0.9.2] - 2000-01-01\n\n- Retained.\n")
+        archive.write_text("# Changelog\n\n## [0.9.2] - 2000-01-01\n\n- Retained.\n", newline="\n")
     else:
         tag, released = "v1.0.0", "2000-01-01"
     before = snapshot(consumer.root)
@@ -250,7 +250,9 @@ def test_formatted_regeneration_and_next_release_are_stable(consumer, monkeypatc
     monkeypatch.setattr(changelog, "run_safe_command", lambda *args, **kwargs: subprocess.CompletedProcess([], 0, history, ""))
     if formatted:
         consumer = replace(consumer, changelog=replace(consumer.changelog, formatter="rumdl.toml"))
-        (consumer.root / "rumdl.toml").write_text(changelog.template("rumdl.toml").replace('"MD053"', '"MD053", "MD057"') + '\n[MD004]\nstyle = "asterisk"\n')
+        (consumer.root / "rumdl.toml").write_text(
+            changelog.template("rumdl.toml").replace('"MD053"', '"MD053", "MD057"') + '\n[MD004]\nstyle = "asterisk"\n', newline="\n"
+        )
     if formatted == "stub":
         monkeypatch.setattr(changelog, "format_markdown", lambda text, path, rules: text.replace("\n- ", "\n* "))
     changelog.generate(consumer)
