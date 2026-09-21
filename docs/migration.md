@@ -12,7 +12,11 @@ and staged file replacement with rollback diagnostics.
 Repository-specific scientific code, benchmark cases, notebooks, custom commands,
 and Semgrep rules remain in consumers. This package checks supplied Semgrep rules;
 it does not distribute a rule set copied from a particular repository. Custom
-commands and release-pinned links are not rewritten during metadata updates.
+commands and release-pinned links retain their contents unless explicitly selected
+by a [declarative release policy](UPDATING_RELEASE_METADATA.md#declarative-consumer-policies).
+The [worked release-policy migration](release-policy-migration.md) replaces consumer
+discovery, staging, CLI-output parsing, and publication wrappers with structured plans.
+It requires a subsequent published package containing the new API; `0.1.2` is insufficient.
 
 Tests exercise the shared implementation with small synthetic inputs grouped by
 capability, including representative edge and failure cases. Fixes and release

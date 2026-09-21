@@ -117,6 +117,73 @@ or unchecked text output is decoded using `encoding` and `errors`. Diagnostic
 formatting does not redact arguments or output; consumers own sensitive-data
 policy. See the [Python examples](../README.md#calling-from-python).
 
+## Python release API
+
+`research_repo_tools.releases` is supported starting with the release containing
+these APIs; published `0.1.2` does not contain them. All paths passed as roots are
+`Path` objects. Policies default to the consumer configuration when omitted.
+These functions do not print or parse CLI output.
+
+| Import | Contract |
+| --- | --- |
+| `apply_release(plan) -> ReleaseResult` | Publish a validated, unchanged plan using the file-publication API |
+| `check_release(root, *, policy=None, previous_tag=None, adapter=None) -> ReleaseCheckResult` | Check shared metadata and consumer rules without writing source files |
+| `discover_release(root, *, policy=None, adapter=None) -> ReleaseDiscovery` | Read package identity, selected files, and standard version references; validate explicit selector cardinality without GitHub access |
+| `plan_release(root, tag, *, previous_tag=None, release_date=None, policy=None, adapter=None) -> ReleasePlan` | Prepare all shared, declarative, and adapter edits in an isolated tree and validate them before returning |
+| `published_releases(root) -> tuple[PublishedRelease, ...]` | Query `gh release list`, excluding drafts/prereleases, sorted by descending numeric stable version |
+
+`plan_release` accepts `X.Y.Z` or `vX.Y.Z` and normalizes to `vX.Y.Z`, including
+an explicit previous tag. Omit `previous_tag` to discover the greatest published
+stable release below the target. Discovery rejects a target below any published
+stable release and fails if no predecessor exists. Supplying `previous_tag`
+bypasses remote discovery; it must precede the target. Dates default to UTC today.
+A `previous-tag` rule also triggers discovery during `check_release` unless the
+caller supplies the previous tag. `published_releases` examines up to 1,000
+GitHub releases, matching the existing CLI discovery limit.
+
+The module exports these frozen dataclasses:
+
+- `ReleasePolicy(date_policy="today", final_changelog=False, required_files=(), exclude=(), rules=())`
+  and `ReleaseRule(path, pattern, value=None, source=None, count=1, exclude=None)`
+  follow the [declarative contract](UPDATING_RELEASE_METADATA.md#declarative-consumer-policies).
+- `ReleaseAdapter(input_files=(), prepare=None, validate=None)` uses trusted Python
+  callbacks, each receiving `(candidate: Path, context: ReleaseContext)`.
+  `prepare` returns `Mapping[str, bytes]`; `validate` returns `Sequence[str]`.
+  Select all callback inputs explicitly; callbacks cannot assume a full repository
+  copy or a `.git` directory. They must not mutate the source or candidate.
+- `ReleaseContext(tag, previous_tag, release_date)` also exposes `version` without
+  the `v` prefix. During checks, `previous_tag` can be `None` when no rule or
+  explicit argument requires it.
+- `ReleaseDiscovery(root, package, files, references, policy)` exposes an absolute
+  root, `PackageInfo(name, version)`, sorted relative file paths, and standard
+  `VersionReference(path, line, version, kind, text)` records. Reference paths are
+  absolute and lines are one-based; `kind` is string-valued. Workspace-only
+  package names can be `None`. Custom selectors are available through `policy.rules`.
+- `ReleaseCheckResult(discovery, problems)` exposes diagnostic strings and `ok`.
+- `ReleaseEdit(path, before, after)` stores a relative path and exact bytes.
+  `ReleasePlan(discovery, context, files, adapter_inputs)` contains every selected
+  file, including unchanged validation inputs. Its `edits` property filters changed
+  files. Pass plans returned by `plan_release` unchanged to `apply_release`.
+- `ReleaseResult(context, changed_paths)` reports relative paths in publication order.
+- `PublishedRelease(tag, published_at)` contains a normalized tag and a timezone-aware
+  `datetime` from GitHub.
+
+Malformed configuration, selectors, metadata, dates, or paths raise `ValueError`.
+I/O and UTF-8 decoding errors propagate. Synchronization mismatches appear in
+`ReleaseCheckResult.problems`; candidate mismatches raise
+`ReleaseValidationError(ValueError)` with a `problems` tuple. A stale plan raises
+`StaleReleasePlanError(ValueError)`. Adapter exceptions propagate before publication;
+adapter diagnostics become validation failures. Remote discovery follows the
+process API's executable, command, and timeout errors. Publication uses the
+`OSError`/`ExceptionGroup`/`RecoveryError` contracts below. Diagnostic strings are
+for humans, not machine parsing.
+
+Planning writes only temporary files. Application rejects changed selected inputs,
+then publishes the exact planned bytes. This is not a concurrent-writer lock or a
+crash-atomic multi-file commit; callers must serialize writers. A plan is a
+short-lived in-process value, not a persisted authorization token. See the
+[worked consumer migration](release-policy-migration.md).
+
 ## Python file-publication API
 
 `research_repo_tools.files.replace_many(updates: Mapping[Path, bytes]) -> None`

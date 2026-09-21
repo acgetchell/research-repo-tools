@@ -1,10 +1,13 @@
 """Tests for release metadata and version synchronization checks."""
 
+import subprocess
 from typing import TYPE_CHECKING
 
 import pytest
 
+from research_repo_tools import release_discovery, update_release
 from research_repo_tools import release_metadata as release_check
+from research_repo_tools.releases import ReleasePolicy, ReleaseRule
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -227,3 +230,27 @@ def test_main_reports_mismatches(tmp_path: Path, capsys: pytest.CaptureFixture[s
     exit_code = release_check.main([str(tmp_path)])
     assert exit_code == 1
     assert "Release-version references are out of sync" in capsys.readouterr().err
+
+
+@pytest.mark.parametrize(
+    "error",
+    [subprocess.CalledProcessError(1, ["gh", "release", "list"]), subprocess.TimeoutExpired(["gh", "release", "list"], 300)],
+    ids=["nonzero-exit", "timeout"],
+)
+def test_check_reports_previous_release_discovery_failures(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], error: subprocess.SubprocessError
+) -> None:
+    _write_project(tmp_path)
+    (tmp_path / "release.txt").write_text("previous: v1.2.2\n", encoding="utf-8")
+    policy = ReleasePolicy(rules=(ReleaseRule("release.txt", r"previous: (?P<value>v\S+)", source="previous-tag"),))
+
+    def fail_discovery(command: str, args: list[str], *, cwd: Path) -> None:
+        assert command == "gh" and args[:2] == ["release", "list"] and cwd == tmp_path.resolve()
+        raise error
+
+    monkeypatch.setattr(update_release, "get_safe_executable", lambda command: command)
+    monkeypatch.setattr(release_discovery, "run_safe_command", fail_discovery)
+    assert release_check.check(tmp_path, policy=policy) == 1
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == f"Could not check release-version synchronization: {error}\n"

@@ -4,7 +4,7 @@ from pathlib import Path
 
 import pytest
 
-from research_repo_tools import cli, release_metadata, update_release
+from research_repo_tools import cli, release_metadata, releases, update_release
 from research_repo_tools.config import ReleasePolicy
 from tests.releases.test_metadata import _write_project
 
@@ -175,8 +175,8 @@ def test_contained_dotdot_workspace_members_stay_inside_validation_tree(tmp_path
     sentinel.parent.mkdir(parents=True)
     sentinel.write_bytes(b"outside sentinel")
     before = snapshot(tmp_path)
-    temporary_directory = update_release.tempfile.TemporaryDirectory
-    monkeypatch.setattr(update_release.tempfile, "TemporaryDirectory", lambda **kwargs: temporary_directory(dir=validation, **kwargs))
+    temporary_directory = releases.tempfile.TemporaryDirectory
+    monkeypatch.setattr(releases.tempfile, "TemporaryDirectory", lambda **kwargs: temporary_directory(dir=validation, **kwargs))
     result = update_release.update_release_version(root, "v1.2.4", previous_tag="v1.2.3", release_date="2026-09-07", dry_run=True)
     assert result.changed_paths
     assert snapshot(tmp_path) == before

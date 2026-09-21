@@ -49,5 +49,87 @@ trigger rollback; incomplete rollback reports retained recovery files. Multi-fil
 replacement is not crash-atomic.
 
 These commands prepare local files. Changelog generation, tagging, dependency
-updates, and publication are separate operations. Arbitrary regex targets,
-repository profiles, and special benchmark-command rewrites are not supported.
+updates, and publication are separate operations. Repository profiles and command hooks are not supported. Explicit selectors and
+Python adapters extend preparation as described below.
+
+
+## Declarative consumer policies
+
+These additions require a published package newer than `0.1.2` containing the
+release-plan API. Existing defaults remain unchanged when no rules are declared.
+Put the following under `[tool.research-repo-tools.release]` in `pyproject.toml`,
+or use `[release]` in a standalone configuration:
+
+```toml
+[tool.research-repo-tools.release]
+required-files = ["CITATION.cff", "README.md", "REFERENCES.md"]
+exclude = ["docs/evidence/**"]
+
+[[tool.research-repo-tools.release.rules]]
+path = "CITATION.cff"
+pattern = '^doi: (?P<value>[^\s]+)[ \t]*\r?$'
+value = "10.5281/zenodo.20033111"
+```
+
+Use TOML multiline literal strings when a pattern contains single quotes; the
+[worked migration](release-policy-migration.md) shows complete selectors.
+`required-files` lists existing regular files. Paths are normalized relative POSIX
+names; absolute paths, `..`, `.git`, and symlink components fail. `exclude` uses
+root-relative POSIX glob patterns, including `**`, to remove historical Markdown
+from automatic dependency-snippet updates. Built-in archive/test exclusions still
+apply. Exclusions do not disable structured metadata or DOI checks. An explicit
+rule cannot select an excluded path, and adapters cannot edit excluded files.
+
+Each rule selects one file and exactly `count` matches (default `1`). `pattern`
+is a Python regular expression evaluated with MULTILINE, with a named nonempty
+`(?P<value>...)` capture. Only that capture is replaced; surrounding bytes and
+line endings survive. Patterns must accommodate CRLF explicitly when using `$`.
+`exclude`, when set on a rule, is a regex applied to the whole match before
+counting, for example to leave measured artifact URLs unchanged. Missing,
+ambiguous, empty, and overlapping mutable captures fail both checking and planning.
+Declare the expected count instead of silently accepting newly added references.
+
+A rule declares exactly one of:
+
+| Field | Meaning |
+| --- | --- |
+| `source = "previous-tag"` | Previous stable tag; checked against the explicit or discovered previous release |
+| `source = "release-date"` | Prepared ISO date; checks use the citation date, current changelog date, or today's UTC date in that order |
+| `source = "tag"` | Target stable tag, such as `v1.2.4` |
+| `source = "version"` | Target stable version, such as `1.2.4` |
+| `value = "..."` | Fixed assertion; never repaired as part of an update |
+
+Version and stable-tag captures must contain the previous or target release
+before preparation. A tag selector may also explicitly match a symbolic revision
+or commit hash; that selected value is promoted to the target tag. A previous-tag
+capture must already be a canonical stable tag older than the target; date
+captures must already be ISO dates. Other malformed input is rejected rather than
+normalized incidentally. All fixed assertions run before adapters or publication.
+
+Checks remain offline unless a `previous-tag` rule needs discovery and no explicit
+`--previous-release vX.Y.Z` is supplied. Preparation uses the same previous-release
+discovery as before. The `date-policy` setting continues to govern changelog
+publication; it does not replace `--date` for release preparation.
+
+## Structured plans and adapters
+
+The [release API](api.md#python-release-api) exposes discovery, checking, planning,
+and application without CLI-output parsing. A plan contains exact before/after
+bytes for the entire selected file set. Preview creates and validates the plan;
+apply publishes its changed bytes in one shared transaction. There is no second
+edit calculation between preview and apply. A changed source file, missing input,
+or changed discovery inventory rejects an old plan before publication.
+
+`ReleaseAdapter` declares any extra existing `input_files`. Its optional `prepare`
+callback reads the isolated candidate after shared and declarative edits and
+returns relative paths mapped to replacement bytes. Its optional `validate`
+callback reads the complete candidate and returns diagnostic strings. Any
+message rejects it. Both callbacks must leave their input tree unchanged; shared
+validation runs after contributed edits. All edit targets must already belong
+to the selected input tree. File creation/deletion and arbitrary shell hooks are
+outside this adapter contract.
+
+`check_release` runs the same discovery, rules, and adapter validation on an
+isolated snapshot, without calling `prepare`. Preparation permits the previous
+changelog heading until generation; final-release validation requires the target
+heading. Scientific evidence selection and interpretation remain consumer code.

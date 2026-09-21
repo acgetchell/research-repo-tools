@@ -188,6 +188,9 @@ def check(dist: Path) -> None:
             public_suite = consumer / "public_api_consumer.py"
             public_suite.write_bytes((ROOT / "tests/utilities/public_api_consumer.py").read_bytes())
             run([str(python), "-I", str(public_suite)], cwd=consumer, env=local_env)
+            release_suite = consumer / "public_release_consumer.py"
+            release_suite.write_bytes((ROOT / "tests/releases/public_release_consumer.py").read_bytes())
+            run([str(python), "-I", str(release_suite)], cwd=consumer, env=local_env)
             command = scripts / ("research-repo-tools.exe" if os.name == "nt" else "research-repo-tools")
             assert run([str(command), "--version"], cwd=consumer, env=local_env).strip() == version
             assert "changelog" in run([str(command), "--help"], cwd=consumer, env=local_env)

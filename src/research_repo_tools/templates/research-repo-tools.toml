@@ -30,3 +30,13 @@ cwd = "."
 output-dir = "target/notebooks"
 timeout = 600
 outputs = "clear"
+
+# Optional consumer publication assertions and selected active references.
+# See docs/UPDATING_RELEASE_METADATA.md and docs/release-policy-migration.md.
+# [release]
+# required-files = ["CITATION.cff", "README.md", "REFERENCES.md"]
+# exclude = ["docs/evidence/**"]
+# [[release.rules]]
+# path = "CITATION.cff"
+# pattern = '^doi: (?P<value>[^\s]+)[ \t]*\r?$'
+# value = "10.1234/your-concept-doi"
