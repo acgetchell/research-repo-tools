@@ -1,20 +1,18 @@
 #!/usr/bin/env python3
-"""Secure subprocess utilities for Python scripts.
+"""Subprocess execution and diagnostics; supported imports are listed in __all__.
 
-This module provides secure subprocess wrappers that:
-- Use full executable paths instead of command names
-- Validate executables exist before running
-- Provide consistent error handling
-- Mitigate security vulnerabilities flagged by Bandit
-
-All scripts should use these functions instead of calling subprocess directly.
-
+The public runners share exact byte transport, explicit executable discovery,
+and standard-library results/errors. Legacy convenience helpers remain private
+to the package's CLI implementation.
 """
 
+import codecs
+import math
 import os
 import platform
 import shutil
 import subprocess
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
@@ -24,9 +22,95 @@ type ExceptionFamily = tuple[type[BaseException], ...]
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300.0
 _GENERIC_CPU_NAMES = frozenset({"amd64", "arm", "arm64", "aarch64", "i386", "i686", "unknown", "x86_64"})
 
+__all__ = ["ExecutableNotFoundError", "format_exception_diagnostics", "resolve_executable", "run_command", "run_command_bytes", "run_git_bytes"]
+
 
 class ExecutableNotFoundError(Exception):
     """Raised when a required executable is not found in PATH."""
+
+
+def resolve_executable(command: str | Path, *, cwd: Path | None = None, env: Mapping[str, str] | None = None) -> Path:
+    """Resolve an executable to an absolute path without launching it.
+
+    Explicit paths and relative PATH entries are relative to cwd (the caller's
+    directory by default). env replaces the environment; a missing PATH uses
+    os.defpath. Windows extension lookup follows shutil.which/PATHEXT.
+    This is discovery, not a trust or identity guarantee against concurrent edits.
+    """
+    name = os.fspath(command)
+    if not name or "\x00" in name:
+        raise ValueError("command must be a nonempty executable name or path without NUL")
+    directory = Path.cwd() if cwd is None else cwd.absolute()
+    if isinstance(command, Path) or os.path.dirname(name):
+        candidate = Path(name)
+        candidates = (candidate if candidate.is_absolute() else directory / candidate,)
+    else:
+        environment = os.environ if env is None else env
+        candidates = tuple(directory / entry / name for entry in environment.get("PATH", os.defpath).split(os.pathsep))
+    # Search explicit paths so Windows cannot implicitly prepend the parent
+    # process's working directory ahead of the selected environment's PATH.
+    selected = next((found for candidate in candidates if (found := shutil.which(str(candidate))) is not None), None)
+    if selected is None:
+        raise ExecutableNotFoundError(f"Required executable {command!r} not found in PATH or at the explicit path")
+    # Do not resolve symlinks: some tools (including venv Python) use argv[0].
+    return Path(selected).absolute()
+
+
+def run_command_bytes(
+    command: str | Path,
+    args: Sequence[str] = (),
+    *,
+    cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
+    input: bytes | None = None,
+    timeout: float | None = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    check: bool = True,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run a resolved argument vector, capturing stdout/stderr without translation.
+
+    No shell is requested. Input is exact bytes; None inherits stdin. env is a
+    replacement environment, not an overlay. timeout must be positive and finite,
+    or None to wait indefinitely. Nonzero exits raise CalledProcessError when
+    check=True; timeouts raise TimeoutExpired with captured bytes. OS launch
+    errors propagate. Timeout cleanup covers the direct child, not its descendants.
+    """
+    if not isinstance(args, Sequence) or isinstance(args, (str, bytes)) or any(not isinstance(arg, str) or "\x00" in arg for arg in args):
+        raise TypeError("args must be a sequence of strings without NUL")
+    if input is not None and not isinstance(input, bytes):
+        raise TypeError("input must be bytes or None")
+    if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
+        raise ValueError("timeout must be positive and finite, or None")
+    path = resolve_executable(command, cwd=cwd, env=env)
+    return subprocess.run([str(path), *args], cwd=cwd, env=env, input=input, capture_output=True, check=check, timeout=timeout)
+
+
+def run_command(
+    command: str | Path,
+    args: Sequence[str] = (),
+    *,
+    cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
+    input: str | None = None,
+    encoding: str = "utf-8",
+    errors: str = "strict",
+    timeout: float | None = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    check: bool = True,
+) -> subprocess.CompletedProcess[str]:
+    """Encode text stdin and decode captured output with explicit codec settings.
+
+    Newlines are preserved on every platform. Use run_command_bytes for binary
+    data. Checked failures and timeouts retain raw captured bytes so decoding
+    cannot mask the original command failure. Successful output (or unchecked
+    output) with invalid encoding raises UnicodeError under strict decoding.
+    """
+    if input is not None and not isinstance(input, str):
+        raise TypeError("input must be str or None")
+    codecs.lookup_error(errors)
+    # Also reject registered binary transforms (e.g. hex) before launching a
+    # child, including when the caller does not provide text input.
+    "".encode(encoding, errors)
+    result = run_command_bytes(command, args, cwd=cwd, env=env, input=None if input is None else input.encode(encoding, errors), timeout=timeout, check=check)
+    return subprocess.CompletedProcess(result.args, result.returncode, result.stdout.decode(encoding, errors), result.stderr.decode(encoding, errors))
 
 
 def _diagnostic_stream(value: str | bytes | None) -> str:
@@ -106,10 +190,7 @@ def get_safe_executable(command: str) -> str:
     Raises:
         ExecutableNotFoundError: If executable is not found in PATH
     """
-    full_path = shutil.which(command)
-    if full_path is None:
-        raise ExecutableNotFoundError(f"Required executable '{command}' not found in PATH")
-    return full_path
+    return str(resolve_executable(command))
 
 
 def _build_run_kwargs(function_name: str, **kwargs: Any) -> RunKwargs:
@@ -374,10 +455,20 @@ def run_git_command_with_input(
 
 
 def run_git_bytes(
-    args: list[str], cwd: Path | None = None, *, input: bytes | None = None, timeout: float = DEFAULT_COMMAND_TIMEOUT_SECONDS
+    args: Sequence[str],
+    cwd: Path | None = None,
+    *,
+    env: Mapping[str, str] | None = None,
+    input: bytes | None = None,
+    timeout: float | None = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    check: bool = True,
 ) -> subprocess.CompletedProcess[bytes]:
-    """Preserve producer stdout and consumer stdin bytes end to end."""
-    return subprocess.run([get_safe_executable("git"), *args], cwd=cwd, input=input, capture_output=True, text=False, check=True, timeout=timeout)
+    """Run Git with exact input/output bytes; attributes and filters remain Git's.
+
+    Equivalent to run_command_bytes("git", args, ...). No Git options, config,
+    or read-only policy are added; the caller owns the requested operation.
+    """
+    return run_command_bytes("git", args, cwd=cwd, env=env, input=input, timeout=timeout, check=check)
 
 
 class ProjectRootNotFoundError(Exception):

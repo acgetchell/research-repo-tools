@@ -122,3 +122,31 @@ repository instructions and scientific validation local. Move common regressions
 upstream before removing local helpers and retain focused integration checks for
 the pinned package, recipes, and configuration. Live reviews remain explicitly
 authorized work, outside routine checks and CI.
+
+## Migrating Python helpers
+
+Published `0.1.2` does not support process or transaction imports. Wait for a
+subsequent published package containing the [public APIs](api.md#python-process-api),
+pin that version, and run the consumer's focused integration checks before
+removing local helper copies. Local wheels remain a pre-publication evaluation aid.
+
+Replace executable lookup with `resolve_executable`; use `run_command` for captured
+text, `run_command_bytes` for binary data, and `run_git_bytes` for Git input that
+must reach clean filters unchanged. The text runner preserves newlines and raises
+checked failures with raw byte diagnostics. `env` replaces the environment rather
+than overlaying it. Keep streaming subprocesses and repository-specific command
+policy in the consumer.
+
+Replace generic multi-file writers with `replace_many`, including single-file
+writes as one-entry mappings. Encode payloads explicitly. Leaf symlinks are
+rejected, overlapping targets fail before effects, and incomplete rollback exposes
+recovery files through `RecoveryError` children of the exception group. This
+supersedes local writers that follow output symlinks or discard recovery failures;
+do not add compatibility flags to retain those behaviors. See the
+[README example](../README.md#calling-from-python) and full publication contract.
+
+Clippy SARIF consumers can also remove their separate Cargo installers and Just
+version variables after adopting a release with the catalog additions. Move the
+exact `clippy-sarif` and `sarif-fmt` pins to the managed Cargo table; keep Clippy's
+arguments, managed Rust component declaration, SARIF upload, and pipeline failure
+handling in the consumer.

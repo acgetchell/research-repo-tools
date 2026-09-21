@@ -270,6 +270,33 @@ policy, failure reports, and environment configuration. Linting uses the locked
 project's Ruff and ty with the consumer's configuration and preserves cell IDs
 in diagnostics. `notebook-check` provides structure and output checks alone.
 
+### Clippy SARIF helpers
+
+Declare the exact converter versions in `pyproject.toml`. Keep the consumer's
+Rust compiler pinned in `rust-toolchain.toml`, with the `clippy` component:
+
+```toml
+[tool.research-repo-tools.toolchain.cargo]
+clippy-sarif = "0.8.0"
+sarif-fmt = "0.8.0"
+```
+
+Use `just setup` to install them and `just tools-check` to verify them. Keep
+the Cargo invocation and SARIF upload workflow in the consumer. A Bash recipe can
+preserve failure from every pipeline stage with `pipefail`:
+
+```just
+clippy-sarif:
+    #!/usr/bin/env bash
+    set -euo pipefail
+    tool() { uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain run -- "$@"; }
+    tool cargo clippy --message-format=json | tool clippy-sarif | tee results.sarif | tool sarif-fmt
+```
+
+`just update-cargo-tools` upgrades only declared tools. Both helpers use the shared
+exact, locked Cargo installer and checked execution. See the
+[platform contract](docs/INSTALLING.md#additional-cargo-tools-and-native-prerequisites).
+
 ### Calling from Python
 
 A consumer that needs a Python wrapper can invoke the same CLI contract without
@@ -286,7 +313,39 @@ print(f"Using research-repo-tools {__version__}")
 raise SystemExit(main(["--root", str(root), "release", "check"]))
 ```
 
-See [supported interfaces][api] for return values, errors, and API stability.
+The process and file APIs below require a release newer than `0.1.2` that includes
+them. Pin the published version before removing local consumer helpers.
+They leave command policy and scientific decisions in the consumer:
+
+```python
+import subprocess
+import sys
+from pathlib import Path
+
+from research_repo_tools.files import replace_many
+from research_repo_tools.process import format_exception_diagnostics, run_command, run_git_bytes
+
+root = Path(__file__).resolve().parents[1]
+try:
+    result = run_command(sys.executable, ["--version"], cwd=root, timeout=30)
+    payload = (root / "results.json").read_bytes()
+    # Git receives the original bytes and applies its own configured filters.
+    digest = run_git_bytes(
+        ["--no-pager", "hash-object", "--path=results.json", "--stdin"],
+        cwd=root, input=payload,
+    ).stdout.strip()
+    replace_many({
+        root / "reports/results.json": payload,
+        root / "reports/results.hash": digest + b"\n",
+    })
+except (OSError, subprocess.SubprocessError, ExceptionGroup) as error:
+    raise SystemExit(format_exception_diagnostics(error)) from error
+```
+
+Text execution uses explicit UTF-8 by default; byte execution preserves LF, CRLF,
+and binary data. Publication stages every file first and rolls back caught
+replacement failures. See [supported interfaces][api] for lookup behavior, typed
+results/errors, recovery backups, concurrency limits, and API stability.
 
 ## Templates and optional settings
 

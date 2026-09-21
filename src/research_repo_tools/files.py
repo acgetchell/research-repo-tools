@@ -13,6 +13,24 @@ from typing import Never
 
 LOGGER = logging.getLogger(__name__)
 
+__all__ = ["RecoveryError", "replace_many"]
+
+
+class RecoveryError(OSError):
+    """A failed rollback, with the target and any retained original backup.
+
+    In an incomplete-rollback exception group, the first exception is the
+    original failure; subsequent exceptions are RecoveryError instances.
+    ``backup`` is None when rollback failed to remove a newly created target.
+    ``__cause__`` retains the underlying recovery error.
+    """
+
+    def __init__(self, target: Path, backup: Path | None, error: OSError):
+        super().__init__(f"failed to restore {target}: {error}")
+        self.target = target
+        self.backup = backup
+        self.__cause__ = error
+
 
 @dataclass(frozen=True, slots=True)
 class _StagedWrite:
@@ -49,7 +67,7 @@ def _stage_bytes(path: Path, payload: bytes) -> Path:
         if existing_mode is not None:
             staged_path.chmod(existing_mode)
     except BaseException:
-        staged_path.unlink(missing_ok=True)
+        _cleanup_temporary_paths((staged_path,))
         raise
     return staged_path
 
@@ -64,7 +82,7 @@ def _stage_backup(path: Path) -> Path:
             os.fsync(handle.fileno())
         shutil.copystat(path, backup_path)
     except BaseException:
-        backup_path.unlink(missing_ok=True)
+        _cleanup_temporary_paths((backup_path,))
         raise
     return backup_path
 
@@ -103,8 +121,15 @@ def _ensure_parent_directory(path: Path) -> list[Path]:
     while not candidate.exists():
         missing.append(candidate)
         candidate = candidate.parent
-    path.mkdir(parents=True, exist_ok=True)
-    return missing
+    created: list[Path] = []
+    try:
+        for directory in reversed(missing):
+            directory.mkdir()
+            created.append(directory)
+    except BaseException:
+        _remove_created_directories(created)
+        raise
+    return created
 
 
 def _transaction_temporary_paths(staged_writes: Sequence[_StagedWrite]) -> list[Path]:
@@ -123,7 +148,7 @@ def _stage_writes(writes: Sequence[tuple[Path, bytes]]) -> tuple[list[_StagedWri
             try:
                 backup_path = _stage_backup(target) if target.exists() else None
             except BaseException:
-                staged_path.unlink(missing_ok=True)
+                _cleanup_temporary_paths((staged_path,))
                 raise
             staged_writes.append(_StagedWrite(target, staged_path, backup_path))
     except BaseException:
@@ -133,9 +158,9 @@ def _stage_writes(writes: Sequence[tuple[Path, bytes]]) -> tuple[list[_StagedWri
     return staged_writes, created_directories
 
 
-def _restore_backups(backups: Sequence[tuple[Path, Path | None]]) -> tuple[list[OSError], set[Path]]:
+def _restore_backups(backups: Sequence[tuple[Path, Path | None]]) -> tuple[list[RecoveryError], set[Path]]:
     """Restore committed targets, returning rollback failures and saved backups."""
-    rollback_errors: list[OSError] = []
+    rollback_errors: list[RecoveryError] = []
     preserved_backups: set[Path] = set()
     for target, backup in reversed(backups):
         try:
@@ -144,14 +169,14 @@ def _restore_backups(backups: Sequence[tuple[Path, Path | None]]) -> tuple[list[
             else:
                 _replace_path(backup, target)
         except OSError as rollback_error:
-            rollback_errors.append(OSError(f"failed to restore {target}: {rollback_error}"))
+            rollback_errors.append(RecoveryError(target, backup, rollback_error))
             if backup is not None:
                 preserved_backups.add(backup)
     return rollback_errors, preserved_backups
 
 
 def _raise_incomplete_rollback(
-    error: BaseException, rollback_errors: list[OSError], backups: Sequence[tuple[Path, Path | None]], preserved: set[Path]
+    error: BaseException, rollback_errors: list[RecoveryError], backups: Sequence[tuple[Path, Path | None]], preserved: set[Path]
 ) -> Never:
     message = "File update failed and rollback was incomplete"
     if preserved:
@@ -160,14 +185,21 @@ def _raise_incomplete_rollback(
     raise BaseExceptionGroup(message, [error, *rollback_errors]) from None
 
 
-def _validate_targets(targets: Sequence[Path]) -> None:
-    if len({path.resolve() for path in targets}) != len(targets):
+def _validate_targets(targets: Sequence[Path]) -> tuple[Path, ...]:
+    if any(not isinstance(path, Path) for path in targets):
+        raise TypeError("Transaction targets must be pathlib.Path instances")
+    resolved = tuple(path.resolve() for path in targets)
+    if len(set(resolved)) != len(targets):
         raise ValueError("A publication transaction cannot contain duplicate target paths")
+    selected = set(resolved)
+    if any(selected.intersection(path.parents) for path in resolved):
+        raise ValueError("A publication transaction cannot contain overlapping target paths")
     for path in targets:
         if path.is_symlink():
             raise ValueError(f"Transaction output must not be a symlink: {path}")
         if path.exists() and not path.is_file():
             raise IsADirectoryError(f"output path exists but is not a file: {path}")
+    return resolved
 
 
 @contextmanager
@@ -211,7 +243,10 @@ def _publish(writes: Sequence[tuple[Path, bytes]]) -> None:
     if not writes:
         return
 
-    _validate_targets([path for path, _text in writes])
+    targets = _validate_targets([path for path, _payload in writes])
+    if any(not isinstance(payload, bytes) for _path, payload in writes):
+        raise TypeError("Transaction payloads must be bytes")
+    writes = tuple((target, payload) for target, (_path, payload) in zip(targets, writes, strict=True))
 
     staged_writes, created_directories = _stage_writes(writes)
 
@@ -237,9 +272,15 @@ def _publish(writes: Sequence[tuple[Path, bytes]]) -> None:
 def replace_many(updates: Mapping[Path, bytes]) -> None:
     """Stage all replacements and backups, then publish with rollback on failure.
 
-    Targets must be distinct regular files, never symlinks. New files start
-    owner-only; existing permissions are preserved. Multiple replacements are
-    not crash atomic. Failed rollback preserves and reports recovery backups.
+    Paths resolve relative to the caller's working directory. Targets must be
+    distinct, non-overlapping regular files (or absent), never leaf symlinks.
+    Parent symlinks are resolved before staging. Payloads must be bytes.
+    New files start owner-only; existing permission bits are preserved where
+    supported. All candidates and backups are synced before ordered replacement.
+    A caught failure rolls back earlier replacements in reverse order. If that
+    fails, an exception group retains the original failure first, followed by
+    RecoveryError instances pointing to retained backups. Cleanup is best effort.
+    This does not serialize concurrent writers or make the group crash atomic.
     """
     _publish(tuple(updates.items()))
 

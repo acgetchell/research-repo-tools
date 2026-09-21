@@ -289,6 +289,8 @@ def test_uv_prerequisite_failure_never_installs_a_replacement(runtime, available
         ("cargo-audit", "cargo-audit 0.22.2", ["--version"]),
         ("cargo-edit", "cargo-edit-upgrade 0.13.13", ["upgrade", "--version"]),
         ("cargo-machete", "0.9.2", ["--version"]),
+        ("clippy-sarif", "clippy-sarif 0.8.0", ["--version"]),
+        ("sarif-fmt", "sarif-fmt 0.8.0", ["--version"]),
         ("samply", "samply 0.13.1", ["--version"]),
         ("tectonic", "Tectonic 0.17.0", ["--version"]),
         ("tex-fmt", "tex-fmt 0.5.7", ["--version"]),
@@ -328,10 +330,12 @@ def test_complete_catalog_installs_and_verifies_exact_declared_tools(runtime):
         "cargo-llvm-cov",
         "cargo-machete",
         "cargo-nextest",
+        "clippy-sarif",
         "dprint",
         "git-cliff",
         "rumdl",
         "samply",
+        "sarif-fmt",
         "taplo-cli",
         "tectonic",
         "tex-fmt",
@@ -863,3 +867,29 @@ def test_failed_operation_discards_cached_probes(runtime):
     with pytest.raises(RuntimeError, match="registry unavailable"):
         instance.sync()
     assert instance._probes.get() is None
+
+
+@pytest.mark.parametrize("package", ["clippy-sarif", "sarif-fmt"])
+def test_sarif_cli_runs_only_verified_managed_binary_and_retains_failure(runtime, monkeypatch, package):
+    instance, fake = runtime
+    manifest = instance.plan.root / "pyproject.toml"
+    manifest.write_text(manifest.read_text() + f'{package} = "0.8.0"\n')
+    instance.plan = toolchain_config.load(config.load(root=instance.plan.root))
+    fake.add(executable(fake.directory, package), f"{package} 0.8.0")
+    invocation = ["--root", str(instance.plan.root), "toolchain", "run", "--", package, "--input", "missing.json"]
+    assert cli.main(invocation) == 1
+    instance.sync()
+    selected = next(tool for tool in instance.plan.cargo if tool.package == package)
+    expected = executable(instance.cargo_root(selected) / "bin", package)
+    calls = []
+    original = fake.run
+
+    def execute(command, args, **kwargs):
+        if args == ["--input", "missing.json"]:
+            calls.append(Path(command))
+            return subprocess.CompletedProcess([command, *args], 17)
+        return original(command, args, **kwargs)
+
+    monkeypatch.setattr(toolchain, "run_safe_command", execute)
+    assert cli.main(invocation) == 17
+    assert calls == [expected]

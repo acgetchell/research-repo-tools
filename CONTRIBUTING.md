@@ -72,7 +72,7 @@ a behavioral change needs verification. Run `just ci` once the
 work is ready for final review.
 It runs checks and tests with coverage, builds wheel and sdist artifacts, and installs both
 outside the checkout with uv. Installation checks exercise the console entry
-point, imports, packaged templates, runtime dependencies, and the bundled `just` executable.
+point, public process/publication consumer contracts, imports, packaged templates, runtime dependencies, and the bundled `just` executable.
 See [Validation](docs/VALIDATING.md) for check coverage and agent restrictions.
 Hosted CI builds once and installs the same wheel and sdist on all three platforms
 using `just check-dist`. Linux uses `just coverage`; macOS and Windows use
@@ -82,6 +82,7 @@ against the built wheel, installing real tools and updating the disposable
 runner user's shell configuration. It also runs the packaged Cargo dependency-update
 recipe with pinned cargo-edit, verifies that a tiny crate's requirements and lock
 resolution advance, and compiles the result with managed Rust and `--locked`.
+The native check also installs both Clippy SARIF helpers and checks conversion and failure propagation.
 This check is excluded from local `just ci`.
 The [release workflows](docs/RELEASING.md) attach the validated distributions
 and signed provenance to a draft GitHub Release. Publishing that release triggers

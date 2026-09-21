@@ -53,7 +53,7 @@ profile are rejected explicitly. Python-only consumers can omit the Rust file an
 Cargo tool table.
 
 Supported Cargo packages are `cargo-audit`, `cargo-edit`, `cargo-llvm-cov`,
-`cargo-machete`, `cargo-nextest`, `dprint`, `git-cliff`, `rumdl`, `samply`,
+`cargo-machete`, `cargo-nextest`, `clippy-sarif`, `dprint`, `git-cliff`, `rumdl`, `samply`, `sarif-fmt`,
 `taplo-cli`, `tectonic`, `tex-fmt`, `typos-cli`, and `zizmor`. Versions accept
 canonical Cargo SemVer. `just` is supplied by the Python `rust-just` dependency;
 do not declare another installation of it under Cargo. Other Python tools belong
@@ -212,9 +212,24 @@ or formatter.
 | --- | --- | --- |
 | `cargo-audit` | `cargo-audit --version` | `cargo-audit X.Y.Z` |
 | `cargo-machete` | `cargo-machete --version` | `X.Y.Z` |
+| `clippy-sarif` | `clippy-sarif --version` | `clippy-sarif X.Y.Z` |
 | `samply` | `samply --version` | `samply X.Y.Z` |
+| `sarif-fmt` | `sarif-fmt --version` | `sarif-fmt X.Y.Z` |
 | `tectonic` | `tectonic --version` | `Tectonic X.Y.Z` |
 | `tex-fmt` | `tex-fmt --version` | `tex-fmt X.Y.Z` |
+
+The [Clippy converter](https://docs.rs/crate/clippy-sarif/0.8.0) and
+[SARIF formatter](https://docs.rs/crate/sarif-fmt/0.8.0) use ordinary Cargo builds
+on the supported macOS, glibc Linux, and Windows MSVC hosts. Native setup CI
+installs the exact `0.8.0` pins, exercises a small JSON diagnostic through both
+managed executables, and verifies converter failures on all three platforms,
+including Ubuntu for Code Scanning consumers. Platform support for a release
+requires these native jobs to pass; synthetic probes alone are insufficient.
+The compiler's Clippy component must be declared separately. SARIF uploading,
+Clippy arguments, and pipeline failure policy remain consumer-owned; see the
+[consumer example](../README.md#clippy-sarif-helpers). Upstream `clippy-sarif` ignores
+unrecognized input lines, so successful conversion alone does not validate every
+Cargo diagnostic or establish that Clippy succeeded.
 
 The platform compiler/SDK prerequisites above apply to these builds.
 [Tectonic additionally needs native font, Unicode, compression, and TLS libraries](https://tectonic-typesetting.github.io/book/latest/howto/build-tectonic/).

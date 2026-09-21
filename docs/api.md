@@ -1,7 +1,7 @@
 # Supported interfaces
 
 The `0.1` series supports the `research-repo-tools` command, its documented TOML
-configuration, packaged templates, and the two Python imports below. Consumers
+configuration, packaged templates, and the Python APIs listed below. Consumers
 should pin an exact released version in their uv development dependencies.
 Patch releases preserve these contracts; a minor release may introduce a
 documented breaking change while the package remains below `1.0`.
@@ -65,11 +65,104 @@ see the [README example](../README.md#calling-from-python).
   Argument parsing raises `SystemExit(0)` for help/version and `SystemExit(2)`
   for usage errors. Unexpected programming errors may propagate.
 
-Other module functions, configuration objects, parsers, and constants are
-implementation details in `0.1`; importing them creates an unsupported dependency.
-Add a shared library API deliberately when consumers need richer return values.
-The existing `py.typed` marker supplies typing information, not a stability promise
-for every importable symbol.
+## Python process API
+
+The following imports from `research_repo_tools.process` are supported starting
+with the release containing these APIs (they are absent from published `0.1.2`).
+Pin that subsequent published package before migrating consumers. These functions
+and the publication API below follow the same patch/minor compatibility policy
+as the CLI. Type annotations are shipped through `py.typed`.
+
+| Import | Contract |
+| --- | --- |
+| `ExecutableNotFoundError` | Executable discovery failed, before a child was launched |
+| `format_exception_diagnostics(error, *, single_line=False) -> str` | Render command, timeout, or grouped publication failures; byte diagnostics use UTF-8 with replacement; text is human-readable, not a parsing contract |
+| `resolve_executable(command, *, cwd=None, env=None) -> Path` | Resolve a name or explicit `str`/`Path` to an absolute executable path without executing it |
+| `run_command(command, args=(), *, cwd=None, env=None, input=None, encoding="utf-8", errors="strict", timeout=300.0, check=True) -> CompletedProcess[str]` | Encode text stdin and decode captured stdout/stderr with the specified codec; preserve newlines on every platform |
+| `run_command_bytes(command, args=(), *, cwd=None, env=None, input=None, timeout=300.0, check=True) -> CompletedProcess[bytes]` | Capture stdout/stderr and transport stdin without decoding or newline translation |
+| `run_git_bytes(args, cwd=None, *, env=None, input=None, timeout=300.0, check=True) -> CompletedProcess[bytes]` | Byte execution with `git` resolved from the selected environment; Git retains responsibility for attributes, clean filters, and all configuration |
+
+`args` is a sequence of strings, without the executable name. `cwd` is a `Path`
+and defaults to the caller's current directory. Explicit relative executable
+paths and relative `PATH` entries resolve against that directory. `env` is a
+replacement mapping, not an overlay; omit it to inherit the environment. A missing
+`PATH` uses `os.defpath`; an empty `PATH` searches the selected directory. Windows
+extension discovery follows `shutil.which`, including the host process's
+`PATHEXT`. Symlinks to executables are preserved so virtual-environment Python
+and executable dispatchers keep their invocation identity. Discovery is not a
+security boundary against executable replacement. Native Windows batch-file
+execution retains the operating system's shell behavior; prefer native executables
+for literal argument transport.
+
+The runners request no shell and always capture both output streams in memory.
+They do not provide streaming, pipelines, redirection, or detached processes.
+`input=None` inherits stdin; an empty string/byte string supplies an empty pipe.
+Text input is encoded once, without platform newline conversion. Binary input
+must be `bytes`; use `run_git_bytes` for Git blobs and filter-sensitive data.
+Git options, mutating operations, and policy decisions remain the caller's choice.
+
+`CompletedProcess` is the standard-library type; `args`, `returncode`, `stdout`,
+and `stderr` are available. Both streams are present, possibly empty. With
+`check=True`, a nonzero status raises `subprocess.CalledProcessError`; with
+`check=False`, it is returned. Timeouts raise `subprocess.TimeoutExpired` and
+terminate/reap the direct child, without promising descendant cleanup. Timeouts
+must be positive and finite, or `None` for no deadline. OS launch errors propagate
+as `OSError`. Invalid arguments raise `TypeError` or `ValueError`; invalid codecs
+raise `LookupError`. Strict encoding/decoding errors raise `UnicodeError`.
+
+Both runners retain raw captured bytes on checked failures and timeouts, including
+the original argument vector and exit status/deadline. The text runner checks
+failure before decoding, so invalid output cannot hide a command error. Successful
+or unchecked text output is decoded using `encoding` and `errors`. Diagnostic
+formatting does not redact arguments or output; consumers own sensitive-data
+policy. See the [Python examples](../README.md#calling-from-python).
+
+## Python file-publication API
+
+`research_repo_tools.files.replace_many(updates: Mapping[Path, bytes]) -> None`
+publishes a mapping in iteration order. An empty mapping is a no-op. It is the
+single supported publication entry point; pass one entry for one file.
+
+- All targets and byte payloads are checked before staging or directory creation.
+  Paths resolve relative to the caller's directory. Duplicate resolved paths and
+  ancestor/descendant targets raise `ValueError`. Leaf symlinks, including dangling
+  symlinks, are rejected. Parent symlinks are resolved once before staging, including
+  for duplicate/overlap checks. Existing non-regular targets raise
+  `IsADirectoryError`. Invalid target or payload types raise `TypeError`.
+- Missing parents are created. Every candidate and existing-file backup is written
+  to an exclusive sibling temporary file and flushed with `fsync` before any target
+  replacement. Each replacement uses the filesystem's atomic rename operation;
+  readers can observe intermediate states across multiple files.
+- New files use mode `0600` subject to the platform/umask. Existing permission bits
+  are retained where supported; Windows only supports a subset of POSIX modes.
+  Publication creates new inodes: ownership, ACLs, extended attributes, timestamps,
+  and hard-link identity are not preserved. Distinct hard-linked paths are separate
+  targets. Directory permissions follow the platform/umask.
+- A caught publication failure restores previously replaced targets in reverse
+  order and removes newly published files. Successful rollback re-raises the
+  original exception unchanged. Staging failures leave targets unchanged. Empty
+  directories created by a failed transaction are removed where possible.
+- Incomplete rollback raises an `ExceptionGroup` (or `BaseExceptionGroup` for a
+  base exception such as interruption). Its first member is the original failure;
+  subsequent members are supported `research_repo_tools.files.RecoveryError`
+  instances. Each exposes `target: Path`, `backup: Path | None`, and the underlying
+  recovery failure as `__cause__`. A backup contains the original bytes and is
+  retained for manual recovery. `backup=None` means removal of a newly created file
+  failed. Exception-group splitting preserves these child exception objects.
+- Temporary-file cleanup is best effort and reports `OSError` through logging,
+  without masking the original failure. Recovery backups are excluded from cleanup.
+  A cleanup warning after success does not mean publication failed.
+
+Callers must serialize writers and prevent concurrent path/symlink changes.
+This API is neither a filesystem sandbox nor a compare-and-swap operation.
+It does not promise multi-file crash atomicity, directory `fsync`, power-loss
+recovery, or automatic recovery after process termination. Replacing open files
+can fail on Windows. Use the recovery paths in the exception before retrying.
+
+Other module functions, configuration objects, parsers, and constants remain
+implementation details; importing them creates an unsupported dependency.
+`__all__` in the process and files modules names only the supported library API.
+The typing marker is not a stability promise for every importable symbol.
 
 ## External programs and platforms
 
