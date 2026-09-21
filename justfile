@@ -31,8 +31,8 @@ changelog-release tag date:
 
 alias changelog-unreleased := changelog-release
 
-# Check the lockfile, Python linting, formatting, types, and workflows.
-check: workflow-check
+# Check the lockfile, Python linting, formatting, newlines, types, and workflows.
+check: newline-check workflow-check
     uv lock --check
     uv run --locked ruff check src scripts tests
     uv run --locked ruff format --check src scripts tests
@@ -66,6 +66,10 @@ alias help-workflows := help
 
 # Build and check isolated wheel and source-distribution installations.
 install-check: build check-dist
+
+# Reject implicit platform-dependent newlines in Python text-file writes.
+newline-check:
+    uv run --locked python scripts/check_newlines.py
 
 # Read-only publication preflight; does not create or push a tag.
 release-check tag:

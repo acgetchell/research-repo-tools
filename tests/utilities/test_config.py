@@ -38,7 +38,8 @@ def test_loaded_settings_preserve_defaults_and_explicit_values(tmp_path):
     path = tmp_path / "config.toml"
     path.write_text(
         'schema=1\n[release]\ndate-policy="declared"\nfinal-changelog=true\n'
-        '[semgrep]\ntimeout=1\nconfig="rules.yaml"\nfixtures="tests"\n[changelog]\nowner="example"\nrepository="consumer"\n'
+        '[semgrep]\ntimeout=1\nconfig="rules.yaml"\nfixtures="tests"\n[changelog]\nowner="example"\nrepository="consumer"\n',
+        newline="\n",
     )
     settings = config.load(path)
     assert settings.root == tmp_path.resolve()

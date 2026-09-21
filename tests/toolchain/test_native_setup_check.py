@@ -128,7 +128,7 @@ def test_native_cargo_update_rejects_incomplete_or_unrelated_changes(harness, tm
     def run(command, *, cwd, env):
         assert cwd == tmp_path
         if command[-1] == "generate-lockfile":
-            (cwd / "Cargo.lock").write_text('[[package]]\nname="itoa"\nversion="0.4.8"\n', encoding="utf-8")
+            (cwd / "Cargo.lock").write_text('[[package]]\nname="itoa"\nversion="0.4.8"\n', encoding="utf-8", newline="\n")
         elif command == ["just", "update-cargo-dependencies"]:
             manifest = cwd / "Cargo.toml"
             manifest.write_text(
@@ -136,8 +136,9 @@ def test_native_cargo_update_rejects_incomplete_or_unrelated_changes(harness, tm
                 .replace('itoa="0.4.8"', f'itoa="{requirement}"')
                 .replace('version="0.1.0"', f'version="{package_version}"'),
                 encoding="utf-8",
+                newline="\n",
             )
-            (cwd / "Cargo.lock").write_text(f'[[package]]\nname="itoa"\nversion="{locked_version}"\n', encoding="utf-8")
+            (cwd / "Cargo.lock").write_text(f'[[package]]\nname="itoa"\nversion="{locked_version}"\n', encoding="utf-8", newline="\n")
         else:
             assert command == ["research-repo-tools", "toolchain", "run", "--", "cargo", "check", "--locked"]
             builds.append(command)

@@ -8,7 +8,7 @@ from pathlib import Path
 def test_runtime_and_cli_follow_distribution_version(tmp_path: Path) -> None:
     metadata = tmp_path / "research_repo_tools-9.8.7.dist-info"
     metadata.mkdir()
-    (metadata / "METADATA").write_text("Metadata-Version: 2.4\nName: research-repo-tools\nVersion: 9.8.7\n", encoding="utf-8")
+    (metadata / "METADATA").write_text("Metadata-Version: 2.4\nName: research-repo-tools\nVersion: 9.8.7\n", encoding="utf-8", newline="\n")
     script = """
 import sys
 sys.path.insert(0, sys.argv[1])

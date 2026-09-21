@@ -78,6 +78,7 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | Dependencies | `deps check-uv`, `update-python`, `update-tools`, `update-uv` | Exact development pins; canonical Cargo SemVer; stable uv pins |
 | Documentation | `docs check-lines` | UTF-8 Markdown line checks with table exemptions |
 | Notebooks | `notebooks check`, `clear`, `execute`, `group`, `lint`, `sync` | Optional locked environment, cell-aware Ruff/ty checks, and execution reports |
+| Performance | `performance compare`, `extract`, `fetch`, `render`, `verify` | Typed timing comparisons, bounded archives, and exact-byte retained evidence |
 | Release metadata | `release check`, `release update` | Infer metadata, apply declared policies, and validate complete release plans |
 | Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
 | Semgrep fixtures | `semgrep check-fixtures` | Validate consumer-supplied rules and positive fixture coverage |
@@ -108,6 +109,7 @@ arguments in lexicographic order.
 | `just notebook-execute FILE...` | Execute selected notebooks and write results and reports |
 | `just notebook-lint FILE...` | Check structure, output policy, Python syntax, Ruff rules/formatting, and ty types |
 | `just notebook-sync` | Synchronize locked notebook dependencies and the project kernel |
+| `just performance COMMAND...` | Compare Criterion samples, handle assets, and verify or render retained evidence |
 | `just release-check` | Check consumer release metadata |
 | `just release-notes TAG` | Print release notes from the root changelog or an archive |
 | `just review [base]` | Review branch and local changes; default to verified `origin/main` |
@@ -217,8 +219,10 @@ preserve those decisions; the aggregate calls that recipe by name. For example:
 
 ```just
 update-cargo-dependencies:
-    uv run --locked --only-group tooling --inexact research-repo-tools toolchain run -- cargo upgrade --incompatible allow --exclude coupled-a --exclude coupled-b
-    uv run --locked --only-group tooling --inexact research-repo-tools toolchain run -- cargo upgrade --manifest-path "fixtures/extra root/Cargo.toml" --incompatible allow
+    uv run --locked --only-group tooling --inexact research-repo-tools toolchain run -- \
+        cargo upgrade --incompatible allow --exclude coupled-a --exclude coupled-b
+    uv run --locked --only-group tooling --inexact research-repo-tools toolchain run -- \
+        cargo upgrade --manifest-path "fixtures/extra root/Cargo.toml" --incompatible allow
     uv run --locked --only-group tooling --inexact research-repo-tools toolchain run -- cargo update
     uv run --locked --only-group tooling --inexact research-repo-tools toolchain run -- cargo update --manifest-path "fixtures/extra root/Cargo.toml"
 ```
@@ -269,6 +273,68 @@ destinations. See the [notebook contract](docs/RUNNING_NOTEBOOKS.md) for output
 policy, failure reports, and environment configuration. Linting uses the locked
 project's Ruff and ty with the consumer's configuration and preserves cell IDs
 in diagnostics. `notebook-check` provides structure and output checks alone.
+
+### Performance evidence
+
+These APIs and recipes require a published release newer than `0.1.2` containing
+them. Merge the packaged `performance` recipe into the consumer justfile, then
+compare existing Criterion trees without executing benchmarks:
+
+```sh
+just performance compare target/baseline/criterion target/current/criterion --output target/comparison.json
+```
+
+Both samples default to `new`, the statistic to `median`, and the unit to `ns`.
+Use `--baseline-sample NAME`, `--current-sample NAME`, `--statistic mean`, or
+`--unit` when the measurement harness requires them. The JSON retains both full
+samples, including added and missing benchmarks. The CLI rejects comparisons
+with no common benchmarks. It does not infer statistical significance.
+Place `--output` outside both Criterion input roots, including path aliases.
+
+Use Python to attach provenance captured by the consumer at measurement time:
+
+```python
+from pathlib import Path
+
+from research_repo_tools.criterion import COMPARISON_SCHEMA, parse_comparison, render_comparison
+from research_repo_tools.evidence import Evidence, Provenance, compare_provenance, publish_evidence
+
+def retain_comparison(payload: bytes, baseline: Provenance, current: Provenance) -> None:
+    comparison = parse_comparison(payload)
+    compatibility = compare_provenance(
+        baseline, current, fields=("harness_sha256", "context.cpu", "context.rustc"),
+    )
+    if not compatibility.compatible:
+        raise ValueError(f"Measurement context differs or is unknown: {compatibility.differences}")
+    retained = Evidence(payload, COMPARISON_SCHEMA, (("baseline", baseline), ("current", current)))
+    publish_evidence(
+        retained, Path("evidence/comparison.json"), Path("evidence/manifest.json"),
+        reports={Path("PERFORMANCE.md"): render_comparison(comparison).encode("utf-8")},
+        immutable=(Path("evidence/comparison.json"), Path("evidence/manifest.json")),
+    )
+```
+
+Choose compatibility fields and scientific acceptance rules in the consumer.
+Provenance records the full source commit, optional exact source and harness
+digests, and explicit context. Unknown values fail a requested compatibility
+check. Render or verify retained evidence independently of measurement:
+
+```sh
+just performance verify evidence/comparison.json evidence/manifest.json
+just performance render evidence/comparison.json evidence/manifest.json --output PERFORMANCE.md
+```
+
+`verify` checks envelope structure and the exact payload digest; consumers still
+validate their own payload schemas. `render` additionally parses the shared
+comparison schema. Domain reports can keep their existing renderer and use the
+shared comparison results and publication transaction.
+
+For published assets, use `just performance fetch HTTPS_URL ASSET --sha256 DIGEST`
+with an independently recorded digest, then
+`just performance extract ASSET ABSENT_DIRECTORY --sha256 DIGEST`.
+The extraction parent must exist. See the [performance API](docs/performance-api.md)
+for limits and [retained-evidence migration](docs/performance-migration.md) before
+replacing consumer helpers or changing artifact formats.
 
 ### Clippy SARIF helpers
 

@@ -13,10 +13,10 @@ from research_repo_tools import cli, config, semgrep
 
 def consumer(tmp_path: Path, content: str = "# ruleid: shared.rule\nbad()\n") -> tuple[config.Config, Path]:
     rule = {"id": "shared.rule", "languages": ["python"], "message": "bad", "severity": "WARNING", "pattern": "bad()", "paths": {"exclude": ["tests/**"]}}
-    (tmp_path / "semgrep.yaml").write_text(yaml.safe_dump({"rules": [rule]}))
+    (tmp_path / "semgrep.yaml").write_text(yaml.safe_dump({"rules": [rule]}), newline="\n")
     fixture = tmp_path / "tests/semgrep/.hidden/named.py"
     fixture.parent.mkdir(parents=True)
-    fixture.write_text(content)
+    fixture.write_text(content, newline="\n")
     return (config.parse({"semgrep": {"config": "semgrep.yaml", "fixtures": "tests/semgrep", "namespace": "shared."}}, root=tmp_path), fixture)
 
 
@@ -24,7 +24,7 @@ def test_generated_configuration_retains_rule_semantics_and_rejects_unknown_anno
     cfg, fixture = consumer(tmp_path)
     selected = yaml.safe_load(semgrep.build_fixture_config(fixture, cfg.root / "semgrep.yaml"))
     assert selected["rules"][0]["paths"] == {"exclude": ["tests/**"]}
-    fixture.write_text("# ruleid: unknown\nbad()\n")
+    fixture.write_text("# ruleid: unknown\nbad()\n", newline="\n")
     with pytest.raises(ValueError, match="unknown annotated rules"):
         semgrep.build_fixture_config(fixture, cfg.root / "semgrep.yaml")
 
@@ -32,7 +32,7 @@ def test_generated_configuration_retains_rule_semantics_and_rejects_unknown_anno
 @pytest.mark.parametrize("payload", ["rules: [", "rules: []\nrules: []\n", "rules:\n- id: duplicate\n  id: replacement\n"])
 def test_bad_yaml_produces_path_aware_failure(tmp_path: Path, payload: str) -> None:
     path = tmp_path / "rules.yaml"
-    path.write_text(payload)
+    path.write_text(payload, newline="\n")
     with pytest.raises(ValueError, match="rules.yaml: invalid Semgrep configuration"):
         semgrep.rules(path)
 
@@ -61,7 +61,7 @@ def test_span_scan_keeps_original_filename_and_uses_fixture_path_semantics(tmp_p
 
 def test_todo_annotations_and_fixed_files_cannot_satisfy_positive_coverage(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg, fixture = consumer(tmp_path, "# todoruleid: shared.rule\n# ok: shared.rule\ngood()\n")
-    fixture.with_suffix(".py.fixed").write_text("# ruleid: shared.rule\nbad()\n")
+    fixture.with_suffix(".py.fixed").write_text("# ruleid: shared.rule\nbad()\n", newline="\n")
     assert semgrep.fixtures(fixture.parent) == [fixture]
     monkeypatch.setattr(semgrep, "run_safe_command", lambda *a, **kw: pytest.fail("spawned before validating coverage"))
     with pytest.raises(ValueError, match="without positive fixtures"):
@@ -71,7 +71,7 @@ def test_todo_annotations_and_fixed_files_cannot_satisfy_positive_coverage(tmp_p
 def test_count_contracts_preserve_production_path_filters_and_zero_findings(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     cfg, fixture = consumer(tmp_path, "bad()\n")
     good = fixture.with_name("good.py")
-    good.write_text("good()\n")
+    good.write_text("good()\n", newline="\n")
     cfg = replace(cfg, semgrep=replace(cfg.semgrep, cwd="tests/semgrep", counts={fixture: {"shared.rule": 1}, good: {"shared.rule": 0}}))
 
     def scan(command: str, arguments: list[str], **kwargs) -> subprocess.CompletedProcess:
@@ -156,7 +156,8 @@ def test_conflicting_fixture_aliases_are_rejected_before_scanning(tmp_path, monk
     manifest.write_text(
         '[tool.research-repo-tools.semgrep]\nconfig="semgrep.yaml"\nfixtures="tests/semgrep"\nnamespace="shared."\n'
         f'[tool.research-repo-tools.semgrep.counts.{json.dumps(relative)}]\n"shared.rule"=1\n'
-        f'[tool.research-repo-tools.semgrep.counts.{json.dumps(second)}]\n"shared.rule"=2\n'
+        f'[tool.research-repo-tools.semgrep.counts.{json.dumps(second)}]\n"shared.rule"=2\n',
+        newline="\n",
     )
     original = manifest.read_bytes()
     monkeypatch.setattr(semgrep, "run_safe_command", lambda *a, **kw: pytest.fail("must reject aliases before scanning"))

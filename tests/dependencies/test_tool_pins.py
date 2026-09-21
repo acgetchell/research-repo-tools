@@ -164,7 +164,7 @@ def test_captured_uv_preflight_never_resolves_an_executable(tmp_path, monkeypatc
 
 
 def test_cli_adopts_cargo_prerelease_without_a_policy_setting(tmp_path, monkeypatch, capsys):
-    (tmp_path / "pyproject.toml").write_text('[tool.research-repo-tools.deps.tools]\nrumdl_version = "rumdl"\nuv_version = "uv"\n')
+    (tmp_path / "pyproject.toml").write_text('[tool.research-repo-tools.deps.tools]\nrumdl_version = "rumdl"\nuv_version = "uv"\n', newline="\n")
     path = tmp_path / "justfile"
     path.write_bytes(b'rumdl_version := "1.0.0"\r\nuv_version := "1.0.0"\r\n')
 
@@ -188,7 +188,7 @@ def test_configured_uv_uses_consumer_root_from_any_working_directory(tmp_path, m
     unrelated = tmp_path / "elsewhere"
     unrelated.mkdir()
     settings = (unrelated if explicit_root else root) / "config.toml"
-    settings.write_text(f'[deps]\nuv="{executable}"\n[deps.tools]\nuv_version="uv"\n')
+    settings.write_text(f'[deps]\nuv="{executable}"\n[deps.tools]\nuv_version="uv"\n', newline="\n")
     pins = root / "justfile"
     pins.write_bytes(b'uv_version := "1.0.0"\r\n')
     selected = []

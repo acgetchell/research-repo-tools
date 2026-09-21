@@ -250,7 +250,7 @@ class TestReleaseConsumer(unittest.TestCase):
             for name in ("value", "source", "exclude"):
                 if value := getattr(rule, name):
                     lines.append(name + " = " + json.dumps(value))
-        config.write_text("\n".join(lines), encoding="utf-8")
+        config.write_text("\n".join(lines), encoding="utf-8", newline="\n")
         args = ["--root", str(self.root), "--config", str(config), "release"]
         with contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main([*args, "check", "--previous-release", "v1.2.2"]), 0)

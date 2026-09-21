@@ -25,12 +25,13 @@ def consumer(tmp_path):
         '[project]\nrequires-python = ">=3.14"\n'
         '[dependency-groups]\ntooling = ["research-repo-tools==0.1.0"]\ndev = [{include-group="tooling"}]\n'
         '[tool.uv]\nrequired-version = "==0.12.15"\n'
-        '[tool.research-repo-tools.toolchain.cargo]\ngit-cliff = "2.14.1"\ncargo-nextest = "0.9.100"\n'
+        '[tool.research-repo-tools.toolchain.cargo]\ngit-cliff = "2.14.1"\ncargo-nextest = "0.9.100"\n',
+        newline="\n",
     )
-    (root / ".python-version").write_text("3.14\n")
-    (root / "uv.lock").write_text("version = 1\n")
+    (root / ".python-version").write_text("3.14\n", newline="\n")
+    (root / "uv.lock").write_text("version = 1\n", newline="\n")
     (root / "rust-toolchain.toml").write_text(
-        '[toolchain]\nchannel="1.98.0"\nprofile="default"\ncomponents=["llvm-tools-preview"]\ntargets=["aarch64-apple-darwin"]\n'
+        '[toolchain]\nchannel="1.98.0"\nprofile="default"\ncomponents=["llvm-tools-preview"]\ntargets=["aarch64-apple-darwin"]\n', newline="\n"
     )
     return root
 
@@ -222,7 +223,7 @@ def test_cargo_upgrade_requires_declared_cargo_edit_even_when_on_path(runtime, c
 def test_cargo_upgrade_rejects_non_exact_pins_before_operations(runtime, capsys, command_name, pin):
     instance, fake = runtime
     manifest = instance.plan.root / "pyproject.toml"
-    manifest.write_text(manifest.read_text() + f'cargo-edit = "{pin}"\n')
+    manifest.write_text(manifest.read_text() + f'cargo-edit = "{pin}"\n', newline="\n")
     fake.calls.clear()
     assert cli.main(["--root", str(instance.plan.root), "toolchain", "run", "--", command_name, "upgrade"]) == 1
     assert "toolchain.cargo.cargo-edit must pin a canonical SemVer" in capsys.readouterr().err
@@ -234,7 +235,7 @@ def test_cargo_upgrade_requires_setup_and_selects_the_verified_tool(runtime, mon
     instance, fake = runtime
     instance.sync()
     manifest = instance.plan.root / "pyproject.toml"
-    manifest.write_text(manifest.read_text() + 'cargo-edit = "0.13.13"\n')
+    manifest.write_text(manifest.read_text() + 'cargo-edit = "0.13.13"\n', newline="\n")
     instance.plan = toolchain_config.load(config.load(root=instance.plan.root))
     tool = next(tool for tool in instance.plan.cargo if tool.package == "cargo-edit")
     fake.add(executable(instance.rustup.parent, "cargo"), "cargo 1.98.0")
@@ -320,7 +321,7 @@ def test_complete_catalog_installs_and_verifies_exact_declared_tools(runtime):
     manifest = instance.plan.root / "pyproject.toml"
     source = manifest.read_text().split("[tool.research-repo-tools.toolchain.cargo]")[0]
     source += "[tool.research-repo-tools.toolchain.cargo]\n" + "".join(f'{package} = "1.2.3"\n' for package in toolchain_config.CARGO_TOOLS)
-    manifest.write_text(source)
+    manifest.write_text(source, newline="\n")
     instance.plan = toolchain_config.load(config.load(root=instance.plan.root))
     instance.sync()
     installs = [args for _, args, _ in fake.calls if "install" in args and "cargo" in args]
@@ -411,14 +412,14 @@ def test_sync_dry_run_only_warns_when_tools_need_repair(runtime, monkeypatch, ca
 @pytest.mark.parametrize("replacement", ['required-version = ">=0.12.15"', 'required-version = "==0.12.15;echo unsafe"'])
 def test_invalid_uv_pins_fail_before_operations(consumer, replacement):
     file = consumer / "pyproject.toml"
-    file.write_text(file.read_text().replace('required-version = "==0.12.15"', replacement))
+    file.write_text(file.read_text().replace('required-version = "==0.12.15"', replacement), newline="\n")
     with pytest.raises(ValueError, match="pin exactly"):
         toolchain_config.load(config.load(root=consumer))
 
 
 def test_unsupported_uv_version_rejected_before_installation(consumer):
     file = consumer / "pyproject.toml"
-    file.write_text(file.read_text().replace("==0.12.15", "==0.12.9"))
+    file.write_text(file.read_text().replace("==0.12.15", "==0.12.9"), newline="\n")
     with pytest.raises(ValueError, match="0.12.10 or newer"):
         toolchain_config.load(config.load(root=consumer))
 
@@ -434,7 +435,7 @@ def test_unsupported_uv_version_rejected_before_installation(consumer):
     ],
 )
 def test_invalid_rust_declarations_rejected(consumer, contents):
-    (consumer / "rust-toolchain.toml").write_text(contents)
+    (consumer / "rust-toolchain.toml").write_text(contents, newline="\n")
     with pytest.raises(ValueError):
         toolchain_config.load(config.load(root=consumer))
 
@@ -442,7 +443,7 @@ def test_invalid_rust_declarations_rejected(consumer, contents):
 @pytest.mark.parametrize("pin", ['git-cliff = ">=2.14.1"', 'unknown = "1.0.0"', 'just = "1.58.0"'])
 def test_invalid_cargo_declarations_rejected(consumer, pin):
     file = consumer / "pyproject.toml"
-    file.write_text(file.read_text().replace('git-cliff = "2.14.1"', pin))
+    file.write_text(file.read_text().replace('git-cliff = "2.14.1"', pin), newline="\n")
     with pytest.raises(ValueError):
         toolchain_config.load(config.load(root=consumer))
 
@@ -485,9 +486,9 @@ def test_run_python_preserves_consumer_dependencies(runtime, tmp_path, monkeypat
     monkeypatch.setenv("PATH", os.pathsep.join([str(python.parent), str(fake.directory)]))
     monkeypatch.setenv("VIRTUAL_ENV", str(environment))
     site = Path(real_run(str(python), ["-c", 'import sysconfig; print(sysconfig.get_path("purelib"))']).stdout.strip())
-    (site / "consumer_dependency.py").write_text('VALUE = "installed only in the consumer"\n')
+    (site / "consumer_dependency.py").write_text('VALUE = "installed only in the consumer"\n', newline="\n")
     output = tmp_path / "result.txt"
-    code = "import sys, consumer_dependency; from pathlib import Path; Path(sys.argv[1]).write_text(consumer_dependency.VALUE)"
+    code = 'import sys, consumer_dependency; from pathlib import Path; Path(sys.argv[1]).write_text(consumer_dependency.VALUE, newline="\\n")'
     assert toolchain.run_command(instance, ["python", "-c", code, str(output)]) == 0
     assert output.read_text() == "installed only in the consumer"
     assert Path(instance.python_status(instance.uv_status()).path) == python
@@ -508,8 +509,8 @@ def test_run_python_preserves_consumer_dependencies(runtime, tmp_path, monkeypat
 def test_python_selection_enforces_resolved_patch_constraints(runtime, pin, requires, actual, ok):
     instance, fake = runtime
     manifest = instance.plan.root / "pyproject.toml"
-    manifest.write_text(manifest.read_text().replace('requires-python = ">=3.14"', f'requires-python = "{requires}"'))
-    (instance.plan.root / ".python-version").write_text(pin)
+    manifest.write_text(manifest.read_text().replace('requires-python = ">=3.14"', f'requires-python = "{requires}"'), newline="\n")
+    (instance.plan.root / ".python-version").write_text(pin, newline="\n")
     instance.plan = toolchain_config.load(config.load(root=instance.plan.root))
     fake.outputs[fake.python] = f"Python {actual}"
     status = instance.python_status(instance.uv_status())
@@ -526,7 +527,7 @@ def test_incompatible_consumer_python_falls_back_to_verified_managed_python(runt
     environment = instance.plan.root / ".venv"
     python = executable(environment / ("Scripts" if os.name == "nt" else "bin"), "python")
     fake.add(python, f"Python {actual}")
-    (environment / "pyvenv.cfg").write_text("synthetic virtual environment\n")
+    (environment / "pyvenv.cfg").write_text("synthetic virtual environment\n", newline="\n")
     status = instance.python_status(instance.uv_status())
     assert status.ok and Path(status.path) == fake.python
     selected = shutil.which("python", path=instance.environment()["PATH"])
@@ -565,8 +566,8 @@ def test_missing_python_install_respects_project_patch_constraints(runtime):
 )
 def test_python_pin_requires_nonempty_project_constraint_intersection(consumer, pin, requires, matching_version):
     manifest = consumer / "pyproject.toml"
-    manifest.write_text(manifest.read_text().replace('requires-python = ">=3.14"', f'requires-python = "{requires}"'))
-    (consumer / ".python-version").write_text(pin)
+    manifest.write_text(manifest.read_text().replace('requires-python = ">=3.14"', f'requires-python = "{requires}"'), newline="\n")
+    (consumer / ".python-version").write_text(pin, newline="\n")
     if matching_version is None:
         with pytest.raises(ValueError, match=r"\.python-version must satisfy project\.requires-python"):
             toolchain_config.load(config.load(root=consumer))
@@ -733,7 +734,7 @@ def test_setup_requires_tooling_group_to_survive_full_sync(runtime, monkeypatch)
     instance, fake = runtime
     setup_module = setup_fake(runtime, monkeypatch)
     manifest = instance.plan.root / "pyproject.toml"
-    manifest.write_text(manifest.read_text().replace('dev = [{include-group="tooling"}]', "dev = []"))
+    manifest.write_text(manifest.read_text().replace('dev = [{include-group="tooling"}]', "dev = []"), newline="\n")
     with pytest.raises(ValueError, match="dev to include the tooling group"):
         setup_module.setup(instance)
     assert not fake.calls
@@ -743,7 +744,7 @@ def test_setup_requires_tooling_group_to_survive_full_sync(runtime, monkeypatch)
 def test_setup_rejects_malformed_groups_before_installing(runtime, monkeypatch, tooling):
     instance, fake = runtime
     manifest = instance.plan.root / "pyproject.toml"
-    manifest.write_text(manifest.read_text().replace('["research-repo-tools==0.1.0"]', tooling))
+    manifest.write_text(manifest.read_text().replace('["research-repo-tools==0.1.0"]', tooling), newline="\n")
     original = manifest.read_bytes()
     setup_module = setup_fake(runtime, monkeypatch)
     monkeypatch.setattr(instance, "sync", lambda: pytest.fail("must reject before tool synchronization"))
@@ -774,7 +775,7 @@ def test_managed_cargo_tools_take_precedence_over_python_environment_binaries(ru
 def test_setup_keeps_dev_when_default_groups_are_disabled(runtime, monkeypatch):
     instance, fake = runtime
     manifest = instance.plan.root / "pyproject.toml"
-    manifest.write_text(manifest.read_text().replace("[tool.uv]", "[tool.uv]\ndefault-groups=[]"))
+    manifest.write_text(manifest.read_text().replace("[tool.uv]", "[tool.uv]\ndefault-groups=[]"), newline="\n")
     setup_module = setup_fake(runtime, monkeypatch)
     setup_module.setup(instance)
     sync_arguments = next(args for _, args, _ in fake.calls if args[0] == "sync")
@@ -829,10 +830,10 @@ def test_probe_cache_notices_new_project_environment_and_config_edits(runtime, m
         python = executable(environment / ("Scripts" if os.name == "nt" else "bin"), "python")
         fake.add(python, "Python 3.14.6")
         configuration = environment / "pyvenv.cfg"
-        configuration.write_text("synthetic virtual environment\n")
+        configuration.write_text("synthetic virtual environment\n", newline="\n")
         assert instance.python_status(instance.uv_status()).actual == "3.14.6"
         fake.outputs[python] = "Python 3.14.9"
-        configuration.write_text("changed virtual environment configuration\n")
+        configuration.write_text("changed virtual environment configuration\n", newline="\n")
         assert instance.python_status(instance.uv_status()).actual == "3.14.9"
 
 
@@ -873,7 +874,7 @@ def test_failed_operation_discards_cached_probes(runtime):
 def test_sarif_cli_runs_only_verified_managed_binary_and_retains_failure(runtime, monkeypatch, package):
     instance, fake = runtime
     manifest = instance.plan.root / "pyproject.toml"
-    manifest.write_text(manifest.read_text() + f'{package} = "0.8.0"\n')
+    manifest.write_text(manifest.read_text() + f'{package} = "0.8.0"\n', newline="\n")
     instance.plan = toolchain_config.load(config.load(root=instance.plan.root))
     fake.add(executable(fake.directory, package), f"{package} 0.8.0")
     invocation = ["--root", str(instance.plan.root), "toolchain", "run", "--", package, "--input", "missing.json"]

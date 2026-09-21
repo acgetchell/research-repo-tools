@@ -32,16 +32,17 @@ def test_rejects_non_stable_or_noncanonical_tags_before_changes(tmp_path: Path, 
 def test_prepares_all_metadata_without_upgrading_dependencies_or_rewriting_evidence(tmp_path: Path) -> None:
     _write_project(tmp_path)
     cargo_lock = tmp_path / "Cargo.lock"
-    cargo_lock.write_text(cargo_lock.read_text() + '\n[[package]]\nname = "dependency"\nversion = "9.8.7"\n', encoding="utf-8")
+    cargo_lock.write_text(cargo_lock.read_text() + '\n[[package]]\nname = "dependency"\nversion = "9.8.7"\n', encoding="utf-8", newline="\n")
     readme = tmp_path / "README.md"
     readme.write_text(
         readme.read_text()
         + "[main guide](https://github.com/example/consumer/blob/main/docs/guide.md)\n[plot](https://raw.githubusercontent.com/example/consumer/v1.2.3/docs/archives/results/v1.2.3-vs-v1.2.2.svg)\n",
         encoding="utf-8",
+        newline="\n",
     )
     (tmp_path / "docs").mkdir()
     guide = tmp_path / "docs" / "guide.md"
-    guide.write_text("just custom-command v1.2.3 v1.2.2\nHistorical v1.0.0 remains unchanged.\n", encoding="utf-8")
+    guide.write_text("just custom-command v1.2.3 v1.2.2\nHistorical v1.0.0 remains unchanged.\n", encoding="utf-8", newline="\n")
     previous_changelog = (tmp_path / "CHANGELOG.md").read_bytes()
     result = updater.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3", release_date="2026-08-30")
     assert result.previous_tag == "v1.2.3"
@@ -111,7 +112,7 @@ def test_changelog_generation_sync_uses_prepared_date_without_github(tmp_path: P
     _write_project(tmp_path)
     updater.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3", release_date="2026-08-30")
     changelog = tmp_path / "CHANGELOG.md"
-    changelog.write_text("## [1.2.4] - 2026-08-31\n\nGenerated notes.\n\n" + changelog.read_text(), encoding="utf-8")
+    changelog.write_text("## [1.2.4] - 2026-08-31\n\nGenerated notes.\n\n" + changelog.read_text(), encoding="utf-8", newline="\n")
     monkeypatch.setattr(updater, "infer_previous_release", lambda *_args: pytest.fail("offline date sync queried GitHub"))
     assert updater.main(["v1.2.4", "--repo-root", str(tmp_path), "--sync-changelog-date"]) == 0
     assert changelog.read_text().startswith("## [1.2.4] - 2026-08-30\n\nGenerated notes.")
@@ -125,7 +126,7 @@ def test_changelog_generation_sync_uses_prepared_date_without_github(tmp_path: P
 def test_malformed_or_duplicate_target_heading_preserves_all_files(tmp_path: Path, heading: str) -> None:
     _write_project(tmp_path)
     changelog = tmp_path / "CHANGELOG.md"
-    changelog.write_text(heading + "\n\n" + changelog.read_text(), encoding="utf-8")
+    changelog.write_text(heading + "\n\n" + changelog.read_text(), encoding="utf-8", newline="\n")
     original = _snapshot(tmp_path)
     with pytest.raises(ValueError, match="date|heading"):
         updater.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3")

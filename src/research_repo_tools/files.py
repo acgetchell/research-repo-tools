@@ -5,6 +5,7 @@ import os
 import secrets
 import shutil
 import stat
+import unicodedata
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -185,15 +186,54 @@ def _raise_incomplete_rollback(
     raise BaseExceptionGroup(message, [error, *rollback_errors]) from None
 
 
-def _validate_targets(targets: Sequence[Path]) -> tuple[Path, ...]:
+type _PathKey = tuple[str, ...] | tuple[int, int, tuple[str, ...]]
+
+
+def _path_keys(path: Path) -> frozenset[_PathKey]:
+    """Identify directory entries, including portable aliases of absent names.
+
+    Case/Unicode collisions are rejected even on case-sensitive filesystems.
+    Anchor missing components at an existing parent directory's identity too.
+    Leaf inodes are deliberately excluded: replacing separate hard links writes
+    separate directory entries and leaves the other links unchanged.
+    """
+    resolved = path.resolve()
+    spelling = tuple(unicodedata.normalize("NFC", part).casefold() for part in resolved.parts)
+    parent = resolved.parent
+    suffix = [spelling[-1]]
+    while True:
+        try:
+            metadata = parent.stat()
+            break
+        except FileNotFoundError, NotADirectoryError:
+            if parent == parent.parent:
+                return frozenset((spelling,))
+            suffix.append(unicodedata.normalize("NFC", parent.name).casefold())
+            parent = parent.parent
+    return frozenset((spelling, (metadata.st_dev, metadata.st_ino, tuple(reversed(suffix)))))
+
+
+def _paths_alias(first: Path, second: Path) -> bool:
+    return not _path_keys(first).isdisjoint(_path_keys(second))
+
+
+def _validate_distinct_paths(targets: Sequence[Path]) -> tuple[Path, ...]:
     if any(not isinstance(path, Path) for path in targets):
         raise TypeError("Transaction targets must be pathlib.Path instances")
     resolved = tuple(path.resolve() for path in targets)
-    if len(set(resolved)) != len(targets):
-        raise ValueError("A publication transaction cannot contain duplicate target paths")
-    selected = set(resolved)
-    if any(selected.intersection(path.parents) for path in resolved):
+    selected: set[_PathKey] = set()
+    for path in resolved:
+        keys = _path_keys(path)
+        if not selected.isdisjoint(keys):
+            raise ValueError("A publication transaction cannot contain duplicate target paths (including case/Unicode aliases)")
+        selected.update(keys)
+    if any(not selected.isdisjoint(_path_keys(parent)) for path in resolved for parent in path.parents):
         raise ValueError("A publication transaction cannot contain overlapping target paths")
+    return resolved
+
+
+def _validate_targets(targets: Sequence[Path]) -> tuple[Path, ...]:
+    resolved = _validate_distinct_paths(targets)
     for path in targets:
         if path.is_symlink():
             raise ValueError(f"Transaction output must not be a symlink: {path}")

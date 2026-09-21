@@ -70,9 +70,9 @@ def test_parent_symlinks_cannot_alias_adapter_or_rule_inputs(tmp_path):
 
 def test_unexpected_active_versions_fail_preview_and_apply_equally(tmp_path, capsys):
     _write_project(tmp_path)
-    (tmp_path / "selected.md").write_text("target v9.9.9\n")
+    (tmp_path / "selected.md").write_text("target v9.9.9\n", newline="\n")
     config_path = tmp_path / "release.toml"
-    config_path.write_text("[[release.rules]]\npath='selected.md'\npattern='target (?P<value>v[^\\s]+)'\nsource='tag'\n")
+    config_path.write_text("[[release.rules]]\npath='selected.md'\npattern='target (?P<value>v[^\\s]+)'\nsource='tag'\n", newline="\n")
     before = snapshot(tmp_path)
     command = ["--root", str(tmp_path), "--config", str(config_path), "release", "update", "1.2.4", "--previous-release", "v1.2.3"]
     errors = []

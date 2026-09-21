@@ -22,7 +22,7 @@ def render(tmp_path: Path, message: str) -> str:
     if run_git_command(["--no-pager", "rev-parse", "--verify", "HEAD"], cwd=root, check=False).returncode:
         pytest.skip("custom commit parsing requires an existing HEAD")
     configuration = tmp_path / "cliff.toml"
-    configuration.write_text(template("cliff.toml", owner="example", repository="consumer"), encoding="utf-8")
+    configuration.write_text(template("cliff.toml", owner="example", repository="consumer"), encoding="utf-8", newline="\n")
     arguments = ["--offline", "--no-exec", "--config", str(configuration)]
     arguments += ["--with-commit", message, "--with-commit", "fix: retain linked entry (#987)", "HEAD..HEAD"]
     result = run_safe_command("git-cliff", arguments, cwd=root, check=False)
@@ -133,7 +133,7 @@ def test_breaking_dependency_scope_retains_migration_instructions(tmp_path: Path
 )
 def test_template_release_links(tmp_path: Path, version: str | None, previous: str | None, expected: str) -> None:
     configuration = tmp_path / "cliff.toml"
-    configuration.write_text(template("cliff.toml", owner="example", repository="consumer"), encoding="utf-8")
+    configuration.write_text(template("cliff.toml", owner="example", repository="consumer"), encoding="utf-8", newline="\n")
     empty_release = {
         "commits": [],
         "timestamp": 0,
@@ -144,7 +144,7 @@ def test_template_release_links(tmp_path: Path, version: str | None, previous: s
     if previous is not None:
         release["previous"] = {**empty_release, "version": previous}
     context = tmp_path / "context.json"
-    context.write_text(json.dumps([release]), encoding="utf-8")
+    context.write_text(json.dumps([release]), encoding="utf-8", newline="\n")
     result = run_safe_command(
         "git-cliff", ["--offline", "--no-exec", "--config", str(configuration), "--from-context", str(context)], cwd=tmp_path, check=False
     )

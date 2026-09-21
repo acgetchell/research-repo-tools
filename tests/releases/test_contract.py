@@ -16,7 +16,7 @@ def snapshot(root: Path) -> dict[str, bytes]:
 def test_cargo_dry_run_validates_complete_candidate_without_replacing_files(tmp_path: Path, capsys) -> None:
     _write_project(tmp_path)
     config = tmp_path / "research-repo-tools.toml"
-    config.write_text("[release]\n")
+    config.write_text("[release]\n", newline="\n")
     original = snapshot(tmp_path)
     assert cli.main(["--config", str(config), "release", "update", "1.2.4", "--previous-release", "v1.2.3", "--date", "2026-09-07", "--dry-run"]) == 0
     assert "Would update: Cargo.toml" in capsys.readouterr().out
@@ -26,8 +26,8 @@ def test_cargo_dry_run_validates_complete_candidate_without_replacing_files(tmp_
 def test_canonical_citation_doi_is_used_for_validation(tmp_path: Path, capsys) -> None:
     _write_project(tmp_path)
     config = tmp_path / "alternate.toml"
-    config.write_text("[release]\n")
-    (tmp_path / "CITATION.cff").write_text((tmp_path / "CITATION.cff").read_text().replace("12345", "99999999"))
+    config.write_text("[release]\n", newline="\n")
+    (tmp_path / "CITATION.cff").write_text((tmp_path / "CITATION.cff").read_text().replace("12345", "99999999"), newline="\n")
     original = snapshot(tmp_path)
     assert cli.main(["--config", str(config), "release", "check"]) == 1
     assert "99999999" in capsys.readouterr().err
@@ -38,7 +38,7 @@ def test_canonical_citation_doi_is_used_for_validation(tmp_path: Path, capsys) -
 def test_final_release_requires_generated_current_heading_before_update(tmp_path: Path, capsys) -> None:
     _write_project(tmp_path)
     config = tmp_path / "alternate.toml"
-    config.write_text("[release]\n")
+    config.write_text("[release]\n", newline="\n")
     original = snapshot(tmp_path)
     assert cli.main(["--config", str(config), "release", "update", "1.2.4", "--previous-release", "v1.2.3", "--final-release"]) == 1
     assert "final release requires" in capsys.readouterr().err
@@ -56,7 +56,7 @@ def test_dry_run_and_publication_have_identical_changed_path_inventory(tmp_path:
 def test_standard_cargo_release_needs_no_release_configuration(tmp_path: Path) -> None:
     _write_project(tmp_path)
     project = tmp_path / "pyproject.toml"
-    project.write_text(project.read_text().split("[tool.research-repo-tools.release]")[0])
+    project.write_text(project.read_text().split("[tool.research-repo-tools.release]")[0], newline="\n")
     assert cli.main(["--root", str(tmp_path), "release", "check"]) == 0
     before = snapshot(tmp_path)
     assert cli.main(["--root", str(tmp_path), "release", "update", "1.2.4", "--previous-release", "v1.2.3", "--date", "2026-09-07", "--dry-run"]) == 0
@@ -64,10 +64,10 @@ def test_standard_cargo_release_needs_no_release_configuration(tmp_path: Path) -
 
 
 def test_standard_python_release_needs_no_configuration(tmp_path: Path) -> None:
-    (tmp_path / "pyproject.toml").write_text('[project]\nname="consumer"\nversion="1.2.3"\n')
-    (tmp_path / "uv.lock").write_text('version=1\n[[package]]\nname="consumer"\nversion="1.2.3"\nsource={virtual="."}\n')
-    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Current.\n")
-    (tmp_path / "README.md").write_text("# Consumer\n")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="consumer"\nversion="1.2.3"\n', newline="\n")
+    (tmp_path / "uv.lock").write_text('version=1\n[[package]]\nname="consumer"\nversion="1.2.3"\nsource={virtual="."}\n', newline="\n")
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Current.\n", newline="\n")
+    (tmp_path / "README.md").write_text("# Consumer\n", newline="\n")
     assert cli.main(["--root", str(tmp_path), "release", "check"]) == 0
     assert cli.main(["--root", str(tmp_path), "release", "update", "1.2.4", "--previous-release", "v1.2.3", "--date", "2026-09-07"]) == 0
     assert 'version="1.2.4"' in (tmp_path / "pyproject.toml").read_text()
@@ -79,13 +79,14 @@ def test_standard_python_release_needs_no_configuration(tmp_path: Path) -> None:
 def test_release_accepts_normalized_python_distribution_names(tmp_path: Path, name: str, source: str) -> None:
     manifest = tmp_path / "pyproject.toml"
     lock = tmp_path / "uv.lock"
-    manifest.write_text(f'[project]\nname="{name}"\nversion="1.2.3"\n', encoding="utf-8")
+    manifest.write_text(f'[project]\nname="{name}"\nversion="1.2.3"\n', encoding="utf-8", newline="\n")
     lock.write_text(
         f'version=1\n[[package]]\nname="my-tools"\nversion="1.2.3"\nsource={{{source}="."}}\n'
         '[[package]]\nname="my-tools"\nversion="9.8.7"\nsource={registry="https://example.invalid"}\n',
         encoding="utf-8",
+        newline="\n",
     )
-    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.3] - 2026-09-15\n\n- Current.\n", encoding="utf-8")
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.3] - 2026-09-15\n\n- Current.\n", encoding="utf-8", newline="\n")
     assert release_metadata.check(tmp_path) == 0
     update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3", release_date="2026-09-15")
     assert f'name="{name}"' in manifest.read_text(encoding="utf-8")
@@ -94,12 +95,13 @@ def test_release_accepts_normalized_python_distribution_names(tmp_path: Path, na
 
 
 def test_release_rejects_normalized_local_package_ambiguity(tmp_path: Path) -> None:
-    (tmp_path / "pyproject.toml").write_text('[project]\nname="My_Tools"\nversion="1.2.3"\n', encoding="utf-8")
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="My_Tools"\nversion="1.2.3"\n', encoding="utf-8", newline="\n")
     lock = tmp_path / "uv.lock"
     lock.write_text(
         'version=1\n[[package]]\nname="My_Tools"\nversion="1.2.3"\nsource={editable="."}\n'
         '[[package]]\nname="my-tools"\nversion="1.2.3"\nsource={virtual="."}\n',
         encoding="utf-8",
+        newline="\n",
     )
     with pytest.raises(release_metadata.ReleaseCheckError, match="found 2"):
         release_metadata.python_version_references(tmp_path)
@@ -107,19 +109,20 @@ def test_release_rejects_normalized_local_package_ambiguity(tmp_path: Path) -> N
 
 def test_workspace_release_updates_all_inherited_versions_but_not_dependencies(tmp_path: Path) -> None:
     (tmp_path / "Cargo.toml").write_text(
-        '[workspace]\nmembers=["crates/*"]\n[workspace.package]\nversion="1.2.3"\nrepository="https://github.com/example/consumer"\n'
+        '[workspace]\nmembers=["crates/*"]\n[workspace.package]\nversion="1.2.3"\nrepository="https://github.com/example/consumer"\n', newline="\n"
     )
-    (tmp_path / "pyproject.toml").write_text('[project]\nname="consumer"\nversion="1.2.3"\n')
-    (tmp_path / "uv.lock").write_text('version=1\n[[package]]\nname="consumer"\nversion="1.2.3"\nsource={editable="."}\n')
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="consumer"\nversion="1.2.3"\n', newline="\n")
+    (tmp_path / "uv.lock").write_text('version=1\n[[package]]\nname="consumer"\nversion="1.2.3"\nsource={editable="."}\n', newline="\n")
     for name in ("first", "second"):
         path = tmp_path / f"crates/{name}/Cargo.toml"
         path.parent.mkdir(parents=True)
-        path.write_text(f'[package]\nname="{name}"\nversion.workspace=true\n')
+        path.write_text(f'[package]\nname="{name}"\nversion.workspace=true\n', newline="\n")
     (tmp_path / "Cargo.lock").write_text(
-        'version=4\n[[package]]\nname="first"\nversion="1.2.3"\n[[package]]\nname="second"\nversion="1.2.3"\n[[package]]\nname="dep"\nversion="1.2.3"\nsource="registry+https://example.invalid"\n'
+        'version=4\n[[package]]\nname="first"\nversion="1.2.3"\n[[package]]\nname="second"\nversion="1.2.3"\n[[package]]\nname="dep"\nversion="1.2.3"\nsource="registry+https://example.invalid"\n',
+        newline="\n",
     )
-    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Current.\n")
-    (tmp_path / "README.md").write_text("# Consumer\n")
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Current.\n", newline="\n")
+    (tmp_path / "README.md").write_text("# Consumer\n", newline="\n")
     assert cli.main(["--root", str(tmp_path), "release", "check"]) == 0
     assert cli.main(["--root", str(tmp_path), "release", "update", "1.2.4", "--previous-release", "v1.2.3", "--date", "2026-09-07"]) == 0
     lock = (tmp_path / "Cargo.lock").read_text()
@@ -132,13 +135,13 @@ def test_workspace_release_updates_all_inherited_versions_but_not_dependencies(t
 def test_release_without_lockfiles_or_repository_url(tmp_path, metadata):
     if metadata in {"cargo", "tool-only"}:
         manifest = tmp_path / "Cargo.toml"
-        manifest.write_text('[package]\nname="consumer"\nversion="1.2.3"\n')
+        manifest.write_text('[package]\nname="consumer"\nversion="1.2.3"\n', newline="\n")
         if metadata == "tool-only":
-            (tmp_path / "pyproject.toml").write_text('[dependency-groups]\ndev=["pytest==9.1.1"]\n')
+            (tmp_path / "pyproject.toml").write_text('[dependency-groups]\ndev=["pytest==9.1.1"]\n', newline="\n")
     else:
         manifest = tmp_path / "pyproject.toml"
-        manifest.write_text('[project]\nname="consumer"\nversion="1.2.3"\n')
-    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Current.\n")
+        manifest.write_text('[project]\nname="consumer"\nversion="1.2.3"\n', newline="\n")
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Current.\n", newline="\n")
     assert cli.main(["--root", str(tmp_path), "release", "check"]) == 0
     assert cli.main(["--root", str(tmp_path), "release", "update", "1.2.4", "--previous-release", "v1.2.3"]) == 0
     assert 'version="1.2.4"' in manifest.read_text()
@@ -148,12 +151,14 @@ def test_release_without_lockfiles_or_repository_url(tmp_path, metadata):
 
 def test_workspace_root_and_members_follow_one_inherited_version(tmp_path):
     manifest = tmp_path / "Cargo.toml"
-    manifest.write_text('[package]\nname="root-package"\nversion.workspace=true\n[workspace]\nmembers=["child"]\n[workspace.package]\nversion="1.2.3"\n')
+    manifest.write_text(
+        '[package]\nname="root-package"\nversion.workspace=true\n[workspace]\nmembers=["child"]\n[workspace.package]\nversion="1.2.3"\n', newline="\n"
+    )
     (tmp_path / "child").mkdir()
-    (tmp_path / "child/Cargo.toml").write_text('[package]\nname="child"\nversion.workspace=true\n')
+    (tmp_path / "child/Cargo.toml").write_text('[package]\nname="child"\nversion.workspace=true\n', newline="\n")
     lock = tmp_path / "Cargo.lock"
-    lock.write_text('version=4\n[[package]]\nname="root-package"\nversion="1.2.3"\n[[package]]\nname="child"\nversion="1.2.3"\n')
-    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Current.\n")
+    lock.write_text('version=4\n[[package]]\nname="root-package"\nversion="1.2.3"\n[[package]]\nname="child"\nversion="1.2.3"\n', newline="\n")
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Current.\n", newline="\n")
     assert cli.main(["--root", str(tmp_path), "release", "check"]) == 0
     assert cli.main(["--root", str(tmp_path), "release", "update", "1.2.4", "--previous-release", "v1.2.3"]) == 0
     assert '[workspace.package]\nversion="1.2.4"' in manifest.read_text()
@@ -163,12 +168,12 @@ def test_workspace_root_and_members_follow_one_inherited_version(tmp_path):
 def test_contained_dotdot_workspace_members_stay_inside_validation_tree(tmp_path, monkeypatch):
     root = tmp_path / "consumer"
     root.mkdir()
-    (root / "Cargo.toml").write_text('[workspace]\nmembers=["../consumer/member"]\n[workspace.package]\nversion="1.2.3"\n')
+    (root / "Cargo.toml").write_text('[workspace]\nmembers=["../consumer/member"]\n[workspace.package]\nversion="1.2.3"\n', newline="\n")
     member = root / "member/Cargo.toml"
     member.parent.mkdir()
-    member.write_text('[package]\nname="member"\nversion.workspace=true\n')
-    (root / "Cargo.lock").write_text('version=4\n[[package]]\nname="member"\nversion="1.2.3"\n')
-    (root / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Current.\n")
+    member.write_text('[package]\nname="member"\nversion.workspace=true\n', newline="\n")
+    (root / "Cargo.lock").write_text('version=4\n[[package]]\nname="member"\nversion="1.2.3"\n', newline="\n")
+    (root / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Current.\n", newline="\n")
     validation = tmp_path / "validation"
     validation.mkdir()
     sentinel = validation / "consumer/member/Cargo.toml"
@@ -199,7 +204,7 @@ def test_release_update_preserves_heading_links_and_fenced_example_bytes(tmp_pat
 def test_fenced_target_cannot_satisfy_final_release_or_change_examples(tmp_path):
     _write_project(tmp_path)
     changelog = tmp_path / "CHANGELOG.md"
-    changelog.write_text("# Changelog\n\n~~~markdown\n## [1.2.4] - 1999-01-01\n~~~\n\n" + changelog.read_text())
+    changelog.write_text("# Changelog\n\n~~~markdown\n## [1.2.4] - 1999-01-01\n~~~\n\n" + changelog.read_text(), newline="\n")
     before = snapshot(tmp_path)
     with pytest.raises(ValueError, match="final release requires"):
         update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3", policy=ReleasePolicy(final_changelog=True))
@@ -231,7 +236,7 @@ def test_release_update_handles_commented_headers_and_quoted_keys_without_touchi
 def test_optional_doi_references_do_not_restrict_unrelated_bibliographies(tmp_path):
     _write_project(tmp_path, readme="# Consumer\n")
     references = tmp_path / "REFERENCES.md"
-    references.write_text("- Author. Method. https://doi.org/10.1234/other-paper\n")
+    references.write_text("- Author. Method. https://doi.org/10.1234/other-paper\n", newline="\n")
     before = references.read_bytes()
     assert release_metadata.check(tmp_path) == 0
     update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3")
@@ -241,7 +246,7 @@ def test_optional_doi_references_do_not_restrict_unrelated_bibliographies(tmp_pa
 @pytest.mark.parametrize("filename,text", [("README.md", "[![DOI](badge)](broken)"), ("REFERENCES.md", "- DOI: broken")])
 def test_malformed_optional_doi_references_fail_without_publication(tmp_path, filename, text):
     _write_project(tmp_path)
-    (tmp_path / filename).write_text(text + "\n")
+    (tmp_path / filename).write_text(text + "\n", newline="\n")
     before = snapshot(tmp_path)
     assert release_metadata.check(tmp_path) == 1
     with pytest.raises(ValueError, match="malformed"):
@@ -250,16 +255,16 @@ def test_malformed_optional_doi_references_fail_without_publication(tmp_path, fi
 
 
 def test_workspace_release_respects_excluded_glob_matches(tmp_path):
-    (tmp_path / "Cargo.toml").write_text('[workspace]\nmembers=["crates/*"]\nexclude=["crates/fixtures"]\n[workspace.package]\nversion="1.2.3"\n')
+    (tmp_path / "Cargo.toml").write_text('[workspace]\nmembers=["crates/*"]\nexclude=["crates/fixtures"]\n[workspace.package]\nversion="1.2.3"\n', newline="\n")
     member = tmp_path / "crates/member/Cargo.toml"
     member.parent.mkdir(parents=True)
-    member.write_text('[package]\nname="member"\nversion.workspace=true\n')
+    member.write_text('[package]\nname="member"\nversion.workspace=true\n', newline="\n")
     excluded = tmp_path / "crates/fixtures/README.md"
     excluded.parent.mkdir()
-    excluded.write_text("Fixture data, not a workspace crate.\n")
+    excluded.write_text("Fixture data, not a workspace crate.\n", newline="\n")
     lock = tmp_path / "Cargo.lock"
-    lock.write_text('version=4\n[[package]]\nname="member"\nversion="1.2.3"\n')
-    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Current.\n")
+    lock.write_text('version=4\n[[package]]\nname="member"\nversion="1.2.3"\n', newline="\n")
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Current.\n", newline="\n")
     before = snapshot(tmp_path)
     assert release_metadata.check(tmp_path) == 0
     update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3", release_date="2026-09-16")

@@ -260,7 +260,7 @@ def test_workflows_gate_signing_and_upload_on_validation():
 
 def test_cli_reports_signature_failure_diagnostics(script, tmp_path, monkeypatch, capsys):
     payload = tmp_path / "event.json"
-    payload.write_text(json.dumps(event()))
+    payload.write_text(json.dumps(event()), newline="\n")
 
     def fail(*args):
         raise subprocess.CalledProcessError(1, ["gh"], stderr=b"wrong source commit")

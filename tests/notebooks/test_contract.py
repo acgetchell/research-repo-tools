@@ -16,17 +16,17 @@ from research_repo_tools import cli, config, files, notebooks, toolchain
 def write(path, source="value = 42\n", *, cell_id="calculate", metadata=None):
     path.parent.mkdir(parents=True, exist_ok=True)
     node = nbformat.v4.new_notebook(cells=[nbformat.v4.new_code_cell(source, id=cell_id, metadata=metadata or {})])
-    path.write_text(nbformat.writes(node), encoding="utf-8")
+    path.write_text(nbformat.writes(node), encoding="utf-8", newline="\n")
     return path
 
 
 @pytest.fixture
 def consumer(tmp_path, monkeypatch):
     (tmp_path / "pyproject.toml").write_text(
-        '[project]\nrequires-python=">=3.14"\n[dependency-groups]\nnotebook=[]\ndev=[]\n[tool.uv]\nrequired-version="==0.12.16"\n'
+        '[project]\nrequires-python=">=3.14"\n[dependency-groups]\nnotebook=[]\ndev=[]\n[tool.uv]\nrequired-version="==0.12.16"\n', newline="\n"
     )
-    (tmp_path / ".python-version").write_text("3.14\n")
-    (tmp_path / "uv.lock").write_text("version=1\n")
+    (tmp_path / ".python-version").write_text("3.14\n", newline="\n")
+    (tmp_path / "uv.lock").write_text("version=1\n", newline="\n")
     # Exercise real project/runtime parsing; the test interpreter is explicitly
     # selected as the disposable consumer's environment without a package install.
     monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", sys.prefix)
@@ -62,7 +62,7 @@ def test_invalid_structure_is_never_repaired(tmp_path, alter, match):
 @pytest.mark.parametrize("text,match", [("[]", "nbformat"), ('{"nbformat":4,"nbformat":4}', "duplicate JSON"), ('{"x":NaN}', "non-finite")])
 def test_invalid_json_boundary(tmp_path, text, match):
     path = tmp_path / "input.ipynb"
-    path.write_text(text)
+    path.write_text(text, newline="\n")
     with pytest.raises(ValueError, match=match):
         notebooks.load(path)
 
@@ -73,7 +73,7 @@ def test_numeric_overflow_rejects_whole_selection_before_effects(consumer, monke
     bad = write(consumer.root / "notebooks/overflow.ipynb")
     document = json.loads(bad.read_bytes())
     document["metadata"]["custom"] = {"values": ["OVERFLOW"]}
-    bad.write_text(json.dumps(document).replace('"OVERFLOW"', number))
+    bad.write_text(json.dumps(document).replace('"OVERFLOW"', number), newline="\n")
     originals = {path: path.read_bytes() for path in (good, bad)}
     monkeypatch.setattr(notebooks, "_execute", lambda *args, **kwargs: pytest.fail("kernel started before numeric validation"))
     monkeypatch.setattr(files, "replace_many", lambda *args, **kwargs: pytest.fail("files published before numeric validation"))
@@ -91,7 +91,7 @@ def test_finite_metadata_survives_notebook_loading(tmp_path, number):
     path = write(tmp_path / "finite.ipynb")
     document = json.loads(path.read_bytes())
     document["metadata"]["number"] = number
-    path.write_text(json.dumps(document))
+    path.write_text(json.dumps(document), newline="\n")
     assert notebooks.load(path).node.metadata.number == number
     assert json.loads(notebooks.serialize(notebooks.load(path).node))["metadata"]["number"] == number
 
@@ -99,7 +99,7 @@ def test_finite_metadata_survives_notebook_loading(tmp_path, number):
 @pytest.mark.parametrize("group", ["notebook", "analysis"])
 def test_group_lookup_uses_configuration_without_notebook_dependencies(tmp_path, monkeypatch, capsys, group):
     settings = tmp_path / "settings.toml"
-    settings.write_text(f'[notebooks]\ngroup="{group}"\n')
+    settings.write_text(f'[notebooks]\ngroup="{group}"\n', newline="\n")
     monkeypatch.setattr(notebooks, "dependency", lambda *args: pytest.fail("group lookup imported notebook dependencies"))
     monkeypatch.setattr(notebooks, "runtime", lambda *args: pytest.fail("group lookup inspected or synchronized tools"))
     assert cli.main(["--config", str(settings), "notebooks", "group"]) == 0
@@ -137,8 +137,8 @@ def test_clear_cli_reports_success_after_one_publication_with_restricted_stdout(
     path = write(tmp_path / "分析.ipynb")
     node = json.loads(path.read_bytes())
     node["cells"][0].update(source="label = '分析 café'\n", execution_count=1, outputs=[{"output_type": "stream", "name": "stdout", "text": "old output\n"}])
-    path.write_text(json.dumps(node, ensure_ascii=False), encoding="utf-8")
-    (tmp_path / "pyproject.toml").write_text("", encoding="utf-8")
+    path.write_text(json.dumps(node, ensure_ascii=False), encoding="utf-8", newline="\n")
+    (tmp_path / "pyproject.toml").write_text("", encoding="utf-8", newline="\n")
     trace = tmp_path / "publications.jsonl"
     child = """
 import json
@@ -148,7 +148,7 @@ from research_repo_tools import cli, files
 
 publish = files.replace_many
 def record(updates):
-    with Path(sys.argv[1]).open("a", encoding="utf-8") as stream:
+    with Path(sys.argv[1]).open("a", encoding="utf-8", newline="\\n") as stream:
         stream.write(json.dumps({str(path): payload.hex() for path, payload in updates.items()}) + "\\n")
     publish(updates)
 
@@ -179,7 +179,7 @@ def test_clear_validates_entire_selection_before_writing(tmp_path):
     node.cells[0].execution_count = 1
     good.write_bytes(notebooks.serialize(node))
     bad = tmp_path / "bad.ipynb"
-    bad.write_text("{}")
+    bad.write_text("{}", newline="\n")
     original = good.read_bytes()
     with pytest.raises(ValueError):
         notebooks.clear([good, bad])

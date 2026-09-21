@@ -37,7 +37,7 @@ def _write_project(
         "REFERENCES.md": f"- DOI: <https://doi.org/{_DOI}>\n",
     }
     for filename, content in files.items():
-        (root / filename).write_text(content, encoding="utf-8")
+        (root / filename).write_text(content, encoding="utf-8", newline="\n")
 
 
 def test_find_version_mismatches_accepts_synchronized_release(tmp_path: Path) -> None:
@@ -45,7 +45,7 @@ def test_find_version_mismatches_accepts_synchronized_release(tmp_path: Path) ->
     _write_project(tmp_path)
     docs = tmp_path / "docs"
     docs.mkdir()
-    (docs / "benchmarking.md").write_text("just custom-command v1.2.3 v1.2.2\njust custom-assets v9.0.0 v8.0.0\n", encoding="utf-8")
+    (docs / "benchmarking.md").write_text("just custom-command v1.2.3 v1.2.2\njust custom-assets v9.0.0 v8.0.0\n", encoding="utf-8", newline="\n")
     assert release_check.find_version_mismatches(tmp_path) == []
     assert release_check.find_release_metadata_mismatches(tmp_path) == []
 
@@ -65,7 +65,7 @@ def test_release_date_uses_the_current_package_heading_not_the_first_release(tmp
     """Date synchronization targets Cargo's version even if another release is listed first."""
     _write_project(tmp_path)
     (tmp_path / "CHANGELOG.md").write_text(
-        f"# Changelog\n\n## [1.2.4] - 2026-08-05\n\n- Newer\n\n## [{_VERSION}] - {_RELEASE_DATE}\n\n- Current\n", encoding="utf-8"
+        f"# Changelog\n\n## [1.2.4] - 2026-08-05\n\n- Newer\n\n## [{_VERSION}] - {_RELEASE_DATE}\n\n- Current\n", encoding="utf-8", newline="\n"
     )
     assert release_check.find_release_metadata_mismatches(tmp_path) == []
 
@@ -73,7 +73,7 @@ def test_release_date_uses_the_current_package_heading_not_the_first_release(tmp
 def test_release_metadata_rejects_a_missing_citation_date(tmp_path: Path) -> None:
     _write_project(tmp_path)
     citation = tmp_path / "CITATION.cff"
-    citation.write_text(citation.read_text(encoding="utf-8").replace(f"date-released: {_RELEASE_DATE}\n", ""), encoding="utf-8")
+    citation.write_text(citation.read_text(encoding="utf-8").replace(f"date-released: {_RELEASE_DATE}\n", ""), encoding="utf-8", newline="\n")
     with pytest.raises(release_check.ReleaseCheckError, match="CITATION\\.cff must contain exactly one top-level date-released; found 0"):
         release_check.find_release_metadata_mismatches(tmp_path)
 
@@ -81,7 +81,7 @@ def test_release_metadata_rejects_a_missing_citation_date(tmp_path: Path) -> Non
 def test_release_metadata_rejects_a_malformed_citation_date_with_its_line(tmp_path: Path) -> None:
     _write_project(tmp_path)
     citation = tmp_path / "CITATION.cff"
-    citation.write_text(citation.read_text(encoding="utf-8").replace(_RELEASE_DATE, "2026/08/04"), encoding="utf-8")
+    citation.write_text(citation.read_text(encoding="utf-8").replace(_RELEASE_DATE, "2026/08/04"), encoding="utf-8", newline="\n")
     with pytest.raises(release_check.ReleaseCheckError, match="CITATION\\.cff:4: top-level date-released"):
         release_check.find_release_metadata_mismatches(tmp_path)
 
@@ -89,7 +89,7 @@ def test_release_metadata_rejects_a_malformed_citation_date_with_its_line(tmp_pa
 def test_release_metadata_rejects_duplicate_citation_dates_with_both_lines(tmp_path: Path) -> None:
     _write_project(tmp_path)
     citation = tmp_path / "CITATION.cff"
-    citation.write_text(citation.read_text(encoding="utf-8") + f"date-released: {_RELEASE_DATE}\n", encoding="utf-8")
+    citation.write_text(citation.read_text(encoding="utf-8") + f"date-released: {_RELEASE_DATE}\n", encoding="utf-8", newline="\n")
     with pytest.raises(release_check.ReleaseCheckError, match="CITATION\\.cff:4 .*found 2 at lines 4, 5"):
         release_check.find_release_metadata_mismatches(tmp_path)
 
@@ -97,7 +97,7 @@ def test_release_metadata_rejects_duplicate_citation_dates_with_both_lines(tmp_p
 def test_release_metadata_rejects_a_malformed_current_changelog_date_with_its_line(tmp_path: Path) -> None:
     _write_project(tmp_path)
     changelog = tmp_path / "CHANGELOG.md"
-    changelog.write_text(changelog.read_text(encoding="utf-8").replace(_RELEASE_DATE, "2026/08/04"), encoding="utf-8")
+    changelog.write_text(changelog.read_text(encoding="utf-8").replace(_RELEASE_DATE, "2026/08/04"), encoding="utf-8", newline="\n")
     with pytest.raises(release_check.ReleaseCheckError, match="CHANGELOG\\.md:.*(?:line 3|3: current-version heading)"):
         release_check.find_release_metadata_mismatches(tmp_path)
 
@@ -109,7 +109,7 @@ def test_release_metadata_rejects_a_malformed_current_changelog_date_with_its_li
 def test_release_metadata_rejects_asymmetric_current_changelog_brackets(tmp_path: Path, heading: str) -> None:
     _write_project(tmp_path)
     changelog = tmp_path / "CHANGELOG.md"
-    changelog.write_text(changelog.read_text(encoding="utf-8").replace(f"## [{_VERSION}] - {_RELEASE_DATE}", heading), encoding="utf-8")
+    changelog.write_text(changelog.read_text(encoding="utf-8").replace(f"## [{_VERSION}] - {_RELEASE_DATE}", heading), encoding="utf-8", newline="\n")
     with pytest.raises(release_check.ReleaseCheckError, match="CHANGELOG\\.md:.*(?:line 3|3: current-version heading)"):
         release_check.find_release_metadata_mismatches(tmp_path)
 
@@ -117,7 +117,9 @@ def test_release_metadata_rejects_asymmetric_current_changelog_brackets(tmp_path
 def test_release_metadata_rejects_a_current_changelog_heading_without_a_date(tmp_path: Path) -> None:
     _write_project(tmp_path)
     changelog = tmp_path / "CHANGELOG.md"
-    changelog.write_text(changelog.read_text(encoding="utf-8").replace(f"## [{_VERSION}] - {_RELEASE_DATE}", f"## [{_VERSION}]"), encoding="utf-8")
+    changelog.write_text(
+        changelog.read_text(encoding="utf-8").replace(f"## [{_VERSION}] - {_RELEASE_DATE}", f"## [{_VERSION}]"), encoding="utf-8", newline="\n"
+    )
     with pytest.raises(release_check.ReleaseCheckError, match="CHANGELOG\\.md:.*(?:line 3|3: current-version heading)"):
         release_check.find_release_metadata_mismatches(tmp_path)
 
@@ -125,7 +127,7 @@ def test_release_metadata_rejects_a_current_changelog_heading_without_a_date(tmp
 def test_release_metadata_rejects_an_impossible_current_changelog_date(tmp_path: Path) -> None:
     _write_project(tmp_path)
     changelog = tmp_path / "CHANGELOG.md"
-    changelog.write_text(changelog.read_text(encoding="utf-8").replace(_RELEASE_DATE, "2026-02-30"), encoding="utf-8")
+    changelog.write_text(changelog.read_text(encoding="utf-8").replace(_RELEASE_DATE, "2026-02-30"), encoding="utf-8", newline="\n")
     with pytest.raises(release_check.ReleaseCheckError, match="CHANGELOG\\.md: Invalid release date at line 3"):
         release_check.find_release_metadata_mismatches(tmp_path)
 
@@ -133,7 +135,7 @@ def test_release_metadata_rejects_an_impossible_current_changelog_date(tmp_path:
 def test_release_metadata_rejects_duplicate_current_changelog_dates_with_both_lines(tmp_path: Path) -> None:
     _write_project(tmp_path)
     changelog = tmp_path / "CHANGELOG.md"
-    changelog.write_text(changelog.read_text(encoding="utf-8") + f"\n## [{_VERSION}] - {_RELEASE_DATE}\n", encoding="utf-8")
+    changelog.write_text(changelog.read_text(encoding="utf-8") + f"\n## [{_VERSION}] - {_RELEASE_DATE}\n", encoding="utf-8", newline="\n")
     with pytest.raises(release_check.ReleaseCheckError, match="CHANGELOG\\.md: Duplicate release heading .* at line 9; first seen at line 3"):
         release_check.find_release_metadata_mismatches(tmp_path)
 
@@ -158,7 +160,7 @@ def test_find_version_mismatches_reports_stale_active_documentation(tmp_path: Pa
     )
     docs = tmp_path / "docs"
     docs.mkdir()
-    (docs / "benchmarking.md").write_text("just custom-command v1.1.0 v1.0.0\n", encoding="utf-8")
+    (docs / "benchmarking.md").write_text("just custom-command v1.1.0 v1.0.0\n", encoding="utf-8", newline="\n")
     mismatches = release_check.find_version_mismatches(tmp_path)
     assert [mismatch.reference.kind for mismatch in mismatches] == [release_check.ReferenceKind.DEPENDENCY_SNIPPET, release_check.ReferenceKind.CARGO_ADD]
 
@@ -166,7 +168,7 @@ def test_find_version_mismatches_reports_stale_active_documentation(tmp_path: Pa
 def test_find_version_mismatches_reports_stale_changelog_release(tmp_path: Path) -> None:
     """The latest generated changelog release must match Cargo.toml."""
     _write_project(tmp_path)
-    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.2] - 2026-08-03\n", encoding="utf-8")
+    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.2] - 2026-08-03\n", encoding="utf-8", newline="\n")
     mismatches = release_check.find_version_mismatches(tmp_path)
     assert len(mismatches) == 1
     assert mismatches[0].reference.kind is release_check.ReferenceKind.CHANGELOG
@@ -177,7 +179,9 @@ def test_find_version_mismatches_reports_stale_changelog_comparison_target(tmp_p
     """The current changelog link must compare through the Cargo version."""
     _write_project(tmp_path)
     (tmp_path / "CHANGELOG.md").write_text(
-        f"# Changelog\n\n## [{_VERSION}] - 2026-08-04\n\n[{_VERSION}]: https://github.com/example/consumer/compare/v1.2.1...v1.2.2\n", encoding="utf-8"
+        f"# Changelog\n\n## [{_VERSION}] - 2026-08-04\n\n[{_VERSION}]: https://github.com/example/consumer/compare/v1.2.1...v1.2.2\n",
+        encoding="utf-8",
+        newline="\n",
     )
     mismatches = release_check.find_version_mismatches(tmp_path)
     assert len(mismatches) == 1
@@ -193,8 +197,8 @@ def test_find_version_mismatches_ignores_historical_surfaces(tmp_path: Path) -> 
     archive.mkdir(parents=True)
     fixtures.mkdir(parents=True)
     stale = 'consumer = "0.1.0"\njust custom-command v0.1.0 v0.0.9\n'
-    (archive / "old.md").write_text(stale, encoding="utf-8")
-    (fixtures / "example.md").write_text(stale, encoding="utf-8")
+    (archive / "old.md").write_text(stale, encoding="utf-8", newline="\n")
+    (fixtures / "example.md").write_text(stale, encoding="utf-8", newline="\n")
     assert release_check.find_version_mismatches(tmp_path) == []
 
 
@@ -202,7 +206,9 @@ def test_find_version_mismatches_rejects_missing_editable_uv_package(tmp_path: P
     """uv.lock must include the local support package as an editable entry."""
     _write_project(tmp_path)
     (tmp_path / "uv.lock").write_text(
-        'version = 1\n\n[[package]]\nname = "consumer-tooling"\nversion = "1.2.3"\nsource = { registry = "https://pypi.org/simple" }\n', encoding="utf-8"
+        'version = 1\n\n[[package]]\nname = "consumer-tooling"\nversion = "1.2.3"\nsource = { registry = "https://pypi.org/simple" }\n',
+        encoding="utf-8",
+        newline="\n",
     )
     with pytest.raises(release_check.ReleaseCheckError, match="exactly one uv\\.lock editable package"):
         release_check.find_version_mismatches(tmp_path)
@@ -211,7 +217,9 @@ def test_find_version_mismatches_rejects_missing_editable_uv_package(tmp_path: P
 def test_find_version_mismatches_rejects_malformed_citation_version(tmp_path: Path) -> None:
     """Malformed citation versions fail before release."""
     _write_project(tmp_path)
-    (tmp_path / "CITATION.cff").write_text('cff-version: 1.2.0\nversion: "\ndoi: 10.5281/zenodo.12345678\ndate-released: 2026-08-04\n', encoding="utf-8")
+    (tmp_path / "CITATION.cff").write_text(
+        'cff-version: 1.2.0\nversion: "\ndoi: 10.5281/zenodo.12345678\ndate-released: 2026-08-04\n', encoding="utf-8", newline="\n"
+    )
     with pytest.raises(release_check.ReleaseCheckError, match="CITATION\\.cff:2: top-level version"):
         release_check.find_version_mismatches(tmp_path)
 
@@ -241,7 +249,7 @@ def test_check_reports_previous_release_discovery_failures(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str], error: subprocess.SubprocessError
 ) -> None:
     _write_project(tmp_path)
-    (tmp_path / "release.txt").write_text("previous: v1.2.2\n", encoding="utf-8")
+    (tmp_path / "release.txt").write_text("previous: v1.2.2\n", encoding="utf-8", newline="\n")
     policy = ReleasePolicy(rules=(ReleaseRule("release.txt", r"previous: (?P<value>v\S+)", source="previous-tag"),))
 
     def fail_discovery(command: str, args: list[str], *, cwd: Path) -> None:

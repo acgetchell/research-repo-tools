@@ -20,8 +20,8 @@ def settings(root: Path, **changes: object) -> config.Config:
 
 @pytest.mark.parametrize("candidate", ["# Changelog\n", "## [9.0.0] - 2026-09-07\n", "## [1.2.3] - 2025-09-07\n"])
 def test_normalize_rejects_changed_release_identity_before_publication(tmp_path, monkeypatch, capsys, candidate):
-    (tmp_path / "pyproject.toml").write_text('[tool.research-repo-tools.changelog]\nformatter="rumdl.toml"\n')
-    (tmp_path / "rumdl.toml").write_text("[global]\n")
+    (tmp_path / "pyproject.toml").write_text('[tool.research-repo-tools.changelog]\nformatter="rumdl.toml"\n', newline="\n")
+    (tmp_path / "rumdl.toml").write_text("[global]\n", newline="\n")
     path = tmp_path / "CHANGELOG.md"
     original = b"# Changelog\r\n\r\n## [1.2.3] - 2026-09-07\r\n\r\n- Retained notes.\r\n"
     path.write_bytes(original)
@@ -87,11 +87,13 @@ def test_template_selects_only_complete_semver_tags(tag: str, accepted: bool) ->
 
 
 def test_changelog_filename_is_a_shared_convention(tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    (tmp_path / "config.toml").write_text("[changelog]\n")
-    (tmp_path / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.0] - 2026-09-07\n\n- Note with [reference].\n\n[reference]: https://example.com/issue\n")
+    (tmp_path / "config.toml").write_text("[changelog]\n", newline="\n")
+    (tmp_path / "CHANGELOG.md").write_text(
+        "# Changelog\n\n## [1.2.0] - 2026-09-07\n\n- Note with [reference].\n\n[reference]: https://example.com/issue\n", newline="\n"
+    )
     assert cli.main(["--config", str(tmp_path / "config.toml"), "changelog", "notes", "v1.2.0"]) == 0
     assert capsys.readouterr().out == "- Note with [reference].\n\n[reference]: https://example.com/issue\n"
-    (tmp_path / "config.toml").write_text('[changelog]\npath="CUSTOM.md"\n')
+    (tmp_path / "config.toml").write_text('[changelog]\npath="CUSTOM.md"\n', newline="\n")
     with pytest.raises(ValueError, match="invalid or unknown fields in changelog"):
         config.load(tmp_path / "config.toml")
 
@@ -99,7 +101,8 @@ def test_changelog_filename_is_a_shared_convention(tmp_path: Path, capsys: pytes
 def test_archiving_ignores_fenced_release_examples_and_preserves_body_references(tmp_path: Path) -> None:
     path = tmp_path / "CHANGELOG.md"
     path.write_text(
-        "# Changelog\n\n## [1.2.0] - 2026-09-07\n\n- Current.\n\n## [1.1.0](https://example.com/v1.1.0) - 2026-08-01\n\n- Historical [issue].\n\n~~~~markdown\n## [0.1.0]\n- example\n~~~\n~~~~\n\n[issue]: https://example.com/42\n"
+        "# Changelog\n\n## [1.2.0] - 2026-09-07\n\n- Current.\n\n## [1.1.0](https://example.com/v1.1.0) - 2026-08-01\n\n- Historical [issue].\n\n~~~~markdown\n## [0.1.0]\n- example\n~~~\n~~~~\n\n[issue]: https://example.com/42\n",
+        newline="\n",
     )
     archive = tmp_path / "docs/archives/changelog"
     archive_changelog.archive_changelog(path, archive)
@@ -128,15 +131,17 @@ def test_incremental_archives_retain_older_patches_links_and_introduction(tmp_pa
     path = tmp_path / "CHANGELOG.md"
     archive = tmp_path / "docs/archives/changelog"
     archive.mkdir(parents=True)
-    (archive / "1.0.md").write_text("# Changelog - 1.0.x\n\nHand-curated [context].\n\n## [1.0.0]\n\n- First patch.\n\n[context]: https://example.com/guide\n")
-    path.write_text("# Changelog\n\n## [1.1.0]\n\n- Current.\n\n## [1.0.1]\n\n- Fix [method](docs/method.md#proof).\n")
+    (archive / "1.0.md").write_text(
+        "# Changelog - 1.0.x\n\nHand-curated [context].\n\n## [1.0.0]\n\n- First patch.\n\n[context]: https://example.com/guide\n", newline="\n"
+    )
+    path.write_text("# Changelog\n\n## [1.1.0]\n\n- Current.\n\n## [1.0.1]\n\n- Fix [method](docs/method.md#proof).\n", newline="\n")
     archive_changelog.archive_changelog(path)
     retained = (archive / "1.0.md").read_text()
     assert "Hand-curated [context]." in retained
     assert "[context]: https://example.com/guide" in retained
     assert "## [1.0.1]" in retained and "## [1.0.0]" in retained
     assert "[method](../../../docs/method.md#proof)" in retained
-    path.write_text("# Changelog\n\n## [1.2.0]\n\n- New.\n\n## [1.1.0]\n\n- Current.\n")
+    path.write_text("# Changelog\n\n## [1.2.0]\n\n- New.\n\n## [1.1.0]\n\n- Current.\n", newline="\n")
     archive_changelog.archive_changelog(path)
     assert "[1.0.x](docs/archives/changelog/1.0.md)" in path.read_text()
     assert "[1.1.x](docs/archives/changelog/1.1.md)" in path.read_text()
@@ -150,8 +155,8 @@ def test_conflicting_retained_release_fails_before_changing_files(tmp_path: Path
     path = tmp_path / "CHANGELOG.md"
     archive = tmp_path / "docs/archives/changelog/1.0.md"
     archive.parent.mkdir(parents=True)
-    archive.write_text("# Changelog - 1.0.x\n\n## [1.0.0]\n\n- Original.\n")
-    path.write_text("# Changelog\n\n## [1.1.0]\n\n- New.\n\n## [1.0.0]\n\n- Different.\n")
+    archive.write_text("# Changelog - 1.0.x\n\n## [1.0.0]\n\n- Original.\n", newline="\n")
+    path.write_text("# Changelog\n\n## [1.1.0]\n\n- New.\n\n## [1.0.0]\n\n- Different.\n", newline="\n")
     before = {p: p.read_bytes() for p in (path, archive)}
     with pytest.raises(ValueError, match="conflicting retained release"):
         archive_changelog.archive_changelog(path)
@@ -170,7 +175,7 @@ def test_final_formatter_validation_preserves_original_on_unfixable_output(tmp_p
     path = tmp_path / "CHANGELOG.md"
     path.write_bytes(b"# Changelog\r\n\r\n- Existing note\r\n")
     rules = tmp_path / "rumdl.toml"
-    rules.write_text("")
+    rules.write_text("", newline="\n")
     original = path.read_bytes()
     calls = []
 
@@ -217,7 +222,7 @@ def test_prospective_generation_dates_linked_heading_without_rewriting_example(t
 @pytest.mark.parametrize("version", ["1٢.2.3", "1.2.3-1٢"])
 def test_invalid_unicode_versions_cannot_publish_archives(tmp_path, version):
     path = tmp_path / "CHANGELOG.md"
-    path.write_text(f"# Changelog\n\n## [2.0.0]\n\n- Current.\n\n## [{version}]\n\n- Invalid.\n")
+    path.write_text(f"# Changelog\n\n## [2.0.0]\n\n- Current.\n\n## [{version}]\n\n- Invalid.\n", newline="\n")
     before = path.read_bytes()
     with pytest.raises(ValueError, match="Unrecognized changelog heading"):
         archive_changelog.archive_changelog(path)
@@ -232,7 +237,7 @@ def git_consumer(tmp_path: Path) -> Path:
     run_git_command(["config", "user.email", "test@example.invalid"], cwd=tmp_path)
     run_git_command(["config", "commit.gpgsign", "false"], cwd=tmp_path)
     run_git_command(["config", "tag.gpgsign", "false"], cwd=tmp_path)
-    (tmp_path / "pyproject.toml").write_text('[project]\nname="consumer"\nversion="1.2.0"\n')
+    (tmp_path / "pyproject.toml").write_text('[project]\nname="consumer"\nversion="1.2.0"\n', newline="\n")
     run_git_command(["add", "pyproject.toml"], cwd=tmp_path)
     run_git_command(["commit", "-qm", "feat: add scientific data reader (#7)"], cwd=tmp_path)
     return tmp_path
@@ -253,7 +258,7 @@ def test_generate_real_git_history_with_packaged_template(git_consumer: Path) ->
 def test_tag_preserves_utf8_notes_and_force_replaces_atomically(git_consumer: Path) -> None:
     cfg = settings(git_consumer)
     cfg = replace(cfg, release=config.ReleasePolicy(date_policy="declared"))
-    (git_consumer / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.0] - 2026-09-07\n\n- Preserve β → γ.\n")
+    (git_consumer / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.0] - 2026-09-07\n\n- Preserve β → γ.\n", newline="\n")
     preview = changelog.tag(cfg, "v1.2.0", dry_run=True)
     assert run_git_command(["tag", "--list"], cwd=git_consumer).stdout == ""
     changelog.tag(cfg, "v1.2.0")
@@ -262,6 +267,6 @@ def test_tag_preserves_utf8_notes_and_force_replaces_atomically(git_consumer: Pa
     old = run_git_command(["rev-parse", "refs/tags/v1.2.0"], cwd=git_consumer).stdout
     with pytest.raises(ValueError, match="already exists"):
         changelog.tag(cfg, "v1.2.0")
-    (git_consumer / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.0] - 2026-09-07\n\n- Revised β → γ.\n")
+    (git_consumer / "CHANGELOG.md").write_text("# Changelog\n\n## [1.2.0] - 2026-09-07\n\n- Revised β → γ.\n", newline="\n")
     changelog.tag(cfg, "v1.2.0", force=True)
     assert run_git_command(["rev-parse", "refs/tags/v1.2.0"], cwd=git_consumer).stdout != old

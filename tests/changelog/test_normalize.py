@@ -110,33 +110,33 @@ def test_prose_escaping_preserves_markdown_syntax_and_literal_code() -> None:
 class TestStripTrailingBlanks:
     def test_strips_trailing_blank_lines(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
-        f.write_text("# Changelog\n\n- Item\n\n\n\n", encoding="utf-8")
+        f.write_text("# Changelog\n\n- Item\n\n\n\n", encoding="utf-8", newline="\n")
         postprocess(f)
         assert f.read_text(encoding="utf-8") == "# Changelog\n\n- Item\n"
 
     def test_preserves_single_trailing_newline(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
-        f.write_text("# Changelog\n\n- Item\n", encoding="utf-8")
+        f.write_text("# Changelog\n\n- Item\n", encoding="utf-8", newline="\n")
         postprocess(f)
         assert f.read_text(encoding="utf-8") == "# Changelog\n\n- Item\n"
 
     def test_adds_trailing_newline_if_missing(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
-        f.write_text("# Changelog\n\n- Item", encoding="utf-8")
+        f.write_text("# Changelog\n\n- Item", encoding="utf-8", newline="\n")
         postprocess(f)
         assert f.read_text(encoding="utf-8") == "# Changelog\n\n- Item\n"
 
     def test_preserves_internal_blank_lines(self, tmp_path: Path) -> None:
         content = "# Changelog\n\n## [1.0.0]\n\n### Added\n\n- Item\n\n\n\n"
         f = tmp_path / "CHANGELOG.md"
-        f.write_text(content, encoding="utf-8")
+        f.write_text(content, encoding="utf-8", newline="\n")
         postprocess(f)
         result = f.read_text(encoding="utf-8")
         assert result == "# Changelog\n\n## [1.0.0]\n\n### Added\n\n- Item\n"
 
     def test_single_newline_file(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
-        f.write_text("\n", encoding="utf-8")
+        f.write_text("\n", encoding="utf-8", newline="\n")
         postprocess(f)
         assert f.read_text(encoding="utf-8") == "\n"
 
@@ -148,14 +148,14 @@ class TestStripTrailingBlanks:
         ".
         """
         f = tmp_path / "CHANGELOG.md"
-        f.write_text("", encoding="utf-8")
+        f.write_text("", encoding="utf-8", newline="\n")
         postprocess(f)
         assert f.read_text(encoding="utf-8") == "\n"
 
     @pytest.mark.skipif(os.name == "nt", reason="POSIX mode preservation is not meaningful on Windows")
     def test_atomic_write_preserves_file_mode(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
-        f.write_text("# Changelog\n\n- Item\n\n\n", encoding="utf-8")
+        f.write_text("# Changelog\n\n- Item\n\n\n", encoding="utf-8", newline="\n")
         f.chmod(416)
         postprocess(f)
         assert f.stat().st_mode & 511 == 416
@@ -505,7 +505,7 @@ class TestSummarySections:
 class TestListMarkerNormalization:
     def test_star_to_dash_at_column_zero(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
-        f.write_text("* item one\n* item two\n", encoding="utf-8")
+        f.write_text("* item one\n* item two\n", encoding="utf-8", newline="\n")
         postprocess(f)
         result = f.read_text(encoding="utf-8")
         assert "* item" not in result
@@ -514,19 +514,19 @@ class TestListMarkerNormalization:
 
     def test_star_to_dash_indented(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
-        f.write_text("- parent item\n  * sub-item\n", encoding="utf-8")
+        f.write_text("- parent item\n  * sub-item\n", encoding="utf-8", newline="\n")
         postprocess(f)
         assert "  - sub-item" in f.read_text(encoding="utf-8")
 
     def test_star_in_bold_not_changed(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
-        f.write_text("Some **bold** text\n", encoding="utf-8")
+        f.write_text("Some **bold** text\n", encoding="utf-8", newline="\n")
         postprocess(f)
         assert "**bold**" in f.read_text(encoding="utf-8")
 
     def test_star_inside_code_block_not_changed(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
-        f.write_text("```text\n* keep me\n```\n", encoding="utf-8")
+        f.write_text("```text\n* keep me\n```\n", encoding="utf-8", newline="\n")
         postprocess(f)
         assert "* keep me" in f.read_text(encoding="utf-8")
 
@@ -534,25 +534,25 @@ class TestListMarkerNormalization:
 class TestBlankLineBeforeList:
     def test_inserts_blank_before_list_after_prose(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
-        f.write_text("Some prose.\n- list item\n", encoding="utf-8")
+        f.write_text("Some prose.\n- list item\n", encoding="utf-8", newline="\n")
         postprocess(f)
         assert f.read_text(encoding="utf-8") == "Some prose.\n\n- list item\n"
 
     def test_no_double_blank(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
-        f.write_text("Some prose.\n\n- list item\n", encoding="utf-8")
+        f.write_text("Some prose.\n\n- list item\n", encoding="utf-8", newline="\n")
         postprocess(f)
         assert f.read_text(encoding="utf-8") == "Some prose.\n\n- list item\n"
 
     def test_no_blank_between_consecutive_items(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
-        f.write_text("- one\n- two\n", encoding="utf-8")
+        f.write_text("- one\n- two\n", encoding="utf-8", newline="\n")
         postprocess(f)
         assert f.read_text(encoding="utf-8") == "- one\n- two\n"
 
     def test_no_blank_after_heading(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
-        f.write_text("### Added\n- item\n", encoding="utf-8")
+        f.write_text("### Added\n- item\n", encoding="utf-8", newline="\n")
         postprocess(f)
         assert "\n\n- item" not in f.read_text(encoding="utf-8")
 
@@ -604,6 +604,7 @@ class TestIndentedHeadingNormalization:
         f.write_text(
             "# Changelog\n\n## [1.0.0]\n\n### Performance\n\n- perf: improve Hilbert curve correctness\n\n  ## Correctness Fixes\n\n  - Add debug_assert guards\n\n  ## API Design\n\n  - Add HilbertError enum\n",
             encoding="utf-8",
+            newline="\n",
         )
         postprocess(f)
         result = f.read_text(encoding="utf-8")
@@ -618,6 +619,7 @@ class TestIndentedHeadingNormalization:
         f.write_text(
             f"# Changelog\n\n## [1.0.0]\n\n### Fixed\n\n- Handle invalid inputs [#116](https://github.com/example/consumer/pull/116)\n  {_commit()}\n\n## Duplicate Item Handling\n\n  - Add duplicate item detection\n\n### Fixed: Add rollback on cell creation failure\n\n  Add rollback mechanisms when cell creation fails.\n",
             encoding="utf-8",
+            newline="\n",
         )
         postprocess(f)
         result = f.read_text(encoding="utf-8")
@@ -632,6 +634,7 @@ class TestIndentedHeadingNormalization:
         f.write_text(
             "# Changelog\n\n## [1.0.0]\n\n### Documentation\n\n- Rename bounding-box helpers\n\n### Documentation: Rename saturating_* helpers to bbox_* and clarify float semantics\n",
             encoding="utf-8",
+            newline="\n",
         )
         postprocess(f)
         result = f.read_text(encoding="utf-8")
@@ -659,6 +662,7 @@ class TestIndentedHeadingNormalization:
         f.write_text(
             "# Changelog\n\n## [1.0.0]\n\n### Performance\n\n- Improve duplicate handling\n\n  **Performance Optimization**\n\n  - First set of changes\n\n  **Performance Optimization**\n\n  - Additional changes\n",
             encoding="utf-8",
+            newline="\n",
         )
         postprocess(f)
         result = f.read_text(encoding="utf-8")
@@ -738,6 +742,7 @@ class TestSquashHeadingNormalization:
         f.write_text(
             f"# Changelog\n\n## [1.0.0]\n\n### Added\n\n- Instrument large-scale 4D debugging {_commit('3af976e', '3af976ec2f7c33d49803b24ab8f1a7da598fea0b')}\n\n* feat: instrument large-scale 4D debugging\n\n  - Thread cavity-touched cells through insertion.\n\n* fix: close the 4D bulk repair retry collapse\n\n  - Raise the D>=4 per-insertion repair budget.\n",
             encoding="utf-8",
+            newline="\n",
         )
         postprocess(f)
         result = f.read_text(encoding="utf-8")
@@ -751,6 +756,7 @@ class TestSquashHeadingNormalization:
         f.write_text(
             f"# Changelog\n\n## [1.0.0]\n\n### Added\n\n- Repeatable summary {_commit()}\n\n## [0.9.0]\n\n- fixed: repeatable summary\n\n  - Preserve this historical squash-body heading.\n",
             encoding="utf-8",
+            newline="\n",
         )
         postprocess(f)
         result = f.read_text(encoding="utf-8")
@@ -762,6 +768,7 @@ class TestSquashHeadingNormalization:
         f.write_text(
             f"# Changelog\n\n## [1.0.0]\n\n### Documentation\n\n- Update workflow docs {_commit()}\n\n  - Added: `just help-workflows` references throughout\n  - Expanded: Testing commands\n",
             encoding="utf-8",
+            newline="\n",
         )
         postprocess(f)
         result = f.read_text(encoding="utf-8")
@@ -923,14 +930,14 @@ class TestCodeBlockLanguage:
 
     def test_adds_language_to_bare_fence(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
-        f.write_text("  ```\n  let x = 1;\n  ```\n", encoding="utf-8")
+        f.write_text("  ```\n  let x = 1;\n  ```\n", encoding="utf-8", newline="\n")
         postprocess(f)
         result = f.read_text(encoding="utf-8")
         assert "```text" in result
 
     def test_preserves_existing_language(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
-        f.write_text("```rust\nlet x = 1;\n```\n", encoding="utf-8")
+        f.write_text("```rust\nlet x = 1;\n```\n", encoding="utf-8", newline="\n")
         postprocess(f)
         result = f.read_text(encoding="utf-8")
         assert "```rust" in result
@@ -939,7 +946,7 @@ class TestCodeBlockLanguage:
     def test_no_reflow_inside_code_block(self, tmp_path: Path) -> None:
         long_code = "  let very_long = " + "a" * 200 + ";"
         f = tmp_path / "CHANGELOG.md"
-        f.write_text(f"```rust\n{long_code}\n```\n", encoding="utf-8")
+        f.write_text(f"```rust\n{long_code}\n```\n", encoding="utf-8", newline="\n")
         postprocess(f)
         result = f.read_text(encoding="utf-8")
         assert long_code in result
@@ -947,7 +954,9 @@ class TestCodeBlockLanguage:
     def test_no_reflow_or_heading_rewrite_inside_tilde_block(self, tmp_path: Path) -> None:
         long_code = "## " + "code " * 50
         f = tmp_path / "CHANGELOG.md"
-        f.write_text(f"# Changelog\n\n## [1.0.0]\n\n### Fixed\n\n- Parent entry\n\n~~~markdown\n{long_code.rstrip()}\n~~~\n## Outside\n", encoding="utf-8")
+        f.write_text(
+            f"# Changelog\n\n## [1.0.0]\n\n### Fixed\n\n- Parent entry\n\n~~~markdown\n{long_code.rstrip()}\n~~~\n## Outside\n", encoding="utf-8", newline="\n"
+        )
         postprocess(f)
         result = f.read_text(encoding="utf-8")
         assert long_code.rstrip() in result
@@ -956,14 +965,14 @@ class TestCodeBlockLanguage:
 
     def test_adds_blank_after_code_block_before_prose(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
-        f.write_text("```text\ncode\n```\nfollowing prose\n", encoding="utf-8")
+        f.write_text("```text\ncode\n```\nfollowing prose\n", encoding="utf-8", newline="\n")
         postprocess(f)
         assert f.read_text(encoding="utf-8") == "```text\ncode\n```\n\nfollowing prose\n"
 
     def test_no_reflow_or_heading_rewrite_inside_tilde_block_without_release(self, tmp_path: Path) -> None:
         long_code = "## " + "code " * 50
         f = tmp_path / "CHANGELOG.md"
-        f.write_text(f"~~~markdown\n{long_code.rstrip()}\n~~~\n## Outside\n", encoding="utf-8")
+        f.write_text(f"~~~markdown\n{long_code.rstrip()}\n~~~\n## Outside\n", encoding="utf-8", newline="\n")
         postprocess(f)
         result = f.read_text(encoding="utf-8")
         assert long_code.rstrip() in result
@@ -974,7 +983,7 @@ class TestCodeBlockLanguage:
 class TestIntegration:
     def test_atomic_replace_preserves_file_mode(self, tmp_path: Path) -> None:
         changelog = tmp_path / "CHANGELOG.md"
-        changelog.write_text("# Changelog\n\n* Original entry\n", encoding="utf-8")
+        changelog.write_text("# Changelog\n\n* Original entry\n", encoding="utf-8", newline="\n")
         changelog.chmod(416)
         original_mode = stat.S_IMODE(changelog.stat().st_mode)
         postprocess(changelog)
@@ -1039,7 +1048,7 @@ class TestIntegration:
         long_body = "  " + "word " * 40
         content = f"# Changelog\n\n## [0.7.2]\n\n### Added\n\n{long_entry}\n\n{long_body.rstrip()}\n\n"
         f = tmp_path / "CHANGELOG.md"
-        f.write_text(content, encoding="utf-8")
+        f.write_text(content, encoding="utf-8", newline="\n")
         postprocess(f)
         result = f.read_text(encoding="utf-8")
         for line in result.split("\n"):
@@ -1051,7 +1060,7 @@ class TestIntegration:
         entry = f"- Feature {_pr(42)} {_commit()}"
         content = f"# Changelog\n\n## [1.0.0] - 2026-01-01\n\n### Added\n\n{entry}\n"
         f = tmp_path / "CHANGELOG.md"
-        f.write_text(content, encoding="utf-8")
+        f.write_text(content, encoding="utf-8", newline="\n")
         postprocess(f)
         result = f.read_text(encoding="utf-8")
         assert "### Merged Pull Requests" in result
@@ -1110,14 +1119,14 @@ class TestPostprocess:
 
     def test_wraps_generated_markdown_to_the_configured_limit(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
-        f.write_text(f"# Changelog\n\n- {'release note ' * 20}\n", encoding="utf-8")
+        f.write_text(f"# Changelog\n\n- {'release note ' * 20}\n", encoding="utf-8", newline="\n")
         postprocess(f)
         assert max(map(len, f.read_text(encoding="utf-8").splitlines())) <= 160
 
     def test_preserves_original_if_atomic_replace_fails(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
         original = "# Changelog\n\n- Existing entry\n\n"
-        f.write_text(original, encoding="utf-8")
+        f.write_text(original, encoding="utf-8", newline="\n")
         with patch.object(type(f), "replace", side_effect=OSError("injected replace failure")), pytest.raises(OSError, match="injected replace failure"):
             postprocess(f)
         assert f.read_text(encoding="utf-8") == original
@@ -1126,21 +1135,21 @@ class TestPostprocess:
     def test_preserves_original_if_markdown_formatting_fails(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
         original = "# Changelog\n\n- Existing entry\n\n"
-        f.write_text(original, encoding="utf-8")
+        f.write_text(original, encoding="utf-8", newline="\n")
         failure = subprocess.CalledProcessError(1, ["rumdl"], stderr="unfixable Markdown")
         with (
             patch("research_repo_tools.postprocess_changelog.run_safe_command", side_effect=failure),
             pytest.raises(postprocess_changelog.MarkdownFormatError, match="unfixable Markdown"),
         ):
             rules = tmp_path / "rumdl.toml"
-            rules.write_text("[global]\nline-length = 160\n")
+            rules.write_text("[global]\nline-length = 160\n", newline="\n")
             postprocess(f, formatter=rules)
         assert f.read_text(encoding="utf-8") == original
         assert set(tmp_path.iterdir()) == {f, rules}
 
     def test_main_reports_atomic_replace_failure_without_traceback(self, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
         changelog = tmp_path / "CHANGELOG.md"
-        changelog.write_text("# Changelog\n", encoding="utf-8")
+        changelog.write_text("# Changelog\n", encoding="utf-8", newline="\n")
         with patch("research_repo_tools.postprocess_changelog.postprocess", side_effect=OSError("injected replace failure")):
             result = postprocess_changelog.main([str(changelog)])
         captured = capsys.readouterr()

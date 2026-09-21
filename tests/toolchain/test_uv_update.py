@@ -14,7 +14,7 @@ from research_repo_tools import cli, uv_update
 @pytest.fixture
 def project(tmp_path, monkeypatch):
     manifest = tmp_path / "pyproject.toml"
-    manifest.write_text('[project]\nname="example"\nversion="0.1.0"\n[tool.uv] # pin\nrequired-version = "==0.12.15" # keep\n')
+    manifest.write_text('[project]\nname="example"\nversion="0.1.0"\n[tool.uv] # pin\nrequired-version = "==0.12.15" # keep\n', newline="\n")
     monkeypatch.delenv("AXOUPDATER_CONFIG_WORKING_DIR", raising=False)
     monkeypatch.setenv("AXOUPDATER_CONFIG_PATH", str(tmp_path / "receipts"))
     return tmp_path
@@ -23,7 +23,9 @@ def project(tmp_path, monkeypatch):
 def standalone_receipt(project, installed):
     path = project / "receipts" / "uv-receipt.json"
     path.parent.mkdir(exist_ok=True)
-    path.write_text(json.dumps({"install_layout": "flat", "install_prefix": str(installed.parent), "binaries": [installed.name]}), encoding="utf-8")
+    path.write_text(
+        json.dumps({"install_layout": "flat", "install_prefix": str(installed.parent), "binaries": [installed.name]}), encoding="utf-8", newline="\n"
+    )
     return path
 
 
@@ -80,7 +82,7 @@ def test_failed_upgrade_preserves_repository_files(project, monkeypatch):
 
 def test_invalid_manifest_fails_before_upgrade(project, monkeypatch):
     manifest = project / "pyproject.toml"
-    manifest.write_text(manifest.read_text().replace("==0.12.15", ">=0.12.15"))
+    manifest.write_text(manifest.read_text().replace("==0.12.15", ">=0.12.15"), newline="\n")
     monkeypatch.setattr(uv_update.shutil, "which", lambda _: pytest.fail("must validate pin first"))
     with pytest.raises(ValueError, match="required-version"):
         uv_update.update(project)
@@ -117,7 +119,7 @@ def test_unverified_owner_never_invokes_self_update_or_changes_pin(project, monk
         path = standalone_receipt(project, installed)
         data = json.loads(path.read_text())
         if receipt == "malformed":
-            path.write_text("{")
+            path.write_text("{", newline="\n")
         else:
             if receipt == "other-installation":
                 data["install_prefix"] = str(project / "different uv")
@@ -129,7 +131,7 @@ def test_unverified_owner_never_invokes_self_update_or_changes_pin(project, monk
                 data["install_prefix"] = "tools"
             elif receipt == "non-object":
                 data = []
-            path.write_text(json.dumps(data), encoding="utf-8")
+            path.write_text(json.dumps(data), encoding="utf-8", newline="\n")
     monkeypatch.setattr(uv_update.shutil, "which", lambda _: str(installed))
     monkeypatch.setattr(uv_update, "check_uv", lambda **_: "0.12.15")
 
@@ -168,5 +170,5 @@ def test_xdg_receipt_does_not_fall_through_to_another_installation(project, monk
     assert uv_update._standalone_installation(installed)
     primary = project / "xdg" / "uv"
     primary.mkdir(parents=True)
-    primary.joinpath("uv-receipt.json").write_text("{}")
+    primary.joinpath("uv-receipt.json").write_text("{}", newline="\n")
     assert not uv_update._standalone_installation(installed)

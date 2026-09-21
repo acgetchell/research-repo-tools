@@ -19,8 +19,8 @@ def consumer(tmp_path, monkeypatch):
         b'[project]\r\nrequires-python = ">=3.14"\r\n[tool.uv]\r\nrequired-version = "==0.12.16"\r\n'
         b"[tool.research-repo-tools.toolchain.cargo]\r\ncargo-nextest = \"0.9.100\" # retained\r\ngit-cliff = '2.14.1'\r\n"
     )
-    (tmp_path / ".python-version").write_text("3.14\n")
-    (tmp_path / "rust-toolchain.toml").write_text('[toolchain]\nchannel="1.98.0"\n')
+    (tmp_path / ".python-version").write_text("3.14\n", newline="\n")
+    (tmp_path / "rust-toolchain.toml").write_text('[toolchain]\nchannel="1.98.0"\n', newline="\n")
     monkeypatch.setattr(toolchain.Runtime, "uv_status", lambda self: toolchain.Status("uv", "0.12.16", "0.12.16", "uv", True))
     monkeypatch.setattr(upgrade, "latest_stable", lambda package: {"cargo-nextest": "0.9.101", "git-cliff": "2.15.0"}[package])
     return manifest
@@ -123,7 +123,7 @@ def test_dry_run_resolves_without_installing_or_writing(consumer, monkeypatch, c
     ],
 )
 def test_version_precedence_never_downgrades_or_replaces_equal_builds(consumer, monkeypatch, pin, latest, expected):
-    consumer.write_text(consumer.read_text().replace("2.14.1", pin))
+    consumer.write_text(consumer.read_text().replace("2.14.1", pin), newline="\n")
     monkeypatch.setattr(upgrade, "latest_stable", lambda name: latest if name == "git-cliff" else "0.9.100")
     calls = []
     monkeypatch.setattr(toolchain.Runtime, "sync", lambda self: calls.append(self.plan))
@@ -134,7 +134,7 @@ def test_version_precedence_never_downgrades_or_replaces_equal_builds(consumer, 
 
 def test_standalone_config_updates_its_own_pins(consumer, monkeypatch):
     standalone = consumer.parent / "settings.toml"
-    standalone.write_text('[toolchain.cargo]\n"git-cliff" = "2.14.1" # keep\n')
+    standalone.write_text('[toolchain.cargo]\n"git-cliff" = "2.14.1" # keep\n', newline="\n")
     before = consumer.read_bytes()
     monkeypatch.setattr(toolchain.Runtime, "sync", lambda _: None)
     assert cli.main(["--config", str(standalone), "toolchain", "upgrade"]) == 0
@@ -143,7 +143,7 @@ def test_standalone_config_updates_its_own_pins(consumer, monkeypatch):
 
 
 def test_unsupported_tools_fail_before_registry_or_install(consumer, monkeypatch):
-    consumer.write_text(consumer.read_text().replace("git-cliff", "unknown-tool"))
+    consumer.write_text(consumer.read_text().replace("git-cliff", "unknown-tool"), newline="\n")
     monkeypatch.setattr(upgrade, "latest_stable", lambda _: pytest.fail("unsupported tool queried"))
     with pytest.raises(ValueError, match="unsupported Cargo tool"):
         upgrade.upgrade(config.load(root=consumer.parent))
@@ -168,7 +168,7 @@ def test_registry_rejects_yanked_and_prerelease_versions_and_uses_semver_order(m
 
 @pytest.mark.parametrize("package", ["cargo-audit", "cargo-machete", "clippy-sarif", "samply", "sarif-fmt", "tectonic", "tex-fmt"])
 def test_additional_catalog_tools_resolve_verify_and_publish(consumer, monkeypatch, package):
-    consumer.write_text(consumer.read_text().replace("git-cliff", package))
+    consumer.write_text(consumer.read_text().replace("git-cliff", package), newline="\n")
     monkeypatch.setattr(upgrade, "latest_stable", lambda name: "3.0.0" if name == package else "0.9.100")
     selected = []
 
@@ -202,7 +202,7 @@ def test_registry_malformed_entries_fail(entry, monkeypatch):
 def test_dotted_keys_preserve_comments_and_other_values(consumer, monkeypatch):
     text = consumer.read_text().replace("[tool.research-repo-tools.toolchain.cargo]\n", "[tool.research-repo-tools]\n")
     text = text.replace("cargo-nextest = ", "toolchain.cargo.cargo-nextest = ").replace("git-cliff = ", "toolchain.cargo.'git-cliff' = ")
-    consumer.write_text(text)
+    consumer.write_text(text, newline="\n")
     monkeypatch.setattr(toolchain.Runtime, "sync", lambda _: None)
     upgrade.upgrade(config.load(root=consumer.parent))
     assert consumer.read_text() == text.replace("0.9.100", "0.9.101").replace("2.14.1", "2.15.0")
