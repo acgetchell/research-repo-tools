@@ -76,6 +76,14 @@ no plotting, numeric, or notebook dependencies. See the
 [consumer examples](../README.md#performance-evidence) and
 [retained-evidence migration](performance-migration.md).
 
+`research_repo_tools.publication` and `research_repo_tools.publication_config`
+provide byte-preserving document sections, deterministic timing tables/SVGs,
+exact tagged-blob checks, and transactional publication plans. See the
+[publication API contract](publication-api.md),
+[consumer configuration](../README.md#document-publication), and
+[publication migration](publication-migration.md). These also require the release
+containing them after `0.1.2` and add no plotting dependencies.
+
 ## Python process API
 
 The following imports from `research_repo_tools.process` are supported starting

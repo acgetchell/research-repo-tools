@@ -40,7 +40,10 @@ The [performance APIs](performance-api.md) provide Criterion timing comparisons,
 exact-byte evidence envelopes, provenance comparison, bounded archive retrieval
 and extraction, and transactional promotion. Follow the
 [retained-evidence migration plan](performance-migration.md) before adoption.
-Plotting, scientific case definitions, benchmark execution, and worktree/harness
+The [publication API](publication-api.md) adds document sections and deterministic
+SVG figures from that evidence; follow its [migration guide](publication-migration.md)
+for historical formats and tagged artifact guarantees. Custom plotting,
+scientific case definitions, benchmark execution, and worktree/harness
 orchestration remain in consumers, whose execution contracts differ.
 
 To adopt the package:

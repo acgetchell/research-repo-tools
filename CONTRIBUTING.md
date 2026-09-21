@@ -73,9 +73,12 @@ a behavioral change needs verification. Run `just ci` once the
 work is ready for final review.
 It runs checks and tests with coverage, builds wheel and sdist artifacts, and installs both
 outside the checkout with uv. Installation checks exercise the console entry
-point, public process/publication/release-plan/performance consumer contracts,
+point, public process/file-publication/release-plan/performance/document-publication consumer contracts,
 imports, packaged templates, runtime dependencies, and the bundled `just` executable.
 See [Validation](docs/VALIDATING.md) for check coverage and agent restrictions.
+New Git-mutating pytest fixtures must depend on `git_mutations_allowed`.
+Standalone unittest consumer suites must skip those fixtures before setup when
+`RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS=1`, including during installation checks.
 Hosted CI builds once and installs the same wheel and sdist on all three platforms
 using `just check-dist`. Linux uses `just coverage`; macOS and Windows use
 `just test`. CI calls the reusable `codecov.yml` workflow to upload the Linux
@@ -150,7 +153,7 @@ See [Supported interfaces](docs/api.md) for the CLI, configuration, and public
 Python entry-point contract.
 
 Maintain one implementation per common capability under `src/research_repo_tools/`.
-Organize tests under `tests/changelog`, `dependencies`, `notebooks`, `performance`, `releases`, `review`, `semgrep`, `toolchain`, and
+Organize tests under `tests/changelog`, `dependencies`, `notebooks`, `performance`, `publication`, `releases`, `review`, `semgrep`, `toolchain`, and
 `utilities`. Fixtures should be small representative inputs generated in temporary
 directories. Preserve meaningful regression assertions against this package;
 merge duplicates instead of maintaining historical implementations or repository

@@ -285,25 +285,30 @@ def parse_comparison(payload: bytes) -> ComparisonSet:
     return compare_samples(sample(document["baseline"]), sample(document["current"]))
 
 
+def _markdown_text(value: str) -> str:
+    escaped = html.escape(value)
+    for char in "|`\\*[]_":
+        escaped = escaped.replace(char, f"&#{ord(char)};")
+    return escaped
+
+
+def _format_estimate(estimate: Estimate | None, unit: Unit) -> str:
+    if estimate is None:
+        return "—"
+    point = f"{estimate.point:g} {unit}"
+    if estimate.lower is not None and estimate.upper is not None:
+        point += f" [{estimate.lower:g}, {estimate.upper:g}]"
+        if estimate.confidence_level is not None:
+            point += f" ({estimate.confidence_level:g} confidence)"
+    return point
+
+
 def render_comparison(comparison: ComparisonSet) -> str:
     """Render retained timing data without measuring or consulting live source.
 
     Keep domain-specific labels, acceptance thresholds, significance, and
     scientific narrative in the consumer's renderer.
     """
-
-    def escape(value: str) -> str:
-        return html.escape(value).replace("|", "&#124;").replace("`", "&#96;")
-
-    def timing(estimate: Estimate | None) -> str:
-        if estimate is None:
-            return "—"
-        point = f"{estimate.point:g} {comparison.baseline.unit}"
-        if estimate.lower is not None and estimate.upper is not None:
-            point += f" [{estimate.lower:g}, {estimate.upper:g}]"
-            if estimate.confidence_level is not None:
-                point += f" ({estimate.confidence_level:g} confidence)"
-        return point
 
     lines = [
         "# Criterion timing comparison",
@@ -321,7 +326,9 @@ def render_comparison(comparison: ComparisonSet) -> str:
         row = pairs.get(name)
         coverage = "common" if row is not None else "added" if name in current else "missing"
         ratio, reduction = (f"{row.speedup:.6g}", f"{row.percent_reduction:.6g}") if row is not None else ("—", "—")
-        lines.append(f"| {escape(name)} | {coverage} | {timing(baseline.get(name))} | {timing(current.get(name))} | {ratio} | {reduction} |")
+        lines.append(
+            f"| {_markdown_text(name)} | {coverage} | {_format_estimate(baseline.get(name), comparison.baseline.unit)} | {_format_estimate(current.get(name), comparison.baseline.unit)} | {ratio} | {reduction} |"
+        )
     if not baseline and not current:
         lines.extend(["", "No benchmark estimates."])
     return "\n".join(lines) + "\n"
