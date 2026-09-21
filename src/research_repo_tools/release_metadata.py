@@ -469,14 +469,17 @@ def _changelog_comparison_references(path: Path, version: str) -> list[VersionRe
     return references
 
 
-def _iter_markdown_files(root: Path) -> list[Path]:
+def _iter_markdown_files(root: Path, policy: ReleasePolicy | None = None) -> list[Path]:
     """Return active Markdown files that can carry current release references."""
     markdown_files: list[Path] = []
     for dirpath, dirnames, filenames in os.walk(root):
         relative_dir = Path(dirpath).relative_to(root)
         dirnames[:] = [dirname for dirname in dirnames if not (set((relative_dir / dirname).parts) & SKIP_DIRS)]
         markdown_files.extend(Path(dirpath) / filename for filename in filenames if filename.endswith(".md") and filename not in SKIP_MARKDOWN_FILES)
-    return sorted(markdown_files, key=lambda path: path.relative_to(root).as_posix())
+    return sorted(
+        (path for path in markdown_files if policy is None or not policy.excludes(path.relative_to(root).as_posix())),
+        key=lambda path: path.relative_to(root).as_posix(),
+    )
 
 
 def _dependency_regex(package_name: str) -> re.Pattern[str]:
@@ -533,7 +536,7 @@ def python_version_references(root: Path) -> list[VersionReference]:
     return references
 
 
-def _version_references(root: Path, package: PackageInfo) -> list[VersionReference]:
+def _version_references(root: Path, package: PackageInfo, policy: ReleasePolicy | None = None) -> list[VersionReference]:
     """Collect all current-release references that should match the package manifest."""
     changelog_path = root / "CHANGELOG.md"
     references = [*cargo_lock_references(root, package), *python_version_references(root), _changelog_reference(changelog_path)]
@@ -541,16 +544,20 @@ def _version_references(root: Path, package: PackageInfo) -> list[VersionReferen
         references.append(_citation_reference(root / "CITATION.cff"))
     references.extend(_changelog_comparison_references(changelog_path, package.version))
     if package.name and (root / "Cargo.toml").is_file():
-        for path in _iter_markdown_files(root):
+        for path in _iter_markdown_files(root, policy):
             references.extend(_dependency_references(path, package.name))
             references.extend(_cargo_add_references(path, package.name))
     return references
 
 
-def find_version_mismatches(root: Path) -> list[VersionMismatch]:
+def find_version_mismatches(root: Path, *, policy: ReleasePolicy | None = None) -> list[VersionMismatch]:
     """Return release-version references that differ from the package manifest."""
     package = read_package_info(root)
-    return [VersionMismatch(reference=reference, package=package) for reference in _version_references(root, package) if reference.version != package.version]
+    return [
+        VersionMismatch(reference=reference, package=package)
+        for reference in _version_references(root, package, policy)
+        if reference.version != package.version
+    ]
 
 
 def find_release_metadata_mismatches(root: Path, *, policy: ReleasePolicy | None = None) -> list[MetadataMismatch]:
@@ -594,40 +601,21 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def check(root: Path, *, policy: ReleasePolicy | None = None) -> int:
-    """Validate one consumer with the caller's explicitly selected policy."""
-    root = root.resolve()
+def check(root: Path, *, policy: ReleasePolicy | None = None, previous_tag: str | None = None) -> int:
+    """Print the structured release check result for command-line consumers."""
+    from research_repo_tools.releases import check_release
+
     try:
-        package = read_package_info(root)
-        mismatches = find_version_mismatches(root)
-        metadata_mismatches = find_release_metadata_mismatches(root, policy=policy)
-    except (OSError, ReleaseCheckError, tomllib.TOMLDecodeError) as error:
+        result = check_release(root, policy=policy, previous_tag=previous_tag)
+    except (OSError, ValueError) as error:
         print(f"Could not check release-version synchronization: {error}", file=sys.stderr)
         return 1
-
-    if mismatches:
-        print("Release-version references are out of sync with Cargo.toml:", file=sys.stderr)
-        for mismatch in mismatches:
-            reference = mismatch.reference
-            rel_path = reference.path.relative_to(root)
-            print(
-                f"  {rel_path}:{reference.line}: {reference.kind} found {reference.version}, expected {mismatch.package.version}: {reference.text}",
-                file=sys.stderr,
-            )
+    if result.problems:
+        print("Release-version references are out of sync or release policy failed:", file=sys.stderr)
+        for problem in result.problems:
+            print(f"  {problem}", file=sys.stderr)
         return 1
-
-    if metadata_mismatches:
-        print("Release DOI or date references are out of sync:", file=sys.stderr)
-        for mismatch in metadata_mismatches:
-            reference = mismatch.reference
-            rel_path = reference.path.relative_to(root)
-            print(
-                f"  {rel_path}:{reference.line}: {reference.kind} found {reference.value}, expected {mismatch.expected}: {reference.text}",
-                file=sys.stderr,
-            )
-        return 1
-
-    print(f"Release metadata is synchronized at {package.version}.")
+    print(f"Release metadata is synchronized at {result.discovery.package.version}.")
     return 0
 
 

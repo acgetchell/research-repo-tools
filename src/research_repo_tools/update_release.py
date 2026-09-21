@@ -4,30 +4,25 @@ import argparse
 import re
 import subprocess
 import sys
-import tempfile
 import tomllib
 from dataclasses import dataclass
-from datetime import UTC, date, datetime
+from datetime import UTC, datetime
 from pathlib import Path
 
 from research_repo_tools.archive_changelog import replace_release_date
-from research_repo_tools.config import ReleasePolicy, load
+from research_repo_tools.config import ReleasePolicy
 from research_repo_tools.process import ExecutableNotFoundError, get_safe_executable
 from research_repo_tools.release_discovery import _publish_texts, _published_releases, _tag_version, normalize_tag
 from research_repo_tools.release_metadata import (
-    ReferenceKind,
     _cargo_add_regex,
     _citation_date_reference,
     _citation_reference,
     _dependency_regex,
     _iter_markdown_files,
     cargo_lock_references,
-    find_release_metadata_mismatches,
-    find_version_mismatches,
     package_version_reference,
     python_version_references,
     read_package_info,
-    workspace_member_manifests,
 )
 from research_repo_tools.toml_source import KEY_PATTERN
 
@@ -115,7 +110,7 @@ def sync_changelog_date(root: Path, tag: str) -> None:
         _publish_texts(((changelog, prepared),))
 
 
-def _prepare_updates(root: Path, tag: str, previous: str, release_date: str) -> dict[Path, str]:
+def _prepare_updates(root: Path, tag: str, previous: str, release_date: str, *, policy: ReleasePolicy | None = None) -> dict[Path, str]:
     version = tag.removeprefix("v")
     allowed = frozenset({version, previous.removeprefix("v")})
     package = read_package_info(root)
@@ -139,7 +134,7 @@ def _prepare_updates(root: Path, tag: str, previous: str, release_date: str) -> 
             updates[citation] = updates[citation].rstrip("\r\n") + newline + f"date-released: {release_date}" + newline
     changelog = root / "CHANGELOG.md"
     updates[changelog] = _changelog_with_date(changelog, version, release_date)
-    for path in _iter_markdown_files(root):
+    for path in _iter_markdown_files(root, policy):
         text = _read_text(path)
         if package.name and (root / "Cargo.toml").is_file():
             text = _dependency_regex(package.name).sub(
@@ -148,45 +143,6 @@ def _prepare_updates(root: Path, tag: str, previous: str, release_date: str) -> 
             text = _cargo_add_regex(package.name).sub(lambda match: _replace_version_match(match, version, allowed, "version"), text)
         updates[path] = text
     return updates
-
-
-def _validate_prepared(updates: dict[Path, str], root: Path, previous: str, *, policy: ReleasePolicy | None = None) -> None:
-    """Validate the complete proposed file set without replacing any repository file."""
-    root = root.resolve()
-    with tempfile.TemporaryDirectory(prefix="research-release-validation-") as directory:
-        # Preserve the root name so contained ../<root>/member spellings also
-        # resolve within the isolated copy when the manifest is validated.
-        staged = Path(directory).resolve() / root.name
-        staged.mkdir()
-
-        def destination_for(source: Path) -> Path:
-            resolved = source.resolve()
-            if source.is_symlink() or not resolved.is_relative_to(root):
-                raise ValueError(f"release metadata must be a repository-contained regular file: {source}")
-            destination = (staged / resolved.relative_to(root)).resolve()
-            if not destination.is_relative_to(staged):
-                raise ValueError(f"release staging destination escapes temporary tree: {destination}")
-            return destination
-
-        cargo = root / "Cargo.toml"
-        if cargo.is_file():
-            for source in workspace_member_manifests(root):
-                destination = destination_for(source)
-                destination.parent.mkdir(parents=True, exist_ok=True)
-                destination.write_bytes(source.read_bytes())
-        for path, text in updates.items():
-            destination = destination_for(path)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            destination.write_bytes(text.encode("utf-8"))
-        mismatches = [
-            mismatch
-            for mismatch in find_version_mismatches(staged)
-            if not (mismatch.reference.kind == ReferenceKind.CHANGELOG and mismatch.reference.version == previous.removeprefix("v"))
-        ]
-        metadata = find_release_metadata_mismatches(staged, policy=policy)
-        if mismatches or metadata:
-            msg = "prepared release metadata failed validation: " + "; ".join(str(item) for item in [*mismatches, *metadata])
-            raise ValueError(msg)
 
 
 def update_release_version(
@@ -199,30 +155,22 @@ def update_release_version(
     policy: ReleasePolicy | None = None,
 ) -> UpdateSummary:
     """Validate then atomically replace owned metadata; restore prior contents on failure."""
-    root = root.resolve()
+    from research_repo_tools.releases import apply_release, plan_release
+
     tag = parse_release_tag(tag)
-    owned = {root / name for name in ("Cargo.toml", "Cargo.lock", "pyproject.toml", "uv.lock", "CITATION.cff", "CHANGELOG.md")}
-    owned.update(_iter_markdown_files(root))
-    for path in owned:
-        if path.is_symlink() or not path.resolve().is_relative_to(root):
-            msg = f"release metadata must be a repository-contained regular file, not a symbolic link: {path}"
-            raise ValueError(msg)
-    previous = parse_release_tag(previous_tag) if previous_tag is not None else infer_previous_release(root, tag)
-    if _tag_version(previous) >= _tag_version(tag):
-        msg = f"previous release {previous} must precede {tag}"
-        raise ValueError(msg)
-    today = release_date if release_date is not None else datetime.now(UTC).date().isoformat()
-    if date.fromisoformat(today).isoformat() != today:
-        msg = "release date must use YYYY-MM-DD form"
-        raise ValueError(msg)
-    updates = _prepare_updates(root, tag, previous, today)
-    if policy is None:
-        policy = load(root=root).release
-    _validate_prepared(updates, root, previous, policy=policy)
-    changed = tuple((path, updates[path]) for path in sorted(updates, key=lambda path: path.relative_to(root).as_posix()) if _read_text(path) != updates[path])
+    if previous_tag is not None:
+        previous_tag = parse_release_tag(previous_tag)
+    plan = plan_release(
+        root,
+        tag,
+        previous_tag=previous_tag,
+        release_date=release_date if release_date is not None else datetime.now(UTC).date().isoformat(),
+        policy=policy,
+    )
     if not dry_run:
-        _publish_texts(changed)
-    return UpdateSummary(tag, previous, today, tuple(path for path, _ in changed))
+        apply_release(plan)
+    assert plan.context.previous_tag is not None
+    return UpdateSummary(plan.context.tag, plan.context.previous_tag, plan.context.release_date, tuple(plan.discovery.root / edit.path for edit in plan.edits))
 
 
 def main(argv: list[str] | None = None) -> int:

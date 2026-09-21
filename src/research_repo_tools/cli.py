@@ -63,7 +63,9 @@ def parser() -> argparse.ArgumentParser:
         if action == "lint":
             command.add_argument("--timeout", type=int, default=30, help="positive per-checker timeout in seconds (default: 30)")
     release = groups.add_parser("release", help="check and synchronize release metadata").add_subparsers(dest="action", required=True)
-    release.add_parser("check").add_argument("--final-release", action="store_true")
+    command = release.add_parser("check")
+    command.add_argument("--final-release", action="store_true")
+    command.add_argument("--previous-release")
     command = release.add_parser("update")
     command.add_argument("version")
     command.add_argument("--date")
@@ -206,7 +208,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         from research_repo_tools import release_metadata, update_release
 
         if args.action == "check":
-            return release_metadata.check(settings.root, policy=policy)
+            return release_metadata.check(settings.root, policy=policy, previous_tag=args.previous_release)
         if not args.version:
             raise ValueError("release update requires a target version")
         from research_repo_tools.release_discovery import normalize_tag

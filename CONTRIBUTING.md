@@ -72,7 +72,7 @@ a behavioral change needs verification. Run `just ci` once the
 work is ready for final review.
 It runs checks and tests with coverage, builds wheel and sdist artifacts, and installs both
 outside the checkout with uv. Installation checks exercise the console entry
-point, public process/publication consumer contracts, imports, packaged templates, runtime dependencies, and the bundled `just` executable.
+point, public process/publication/release-plan consumer contracts, imports, packaged templates, runtime dependencies, and the bundled `just` executable.
 See [Validation](docs/VALIDATING.md) for check coverage and agent restrictions.
 Hosted CI builds once and installs the same wheel and sdist on all three platforms
 using `just check-dist`. Linux uses `just coverage`; macOS and Windows use

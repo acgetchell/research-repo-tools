@@ -5,14 +5,17 @@ from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 from types import MappingProxyType
-from typing import Literal, TypeIs
+from typing import Literal, TypeIs, cast
+
+from research_repo_tools.release_policy import ReleasePolicy as ReleasePolicy
+from research_repo_tools.release_policy import ReleaseRule
 
 FIELDS = {
     "notebooks": {"group", "cwd", "output-dir", "timeout", "outputs"},
     "toolchain": {"cargo"},
     "deps": {"pyproject", "justfile", "tools", "uv"},
     "semgrep": {"config", "fixtures", "namespace", "timeout", "cwd", "counts"},
-    "release": {"date-policy", "final-changelog"},
+    "release": {"date-policy", "final-changelog", "required-files", "exclude", "rules"},
     "changelog": {"formatter", "cliff-config", "owner", "repository"},
 }
 
@@ -56,12 +59,6 @@ class SemgrepSettings:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "counts", MappingProxyType({path: MappingProxyType(dict(counts)) for path, counts in self.counts.items()}))
-
-
-@dataclass(frozen=True, slots=True)
-class ReleasePolicy:
-    date_policy: Literal["today", "declared"] = "today"
-    final_changelog: bool = False
 
 
 @dataclass(frozen=True, slots=True)
@@ -141,6 +138,39 @@ def _counts(value: object, root: Path) -> dict[Path, Mapping[str, int]]:
     return result
 
 
+def _release_paths(value: object, context: str) -> tuple[str, ...]:
+    if not isinstance(value, list):
+        raise ValueError(f"{context} must be an array of paths")
+    return tuple(_string(item, context) for item in value)
+
+
+def _release_rules(value: object) -> tuple[ReleaseRule, ...]:
+    if not isinstance(value, list):
+        raise ValueError("release.rules must be an array of tables")
+    rules = []
+    for item in value:
+        rule = _table(item, "release rule")
+        if rule.keys() - {"path", "pattern", "value", "source", "count", "exclude"}:
+            raise ValueError("unknown release rule field")
+        source = rule.get("source")
+        if source not in (None, "version", "tag", "previous-tag", "release-date"):
+            raise ValueError("invalid release rule source")
+        count = rule.get("count", 1)
+        if type(count) is not int:
+            raise ValueError("release rule count must be a positive integer")
+        rules.append(
+            ReleaseRule(
+                path=_string(rule.get("path"), "release rule path"),
+                pattern=_string(rule.get("pattern"), "release rule pattern"),
+                value=_optional_string(rule, "value", "release rule"),
+                source=cast(Literal["version", "tag", "previous-tag", "release-date"] | None, source),
+                count=count,
+                exclude=_optional_string(rule, "exclude", "release rule"),
+            )
+        )
+    return tuple(rules)
+
+
 def parse(value: object, *, root: Path) -> Config:
     """Reject invalid fields and ambiguous paths before publishing trusted settings."""
     data = _table(value, "research-repo-tools configuration")
@@ -192,7 +222,13 @@ def parse(value: object, *, root: Path) -> Config:
             cwd=_string(semgrep.get("cwd", "."), "semgrep.cwd"),
             counts=_counts(semgrep.get("counts", {}), root),
         ),
-        release=ReleasePolicy(date_policy, final),
+        release=ReleasePolicy(
+            date_policy,
+            final,
+            required_files=_release_paths(release.get("required-files", []), "release.required-files"),
+            exclude=_release_paths(release.get("exclude", []), "release.exclude"),
+            rules=_release_rules(release.get("rules", [])),
+        ),
         changelog=ChangelogSettings(
             formatter=_optional_string(changelog, "formatter", "changelog"),
             cliff_config=_optional_string(changelog, "cliff-config", "changelog"),

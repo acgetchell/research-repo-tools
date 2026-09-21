@@ -78,7 +78,7 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | Dependencies | `deps check-uv`, `update-python`, `update-tools`, `update-uv` | Exact development pins; canonical Cargo SemVer; stable uv pins |
 | Documentation | `docs check-lines` | UTF-8 Markdown line checks with table exemptions |
 | Notebooks | `notebooks check`, `clear`, `execute`, `group`, `lint`, `sync` | Optional locked environment, cell-aware Ruff/ty checks, and execution reports |
-| Release metadata | `release check`, `release update` | Infer Cargo or Python metadata; validate before replacing files |
+| Release metadata | `release check`, `release update` | Infer metadata, apply declared policies, and validate complete release plans |
 | Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
 | Semgrep fixtures | `semgrep check-fixtures` | Validate consumer-supplied rules and positive fixture coverage |
 | Setup | `setup` | Require uv; install user Just and declared tools; sync the locked environment |
@@ -346,6 +346,30 @@ Text execution uses explicit UTF-8 by default; byte execution preserves LF, CRLF
 and binary data. Publication stages every file first and rolls back caught
 replacement failures. See [supported interfaces][api] for lookup behavior, typed
 results/errors, recovery backups, concurrency limits, and API stability.
+
+### Preparing a structured release
+
+The release API requires a published version newer than `0.1.2` containing it.
+It replaces wrapper-owned discovery, staging, CLI-output parsing, and rollback:
+
+```python
+from pathlib import Path
+
+from research_repo_tools.releases import apply_release, plan_release
+
+plan = plan_release(
+    Path.cwd(), "v1.2.4", previous_tag="v1.2.3", release_date="2026-09-20",
+)
+for edit in plan.edits:
+    print(edit.path)  # Inspect edit.before and edit.after for the exact byte diff.
+# Omit apply_release for a fully validated preview.
+result = apply_release(plan)
+```
+
+Declare required files, fixed metadata, and selected active references in
+[release configuration][release]. Add a small Python adapter when validation
+needs consumer-owned evidence rules. See the [worked MCMC-style migration](docs/release-policy-migration.md)
+and [typed API contract][api]. Historical evidence stays excluded from updates.
 
 ## Templates and optional settings
 
