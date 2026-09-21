@@ -3,6 +3,7 @@
 import argparse
 import os
 import re
+import subprocess
 import sys
 import tomllib
 from dataclasses import dataclass
@@ -607,7 +608,7 @@ def check(root: Path, *, policy: ReleasePolicy | None = None, previous_tag: str 
 
     try:
         result = check_release(root, policy=policy, previous_tag=previous_tag)
-    except (OSError, ValueError) as error:
+    except (OSError, ValueError, subprocess.SubprocessError) as error:
         print(f"Could not check release-version synchronization: {error}", file=sys.stderr)
         return 1
     if result.problems:

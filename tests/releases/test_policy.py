@@ -84,9 +84,10 @@ def test_unexpected_active_versions_fail_preview_and_apply_equally(tmp_path, cap
     assert "unexpected active release version" in errors[0]
 
 
-def test_explicit_revision_selector_can_promote_main_without_touching_old_evidence(tmp_path):
+@pytest.mark.parametrize("newline", [b"\n", b"\r\n"], ids=["lf", "crlf"])
+def test_explicit_revision_selector_can_promote_main_without_touching_old_evidence(tmp_path, newline):
     _write_project(tmp_path)
-    (tmp_path / "active.md").write_text("source main\nmeasured v0.1.0\n")
+    (tmp_path / "active.md").write_bytes(b"source main" + newline + b"measured v0.1.0" + newline)
     policy = ReleasePolicy(rules=(ReleaseRule("active.md", r"source (?P<value>main|[0-9a-f]{7,40}|v\d+\.\d+\.\d+)", source="tag"),))
     plan = plan_release(tmp_path, "1.2.4", previous_tag="1.2.3", policy=policy)
-    assert next(edit.after for edit in plan.edits if edit.path == Path("active.md")) == b"source v1.2.4\nmeasured v0.1.0\n"
+    assert next(edit.after for edit in plan.edits if edit.path == Path("active.md")) == b"source v1.2.4" + newline + b"measured v0.1.0" + newline

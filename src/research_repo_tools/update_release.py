@@ -154,7 +154,7 @@ def update_release_version(
     dry_run: bool = False,
     policy: ReleasePolicy | None = None,
 ) -> UpdateSummary:
-    """Validate then atomically replace owned metadata; restore prior contents on failure."""
+    """Validate then transactionally replace owned metadata; roll back on failure."""
     from research_repo_tools.releases import apply_release, plan_release
 
     tag = parse_release_tag(tag)
