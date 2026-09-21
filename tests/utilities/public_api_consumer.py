@@ -32,14 +32,16 @@ class TestProcess(ConsumerCase):
         python = resolve_executable(sys.executable)
         self.assertTrue(python.is_absolute())
         self.assertEqual(resolve_executable(python.name, env={"PATH": str(python.parent)}), python)
-        relative = Path(os.path.relpath(python, self.root))
-        self.assertEqual(resolve_executable(relative, cwd=self.root).resolve(), python.resolve())
+        # The interpreter and temporary consumer can be on different Windows
+        # drives. Test a relative executable from its own directory instead.
+        relative = Path("..") / python.parent.name / python.name
+        self.assertEqual(resolve_executable(relative, cwd=python.parent).resolve(), python.resolve())
         with self.assertRaises(ExecutableNotFoundError):
             resolve_executable("absent-public-api-command", env={"PATH": str(self.root)})
         with self.assertRaises(ExecutableNotFoundError):
             run_command("absent-public-api-command")
         probe = "import os,sys; print(os.getcwd()); print(sys.argv[1]); print(os.environ['API_MARKER'])"
-        result = run_command(python, ["-c", probe, "a b; $(literal)"], cwd=self.root, env={**os.environ, "API_MARKER": "é"})
+        result = run_command(python, ["-c", probe, "a b; $(literal)"], cwd=self.root, env={**os.environ, "API_MARKER": "é", "PYTHONIOENCODING": "utf-8"})
         self.assertEqual(result.returncode, 0)
         self.assertEqual(result.stdout.splitlines(), [str(self.root), "a b; $(literal)", "é"])
         self.assertEqual(result.stderr, "")
