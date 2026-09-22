@@ -236,6 +236,58 @@ consumer checks for coupled dependencies and additional manifests. Review both
 manifests and lockfiles after updating. See [update adoption][update-adoption]
 for superseded policies and consumer integration requirements.
 
+#### User-installed tool updates
+
+A machine-configuration repository can use the same dependency commands while
+owning its user-wide Cargo installations. Keep the shared package's exact pin in
+the `tooling` group, included by `dev`, and map only the Just pins the repository
+owns:
+
+```toml
+[tool.research-repo-tools.deps.tools]
+just_version = "just"
+nextest_version = "cargo-nextest"
+uv_version = "uv"
+```
+
+Merge these thin recipes into the repository's existing update workflow:
+
+```just
+# Validate the selected uv executable's stable X.Y.Z version output.
+check-uv:
+    uv run --locked --only-group tooling --inexact research-repo-tools deps check-uv
+
+# Upgrade user-installed Cargo packages before reconciling the owned Just pins.
+update-cargo-tools:
+    cargo install-update --all --locked
+    uv run --locked --only-group tooling --inexact research-repo-tools deps update-tools
+
+# Advance direct dev pins, then refresh the entire lock and synchronize dev.
+update-python-dependencies:
+    uv run --locked --only-group tooling --inexact research-repo-tools deps update-python
+    uv lock --upgrade
+    uv sync --locked --group dev
+```
+
+`cargo install-update` requires the separately installed `cargo-update` package.
+Its `--all` scope covers the user's Cargo installations; `--locked` retains each
+tool's published dependency resolution. A failed Cargo upgrade stops before pin
+reconciliation. Successfully upgraded tools remain installed and can be reconciled
+on retry. `deps update-tools` reads `cargo install --list` and the selected uv
+version, validates every mapped assignment, and updates only those Just pins.
+It does not install tools; `--dry-run` previews the pin changes.
+
+`deps check-uv` validates stable version syntax; it does not install uv or assert
+equality with a Just pin. Python pin updates preserve intentional ranges, markers,
+extras, and included-group pins. A universal resolution requiring multiple
+versions for one direct exact pin fails before changing the manifest or lock.
+Even when no direct pin changes, the recipe still upgrades the full lock and
+synchronizes `dev`.
+
+Shell bootstrap, Homebrew, stow, and machine-wide update ordering remain consumer
+policy. The standard research-project template continues to use isolated managed
+Cargo installations through `toolchain upgrade`.
+
 `changelog tag TAG` creates a local annotated tag when explicitly invoked.
 `--dry-run` previews it. Generation needs git-cliff; tagging needs Git. Optional
 formatting needs rumdl, fixture validation needs Semgrep, and dependency

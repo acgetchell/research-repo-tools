@@ -59,24 +59,30 @@ assert main(["--root", str(consumer), "notebooks", "check", str(notebook)]) == 1
 
 
 def check_python_update(consumer: Path, artifact: Path, version: str, uv: str, just: Path, env: dict[str, str]) -> None:
-    """Prove full lock upgrades and explicit dev sync with the installed template."""
+    """Prove exact pins, retained constraints, full lock upgrades, and dev sync."""
     consumer.mkdir()
     wheels = consumer / "wheels"
     wheels.mkdir()
+    # The script resolver uses this local registry, not project source overrides.
+    # Make the unpublished candidate available without relying on a PyPI release.
+    shutil.copyfile(artifact, wheels / artifact.name)
 
-    def fixture(release: str) -> None:
-        info = f"update_fixture-{release}.dist-info"
-        with zipfile.ZipFile(wheels / f"update_fixture-{release}-py3-none-any.whl", "w") as archive:
-            archive.writestr(f"{info}/METADATA", f"Metadata-Version: 2.3\nName: update-fixture\nVersion: {release}\nRequires-Python: >=3.14\n")
+    def fixture(name: str, release: str, requires_python: str = ">=3.14") -> None:
+        distribution = name.replace("-", "_")
+        info = f"{distribution}-{release}.dist-info"
+        with zipfile.ZipFile(wheels / f"{distribution}-{release}-py3-none-any.whl", "w") as archive:
+            archive.writestr(f"{info}/METADATA", f"Metadata-Version: 2.3\nName: {name}\nVersion: {release}\nRequires-Python: {requires_python}\n")
             archive.writestr(f"{info}/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
             archive.writestr(f"{info}/RECORD", "")
 
-    fixture("1.0.0")
+    for name in ("update-fixture", "pin-fixture", "marker-fixture"):
+        fixture(name, "1.0.0")
     uv_version = run([uv, "--version"], cwd=consumer, env=env).split()[1]
     manifest = consumer / "pyproject.toml"
     manifest.write_text(
         '[project]\nname="update-consumer"\nversion="0.1.0"\nrequires-python=">=3.14"\n'
-        f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}, "update-fixture>=1,<3"]\n'
+        f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\n'
+        'dev=[{include-group="tooling"}, "update-fixture>=1,<3", "pin-fixture==1.0.0", "marker-fixture==1.0.0; python_version >= \'3.14\'"]\n'
         f'[tool.uv]\npackage=false\ndefault-groups=[]\nrequired-version="=={uv_version}"\nfind-links=["wheels"]\n'
         f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(artifact.resolve()))}}}\n",
         encoding="utf-8",
@@ -88,16 +94,41 @@ def check_python_update(consumer: Path, artifact: Path, version: str, uv: str, j
     run([uv, "sync", "--managed-python", "--group", "dev"], cwd=consumer, env=offline)
     cli = [uv, "run", "--locked", "--no-sync", "research-repo-tools"]
     run([*cli, "templates", "justfile", "--output", "justfile"], cwd=consumer, env=offline)
-    probe = [uv, "run", "--locked", "--no-sync", "python", "-c", 'from importlib.metadata import version; print(version("update-fixture"))']
-    assert run(probe, cwd=consumer, env=offline).strip() == "1.0.0"
-    original = manifest.read_bytes()
-    fixture("2.0.0")
-    # No exact direct dev pin changes: only a full lock upgrade can select 2.0.0.
+    probe = [
+        uv,
+        "run",
+        "--locked",
+        "--no-sync",
+        "python",
+        "-c",
+        'import json; from importlib.metadata import version; print(json.dumps({name: version(name) for name in ("update-fixture", "pin-fixture", "marker-fixture")}))',
+    ]
+    assert json.loads(run(probe, cwd=consumer, env=offline)) == dict.fromkeys(("update-fixture", "pin-fixture", "marker-fixture"), "1.0.0")
+    original = tomllib.loads(manifest.read_text(encoding="utf-8"))
+    fixture("pin-fixture", "2.0.0")
+    fixture("marker-fixture", "2.0.0")
     run([str(just), "update-python-dependencies"], cwd=consumer, env=offline)
-    assert manifest.read_bytes() == original, "update changed retained constraints or the shared package pin"
-    assert run(probe, cwd=consumer, env=offline).strip() == "2.0.0", "updated lock was not synchronized into dev"
+    expected = {"update-fixture": "1.0.0", "pin-fixture": "2.0.0", "marker-fixture": "1.0.0"}
+    assert json.loads(run(probe, cwd=consumer, env=offline)) == expected
+    original["dependency-groups"]["dev"][2] = "pin-fixture==2.0.0"
+    assert tomllib.loads(manifest.read_text(encoding="utf-8")) == original, "update changed retained constraints or the shared package pin"
+    retained_manifest = manifest.read_bytes()
+    fixture("update-fixture", "2.0.0")
+    # Once exact pins are current, only a full lock upgrade can select this release.
+    run([str(just), "update-python-dependencies"], cwd=consumer, env=offline)
+    assert manifest.read_bytes() == retained_manifest, "update changed retained constraints or the shared package pin"
+    expected["update-fixture"] = "2.0.0"
+    assert json.loads(run(probe, cwd=consumer, env=offline)) == expected, "updated lock was not synchronized into dev"
     locked = tomllib.loads((consumer / "uv.lock").read_text(encoding="utf-8"))
     assert next(package["version"] for package in locked["package"] if package["name"] == "update-fixture") == "2.0.0"
+    snapshot = manifest.read_bytes(), (consumer / "uv.lock").read_bytes()
+    # Universal resolution needs two versions across this project's Python range.
+    # Refuse to replace its single exact pin with a host-dependent choice.
+    fixture("pin-fixture", "3.0.0", ">=3.15")
+    result = subprocess.run([*cli, "deps", "update-python"], cwd=consumer, env=offline, capture_output=True, encoding="utf-8", timeout=TIMEOUT)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "selected multiple versions for pin-fixture" in result.stderr, result.stderr
+    assert (manifest.read_bytes(), (consumer / "uv.lock").read_bytes()) == snapshot
 
 
 def check_update_bootstrap(consumer: Path, uv: str, just: Path, env: dict[str, str]) -> None:
