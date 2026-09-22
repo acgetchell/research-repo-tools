@@ -1,6 +1,7 @@
 """Common repository maintenance with standard defaults."""
 
 import argparse
+import os
 import subprocess
 import sys
 from dataclasses import replace
@@ -36,6 +37,10 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--dry-run", action="store_true", help="print candidate output without publishing")
         if name == "tag":
             command.add_argument("--force", action="store_true", help="replace an existing local tag")
+    ci = groups.add_parser("ci", help="export validated CI environment values").add_subparsers(dest="action", required=True)
+    command = ci.add_parser("export", help="append checked single-line values to GITHUB_ENV")
+    command.add_argument("names", nargs="+")
+    command.add_argument("--file", type=Path, help="command file; defaults to GITHUB_ENV")
     coverage = groups.add_parser("coverage", help="summarize Cobertura coverage").add_subparsers(dest="action", required=True).add_parser("report")
     coverage.add_argument("--report", default="coverage/cobertura.xml")
     coverage.add_argument("--prefix", default="")
@@ -51,6 +56,17 @@ def parser() -> argparse.ArgumentParser:
     deps.add_parser("update-uv", help="upgrade uv through its owner and reconcile its project pin")
     docs = groups.add_parser("docs", help="check Markdown source files").add_subparsers(dest="action", required=True)
     docs.add_parser("check-lines").add_argument("files", nargs="+")
+    files = groups.add_parser("files", help="select tracked and nonignored inputs and batch commands").add_subparsers(dest="action", required=True)
+    for action in ("list", "run"):
+        command = files.add_parser(action)
+        command.add_argument("--include", action="append", default=[], help="Git pathspec; may be repeated")
+        command.add_argument("--exclude", action="append", default=[], help="POSIX glob; may be repeated")
+        if action == "list":
+            command.add_argument("--null", action="store_true", help="separate file names with NUL")
+        else:
+            command.add_argument("--batch-size", type=int, default=100)
+            command.add_argument("--timeout", type=float, default=300)
+            command.add_argument("command", nargs=argparse.REMAINDER)
     notebooks = groups.add_parser("notebooks", help="validate, clean, execute, and synchronize selected notebooks").add_subparsers(dest="action", required=True)
     for action in ("check", "clear", "execute", "group", "lint", "sync"):
         command = notebooks.add_parser(action)
@@ -90,13 +106,53 @@ def parser() -> argparse.ArgumentParser:
     templates.add_argument("--output", type=Path, help="create a new file; existing files are never overwritten")
     toolchain = groups.add_parser("toolchain", help="check, install, and select declared development tools").add_subparsers(dest="action", required=True)
     toolchain.add_parser("check", help="inspect installed tools without installing anything").add_argument("--json", action="store_true")
+    toolchain.add_parser("export", help="verify tools and export their environment to GITHUB_ENV").add_argument("--file", type=Path)
     toolchain.add_parser("run", help="run a command with verified managed tools; never installs").add_argument("command", nargs=argparse.REMAINDER)
     toolchain.add_parser("sync", help="install and verify declared versions").add_argument("--dry-run", action="store_true")
     toolchain.add_parser("upgrade", help="upgrade declared Cargo tools and publish verified pins").add_argument("--dry-run", action="store_true")
+    validation = groups.add_parser("validation", help="run configured command and prerequisite checks").add_subparsers(dest="action", required=True)
+    validation.add_parser("cargo-metadata").add_argument("--package")
+    validation.add_parser("require").add_argument("names", nargs="+")
+    command = validation.add_parser("run")
+    command.add_argument("configuration")
+    command.add_argument("names", nargs="*")
     return result
 
 
 def run(args: argparse.Namespace, settings: config.Config) -> int:
+    if args.group == "validation":
+        from research_repo_tools.validation import check_cargo_metadata, require_executables, run_checks
+
+        if args.action == "cargo-metadata":
+            check_cargo_metadata(settings.root, package=args.package)
+        elif args.action == "require":
+            require_executables(settings.root, tuple(args.names))
+        else:
+            run_checks(settings.root, args.configuration, tuple(args.names))
+        return 0
+    if args.group == "ci":
+        from research_repo_tools.ci import export_environment
+
+        destination = args.file or os.environ.get("GITHUB_ENV")
+        if not destination:
+            raise ValueError("ci export requires --file or GITHUB_ENV")
+        export_environment(Path(destination), args.names)
+        return 0
+    if args.group == "files":
+        from research_repo_tools.selection import run_selected, select_files
+
+        if args.action == "list":
+            from research_repo_tools.performance import _write_stdout
+
+            separator = "\0" if args.null else "\n"
+            names = select_files(settings.root, include=args.include, exclude=args.exclude)
+            _write_stdout("".join(name + separator for name in names).encode("utf-8"))
+        else:
+            command = args.command[1:] if args.command[:1] == ["--"] else args.command
+            count = run_selected(settings.root, command, include=args.include, exclude=args.exclude, batch_size=args.batch_size, timeout=args.timeout)
+            if not count:
+                print("No matching files.")
+        return 0
     if args.group == "performance":
         from research_repo_tools.performance import run
 
@@ -137,6 +193,21 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             return 0
         plan = toolchain_config.load(settings)
         runtime = toolchain.Runtime(plan)
+        if args.action == "export":
+            from research_repo_tools.ci import export_environment
+
+            destination = args.file or os.environ.get("GITHUB_ENV")
+            if not destination:
+                raise ValueError("toolchain export requires --file or GITHUB_ENV")
+            if not toolchain.report(runtime.inspect(), stream=sys.stderr):
+                raise ValueError("toolchain is incomplete; run toolchain sync before exporting")
+            environment = runtime.environment()
+            environment["RESEARCH_REPO_TOOLS_HOME"] = str(runtime.base)
+            names = ["RESEARCH_REPO_TOOLS_HOME", "PATH"]
+            if plan.rust:
+                names.extend(["CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "RUSTUP_AUTO_INSTALL", "RUSTUP_NO_UPDATE_CHECK"])
+            export_environment(Path(destination), names, environment=environment)
+            return 0
         if args.action == "run":
             return toolchain.run_command(runtime, args.command)
         if args.action == "sync" and not args.dry_run:
@@ -220,6 +291,8 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             raise ValueError("release update requires a target version")
         from research_repo_tools.release_discovery import normalize_tag
 
+        if policy.tag_policy == "canonical-stable" and args.version != normalize_tag(args.version):
+            raise ValueError("release tag must use canonical stable vX.Y.Z form")
         summary = update_release.update_release_version(
             settings.root,
             normalize_tag(args.version),

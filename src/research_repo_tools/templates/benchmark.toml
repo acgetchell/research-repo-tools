@@ -1,0 +1,21 @@
+# Illustrative scaffold: choose your consumer's command, source/harness inputs,
+# suite, measurement settings, probes, dependencies, and compatibility policy.
+schema = 1
+command = ["cargo", "bench", "--locked", "--bench", "timings"]
+sources = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "src/**/*.rs", "benches/timings.rs"]
+harness = ["benches/timings.rs"]
+criterion-dir = "target/criterion"
+sample = "new"
+statistic = "median"
+unit = "ns"
+timeout = 7200
+compatible = ["context.os", "context.architecture", "context.cpu"]
+
+[probes]
+rustc = ["rustc", "--version", "--verbose"]
+
+[dependencies]
+criterion = "Cargo.lock"
+
+[context]
+suite = "timings"

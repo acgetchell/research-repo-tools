@@ -529,6 +529,13 @@ def python_version_references(root: Path) -> list[VersionReference]:
     path = root / "pyproject.toml"
     if not path.is_file() or "project" not in _read_toml(path):
         return []
+    document = _read_toml(path)
+    tool = document.get("tool", {})
+    uv = tool.get("uv", {}) if _is_parsed_object(tool) else {}
+    if (root / "Cargo.toml").is_file() and _is_parsed_object(uv) and uv.get("package") is False:
+        # A dependency-only Python environment is not another released package.
+        # Keep its own project/lock identity independent of the Rust release.
+        return []
     project = _read_python_project_info(path)
     references = [_pyproject_reference(path, project)]
     lock = root / "uv.lock"

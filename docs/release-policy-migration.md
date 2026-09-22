@@ -1,7 +1,7 @@
 # Migrating consumer release policies
 
-MCMC's release checker and updater currently retain generic discovery, candidate
-staging, CLI-output capture, and private publication helpers. A published version
+MCMC's coordinated extraction removes generic release discovery, candidate
+staging, CLI-output capture, and publication wrappers. A published version
 containing the structured release API lets a consumer remove that orchestration.
 Pin that release before deleting the old helpers. The following is a small worked
 fixture using MCMC's fixed concept DOI and representative release references; file
@@ -70,6 +70,12 @@ the measured release. The default archive exclusions still apply; `exclude` adds
 consumer-selected evidence directories to the automatic Markdown exclusions.
 
 ## Thin consumer wrapper
+
+For the MCMC migration, use `tag-policy="canonical-stable"`, explicit previous
+release/date arguments, fixed DOI rules, and version-independent example commands.
+Ordinary checks stay offline. A non-package Python environment (`tool.uv.package=false`)
+beside Cargo is not a second releasable package and its environment version is not
+synchronized. No callback is needed merely to advance an example baseline.
 
 With only these declarative rules, use the existing shared release recipes and
 delete both generic wrappers. If current evidence needs extra interpretation,

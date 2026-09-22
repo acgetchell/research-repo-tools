@@ -6,9 +6,20 @@ from pathlib import Path
 from urllib.parse import quote
 
 from research_repo_tools.criterion import COMPARISON_SCHEMA, _markdown_text, _unit, parse_comparison
-from research_repo_tools.evidence import Provenance, _object, _string, compare_provenance, parse_evidence
+from research_repo_tools.evidence import Provenance, _object, _string, compare_provenance, fingerprint_files, parse_evidence
 from research_repo_tools.files import _validate_distinct_paths
-from research_repo_tools.publication import GitCheck, MarkerPair, PublicationPlan, TableLayout, _path, plan_publication, render_svg, render_table
+from research_repo_tools.publication import (
+    GitCheck,
+    GlobCheck,
+    MarkerPair,
+    PublicationPlan,
+    TableLayout,
+    _inventory,
+    _path,
+    plan_publication,
+    render_svg,
+    render_table,
+)
 from research_repo_tools.release_policy import ReleaseRule
 from research_repo_tools.release_tags import _github_repo_url, validate_semver
 
@@ -43,7 +54,7 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
         tomllib.loads(config_bytes.decode("utf-8")),
         "publication",
         {"schema", "document", "payload", "manifest", "begin", "end", "unit", "rows", "provenance", "references"},
-        {"baseline-label", "current-label", "svg", "links", "repository"},
+        {"baseline-label", "current-label", "svg", "links", "repository", "tag-policy", "prose-file", "current-sources", "current-harness"},
     )
     if type(raw["schema"]) is not int or raw["schema"] != 1:
         raise ValueError("publication schema must be integer 1")
@@ -58,6 +69,9 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
     comparison = parse_comparison(retained.payload)
     pins = _table(raw["provenance"], "provenance", {"baseline", "current"})
     sources = dict(retained.sources)
+    tag_policy = raw.get("tag-policy", "existing")
+    if tag_policy not in {"existing", "prepare"}:
+        raise ValueError("tag-policy must be existing or prepare")
     releases: dict[str, str] = {}
     checks = []
     for name in ("baseline", "current"):
@@ -121,6 +135,30 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
     if selected_sources != set(values):
         raise ValueError("publication references must check the current version and both report tags (version, tag, previous-tag)")
     document = names["document"]
+    if tag_policy == "prepare":
+        from research_repo_tools.release_discovery import _tag_version
+
+        if "repository" not in raw:
+            raise ValueError("prepare policy requires a repository for existing-tag verification")
+        if dict(sources["current"].context).get("mode") != "working-tree" or _tag_version(releases["current"]) <= _tag_version(releases["baseline"]):
+            raise ValueError("prepare policy requires prospective working-tree evidence newer than its baseline")
+        if not {"current-sources", "current-harness"} <= raw.keys():
+            raise ValueError("prepare policy requires current-sources and current-harness inventories")
+    inventories = []
+    for field, attribute in (("current-sources", "source_sha256"), ("current-harness", "harness_sha256")):
+        if field in raw:
+            patterns = tuple(_string(item, field) for item in _array(raw[field], field))
+            inventory = _inventory(root, patterns)
+            inventories.append(GlobCheck(patterns, inventory))
+            if dict(sources["current"].context).get("fingerprint-schema") != "research-repo-tools/files/v1":
+                raise ValueError("current input checks require the shared fingerprint framing")
+            expected = getattr(sources["current"], attribute)
+            if expected is None or fingerprint_files(root, tuple(map(Path, inventory))) != expected:
+                raise ValueError(f"{field} differ from the measured source")
+            for name in inventory:
+                inputs[name] = _path(root, name).read_bytes()
+            if fingerprint_files(root, tuple(map(Path, inventory))) != expected or any(_path(root, name).read_bytes() != inputs[name] for name in inventory):
+                raise ValueError(f"{field} changed while planning publication")
     figures: dict[str, bytes] = {}
     if "svg" in raw:
         figures[_string(raw["svg"], "svg")] = render_svg(comparison, layout)
@@ -142,6 +180,10 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
         return quote(posixpath.relpath(name, posixpath.dirname(document) or "."), safe="/.")
 
     content = render_table(comparison, layout)
+    if "prose-file" in raw:
+        prose_path = _string(raw["prose-file"], "prose-file")
+        inputs[prose_path] = _path(root, prose_path).read_bytes()
+        content += "\n" + inputs[prose_path].decode("utf-8").rstrip() + "\n"
     if figures:
         content = f"![Baseline/current timing point ratios]({link(next(iter(figures)), image=True)})\n\n" + content
     if "links" in raw:
@@ -156,8 +198,8 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
     if repository:
         # Verify every retained artifact/reference and generated figure, whether
         # linked directly or used to establish a link's release identity.
-        paths = tuple(dict.fromkeys([names["payload"], names["manifest"], *(rule.path for rule in references), *link_paths]))
-        checks.append(GitCheck(releases["current"], paths))
+        paths = tuple(dict.fromkeys([*(name for name in inputs if name != configuration), *(rule.path for rule in references), *link_paths]))
+        checks.append(GitCheck(releases["current"], paths, allow_missing=tag_policy == "prepare"))
     return plan_publication(
         root,
         document,
@@ -167,4 +209,5 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
         figures=figures,
         references=references,
         git_checks=checks,
+        glob_checks=inventories,
     )

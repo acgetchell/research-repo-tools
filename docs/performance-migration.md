@@ -13,9 +13,10 @@ MCMC retains `criterion-comparison/v1` CSV with
 `mcmc-performance-provenance/v1` or `/v2` sidecars. la-stack and other consumers
 have their own columns, eligibility rules, and provenance requirements. Keep
 these original CSV/JSON files, their schema IDs, and recorded hashes untouched.
-Retain a small consumer adapter for each supported historical schema. That
-adapter parses its column layout and domain metadata, verifies its recorded
-digest, and maps timings into shared `Estimate`/`Sample` values.
+Use `legacy_evidence.convert_csv` with declarative column/metadata mappings.
+It verifies original hashes before interpreting data and maps durations into
+shared `Estimate`/`Sample` values. Consumers retain scientific meaning in
+assertions and prose. No legacy writer is needed.
 
 At the raw boundary, use the original bytes:
 
@@ -28,7 +29,7 @@ def verified_legacy_csv(csv_path, recorded_sha256):
     return payload.decode("utf-8")
 ```
 
-Read the sidecar in the consumer's existing schema parser to obtain the recorded
+Configure sidecar selectors and assertions to obtain the recorded
 digest and validate release labels, suite/scope, commands, validation eligibility,
 and source identities. Do not hash normalized CSV, regenerate sidecars, or
 substitute live source metadata before validating the original evidence. If old
@@ -37,11 +38,11 @@ explicit consumer migration decision; never silently repair the file or digest.
 
 Map both complete sample inventories into `Sample`, not only the common rows.
 Use `compare_samples` for paired rows, `missing_baseline` for current-only rows,
-and `missing_current` for baseline-only rows. For existing MCMC reports, map
-`Estimate.point/lower/upper` to its duration formatter and retain its existing
-labels and narrative. `speedup` and `percent_reduction` retain the baseline/current
-and positive-time-reduction meanings. Keep the old renderer's display precision
-and scientific interpretation until the consumer explicitly changes those policies.
+and `missing_current` for baseline-only rows. Preserve original MCMC report bytes
+and write converted companions at new paths. `speedup` and `percent_reduction`
+retain the baseline/current and positive-time-reduction meanings. New shared
+layouts may differ; scientific interpretation and workload eligibility remain
+consumer policy.
 
 Existing schema validation can therefore stay small while generic number checks,
 pairing, arithmetic, hashing, compatibility diagnostics, safe extraction, and
@@ -98,12 +99,13 @@ For README and document publishers, follow the
 legacy schema adapters and renderers, exact tagged artifact verification, and
 the shared marker/snapshot/transaction contract.
 
-Workload selection, statistical tests, performance acceptance, published-release
-selection, authentication, Cargo commands, worktree lifecycle, and harness
-substitution remain consumer-owned. Inspection of the current consumers shows
-different execution and compatibility contracts, so this increment introduces no
-shared worktree or benchmark runner. Consumers can use the supported process API
-for execution, retaining binary Git input and their own rollback guarantees.
+The coordinated extraction supplies configured release selection, authenticated
+assets, provenance capture, live measurement, explicit worktree lifecycle,
+retained report promotion and rerendering. See the [workflow contracts](workflow-api.md)
+and [complete MCMC deletion map](mcmc-extraction.md). Consumers select benchmark
+commands/inventories, compatibility fields, workloads, statistical interpretation,
+and publication decisions in configuration and prose. The earlier incremental
+guidance to retain generic wrappers is superseded by these complete workflows.
 
 Before deleting helpers, pin the published package and exercise each consumer's
 complete workflow: retained legacy reads, unchanged reports, missing benchmarks,

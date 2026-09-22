@@ -16,9 +16,11 @@ from research_repo_tools.release_policy import ReleaseRule, relative_path
 
 __all__ = [
     "GitCheck",
+    "GlobCheck",
     "MarkerPair",
     "PublicationPlan",
     "TableLayout",
+    "plan_outputs",
     "plan_publication",
     "preview_publication",
     "publish_publication",
@@ -188,6 +190,47 @@ def _path(root: Path, name: str) -> Path:
     return path
 
 
+def _inventory(root: Path, patterns: tuple[str, ...]) -> tuple[str, ...]:
+    paths: set[str] = set()
+    for pattern in patterns:
+        # Validate traversal before allowing glob expansion; wildcard components
+        # intentionally remain patterns until the selected paths are validated.
+        if pattern.startswith("/") or "\\" in pattern or any(part in {"", ".", "..", ".git"} for part in pattern.split("/")):
+            raise ValueError(f"source pattern must be root-relative: {pattern!r}")
+        found = list(root.glob(pattern))
+        if not found:
+            raise ValueError(f"source pattern has no matches: {pattern}")
+        for path in found:
+            name = path.relative_to(root).as_posix()
+            _path(root, name)
+            if not path.is_file():
+                raise ValueError(f"source input is missing or not a regular file: {name}")
+            paths.add(name)
+    _validate_distinct_paths(tuple(root / path for path in paths))
+    return tuple(sorted(paths))
+
+
+@dataclass(frozen=True, slots=True)
+class GlobCheck:
+    """Root-relative glob patterns and their complete expected file inventory.
+
+    Every selected path must also have validated bytes in the planner's inputs.
+    Re-expansion before publication detects additions as well as removals.
+    """
+
+    patterns: tuple[str, ...]
+    paths: tuple[str, ...]
+
+    def __post_init__(self) -> None:
+        if isinstance(self.patterns, str) or isinstance(self.paths, str) or not self.patterns or not self.paths:
+            raise ValueError("glob check requires nonempty pattern and path sequences")
+        object.__setattr__(self, "patterns", tuple(_string(pattern, "glob pattern") for pattern in self.patterns))
+        paths = tuple(_publication_name(path) for path in self.paths)
+        if len(set(paths)) != len(paths):
+            raise ValueError("glob check paths must be unique")
+        object.__setattr__(self, "paths", tuple(sorted(paths)))
+
+
 @dataclass(frozen=True, slots=True)
 class GitCheck:
     """Required local tag, exact blob paths, and optional measured commit identity.
@@ -199,9 +242,14 @@ class GitCheck:
     tag: str
     paths: tuple[str, ...] = ()
     revision: str | None = None
+    allow_missing: bool = False
 
     def __post_init__(self) -> None:
         _string(self.tag, "publication tag")
+        if type(self.allow_missing) is not bool:
+            raise ValueError("allow_missing must be a boolean")
+        if self.allow_missing and re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", self.tag) is None:
+            raise ValueError("future publication tags must use canonical stable vX.Y.Z syntax")
         paths = tuple(_publication_name(path) for path in self.paths)
         if len(set(paths)) != len(paths) or (not paths and self.revision is None):
             raise ValueError("Git check requires unique paths or a source revision")
@@ -261,11 +309,43 @@ class PublicationPlan:
     outputs: tuple[tuple[str, bytes], ...]
     originals: tuple[tuple[str, bytes | None], ...]
     git_checks: tuple[GitCheck, ...]
+    glob_checks: tuple[GlobCheck, ...] = ()
 
     @property
     def changed_paths(self) -> tuple[Path, ...]:
         original = dict(self.originals)
         return tuple(self.root / name for name, data in self.outputs if original[name] != data)
+
+
+def plan_outputs(root: Path, outputs: Mapping[str, bytes], *, inputs: Mapping[str, bytes], immutable: Sequence[str] = ()) -> PublicationPlan:
+    """Snapshot a fully rendered multi-output publication without writing files.
+
+    Inputs may overlap outputs only when their exact bytes remain unchanged.
+    Immutable outputs may be absent or identical. The returned plan uses the
+    same stale-input, rollback and recovery behavior as document publication.
+    """
+    root = root.resolve(strict=True)
+    if not outputs or not inputs:
+        raise ValueError("output publication requires candidates and validated inputs")
+    if any(not isinstance(data, bytes) for data in (*outputs.values(), *inputs.values())):
+        raise TypeError("publication inputs and outputs must be bytes")
+    if set(immutable) - outputs.keys():
+        raise ValueError("immutable files must be publication outputs")
+    names = tuple(dict.fromkeys([*inputs, *outputs]))
+    _validate_distinct_paths(tuple(_path(root, name) for name in names))
+    originals = {}
+    for name in names:
+        path = _path(root, name)
+        originals[name] = path.read_bytes() if path.exists() else None
+    for name, expected in inputs.items():
+        if originals[name] != expected or (name in outputs and outputs[name] != expected):
+            raise ValueError(f"validated input changed or would be overwritten: {name}")
+    for name in immutable:
+        if originals[name] is not None and originals[name] != outputs[name]:
+            raise ValueError(f"immutable output differs: {name}")
+    plan = PublicationPlan(root, tuple(outputs.items()), tuple(originals.items()), ())
+    _verify_plan(plan)
+    return plan
 
 
 def plan_publication(
@@ -278,6 +358,7 @@ def plan_publication(
     figures: Mapping[str, bytes] | None = None,
     references: Sequence[ReleaseRule] = (),
     git_checks: Sequence[GitCheck] = (),
+    glob_checks: Sequence[GlobCheck] = (),
 ) -> PublicationPlan:
     """Validate all candidates without writes, directories, measurement, or network.
 
@@ -286,10 +367,14 @@ def plan_publication(
     must not alias outputs. Fixed-value ReleaseRules assert current package/report
     identities and publication links; rules against outputs inspect candidates.
     GitChecks verify configured input/reference/candidate blobs before publication.
+    GlobChecks require complete selected inventories whose bytes are in inputs.
     """
     root = root.resolve(strict=True)
     if not inputs:
         raise ValueError("publication requires retained evidence inputs")
+    for check in glob_checks:
+        if set(check.paths) - inputs.keys():
+            raise ValueError("glob checks require every selected path in validated inputs")
     writes = [(document, None), *(figures or {}).items()]
     # Check sequences before making a dictionary: never collapse duplicate paths.
     names = [name for name, _ in writes] + list(inputs)
@@ -320,13 +405,16 @@ def plan_publication(
         if any(match.group("value") != rule.value for match in rule.matches(data.decode("utf-8"))):
             raise ValueError(f"{rule.path}: publication reference does not match {rule.value!r}")
     _validate_distinct_paths(tuple(_path(root, name) for name in originals))
-    plan = PublicationPlan(root, tuple(outputs.items()), tuple(originals.items()), tuple(git_checks))
+    plan = PublicationPlan(root, tuple(outputs.items()), tuple(originals.items()), tuple(git_checks), tuple(glob_checks))
     _verify_plan(plan)
     return plan
 
 
 def _verify_plan(plan: PublicationPlan) -> None:
     _validate_distinct_paths(tuple(_path(plan.root, name) for name, _ in plan.originals))
+    for check in plan.glob_checks:
+        if _inventory(plan.root, check.patterns) != check.paths:
+            raise ValueError("publication source inventory changed after planning")
     for name, expected in plan.originals:
         path = _path(plan.root, name)
         actual = path.read_bytes() if path.exists() else None
@@ -337,6 +425,11 @@ def _verify_plan(plan: PublicationPlan) -> None:
         missing = set(check.paths) - available.keys()
         if missing:
             raise ValueError(f"Git publication checks select unknown files: {sorted(missing)}")
+        if check.allow_missing:
+            state = run_git_bytes(["--no-pager", "show-ref", "--verify", "--quiet", f"refs/tags/{check.tag}"], cwd=plan.root, check=False)
+            if state.returncode == 1:
+                continue
+            state.check_returncode()
         verify_tagged_files(plan.root, check.tag, {name: available[name] for name in check.paths}, revision=check.revision)
 
 

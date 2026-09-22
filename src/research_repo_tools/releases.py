@@ -135,13 +135,13 @@ class ReleaseResult:
     changed_paths: tuple[Path, ...]
 
 
-def published_releases(root: Path) -> tuple[PublishedRelease, ...]:
+def published_releases(root: Path, *, repository: str | None = None) -> tuple[PublishedRelease, ...]:
     """Query gh for stable published releases, descending by numeric version.
 
     Drafts and prereleases are excluded. Command, decoding, and parsing failures
     propagate with the process API's diagnostic and exception contracts.
     """
-    return _published_releases(root.resolve())
+    return _published_releases(root.resolve()) if repository is None else _published_releases(root.resolve(), repository=repository)
 
 
 def _safe_file(root: Path, path: Path) -> Path:
@@ -356,7 +356,10 @@ def plan_release(
 
     discovery = discover_release(root, policy=policy, adapter=adapter)
     root, policy = discovery.root, discovery.policy
-    tag = normalize_tag(tag)
+    normalized = normalize_tag(tag)
+    if policy.tag_policy == "canonical-stable" and tag != normalized:
+        raise ValueError("release tag must use canonical stable vX.Y.Z form")
+    tag = normalized
     released = release_date if release_date is not None else datetime.now(UTC).date().isoformat()
     if date.fromisoformat(released).isoformat() != released:
         raise ValueError("release date must use YYYY-MM-DD form")

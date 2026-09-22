@@ -22,7 +22,16 @@ type ExceptionFamily = tuple[type[BaseException], ...]
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300.0
 _GENERIC_CPU_NAMES = frozenset({"amd64", "arm", "arm64", "aarch64", "i386", "i686", "unknown", "x86_64"})
 
-__all__ = ["ExecutableNotFoundError", "format_exception_diagnostics", "resolve_executable", "run_command", "run_command_bytes", "run_git_bytes"]
+__all__ = [
+    "ExecutableNotFoundError",
+    "cpu_description",
+    "format_exception_diagnostics",
+    "resolve_executable",
+    "run_command",
+    "run_command_bytes",
+    "run_command_live",
+    "run_git_bytes",
+]
 
 
 class ExecutableNotFoundError(Exception):
@@ -111,6 +120,29 @@ def run_command(
     "".encode(encoding, errors)
     result = run_command_bytes(command, args, cwd=cwd, env=env, input=None if input is None else input.encode(encoding, errors), timeout=timeout, check=check)
     return subprocess.CompletedProcess(result.args, result.returncode, result.stdout.decode(encoding, errors), result.stderr.decode(encoding, errors))
+
+
+def run_command_live(
+    command: str | Path,
+    args: Sequence[str] = (),
+    *,
+    cwd: Path | None = None,
+    env: Mapping[str, str] | None = None,
+    timeout: float | None = DEFAULT_COMMAND_TIMEOUT_SECONDS,
+    check: bool = True,
+) -> subprocess.CompletedProcess[bytes]:
+    """Run an argument vector with inherited stdin/stdout/stderr and no shell.
+
+    Output is visible while the child runs. Results and failures contain no
+    captured output. Timeout cleanup covers the direct child, as for the byte
+    runner; callers must arrange separate isolation for descendant processes.
+    """
+    if not isinstance(args, Sequence) or isinstance(args, (str, bytes)) or any(not isinstance(arg, str) or "\x00" in arg for arg in args):
+        raise TypeError("args must be a sequence of strings without NUL")
+    if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
+        raise ValueError("timeout must be positive and finite, or None")
+    path = resolve_executable(command, cwd=cwd, env=env)
+    return subprocess.run([str(path), *args], cwd=cwd, env=env, check=check, timeout=timeout)
 
 
 def _diagnostic_stream(value: str | bytes | None) -> str:

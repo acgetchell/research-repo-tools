@@ -15,7 +15,7 @@ from research_repo_tools.postprocess_changelog import format_markdown, postproce
 from research_repo_tools.process import run_git_command, run_git_command_with_input, run_safe_command
 from research_repo_tools.release_tags import _GITHUB_TAG_ANNOTATION_LIMIT, SEMVER_PATTERN, _heading_to_anchor, validate_semver
 
-TEMPLATES = ("cliff.toml", "justfile", "research-repo-tools.toml", "CHANGELOG.md", "rumdl.toml")
+TEMPLATES = ("CHANGELOG.md", "benchmark.toml", "cliff.toml", "examples.toml", "justfile", "performance-report.toml", "research-repo-tools.toml", "rumdl.toml")
 _COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 
 

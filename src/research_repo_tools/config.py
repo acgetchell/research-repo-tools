@@ -15,7 +15,7 @@ FIELDS = {
     "toolchain": {"cargo"},
     "deps": {"pyproject", "justfile", "tools", "uv"},
     "semgrep": {"config", "fixtures", "namespace", "timeout", "cwd", "counts"},
-    "release": {"date-policy", "final-changelog", "required-files", "exclude", "rules"},
+    "release": {"date-policy", "final-changelog", "required-files", "exclude", "rules", "tag-policy"},
     "changelog": {"formatter", "cliff-config", "owner", "repository"},
 }
 
@@ -228,6 +228,7 @@ def parse(value: object, *, root: Path) -> Config:
             required_files=_release_paths(release.get("required-files", []), "release.required-files"),
             exclude=_release_paths(release.get("exclude", []), "release.exclude"),
             rules=_release_rules(release.get("rules", [])),
+            tag_policy=cast(Literal["normalized-stable", "canonical-stable"], release.get("tag-policy", "normalized-stable")),
         ),
         changelog=ChangelogSettings(
             formatter=_optional_string(changelog, "formatter", "changelog"),

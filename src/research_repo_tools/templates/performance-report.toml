@@ -1,0 +1,5 @@
+schema = 1
+current = "docs/PERFORMANCE.md"
+archive = "docs/archive/performance"
+title = "Benchmark timings"
+# prose-file = "docs/performance-interpretation.md"
