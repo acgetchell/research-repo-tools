@@ -86,6 +86,11 @@ containing them after `0.1.2` and add no plotting dependencies.
 
 ## Python process API
 
+The coordinated workflow additions, including `measurement`, `worktrees`,
+`release_pairs`, `release_assets`, `legacy_evidence`, `performance_reports`,
+`selection`, `validation`, and `ci`, are documented in
+[configured workflow contracts](workflow-api.md).
+
 The following imports from `research_repo_tools.process` are supported starting
 with the release containing these APIs (they are absent from published `0.1.2`).
 Pin that subsequent published package before migrating consumers. These functions
@@ -95,10 +100,12 @@ as the CLI. Type annotations are shipped through `py.typed`.
 | Import | Contract |
 | --- | --- |
 | `ExecutableNotFoundError` | Executable discovery failed, before a child was launched |
+| `cpu_description() -> str` | Available host CPU description, or `unavailable` without invented provenance |
 | `format_exception_diagnostics(error, *, single_line=False) -> str` | Render command, timeout, or grouped publication failures; byte diagnostics use UTF-8 with replacement; text is human-readable, not a parsing contract |
 | `resolve_executable(command, *, cwd=None, env=None) -> Path` | Resolve a name or explicit `str`/`Path` to an absolute executable path without executing it |
 | `run_command(command, args=(), *, cwd=None, env=None, input=None, encoding="utf-8", errors="strict", timeout=300.0, check=True) -> CompletedProcess[str]` | Encode text stdin and decode captured stdout/stderr with the specified codec; preserve newlines on every platform |
 | `run_command_bytes(command, args=(), *, cwd=None, env=None, input=None, timeout=300.0, check=True) -> CompletedProcess[bytes]` | Capture stdout/stderr and transport stdin without decoding or newline translation |
+| `run_command_live(command, args=(), *, cwd=None, env=None, timeout=300.0, check=True) -> CompletedProcess` | Inherit stdin/stdout/stderr for trusted long-running commands; streams are not captured |
 | `run_git_bytes(args, cwd=None, *, env=None, input=None, timeout=300.0, check=True) -> CompletedProcess[bytes]` | Byte execution with `git` resolved from the selected environment; Git retains responsibility for attributes, clean filters, and all configuration |
 
 `args` is a sequence of strings, without the executable name. `cwd` is a `Path`
@@ -113,15 +120,17 @@ security boundary against executable replacement. Native Windows batch-file
 execution retains the operating system's shell behavior; prefer native executables
 for literal argument transport.
 
-The runners request no shell and always capture both output streams in memory.
-They do not provide streaming, pipelines, redirection, or detached processes.
+The runners request no shell. Capturing runners keep both output streams in memory;
+the live runner inherits them and returns `None` for stdout/stderr. They do not
+provide pipelines, redirection, or detached processes.
 `input=None` inherits stdin; an empty string/byte string supplies an empty pipe.
 Text input is encoded once, without platform newline conversion. Binary input
 must be `bytes`; use `run_git_bytes` for Git blobs and filter-sensitive data.
 Git options, mutating operations, and policy decisions remain the caller's choice.
 
 `CompletedProcess` is the standard-library type; `args`, `returncode`, `stdout`,
-and `stderr` are available. Both streams are present, possibly empty. With
+and `stderr` are available. Capturing runners return both streams, possibly empty;
+`run_command_live` returns `None` for both. With
 `check=True`, a nonzero status raises `subprocess.CalledProcessError`; with
 `check=False`, it is returned. Timeouts raise `subprocess.TimeoutExpired` and
 terminate/reap the direct child, without promising descendant cleanup. Timeouts
@@ -129,8 +138,10 @@ must be positive and finite, or `None` for no deadline. OS launch errors propaga
 as `OSError`. Invalid arguments raise `TypeError` or `ValueError`; invalid codecs
 raise `LookupError`. Strict encoding/decoding errors raise `UnicodeError`.
 
-Both runners retain raw captured bytes on checked failures and timeouts, including
-the original argument vector and exit status/deadline. The text runner checks
+Capturing runners retain raw captured bytes on checked failures and timeouts,
+including the original argument vector and exit status/deadline. The live runner
+does not capture output on failures or timeouts either; its exception stream
+attributes are `None`. The text runner checks
 failure before decoding, so invalid output cannot hide a command error. Successful
 or unchecked text output is decoded using `encoding` and `errors`. Diagnostic
 formatting does not redact arguments or output; consumers own sensitive-data
@@ -149,10 +160,11 @@ These functions do not print or parse CLI output.
 | `check_release(root, *, policy=None, previous_tag=None, adapter=None) -> ReleaseCheckResult` | Check shared metadata and consumer rules without writing source files |
 | `discover_release(root, *, policy=None, adapter=None) -> ReleaseDiscovery` | Read package identity, selected files, and standard version references; validate explicit selector cardinality without GitHub access |
 | `plan_release(root, tag, *, previous_tag=None, release_date=None, policy=None, adapter=None) -> ReleasePlan` | Prepare all shared, declarative, and adapter edits in an isolated tree and validate them before returning |
-| `published_releases(root) -> tuple[PublishedRelease, ...]` | Query `gh release list`, excluding drafts/prereleases, sorted by descending numeric stable version |
+| `published_releases(root, *, repository=None) -> tuple[PublishedRelease, ...]` | Query `gh release list`, excluding drafts/prereleases, sorted by descending numeric stable version |
 
-`plan_release` accepts `X.Y.Z` or `vX.Y.Z` and normalizes to `vX.Y.Z`, including
-an explicit previous tag. Omit `previous_tag` to discover the greatest published
+By default `plan_release` accepts `X.Y.Z` or `vX.Y.Z` and normalizes to `vX.Y.Z`, including
+an explicit previous tag. `tag_policy="canonical-stable"` requires canonical
+`vX.Y.Z` on input. Omit `previous_tag` to discover the greatest published
 stable release below the target. Discovery rejects a target below any published
 stable release and fails if no predecessor exists. Supplying `previous_tag`
 bypasses remote discovery; it must precede the target. Dates default to UTC today.
@@ -162,7 +174,7 @@ GitHub releases, matching the existing CLI discovery limit.
 
 The module exports these frozen dataclasses:
 
-- `ReleasePolicy(date_policy="today", final_changelog=False, required_files=(), exclude=(), rules=())`
+- `ReleasePolicy(date_policy="today", final_changelog=False, required_files=(), exclude=(), rules=(), tag_policy="normalized-stable")`
   and `ReleaseRule(path, pattern, value=None, source=None, count=1, exclude=None)`
   follow the [declarative contract](UPDATING_RELEASE_METADATA.md#declarative-consumer-policies).
 - `ReleaseAdapter(input_files=(), prepare=None, validate=None)` uses trusted Python

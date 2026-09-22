@@ -7,14 +7,16 @@ import sys
 import tempfile
 import unittest
 import xml.etree.ElementTree as ET
+from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
 from research_repo_tools.cli import main
 from research_repo_tools.criterion import COMPARISON_SCHEMA, Estimate, Sample, compare_samples, serialize_comparison
-from research_repo_tools.evidence import Evidence, Provenance, serialize_evidence
+from research_repo_tools.evidence import Evidence, Provenance, fingerprint_files, load_evidence, publish_evidence, serialize_evidence
 from research_repo_tools.publication import (
     GitCheck,
+    GlobCheck,
     MarkerPair,
     TableLayout,
     plan_publication,
@@ -108,6 +110,73 @@ def fixture_git(root: Path, *args: str, input: bytes | None = None) -> bytes:
 
 
 class TestPublicationConsumer(unittest.TestCase):
+    def test_glob_checks_require_complete_snapshotted_inputs(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "README.md").write_bytes(DOCUMENT)
+            (root / "first.rs").write_bytes(b"first\r\n")
+            (root / "second.rs").write_bytes(b"second\n")
+            incomplete = {"first.rs": b"first\r\n"}
+            check = GlobCheck(("*.rs",), ("second.rs", "first.rs"))
+            with self.assertRaisesRegex(ValueError, "validated inputs"):
+                plan_publication(root, "README.md", MARKERS, "Timings", inputs=incomplete, glob_checks=(check,))
+            with self.assertRaisesRegex(ValueError, "inventory changed"):
+                plan_publication(root, "README.md", MARKERS, "Timings", inputs=incomplete, glob_checks=(GlobCheck(("*.rs",), ("first.rs",)),))
+            self.assertEqual((root / "README.md").read_bytes(), DOCUMENT)
+            complete = {**incomplete, "second.rs": b"second\n"}
+            plan = plan_publication(root, "README.md", MARKERS, "Timings", inputs=complete, glob_checks=(check,))
+            self.assertEqual(publish_publication(plan), (root / "README.md",))
+
+    def test_preparation_rechecks_source_and_harness_inventories_before_writing(self) -> None:
+        for directory in ("source", "harness"):
+            for mutation in ("add", "remove", "rename", "edit"):
+                with self.subTest(directory=directory, mutation=mutation), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary).resolve()
+                    config = make_fixture(root)
+                    for name in ("source", "harness"):
+                        (root / name).mkdir()
+                        (root / name / "measured.rs").write_bytes(b"measured bytes\r\n")
+                    retained = load_evidence(root / "evidence.json", root / "manifest.json")
+                    sources = dict(retained.sources)
+                    harness_digest = fingerprint_files(root, (Path("harness/measured.rs"),))
+                    sources["current"] = replace(
+                        sources["current"],
+                        source_sha256=fingerprint_files(root, (Path("source/measured.rs"),)),
+                        harness_sha256=harness_digest,
+                        context=(("release", "v1.1.0"), ("mode", "working-tree"), ("fingerprint-schema", "research-repo-tools/files/v1")),
+                    )
+                    publish_evidence(
+                        Evidence(retained.payload, retained.payload_schema, tuple(sources.items())), root / "evidence.json", root / "manifest.json"
+                    )
+                    baseline, current = config.split("[provenance.current]", 1)
+                    config = (
+                        'repository="example/project"\ntag-policy="prepare"\ncurrent-sources=["source/*.rs"]\ncurrent-harness=["harness/*.rs"]\n'
+                        + baseline
+                        + "[provenance.current]"
+                        + current.replace("c" * 64, harness_digest, 1)
+                    )
+                    (root / "publication.toml").write_text(config, encoding="utf-8", newline="\n")
+                    with patch("research_repo_tools.publication.run_git_bytes", return_value=subprocess.CompletedProcess([], 1, b"", b"")):
+                        plan = load_publication(root, "publication.toml")
+                        measured, added = root / directory / "measured.rs", root / directory / "added.rs"
+                        if mutation == "add":
+                            added.write_bytes(b"new source\n")
+                        elif mutation == "remove":
+                            measured.unlink()
+                        elif mutation == "rename":
+                            measured.rename(added)
+                        else:
+                            measured.write_bytes(b"edited source\n")
+                        before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+                        with self.assertRaises(ValueError):
+                            publish_publication(plan)
+                        self.assertEqual({path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}, before)
+                        self.assertFalse((root / "figures").exists())
+                        measured.write_bytes(b"measured bytes\r\n")
+                        added.unlink(missing_ok=True)
+                        (root / directory / "notes.txt").write_bytes(b"unselected input\n")
+                        self.assertEqual(len(publish_publication(plan)), 2)
+
     def test_fixture_git_overrides_inherited_signing(self) -> None:
         # Reading effective configuration needs no repository or Git mutation.
         inherited = {

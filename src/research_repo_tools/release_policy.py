@@ -77,8 +77,11 @@ class ReleasePolicy:
     required_files: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()
     rules: tuple[ReleaseRule, ...] = ()
+    tag_policy: Literal["normalized-stable", "canonical-stable"] = "normalized-stable"
 
     def __post_init__(self) -> None:
+        if not isinstance(self.tag_policy, str) or self.tag_policy not in {"normalized-stable", "canonical-stable"}:
+            raise ValueError("tag policy must be normalized-stable or canonical-stable")
         if self.date_policy not in {"today", "declared"} or type(self.final_changelog) is not bool:
             raise ValueError("invalid release date or final-changelog policy")
         for name in ("required_files", "exclude", "rules"):

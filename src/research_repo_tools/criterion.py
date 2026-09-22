@@ -1,6 +1,8 @@
 """Validated Criterion timing estimates and deterministic comparison data."""
 
+import csv
 import html
+import io
 import math
 from dataclasses import dataclass
 from pathlib import Path
@@ -10,6 +12,7 @@ from research_repo_tools.evidence import _load_json, _object, _string, determini
 
 __all__ = [
     "COMPARISON_SCHEMA",
+    "SAMPLE_SCHEMA",
     "Comparison",
     "ComparisonSet",
     "Estimate",
@@ -20,14 +23,18 @@ __all__ = [
     "compare_samples",
     "parse_comparison",
     "parse_estimate",
+    "parse_sample",
     "read_estimate",
     "render_comparison",
     "serialize_comparison",
+    "serialize_comparison_csv",
+    "serialize_sample",
 ]
 
 type Statistic = Literal["mean", "median"]
 type Unit = Literal["ns", "us", "ms", "s"]
 COMPARISON_SCHEMA = "research-repo-tools/criterion-comparison/v1"
+SAMPLE_SCHEMA = "research-repo-tools/criterion-sample/v1"
 
 
 def _positive(value: object, context: str) -> float:
@@ -236,22 +243,56 @@ def collect_sample(criterion_dir: Path, sample: str, *, statistic: Statistic = "
     return Sample(tuple(estimates), statistic, unit)
 
 
+def _sample_document(sample: Sample) -> list[dict[str, object]]:
+    return [
+        {"benchmark": name, "point": estimate.point, "lower": estimate.lower, "upper": estimate.upper, "confidence_level": estimate.confidence_level}
+        for name, estimate in sample.estimates
+    ]
+
+
+def serialize_sample(sample: Sample) -> bytes:
+    """Serialize one complete timing sample for a release baseline asset."""
+    return deterministic_json({"schema": SAMPLE_SCHEMA, "statistic": sample.statistic, "unit": sample.unit, "estimates": _sample_document(sample)})
+
+
+def _parse_sample(raw: object, statistic: Statistic, unit: Unit) -> Sample:
+    if not isinstance(raw, list):
+        raise ValueError("comparison sample must be an array")
+    rows = []
+    for value in raw:
+        row = _object(value, "comparison row", {"benchmark", "point", "lower", "upper", "confidence_level"})
+        rows.append(
+            (
+                _string(row["benchmark"], "benchmark"),
+                Estimate(
+                    _positive(row["point"], "point"),
+                    None if row["lower"] is None else _positive(row["lower"], "lower"),
+                    None if row["upper"] is None else _positive(row["upper"], "upper"),
+                    None if row["confidence_level"] is None else _positive(row["confidence_level"], "confidence_level"),
+                ),
+            )
+        )
+    return Sample(tuple(rows), statistic, unit)
+
+
+def parse_sample(payload: bytes) -> Sample:
+    """Parse a shared sample; reject unknown fields, schemas and duplicate rows."""
+    document = _object(_load_json(payload, "Criterion sample"), "Criterion sample", {"schema", "statistic", "unit", "estimates"})
+    if document["schema"] != SAMPLE_SCHEMA:
+        raise ValueError(f"unsupported sample schema: {document['schema']!r}")
+    return _parse_sample(document["estimates"], _statistic(document["statistic"]), _unit(document["unit"]))
+
+
 def serialize_comparison(comparison: ComparisonSet) -> bytes:
     """Serialize both full samples deterministically; ratios/coverage are derived."""
-
-    def sample_document(sample: Sample) -> list[dict[str, object]]:
-        return [
-            {"benchmark": name, "point": estimate.point, "lower": estimate.lower, "upper": estimate.upper, "confidence_level": estimate.confidence_level}
-            for name, estimate in sample.estimates
-        ]
 
     return deterministic_json(
         {
             "schema": COMPARISON_SCHEMA,
             "statistic": comparison.baseline.statistic,
             "unit": comparison.baseline.unit,
-            "baseline": sample_document(comparison.baseline),
-            "current": sample_document(comparison.current),
+            "baseline": _sample_document(comparison.baseline),
+            "current": _sample_document(comparison.current),
         }
     )
 
@@ -263,26 +304,27 @@ def parse_comparison(payload: bytes) -> ComparisonSet:
         raise ValueError(f"unsupported comparison schema: {document['schema']!r}")
     statistic, unit = _statistic(document["statistic"]), _unit(document["unit"])
 
-    def sample(raw: object) -> Sample:
-        if not isinstance(raw, list):
-            raise ValueError("comparison sample must be an array")
-        rows = []
-        for value in raw:
-            row = _object(value, "comparison row", {"benchmark", "point", "lower", "upper", "confidence_level"})
-            rows.append(
-                (
-                    _string(row["benchmark"], "benchmark"),
-                    Estimate(
-                        _positive(row["point"], "point"),
-                        None if row["lower"] is None else _positive(row["lower"], "lower"),
-                        None if row["upper"] is None else _positive(row["upper"], "upper"),
-                        None if row["confidence_level"] is None else _positive(row["confidence_level"], "confidence_level"),
-                    ),
-                )
-            )
-        return Sample(tuple(rows), statistic, unit)
+    return compare_samples(_parse_sample(document["baseline"], statistic, unit), _parse_sample(document["current"], statistic, unit))
 
-    return compare_samples(sample(document["baseline"]), sample(document["current"]))
+
+def serialize_comparison_csv(comparison: ComparisonSet) -> bytes:
+    """Export full inventories and recorded marginal bounds for analysis.
+
+    CSV is a derived view; the JSON payload and envelope remain the retained
+    evidence. Units and statistic are explicit columns, and absent values stay
+    empty rather than becoming zero. No ratio interval or significance is added.
+    """
+    output = io.StringIO(newline="")
+    writer = csv.writer(output, lineterminator="\n")
+    parts = ("point", "lower", "upper", "confidence_level")
+    writer.writerow(["schema", "statistic", "unit", "benchmark", "coverage", *(f"{side}_{part}" for side in ("baseline", "current") for part in parts)])
+    baseline, current = dict(comparison.baseline.estimates), dict(comparison.current.estimates)
+    for name in sorted(baseline.keys() | current.keys()):
+        coverage = "common" if name in baseline and name in current else "added" if name in current else "missing"
+        estimates = [baseline.get(name), current.get(name)]
+        values = [None if estimate is None else getattr(estimate, part) for estimate in estimates for part in parts]
+        writer.writerow([COMPARISON_SCHEMA, comparison.baseline.statistic, comparison.baseline.unit, name, coverage, *values])
+    return output.getvalue().encode("utf-8")
 
 
 def _markdown_text(value: str) -> str:

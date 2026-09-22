@@ -1,0 +1,10 @@
+# Illustrative scaffold: replace the example command and output markers with
+# your consumer's scientific checks and declare its actual prerequisites.
+schema = 1
+prerequisites = ["cargo"]
+
+[[checks]]
+name = "example"
+command = ["target/debug/examples/example"]
+expect = ["Expected scientific output"]
+timeout = 300

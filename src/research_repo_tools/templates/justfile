@@ -30,6 +30,10 @@ alias changelog-unreleased := changelog-release
 [private]
 default: help
 
+# Run a validator on tracked and nonignored inputs, with portable batching.
+files +args:
+    uv run --locked --group dev research-repo-tools files "$@"
+
 # List available commands and arguments in lexicographic order.
 help:
     @just --justfile {{quote(justfile())}} --alias-style separate --list
@@ -68,6 +72,10 @@ release-check:
 release-notes tag:
     uv run --locked --group dev research-repo-tools changelog notes {{quote(tag)}}
 
+# Prepare release metadata offline with a reviewed predecessor and date.
+release-update tag previous date:
+    uv run --locked --group dev research-repo-tools release update "$1" --previous-release "$2" --date "$3"
+
 # Review branch and local changes with CodeRabbit against a verified origin/main by default.
 review base="origin/main":
     uv run --locked --group dev research-repo-tools review branch --base="$1"
@@ -99,6 +107,10 @@ tag-release tag:
 tools-check:
     uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain check
 
+# Export verified managed paths to the current GitHub Actions environment file.
+tools-export:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain export
+
 # Upgrade tools, then Cargo and Python dependencies and the dev environment.
 update: update-tools update-dependencies
 
@@ -128,3 +140,7 @@ update-tools: update-uv update-cargo-tools setup
 # Upgrade uv through its installation owner and reconcile the project pin.
 update-uv:
     uv run --no-config --no-sync --no-python-downloads research-repo-tools deps update-uv
+
+# Run declared scientific examples or validators in configuration order.
+validate configuration *names:
+    uv run --locked --group dev research-repo-tools toolchain run -- research-repo-tools validation run "$@"

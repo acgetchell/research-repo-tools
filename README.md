@@ -74,17 +74,20 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | Capability | Commands | Contract |
 | --- | --- | --- |
 | Changelog | `changelog archive`, `check`, `generate`, `normalize`, `notes`, `tag` | Root `CHANGELOG.md`; completed minor series in `docs/archives/changelog/` |
+| CI environment | `ci export` | Validate all single-line values before appending a GitHub environment command file |
 | Coverage | `coverage report` | Cobertura summaries with deduplicated source lines |
 | Dependencies | `deps check-uv`, `update-python`, `update-tools`, `update-uv` | Exact development pins; canonical Cargo SemVer; stable uv pins |
 | Documentation | `docs check-lines` | UTF-8 Markdown line checks with table exemptions |
+| File selection | `files list`, `run` | Tracked/nonignored inputs, exclusions and portable argument batching |
 | Notebooks | `notebooks check`, `clear`, `execute`, `group`, `lint`, `sync` | Optional locked environment, cell-aware Ruff/ty checks, and execution reports |
-| Performance | `performance compare`, `extract`, `fetch`, `publish`, `render`, `verify` | Typed timings, bounded archives, exact-byte evidence, and document publication |
+| Performance | `performance assets`, `baseline`, `compare`, `convert`, `export`, `extract`, `fetch`, `measure`, `promote`, `publish`, `release-draft`, `release-upload`, `render`, `verify` | Complete configured measurement, retained evidence, release assets and publication |
 | Release metadata | `release check`, `release update` | Infer metadata, apply declared policies, and validate complete release plans |
 | Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
 | Semgrep fixtures | `semgrep check-fixtures` | Validate consumer-supplied rules and positive fixture coverage |
 | Setup | `setup` | Require uv; install user Just and declared tools; sync the locked environment |
 | Templates | `templates NAME` | Shared changelog, git-cliff, just, TOML, and rumdl resources |
-| Toolchain | `toolchain check`, `run`, `sync`, `upgrade` | Exact declarations; managed installations; verified execution and explicit Cargo upgrades |
+| Toolchain | `toolchain check`, `export`, `run`, `sync`, `upgrade` | Exact declarations; managed installations; verified execution and checked CI export |
+| Validation | `validation cargo-metadata`, `require`, `run` | Native package preflight, executable checks and configured example output assertions |
 
 ### Just recipes
 
@@ -419,9 +422,122 @@ bytes. To assert that a measured source itself is a tagged commit, also set
 `verify-tag = true` in that source's provenance table. These are read-only local
 Git checks; fetching release assets remains a separate explicit operation.
 
-Historical CSV/JSON formats and custom renderers use the Python planner with
-their consumer schema adapter. See the [publication API](docs/publication-api.md)
-and [migration guide](docs/publication-migration.md), including MCMC's adapter path.
+Historical CSV/JSON formats can use declarative conversion into shared companions
+at new paths. See the [publication API](docs/publication-api.md) and
+[migration guide](docs/publication-migration.md). Scientific prose remains consumer-owned.
+
+### Configured benchmark workflows
+
+The coordinated v0.1.4 work adds complete workflows around the retained-evidence
+APIs. Pin that version once published; source availability is not a release.
+Start with the packaged `benchmark.toml`, `examples.toml`, and
+`performance-report.toml` templates, selecting your actual workloads and paths.
+For example, a measurement configuration contains:
+
+```toml
+schema = 1
+command = ["cargo", "bench", "--locked", "--bench", "timings"]
+sources = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "src/**/*.rs", "benches/timings.rs"]
+harness = ["benches/timings.rs"]
+sample = "new"
+statistic = "median"
+unit = "ns"
+compatible = ["context.os", "context.architecture", "context.cpu"]
+
+[probes]
+rustc = ["rustc", "--version", "--verbose"]
+
+[dependencies]
+criterion = "Cargo.lock"
+```
+
+Use the template's `just performance` wrapper. These are alternative operations:
+
+```sh
+just performance compare target/criterion target/criterion --baseline-sample last --format markdown
+just performance measure benchmark.toml --mode current-vs-latest --allow-git-mutations --payload target/local.json --manifest target/local.evidence.json
+just performance measure benchmark.toml v1.2.0 v1.1.0 --allow-git-mutations --payload target/release.json --manifest target/release.evidence.json
+just performance assets --repository owner/project --asset-template 'project-{tag}-baseline.tar.gz' --payload target/releases.json --manifest target/releases.evidence.json
+```
+
+Measurement explicitly permits temporary Git worktrees and runs trusted consumer
+code. It needs existing local tags and a verified benchmark toolchain. Use a
+consumer recipe with `toolchain run -- research-repo-tools performance measure`
+when tools live under managed paths. Omitting tags infers the package release:
+prospective releases use working files, and published versions use their tagged
+source and predecessor. Publication chronology is the default; `--order version`
+selects numeric order. Asset comparison performs no measurement. Add
+`--legacy-configuration legacy-baseline.toml` only for declared historical layouts.
+
+A report configuration contains:
+
+```toml
+schema = 1
+current = "docs/PERFORMANCE.md"
+archive = "docs/archive/performance"
+title = "Benchmark timings"
+prose-file = "docs/performance-interpretation.md"
+```
+
+After measurement, promote, rerender offline, then check or publish the configured
+README section:
+
+```sh
+just performance promote performance-report.toml --payload target/release.json --manifest target/release.evidence.json
+just performance promote performance-report.toml --check
+just performance publish performance-publication.toml --check
+just performance publish performance-publication.toml
+```
+
+Promotion retains full JSON evidence and CSV, archives the prior report, rebases
+evidence links, and refreshes the archive index. `--preview` shows planned diffs.
+Future-release README preparation requires explicit `tag-policy="prepare"`,
+`repository`, both current inventories and matching working-tree fingerprints.
+Any existing tag must still contain exact referenced and generated bytes.
+Historical conversion writes new paths and preserves original files and hashes;
+see [migration](docs/performance-migration.md) and the
+[configuration/API contracts](docs/workflow-api.md).
+
+### Consumer glue and release jobs
+
+The template's `just files` and `just validate` recipes replace discovery and
+example-runner scripts. Keep scientific output expectations in configuration:
+
+```toml
+schema = 1
+[[checks]]
+name = "simulation"
+command = ["target/debug/examples/simulation"]
+expect = ["Samples:", "Mean:"]
+timeout = 300
+```
+
+Compile the example first, then use `just validate examples.toml`. Explicit
+executable paths discover Windows extensions. File-based validators can use
+`just files run --include '*.md' --exclude CHANGELOG.md -- rumdl check`;
+the shared runner selects tracked/nonignored files and batches literal arguments.
+
+After setup/cache restoration in GitHub Actions, `just tools-export` verifies
+managed tools and appends checked settings to `GITHUB_ENV`. Cache keys should
+include OS/architecture and exact tool, Rust and lockfile identities. Generic
+`ci export NAME ...` supports additional declared single-line environment values.
+
+Release benchmarks use three jobs: validate a mutable draft, measure a checked-out
+tag with read-only permissions, then attach/publish inert bytes in a separate
+writer job. The measurement recipe invokes `performance baseline benchmark.toml
+v1.2.0 project-v1.2.0-baseline.tar.gz`; it requires HEAD and configured source bytes
+to match the tag. Writer jobs install the exact published package and run
+`performance release-draft owner/project v1.2.0` or `performance release-upload
+owner/project v1.2.0 project-v1.2.0-baseline.tar.gz --publish` without checking out
+benchmark code. Identical attachment retries are accepted; different bytes fail.
+
+Once no local executable modules remain, remove the consumer's build backend,
+console scripts and self-referencing notebook extra. Set `[tool.uv] package=false`,
+retain exact shared pins in tooling/notebook dependency groups, refresh the lock,
+and remove local wheel/entry-point tests. Rust/scientific and configuration tests
+remain. Declare `release.tag-policy="canonical-stable"` where `vX.Y.Z` is required;
+use `just release-update TAG PREVIOUS DATE` for offline release preparation.
+Version-independent documentation examples avoid release-update callbacks.
 
 ### Clippy SARIF helpers
 

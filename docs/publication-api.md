@@ -11,11 +11,13 @@ Import from `research_repo_tools.publication`:
 
 | Name | Contract |
 | --- | --- |
-| `GitCheck(tag, paths=(), revision=None)` | Required local tag, ordered root-relative blob paths, optional full lowercase source commit ID; requires paths or a revision |
+| `GitCheck(tag, paths=(), revision=None, allow_missing=False)` | Local tag, ordered root-relative blob paths, optional full lowercase source commit ID; explicit future-tag allowance is rechecked before publication |
+| `GlobCheck(patterns, paths)` | Root-relative glob patterns and their complete expected regular-file inventory; every path must have validated bytes in planner inputs |
 | `MarkerPair(begin, end)` | Nonempty single-line UTF-8 delimiters, distinct and not containing one another |
-| `PublicationPlan` | Planner result with `root`, immutable `outputs` and `originals` path/byte tuples, `git_checks`, and absolute `changed_paths` |
+| `PublicationPlan` | Planner result with `root`, immutable `outputs` and `originals` path/byte tuples, `git_checks`, `glob_checks`, and absolute `changed_paths` |
 | `TableLayout(rows, baseline_label, current_label, unit)` | Nonempty ordered `(benchmark, display_label)` pairs with unique benchmark IDs and an explicit recorded timing unit |
-| `plan_publication(root, document, markers, content, *, inputs, figures=None, references=(), git_checks=())` | Validate exact retained inputs, document markers, all candidates, reference captures, and required Git identities without writing |
+| `plan_outputs(root, outputs, *, inputs, immutable=())` | Snapshot generic root-relative byte outputs and inputs, reject conflicting immutable files, reuse the same publication/recovery path |
+| `plan_publication(root, document, markers, content, *, inputs, figures=None, references=(), git_checks=(), glob_checks=())` | Validate exact retained inputs, document markers, all candidates, reference captures, Git identities, and glob inventories without writing |
 | `preview_publication(plan)` | Unified diffs for UTF-8 candidates; SHA-256 summaries for other bytes; does not publish or revalidate a saved plan |
 | `publish_publication(plan)` | Recheck snapshots and Git identities, transactionally publish changed outputs, return their absolute paths |
 | `render_svg(comparison, layout)` | Deterministic UTF-8 SVG bytes with XML-escaped labels, point-ratio bars and a reference at one; standard library only |
@@ -66,7 +68,10 @@ outlining. Its visual text metrics depend on the viewer's sans-serif font.
 
 Publication rechecks every input, reference, and output against its snapshot,
 including expected absence, immediately before calling `replace_many` once.
-It also repeats configured Git checks. Caught failures roll back earlier writes;
+It also repeats configured Git checks and expands each `GlobCheck` again to
+reject added, removed, renamed, unsafe, or aliased matching paths. The TOML adapter
+retains these checks for both `current-sources` and `current-harness`; files outside
+those patterns do not change the selected inventory. Caught failures roll back earlier writes;
 incomplete rollback exposes `RecoveryError` backups through the existing
 [file-publication contract](api.md#python-file-publication-api).
 No-op outputs are not rewritten. Concurrent writers must be excluded by the
@@ -85,15 +90,18 @@ non-integer schema/count values, and empty required arrays fail before writes.
 | --- | --- |
 | `baseline-label`, `current-label` | Optional display labels; default to the expected release tags |
 | `begin`, `end` | Required literal marker strings |
+| `current-sources`, `current-harness` | Optional glob inventories checked against current shared fingerprints and included in stale-input snapshots |
 | `document` | Existing document to update |
 | `links` | Optional nonempty array of `{label, path}` tables; paths must exist or be candidates |
 | `manifest`, `payload` | Existing retained sidecar and comparison payload |
+| `prose-file` | Optional consumer interpretation, included in the input snapshot |
 | `provenance.baseline`, `provenance.current` | Required independently maintained source expectations |
 | `references` | Nonempty selector array covering `previous-tag`, `tag`, and `version` |
 | `repository` | Optional GitHub `owner/repository`; selects verified links at the current release tag |
 | `rows` | Nonempty array of `{benchmark, label}` tables in the desired publication order |
 | `schema` | Integer `1` |
 | `svg` | Optional generated SVG path; also inserts its image link |
+| `tag-policy` | `existing` by default; explicit `prepare` requires a repository and verified prospective working-tree inventories |
 | `unit` | Explicit evidence timing unit: `ns`, `us`, `ms`, or `s` |
 
 Each provenance table requires `revision` (full Git commit ID) and `release`
@@ -107,8 +115,8 @@ Set `verify-tag = true` in a source's provenance table only when the evidence
 promises measurement of that exact tagged commit. This resolves its local release
 tag and requires the recorded commit ID. A measurement with applied working-tree
 changes or a substituted harness needs the consumer's corresponding source/harness
-validation; a matching commit alone does not prove those bytes. Use a consumer
-adapter and `fingerprint_files` or the original digest scheme for that policy.
+validation; a matching commit alone does not prove those bytes. Configure
+`current-sources` and `current-harness` to verify shared fingerprint framing.
 
 Reference tables require `path`, `pattern`, and `source`; optional `count` defaults
 to one and `exclude` filters complete matches. Patterns use Python MULTILINE
@@ -122,7 +130,9 @@ Without `repository`, links are URL-encoded relative paths from the document.
 With `repository`, the adapter creates GitHub blob links and a raw SVG link at
 the current release tag, and requires a locally present tag containing exact
 payload, manifest, reference, linked-file, and figure bytes. Generated figures
-are checked as candidates, before writes. There is no missing-tag fallback.
+are checked as candidates, before writes. The explicit `prepare` policy permits
+an absent future tag under the [workflow requirements](workflow-api.md); any
+existing tag is still checked exactly, including one created after planning.
 A linked document or reference to the publication document must match its
 candidate at that tag too. Existing-release repairs that differ from stored blobs
 remain local or require a new release.

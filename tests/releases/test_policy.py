@@ -6,6 +6,7 @@ from pathlib import Path
 import pytest
 
 from research_repo_tools import cli, config
+from research_repo_tools.release_metadata import python_version_references
 from research_repo_tools.releases import ReleaseAdapter, ReleasePolicy, ReleaseRule, check_release, discover_release, plan_release
 from tests.releases.test_contract import snapshot
 from tests.releases.test_metadata import _write_project
@@ -41,6 +42,18 @@ def test_invalid_policy_containers_are_rejected(tmp_path, value):
 def test_selected_historical_file_is_not_silently_reactivated():
     with pytest.raises(ValueError, match="excluded historical"):
         ReleasePolicy(exclude=("docs/history/**",), rules=(ReleaseRule("docs/history/old.md", "(?P<value>.+)", source="version"),))
+
+
+def test_nonpackage_python_environment_is_independent_of_cargo_release(tmp_path: Path) -> None:
+    _write_project(tmp_path)
+    (tmp_path / "pyproject.toml").write_bytes(b'[project]\nname="environment"\nversion="0.0.0"\n[tool.uv]\npackage=false\n')
+    assert python_version_references(tmp_path) == []
+
+
+def test_canonical_stable_policy_rejects_bare_version(tmp_path: Path) -> None:
+    _write_project(tmp_path)
+    with pytest.raises(ValueError, match="canonical stable"):
+        plan_release(tmp_path, "1.2.4", previous_tag="v1.2.3", policy=ReleasePolicy(tag_policy="canonical-stable"))
 
 
 def test_overlapping_and_optional_captures_fail_check_and_preview(tmp_path):

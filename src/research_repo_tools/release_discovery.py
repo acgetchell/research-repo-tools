@@ -58,8 +58,13 @@ def stable_published_releases(document: object) -> tuple[PublishedRelease, ...]:
     return tuple(sorted(releases, key=lambda item: _tag_version(item.tag), reverse=True))
 
 
-def _published_releases(root: Path) -> tuple[PublishedRelease, ...]:
-    result = run_safe_command("gh", ["release", "list", "--limit", "1000", "--json", "tagName,isDraft,isPrerelease,publishedAt"], cwd=root)
+def _published_releases(root: Path, *, repository: str | None = None) -> tuple[PublishedRelease, ...]:
+    arguments = ["release", "list", "--limit", "1000", "--json", "tagName,isDraft,isPrerelease,publishedAt"]
+    if repository is not None:
+        from research_repo_tools.release_assets import _repository
+
+        arguments.extend(["--repo", _repository(repository)])
+    result = run_safe_command("gh", arguments, cwd=root)
     return stable_published_releases(json.loads(result.stdout))
 
 

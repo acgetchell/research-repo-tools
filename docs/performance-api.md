@@ -25,6 +25,8 @@ Import from `research_repo_tools.criterion`:
 | `read_estimate(path, *, statistic="median")` | Parse one Criterion file with path-qualified errors |
 | `render_comparison(comparison)` | Deterministic Markdown derived entirely from retained data |
 | `serialize_comparison(comparison)` | Deterministic JSON bytes containing full samples and explicit statistic/unit |
+| `serialize_comparison_csv(comparison)` | Full inventories, coverage, unit/statistic, points and optional marginal bounds/confidence as UTF-8/LF CSV |
+| `serialize_sample(sample)`, `parse_sample(payload)` | Validated retained sample bytes using `SAMPLE_SCHEMA`, `research-repo-tools/criterion-sample/v1` |
 
 Criterion's default wall-time measurement records nanoseconds, but custom
 measurements choose their own numeric scale. Units cannot be inferred from
@@ -166,4 +168,6 @@ Invalid data normally raises `ValueError`; wrong Python argument types may raise
 `TypeError`. Filesystem/transport errors propagate as `OSError`, and publication
 may raise an exception group with recovery information. CLI errors use the
 package's usual stderr/exit-status contract. No heavy optional dependencies,
-network operations on import, measurement, or worktree mutation are introduced.
+or network operations on import are introduced. Explicit configured measurement,
+worktree and release-asset operations are documented separately in the
+[workflow API](workflow-api.md).

@@ -18,15 +18,22 @@ def _write_stdout(output: bytes) -> None:
 
 
 def add_commands(groups) -> None:
+    from research_repo_tools.performance_workflows import add_command
+
     commands = groups.add_parser("performance", help="compare timings and verify retained evidence").add_subparsers(dest="action", required=True)
+    add_command(commands, "assets")
+    add_command(commands, "baseline")
     compare = commands.add_parser("compare", help="write deterministic comparison JSON from two Criterion sample trees")
     compare.add_argument("baseline")
     compare.add_argument("current")
     compare.add_argument("--baseline-sample", default="new")
     compare.add_argument("--current-sample", default="new")
     compare.add_argument("--output")
+    compare.add_argument("--format", choices=("csv", "json", "markdown"), default="json")
     compare.add_argument("--statistic", choices=("mean", "median"), default="median")
     compare.add_argument("--unit", choices=("ms", "ns", "s", "us"), default="ns")
+    add_command(commands, "convert")
+    add_command(commands, "export")
     extract = commands.add_parser("extract", help="safely extract a tar/ZIP asset into an absent directory")
     extract.add_argument("archive")
     extract.add_argument("destination")
@@ -35,11 +42,15 @@ def add_commands(groups) -> None:
     fetch.add_argument("url")
     fetch.add_argument("destination")
     fetch.add_argument("--sha256", required=True)
+    add_command(commands, "measure")
+    add_command(commands, "promote")
     publish = commands.add_parser("publish", help="publish a marked document section and figures from verified retained evidence")
     publish.add_argument("configuration", help="publication TOML path relative to the consumer root")
     mode = publish.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="validate and return 1 when outputs differ; write nothing")
     mode.add_argument("--preview", action="store_true", help="validate and print candidate diffs; write nothing")
+    add_command(commands, "release-draft")
+    add_command(commands, "release-upload")
     render = commands.add_parser("render", help="render verified retained comparison data without measuring")
     render.add_argument("payload")
     render.add_argument("manifest")
@@ -50,6 +61,10 @@ def add_commands(groups) -> None:
 
 
 def run(args: argparse.Namespace, settings: Config) -> int:
+    from research_repo_tools import performance_workflows
+
+    if args.action in performance_workflows.COMMANDS:
+        return performance_workflows.run(args, settings)
     if args.action == "publish":
         from research_repo_tools.publication import preview_publication, publish_publication
         from research_repo_tools.publication_config import load_publication
@@ -82,7 +97,13 @@ def run(args: argparse.Namespace, settings: Config) -> int:
             comparison = criterion.compare_samples(baseline, current)
             if not comparison.comparisons:
                 raise ValueError("no common Criterion benchmarks; inspect the selected sample directories")
-            output = criterion.serialize_comparison(comparison)
+            output = (
+                criterion.render_comparison(comparison).encode("utf-8")
+                if args.format == "markdown"
+                else criterion.serialize_comparison_csv(comparison)
+                if args.format == "csv"
+                else criterion.serialize_comparison(comparison)
+            )
             if args.output:
                 destination = settings.path(args.output).resolve()
                 if any(_paths_alias(ancestor, root) for root in roots for ancestor in (destination, *destination.parents)):

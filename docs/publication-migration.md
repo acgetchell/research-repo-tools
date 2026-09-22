@@ -11,13 +11,15 @@ bytes throughout adoption; follow the
 Move marker validation, byte-preserving section replacement, candidate snapshots,
 reference assertions, deterministic timing tables/SVGs, local tagged-blob checks,
 and multi-file publication into shared calls. Consumers retain benchmark selection,
-release discovery, measurement, scientific conclusions, provenance capture,
-eligibility rules, and legacy schema parsing. No consumer name selects behavior.
+scientific conclusions, eligibility rules, release/measurement choices, source
+inventories and historical layout declarations. Shared configured workflows own
+discovery, measurement, provenance capture and conversion mechanics. No consumer
+name selects behavior.
 
-MCMC's `publish_performance_readme.py` can retain its `load_comparison_artifact`
-adapter and its scientific prose. Map validated comparison rows to shared
-`Estimate`/`Sample` objects for the common renderers, or keep its current table/SVG
-renderers when historical output identity requires them. After checking the
+MCMC's `publish_performance_readme.py` is replaced by publication TOML and separate
+scientific prose. Convert historical input to shared evidence at new paths;
+preserve historical tables/SVGs as immutable files without retaining their writers.
+For a consumer with additional scientific rendering requirements, after checking the
 artifact/report release pair and current package release, pass the original CSV,
 JSON provenance, report, and package metadata bytes as `inputs` to
 `plan_publication`. Use `MarkerPair` for the existing PERFORMANCE delimiters,
@@ -55,12 +57,12 @@ The [README](../README.md#document-publication) contains a complete example.
 
 ## Intentional contract changes
 
-The common publisher requires an existing local tag whenever it verifies a tagged
-publication. It has no implicit allowance for a future release tag. Prepare a
-local-link publication first, then validate tagged links once the intended tag
-and artifacts exist. Consumers own the release workflow and the decision to make
-new claims about a future release; that decision cannot bypass verification of
-already tagged content.
+The default tagged publisher requires an existing local tag. Explicit
+`tag-policy="prepare"` permits a missing future tag only with newer working-tree
+evidence, a repository, and matching current source/harness inventories using
+shared fingerprint framing. If the tag exists at planning or publication time,
+exact blob verification is mandatory. This replaces the former two-step advice
+to publish local links first; see the [workflow contract](workflow-api.md).
 
 Exact blob verification replaces text-mode or attribute-filtered hashes.
 Different CRLF/LF bytes, repaired retained evidence, or a newly rendered SVG cannot
@@ -72,9 +74,9 @@ to make checks pass.
 The shared renderer uses explicit row order, fixed general numeric formatting,
 recorded timing units, full coverage counts, and neutral point-ratio language.
 It does not preserve MCMC's Matplotlib layout or duration formatter byte for byte.
-Retain a small renderer adapter where those details are part of an existing
-publication contract. Custom plotting dependencies stay in that consumer's extra;
-shared maintenance and SVG rendering add no plotting dependencies.
+Preserve old figures at their original paths. Custom scientific plotting belongs
+in consumer notebooks; shared maintenance and SVG rendering add no plotting
+dependencies. Historical visual identity alone does not require legacy writers.
 
 Marker interiors use LF while surrounding bytes remain untouched. Paths reject
 all symlink components and portable aliases, and failures preserve original

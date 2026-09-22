@@ -13,7 +13,9 @@ research-repo-tools release check --final-release
 ```
 
 The owning version comes from a root Cargo package, Cargo workspace package, or
-Python project. Declared Python package versions follow that version. Existing
+Python project. Declared Python package versions follow that version. A Python
+dependency environment beside Cargo with `[tool.uv] package=false` is excluded
+from version synchronization because it is not another releasable package. Existing
 local Cargo and uv lock entries are synchronized; a lockfile is not required.
 Cargo workspace members inheriting the workspace version participate, while
 registry dependencies and independently versioned members retain their versions.
@@ -62,6 +64,7 @@ or use `[release]` in a standalone configuration:
 
 ```toml
 [tool.research-repo-tools.release]
+tag-policy = "canonical-stable"
 required-files = ["CITATION.cff", "README.md", "REFERENCES.md"]
 exclude = ["docs/evidence/**"]
 
@@ -73,6 +76,8 @@ value = "10.5281/zenodo.20033111"
 
 Use TOML multiline literal strings when a pattern contains single quotes; the
 [worked migration](release-policy-migration.md) shows complete selectors.
+`tag-policy` defaults to `normalized-stable`, accepting `X.Y.Z` or `vX.Y.Z`.
+`canonical-stable` requires the target argument to use canonical `vX.Y.Z` syntax.
 `required-files` lists existing regular files. Paths are normalized relative POSIX
 names; absolute paths, `..`, `.git`, and symlink components fail. `exclude` uses
 root-relative POSIX glob patterns, including `**`, to remove historical Markdown
