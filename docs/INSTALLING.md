@@ -307,9 +307,12 @@ cached. Fix the cause and rerun the upgrade. Concurrent configuration edits are
 detected before publication and are never deliberately overwritten. No lockfile,
 user Cargo installation, or Rust compiler pin is changed by this command.
 
-The older `deps update-tools` command updates legacy Just variables from
-user-installed Cargo tools. It does not manage this new TOML toolchain contract
-and is not included in the new consumer template.
+`deps update-tools` supports consumers whose Just variables track user-installed
+Cargo tools and uv. It reconciles explicitly mapped pins after the consumer's
+native package-manager update; it never installs tools itself. Machine-configuration
+repositories can use the [user-installed tool recipes](../README.md#user-installed-tool-updates),
+including `cargo install-update --all --locked`. This separate ownership model
+does not change the isolated TOML toolchain contract or its standard template.
 
 Upstream behavior: [uv installation](https://docs.astral.sh/uv/getting-started/installation/),
 [user tools](https://docs.astral.sh/uv/concepts/tools/),

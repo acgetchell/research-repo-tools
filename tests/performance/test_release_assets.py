@@ -101,5 +101,8 @@ def test_download_transport_bounds_output_and_rejects_partial_failures(tmp_path:
     popen = subprocess.Popen
     monkeypatch.setattr(assets, "resolve_executable", lambda *args, **kwargs: Path(sys.executable))
     monkeypatch.setattr(assets.subprocess, "Popen", lambda command, **kwargs: popen([sys.executable, "-c", program], **kwargs))
+    # Size and exit-status cases must allow interpreter/coverage startup; only
+    # the deliberate sleeping child should race a short deadline.
+    timeout = 0.3 if error is subprocess.TimeoutExpired else 10
     with pytest.raises(error):
-        assets._download(tmp_path, "owner/repo", 3, 10, timeout=0.3)
+        assets._download(tmp_path, "owner/repo", 3, 10, timeout=timeout)

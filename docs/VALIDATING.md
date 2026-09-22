@@ -45,6 +45,10 @@ including setup startup and its missing-uv failure. These checks do not install
 user tools or modify shell profiles.
 They run the installed Just template against a consumer with default dependency
 groups disabled, verifying that recipes restore their required tooling group.
+Offline update fixtures verify exact dev-pin upgrades, retained ranges and
+markers, full-lock upgrades when direct pins are already current, and explicit
+dev synchronization. Ambiguous universal resolutions must leave both the
+manifest and lock unchanged.
 Maintenance-only installations must not contain notebook dependencies. Each
 distribution is also installed with its notebook extra through a locked consumer
 group, then checked with project-kernel synchronization, native Ruff/ty linting,
