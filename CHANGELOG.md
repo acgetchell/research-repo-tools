@@ -5,6 +5,62 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.3] - 2026-09-22
+
+### Added
+
+- Add managed SARIF tools and public Python utility APIs
+  [`5e1290e`](https://github.com/acgetchell/research-repo-tools/commit/5e1290e5dea6a32d908131f780b6b64821bbdaec)
+
+  - Manage clippy-sarif and sarif-fmt with exact locked installation, checked execution, and upgrades limited to declared tools.
+  - Expose executable resolution and text/byte command runners that preserve Git input bytes and original failure diagnostics.
+  - Support transactional byte publication with target validation, preserved permissions, rollback, and structured recovery errors.
+  - Document API compatibility, platform limits, and consumer migration.
+- Add configurable policies and structured plans [`cf4331f`](https://github.com/acgetchell/research-repo-tools/commit/cf4331fa151234802d18b1ae11264688b065c51e)
+
+  - Declare required files, fixed metadata, and active release references with exclusions for historical evidence.
+  - Expose typed discovery, checks, plans, and consumer adapters for contributing edits and validating complete candidates.
+  - Apply the exact previewed bytes with stale-input checks and transactional rollback; reject fixed DOI mismatches before editing.
+  - Document replacing MCMC's release orchestration with configuration and small adapters while retaining consumer-owned evidence policy.
+- Add Criterion comparison and evidence APIs [`b3de44f`](https://github.com/acgetchell/research-repo-tools/commit/b3de44f622f304a3b04ef7cb382165b88279939f)
+
+  - Add validated timing comparisons with explicit units and complete common, added, and missing benchmark inventories.
+  - Preserve exact evidence bytes with deterministic serialization, source and harness provenance, and explicit compatibility checks.
+  - Support bounded asset retrieval, safe archive extraction, and recoverable publication with immutable evidence and alias protection.
+  - Add performance commands for comparison, extraction, retrieval, retained-data rendering, and verification.
+  - Document retained-evidence migration while keeping benchmark execution and scientific acceptance policies in consumers.
+- Add evidence-backed document publication [`1ad1c56`](https://github.com/acgetchell/research-repo-tools/commit/1ad1c56d3c3a64a57fb278ac7ea553423a5a3d5c)
+
+  - Add Python publication plans and a TOML-driven performance publish command with check and preview modes.
+  - Render selected timing tables and optional SVGs with explicit labels, units, and links, without plotting dependencies.
+  - Verify provenance, release references, and exact tagged artifact bytes before publishing documents and figures with snapshot checks and rollback.
+  - Preserve surrounding document bytes, historical links, and UTF-8 preview output across platforms.
+  - Document migration through consumer schema and renderer adapters.
+  - Share the Git-mutation opt-out across checkout and installed consumer suites while retaining full coverage by default.
+
+### Changed
+
+- Make public API consumer checks portable [`08140cf`](https://github.com/acgetchell/research-repo-tools/commit/08140cf1b2ddf24de5565339130b5be782404218)
+
+  - Resolve relative interpreter paths without crossing Windows drives.
+  - Explicitly use UTF-8 for the Unicode subprocess probe so inherited encodings cannot cause decoding failures.
+
+### Fixed
+
+- Handle discovery errors and Windows check failures
+  [`4114c94`](https://github.com/acgetchell/research-repo-tools/commit/4114c94f78c32b6ad028fa2f5af909841f9d8fff)
+
+  - Report failed or timed-out release discovery on stderr and return  status 1 instead of propagating subprocess exceptions.
+  - Describe release updates as transactional with rollback on failure, removing the inaccurate atomicity claim.
+  - Use explicit LF and CRLF fixtures so release-policy checks preserve exact bytes consistently across platforms.
+- Protect performance inputs and enforce portable text writes
+  [`a494030`](https://github.com/acgetchell/research-repo-tools/commit/a494030723489565fc7f9c085806cc2d1b933f94)
+
+  - Reject comparison outputs within either Criterion input root, including equivalent path aliases.
+  - Reject Unicode surrogates in archive names before filesystem access.
+  - Enforce explicit newline policies through just newline-check, included in just check and just ci.
+  - Make generated scripts and fixtures portable while preserving intentional LF/CRLF data and malformed ZIP names on Windows.
+
 ## [0.1.2] - 2026-09-20
 
 ### Merged Pull Requests
@@ -227,6 +283,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Document supported CLI and Python interfaces, consumer just recipes, and publisher setup.
   - Generate the initial 0.1.0 changelog from committed history.
 
+[0.1.3]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.1...v0.1.2
 [0.1.1]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.0...v0.1.1
 [0.1.0]: https://github.com/acgetchell/research-repo-tools/tree/v0.1.0
