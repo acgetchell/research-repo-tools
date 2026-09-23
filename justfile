@@ -34,9 +34,9 @@ alias changelog-unreleased := changelog-release
 # Check the lockfile, Python linting, formatting, newlines, types, and workflows.
 check: newline-check workflow-check
     uv lock --check
-    uv run --locked ruff check src scripts tests
-    uv run --locked ruff format --check src scripts tests
-    uv run --locked ty check src scripts tests
+    uv run --locked research-repo-tools files run --include '*.py' --include '*.pyi' -- ruff check --no-fix --no-force-exclude
+    uv run --locked research-repo-tools files run --include '*.py' --include '*.pyi' -- ruff format --check --no-force-exclude
+    uv run --locked research-repo-tools files run --include '*.py' --include '*.pyi' -- ty check --no-force-exclude
 
 # Validate existing artifacts without rebuilding them (also used by native CI).
 check-dist:
@@ -137,7 +137,7 @@ update-tools: update-uv setup
 update-uv:
     uv run --no-config --no-sync --no-python-downloads research-repo-tools deps update-uv
 
-# Run actionlint and offline zizmor workflow checks.
+# Run actionlint and zizmor with authenticated online audits when available.
 workflow-check:
     uv run --locked actionlint
-    uv run --locked zizmor --offline --strict-collection .github
+    uv run --locked research-repo-tools zizmor check

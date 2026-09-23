@@ -124,10 +124,23 @@ def parser() -> argparse.ArgumentParser:
     command = validation.add_parser("run")
     command.add_argument("configuration")
     command.add_argument("names", nargs="*")
+    zizmor = groups.add_parser("zizmor", help="audit workflows with the declared scanner and authentication policy").add_subparsers(
+        dest="action", required=True
+    )
+    command = zizmor.add_parser("check", help="run local audits; report unauthenticated offline fallback")
+    command.add_argument("--format", choices=("plain", "sarif"), default="plain")
+    mode = command.add_mutually_exclusive_group()
+    mode.add_argument("--offline", action="store_true", help="disable authentication discovery and all online audits")
+    mode.add_argument("--require-online", action="store_true", help="fail if authentication is unavailable; never downgrade")
+    command.add_argument("paths", nargs="*", default=[".github"], help="local input paths relative to the consumer root (default: .github)")
     return result
 
 
 def run(args: argparse.Namespace, settings: config.Config) -> int:
+    if args.group == "zizmor":
+        from research_repo_tools.zizmor import check
+
+        return check(settings, args.paths, output_format=args.format, offline=args.offline, require_online=args.require_online)
     if args.group == "validation":
         from research_repo_tools.validation import check_cargo_metadata, require_executables, run_checks
 

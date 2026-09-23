@@ -40,3 +40,8 @@ outputs = "clear"
 # path = "CITATION.cff"
 # pattern = '^doi: (?P<value>[^\s]+)[ \t]*\r?$'
 # value = "10.1234/your-concept-doi"
+
+# Declare the scanner pin in dependency-groups.dev OR toolchain.cargo.
+[zizmor]
+persona = "regular"
+timeout = 300

@@ -1,5 +1,12 @@
 # Shared scope and adoption
 
+For the v0.1.6 workflow-security and Python-typing adoption contract, see the
+[installed validation guide](../src/research_repo_tools/templates/VALIDATING_WORKFLOWS.md).
+It replaces separate zizmor-action scanner authority with the shared direct
+scanner path, reuses file selection for complete Python coverage, and retains
+consumer scientific annotations, precise fixture exceptions, and gate wiring.
+Publication does not complete consumer adoption.
+
 The first version provides changelog generation, normalization, archiving, release
 notes and local tags; declared toolchain setup; release metadata synchronization; dependency pin maintenance;
 Semgrep fixture validation; Markdown line checks; and coverage summaries.

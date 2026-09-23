@@ -1,0 +1,20 @@
+# Merge into pyproject.toml; keep existing lint rules and consumer tool pins.
+# This opt-in policy is for Python 3.14+ repositories.
+[tool.ruff]
+target-version = "py314"
+
+[tool.ruff.lint]
+extend-select = [
+    "ANN001", "ANN002", "ANN003", "ANN201", "ANN202", "ANN204", "ANN205", "ANN206",
+    "TC", "UP037",
+]
+
+[tool.ruff.lint.flake8-type-checking]
+strict = true
+
+# Illustrative exact exceptions: adapt to the consumer's deliberate violations.
+# Do not exclude the fixture directory from discovery, Ruff, or ty.
+# [tool.ruff.lint.per-file-ignores]
+# "tests/semgrep/missing_annotation.py" = ["ANN001", "ANN201"]
+# Prefer a line-level `# ty: ignore[invalid-argument-type]` on an intentional
+# type error. It leaves unrelated errors, including elsewhere in that file, active.

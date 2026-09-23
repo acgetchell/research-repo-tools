@@ -167,8 +167,9 @@ def check(dist: Path) -> None:
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     version = metadata["project"]["version"]
     expected_just = next(item.removeprefix("rust-just==") for item in metadata["project"]["dependencies"] if item.startswith("rust-just=="))
-    notebook_checkers = [
-        next(item for item in metadata["dependency-groups"]["dev"] if isinstance(item, str) and item.startswith(f"{tool}==")) for tool in ("ruff", "ty")
+    validation_checkers = [
+        next(item for item in metadata["dependency-groups"]["dev"] if isinstance(item, str) and item.startswith(f"{tool}=="))
+        for tool in ("ruff", "ty", "zizmor")
     ]
     wheel = dist / f"research_repo_tools-{version}-py3-none-any.whl"
     sdist = dist / f"research_repo_tools-{version}.tar.gz"
@@ -252,7 +253,7 @@ def check(dist: Path) -> None:
             notebook_group = "notebook" if artifact == wheel else "analysis"
             (recipe_consumer / "pyproject.toml").write_text(
                 '[project]\nname="recipe-consumer"\nversion="0.1.0"\nrequires-python=">=3.14"\n'
-                f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}, {", ".join(map(json.dumps, notebook_checkers))}]\n'
+                f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}, {", ".join(map(json.dumps, validation_checkers))}]\n'
                 f'{notebook_group}=["research-repo-tools[notebooks]=={version}"]\n'
                 f'[tool.uv]\npackage=false\ndefault-groups=[]\nrequired-version="=={uv_version}"\n'
                 f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(artifact.resolve()))}}}\n"
@@ -277,6 +278,10 @@ def check(dist: Path) -> None:
             run([str(just), "notebook-sync"], cwd=recipe_consumer, env=env)
             recipe_python = recipe_consumer / ".venv" / scripts.name / python.name
             run([str(recipe_python), "-I", str(notebook_suite)], cwd=recipe_consumer, env=env)
+            validation_suite = consumer / "public_validation_consumer.py"
+            validation_suite.write_bytes((ROOT / "tests/validation/public_validation_consumer.py").read_bytes())
+            validation_env = {**env, "PATH": str(recipe_python.parent) + os.pathsep + env.get("PATH", "")}
+            run([str(recipe_python), "-I", str(validation_suite)], cwd=recipe_consumer, env=validation_env)
             notebook = recipe_consumer / "notebooks" / "smoke.ipynb"
             notebook.parent.mkdir()
             notebook.write_text(

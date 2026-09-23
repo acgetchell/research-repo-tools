@@ -18,6 +18,7 @@ FIELDS = {
     "semgrep": {"config", "fixtures", "namespace", "timeout", "cwd", "counts"},
     "release": {"date-policy", "final-changelog", "required-files", "exclude", "rules", "tag-policy"},
     "changelog": {"formatter", "cliff-config", "owner", "repository"},
+    "zizmor": {"persona", "timeout"},
 }
 
 
@@ -80,6 +81,12 @@ class ChangelogSettings:
 
 
 @dataclass(frozen=True, slots=True)
+class ZizmorSettings:
+    persona: Literal["regular", "pedantic", "auditor"] | None = None
+    timeout: int = 300
+
+
+@dataclass(frozen=True, slots=True)
 class Config:
     root: Path
     toolchain: ToolchainSettings = field(default_factory=ToolchainSettings)
@@ -88,6 +95,7 @@ class Config:
     release: ReleasePolicy = field(default_factory=ReleasePolicy)
     changelog: ChangelogSettings = field(default_factory=ChangelogSettings)
     notebooks: NotebookSettings = field(default_factory=NotebookSettings)
+    zizmor: ZizmorSettings = field(default_factory=ZizmorSettings)
 
     def path(self, value: str) -> Path:
         path = Path(value)
@@ -216,6 +224,13 @@ def parse(value: object, *, root: Path) -> Config:
     release = _section(data, "release")
     changelog = _section(data, "changelog")
     notebooks = _section(data, "notebooks")
+    zizmor = _section(data, "zizmor")
+    persona = zizmor.get("persona")
+    if "persona" in zizmor and persona not in ("regular", "pedantic", "auditor"):
+        raise ValueError("zizmor.persona must be regular, pedantic, or auditor")
+    zizmor_timeout = zizmor.get("timeout", 300)
+    if type(zizmor_timeout) is not int or zizmor_timeout <= 0:
+        raise ValueError("zizmor.timeout must be a positive integer")
     notebook_timeout = notebooks.get("timeout", 600)
     if type(notebook_timeout) is not int or notebook_timeout <= 0:
         raise ValueError("notebooks.timeout must be a positive integer")
@@ -237,6 +252,7 @@ def parse(value: object, *, root: Path) -> Config:
         raise ValueError("release.final-changelog must be a boolean")
     return Config(
         root=root,
+        zizmor=ZizmorSettings(cast(Literal["regular", "pedantic", "auditor"] | None, persona), zizmor_timeout),
         toolchain=ToolchainSettings(_strings(toolchain.get("cargo", {}), "toolchain.cargo")),
         deps=DependencySettings(
             pyproject=_string(deps.get("pyproject", "pyproject.toml"), "deps.pyproject"),

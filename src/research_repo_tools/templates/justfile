@@ -25,6 +25,12 @@ changelog-release tag date:
 
 alias changelog-unreleased := changelog-release
 
+# Extend this gate with the consumer's Rust/domain checks; retain fixture validation.
+check: python-check semgrep-check zizmor-check
+
+# Local and CI use the same complete validation gate.
+ci: check
+
 # Show command help when invoked without a recipe.
 [default]
 [private]
@@ -71,6 +77,12 @@ notebook-sync:
 # Compare timings, handle assets, and verify, render, or publish retained evidence.
 performance +args:
     uv run --locked --group dev research-repo-tools performance "$@"
+
+# Check every tracked/nonignored Python file, including deliberate negative fixtures.
+python-check:
+    uv run --locked --group dev research-repo-tools files run --include '*.py' --include '*.pyi' -- ruff check --no-fix --no-force-exclude
+    uv run --locked --group dev research-repo-tools files run --include '*.py' --include '*.pyi' -- ruff format --check --no-force-exclude
+    uv run --locked --group dev research-repo-tools files run --include '*.py' --include '*.pyi' -- ty check --no-force-exclude
 
 # Check consumer release metadata.
 release-check:
@@ -152,3 +164,7 @@ update-uv:
 # Run declared scientific examples or validators in configuration order.
 validate configuration *names:
     uv run --locked --group dev research-repo-tools toolchain run -- research-repo-tools validation run "$@"
+
+# Audit with the declared version/persona; pass --require-online in CI or --offline deliberately.
+zizmor-check *args:
+    uv run --locked --group dev research-repo-tools zizmor check "$@"

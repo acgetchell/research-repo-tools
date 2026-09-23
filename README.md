@@ -88,6 +88,7 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | Templates | `templates NAME` | Shared changelog, git-cliff, just, TOML, and rumdl resources |
 | Toolchain | `toolchain check`, `export`, `run`, `sync`, `upgrade` | Exact declarations; managed installations; verified execution and checked CI export |
 | Validation | `validation cargo-metadata`, `require`, `run` | Native package preflight, executable checks and configured example output assertions |
+| Workflow security | `zizmor check` | One declared scanner/persona, token discovery, explicit offline or required-online audits |
 
 ### Just recipes
 
@@ -105,6 +106,8 @@ arguments in lexicographic order.
 | `just changelog-preview` | Validate the generated root and archives without writing; print the root candidate |
 | `just changelog-release TAG DATE` | Generate a prospective release with an explicit `YYYY-MM-DD` date |
 | `just changelog-unreleased TAG DATE` | Alias for `changelog-release` |
+| `just check` | Run Python, Semgrep fixture, and zizmor validation; extend with consumer domain gates |
+| `just ci` | Run the same canonical consumer gate as local validation |
 | `just help` | List available commands and arguments in lexicographic order |
 | `just help-workflows` | Alias for `help` |
 | `just notebook-advise FILE... [--strict]` | Report configured review warnings, optionally failing on them |
@@ -115,6 +118,7 @@ arguments in lexicographic order.
 | `just notebook-lint FILE...` | Check structure, output policy, Python syntax, Ruff rules/formatting, and ty types |
 | `just notebook-sync` | Synchronize locked notebook dependencies and the project kernel |
 | `just performance COMMAND...` | Compare Criterion samples, handle assets, and verify, render, or publish retained evidence |
+| `just python-check` | Apply full configured Ruff/ty checks to all tracked and nonignored Python, including fixtures |
 | `just release-check` | Check consumer release metadata |
 | `just release-notes TAG` | Print release notes from the root changelog or an archive |
 | `just review [base]` | Review branch and local changes; default to verified `origin/main` |
@@ -133,11 +137,57 @@ arguments in lexicographic order.
 | `just update-python-deps` | Alias for `update-python-dependencies` |
 | `just update-tools` | Upgrade uv and managed Cargo tools, then run setup |
 | `just update-uv` | Upgrade uv through its installation owner and reconcile its pin |
+| `just zizmor-check [ARGS...]` | Run local workflow audits; accept `--offline`, `--require-online`, and `--format sarif` |
 
 To preview a prospective release, run
 `just changelog-preview --tag v1.2.3 --date YYYY-MM-DD`.
 Follow the [toolchain guide][toolchain] for declarations, first-time setup, and
 strictly read-only tool checks.
+
+### Workflow security and complete Python validation
+
+These additions target v0.1.6; consumers should adopt `research-repo-tools==0.1.6`
+after publication. Merge the packaged `python-validation.toml` policy into your
+pyproject and retain the full existing Ruff configuration. It enables missing
+annotations (ANN001/002/003/201/202/204/205/206), TC, and UP037. The `python-check`
+recipe discovers `*.py` and `*.pyi` throughout the repository, including support
+code, tests, and negative Semgrep fixtures. Use exact per-file/rule exceptions
+for intentional violations. Extend `check` with existing Rust/domain tests and
+native notebook linting; keep `semgrep-check` in the canonical local and CI gate.
+
+Declare one zizmor scanner pin, either `zizmor==1.30.1` in the consumer's dev
+dependency group or `zizmor = "1.30.1"` in its existing managed Cargo toolchain.
+Keep the choice in that one repository-owned declaration. Configure an explicit
+persona in pyproject.toml:
+
+```toml
+[tool.research-repo-tools.zizmor]
+persona = "regular"
+timeout = 300
+```
+
+After [setup][toolchain], run:
+
+```sh
+just python-check
+just zizmor-check
+just ci
+```
+
+Local auditing uses `ZIZMOR_GITHUB_TOKEN`, then `GH_TOKEN`, then authenticated
+`gh` discovery. It reports an offline fallback when authentication is absent.
+Use `just zizmor-check --offline` for deliberate offline checking, or
+`just zizmor-check --require-online` in CI. Scanner errors propagate and never
+trigger an offline retry. Token values are not printed or stored by the wrapper.
+
+The packaged `zizmor.yml` workflow runs the finding gate and then produces SARIF
+with the same pin/persona. SARIF output alone does not fail on findings; the
+plain gate does. Fork and Dependabot PRs retain audits and skip privileged upload.
+The installed [validation and migration guide](src/research_repo_tools/templates/VALIDATING_WORKFLOWS.md)
+documents authentication, permissions, Python 3.14 annotations, exact negative
+fixture exceptions, notebook wiring, and consumer CodeRabbit settings. Extract it
+with `templates VALIDATING_WORKFLOWS.md`; `templates python-validation.toml` and
+`templates zizmor.yml` expose the corresponding reusable examples.
 
 ### CodeRabbit review
 
