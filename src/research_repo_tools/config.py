@@ -1,5 +1,6 @@
 """Parse checkout-independent TOML into immutable, typed settings."""
 
+import re
 import tomllib
 from collections.abc import Mapping
 from dataclasses import dataclass, field
@@ -11,7 +12,7 @@ from research_repo_tools.release_policy import ReleasePolicy as ReleasePolicy
 from research_repo_tools.release_policy import ReleaseRule
 
 FIELDS = {
-    "notebooks": {"group", "cwd", "output-dir", "timeout", "outputs"},
+    "notebooks": {"advice", "group", "cwd", "output-dir", "timeout", "outputs"},
     "toolchain": {"cargo"},
     "deps": {"pyproject", "justfile", "tools", "uv"},
     "semgrep": {"config", "fixtures", "namespace", "timeout", "cwd", "counts"},
@@ -21,12 +22,21 @@ FIELDS = {
 
 
 @dataclass(frozen=True, slots=True)
+class NotebookAdvice:
+    descriptive_ids: bool = True
+    ruff_rules: tuple[str, ...] = ()
+    strict: bool = False
+    subprocess_timeout: bool = False
+
+
+@dataclass(frozen=True, slots=True)
 class NotebookSettings:
     group: str = "notebook"
     cwd: str = "."
     output_dir: str = "target/notebooks"
     timeout: int = 600
     outputs: Literal["clear", "preserve"] = "clear"
+    advice: NotebookAdvice = field(default_factory=NotebookAdvice)
 
 
 @dataclass(frozen=True, slots=True)
@@ -171,6 +181,26 @@ def _release_rules(value: object) -> tuple[ReleaseRule, ...]:
     return tuple(rules)
 
 
+def _notebook_advice(value: object) -> NotebookAdvice:
+    section = _table(value, "notebooks.advice")
+    if section.keys() - {"descriptive-ids", "ruff-rules", "strict", "subprocess-timeout"}:
+        raise ValueError("unknown notebooks.advice field")
+    for key in ("descriptive-ids", "strict", "subprocess-timeout"):
+        if key in section and type(section[key]) is not bool:
+            raise ValueError(f"notebooks.advice.{key} must be a boolean")
+    rules = section.get("ruff-rules", [])
+    if not isinstance(rules, list) or any(not isinstance(rule, str) or re.fullmatch(r"[A-Z]+[0-9]*", rule) is None for rule in rules):
+        raise ValueError("notebooks.advice.ruff-rules must be an array of Ruff rule codes or prefixes")
+    if len(set(rules)) != len(rules):
+        raise ValueError("notebooks.advice.ruff-rules must be distinct")
+    return NotebookAdvice(
+        descriptive_ids=section.get("descriptive-ids", True) is True,
+        ruff_rules=tuple(rules),
+        strict=section.get("strict", False) is True,
+        subprocess_timeout=section.get("subprocess-timeout", False) is True,
+    )
+
+
 def parse(value: object, *, root: Path) -> Config:
     """Reject invalid fields and ambiguous paths before publishing trusted settings."""
     data = _table(value, "research-repo-tools configuration")
@@ -242,6 +272,7 @@ def parse(value: object, *, root: Path) -> Config:
             output_dir=_string(notebooks.get("output-dir", "target/notebooks"), "notebooks.output-dir"),
             timeout=notebook_timeout,
             outputs="preserve" if notebook_outputs == "preserve" else "clear",
+            advice=_notebook_advice(notebooks.get("advice", {})),
         ),
     )
 

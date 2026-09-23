@@ -61,5 +61,5 @@ def setup(runtime: Runtime) -> None:
     sync = ["sync", "--locked", "--managed-python"]
     if include_dev:
         sync += ["--group", "dev"]
-    run_safe_command(uv.path, sync, cwd=root, env=runtime.environment(), timeout=INSTALL_TIMEOUT, capture_output=False)
+    run_safe_command(uv.path, sync, cwd=root, env=runtime.project_environment(), timeout=INSTALL_TIMEOUT, capture_output=False)
     print("Setup complete. Open a new terminal if PATH changed, then run just help.")

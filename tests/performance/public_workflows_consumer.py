@@ -10,8 +10,9 @@ import sys
 import tarfile
 import tempfile
 import unittest
-from contextlib import contextmanager
+from contextlib import chdir, contextmanager, redirect_stderr, redirect_stdout
 from pathlib import Path
+from types import SimpleNamespace
 from unittest.mock import patch
 
 from research_repo_tools.ci import export_environment
@@ -21,8 +22,9 @@ from research_repo_tools.evidence import Evidence, Provenance, deterministic_jso
 from research_repo_tools.legacy_evidence import convert_csv
 from research_repo_tools.measurement import MeasurementConfig, measure_checkout
 from research_repo_tools.performance_reports import load_report_plan
-from research_repo_tools.publication import publish_publication
-from research_repo_tools.release_assets import package_baseline, read_baseline
+from research_repo_tools.process import ExecutableNotFoundError
+from research_repo_tools.publication import preview_publication, publish_publication
+from research_repo_tools.release_assets import GitHubRelease, download_release_asset, package_baseline, read_baseline
 from research_repo_tools.selection import argument_batches
 from research_repo_tools.validation import run_checks
 from research_repo_tools.worktrees import apply_snapshot, capture_snapshot, temporary_worktree
@@ -85,6 +87,152 @@ def retained(current: str = "v1.1.0", baseline: str = "v1.0.0", point: float = 5
 
 
 class TestWorkflowConsumer(unittest.TestCase):
+    def test_setup_sync_uses_explicit_consumer_root_despite_uv_selectors(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory).resolve()
+            root, invocation = parent / "consumer", parent / "invocation"
+            root.mkdir()
+            invocation.mkdir()
+            (root / "pyproject.toml").write_bytes(b'[tool.uv]\nrequired-version="==0.12.18"\n')
+            (root / ".python-version").write_bytes(b"3.14\n")
+            (root / "uv.lock").write_bytes(b"version=1\n")
+            originals = {path: path.read_bytes() for path in root.iterdir()}
+            selectors = {name: str(invocation) for name in ("UV_PROJECT", "UV_WORKING_DIR", "UV_WORKING_DIRECTORY", "UV_ENV_FILE")}
+            environment = {**selectors, "PATH": "managed/bin", "UV_PROJECT_ENVIRONMENT": str(parent / "chosen venv")}
+            calls = []
+
+            def run(command, args, **kwargs):
+                calls.append((args, kwargs))
+                output = str(parent / "user bin") if args[:2] == ["tool", "dir"] else ""
+                return subprocess.CompletedProcess([command, *args], 0, output, "")
+
+            status = SimpleNamespace(name="uv", required="0.12.18", actual="0.12.18", path="uv", ok=True)
+            with (
+                chdir(invocation),
+                patch.dict(os.environ, selectors),
+                patch("research_repo_tools.toolchain.Runtime.sync"),
+                patch("research_repo_tools.toolchain.Runtime.uv_status", return_value=status),
+                patch("research_repo_tools.toolchain.Runtime.inspect", return_value=[]),
+                patch("research_repo_tools.toolchain.Runtime.environment", return_value=environment),
+                patch("research_repo_tools.toolchain_setup._probe", return_value=status),
+                patch("research_repo_tools.toolchain_setup.run_safe_command", side_effect=run),
+                redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(main(["--root", str(root), "setup"]), 0)
+            args, options = next(call for call in calls if call[0][0] == "sync")
+            self.assertEqual(args, ["sync", "--locked", "--managed-python"])
+            self.assertEqual(options["cwd"], root)
+            self.assertFalse(selectors.keys() & options["env"].keys())
+            self.assertEqual(options["env"]["UV_PROJECT_ENVIRONMENT"], str(parent / "chosen venv"))
+            self.assertEqual(options["env"]["PATH"], "managed/bin")
+            self.assertEqual({path: path.read_bytes() for path in root.iterdir()}, originals)
+
+    def test_grouped_cli_failures_preserve_expected_diagnostics(self) -> None:
+        for failure in (ExecutableNotFoundError("benchmark executable missing"), TypeError("invalid measurement input")):
+            with self.subTest(failure=type(failure).__name__), tempfile.TemporaryDirectory() as directory:
+                error = ExceptionGroup("measurement and cleanup failed", [failure, RuntimeError("retained recovery checkout")])
+                out, err = io.StringIO(), io.StringIO()
+                with patch("research_repo_tools.cli.run", side_effect=error), redirect_stdout(out), redirect_stderr(err):
+                    self.assertEqual(
+                        main(["--root", directory, "performance", "measure", "benchmark.toml", "--payload", "result.json", "--manifest", "evidence.json"]), 1
+                    )
+                self.assertEqual(out.getvalue(), "")
+                self.assertIn(str(failure), err.getvalue())
+                self.assertIn("retained recovery checkout", err.getvalue())
+                self.assertNotIn("Traceback", err.getvalue())
+
+    def test_grouped_cli_failures_still_raise_unexpected_members(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            bug = KeyError("unexpected implementation failure")
+            error = ExceptionGroup("combined failure", [RuntimeError("retained recovery checkout"), bug])
+            err = io.StringIO()
+            with patch("research_repo_tools.cli.run", side_effect=error), redirect_stderr(err), self.assertRaises(ExceptionGroup) as caught:
+                main(["--root", directory, "performance", "measure", "benchmark.toml", "--payload", "result.json", "--manifest", "evidence.json"])
+            self.assertEqual(caught.exception.exceptions, (bug,))
+            self.assertIn("retained recovery checkout", err.getvalue())
+
+    def test_explicit_asset_digest_is_validated_before_download(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            destination = root / "baseline.tar.gz"
+            destination.write_bytes(b"original")
+            payload = b"downloaded asset"
+            release = GitHubRelease("owner/repo", "v1.0.0", 1, False, False, False, ((destination.name, 2, len(payload), None),))
+            with (
+                patch("research_repo_tools.release_assets.lookup_release", return_value=release) as lookup,
+                patch("research_repo_tools.release_assets._download", return_value=payload) as download,
+            ):
+                for digest in ("", "bad", "A" * 64, "0" * 63):
+                    with self.subTest(digest=digest), self.assertRaisesRegex(ValueError, "SHA-256"):
+                        download_release_asset(root, "owner/repo", "v1.0.0", destination.name, destination, expected_sha256=digest)
+                    lookup.assert_not_called()
+                    download.assert_not_called()
+                    self.assertEqual(destination.read_bytes(), b"original")
+                with self.assertRaisesRegex(ValueError, "SHA-256"):
+                    download_release_asset(root, "owner/repo", "v1.0.0", destination.name, destination, expected_sha256=sha256(b"other"))
+                self.assertEqual(destination.read_bytes(), b"original")
+                for digest in (sha256(payload), None):
+                    download_release_asset(root, "owner/repo", "v1.0.0", destination.name, destination, expected_sha256=digest)
+                    self.assertEqual(destination.read_bytes(), payload)
+
+    def test_cli_export_explicit_paths_use_consumer_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory).resolve()
+            root, invocation = parent / "consumer", parent / "invocation"
+            root.mkdir()
+            invocation.mkdir()
+            (root / "pyproject.toml").write_bytes(b'[tool.uv]\nrequired-version="==0.12.18"\n')
+            (root / ".python-version").write_bytes(b"3.14\n")
+            with (
+                chdir(invocation),
+                patch.dict(os.environ, {"EXPORTED_VALUE": "café", "GITHUB_ENV": "runner-env"}),
+                patch("research_repo_tools.toolchain.Runtime.inspect", return_value=[]),
+                patch("research_repo_tools.toolchain.Runtime.environment", return_value={"PATH": "managed/bin"}),
+            ):
+                for group, names in (("ci", ["EXPORTED_VALUE"]), ("toolchain", [])):
+                    with self.subTest(group=group):
+                        target = root / f"{group}-env"
+                        target.write_bytes(b"EXISTING=yes\r\n")
+                        command = ["--root", str(root), group, "export", *names]
+                        self.assertEqual(main([*command, "--file", target.name]), 0)
+                        self.assertTrue(target.read_bytes().startswith(b"EXISTING=yes\r\n"))
+                        expected = "EXPORTED_VALUE=café\n".encode() if group == "ci" else b"PATH=managed/bin\n"
+                        self.assertIn(expected, target.read_bytes())
+                        self.assertFalse((invocation / target.name).exists())
+                        absolute = invocation / f"absolute-{group}"
+                        self.assertEqual(main([*command, "--file", str(absolute)]), 0)
+                        self.assertIn(expected, absolute.read_bytes())
+                        self.assertEqual(main(command), 0)
+                        self.assertIn(expected, (invocation / "runner-env").read_bytes())
+                        self.assertFalse((root / "runner-env").exists())
+
+    def test_toolchain_run_resolves_paths_before_launch_from_consumer_root(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            parent = Path(directory).resolve()
+            root, invocation = parent / "consumer", parent / "invocation"
+            root.mkdir()
+            invocation.mkdir()
+            name = "check.exe" if os.name == "nt" else "check"
+            for base in (root, invocation):
+                (base / "bin").mkdir()
+                program = base / "bin" / name
+                program.write_bytes(b"synthetic executable; native launch is intercepted")
+                program.chmod(0o700)
+            (root / "pyproject.toml").write_bytes(b'[tool.uv]\nrequired-version="==0.12.18"\n')
+            (root / ".python-version").write_bytes(b"3.14\n")
+            with (
+                chdir(invocation),
+                patch("research_repo_tools.toolchain.Runtime.inspect", return_value=[]),
+                patch("research_repo_tools.toolchain.Runtime.environment", return_value={**os.environ, "PATH": "bin"}),
+                patch("subprocess.run", return_value=subprocess.CompletedProcess([], 23)) as launch,
+            ):
+                for command in (f"./bin/{name}", name):
+                    with self.subTest(command=command):
+                        self.assertEqual(main(["--root", str(root), "toolchain", "run", "--", command, "literal argument"]), 23)
+                        self.assertEqual(Path(launch.call_args.args[0][0]), root / "bin" / name)
+                        self.assertEqual(launch.call_args.args[0][1:], ["literal argument"])
+                        self.assertEqual(launch.call_args.kwargs["cwd"], root)
+
     def test_environment_export_rejects_malformed_and_duplicate_names_before_append(self) -> None:
         for raw in ('["GOOD", []]', '["GOOD", {}]', '["GOOD", null]', '["GOOD", "GOOD"]', "[]", '"GOOD"'):
             with self.subTest(names=raw), tempfile.TemporaryDirectory() as directory:
@@ -336,6 +484,25 @@ record="$"
             rows = list(csv.DictReader(io.StringIO((root / "analysis.csv").read_text(encoding="utf-8"), newline="")))
             self.assertEqual({row["coverage"] for row in rows}, {"common", "added"})
             self.assertEqual({row["unit"] for row in rows}, {"ns"})
+
+    def test_promotion_preview_preserves_utf8_bytes(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            publish_evidence(retained(), root / "pair.json", root / "pair.evidence.json")
+            (root / "report.toml").write_bytes('schema=1\ncurrent="docs/PERFORMANCE.md"\narchive="docs/evidence"\ntitle="café β → γ"\n'.encode())
+            before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            expected = preview_publication(load_report_plan(root, "report.toml", payload="pair.json", manifest="pair.evidence.json")).encode()
+            self.assertIn("café β → γ".encode(), expected)
+            command = ["--root", str(root), "performance", "promote", "report.toml", "--payload", "pair.json", "--manifest", "pair.evidence.json", "--preview"]
+            for encoding in ("utf-8", "cp1252"):
+                for newline in ("\n", "\r\n"):
+                    with self.subTest(encoding=encoding, newline=newline):
+                        with io.BytesIO() as buffer, io.TextIOWrapper(buffer, encoding=encoding, newline=newline) as stdout:
+                            with patch("sys.stdout", stdout):
+                                self.assertEqual(main(command), 0)
+                            stdout.flush()
+                            self.assertEqual(buffer.getvalue(), expected)
+            self.assertEqual({path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}, before)
 
     def test_promotion_archives_previous_pair_and_rejects_stale_or_conflicting_plans(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

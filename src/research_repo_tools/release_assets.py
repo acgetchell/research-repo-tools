@@ -12,7 +12,7 @@ from pathlib import Path
 
 from research_repo_tools.archives import ArchiveLimits, extract_archive
 from research_repo_tools.criterion import SAMPLE_SCHEMA, Sample, parse_sample, serialize_sample
-from research_repo_tools.evidence import Evidence, Provenance, _load_json, _object, parse_evidence, serialize_evidence, verify_sha256
+from research_repo_tools.evidence import Evidence, Provenance, _digest, _load_json, _object, parse_evidence, serialize_evidence, verify_sha256
 from research_repo_tools.files import replace_many
 from research_repo_tools.process import resolve_executable, run_command_bytes
 from research_repo_tools.release_discovery import normalize_tag
@@ -148,6 +148,8 @@ def download_release_asset(
     provider digest verifies transport consistency, not independent authorship.
     """
     _asset_name(name)
+    if expected_sha256 is not None:
+        _digest(expected_sha256, "expected digest")
     release = lookup_release(root, repository, tag)
     if release.prerelease or (release.draft and not allow_draft):
         raise ValueError("benchmark retrieval requires a published stable release")
@@ -162,7 +164,7 @@ def download_release_asset(
         raise ValueError("downloaded release asset size differs from its metadata")
     if digest:
         verify_sha256(payload, digest)
-    if expected_sha256:
+    if expected_sha256 is not None:
         verify_sha256(payload, expected_sha256)
     replace_many({destination: payload})
 

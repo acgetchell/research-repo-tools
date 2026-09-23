@@ -17,8 +17,9 @@ with managed Python and registers a `research-repo-tools` kernel inside that
 project environment. It does not install a user or system kernel. Existing Rust
 tools must already be set up when the consumer needs native builds.
 
-Set `group` to another declared dependency group when needed. Every notebook
-recipe uses the same configured group. The underlying `notebooks group` command
+Set `group` to another declared dependency group when needed. Notebook recipes
+that need optional dependencies use the same configured group. Inspection uses
+only the tooling group. The underlying `notebooks group` command
 prints its name without importing notebook dependencies or synchronizing tools;
 the recipes use this lookup before selecting their locked environment.
 
@@ -41,12 +42,17 @@ in memory and leaves source files untouched.
 
 The consumer template provides these recipes:
 
+- `just notebook-advise FILE...`: report opt-in review policy, with `--strict`
+  to fail on advisory warnings.
 - `just notebook-check FILE...`: validate nbformat 4.5 structure, unique existing
   cell IDs, and the declared output policy without repairing files.
 - `just notebook-clear FILE...`: deliberately remove outputs, counts, execution
   timing, and widget state; preserve cell IDs, source, attachments, and other metadata.
 - `just notebook-execute FILE...`: run selected notebooks in fresh kernels using
   the configured working directory and the current locked project interpreter.
+- `just notebook-inspect FILE...`: inventory existing cells and problems awaiting
+  repair; `--json` selects the [structured schema](notebook-inspection.md), and
+  `--no-preview` omits source text.
 - `just notebook-lint FILE...`: check structure, output policy, Python syntax,
   Ruff rules, formatting, and ty types without executing or rewriting cells.
 - `just notebook-sync`: synchronize notebook dependencies and the project kernel.
@@ -84,6 +90,12 @@ output policy; `notebooks lint` also replaces the common Python lint/format/type
 helper. Consumers retain their fast/slow selections, preparation recipes, and
 scientific assertions.
 
+The inspection and advisory commands added after `0.1.4` replace generic summary
+and review helpers once the consumer has tested the published release against its
+workflow. Retain only consumer invocation and policy checks after adoption. The
+base-package inspection command tolerates repairable nbformat 4 structure; strict
+commands retain their nbformat 4.5 admission rules.
+
 ## Python linting
 
 Declare Ruff 0.16.8 or newer and ty 0.0.82 or newer in the consumer's development
@@ -115,3 +127,53 @@ metadata declaring a non-Python language is rejected. Linting never runs a magic
 or cell. Unlike historical text extraction, it preserves multiline strings and
 maps diagnostics directly to cells. Configure notebook-specific rules against
 `*.ipynb` paths rather than historical `*_notebook.py` filenames.
+
+## Review advisories
+
+`notebooks advise` is a separate read-only pass that composes with `notebooks lint`.
+Neither command implicitly enables the other. Advice requires the notebook extra
+and the same valid nbformat 4.5 structure and Python metadata as lint, but ignores
+stored-output policy. Use inspection before repairing older or malformed files.
+Advice does not certify syntax, formatting, types, or output cleanliness; keep
+native lint in the workflow.
+
+Configure `[tool.research-repo-tools.notebooks.advice]` as shown in the
+[README](../README.md#notebooks). Unknown fields and invalid values fail before
+analysis. Supported fields are:
+
+| Field | Default | Behavior |
+| --- | --- | --- |
+| `descriptive-ids` | `true` | Warn about hexadecimal IDs of 8–64 characters, UUID-shaped IDs, decimal IDs, and `cell`, `code`, `markdown`, or `raw` followed by a number (optional hyphen/underscore) |
+| `ruff-rules` | `[]` | Distinct Ruff codes or prefixes, supplied to native Ruff `--select`; consumer rule ignores, per-file ignores, and rule settings apply |
+| `strict` | `false` | Fail on warnings; CLI `--strict` also enables this policy |
+| `subprocess-timeout` | `false` | Warn about direct `subprocess.run`, `call`, `check_call`, or `check_output` calls with missing or literal `None` timeouts |
+
+ID warnings are heuristics, not claims that an ID was generated or unstable.
+They apply to all cell types, never change IDs, and remain separate from hard ID
+validity or uniqueness errors. Stable descriptive IDs need no prescribed spelling.
+
+Ruff 0.16.8 or newer is required only when `ruff-rules` is nonempty; ty is needed
+by lint, not advice. Generic Python advice uses
+[Ruff's native rules](https://docs.astral.sh/ruff/rules/), including `ANN` for
+annotations, `BLE001` for broad exceptions, `TID251` for consumer-defined banned
+imports, and the relevant `S`/`ASYNC` subprocess rules. Native Ruff reads the
+original notebook and understands supported IPython syntax. Its missing or old
+installation produces guidance. Fixes and caches are disabled, explicit selections
+override exclusions, and `--timeout` is a positive per-checker bound (default 30s).
+
+The supplemental timeout heuristic parses code cells with Python's AST without
+execution. Cells that cannot be parsed, including IPython line/shell/assignment
+and cell magics, receive an informational skip. It does not strip lines, so
+multiline strings retain their meaning. It checks only calls spelled with the
+literal `subprocess` qualifier, without resolving aliases, shadowing, wrappers,
+`Popen` lifecycles, expanded keyword dictionaries, or runtime timeout values.
+Review its warnings in context; an explicit expression is not proof of a finite
+bound. Syntax validation remains native lint's responsibility.
+
+Warnings and informational skips identify original one-based cell numbers and
+existing IDs on stderr; stdout reports warning and skip counts. Warnings return
+zero unless strict mode is enabled. Informational skips never fail strict mode.
+Invalid structure, Python metadata, configuration, missing checkers, native syntax
+errors, malformed checker results, checker failures, and timeouts always return
+nonzero. Diagnostics can include source identifiers and rule messages; the
+inspection `--no-preview` option does not redact advisory or native lint output.

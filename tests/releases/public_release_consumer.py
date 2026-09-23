@@ -85,6 +85,35 @@ class TestReleaseConsumer(unittest.TestCase):
     def plan(self, **kwargs):
         return plan_release(self.root, "1.2.4", previous_tag="v1.2.3", release_date="2026-09-20", policy=self.policy, **kwargs)
 
+    def test_git_metadata_aliases_fail_before_planning_or_publication(self) -> None:
+        before = self.snapshot()
+        for name in (".git/config", ".GIT/config", ".Git/config", ".git./config", ".git /config", "nested/.GIT. /config"):
+            with self.subTest(name=name):
+                for construct in (
+                    lambda: ReleaseRule(name, "(?P<value>.+)", source="version"),
+                    lambda: ReleasePolicy(required_files=(name,)),
+                    lambda: ReleaseAdapter((name,)),
+                ):
+                    with self.assertRaisesRegex(ValueError, "repository-relative"):
+                        construct()
+                with self.assertRaisesRegex(ValueError, "repository-relative"):
+                    self.plan(adapter=ReleaseAdapter(prepare=lambda *_: {name: b"changed"}))
+                self.assertEqual(self.snapshot(), before)
+
+    def test_release_notes_stdout_preserves_utf8_and_lf(self) -> None:
+        changelog = self.root / "CHANGELOG.md"
+        changelog.write_bytes("# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- café β → γ.\n".encode())
+        before = self.snapshot()
+        for encoding in ("utf-8", "cp1252"):
+            for newline in ("\n", "\r\n"):
+                with self.subTest(encoding=encoding, newline=newline):
+                    with io.BytesIO() as buffer, io.TextIOWrapper(buffer, encoding=encoding, newline=newline) as stdout:
+                        with patch("sys.stdout", stdout):
+                            self.assertEqual(main(["--root", str(self.root), "changelog", "notes", "v1.2.3"]), 0)
+                        stdout.flush()
+                        self.assertEqual(buffer.getvalue(), "- café β → γ.\n".encode())
+        self.assertEqual(self.snapshot(), before)
+
     def test_discovery_and_preview_apply_preserve_historical_bytes(self) -> None:
         before = self.snapshot()
         discovery = discover_release(self.root, policy=self.policy)

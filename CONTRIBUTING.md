@@ -163,6 +163,10 @@ Notebook tests use synthetic files and real fresh kernels for interpreter,
 working-directory, cell-error, and timeout behavior. They require local socket
 access for Jupyter. Optional notebook dependencies are pinned in the development
 group but remain absent from maintenance-only distribution installations.
+The public notebook consumer suite runs against both installed distributions:
+inspection runs without extras, and advisory checks run in the locked notebook
+environment with native Ruff. It covers repair inventories, source suppression,
+policy configuration, strict warning status, IPython skips, and unchanged inputs.
 
 Use `newline="\n"` for portable text-file writes, or bytes for exact serialized
 fixtures. Intentional CRLF output must select that policy explicitly. The AST

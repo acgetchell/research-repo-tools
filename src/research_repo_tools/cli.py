@@ -9,6 +9,7 @@ from io import TextIOWrapper
 from pathlib import Path
 
 from research_repo_tools import __version__, config
+from research_repo_tools.performance import _write_stdout
 from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics
 
 
@@ -67,8 +68,10 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--batch-size", type=int, default=100)
             command.add_argument("--timeout", type=float, default=300)
             command.add_argument("command", nargs=argparse.REMAINDER)
-    notebooks = groups.add_parser("notebooks", help="validate, clean, execute, and synchronize selected notebooks").add_subparsers(dest="action", required=True)
-    for action in ("check", "clear", "execute", "group", "lint", "sync"):
+    notebooks = groups.add_parser("notebooks", help="inspect, review, validate, clean, execute, and synchronize notebooks").add_subparsers(
+        dest="action", required=True
+    )
+    for action in ("advise", "check", "clear", "execute", "group", "inspect", "lint", "sync"):
         command = notebooks.add_parser(action)
         if action not in ("group", "sync"):
             command.add_argument("files", nargs="+", help="explicit notebook paths relative to the consumer root")
@@ -76,7 +79,12 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--cwd")
             command.add_argument("--output-dir")
             command.add_argument("--timeout", type=int, help="positive per-cell timeout in seconds")
-        if action == "lint":
+        if action == "inspect":
+            command.add_argument("--json", action="store_true", help="emit the versioned inspection schema")
+            command.add_argument("--no-preview", action="store_true", help="omit source text previews")
+        if action == "advise":
+            command.add_argument("--strict", action="store_true", help="fail on advisory warnings as well as errors")
+        if action in ("advise", "lint"):
             command.add_argument("--timeout", type=int, default=30, help="positive per-checker timeout in seconds (default: 30)")
     from research_repo_tools.performance import add_commands
 
@@ -133,7 +141,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
     if args.group == "ci":
         from research_repo_tools.ci import export_environment
 
-        destination = args.file or os.environ.get("GITHUB_ENV")
+        destination = settings.path(str(args.file)) if args.file is not None else os.environ.get("GITHUB_ENV")
         if not destination:
             raise ValueError("ci export requires --file or GITHUB_ENV")
         export_environment(Path(destination), args.names)
@@ -142,8 +150,6 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         from research_repo_tools.selection import run_selected, select_files
 
         if args.action == "list":
-            from research_repo_tools.performance import _write_stdout
-
             separator = "\0" if args.null else "\n"
             names = select_files(settings.root, include=args.include, exclude=args.exclude)
             _write_stdout("".join(name + separator for name in names).encode("utf-8"))
@@ -167,10 +173,18 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             notebooks.sync(settings)
             return 0
         paths = [settings.path(path) for path in args.files]
-        if args.action == "check":
+        if args.action == "advise":
+            from research_repo_tools.notebook_advice import advise
+
+            return advise(settings, paths, strict=args.strict, timeout=args.timeout)
+        elif args.action == "check":
             notebooks.check(paths, outputs=settings.notebooks.outputs)
         elif args.action == "clear":
             notebooks.clear(paths)
+        elif args.action == "inspect":
+            from research_repo_tools.notebook_inspect import inspect
+
+            inspect(paths, preview=not args.no_preview, as_json=args.json)
         elif args.action == "lint":
             from research_repo_tools.notebook_lint import lint
 
@@ -196,7 +210,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         if args.action == "export":
             from research_repo_tools.ci import export_environment
 
-            destination = args.file or os.environ.get("GITHUB_ENV")
+            destination = settings.path(str(args.file)) if args.file is not None else os.environ.get("GITHUB_ENV")
             if not destination:
                 raise ValueError("toolchain export requires --file or GITHUB_ENV")
             if not toolchain.report(runtime.inspect(), stream=sys.stderr):
@@ -237,7 +251,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         if args.output:
             write_template(settings.path(str(args.output)), rendered)
         else:
-            print(rendered, end="")
+            _write_stdout(rendered.encode("utf-8"))
         return 0
     if args.group == "semgrep":
         from research_repo_tools.semgrep import check
@@ -314,7 +328,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         if args.action == "generate":
             rendered = changelog.generate(settings, tag=args.tag, released=args.date, dry_run=args.dry_run)
             if args.dry_run:
-                print(rendered, end="")
+                _write_stdout(rendered.encode("utf-8"))
             return 0
         if args.action == "archive":
             archive_changelog.archive_changelog(path, settings.root / "docs/archives/changelog")
@@ -325,11 +339,11 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             return 0
         if args.action == "notes":
             notes, _source, _heading = changelog.notes(settings, args.tag)
-            print(notes, end="")
+            _write_stdout(notes.encode("utf-8"))
             return 0
         body = changelog.tag(settings, args.tag, force=args.force, dry_run=args.dry_run)
         if args.dry_run:
-            print(body, end="")
+            _write_stdout(body.encode("utf-8"))
         else:
             print(f"Created local annotated tag {args.tag}")
         return 0
@@ -343,16 +357,17 @@ def main(argv: list[str] | None = None) -> int:
         if isinstance(stream, TextIOWrapper):
             stream.reconfigure(errors="backslashreplace")
     args = parser().parse_args(argv)
+    expected_errors = (ExecutableNotFoundError, OSError, ValueError, TypeError, RuntimeError, subprocess.SubprocessError)
     try:
         return run(args, config.load(args.config, args.root))
     except ExceptionGroup as error:
-        expected, unexpected = error.split((OSError, ValueError, RuntimeError, subprocess.SubprocessError))
+        expected, unexpected = error.split(expected_errors)
         if expected is not None:
             print(f"research-repo-tools: {format_exception_diagnostics(expected)}", file=sys.stderr)
         if unexpected is not None:
             raise unexpected from None
         return 1
-    except (ExecutableNotFoundError, OSError, ValueError, TypeError, RuntimeError, subprocess.SubprocessError) as error:
+    except expected_errors as error:
         print(f"research-repo-tools: {format_exception_diagnostics(error, single_line=args.group == 'deps')}", file=sys.stderr)
         return 1
 

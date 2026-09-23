@@ -46,7 +46,7 @@ packages = ["src/research_repo_tools"]
 include = ["src", "tests", "docs", "scripts", "pyproject.toml", "uv.lock", "README.md", "CONTRIBUTING.md", "AGENTS.md", "CHANGELOG.md", "LICENSE", "justfile", ".python-version"]
 
 [tool.uv]
-required-version = "==0.12.17"
+required-version = "==0.12.18"
 
 [tool.research-repo-tools.changelog]
 owner = "acgetchell"

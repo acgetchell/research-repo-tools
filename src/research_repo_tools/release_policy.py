@@ -14,7 +14,7 @@ def relative_path(value: str) -> str:
         or "\\" in value
         or PureWindowsPath(value).drive
         or PurePosixPath(value).is_absolute()
-        or any(part in {"", ".", "..", ".git"} for part in value.split("/"))
+        or any(part in {"", ".", ".."} or part.rstrip(" .").casefold() == ".git" for part in value.split("/"))
     ):
         raise ValueError(f"release path must be a normalized repository-relative path: {value!r}")
     return value
