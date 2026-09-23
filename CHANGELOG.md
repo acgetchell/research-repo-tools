@@ -5,6 +5,29 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.5] - 2026-09-23
+
+### Added
+
+- Add read-only inspection and configurable advice
+  [`9946fc7`](https://github.com/acgetchell/research-repo-tools/commit/9946fc7212513d9ca6c358c8afb071e7f53abf38)
+
+  - Add text and versioned JSON inventories for nbformat 4 notebooks, with source-preview controls and structural repair diagnostics.
+  - Add descriptive-ID warnings, configurable native Ruff rules, and optional subprocess timeout advice with opt-in strict mode.
+  - Reject invalid Unicode before notebook execution and prevent raw JSON values from leaking through parser diagnostics.
+  - Honor the consumer root for executable lookup, export paths, and uv synchronization despite ambient project selectors.
+  - Preserve UTF-8 and newlines in generated CLI output, retain subprocess diagnostics, and handle grouped expected failures.
+  - Validate supplied release asset digests before downloading and reject portable aliases of Git metadata paths.
+  - Update the uv pin to 0.12.18 and document notebook adoption, release publication, and shared workflow ownership.
+
+### Fixed
+
+- Suppress parser warnings during timeout advice [`3b6cff7`](https://github.com/acgetchell/research-repo-tools/commit/3b6cff7520576279519ad6a065031f17f2a0419b)
+
+  - Suppress SyntaxWarning only while parsing cells, preventing stderr leakage and false syntax skips under warnings-as-errors.
+  - Preserve genuine syntax-error handling and caller warning filters.
+  - Clarify that download_release_asset saves verified assets and requires a separate extract_archive call to unpack them.
+
 ## [0.1.4] - 2026-09-22
 
 ### Added
@@ -296,6 +319,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Document supported CLI and Python interfaces, consumer just recipes, and publisher setup.
   - Generate the initial 0.1.0 changelog from committed history.
 
+[0.1.5]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.2...v0.1.3
 [0.1.2]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.1...v0.1.2
