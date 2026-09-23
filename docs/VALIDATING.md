@@ -60,6 +60,15 @@ syntax, formatting, types, IPython forms, cross-cell references, configuration,
 and diagnostic cell mapping. Kernel tests require local socket access.
 `just check-dist` validates existing wheel and sdist artifacts without rebuilding.
 
+Both installed distributions run the validation consumer suite with native
+Ruff, ty, and offline zizmor. It verifies the shipped typing policy, precise
+negative-fixture exceptions, missing-annotation/TC/UP failures, CLI selection,
+gate wiring, scanner finding status, and valid SARIF. Modeled Git inventories
+supplement native tracked/new-file discovery tests; only the latter require Git
+mutations. Credential-free unit tests cover token precedence, failed discovery,
+required-online failure, redaction, scanner errors, and managed scanner selection.
+These fixtures do not establish successful authenticated audits or SARIF upload.
+
 GitHub runs package checks on Linux, macOS, and Windows, plus a git-cliff
 integration job, for pull requests and pushes to `main`. Branch pushes with an
 open pull request do not duplicate the matrix. Separate workflows run dependency

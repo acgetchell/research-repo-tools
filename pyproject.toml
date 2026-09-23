@@ -52,6 +52,9 @@ required-version = "==0.12.18"
 owner = "acgetchell"
 repository = "research-repo-tools"
 
+[tool.research-repo-tools.zizmor]
+persona = "regular"
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 addopts = ["--import-mode=importlib", "--strict-markers"]

@@ -33,6 +33,16 @@ against the consumer root; bare executable names use `PATH`.
 Explicit `ci export --file` and `toolchain export --file` paths follow this rule.
 The `GITHUB_ENV` fallback keeps the path supplied by the invoking environment.
 
+`zizmor check` verifies one repository-declared scanner pin and requires an explicit
+`[tool.research-repo-tools.zizmor] persona`. It supports plain and SARIF reports,
+automatic authentication discovery, `--offline`, and `--require-online`.
+The [packaged audit and validation contract](../src/research_repo_tools/templates/VALIDATING_WORKFLOWS.md)
+defines token precedence, redaction, timeouts, native exit status (including
+SARIF's finding behavior), complete Python inventory, and migration requirements.
+It is available from installed distributions as `templates VALIDATING_WORKFLOWS.md`.
+The `python-validation.toml` and `zizmor.yml` templates accompany it. The zizmor
+module itself is an implementation detail; use the supported CLI entry point.
+
 Commands return zero on success. Validation failures and handled operational
 errors return nonzero; argument errors return `2`. Help and version output are
 successful exits. Diagnostics use stderr, while reports and generated content

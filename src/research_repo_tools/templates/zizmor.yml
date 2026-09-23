@@ -1,27 +1,20 @@
+# Consumer workflow: scanner pin and persona live in pyproject.toml.
+# This uses the zizmor-check recipe from the packaged justfile.
 name: zizmor
 
 on:
+  pull_request:
   push:
     branches: [main]
-  pull_request:
-    branches: [main]
-  schedule:
-    - cron: "42 18 * * 5"
   workflow_dispatch:
 
 permissions: {}
 
-concurrency:
-  group: zizmor-${{ github.ref }}
-  cancel-in-progress: true
-
 jobs:
   analyze:
-    name: GitHub Actions Security Analysis
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
-      actions: read
       contents: read
       security-events: write
     steps:
@@ -30,19 +23,21 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@bec219d24cd3e171d82865faccec33120bb574f4 # v10.1.0
         with:
-          version-file: "pyproject.toml"
-          python-version: "3.14"
+          version-file: pyproject.toml
+      # Python-pinned scanners are installed by uv run. A Cargo-pinned scanner
+      # needs the consumer's existing managed setup before this step; see the guide.
       - name: Fail on workflow findings
         id: audit
         env:
           ZIZMOR_GITHUB_TOKEN: ${{ github.token }}
-        run: uv run --locked research-repo-tools zizmor check --require-online
+        run: uv run --locked --group dev just zizmor-check --require-online
       - name: Produce SARIF even when the finding gate fails
         id: sarif
         if: ${{ !cancelled() && steps.audit.outcome != 'skipped' }}
         env:
           ZIZMOR_GITHUB_TOKEN: ${{ github.token }}
-        run: uv run --locked research-repo-tools zizmor check --require-online --format sarif > "$RUNNER_TEMP/zizmor.sarif"
+        run: uv run --locked --group dev just zizmor-check --require-online --format sarif > "$RUNNER_TEMP/zizmor.sarif"
+      # Fork and Dependabot runs keep the audit gate but skip privileged upload.
       - name: Upload security findings
         if: ${{ !cancelled() && steps.sarif.outcome == 'success' && (github.event_name != 'pull_request' || github.event.pull_request.head.repo.full_name == github.repository) && github.actor != 'dependabot[bot]' }}
         uses: github/codeql-action/upload-sarif@b96794f015dfd88f77b49b1c93e0fa7110f94c63 # v4.38.0

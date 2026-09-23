@@ -62,7 +62,7 @@ including changelog recipes and aliases.
 | `just update-python-dependencies` | Update direct dev pins, upgrade the full lock, and synchronize dev |
 | `just update-tools` | Upgrade uv, then install declared Just and synchronize the environment |
 | `just update-uv` | Upgrade uv through its installation owner and reconcile its pin |
-| `just workflow-check` | Run actionlint and offline zizmor checks |
+| `just workflow-check` | Run actionlint and shared zizmor audits with reported authentication policy |
 
 The maintainer justfile also exposes the [shared changelog recipes](README.md#just-recipes).
 Its `just release-check TAG` performs the package publication preflight;
@@ -93,8 +93,9 @@ The [release workflows](docs/RELEASING.md) attach the validated distributions
 and signed provenance to a draft GitHub Release. Publishing that release triggers
 asset verification and the approval-gated PyPI upload without rebuilding.
 
-`just check` lints, formats, and type-checks `src`, `scripts`, and
-`tests`. It also runs the newline guard and the locked actionlint and zizmor workflow validators.
+`just check` lints, formats, and type-checks every tracked and nonignored Python
+file using shared selection, including `src`, `scripts`, and `tests`. It also runs
+the newline guard and the locked actionlint and zizmor workflow validators.
 `just audit` performs the separate network-backed Python dependency audit.
 GitHub repository settings and required checks are documented in
 [GitHub setup](docs/CONFIGURING_GITHUB.md); their API payloads live in `.github/settings/`.
@@ -153,8 +154,9 @@ See [Supported interfaces](docs/api.md) for the CLI, configuration, and public
 Python entry-point contract.
 
 Maintain one implementation per common capability under `src/research_repo_tools/`.
-Organize tests under `tests/changelog`, `dependencies`, `notebooks`, `performance`, `publication`, `releases`, `review`, `semgrep`, `toolchain`, and
-`utilities`. Fixtures should be small representative inputs generated in temporary
+Organize tests under `tests/changelog`, `dependencies`, `notebooks`, `performance`,
+`publication`, `releases`, `review`, `semgrep`, `toolchain`, `utilities`, `validation`,
+and `zizmor`. Fixtures should be small representative inputs generated in temporary
 directories. Preserve meaningful regression assertions against this package;
 merge duplicates instead of maintaining historical implementations or repository
 snapshots. Use actual child processes for byte transport and minimal disposable

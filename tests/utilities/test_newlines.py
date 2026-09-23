@@ -89,4 +89,5 @@ def test_final_gate_includes_newline_guard():
     assert result.returncode == 0, result.stderr
     commands = result.stderr.splitlines()
     assert "uv run --locked python scripts/check_newlines.py" in commands
-    assert commands.index("uv run --locked python scripts/check_newlines.py") < commands.index("uv run --locked ruff check src scripts tests")
+    lint_index = next(index for index, command in enumerate(commands) if "files run" in command and " -- ruff check " in command)
+    assert commands.index("uv run --locked python scripts/check_newlines.py") < lint_index
