@@ -1,10 +1,12 @@
 """Public notebook review contracts, also run from installed wheel and sdist."""
 
+import ast
 import contextlib
 import io
 import json
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from unittest.mock import patch
 
@@ -242,6 +244,34 @@ class TestAdvice(Consumer):
         self.assertIn("(calculate-value):2:1", err)
         self.assertIn("(calculate-value):3:1", err)
         self.assertEqual(self.path.read_bytes(), original)
+
+    def test_timeout_advice_suppresses_parser_warnings_without_skipping_valid_cells(self):
+        source = r'pattern = "\q"' + '\nsubprocess.run(["tool"])\n'
+        with warnings.catch_warnings(record=True, action="always", category=SyntaxWarning) as emitted:
+            ast.parse(source)
+        self.assertEqual([item.category for item in emitted], [SyntaxWarning])
+        self.configure("descriptive-ids=false\nsubprocess-timeout=true\n")
+        original = self.write([code(source), code("if True print(1)", "invalid-syntax")])
+        for action in ("always", "error"):
+            with self.subTest(action=action):
+                with warnings.catch_warnings(record=True, action=action, category=SyntaxWarning) as emitted:
+                    status, out, err = self.run_cli("advise", "--strict")
+                    self.assertEqual(emitted, [])
+                    # The caller's warning policy still applies after advice.
+                    if action == "error":
+                        with self.assertRaises(SyntaxError):
+                            ast.parse(source)
+                    else:
+                        ast.parse(source)
+                        self.assertEqual([item.category for item in emitted], [SyntaxWarning])
+                self.assertEqual(status, 1)
+                self.assertIn("cell 1 (calculate-value):2:1: subprocess-timeout", err)
+                self.assertEqual(err.count("WARNING"), 1)
+                self.assertEqual(err.count("INFO"), 1)
+                self.assertIn("cell 2 (invalid-syntax): plain-AST timeout advice skipped", err)
+                self.assertIn("1 advisory warning(s), 1 skipped cell(s)", out)
+                self.assertNotIn("SyntaxWarning", err)
+                self.assertEqual(self.path.read_bytes(), original)
 
     def test_invalid_ruff_configuration_and_syntax_are_always_errors(self):
         self.configure('ruff-rules=["NOTARULE999"]\n')

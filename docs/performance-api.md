@@ -142,7 +142,10 @@ reads at most the archive byte limit plus one before rejecting oversize input.
 For `download_asset`, callers supply the URL and an independent trusted digest.
 The [workflow APIs](workflow-api.md#release-assets) additionally provide release
 discovery and authenticated GitHub asset retrieval, including historical assets
-without an independent digest. Downloaded bytes use the common verifier and extractor.
+without an independent digest. `download_release_asset` checks the asset size,
+uses the common verifier for any available or caller-supplied digests, and saves the
+asset without extracting it. Callers must invoke `extract_archive` separately to
+unpack the downloaded file with the extraction protections below.
 
 Extraction rejects absolute/traversing paths, links, special files, sparse tar
 members, encrypted ZIP files, duplicate members, file/directory overlaps, and

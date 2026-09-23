@@ -4,6 +4,7 @@ import ast
 import re
 import sys
 from pathlib import Path
+from warnings import catch_warnings
 
 from research_repo_tools.config import Config
 from research_repo_tools.notebook_lint import RUFF_COMMON, Diagnostic, _run, python_notebooks, require_checkers
@@ -15,7 +16,8 @@ SUBPROCESS_CALLS = {"call", "check_call", "check_output", "run"}
 
 def _timeouts(source: str, number: int) -> tuple[list[Diagnostic], list[Diagnostic]]:
     try:
-        tree = ast.parse(source)
+        with catch_warnings(action="ignore", category=SyntaxWarning):
+            tree = ast.parse(source)
     except SyntaxError:
         # No text-based removal of magics: that can corrupt multiline strings.
         # Native Ruff/ty remain responsible for notebook syntax validation.
