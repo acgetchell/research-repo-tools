@@ -5,6 +5,24 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.6] - 2026-09-23
+
+### Added
+
+- Share zizmor audits and complete Python checks [`638a797`](https://github.com/acgetchell/research-repo-tools/commit/638a797393d4d937174f1b105fe89fdc693e6a93)
+
+  - Add zizmor check with a verified scanner pin, explicit persona, token discovery and redaction, and required-online or offline modes.
+  - Fail CI on workflow findings while preserving SARIF generation and restricting privileged uploads for fork and Dependabot runs.
+  - Apply full configured Ruff and ty checks to tracked and nonignored Python files, including fixtures, through shared file selection.
+  - Ship an opt-in annotation policy and adoption guidance covering Python 3.14, precise fixture exceptions, and canonical validation gates.
+
+### Fixed
+
+- Allow SARIF uploads from private repositories [`56e0e31`](https://github.com/acgetchell/research-repo-tools/commit/56e0e313bfd4c45ff98d51cab1938015e28fd1b4)
+
+  - Grant actions: read in the packaged workflow for private-repository SARIF uploads, preserving existing permissions.
+  - Update the locked wcwidth dependency from 0.8.4 to 0.9.0.
+
 ## [0.1.5] - 2026-09-23
 
 ### Added
@@ -319,6 +337,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Document supported CLI and Python interfaces, consumer just recipes, and publisher setup.
   - Generate the initial 0.1.0 changelog from committed history.
 
+[0.1.6]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.3...v0.1.4
 [0.1.3]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.2...v0.1.3
