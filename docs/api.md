@@ -30,12 +30,18 @@ A standalone configuration uses unprefixed tables and `schema = 1`, as shown in
 the [packaged template](../src/research_repo_tools/templates/research-repo-tools.toml).
 Unknown settings fail. Relative paths and explicit executable paths resolve
 against the consumer root; bare executable names use `PATH`.
+Explicit `ci export --file` and `toolchain export --file` paths follow this rule.
+The `GITHUB_ENV` fallback keeps the path supplied by the invoking environment.
 
 Commands return zero on success. Validation failures and handled operational
 errors return nonzero; argument errors return `2`. Help and version output are
 successful exits. Diagnostics use stderr, while reports and generated content
 use stdout. Human-readable diagnostics and progress messages are not a structured
 machine API. Template output and extracted release notes are intended for reuse.
+Notebook inspection additionally supports a [versioned JSON inventory](notebook-inspection.md).
+Completed inventories may report repair problems with status zero; advisory
+warnings fail only when strict mode is enabled. These review commands do not
+replace notebook validation.
 
 Review commands require Git and an externally installed, authenticated CodeRabbit
 CLI. `review branch --base origin/main` verifies the cached base against the remote;

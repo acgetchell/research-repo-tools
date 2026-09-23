@@ -139,9 +139,10 @@ Import from `research_repo_tools.archives`:
 Retrieval permits HTTPS redirects only, rejects embedded credentials, and uses a
 positive finite per-socket timeout rather than a total transfer deadline. It
 reads at most the archive byte limit plus one before rejecting oversize input.
-Consumers select published releases, discover the URL, and obtain an independent
-trusted digest. Authenticated provider-specific retrieval remains in consumers;
-downloaded bytes can still use the common verifier and extractor.
+For `download_asset`, callers supply the URL and an independent trusted digest.
+The [workflow APIs](workflow-api.md#release-assets) additionally provide release
+discovery and authenticated GitHub asset retrieval, including historical assets
+without an independent digest. Downloaded bytes use the common verifier and extractor.
 
 Extraction rejects absolute/traversing paths, links, special files, sparse tar
 members, encrypted ZIP files, duplicate members, file/directory overlaps, and

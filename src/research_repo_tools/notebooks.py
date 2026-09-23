@@ -45,13 +45,13 @@ def _object(pairs: list[tuple[str, object]]) -> dict[str, object]:
     result = {}
     for key, value in pairs:
         if key in result:
-            raise ValueError(f"duplicate JSON key: {key}")
+            raise ValueError("duplicate JSON key")
         result[key] = value
     return result
 
 
-def _constant(value: str):
-    raise ValueError(f"non-finite JSON number: {value}")
+def _constant(_value: str):
+    raise ValueError("non-finite JSON number")
 
 
 def _finite_float(value: str) -> float:
@@ -61,14 +61,40 @@ def _finite_float(value: str) -> float:
     return result
 
 
-def load(path: Path) -> Notebook:
-    """Validate without nbformat's implicit ID repair or version conversion."""
-    nbformat = dependency("nbformat")
+def _check_unicode(raw: object) -> None:
+    pending = [raw]
+    while pending:
+        value = pending.pop()
+        if isinstance(value, str):
+            if re.search(r"[\ud800-\udfff]", value):
+                raise ValueError("unpaired Unicode surrogate in notebook JSON")
+        elif isinstance(value, dict):
+            pending.extend(value)
+            pending.extend(value.values())
+        elif isinstance(value, list):
+            pending.extend(value)
+
+
+def read_raw(path: Path) -> tuple[bytes, dict]:
+    """Read unambiguous JSON without conversion, normalization, or ID generation."""
     original = path.read_bytes()
     try:
         raw = json.loads(original.decode("utf-8"), object_pairs_hook=_object, parse_constant=_constant, parse_float=_finite_float)
+        _check_unicode(raw)
         if not isinstance(raw, dict) or type(raw.get("nbformat")) is not int or raw["nbformat"] != 4:
             raise ValueError("expected nbformat 4")
+        if not isinstance(raw.get("cells"), list):
+            raise ValueError("cells must be an array")
+        return original, raw
+    except (ValueError, UnicodeError) as error:
+        raise ValueError(f"{path}: {error}") from error
+
+
+def load(path: Path) -> Notebook:
+    """Validate without nbformat's implicit ID repair or version conversion."""
+    nbformat = dependency("nbformat")
+    original, raw = read_raw(path)
+    try:
         if type(raw.get("nbformat_minor")) is not int or raw["nbformat_minor"] != 5:
             raise ValueError("expected nbformat 4.5 with stable cell IDs")
         cells = raw.get("cells")
@@ -97,7 +123,7 @@ def load(path: Path) -> Notebook:
         raise ValueError(f"{path}: {error}") from error
 
 
-def selected(paths: list[Path]) -> list[Notebook]:
+def selected_paths(paths: list[Path]) -> list[Path]:
     if not paths:
         raise ValueError("select at least one notebook explicitly")
     resolved = [path.resolve() for path in paths]
@@ -105,7 +131,11 @@ def selected(paths: list[Path]) -> list[Notebook]:
         raise ValueError("selected notebook paths must be distinct")
     if any(path.suffix != ".ipynb" or not path.is_file() for path in resolved):
         raise ValueError("selected notebooks must be existing .ipynb files")
-    return [load(path) for path in resolved]
+    return resolved
+
+
+def selected(paths: list[Path]) -> list[Notebook]:
+    return [load(path) for path in selected_paths(paths)]
 
 
 def generated_state(node: NotebookNode) -> bool:
@@ -171,12 +201,7 @@ def sync(settings: Config) -> None:
     environment = project_environment(settings.root)
     if managed.plan.rust is not None and not all(status.ok for status in managed.rust_statuses()):
         raise ValueError("managed Rust is incomplete; run setup before synchronizing notebook dependencies")
-    env = managed.environment()
-    # The explicit consumer root owns synchronization; ambient uv selectors
-    # must not redirect it into a different checkout. The environment override
-    # remains deliberate and is also used by project_environment().
-    for name in ("UV_PROJECT", "UV_WORKING_DIR", "UV_WORKING_DIRECTORY", "UV_ENV_FILE"):
-        env.pop(name, None)
+    env = managed.project_environment()
     uv = managed.uv_status().path
     run_safe_command(
         uv,

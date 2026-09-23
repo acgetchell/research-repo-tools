@@ -40,6 +40,10 @@ help:
 
 alias help-workflows := help
 
+# Review configured notebook advisories; pass --strict to fail on warnings.
+notebook-advise +files:
+    notebook_group="$(uv run --locked --only-group tooling --inexact research-repo-tools notebooks group)" && uv run --locked --group dev --group "$notebook_group" research-repo-tools notebooks advise "$@"
+
 # Validate structure, cell identities, and source output policy.
 notebook-check +files:
     notebook_group="$(uv run --locked --only-group tooling --inexact research-repo-tools notebooks group)" && uv run --locked --group dev --group "$notebook_group" research-repo-tools notebooks check "$@"
@@ -51,6 +55,10 @@ notebook-clear +files:
 # Execute only the selected notebooks in fresh project kernels.
 notebook-execute +files:
     notebook_group="$(uv run --locked --only-group tooling --inexact research-repo-tools notebooks group)" && uv run --locked --group dev --group "$notebook_group" research-repo-tools notebooks execute "$@"
+
+# Inspect existing cells and repair problems without notebook dependencies.
+notebook-inspect +files:
+    uv run --locked --only-group tooling --inexact research-repo-tools notebooks inspect "$@"
 
 # Check structure, Python syntax, Ruff rules/formatting, and ty types.
 notebook-lint +files:

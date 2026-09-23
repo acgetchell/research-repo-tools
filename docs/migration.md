@@ -42,9 +42,10 @@ and extraction, and transactional promotion. Follow the
 [retained-evidence migration plan](performance-migration.md) before adoption.
 The [publication API](publication-api.md) adds document sections and deterministic
 SVG figures from that evidence; follow its [migration guide](publication-migration.md)
-for historical formats and tagged artifact guarantees. Custom plotting,
-scientific case definitions, benchmark execution, and worktree/harness
-orchestration remain in consumers, whose execution contracts differ.
+for historical formats and tagged artifact guarantees. The [workflow APIs](workflow-api.md)
+provide configured benchmark execution and isolated worktree orchestration.
+Consumers retain scientific case definitions, harness commands, custom plotting,
+and experiment policy.
 
 To adopt the package:
 
@@ -142,8 +143,8 @@ Replace executable lookup with `resolve_executable`; use `run_command` for captu
 text, `run_command_bytes` for binary data, and `run_git_bytes` for Git input that
 must reach clean filters unchanged. The text runner preserves newlines and raises
 checked failures with raw byte diagnostics. `env` replaces the environment rather
-than overlaying it. Keep streaming subprocesses and repository-specific command
-policy in the consumer.
+than overlaying it. Use `run_command_live` for inherited input/output streams;
+repository-specific command policy remains in the consumer.
 
 Replace generic multi-file writers with `replace_many`, including single-file
 writes as one-entry mappings. Encode payloads explicitly. Leaf symlinks are

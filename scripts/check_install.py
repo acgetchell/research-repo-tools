@@ -218,6 +218,9 @@ def check(dist: Path) -> None:
             run([uv, "pip", "install", "--python", str(python), str(artifact)], cwd=consumer, env=env)
             local_env = {**env, "PATH": str(scripts) + os.pathsep + env.get("PATH", "")}
             run([str(python), "-c", BASE_SMOKE, str(ROOT)], cwd=consumer, env=local_env)
+            notebook_suite = consumer / "public_notebook_consumer.py"
+            notebook_suite.write_bytes((ROOT / "tests/notebooks/public_notebook_consumer.py").read_bytes())
+            run([str(python), "-I", str(notebook_suite), "TestInspection"], cwd=consumer, env=local_env)
             # Run the same consumer suite against each installed artifact, using
             # only documented imports and no source checkout or pytest dependency.
             public_suite = consumer / "public_api_consumer.py"
@@ -272,6 +275,8 @@ def check(dist: Path) -> None:
             # Install the extra from this same distribution, exercise locked sync
             # and a real project kernel without touching the user's kernels.
             run([str(just), "notebook-sync"], cwd=recipe_consumer, env=env)
+            recipe_python = recipe_consumer / ".venv" / scripts.name / python.name
+            run([str(recipe_python), "-I", str(notebook_suite)], cwd=recipe_consumer, env=env)
             notebook = recipe_consumer / "notebooks" / "smoke.ipynb"
             notebook.parent.mkdir()
             notebook.write_text(
@@ -296,6 +301,9 @@ def check(dist: Path) -> None:
                 newline="\n",
             )
             original_notebook = notebook.read_bytes()
+            inventory = json.loads(run([str(just), "notebook-inspect", "notebooks/smoke.ipynb", "--json", "--no-preview"], cwd=recipe_consumer, env=env))
+            assert inventory["schema"] == 1 and len(inventory["notebooks"][0]["cells"]) == 1
+            run([str(just), "notebook-advise", "notebooks/smoke.ipynb", "--strict"], cwd=recipe_consumer, env=env)
             run([str(just), "notebook-check", "notebooks/smoke.ipynb"], cwd=recipe_consumer, env=env)
             run([str(just), "notebook-clear", "notebooks/smoke.ipynb"], cwd=recipe_consumer, env=env)
             run([str(just), "notebook-lint", "notebooks/smoke.ipynb"], cwd=recipe_consumer, env=env)

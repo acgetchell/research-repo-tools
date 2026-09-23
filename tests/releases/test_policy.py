@@ -17,6 +17,9 @@ from tests.releases.test_metadata import _write_project
     [
         {"path": "../README.md", "pattern": "(?P<value>.+)", "value": "x"},
         {"path": "C:/README.md", "pattern": "(?P<value>.+)", "value": "x"},
+        {"path": ".GIT/config", "pattern": "(?P<value>.+)", "value": "x"},
+        {"path": ".git./config", "pattern": "(?P<value>.+)", "value": "x"},
+        {"path": "nested/.Git /config", "pattern": "(?P<value>.+)", "value": "x"},
         {"path": "README.md", "pattern": "(?P<value>.+)", "value": "x", "source": "version"},
         {"path": "README.md", "pattern": "(?P<value>.+)"},
         {"path": "README.md", "pattern": "missing capture", "source": "version"},

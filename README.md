@@ -79,7 +79,7 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | Dependencies | `deps check-uv`, `update-python`, `update-tools`, `update-uv` | Exact development pins; canonical Cargo SemVer; stable uv pins |
 | Documentation | `docs check-lines` | UTF-8 Markdown line checks with table exemptions |
 | File selection | `files list`, `run` | Tracked/nonignored inputs, exclusions and portable argument batching |
-| Notebooks | `notebooks check`, `clear`, `execute`, `group`, `lint`, `sync` | Optional locked environment, cell-aware Ruff/ty checks, and execution reports |
+| Notebooks | `notebooks advise`, `check`, `clear`, `execute`, `group`, `inspect`, `lint`, `sync` | Read-only review, optional locked environment, native Ruff/ty checks, and execution reports |
 | Performance | `performance assets`, `baseline`, `compare`, `convert`, `export`, `extract`, `fetch`, `measure`, `promote`, `publish`, `release-draft`, `release-upload`, `render`, `verify` | Complete configured measurement, retained evidence, release assets and publication |
 | Release metadata | `release check`, `release update` | Infer metadata, apply declared policies, and validate complete release plans |
 | Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
@@ -107,9 +107,11 @@ arguments in lexicographic order.
 | `just changelog-unreleased TAG DATE` | Alias for `changelog-release` |
 | `just help` | List available commands and arguments in lexicographic order |
 | `just help-workflows` | Alias for `help` |
+| `just notebook-advise FILE... [--strict]` | Report configured review warnings, optionally failing on them |
 | `just notebook-check FILE...` | Validate notebook structure, cell IDs, and output policy |
 | `just notebook-clear FILE...` | Deliberately clear generated notebook state |
 | `just notebook-execute FILE...` | Execute selected notebooks and write results and reports |
+| `just notebook-inspect FILE... [--json] [--no-preview]` | Inventory cells and repair problems without generating IDs or loading Jupyter |
 | `just notebook-lint FILE...` | Check structure, output policy, Python syntax, Ruff rules/formatting, and ty types |
 | `just notebook-sync` | Synchronize locked notebook dependencies and the project kernel |
 | `just performance COMMAND...` | Compare Criterion samples, handle assets, and verify, render, or publish retained evidence |
@@ -292,8 +294,9 @@ Cargo installations through `toolchain upgrade`.
 `--dry-run` previews it. Generation needs git-cliff; tagging needs Git. Optional
 formatting needs rumdl, fixture validation needs Semgrep, and dependency
 updates need uv or Cargo. These executables are required only by the commands
-that invoke them. The CLI does not publish packages or hosted releases; this
-repository's tagged-release workflow publishes the tooling package to PyPI.
+that invoke them. The CLI validates existing GitHub draft releases and uploads
+verified assets; `performance release-upload --publish` explicitly publishes the draft.
+This repository's tagged-release workflow publishes the tooling package to PyPI.
 
 `just changelog` generates and normalizes history, then moves completed minor
 series to `docs/archives/changelog/`. The root file keeps Unreleased, the newest
@@ -328,6 +331,49 @@ destinations. See the [notebook contract](docs/RUNNING_NOTEBOOKS.md) for output
 policy, failure reports, and environment configuration. Linting uses the locked
 project's Ruff and ty with the consumer's configuration and preserves cell IDs
 in diagnostics. `notebook-check` provides structure and output checks alone.
+
+Read-only review commands require the release containing #39 and #40, targeted
+for `0.1.5`; they are absent from `0.1.4`. Merge the new recipes from the packaged
+template when adopting that release. Inspection uses only the base installation
+and tolerates older nbformat 4 files and cell fields awaiting repair:
+
+```sh
+just notebook-inspect notebooks/analysis.ipynb
+just notebook-inspect notebooks/analysis.ipynb --json --no-preview
+```
+
+Previews expose up to 80 characters of cell source; use `--no-preview` for
+sensitive notebooks. Inspection never prints stored outputs or metadata, generates
+IDs, executes cells, or rewrites notebooks. It reports structural problems but
+does not certify validity. See the [inspection schema](docs/notebook-inspection.md).
+
+Advisory policy is opt-in through a separate command, run alongside native lint:
+
+```sh
+just notebook-advise notebooks/analysis.ipynb
+just notebook-advise notebooks/analysis.ipynb --strict
+```
+
+Without configuration, advice warns only about IDs that look generated or positional.
+Configure additional policy in the consumer's `pyproject.toml`, for example:
+
+```toml
+[tool.research-repo-tools.notebooks.advice]
+descriptive-ids = true
+ruff-rules = ["ANN001", "ANN201", "BLE001", "TID251"]
+strict = false
+subprocess-timeout = true
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+"pandas" = {msg = "Prefer Polars for this project"}
+"csv" = {msg = "Prefer Polars for this project"}
+```
+
+Ruff supplies annotations, broad-exception, and configured import warnings;
+library preferences remain consumer policy. The optional timeout heuristic covers
+direct calls spelled `subprocess.run`, `call`, `check_call`, or `check_output`
+without an explicit non-`None` timeout. It skips entire cells that cannot be parsed
+as plain Python, including magics. See [advisory behavior and limits](docs/RUNNING_NOTEBOOKS.md#review-advisories).
 
 ### Performance evidence
 

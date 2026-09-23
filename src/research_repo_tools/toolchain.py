@@ -18,7 +18,7 @@ from pathlib import Path
 
 from packaging.specifiers import SpecifierSet
 
-from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics, run_safe_command
+from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics, resolve_executable, run_safe_command
 from research_repo_tools.tool_pins import SEMVER
 from research_repo_tools.toolchain_config import RUSTUP_VERSION, CargoTool, Toolchain, executable, home, host_target
 
@@ -127,6 +127,13 @@ class Runtime:
         with self._operation():
             python = self.python_status(self.uv_status())
             return self._environment(python)
+
+    def project_environment(self) -> dict[str, str]:
+        """Keep project synchronization rooted here while preserving its venv override."""
+        env = self.environment()
+        for name in ("UV_PROJECT", "UV_WORKING_DIR", "UV_WORKING_DIRECTORY", "UV_ENV_FILE"):
+            env.pop(name, None)
+        return env
 
     def _environment(self, python: Status | None = None) -> dict[str, str]:
         """Build probe environments without recursively looking up Python."""
@@ -393,8 +400,6 @@ def run_command(runtime: Runtime, command: list[str]) -> int:
     if not report(runtime.inspect(), stream=sys.stderr):
         raise ValueError("toolchain is incomplete; run toolchain sync before running commands")
     env = runtime.environment()
-    selected = shutil.which(command[0], path=env["PATH"])
-    if selected is None:
-        raise ExecutableNotFoundError(f"Required executable {command[0]!r} not found in the managed environment")
-    result = run_safe_command(selected, command[1:], cwd=runtime.plan.root, env=env, capture_output=False, timeout=None, check=False)
+    selected = resolve_executable(command[0], cwd=runtime.plan.root, env=env)
+    result = run_safe_command(str(selected), command[1:], cwd=runtime.plan.root, env=env, capture_output=False, timeout=None, check=False)
     return result.returncode if result.returncode >= 0 else 128 - result.returncode

@@ -16,6 +16,7 @@ from research_repo_tools.notebooks import Notebook, generated_state, selected
 from research_repo_tools.process import format_exception_diagnostics, run_safe_command
 
 MINIMUM_VERSIONS = {"ruff": "0.16.8", "ty": "0.0.82"}
+RUFF_COMMON = ["--no-cache", "--no-force-exclude", "--no-respect-gitignore", "--output-format", "json"]
 TY_LOCATION = re.compile(r"^.+:cell (?P<cell>\d+):(?P<line>\d+):(?P<column>\d+): (?P<message>.+)$")
 
 
@@ -25,6 +26,7 @@ class Diagnostic:
     cell: int | None = None
     line: int | None = None
     column: int | None = None
+    operational: bool = False
 
     def render(self, notebook: Notebook) -> str:
         location = str(notebook.path)
@@ -35,14 +37,15 @@ class Diagnostic:
         return f"{location}: {self.message}"
 
 
-def require_checkers() -> None:
-    for package, minimum in MINIMUM_VERSIONS.items():
+def require_checkers(packages: tuple[str, ...] = ("ruff", "ty"), *, command: str = "notebooks lint") -> None:
+    for package in packages:
+        minimum = MINIMUM_VERSIONS[package]
         try:
             installed = version(package)
         except PackageNotFoundError as error:
-            raise ValueError(f"notebooks lint requires {package}>={minimum} in the locked project environment; add it to the dev group") from error
+            raise ValueError(f"{command} requires {package}>={minimum} in the locked project environment; add it to the dev group") from error
         if Version(installed) < Version(minimum):
-            raise ValueError(f"notebooks lint requires {package}>={minimum}; found {installed}; update the consumer's declaration and lockfile")
+            raise ValueError(f"{command} requires {package}>={minimum}; found {installed}; update the consumer's declaration and lockfile")
 
 
 def _cell(value: object, notebook: Notebook) -> int:
@@ -69,7 +72,15 @@ def ruff_diagnostics(output: str, notebook: Notebook, label: str) -> list[Diagno
         if not isinstance(position, dict):
             raise ValueError("Ruff returned a malformed diagnostic location")
         cell = _cell(entry["cell"], notebook) if entry.get("cell") is not None else None
-        result.append(Diagnostic(f"{label} [{entry['code']}]: {entry['message']}", cell, _positive(position.get("row")), _positive(position.get("column"))))
+        result.append(
+            Diagnostic(
+                f"{label} [{entry['code']}]: {entry['message']}",
+                cell,
+                _positive(position.get("row")),
+                _positive(position.get("column")),
+                operational=entry["code"] == "invalid-syntax",
+            )
+        )
     return result
 
 
@@ -93,37 +104,41 @@ def _run(notebook: Notebook, settings: Config, module: str, args: list[str], lab
     try:
         result = run_safe_command(sys.executable, ["-m", module, *args, str(notebook.path)], cwd=settings.root, env=env, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
-        return [Diagnostic(f"{label} timed out after {timeout} seconds")]
+        return [Diagnostic(f"{label} timed out after {timeout} seconds", operational=True)]
     except (OSError, subprocess.SubprocessError) as error:
-        return [Diagnostic(f"{label} unavailable: {format_exception_diagnostics(error, single_line=True)}")]
+        return [Diagnostic(f"{label} unavailable: {format_exception_diagnostics(error, single_line=True)}", operational=True)]
     if result.returncode not in (0, 1):
         detail = (result.stderr or result.stdout).strip()
-        return [Diagnostic(f"{label} failed with exit code {result.returncode}: {detail}")]
+        return [Diagnostic(f"{label} failed with exit code {result.returncode}: {detail}", operational=True)]
     try:
         diagnostics = ruff_diagnostics(result.stdout, notebook, label) if module == "ruff" else ty_diagnostics(result.stdout, notebook)
     except ValueError as error:
-        return [Diagnostic(f"{label} returned invalid diagnostics: {error}")]
+        return [Diagnostic(f"{label} returned invalid diagnostics: {error}", operational=True)]
     if result.stderr.strip():
-        diagnostics.append(Diagnostic(f"{label}: {result.stderr.strip()}"))
+        diagnostics.append(Diagnostic(f"{label}: {result.stderr.strip()}", operational=True))
     if result.returncode and not diagnostics:
-        diagnostics.append(Diagnostic(f"{label} failed with exit code {result.returncode} without diagnostics"))
+        diagnostics.append(Diagnostic(f"{label} failed with exit code {result.returncode} without diagnostics", operational=True))
     return diagnostics
 
 
-def lint(settings: Config, paths: list[Path], *, timeout: int = 30) -> int:
-    if type(timeout) is not int or timeout <= 0:
-        raise ValueError("notebook lint timeout must be a positive integer")
+def python_notebooks(paths: list[Path]) -> list[Notebook]:
     notebooks = selected(paths)
     for notebook in notebooks:
         for section, key in (("language_info", "name"), ("kernelspec", "language")):
             language = notebook.node.metadata.get(section, {}).get(key)
             if language is not None and language != "python":
-                raise ValueError(f"{notebook.path}: notebooks lint requires Python notebook metadata; found {language!r}")
+                raise ValueError(f"{notebook.path}: notebook Python analysis requires Python notebook metadata; found {language!r}")
+    return notebooks
+
+
+def lint(settings: Config, paths: list[Path], *, timeout: int = 30) -> int:
+    if type(timeout) is not int or timeout <= 0:
+        raise ValueError("notebook lint timeout must be a positive integer")
+    notebooks = python_notebooks(paths)
     require_checkers()
-    ruff_common = ["--no-cache", "--no-force-exclude", "--no-respect-gitignore", "--output-format", "json"]
     checks = (
-        ("ruff", ["check", "--no-fix", "--no-fix-only", *ruff_common], "ruff check"),
-        ("ruff", ["format", "--check", *ruff_common], "ruff format"),
+        ("ruff", ["check", "--no-fix", "--no-fix-only", *RUFF_COMMON], "ruff check"),
+        ("ruff", ["format", "--check", *RUFF_COMMON], "ruff format"),
         (
             "ty",
             [

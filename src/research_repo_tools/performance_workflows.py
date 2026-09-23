@@ -166,12 +166,13 @@ def run(args: argparse.Namespace, settings: Config) -> int:
             raise ValueError("CSV export requires shared comparison evidence")
         replace_many({paths[2]: criterion.serialize_comparison_csv(criterion.parse_comparison(retained.payload))})
     elif args.action == "promote":
+        from research_repo_tools.performance import _write_stdout
         from research_repo_tools.performance_reports import load_report_plan
         from research_repo_tools.publication import preview_publication, publish_publication
 
         plan = load_report_plan(root, args.configuration, payload=args.payload, manifest=args.manifest)
         if args.preview:
-            print(preview_publication(plan), end="")
+            _write_stdout(preview_publication(plan).encode("utf-8"))
         elif args.check:
             return int(bool(plan.changed_paths))
         else:

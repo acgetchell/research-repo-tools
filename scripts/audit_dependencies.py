@@ -5,7 +5,7 @@ import sys
 import tempfile
 from pathlib import Path
 
-from research_repo_tools.process import ExecutableNotFoundError, run_safe_command
+from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics, run_safe_command
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -43,5 +43,5 @@ if __name__ == "__main__":
     try:
         raise SystemExit(main())
     except (ExecutableNotFoundError, OSError, subprocess.SubprocessError) as error:
-        print(f"Dependency audit failed: {error}", file=sys.stderr)
+        print(f"Dependency audit failed: {format_exception_diagnostics(error)}", file=sys.stderr)
         raise SystemExit(1) from error
