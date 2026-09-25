@@ -144,6 +144,15 @@ To preview a prospective release, run
 Follow the [toolchain guide][toolchain] for declarations, first-time setup, and
 strictly read-only tool checks.
 
+### Dependabot approval and auto-merge
+
+The [shared GitHub workflow][dependabot] can approve allowlisted
+Python or Rust dependency patch updates and enable native auto-merge after the
+repository's required reviews and checks are satisfied. Each repository owns
+its dependency/file policy, Actions approval setting, and merge rules. Consumers
+pin the reusable workflow to a reviewed Git commit; no Python package upgrade is
+required. `research-repo-tools` is the first pilot consumer.
+
 ### Workflow security and complete Python validation
 
 These additions target v0.1.6; consumers should adopt `research-repo-tools==0.1.6`
@@ -859,6 +868,7 @@ BSD-3-Clause. See [LICENSE][license].
 [contributing]: https://github.com/acgetchell/research-repo-tools/blob/main/CONTRIBUTING.md
 [api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/api.md
 [toolchain]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/INSTALLING.md
+[dependabot]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/AUTOMATING_DEPENDABOT.md
 [changelog]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/GENERATING_CHANGELOGS.md
 [release]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_RELEASE_METADATA.md
 [migration]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/migration.md

@@ -1,8 +1,10 @@
-name: Dependabot review and auto-merge
+name: Dependabot approval and auto-merge
 
-on:
-  pull_request:
+# Trusted base-branch policy only; the reusable job never checks out or runs PR code.
+on: # zizmor: ignore[dangerous-triggers]
+  pull_request_target:
     types: [opened, reopened, ready_for_review, synchronize]
+    branches: [main]
 
 permissions: {}
 
@@ -11,77 +13,20 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  review-and-enable-auto-merge:
-    if: >-
-      github.event.pull_request.user.login == 'dependabot[bot]' &&
-      github.event.pull_request.head.repo.full_name == github.repository &&
-      github.repository == 'acgetchell/research-repo-tools'
-    runs-on: ubuntu-24.04
-    timeout-minutes: 160
+  approve-and-enable-auto-merge:
     permissions:
       contents: write
       pull-requests: write
-    steps:
-      # This privileged job never checks out or executes pull-request code.
-      - name: Request CodeRabbit review
-        env:
-          GH_TOKEN: ${{ secrets.CODERABBIT_REVIEW_TOKEN }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          if [[ -z "$GH_TOKEN" ]]; then
-            echo "::error::Configure CODERABBIT_REVIEW_TOKEN as a Dependabot secret."
-            exit 1
-          fi
-          if [[ "$(gh api user --jq '.login')" != "acgetchell" ]]; then
-            echo "::error::CODERABBIT_REVIEW_TOKEN must belong to acgetchell."
-            exit 1
-          fi
-          marker="<!-- coderabbit-review-request:${PR_HEAD_SHA} -->"
-          comments="$(gh api --paginate "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" \
-            --jq '.[] | select(.user.login == "acgetchell") | .body')"
-          if grep -Fxq -- "$marker" <<< "$comments"; then
-            echo "CodeRabbit review already requested for ${PR_HEAD_SHA}."
-            exit 0
-          fi
-          body="$(printf '@coderabbitai review\n\n%s' "$marker")"
-          gh api --method POST "repos/${REPOSITORY}/issues/${PR_NUMBER}/comments" --raw-field body="$body"
-      - name: Wait for CodeRabbit approval of this head
-        id: approval
-        timeout-minutes: 60
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
-          PR_NUMBER: ${{ github.event.pull_request.number }}
-          REPOSITORY: ${{ github.repository }}
-        run: |
-          set -euo pipefail
-          while true; do
-            current="$(gh api "repos/${REPOSITORY}/pulls/${PR_NUMBER}" --jq '.head.sha')"
-            if [[ "$current" != "$PR_HEAD_SHA" ]]; then
-              echo "::error::PR head changed while waiting for review."
-              exit 1
-            fi
-            state="$(gh api --paginate "repos/${REPOSITORY}/pulls/${PR_NUMBER}/reviews?per_page=100" |
-              jq --raw-output --slurp --arg sha "$PR_HEAD_SHA" \
-              '[.[][] | select(.user.login == "coderabbitai[bot]" and .commit_id == $sha)] | last | .state // empty')"
-            if [[ "$state" == "APPROVED" ]]; then
-              echo "head_sha=$PR_HEAD_SHA" >> "$GITHUB_OUTPUT"
-              break
-            fi
-            sleep 15
-          done
-      - name: Wait for required checks
-        timeout-minutes: 90
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-        run: gh pr checks --required --watch --fail-fast "$PR_URL"
-      - name: Enable squash auto-merge for the approved head
-        env:
-          GH_TOKEN: ${{ github.token }}
-          PR_URL: ${{ github.event.pull_request.html_url }}
-          APPROVED_HEAD_SHA: ${{ steps.approval.outputs.head_sha }}
-        run: gh pr merge --auto --squash --match-head-commit "$APPROVED_HEAD_SHA" "$PR_URL"
+    # Pinned actionlint does not yet recognize the equivalent $/ syntax.
+    uses: ./.github/workflows/dependabot-approve.yml # zizmor: ignore[self-repository]
+    with:
+      repository: acgetchell/research-repo-tools
+      policy: >-
+        {"uv": {
+          "dependencies": [
+            "hatchling", "packaging", "pyyaml", "rust-just",
+            "ipykernel", "nbclient", "nbformat", "actionlint-py",
+            "coverage", "pytest", "pytest-cov", "ruff", "ty", "zizmor", "pip-audit"
+          ],
+          "files": ["pyproject.toml", "uv.lock"]
+        }}

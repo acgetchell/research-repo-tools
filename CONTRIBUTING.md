@@ -12,6 +12,12 @@ package setup command. It installs the pinned user-level Just command,
 configures PATH, and synchronizes the locked development environment.
 Recipes require a POSIX `sh` on PATH; on Windows, expose Git for Windows' `bin`
 directory as described in the [toolchain guide](docs/INSTALLING.md).
+The Dependabot workflow tests also require Bash and [jq](https://jqlang.org/download/)
+on PATH. On macOS, the system Bash is sufficient and Homebrew provides jq
+(`brew install jq`). On Debian/Ubuntu, install both with `sudo apt-get install bash jq`.
+On Windows, use Git for Windows' Bash and install jq with `winget install jqlang.jq`,
+then open a new terminal. The Python setup command below does not install these
+system executables; missing prerequisites fail the tests with setup guidance.
 
 ```sh
 uv run --locked --managed-python research-repo-tools setup
