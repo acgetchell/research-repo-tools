@@ -1,0 +1,161 @@
+name: Approve Dependabot patch updates
+
+on:
+  workflow_call:
+    inputs:
+      repository:
+        description: Exact owner/repository allowed to call this workflow
+        required: true
+        type: string
+      policy:
+        description: JSON map of uv/cargo ecosystems to dependency and file allowlists
+        required: true
+        type: string
+
+permissions: {}
+
+jobs:
+  approve:
+    if: >-
+      github.event_name == 'pull_request_target' &&
+      github.repository == inputs.repository &&
+      github.event.pull_request.user.login == 'dependabot[bot]' &&
+      github.event.pull_request.head.repo.full_name == github.repository &&
+      github.event.pull_request.base.ref == github.event.repository.default_branch &&
+      !github.event.pull_request.draft
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      # The caller and this workflow run from trusted base-branch definitions.
+      # Never check out PR code or pass repository secrets to this workflow.
+      - name: Read signed Dependabot metadata
+        id: metadata
+        uses: dependabot/fetch-metadata@25dd0e34f4fe68f24cc83900b1fe3fe149efef98 # v3.1.0
+        with:
+          skip-verification: false
+          skip-commit-verification: false
+
+      - name: Approve an eligible current head
+        id: approve
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ inputs.repository }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+          DEPENDENCIES: ${{ steps.metadata.outputs.updated-dependencies-json }}
+          POLICY: ${{ inputs.policy }}
+        shell: bash
+        run: |
+          set -euo pipefail
+          pr="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER")"
+          if ! jq -e --arg sha "$PR_HEAD_SHA" --arg repo "$REPOSITORY" --arg base "$DEFAULT_BRANCH" '
+            .state == "open" and .draft == false and .user.login == "dependabot[bot]" and
+            .head.sha == $sha and .head.repo.full_name == $repo and
+            .base.repo.full_name == $repo and .base.ref == $base
+          ' <<< "$pr" > /dev/null; then
+            echo "::error::PR identity, target, or head changed."
+            exit 1
+          fi
+
+          branch="$(jq -rn --arg branch "$DEFAULT_BRANCH" '$branch | @uri')"
+          rules="$(gh api --paginate --slurp "repos/$REPOSITORY/rules/branches/$branch?per_page=100")"
+          if ! jq -e '
+            add | any(.[]; .type == "pull_request" and
+              .parameters.required_approving_review_count >= 1 and
+              .parameters.dismiss_stale_reviews_on_push == true and
+              .parameters.required_review_thread_resolution == true) and
+            any(.[]; .type == "required_status_checks" and
+              .parameters.strict_required_status_checks_policy == true and
+              (.parameters.required_status_checks | length) > 0)
+          ' <<< "$rules" > /dev/null; then
+            echo "::error::Require active rulesets with approvals, stale dismissal, resolved threads, and strict checks."
+            exit 1
+          fi
+
+          # fetch-metadata reads the first commit. Require that it is the ONLY
+          # commit and the event head, so later human/bot commits cannot inherit
+          # approval from earlier patch metadata.
+          # A verified personal signature can claim Dependabot as its author.
+          # Also require GitHub's committer identity for its bot-signed commits.
+          if [[ "$(jq -r '.commits' <<< "$pr")" != 1 ]]; then
+            echo "Manual review required: expected a single Dependabot commit."
+            exit 0
+          fi
+          commits="$(gh api --paginate --slurp "repos/$REPOSITORY/pulls/$PR_NUMBER/commits?per_page=100")"
+          if ! jq -e --arg sha "$PR_HEAD_SHA" '
+            add | length == 1 and all(.[];
+              .sha == $sha and .author.login == "dependabot[bot]" and
+              .committer.login == "web-flow" and
+              .commit.verification.verified == true)
+          ' <<< "$commits" > /dev/null; then
+            echo "::error::Expected a GitHub-signed Dependabot commit at the event head."
+            exit 1
+          fi
+
+          # Evaluate every member of a group, not just the highest known update
+          # type. Unknown versions, prereleases, and downgrades need review.
+          if ! jq -en --argjson deps "$DEPENDENCIES" --argjson policy "$POLICY" '
+            def version: capture("^v?(?<major>0|[1-9][0-9]*)\\.(?<minor>0|[1-9][0-9]*)\\.(?<patch>0|[1-9][0-9]*)$")
+              // error("Expected a three-component release version")
+              | [.major, .minor, .patch] | map(tonumber);
+            ($deps | type == "array" and length > 0) and
+            all($deps[];
+              . as $dep | $policy[$dep.packageEcosystem] as $allowed |
+              ($dep.packageEcosystem == "uv" or $dep.packageEcosystem == "cargo") and
+              $dep.packageEcosystem == $deps[0].packageEcosystem and
+              $dep.updateType == "version-update:semver-patch" and
+              ($allowed.dependencies | index($dep.dependencyName)) != null and
+              (($dep.prevVersion | version) as $old | ($dep.newVersion | version) as $new |
+                $old[0:2] == $new[0:2] and $new[2] > $old[2]))
+          ' > /dev/null; then
+            echo "Manual review required: update is outside the dependency patch policy."
+            exit 0
+          fi
+
+          ecosystem="$(jq -r '.[0].packageEcosystem' <<< "$DEPENDENCIES")"
+          files="$(gh api --paginate --slurp "repos/$REPOSITORY/pulls/$PR_NUMBER/files?per_page=100")"
+          if ! jq -e --argjson policy "$POLICY" --arg ecosystem "$ecosystem" \
+            --argjson count "$(jq '.changed_files' <<< "$pr")" '
+            add | length > 0 and length == $count and all(.[];
+              . as $file | .status == "modified" and
+              ($policy[$ecosystem].files | index($file.filename)) != null)
+          ' <<< "$files" > /dev/null; then
+            echo "Manual review required: changed files are outside the dependency file policy."
+            exit 0
+          fi
+
+          reviews="$(gh api --paginate --slurp "repos/$REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100")"
+          approved="$(jq -r --arg sha "$PR_HEAD_SHA" '
+            [.[][] | select(.user.login == "github-actions[bot]" and .commit_id == $sha)] |
+            sort_by(.id) | last | .state == "APPROVED"
+          ' <<< "$reviews")"
+          snapshot='[.head.sha, .base.sha, .base.ref, .base.repo.full_name, .state, .draft] | @json'
+          expected="$(jq -r "$snapshot" <<< "$pr")"
+          current="$(gh api "repos/$REPOSITORY/pulls/$PR_NUMBER" --jq "$snapshot")"
+          if [[ "$current" != "$expected" ]]; then
+            echo "::error::PR head, base, or reviewability changed before approval."
+            exit 1
+          fi
+          if [[ "$approved" != true ]]; then
+            gh api --method POST "repos/$REPOSITORY/pulls/$PR_NUMBER/reviews" \
+              --raw-field commit_id="$PR_HEAD_SHA" --raw-field event=APPROVE \
+              --raw-field body='Approved by the dependency patch policy. Required checks and review threads still gate merging.' \
+              --silent
+          fi
+          echo "eligible=true" >> "$GITHUB_OUTPUT"
+
+      - name: Enable native auto-merge for the approved head
+        if: steps.approve.outputs.eligible == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPOSITORY: ${{ inputs.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          PR_HEAD_SHA: ${{ github.event.pull_request.head.sha }}
+        shell: bash
+        run: |
+          gh pr merge "$PR_NUMBER" --repo "$REPOSITORY" --auto --squash \
+            --match-head-commit "$PR_HEAD_SHA"

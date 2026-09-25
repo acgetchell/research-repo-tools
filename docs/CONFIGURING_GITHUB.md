@@ -20,7 +20,7 @@ The baseline follows Delaunay and la-stack, adapted to this Python package:
 - Read-only default workflow tokens; write permissions are limited to specific
   security-upload, Dependabot, and draft-release staging jobs. OIDC identity is
   limited to Codecov, validated-release signing, and PyPI upload jobs. Actions
-  cannot approve pull requests.
+  approvals are enabled for the restricted Dependabot patch policy described below.
 - Selected Actions only, with full commit SHA pinning required. Dependabot updates
   GitHub Actions and the uv lockfile weekly, with separate security-update groups.
 - Dependabot alerts/security updates, secret scanning, push protection, and private
@@ -94,34 +94,31 @@ even when the service cannot accept an upload.
 
 ## CodeRabbit and Dependabot
 
-### App access and review credentials
+### App access and automated approvals
 
 Grant the existing CodeRabbit GitHub App installation access to this repository
 through [installed GitHub Apps](https://github.com/settings/installations).
 The repository's `.coderabbit.yaml` enables reviews, approval on resolved findings,
-and the legacy `CodeRabbit` status used by the branch rule.
+and the legacy `CodeRabbit` status used by the branch rule. CodeRabbit continues
+to review ordinary PRs. Its required status remains separate from a submitted
+approval: a successful skipped review is not an approving review.
 After the App is connected, add `"integration_id": 347564` to its entry in
 `.github/settings/main-ruleset.json` and update the existing ruleset to bind that
 status to CodeRabbit's identity, as Delaunay does.
 
-Configure `CODERABBIT_REVIEW_TOKEN` as a **Dependabot secret**, using an acgetchell
-token that can read the repository/PR metadata and create PR conversation comments.
-For a fine-grained token, grant this repository Metadata read, Issues write, and
-Pull requests read. The CLI prompts for the value without putting it in shell
-history:
+The Dependabot caller now uses the shared
+[dependency approval workflow](AUTOMATING_DEPENDABOT.md). It approves only eligible
+patch updates, then enables native squash auto-merge. All required checks,
+resolved review threads, and stale-approval dismissal still apply. It does not
+wait on a runner for checks or a CodeRabbit approval.
 
-```sh
-gh secret set CODERABBIT_REVIEW_TOKEN --app dependabot --repo acgetchell/research-repo-tools
-```
-
-An existing token may need its selected-repository access updated. GitHub does not
-expose stored secret values, so a secret in another repository cannot be copied
-out through the API.
-
-The automation handles same-repository Dependabot PRs, requests one CodeRabbit
-review per head, waits for that exact head's approval and required checks, and
-enables squash auto-merge with a head-commit guard. It never checks out PR code.
-Missing credentials, review, or required checks prevent completion.
+Apply `.github/settings/workflow-permissions.json` to permit Actions approvals
+and `.github/settings/allowed-actions.json` to allow the SHA-pinned metadata
+action. Default token permissions remain read-only. These payloads describe the
+desired configuration; committing them does not apply repository settings.
+No `CODERABBIT_REVIEW_TOKEN` is needed by the new workflow. Existing copies can be
+removed from this repository after confirming no other workflow uses them; do
+not revoke a token shared with other repositories.
 
 ## Release configuration
 

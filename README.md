@@ -1,5 +1,6 @@
 # research-repo-tools
 
+[![PyPI version][pypi-badge]][pypi]
 [![License][license-badge]][license]
 [![CI][ci-badge]][ci-workflow]
 [![CodeQL][codeql-badge]][codeql-workflow]
@@ -143,6 +144,20 @@ To preview a prospective release, run
 `just changelog-preview --tag v1.2.3 --date YYYY-MM-DD`.
 Follow the [toolchain guide][toolchain] for declarations, first-time setup, and
 strictly read-only tool checks.
+
+### Dependabot approval and auto-merge
+
+The [shared GitHub workflow][dependabot] can approve allowlisted
+Python or Rust dependency patch updates and enable native auto-merge after the
+repository's required reviews and checks are satisfied. Each repository owns
+its dependency/file policy, Actions approval setting, and merge rules. Consumers
+pin the reusable workflow to a reviewed Git commit; no Python package upgrade is
+required. `research-repo-tools` is the first pilot consumer.
+
+This workflow supersedes CodeRabbit approval polling and the
+`CODERABBIT_REVIEW_TOKEN` personal access token requirement. It uses
+`GITHUB_TOKEN` for approval and auto-merge. Any required CodeRabbit status
+remains an independent merge gate.
 
 ### Workflow security and complete Python validation
 
@@ -859,12 +874,15 @@ BSD-3-Clause. See [LICENSE][license].
 [contributing]: https://github.com/acgetchell/research-repo-tools/blob/main/CONTRIBUTING.md
 [api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/api.md
 [toolchain]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/INSTALLING.md
+[dependabot]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/AUTOMATING_DEPENDABOT.md
 [changelog]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/GENERATING_CHANGELOGS.md
 [release]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_RELEASE_METADATA.md
 [migration]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/migration.md
 [update-adoption]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/migration.md#dependency-and-tool-update-adoption
 [license]: https://github.com/acgetchell/research-repo-tools/blob/main/LICENSE
 [just-template]: https://github.com/acgetchell/research-repo-tools/blob/main/src/research_repo_tools/templates/justfile
+[pypi-badge]: https://badgen.net/pypi/v/research-repo-tools
+[pypi]: https://pypi.org/project/research-repo-tools/
 [license-badge]: https://badgen.net/github/license/acgetchell/research-repo-tools
 [ci-badge]: https://github.com/acgetchell/research-repo-tools/actions/workflows/ci.yml/badge.svg?branch=main
 [ci-workflow]: https://github.com/acgetchell/research-repo-tools/actions/workflows/ci.yml
