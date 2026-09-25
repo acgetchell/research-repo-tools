@@ -26,11 +26,16 @@ POLICY = {
 }
 FAKE_GH = r"""
 # Keep the Ubuntu workflow's LF transport when Git Bash invokes native jq.exe.
-jq() { native_jq --binary "$@"; }
+# jq 1.7 on POSIX accepts -b as a no-op but rejects the long --binary option.
+jq() { native_jq -b "$@"; }
 
-# Model native Windows jq output on every host without changing OS identity.
+# Model platform-specific jq behavior without changing OS identity.
 native_jq() {
-  if [[ "$SCENARIO" == windows-jq && "$1" != --binary ]]; then
+  if [[ "$SCENARIO" == posix-jq && "$1" == --binary ]]; then
+    echo 'jq: Unknown option --binary' >&2
+    return 2
+  fi
+  if [[ "$SCENARIO" == windows-jq && "$1" != -b ]]; then
     command jq "$@" | sed $'s/$/\r/'
   else
     command jq "$@"
@@ -130,8 +135,10 @@ def run_step(tmp_path, payloads, dependencies=None, scenario="fresh", step=1):
     for name, value in payloads.items():
         (tmp_path / f"{name}.json").write_text(json.dumps(value), encoding="utf-8", newline="\n")
     script = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["approve"]["steps"][step]["run"]
-    return subprocess.run(
-        [bash, "-euo", "pipefail", "-c", FAKE_GH + script],
+    result = subprocess.run(
+        # Byte input avoids Windows argument quoting and newline translation.
+        [bash, "-euo", "pipefail", "-s"],
+        input=(FAKE_GH + script).encode("utf-8"),
         env=os.environ
         | {
             "TEST_DIR": tmp_path.as_posix(),
@@ -146,10 +153,10 @@ def run_step(tmp_path, payloads, dependencies=None, scenario="fresh", step=1):
             "GITHUB_OUTPUT": (tmp_path / "outputs").as_posix(),
         },
         capture_output=True,
-        text=True,
         check=False,
         timeout=10,
     )
+    return subprocess.CompletedProcess(result.args, result.returncode, result.stdout.decode("utf-8"), result.stderr.decode("utf-8"))
 
 
 @pytest.mark.parametrize("ecosystem", ["uv", "cargo"])
@@ -166,16 +173,23 @@ def test_patch_approval_is_bound_to_verified_head(tmp_path, payloads, ecosystem)
     assert (tmp_path / "outputs").read_text(encoding="utf-8") == "eligible=true\n"
 
 
-def test_native_jq_newlines_do_not_change_workflow_decisions(tmp_path, payloads, monkeypatch):
-    # Prove the model exercises the original CRLF failure before using the adapter.
+@pytest.mark.parametrize(
+    "scenario,broken_call,error",
+    [
+        ("posix-jq", 'native_jq --binary "$@"', "jq: Unknown option --binary"),
+        ("windows-jq", 'native_jq "$@"', "Unexpected gh invocation:"),
+    ],
+)
+def test_native_jq_models_preserve_workflow_decisions(tmp_path, payloads, monkeypatch, scenario, broken_call, error):
+    # Prove each model reproduces its failure before using the portable adapter.
     script = FAKE_GH
-    monkeypatch.setitem(globals(), "FAKE_GH", script.replace('jq() { native_jq --binary "$@"; }', 'jq() { native_jq "$@"; }'))
-    failure = run_step(tmp_path, payloads, scenario="windows-jq")
+    monkeypatch.setitem(globals(), "FAKE_GH", script.replace('native_jq -b "$@"', broken_call))
+    failure = run_step(tmp_path, payloads, scenario=scenario)
     assert failure.returncode != 0
-    assert "Unexpected gh invocation:" in failure.stderr
+    assert error in failure.stderr
     assert not (tmp_path / "review-request").exists()
     monkeypatch.setitem(globals(), "FAKE_GH", script)
-    result = run_step(tmp_path, payloads, scenario="windows-jq")
+    result = run_step(tmp_path, payloads, scenario=scenario)
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "review-request").exists()
     assert (tmp_path / "outputs").read_bytes() == b"eligible=true\n"

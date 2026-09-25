@@ -1,5 +1,6 @@
 # research-repo-tools
 
+[![PyPI version][pypi-badge]][pypi]
 [![License][license-badge]][license]
 [![CI][ci-badge]][ci-workflow]
 [![CodeQL][codeql-badge]][codeql-workflow]
@@ -875,6 +876,8 @@ BSD-3-Clause. See [LICENSE][license].
 [update-adoption]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/migration.md#dependency-and-tool-update-adoption
 [license]: https://github.com/acgetchell/research-repo-tools/blob/main/LICENSE
 [just-template]: https://github.com/acgetchell/research-repo-tools/blob/main/src/research_repo_tools/templates/justfile
+[pypi-badge]: https://badgen.net/pypi/v/research-repo-tools
+[pypi]: https://pypi.org/project/research-repo-tools/
 [license-badge]: https://badgen.net/github/license/acgetchell/research-repo-tools
 [ci-badge]: https://github.com/acgetchell/research-repo-tools/actions/workflows/ci.yml/badge.svg?branch=main
 [ci-workflow]: https://github.com/acgetchell/research-repo-tools/actions/workflows/ci.yml
