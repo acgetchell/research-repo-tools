@@ -154,6 +154,11 @@ its dependency/file policy, Actions approval setting, and merge rules. Consumers
 pin the reusable workflow to a reviewed Git commit; no Python package upgrade is
 required. `research-repo-tools` is the first pilot consumer.
 
+This workflow supersedes CodeRabbit approval polling and the
+`CODERABBIT_REVIEW_TOKEN` personal access token requirement. It uses
+`GITHUB_TOKEN` for approval and auto-merge. Any required CodeRabbit status
+remains an independent merge gate.
+
 ### Workflow security and complete Python validation
 
 These additions target v0.1.6; consumers should adopt `research-repo-tools==0.1.6`

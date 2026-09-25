@@ -31,12 +31,17 @@ jq() { native_jq -b "$@"; }
 
 # Model platform-specific jq behavior without changing OS identity.
 native_jq() {
+  # Model native-process stdin forwarding consuming a script fed to Bash -s.
+  if [[ "$SCENARIO" == stdin-reading-jq && " $* " == *" -rn "* ]]; then
+    cat > /dev/null
+  fi
   if [[ "$SCENARIO" == posix-jq && "$1" == --binary ]]; then
     echo 'jq: Unknown option --binary' >&2
     return 2
   fi
   if [[ "$SCENARIO" == windows-jq && "$1" != -b ]]; then
-    command jq "$@" | sed $'s/$/\r/'
+    # Start with LF on every host before adding exactly one carriage return.
+    command jq -b "$@" | sed $'s/$/\r/'
   else
     command jq "$@"
   fi
@@ -135,10 +140,12 @@ def run_step(tmp_path, payloads, dependencies=None, scenario="fresh", step=1):
     for name, value in payloads.items():
         (tmp_path / f"{name}.json").write_text(json.dumps(value), encoding="utf-8", newline="\n")
     script = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["approve"]["steps"][step]["run"]
+    script_path = tmp_path / "workflow-step.sh"
+    script_path.write_text(FAKE_GH + script, encoding="utf-8", newline="\n")
     result = subprocess.run(
-        # Byte input avoids Windows argument quoting and newline translation.
-        [bash, "-euo", "pipefail", "-s"],
-        input=(FAKE_GH + script).encode("utf-8"),
+        # Keep script bytes out of Windows argv and child-process stdin.
+        [bash, "-euo", "pipefail", script_path.as_posix()],
+        stdin=subprocess.DEVNULL,
         env=os.environ
         | {
             "TEST_DIR": tmp_path.as_posix(),
@@ -171,6 +178,13 @@ def test_patch_approval_is_bound_to_verified_head(tmp_path, payloads, ecosystem)
     assert f"commit_id={SHA}" in request
     assert "event=APPROVE" in request
     assert (tmp_path / "outputs").read_text(encoding="utf-8") == "eligible=true\n"
+
+
+def test_native_jq_cannot_consume_the_workflow_script(tmp_path, payloads):
+    result = run_step(tmp_path, payloads, scenario="stdin-reading-jq")
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "review-request").exists()
+    assert (tmp_path / "outputs").read_bytes() == b"eligible=true\n"
 
 
 @pytest.mark.parametrize(

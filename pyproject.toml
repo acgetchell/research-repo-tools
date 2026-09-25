@@ -33,8 +33,8 @@ dev = [
     "nbformat==5.11.1",
     "pytest==9.1.1",
     "pytest-cov==7.1.0",
-    "ruff==0.16.8",
-    "ty==0.0.83",
+    "ruff==0.16.9",
+    "ty==0.0.84",
     "zizmor==1.30.1",
 ]
 audit = ["pip-audit==2.10.1"]
@@ -46,7 +46,7 @@ packages = ["src/research_repo_tools"]
 include = ["src", "tests", "docs", "scripts", "pyproject.toml", "uv.lock", "README.md", "CONTRIBUTING.md", "AGENTS.md", "CHANGELOG.md", "LICENSE", "justfile", ".python-version"]
 
 [tool.uv]
-required-version = "==0.12.18"
+required-version = "==0.12.19"
 
 [tool.research-repo-tools.changelog]
 owner = "acgetchell"
