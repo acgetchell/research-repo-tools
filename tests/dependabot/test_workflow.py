@@ -40,8 +40,10 @@ native_jq() {
     return 2
   fi
   if [[ "$SCENARIO" == windows-jq && "$1" != -b ]]; then
-    # Start with LF on every host before adding exactly one carriage return.
-    command jq -b "$@" | sed $'s/$/\r/'
+    # Emit CRLF with Bash builtins, without a platform-dependent text filter.
+    command jq -b "$@" | while IFS= read -r line; do
+      printf '%s\r\n' "$line"
+    done
   else
     command jq "$@"
   fi
@@ -129,7 +131,7 @@ def payloads():
     }
 
 
-def run_step(tmp_path, payloads, dependencies=None, scenario="fresh", step=1):
+def run_script(tmp_path, script, scenario="fresh", extra_env=None):
     bash = shutil.which("bash")
     if os.name == "nt":
         # Select the Bash beside the required Git for Windows sh, not a WSL shim.
@@ -137,19 +139,28 @@ def run_step(tmp_path, payloads, dependencies=None, scenario="fresh", step=1):
         bash = str(Path(sh).with_name("bash.exe")) if sh else None
     assert bash is not None and Path(bash).is_file(), "Install Bash (Git for Windows on Windows); see CONTRIBUTING.md."
     assert shutil.which("jq") is not None, "Install jq and add it to PATH; see CONTRIBUTING.md."
-    for name, value in payloads.items():
-        (tmp_path / f"{name}.json").write_text(json.dumps(value), encoding="utf-8", newline="\n")
-    script = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["approve"]["steps"][step]["run"]
     script_path = tmp_path / "workflow-step.sh"
     script_path.write_text(FAKE_GH + script, encoding="utf-8", newline="\n")
-    result = subprocess.run(
+    return subprocess.run(
         # Keep script bytes out of Windows argv and child-process stdin.
         [bash, "-euo", "pipefail", script_path.as_posix()],
         stdin=subprocess.DEVNULL,
-        env=os.environ
-        | {
-            "TEST_DIR": tmp_path.as_posix(),
-            "SCENARIO": scenario,
+        env=os.environ | {"TEST_DIR": tmp_path.as_posix(), "SCENARIO": scenario} | (extra_env or {}),
+        capture_output=True,
+        check=False,
+        timeout=10,
+    )
+
+
+def run_step(tmp_path, payloads, dependencies=None, scenario="fresh", step=1):
+    for name, value in payloads.items():
+        (tmp_path / f"{name}.json").write_text(json.dumps(value), encoding="utf-8", newline="\n")
+    script = yaml.safe_load(WORKFLOW.read_text(encoding="utf-8"))["jobs"]["approve"]["steps"][step]["run"]
+    result = run_script(
+        tmp_path,
+        script,
+        scenario,
+        extra_env={
             "GH_TOKEN": "test-token",
             "REPOSITORY": "owner/repo",
             "DEFAULT_BRANCH": "main",
@@ -159,11 +170,32 @@ def run_step(tmp_path, payloads, dependencies=None, scenario="fresh", step=1):
             "POLICY": json.dumps(POLICY),
             "GITHUB_OUTPUT": (tmp_path / "outputs").as_posix(),
         },
-        capture_output=True,
-        check=False,
-        timeout=10,
     )
     return subprocess.CompletedProcess(result.args, result.returncode, result.stdout.decode("utf-8"), result.stderr.decode("utf-8"))
+
+
+@pytest.mark.parametrize(
+    "binary,substitute,expected",
+    [
+        (False, False, b"first\r\nsecond\r\n"),
+        (True, False, b"first\nsecond\n"),
+        (False, True, b"first\r\nsecond\r"),
+        (True, True, b"first\nsecond"),
+    ],
+    ids=["crlf-output", "lf-output", "crlf-substitution", "lf-substitution"],
+)
+@pytest.mark.parametrize("text_filter_normalizes_crlf", [False, True], ids=["default-tools", "normalizing-filter"])
+def test_jq_model_preserves_exact_bytes(tmp_path, monkeypatch, binary, substitute, expected, text_filter_normalizes_crlf):
+    if text_filter_normalizes_crlf:
+        # Model a platform text filter removing CR; the fixture must not rely on it.
+        normalizing_filter = r"""sed() { command sed "$@" | tr -d '\r'; }""" + "\n"
+        monkeypatch.setitem(globals(), "FAKE_GH", normalizing_filter + FAKE_GH)
+    command = "native_jq " + ("-b " if binary else "") + '-nr \'"first", "second"\''
+    script = f'value="$({command})"\nprintf "%s" "$value"\n' if substitute else command + "\n"
+    result = run_script(tmp_path, script, scenario="windows-jq")
+    assert result.returncode == 0, result.stderr
+    assert result.stderr == b""
+    assert result.stdout == expected
 
 
 @pytest.mark.parametrize("ecosystem", ["uv", "cargo"])
