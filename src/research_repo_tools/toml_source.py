@@ -116,3 +116,109 @@ def replace_string(text: str, table: str, key: str, value: str) -> str:
     result = text[:start] + quoted + text[match.end() :]
     tomllib.loads(result)
     return result
+
+
+def set_value(text: str, table: str, key: str, value: str) -> str:
+    """Set a TOML literal, retaining unrelated bytes and rejecting inline owners."""
+    import json
+
+    tomllib.loads("value = " + value)
+    encoded_key = key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else json.dumps(key)
+    newline = "\r\n" if "\r\n" in text else "\n"
+    lines = text.splitlines(keepends=True)
+    try:
+        line = key_line(text, table, key)
+    except ValueError:
+        for number, statement in _statements(text):
+            if statement.startswith("[") and not statement.startswith("[[") and _key_path(tomllib.loads(statement)) == tuple(table.split(".")):
+                if not lines[number - 1].endswith("\n"):
+                    lines[number - 1] += newline
+                lines.insert(number, f"{encoded_key} = {value}{newline}")
+                result = "".join(lines)
+                break
+        else:
+            result = text.rstrip("\r\n") + newline + newline + f"[{table}]{newline}{encoded_key} = {value}{newline}"
+    else:
+        offset = sum(map(len, lines[: line - 1]))
+        match = _KEY.match(text, offset + len(lines[line - 1]) - len(lines[line - 1].lstrip()))
+        if match is None:
+            raise ValueError(f"[{table}].{key} must use a standalone assignment")
+        start = end = match.end()
+        while text[start].isspace():
+            start += 1
+        end = start
+        depth = 0
+        while end < len(text):
+            char = text[end]
+            if char in "\"'":
+                literal = _STRING.match(text, end)
+                if literal is None:
+                    raise ValueError("unsupported TOML literal")
+                end = literal.end()
+                continue
+            if char in "[{":
+                depth += 1
+            elif char in "]}":
+                depth -= 1
+            elif char == "#":
+                if depth == 0:
+                    break
+                end = text.find("\n", end)
+                if end < 0:
+                    raise ValueError("unterminated TOML value")
+                continue
+            elif char in "\r\n" and depth == 0:
+                break
+            end += 1
+        while end > start and text[end - 1].isspace():
+            end -= 1
+        result = text[:start] + value + text[end:]
+    tomllib.loads(result)
+    return result
+
+
+def replace_array_strings(text: str, table: str, key: str, replacements: dict[str, str]) -> str:
+    """Replace exact string array entries without changing comments or includes."""
+    import json
+
+    line = key_line(text, table, key)
+    lines = text.splitlines(keepends=True)
+    offset = sum(map(len, lines[: line - 1]))
+    match = _KEY.match(text, offset + len(lines[line - 1]) - len(lines[line - 1].lstrip()))
+    if match is None:
+        raise ValueError(f"[{table}].{key} requires a standalone array")
+    position = match.end()
+    while text[position].isspace():
+        position += 1
+    if text[position] != "[":
+        raise ValueError(f"[{table}].{key} requires a standalone array")
+    depth = 0
+    edits = []
+    while position < len(text):
+        char = text[position]
+        if char == "#":
+            position = text.find("\n", position)
+            if position < 0:
+                raise ValueError("unterminated array")
+        elif char in "\"'":
+            literal = _STRING.match(text, position)
+            if literal is None:
+                raise ValueError("unsupported TOML string")
+            value = tomllib.loads("value = " + literal.group())["value"]
+            if depth == 1 and value in replacements:
+                replacement = replacements[value]
+                quoted = f"'{replacement}'" if char == "'" and "'" not in replacement else json.dumps(replacement)
+                edits.append((position, literal.end(), quoted))
+            position = literal.end()
+            continue
+        elif char in "[{":
+            depth += 1
+        elif char in "]}":
+            depth -= 1
+            if depth == 0:
+                break
+        position += 1
+    for start, end, value in reversed(edits):
+        text = text[:start] + value + text[end:]
+    tomllib.loads(text)
+    return text

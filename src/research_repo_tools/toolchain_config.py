@@ -16,6 +16,7 @@ from research_repo_tools.tool_pins import SEMVER, STABLE
 # Some Cargo subcommands need their subcommand argument even when invoked directly.
 CARGO_TOOLS = {
     "cargo-audit": ("cargo-audit", ("--version",)),
+    "cargo-deny": ("cargo-deny", ("--version",)),
     "cargo-edit": ("cargo-upgrade", ("upgrade", "--version")),
     "cargo-llvm-cov": ("cargo-llvm-cov", ("llvm-cov", "--version")),
     "cargo-machete": ("cargo-machete", ("--version",)),
@@ -56,6 +57,12 @@ class RustToolchain:
 
 
 @dataclass(frozen=True)
+class BinaryTool:
+    name: str
+    version: str
+
+
+@dataclass(frozen=True)
 class Toolchain:
     root: Path
     uv: str
@@ -63,6 +70,7 @@ class Toolchain:
     rust: RustToolchain | None
     cargo: tuple[CargoTool, ...]
     requires_python: str = ">=3.14"
+    binaries: tuple[BinaryTool, ...] = ()
 
     @property
     def python_request(self) -> str:
@@ -83,6 +91,10 @@ def load(settings: Config) -> Toolchain:
     """Require exact pins; floating toolchain updates belong to an explicit upgrade."""
     root = settings.root
     document = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    if settings.toolchain.inherit_python:
+        from research_repo_tools.python_baseline import check
+
+        check(root, document)
     try:
         uv = document["tool"]["uv"]["required-version"]
     except (KeyError, TypeError) as error:
@@ -138,7 +150,12 @@ def load(settings: Config) -> Toolchain:
         cargo.append(CargoTool(package, version, binary, args))
     if cargo and rust is None:
         raise ValueError("Cargo tools require a pinned rust-toolchain.toml")
-    return Toolchain(root, uv[2:], python, rust, tuple(cargo), requires)
+    binaries = []
+    for name, version in sorted(settings.toolchain.binaries.items()):
+        if name not in {"gitleaks", "osv-scanner"} or not STABLE.fullmatch(version):
+            raise ValueError("toolchain.binaries supports exact stable X.Y.Z pins for gitleaks and osv-scanner")
+        binaries.append(BinaryTool(name, version))
+    return Toolchain(root, uv[2:], python, rust, tuple(cargo), requires, tuple(binaries))
 
 
 def host_target() -> str:

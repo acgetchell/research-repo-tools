@@ -84,10 +84,11 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | Performance | `performance assets`, `baseline`, `compare`, `convert`, `export`, `extract`, `fetch`, `measure`, `promote`, `publish`, `release-draft`, `release-upload`, `render`, `verify` | Complete configured measurement, retained evidence, release assets and publication |
 | Release metadata | `release check`, `release update` | Infer metadata, apply declared policies, and validate complete release plans |
 | Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
-| Semgrep fixtures | `semgrep check-fixtures` | Validate consumer-supplied rules and positive fixture coverage |
+| Security | `security osv`, `secrets` | Managed OSV/Gitleaks, explicit inputs, full history, redacted native reports |
+| Semgrep | `semgrep check-fixtures`, `scan` | Validate consumer rules, explicit inventory, reports and fixture expectations |
 | Setup | `setup` | Require uv; install user Just and declared tools; sync the locked environment |
 | Templates | `templates NAME` | Shared changelog, git-cliff, just, TOML, and rumdl resources |
-| Toolchain | `toolchain check`, `export`, `run`, `sync`, `upgrade` | Exact declarations; managed installations; verified execution and checked CI export |
+| Toolchain | `toolchain adopt`, `check`, `clean`, `export`, `python-check`, `run`, `sync`, `upgrade` | Exact declarations; managed installations and cleanup; verified execution and checked CI export |
 | Validation | `validation cargo-metadata`, `require`, `run` | Native package preflight, executable checks and configured example output assertions |
 | Workflow security | `zizmor check` | One declared scanner/persona, token discovery, explicit offline or required-online audits |
 
@@ -109,6 +110,8 @@ arguments in lexicographic order.
 | `just changelog-unreleased TAG DATE` | Alias for `changelog-release` |
 | `just check` | Run Python, Semgrep fixture, and zizmor validation; extend with consumer domain gates |
 | `just ci` | Run the same canonical consumer gate as local validation |
+| `just clean [ARGS...]` | Preview obsolete package-owned installs; `--apply` removes them; repeat `--keep-root PATH` to retain other consumers' pins |
+| `just files COMMAND...` | List selected tracked/nonignored files or run a command over them |
 | `just help` | List available commands and arguments in lexicographic order |
 | `just help-workflows` | Alias for `help` |
 | `just notebook-advise FILE... [--strict]` | Report configured review warnings, optionally failing on them |
@@ -121,27 +124,54 @@ arguments in lexicographic order.
 | `just performance COMMAND...` | Compare Criterion samples, handle assets, and verify, render, or publish retained evidence |
 | `just python-check` | Apply full configured Ruff/ty checks to all tracked and nonignored Python, including fixtures |
 | `just release-check` | Check consumer release metadata |
+| `just release-first TAG DATE` | Prepare a first release after checking published stable history |
 | `just release-notes TAG` | Print release notes from the root changelog or an archive |
+| `just release-update TAG PREVIOUS DATE` | Prepare metadata with an explicit predecessor and date |
 | `just review [base]` | Review branch and local changes; default to verified `origin/main` |
 | `just review-uncommitted` | Review staged, unstaged, and non-ignored untracked changes |
+| `just security-osv LOCKFILE...` | Audit explicitly selected uv.lock/Cargo.lock files |
+| `just security-secrets [ARGS...]` | Scan full reachable history and current tracked/nonignored files |
 | `just semgrep-check` | Validate the consumer's Semgrep rules and fixtures |
 | `just setup` | Install and verify declared tools, then synchronize the Python environment |
+| `just shared-python-plan VERSION` | Preview an opt-in shared-package/Python migration outside the old environment |
+| `just shared-python-update VERSION` | Apply the migration and recreate the locked environment and notebook kernel |
 | `just tag TAG` | Forward to `tag-release` |
 | `just tag-force TAG` | Explicitly replace an existing local tag |
 | `just tag-release TAG` | Create a local annotated tag from validated release notes |
 | `just tools-check` | Check installed tools and versions without installing them |
+| `just tools-export` | Verify tools and append their environment to `GITHUB_ENV` |
 | `just update` | Upgrade tools, then Cargo and Python dependencies and the development environment |
 | `just update-cargo-dependencies` | Upgrade root Cargo requirements (including incompatible releases) and lock resolution; skip projects without a root Cargo.toml |
-| `just update-cargo-tools` | Upgrade declared managed Cargo tools and publish verified TOML pins |
+| `just update-cargo-tools` | Upgrade declared Cargo tools and release binaries; publish verified TOML pins |
 | `just update-dependencies` | Run the Cargo and Python dependency workflows |
 | `just update-python-dependencies` | Update direct dev pins, upgrade the full Python lock, and synchronize dev |
 | `just update-python-deps` | Alias for `update-python-dependencies` |
-| `just update-tools` | Upgrade uv and managed Cargo tools, then run setup |
+| `just update-tools` | Upgrade uv and managed tools, then run setup |
 | `just update-uv` | Upgrade uv through its installation owner and reconcile its pin |
+| `just validate CONFIGURATION [NAME...]` | Check configured example outputs |
 | `just zizmor-check [ARGS...]` | Run local workflow audits; accept `--offline`, `--require-online`, and `--format sarif` |
 
 To preview a prospective release, run
 `just changelog-preview --tag v1.2.3 --date YYYY-MM-DD`.
+
+To reclaim obsolete managed Cargo tools, Rust toolchains, release binaries, and
+Python interpreters, use the shared `clean` recipe. Include every other consumer
+whose installed pins you want to retain:
+
+```sh
+just clean --keep-root ../la-stack
+just clean --apply --keep-root ../la-stack
+```
+
+The default is a preview. Cleanup preserves current declarations, newer versions,
+unknown tools, other hosts, and Python interpreters referenced by the selected
+consumers' environments or uv tools. It only removes installations inside the
+package-owned store; user-wide Cargo, rustup and uv Python installs, project
+`.venv`, build artifacts, and dependency caches remain intact. See the
+[cleanup contract](https://github.com/acgetchell/research-repo-tools/blob/main/docs/INSTALLING.md#cleaning-obsolete-installations) for retention
+rules and Windows guidance. Consumers copy the packaged recipe and pin the shared
+package; the cleanup implementation lives here.
+
 Follow the [toolchain guide][toolchain] for declarations, first-time setup, and
 strictly read-only tool checks.
 
@@ -198,7 +228,8 @@ trigger an offline retry. Token values are not printed or stored by the wrapper.
 The packaged `zizmor.yml` workflow runs the finding gate and then produces SARIF
 with the same pin/persona. SARIF output alone does not fail on findings; the
 plain gate does. Fork and Dependabot PRs retain audits and skip privileged upload.
-The installed [validation and migration guide](src/research_repo_tools/templates/VALIDATING_WORKFLOWS.md)
+The installed
+[validation and migration guide](https://github.com/acgetchell/research-repo-tools/blob/main/src/research_repo_tools/templates/VALIDATING_WORKFLOWS.md)
 documents authentication, permissions, Python 3.14 annotations, exact negative
 fixture exceptions, notebook wiring, and consumer CodeRabbit settings. Extract it
 with `templates VALIDATING_WORKFLOWS.md`; `templates python-validation.toml` and
@@ -257,6 +288,117 @@ before their commands will run. Review the generated changes before committing.
 
 The underlying CLI remains available for integrations and custom recipes; see
 [supported interfaces][api].
+
+### Shared Python adoption
+
+Opt in once in the consumer manifest:
+
+```toml
+[tool.research-repo-tools.toolchain]
+inherit-python = true
+```
+
+The installed package owns its runtime requirement from distribution metadata
+and its selected development minor (currently Python 3.14). Exact package pins,
+`.python-version`, and dependency-only `project.requires-python` are checked
+mirrors. Public Python packages retain their own runtime compatibility; only
+the groups containing the shared tool get uv Python constraints. Ruff and ty
+infer targets from project metadata. Consumer lint rules, fixture exceptions,
+notebook policy, and deliberate lower targets remain consumer decisions.
+
+After the target version is published, use the packaged standalone bootstrap:
+
+```sh
+just shared-python-plan 0.1.7
+just shared-python-update 0.1.7
+just python-check
+```
+
+These recipes run the exact target package outside the old project environment,
+so an obsolete selector, lock or environment cannot prevent startup. Preview
+resolves and installs a temporary candidate; it may download Python/packages
+and populate caches, but leaves consumer files and `.venv` unchanged. Apply
+updates all direct shared-package pins (including extras), Python mirrors,
+`uv.lock`, the environment, and the configured notebook group's project kernel.
+Resolution and candidate installation must succeed before publication.
+
+A caught failure restores original files and the prior environment. Recovery
+errors identify the retained backup; do not delete it before recovering. Close
+processes using `.venv` on Windows before applying. This is not a crash-atomic
+or concurrent-writer transaction. Include every required source in the tracked
+or nonignored inventory; external local path dependencies need a separately
+reviewed migration. `just python-check` detects mirror drift without repairing
+it or downloading an interpreter. Routine checks do not advance versions.
+
+### Dependency and secret scanning
+
+Declare the optional release binaries and run setup:
+
+```toml
+[tool.research-repo-tools.toolchain.binaries]
+gitleaks = "8.30.1"
+osv-scanner = "2.6.0"
+```
+
+```sh
+just setup
+just tools-check
+just security-osv uv.lock Cargo.lock
+just security-secrets
+```
+
+Supply only the lockfiles the consumer actually owns. Use `just files` to inspect
+tracked and nonignored inputs for repositories containing several packages.
+OSV checks each explicit supported lockfile with Go and Rust call analysis
+disabled; it does not execute dependency build scripts. Advisory queries need
+network access. Missing inputs, uncovered sources, scanner failures, malformed
+or missing reports, and findings all block the gate.
+
+Gitleaks checks all reachable Git history and a private snapshot of current
+tracked/nonignored files, including uncommitted new files. Full history is
+required (`fetch-depth: 0` in Actions). Environment/build directories are excluded
+from the working snapshot. Selected symlinks and submodules fail explicitly;
+scan submodules as separate repositories. Native history scanning covers patches,
+not unreachable objects, nested repositories, archive contents or binary blobs.
+Extra working-tree exclusions are explicit `--exclude` arguments.
+
+Reports go to `target/security`: numbered OSV JSON/SARIF pairs and Gitleaks
+history/working pairs. Findings retain native rule IDs and locations. Gitleaks
+uses complete native secret redaction; surrounding match text and commit messages
+are also removed before reports are published. Inline `gitleaks:allow` and
+ambient `.gitleaksignore` bypasses are disabled. Consumer `.gitleaks.toml` policy
+is honored; use `--scanner-config PATH` for another reviewed configuration.
+Raw scanner logs are not echoed because they can include sensitive metadata.
+The first nonzero scanner status is returned; invalid successful reports return
+1, and timeouts return 124. Checks never install or select an ambient scanner.
+
+The standalone binaries require neither a paid GitHub security product nor a
+Gitleaks Action license. Consumers own exceptions, schedules, Actions permissions,
+and whether SARIF uploads are available for their repositories. See the
+[migration map](https://github.com/acgetchell/research-repo-tools/blob/main/docs/shared-capability-migration.md) before deleting local tools.
+
+### First releases and Rust documentation scans
+
+Declare `cargo-deny = "0.20.2"` in the managed Cargo table to run the exact
+`cargo deny` through the shared toolchain. Keep `deny.toml` policy local.
+
+`just release-first TAG DATE` permits an Unreleased-only changelog while preparing
+the first stable release. It verifies that published stable release history is
+empty; failed GitHub queries never count as empty history. Draft/prerelease
+records are not predecessors. For an explicitly reviewed offline first release,
+invoke the CLI with `release update TAG --first-release --offline --date DATE`.
+Previous-tag selectors require a real predecessor and final validation still
+requires a dated release heading. No synthetic `v0.0.0` predecessor is inserted.
+
+Consumers can wrap `semgrep scan --include '*.rs' --include '*.py' --include '*.md'
+--rust-docs` in their own `just semgrep-scan` recipe. Keep rules and scope local.
+The shared scan checks native errors and coverage, disables inline `nosem`, and
+writes native JSON/SARIF reports with original source locations. Rust fences in
+Markdown and line/block rustdoc comments preserve source line numbers and hidden
+`# ` lines. Macro-generated docs and `#[doc = ...]` attributes are outside this
+adapter's scope. `semgrep check-fixtures --rust-docs` adapts annotated Markdown
+fixtures to the existing shared assertion checker; count-based expectations use
+a separate fixture gate. Findings and fixture mismatches remain blocking.
 
 ### Dependency and tool updates
 
@@ -392,7 +534,7 @@ just notebook-execute notebooks/analysis.ipynb
 Execution leaves source files untouched and writes executed notebooks and JSON
 reports under `target/notebooks`, preserving root-relative paths. Consumers own
 fast/slow selections, input preparation, scientific assertions, and figure
-destinations. See the [notebook contract](docs/RUNNING_NOTEBOOKS.md) for output
+destinations. See the [notebook contract](https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_NOTEBOOKS.md) for output
 policy, failure reports, and environment configuration. Linting uses the locked
 project's Ruff and ty with the consumer's configuration and preserves cell IDs
 in diagnostics. `notebook-check` provides structure and output checks alone.
@@ -410,7 +552,7 @@ just notebook-inspect notebooks/analysis.ipynb --json --no-preview
 Previews expose up to 80 characters of cell source; use `--no-preview` for
 sensitive notebooks. Inspection never prints stored outputs or metadata, generates
 IDs, executes cells, or rewrites notebooks. It reports structural problems but
-does not certify validity. See the [inspection schema](docs/notebook-inspection.md).
+does not certify validity. See the [inspection schema](https://github.com/acgetchell/research-repo-tools/blob/main/docs/notebook-inspection.md).
 
 Advisory policy is opt-in through a separate command, run alongside native lint:
 
@@ -438,7 +580,33 @@ Ruff supplies annotations, broad-exception, and configured import warnings;
 library preferences remain consumer policy. The optional timeout heuristic covers
 direct calls spelled `subprocess.run`, `call`, `check_call`, or `check_output`
 without an explicit non-`None` timeout. It skips entire cells that cannot be parsed
-as plain Python, including magics. See [advisory behavior and limits](docs/RUNNING_NOTEBOOKS.md#review-advisories).
+as plain Python, including magics. See
+[advisory behavior and limits](https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_NOTEBOOKS.md#review-advisories).
+
+#### Notebook dependency installation policy
+
+Consumers can opt into a blocking source policy with:
+
+```toml
+[tool.research-repo-tools.notebooks]
+prohibit-installs = true
+```
+
+`just notebook-lint FILE...` then rejects literal dependency-changing pip, uv,
+conda, and mamba commands in line magics, `!` commands, `%%bash`, `%%sh`, and
+`%%script bash/sh` cells. It also checks literal `subprocess` calls and
+`os.system` commands in plain Python cells. Diagnostics retain notebook paths,
+cell IDs, and original source line numbers. The policy never runs cells or
+changes their source. Python strings and comments containing installation
+examples are not commands.
+
+This is a source convention, not a sandbox: dynamically assembled commands,
+aliases, wrapper functions, arbitrary cell magics, and shell heredoc semantics
+are outside its contract. Keep dependency installation in the project setup;
+put quoted Python examples in strings or Markdown. Review unusual shell cells
+manually; the consumer can disable this policy and retain its own stricter gate
+if its syntax is outside the supported set. Native Ruff and ty remain responsible
+for Python syntax and type checks.
 
 ### Performance evidence
 
@@ -498,8 +666,8 @@ shared comparison results and publication transaction.
 For published assets, use `just performance fetch HTTPS_URL ASSET --sha256 DIGEST`
 with an independently recorded digest, then
 `just performance extract ASSET ABSENT_DIRECTORY --sha256 DIGEST`.
-The extraction parent must exist. See the [performance API](docs/performance-api.md)
-for limits and [retained-evidence migration](docs/performance-migration.md) before
+The extraction parent must exist. See the [performance API](https://github.com/acgetchell/research-repo-tools/blob/main/docs/performance-api.md)
+for limits and [retained-evidence migration](https://github.com/acgetchell/research-repo-tools/blob/main/docs/performance-migration.md) before
 replacing consumer helpers or changing artifact formats.
 
 ### Document publication
@@ -586,8 +754,8 @@ bytes. To assert that a measured source itself is a tagged commit, also set
 Git checks; fetching release assets remains a separate explicit operation.
 
 Historical CSV/JSON formats can use declarative conversion into shared companions
-at new paths. See the [publication API](docs/publication-api.md) and
-[migration guide](docs/publication-migration.md). Scientific prose remains consumer-owned.
+at new paths. See the [publication API](https://github.com/acgetchell/research-repo-tools/blob/main/docs/publication-api.md) and
+[migration guide](https://github.com/acgetchell/research-repo-tools/blob/main/docs/publication-migration.md). Scientific prose remains consumer-owned.
 
 ### Configured benchmark workflows
 
@@ -620,7 +788,8 @@ Use the template's `just performance` wrapper. These are alternative operations:
 just performance compare target/criterion target/criterion --baseline-sample last --format markdown
 just performance measure benchmark.toml --mode current-vs-latest --allow-git-mutations --payload target/local.json --manifest target/local.evidence.json
 just performance measure benchmark.toml v1.2.0 v1.1.0 --allow-git-mutations --payload target/release.json --manifest target/release.evidence.json
-just performance assets --repository owner/project --asset-template 'project-{tag}-baseline.tar.gz' --payload target/releases.json --manifest target/releases.evidence.json
+just performance assets --repository owner/project --asset-template 'project-{tag}-baseline.tar.gz' \
+  --payload target/releases.json --manifest target/releases.evidence.json
 ```
 
 Measurement explicitly permits temporary Git worktrees and runs trusted consumer
@@ -658,8 +827,8 @@ Future-release README preparation requires explicit `tag-policy="prepare"`,
 `repository`, both current inventories and matching working-tree fingerprints.
 Any existing tag must still contain exact referenced and generated bytes.
 Historical conversion writes new paths and preserves original files and hashes;
-see [migration](docs/performance-migration.md) and the
-[configuration/API contracts](docs/workflow-api.md).
+see [migration](https://github.com/acgetchell/research-repo-tools/blob/main/docs/performance-migration.md) and the
+[configuration/API contracts](https://github.com/acgetchell/research-repo-tools/blob/main/docs/workflow-api.md).
 
 ### Consumer glue and release jobs
 
@@ -727,7 +896,7 @@ clippy-sarif:
 
 `just update-cargo-tools` upgrades only declared tools. Both helpers use the shared
 exact, locked Cargo installer and checked execution. See the
-[platform contract](docs/INSTALLING.md#additional-cargo-tools-and-native-prerequisites).
+[platform contract](https://github.com/acgetchell/research-repo-tools/blob/main/docs/INSTALLING.md#additional-cargo-tools-and-native-prerequisites).
 
 ### Calling from Python
 
@@ -800,7 +969,8 @@ result = apply_release(plan)
 
 Declare required files, fixed metadata, and selected active references in
 [release configuration][release]. Add a small Python adapter when validation
-needs consumer-owned evidence rules. See the [worked MCMC-style migration](docs/release-policy-migration.md)
+needs consumer-owned evidence rules. See the
+[worked MCMC-style migration](https://github.com/acgetchell/research-repo-tools/blob/main/docs/release-policy-migration.md)
 and [typed API contract][api]. Historical evidence stays excluded from updates.
 
 ## Templates and optional settings

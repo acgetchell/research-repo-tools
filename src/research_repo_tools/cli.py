@@ -98,12 +98,28 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--date")
     command.add_argument("--dry-run", action="store_true")
     command.add_argument("--final-release", action="store_true")
+    command.add_argument("--first-release", action="store_true", help="require empty stable published history; prepare without a predecessor")
+    command.add_argument("--offline", action="store_true", help="use reviewed first-release intent or an explicit previous release without GitHub")
     command.add_argument("--previous-release")
     review = groups.add_parser("review", help="run an opt-in CodeRabbit review").add_subparsers(dest="action", required=True)
     review.add_parser("branch", help="review branch and local changes against a verified base").add_argument("--base", default="origin/main")
     review.add_parser("uncommitted", help="review only staged, unstaged, and untracked changes")
+    security = groups.add_parser("security", help="run managed native dependency and secret scanners").add_subparsers(dest="action", required=True)
+    osv = security.add_parser("osv", help="scan explicit tracked/nonignored uv.lock and Cargo.lock files")
+    osv.add_argument("lockfiles", nargs="+")
+    osv.add_argument("--output", default="target/security")
+    osv.add_argument("--scanner-config")
+    secrets = security.add_parser("secrets", help="scan full Git history and current tracked/nonignored files")
+    secrets.add_argument("--exclude", action="append", default=[])
+    secrets.add_argument("--output", default="target/security")
+    secrets.add_argument("--scanner-config")
     semgrep = groups.add_parser("semgrep", help="validate consumer rules and fixtures").add_subparsers(dest="action", required=True)
-    semgrep.add_parser("check-fixtures")
+    semgrep.add_parser("check-fixtures").add_argument("--rust-docs", action="store_true")
+    scan = semgrep.add_parser("scan", help="scan explicit inventory with strict native reports")
+    scan.add_argument("--include", action="append", required=True)
+    scan.add_argument("--exclude", action="append", default=[])
+    scan.add_argument("--output", default="target/security/semgrep")
+    scan.add_argument("--rust-docs", action="store_true")
     groups.add_parser("setup", help="install Just and declared tools, configure PATH, and sync the locked environment")
     templates = groups.add_parser("templates", help="print or explicitly create shared package resources")
     from research_repo_tools.changelog import TEMPLATES
@@ -113,11 +129,23 @@ def parser() -> argparse.ArgumentParser:
     templates.add_argument("--repository")
     templates.add_argument("--output", type=Path, help="create a new file; existing files are never overwritten")
     toolchain = groups.add_parser("toolchain", help="check, install, and select declared development tools").add_subparsers(dest="action", required=True)
+    adoption = toolchain.add_parser("adopt", help="migrate an opted-in consumer to the exact executing shared package")
+    mode = adoption.add_mutually_exclusive_group(required=True)
+    mode.add_argument("--dry-run", action="store_true")
+    mode.add_argument("--apply", action="store_true")
     toolchain.add_parser("check", help="inspect installed tools without installing anything").add_argument("--json", action="store_true")
+    clean = toolchain.add_parser("clean", help="preview obsolete package-owned installations; --apply removes them")
+    mode = clean.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true")
+    mode.add_argument("--dry-run", action="store_true", help="preview only (the default)")
+    clean.add_argument("--keep-root", type=Path, action="append", default=[], help="also retain this consumer's pins (repeatable)")
     toolchain.add_parser("export", help="verify tools and export their environment to GITHUB_ENV").add_argument("--file", type=Path)
+    toolchain.add_parser("python-check", help="check opt-in shared Python mirrors without modifying the environment")
     toolchain.add_parser("run", help="run a command with verified managed tools; never installs").add_argument("command", nargs=argparse.REMAINDER)
     toolchain.add_parser("sync", help="install and verify declared versions").add_argument("--dry-run", action="store_true")
-    toolchain.add_parser("upgrade", help="upgrade declared Cargo tools and publish verified pins").add_argument("--dry-run", action="store_true")
+    toolchain.add_parser("upgrade", help="upgrade declared Cargo tools and release binaries, then publish verified pins").add_argument(
+        "--dry-run", action="store_true"
+    )
     validation = groups.add_parser("validation", help="run configured command and prerequisite checks").add_subparsers(dest="action", required=True)
     validation.add_parser("cargo-metadata").add_argument("--package")
     validation.add_parser("require").add_argument("names", nargs="+")
@@ -213,6 +241,40 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
     if args.group == "toolchain":
         from research_repo_tools import toolchain, toolchain_config
 
+        if args.action == "python-check":
+            if settings.toolchain.inherit_python:
+                from research_repo_tools.python_baseline import check
+
+                check(settings.root)
+            return 0
+
+        if args.action == "adopt":
+            from research_repo_tools.python_adoption import apply_python_adoption, plan_python_adoption
+
+            plan = plan_python_adoption(settings)
+            print(f"Shared package {plan.baseline.package_version}: Python {plan.baseline.selected}; requirement {plan.baseline.requirement}")
+            for path in plan.changed_paths:
+                print(f"{'Would update' if args.dry_run else 'Update'}: {path}")
+            if args.apply:
+                apply_python_adoption(plan)
+            return 0
+
+        if args.action == "clean":
+            from research_repo_tools.toolchain_clean import apply_clean, plan_clean
+
+            plan = plan_clean(settings, keep_roots=tuple(args.keep_root))
+            print(f"Package-owned store: {plan.home}")
+            for root in (plan.root, *plan.keep_roots):
+                print(f"Retain declarations: {root}")
+            for removal in plan.removals:
+                print(f"Would remove {removal.kind}: {removal.path}")
+            if args.apply:
+                apply_clean(plan, config.load(args.config, args.root))
+                print(f"Removed {len(plan.removals)} obsolete installations.")
+            else:
+                print("Preview only; pass --apply to remove the listed installations. Use --keep-root for other consumers sharing this store.")
+            return 0
+
         if args.action == "upgrade":
             from research_repo_tools.toolchain_upgrade import upgrade
 
@@ -230,7 +292,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
                 raise ValueError("toolchain is incomplete; run toolchain sync before exporting")
             environment = runtime.environment()
             environment["RESEARCH_REPO_TOOLS_HOME"] = str(runtime.base)
-            names = ["RESEARCH_REPO_TOOLS_HOME", "PATH"]
+            names = ["RESEARCH_REPO_TOOLS_HOME", "UV_PYTHON_INSTALL_DIR", "PATH"]
             if plan.rust:
                 names.extend(["CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "RUSTUP_AUTO_INSTALL", "RUSTUP_NO_UPDATE_CHECK"])
             export_environment(Path(destination), names, environment=environment)
@@ -266,7 +328,19 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         else:
             _write_stdout(rendered.encode("utf-8"))
         return 0
+    if args.group == "security":
+        from research_repo_tools.security import scan_osv, scan_secrets
+
+        if args.action == "osv":
+            return scan_osv(settings, tuple(args.lockfiles), output=args.output, configuration=args.scanner_config)
+        return scan_secrets(settings, output=args.output, configuration=args.scanner_config, exclude=tuple(args.exclude))
     if args.group == "semgrep":
+        from research_repo_tools.semgrep_scan import check_documentation_fixtures, scan
+
+        if args.action == "scan":
+            return scan(settings, include=tuple(args.include), exclude=tuple(args.exclude), output=args.output, rust_docs=args.rust_docs)
+        if args.rust_docs:
+            return check_documentation_fixtures(settings)
         from research_repo_tools.semgrep import check
 
         return check(settings)
@@ -327,6 +401,8 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             release_date=args.date,
             dry_run=args.dry_run,
             policy=policy,
+            first_release=args.first_release,
+            offline=args.offline,
         )
         for path in summary.changed_paths:
             print(f"{'Would update' if args.dry_run else 'Updated'}: {path.relative_to(settings.root)}")

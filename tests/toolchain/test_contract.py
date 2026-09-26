@@ -288,6 +288,7 @@ def test_uv_prerequisite_failure_never_installs_a_replacement(runtime, available
     "package,banner,arguments",
     [
         ("cargo-audit", "cargo-audit 0.22.2", ["--version"]),
+        ("cargo-deny", "cargo-deny 0.20.2", ["--version"]),
         ("cargo-edit", "cargo-edit-upgrade 0.13.13", ["upgrade", "--version"]),
         ("cargo-machete", "0.9.2", ["--version"]),
         ("clippy-sarif", "clippy-sarif 0.8.0", ["--version"]),
@@ -327,6 +328,7 @@ def test_complete_catalog_installs_and_verifies_exact_declared_tools(runtime):
     installs = [args for _, args, _ in fake.calls if "install" in args and "cargo" in args]
     assert {args[-1] for args in installs} == {
         "cargo-audit",
+        "cargo-deny",
         "cargo-edit",
         "cargo-llvm-cov",
         "cargo-machete",

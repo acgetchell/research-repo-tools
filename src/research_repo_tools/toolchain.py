@@ -20,7 +20,7 @@ from packaging.specifiers import SpecifierSet
 
 from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics, resolve_executable, run_safe_command
 from research_repo_tools.tool_pins import SEMVER
-from research_repo_tools.toolchain_config import RUSTUP_VERSION, CargoTool, Toolchain, executable, home, host_target
+from research_repo_tools.toolchain_config import RUSTUP_VERSION, BinaryTool, CargoTool, Toolchain, executable, home, host_target
 
 INSTALL_TIMEOUT = 3600
 FAILURES = (ExecutableNotFoundError, OSError, ValueError, subprocess.SubprocessError)
@@ -123,6 +123,19 @@ class Runtime:
         assert self.plan.rust is not None
         return self.base / "cargo" / self.host / self.plan.rust.channel / tool.package / tool.version
 
+    def binary_path(self, tool: BinaryTool) -> Path:
+        return executable(self.base / "binaries" / self.host / tool.name / tool.version / "bin", tool.name)
+
+    def binary_status(self, tool: BinaryTool) -> Status:
+        from research_repo_tools.prebuilt_tools import version_at
+
+        path = self.binary_path(tool)
+        try:
+            actual = version_at(path, tool, cwd=self.plan.root, env=self.environment())
+            return Status(tool.name, tool.version, actual, str(path), actual == tool.version)
+        except FAILURES as error:
+            return Status(tool.name, tool.version, format_exception_diagnostics(error, single_line=True), str(path), False)
+
     def environment(self) -> dict[str, str]:
         with self._operation():
             python = self.python_status(self.uv_status())
@@ -138,7 +151,11 @@ class Runtime:
     def _environment(self, python: Status | None = None) -> dict[str, str]:
         """Build probe environments without recursively looking up Python."""
         env = dict(os.environ)
+        # Private by default so shared cleanup can distinguish package-owned
+        # interpreters from uv installations used by unrelated projects.
+        env.setdefault("UV_PYTHON_INSTALL_DIR", str(self.base / "python"))
         paths = [str(self.cargo_root(tool) / "bin") for tool in self.plan.cargo]
+        paths.extend(str(self.binary_path(tool).parent) for tool in self.plan.binaries)
         if self.plan.rust:
             paths.append(str(self.rustup.parent))
             env.update(
@@ -168,8 +185,7 @@ class Runtime:
         if not environment.is_absolute():
             environment = self.plan.root / environment
         paths = [environment, environment / "pyvenv.cfg", executable(environment / ("Scripts" if os.name == "nt" else "bin"), "python")]
-        if directory := os.environ.get("UV_PYTHON_INSTALL_DIR"):
-            paths.append(Path(directory))
+        paths.append(Path(os.environ.get("UV_PYTHON_INSTALL_DIR") or self.base / "python"))
         # Include the uv executable: changing it can change interpreter discovery.
         if uv.path:
             paths.append(Path(uv.path))
@@ -268,7 +284,16 @@ class Runtime:
         just = _probe("just", "just", version("rust-just"), env=dict(os.environ), cwd=self.plan.root)
         # Git is a system prerequisite; no implicit installation or repository mutation.
         git = _probe("git", "git version", "", ("--no-pager", "--version"), env=dict(os.environ), cwd=self.plan.root)
-        return [uv, self.python_status(uv), just, git, self.shell_status(), *self.rust_statuses(), *(self.cargo_status(tool) for tool in self.plan.cargo)]
+        return [
+            uv,
+            self.python_status(uv),
+            just,
+            git,
+            self.shell_status(),
+            *self.rust_statuses(),
+            *(self.cargo_status(tool) for tool in self.plan.cargo),
+            *(self.binary_status(tool) for tool in self.plan.binaries),
+        ]
 
     def _rustup(self, args: list[str], *, install: bool = False) -> subprocess.CompletedProcess[str]:
         return run_safe_command(
@@ -334,6 +359,14 @@ class Runtime:
                         f"{tool.package} installation failed verification: {result.actual}; rerun toolchain sync to repair the managed installation"
                     )
 
+        from research_repo_tools.prebuilt_tools import install
+
+        for tool in self.plan.binaries:
+            if not self.binary_status(tool).ok:
+                install(tool, self.host, self.binary_path(tool), cwd=self.plan.root, env=self.environment())
+                if not self.binary_status(tool).ok:
+                    raise RuntimeError(f"{tool.name} installation failed verification")
+
     def _install(self, command: str, args: list[str]) -> None:
         print(f"Installing: {Path(command).name} {' '.join(args)}", file=sys.stderr, flush=True)
         try:
@@ -395,8 +428,12 @@ def run_command(runtime: Runtime, command: list[str]) -> int:
         command = command[1:]
     if not command:
         raise ValueError("toolchain run requires a command after --")
+    if command[0] in {"gitleaks", "osv-scanner"} and not any(tool.name == command[0] for tool in runtime.plan.binaries):
+        raise ValueError(f"{command[0]} requires an exact pin in toolchain.binaries; declare it and run just setup")
     if (command[:2] == ["cargo", "upgrade"] or command[0] == "cargo-upgrade") and not any(tool.package == "cargo-edit" for tool in runtime.plan.cargo):
         raise ValueError("cargo upgrade requires an exact cargo-edit pin in [tool.research-repo-tools.toolchain.cargo]; declare it and run just setup")
+    if (command[:2] == ["cargo", "deny"] or command[0] == "cargo-deny") and not any(tool.package == "cargo-deny" for tool in runtime.plan.cargo):
+        raise ValueError("cargo deny requires an exact cargo-deny pin in [tool.research-repo-tools.toolchain.cargo]; declare it and run just setup")
     if not report(runtime.inspect(), stream=sys.stderr):
         raise ValueError("toolchain is incomplete; run toolchain sync before running commands")
     env = runtime.environment()

@@ -50,6 +50,7 @@ including changelog recipes and aliases.
 | `just check-dist` | Check isolated installations of existing build artifacts |
 | `just check-setup` | Exercise real setup on disposable GitHub-hosted runners only |
 | `just ci` | Run checks, tests, builds, and installation checks for final review |
+| `just clean [ARGS...]` | Preview obsolete package-owned installs; pass `--apply` to remove them |
 | `just coverage` | Run tests with branch and subprocess coverage; write `coverage/cobertura.xml` |
 | `just help` | List available commands and arguments in lexicographic order |
 | `just help-workflows` | Alias for `help` |
@@ -161,7 +162,7 @@ Python entry-point contract.
 
 Maintain one implementation per common capability under `src/research_repo_tools/`.
 Organize tests under `tests/changelog`, `dependencies`, `notebooks`, `performance`,
-`publication`, `releases`, `review`, `semgrep`, `toolchain`, `utilities`, `validation`,
+`publication`, `releases`, `review`, `security`, `semgrep`, `toolchain`, `utilities`, `validation`,
 and `zizmor`. Fixtures should be small representative inputs generated in temporary
 directories. Preserve meaningful regression assertions against this package;
 merge duplicates instead of maintaining historical implementations or repository

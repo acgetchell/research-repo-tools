@@ -299,5 +299,26 @@ class TestAdvice(Consumer):
         self.assertFalse((self.root / "target").exists())
 
 
+class TestInstallPolicy(Consumer):
+    def test_installed_lint_blocks_install_cells_without_execution_or_rewriting(self):
+        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.14"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
+        original = self.write([code("%pip install package-that-must-not-be-installed\n", "environment-policy")])
+        status, _out, err = self.run_cli("lint")
+        self.assertEqual(status, 1)
+        self.assertIn("cell 1 (environment-policy)", err)
+        self.assertIn("dependency-install", err)
+        self.assertEqual(self.path.read_bytes(), original)
+        original = self.write([code("import subprocess\nsubprocess.run(args=['uv', 'pip', 'install', 'never-executed'])\n", "keyword-install")])
+        status, _out, err = self.run_cli("lint")
+        self.assertEqual(status, 1)
+        self.assertIn("cell 1 (keyword-install)", err)
+        self.assertIn("dependency-install", err)
+        self.assertEqual(self.path.read_bytes(), original)
+        original = self.write([code('message = """example\n%pip install never-executed\n"""\n')])
+        status, _out, err = self.run_cli("lint")
+        self.assertNotIn("dependency-install", err)
+        self.assertEqual(self.path.read_bytes(), original)
+
+
 if __name__ == "__main__":
     unittest.main()

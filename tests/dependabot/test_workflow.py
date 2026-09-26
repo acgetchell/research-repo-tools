@@ -179,7 +179,8 @@ def run_step(tmp_path, payloads, dependencies=None, scenario="fresh", step=1):
     [
         (False, False, b"first\r\nsecond\r\n"),
         (True, False, b"first\nsecond\n"),
-        (False, True, b"first\r\nsecond\r"),
+        # Git for Windows Bash strips a trailing CR when assigning a variable.
+        (False, True, b"first\r\nsecond" if os.name == "nt" else b"first\r\nsecond\r"),
         (True, True, b"first\nsecond"),
     ],
     ids=["crlf-output", "lf-output", "crlf-substitution", "lf-substitution"],
@@ -190,7 +191,9 @@ def test_jq_model_preserves_exact_bytes(tmp_path, monkeypatch, binary, substitut
         # Model a platform text filter removing CR; the fixture must not rely on it.
         normalizing_filter = r"""sed() { command sed "$@" | tr -d '\r'; }""" + "\n"
         monkeypatch.setitem(globals(), "FAKE_GH", normalizing_filter + FAKE_GH)
-    command = "native_jq " + ("-b " if binary else "") + '-nr \'"first", "second"\''
+    # Exercise the actual adapter, so dropping its -b fails the byte assertions
+    # even when the host shell hides a trailing CR during variable assignment.
+    command = ("jq " if binary else "native_jq ") + '-nr \'"first", "second"\''
     script = f'value="$({command})"\nprintf "%s" "$value"\n' if substitute else command + "\n"
     result = run_script(tmp_path, script, scenario="windows-jq")
     assert result.returncode == 0, result.stderr
@@ -219,22 +222,16 @@ def test_native_jq_cannot_consume_the_workflow_script(tmp_path, payloads):
     assert (tmp_path / "outputs").read_bytes() == b"eligible=true\n"
 
 
-@pytest.mark.parametrize(
-    "scenario,broken_call,error",
-    [
-        ("posix-jq", 'native_jq --binary "$@"', "jq: Unknown option --binary"),
-        ("windows-jq", 'native_jq "$@"', "Unexpected gh invocation:"),
-    ],
-)
-def test_native_jq_models_preserve_workflow_decisions(tmp_path, payloads, monkeypatch, scenario, broken_call, error):
-    # Prove each model reproduces its failure before using the portable adapter.
-    script = FAKE_GH
-    monkeypatch.setitem(globals(), "FAKE_GH", script.replace('native_jq -b "$@"', broken_call))
-    failure = run_step(tmp_path, payloads, scenario=scenario)
+def test_posix_jq_model_rejects_long_binary_option(tmp_path, payloads, monkeypatch):
+    monkeypatch.setitem(globals(), "FAKE_GH", FAKE_GH.replace('native_jq -b "$@"', 'native_jq --binary "$@"'))
+    failure = run_step(tmp_path, payloads, scenario="posix-jq")
     assert failure.returncode != 0
-    assert error in failure.stderr
+    assert "jq: Unknown option --binary" in failure.stderr
     assert not (tmp_path / "review-request").exists()
-    monkeypatch.setitem(globals(), "FAKE_GH", script)
+
+
+@pytest.mark.parametrize("scenario", ["posix-jq", "windows-jq"])
+def test_native_jq_models_preserve_workflow_decisions(tmp_path, payloads, scenario):
     result = run_step(tmp_path, payloads, scenario=scenario)
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "review-request").exists()

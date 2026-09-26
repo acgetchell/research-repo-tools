@@ -1,6 +1,5 @@
 """Initialize a checkout using an existing uv installation."""
 
-import os
 import tomllib
 from importlib.metadata import version
 from pathlib import Path
@@ -34,7 +33,7 @@ def setup(runtime: Runtime) -> None:
     uv = runtime.uv_status()
     required = version("rust-just")
     # Keep this independent of a disposable project venv and of project indexes.
-    env = dict(os.environ)
+    env = runtime.project_environment()
     run_safe_command(
         uv.path,
         ["tool", "install", "--no-config", "--managed-python", "--python", runtime.plan.python_request, f"rust-just=={required}"],

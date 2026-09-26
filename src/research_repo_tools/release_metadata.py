@@ -544,10 +544,13 @@ def python_version_references(root: Path) -> list[VersionReference]:
     return references
 
 
-def _version_references(root: Path, package: PackageInfo, policy: ReleasePolicy | None = None) -> list[VersionReference]:
+def _version_references(root: Path, package: PackageInfo, policy: ReleasePolicy | None = None, *, allow_unreleased: bool = False) -> list[VersionReference]:
     """Collect all current-release references that should match the package manifest."""
     changelog_path = root / "CHANGELOG.md"
-    references = [*cargo_lock_references(root, package), *python_version_references(root), _changelog_reference(changelog_path)]
+    references = [*cargo_lock_references(root, package), *python_version_references(root)]
+    parsed = _parsed_changelog(changelog_path)
+    if not allow_unreleased or parsed.release_headings or parsed.unreleased is None:
+        references.append(_changelog_reference(changelog_path))
     if (root / "CITATION.cff").is_file():
         references.append(_citation_reference(root / "CITATION.cff"))
     references.extend(_changelog_comparison_references(changelog_path, package.version))
@@ -558,12 +561,12 @@ def _version_references(root: Path, package: PackageInfo, policy: ReleasePolicy 
     return references
 
 
-def find_version_mismatches(root: Path, *, policy: ReleasePolicy | None = None) -> list[VersionMismatch]:
+def find_version_mismatches(root: Path, *, policy: ReleasePolicy | None = None, allow_unreleased: bool = False) -> list[VersionMismatch]:
     """Return release-version references that differ from the package manifest."""
     package = read_package_info(root)
     return [
         VersionMismatch(reference=reference, package=package)
-        for reference in _version_references(root, package, policy)
+        for reference in _version_references(root, package, policy, allow_unreleased=allow_unreleased)
         if reference.version != package.version
     ]
 

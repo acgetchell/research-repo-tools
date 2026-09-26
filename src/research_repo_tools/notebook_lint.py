@@ -159,6 +159,10 @@ def lint(settings: Config, paths: list[Path], *, timeout: int = 30) -> int:
     failed = False
     for notebook in notebooks:
         diagnostics = []
+        if settings.notebooks.prohibit_installs:
+            from research_repo_tools.notebook_policy import install_diagnostics
+
+            diagnostics.extend(install_diagnostics(notebook))
         if settings.notebooks.outputs == "clear" and generated_state(notebook.node):
             diagnostics.append(Diagnostic("generated outputs, counts, timing, or widget state must be cleared"))
         for module, args, label in checks:

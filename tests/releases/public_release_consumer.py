@@ -306,5 +306,82 @@ class TestReleaseConsumer(unittest.TestCase):
         self.assertEqual([item.tag for item in result], ["v1.2.10", "v1.2.9"])
 
 
+class TestFirstRelease(unittest.TestCase):
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="first-release-")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        (self.root / "pyproject.toml").write_bytes(b'[project]\r\nname="first"\r\nversion="0.0.1"\r\n')
+        (self.root / "CHANGELOG.md").write_bytes(b"# Changelog\r\n\r\n## [Unreleased]\r\n\r\n### Added\r\n\r\n- First feature.\r\n")
+        self.policy = ReleasePolicy(tag_policy="canonical-stable", date_policy="declared")
+
+    def plan(self, **kwargs):
+        return plan_release(self.root, "v0.1.0", first_release=True, release_date="2026-09-25", policy=self.policy, **kwargs)
+
+    def test_offline_first_release_is_transactional_and_idempotent(self):
+        before = {path.name: path.read_bytes() for path in self.root.iterdir()}
+        with patch("subprocess.run", side_effect=AssertionError("offline planning called a process")):
+            plan = self.plan(offline=True)
+            self.assertIsNone(plan.context.previous_tag)
+            self.assertEqual({path.name: path.read_bytes() for path in self.root.iterdir()}, before)
+            apply_release(plan)
+            self.assertIn(b'version="0.1.0"\r\n', (self.root / "pyproject.toml").read_bytes())
+            self.assertEqual((self.root / "CHANGELOG.md").read_bytes(), before["CHANGELOG.md"])
+            self.assertFalse(self.plan(offline=True).edits)
+        with self.assertRaisesRegex(ValueError, "no generated release heading"):
+            check_release(self.root, policy=replace(self.policy, final_changelog=True))
+
+    def test_online_first_release_requires_successfully_fetched_empty_history(self):
+        import subprocess
+
+        for raw, succeeds in (
+            ([], True),
+            ([{"tagName": "v0.0.1", "isDraft": False, "isPrerelease": False, "publishedAt": "2026-09-01T00:00:00Z"}], False),
+            ([{"tagName": "v1.0.0-rc.1", "isDraft": False, "isPrerelease": True}], True),
+        ):
+            with (
+                self.subTest(history=raw),
+                patch("shutil.which", return_value=str(Path(__file__).resolve())),
+                patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, json.dumps(raw).encode(), b"")),
+            ):
+                if succeeds:
+                    self.assertIsNone(self.plan().context.previous_tag)
+                else:
+                    with self.assertRaisesRegex(ValueError, "empty stable published"):
+                        self.plan()
+        with (
+            patch("shutil.which", return_value=str(Path(__file__).resolve())),
+            patch("subprocess.run", side_effect=subprocess.CalledProcessError(1, ["gh"], stderr=b"unavailable")),
+            self.assertRaises(subprocess.CalledProcessError),
+        ):
+            self.plan()
+
+    def test_first_release_rejects_incompatible_intent_and_selectors(self):
+        with self.assertRaisesRegex(ValueError, "cannot specify"):
+            self.plan(offline=True, previous_tag="v0.0.0")
+        with self.assertRaisesRegex(ValueError, "previous-tag selectors"):
+            plan_release(
+                self.root,
+                "v0.1.0",
+                first_release=True,
+                offline=True,
+                policy=ReleasePolicy(rules=(ReleaseRule("pyproject.toml", r'name="(?P<value>first)"', source="previous-tag"),)),
+            )
+        with self.assertRaisesRegex(ValueError, "downgrade"):
+            plan_release(self.root, "v0.0.0", first_release=True, offline=True)
+        with self.assertRaisesRegex(ValueError, "canonical"):
+            plan_release(self.root, "0.1.0", first_release=True, offline=True, policy=self.policy)
+        with self.assertRaisesRegex(ValueError, "no generated release heading"):
+            plan_release(self.root, "v0.1.0", first_release=True, offline=True, policy=replace(self.policy, final_changelog=True))
+
+    def test_first_release_cli_dry_run_and_apply(self):
+        command = ["--root", str(self.root), "release", "update", "v0.1.0", "--first-release", "--offline", "--date", "2026-09-25"]
+        before = (self.root / "pyproject.toml").read_bytes()
+        self.assertEqual(main([*command, "--dry-run"]), 0)
+        self.assertEqual((self.root / "pyproject.toml").read_bytes(), before)
+        self.assertEqual(main(command), 0)
+        self.assertEqual(main(command), 0)
+
+
 if __name__ == "__main__":
     unittest.main()

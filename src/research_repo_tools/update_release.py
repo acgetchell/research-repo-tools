@@ -35,7 +35,7 @@ class UpdateSummary:
     """Release identities and files changed by a successful preparation."""
 
     tag: str
-    previous_tag: str
+    previous_tag: str | None
     release_date: str
     changed_paths: tuple[Path, ...]
 
@@ -110,10 +110,10 @@ def sync_changelog_date(root: Path, tag: str) -> None:
         _publish_texts(((changelog, prepared),))
 
 
-def _prepare_updates(root: Path, tag: str, previous: str, release_date: str, *, policy: ReleasePolicy | None = None) -> dict[Path, str]:
+def _prepare_updates(root: Path, tag: str, previous: str | None, release_date: str, *, policy: ReleasePolicy | None = None) -> dict[Path, str]:
     version = tag.removeprefix("v")
-    allowed = frozenset({version, previous.removeprefix("v")})
     package = read_package_info(root)
+    allowed = frozenset({version, previous.removeprefix("v") if previous else package.version})
     references = [
         package_version_reference(root, package),
         *((reference.path, reference.line) for reference in cargo_lock_references(root, package)),
@@ -153,6 +153,8 @@ def update_release_version(
     release_date: str | None = None,
     dry_run: bool = False,
     policy: ReleasePolicy | None = None,
+    first_release: bool = False,
+    offline: bool = False,
 ) -> UpdateSummary:
     """Validate then transactionally replace owned metadata; roll back on failure."""
     from research_repo_tools.releases import apply_release, plan_release
@@ -166,10 +168,11 @@ def update_release_version(
         previous_tag=previous_tag,
         release_date=release_date if release_date is not None else datetime.now(UTC).date().isoformat(),
         policy=policy,
+        first_release=first_release,
+        offline=offline,
     )
     if not dry_run:
         apply_release(plan)
-    assert plan.context.previous_tag is not None
     return UpdateSummary(plan.context.tag, plan.context.previous_tag, plan.context.release_date, tuple(plan.discovery.root / edit.path for edit in plan.edits))
 
 

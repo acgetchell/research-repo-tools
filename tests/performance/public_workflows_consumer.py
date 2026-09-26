@@ -187,7 +187,7 @@ class TestWorkflowConsumer(unittest.TestCase):
                 chdir(invocation),
                 patch.dict(os.environ, {"EXPORTED_VALUE": "café", "GITHUB_ENV": "runner-env"}),
                 patch("research_repo_tools.toolchain.Runtime.inspect", return_value=[]),
-                patch("research_repo_tools.toolchain.Runtime.environment", return_value={"PATH": "managed/bin"}),
+                patch("research_repo_tools.toolchain.Runtime.environment", return_value={"PATH": "managed/bin", "UV_PYTHON_INSTALL_DIR": "managed/python"}),
             ):
                 for group, names in (("ci", ["EXPORTED_VALUE"]), ("toolchain", [])):
                     with self.subTest(group=group):
@@ -198,6 +198,8 @@ class TestWorkflowConsumer(unittest.TestCase):
                         self.assertTrue(target.read_bytes().startswith(b"EXISTING=yes\r\n"))
                         expected = "EXPORTED_VALUE=café\n".encode() if group == "ci" else b"PATH=managed/bin\n"
                         self.assertIn(expected, target.read_bytes())
+                        if group == "toolchain":
+                            self.assertIn(b"UV_PYTHON_INSTALL_DIR=managed/python\n", target.read_bytes())
                         self.assertFalse((invocation / target.name).exists())
                         absolute = invocation / f"absolute-{group}"
                         self.assertEqual(main([*command, "--file", str(absolute)]), 0)
