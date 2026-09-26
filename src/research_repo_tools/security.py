@@ -155,6 +155,9 @@ def _report_run(binary: Path, args: list[str], destination: Path, format_name: s
 
 def _clear_numbered_reports(directory: Path, *, prefix: str = "") -> None:
     """Unlink this scanner's old reports, including links, without following them."""
+    for component in (*reversed(directory.parents), directory):
+        if component.is_symlink() or component.is_junction():
+            raise ValueError(f"report directory must not contain symlinks or junctions: {component}")
     directory.mkdir(parents=True, exist_ok=True)
     for report in directory.iterdir():
         if re.fullmatch(re.escape(prefix) + r"[0-9]+\.(?:json|sarif)", report.name):

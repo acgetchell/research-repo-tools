@@ -2,6 +2,7 @@
 
 import importlib.metadata
 import json
+import os
 import subprocess
 import tempfile
 import unittest
@@ -14,6 +15,46 @@ from research_repo_tools.toolchain_config import load
 
 
 class TestSharedCapabilities(unittest.TestCase):
+    def test_report_directories_reject_links_before_mutation(self):
+        with tempfile.TemporaryDirectory(prefix="report links ") as directory:
+            root = Path(directory).resolve()
+            (root / "uv.lock").write_bytes(b"version = 1\n")
+            (root / "source.py").write_bytes(b"value = 1\n")
+            external = root / "external"
+            (external / "nested").mkdir(parents=True)
+            for parent in (external, external / "nested"):
+                for name in ("osv-12.json", "osv-12.sarif", "12.json", "12.sarif"):
+                    (parent / name).write_bytes(b"external report\n")
+            original = {path.relative_to(external): path.read_bytes() for path in external.rglob("*") if path.is_file()}
+            alias = root / "output link"
+            if os.name == "nt":
+                subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(alias), str(external)], capture_output=True, check=True)
+                self.assertTrue(alias.is_junction())
+            else:
+                alias.symlink_to(external, target_is_directory=True)
+                self.assertTrue(alias.is_symlink())
+            self.assertEqual(alias.resolve(), external)
+            settings = config.parse({"semgrep": {"config": "rules.yml"}}, root=root)
+            for scanner in ("osv", "semgrep"):
+                for suffix in ("", "nested", "new/child"):
+                    with self.subTest(scanner=scanner, suffix=suffix):
+                        output = str(alias / suffix)
+                        with (
+                            patch.object(security, "security_inventory", return_value=("uv.lock",)),
+                            patch.object(security, "_binary", return_value=(root / "osv-scanner", {})),
+                            patch.object(semgrep_scan, "security_inventory", return_value=("source.py",)),
+                            patch.object(semgrep_scan, "resolve_executable", return_value=root / "semgrep"),
+                            patch.object(security, "run_command_bytes", return_value=subprocess.CompletedProcess([], 0, b"", b"")) as run,
+                        ):
+                            with self.assertRaisesRegex(ValueError, "report directory.*(?:symlink|junction)"):
+                                if scanner == "osv":
+                                    security.scan_osv(settings, ("uv.lock",), output=output)
+                                else:
+                                    semgrep_scan.scan(settings, include=("*.py",), output=output)
+                            run.assert_not_called()
+                        self.assertFalse((external / "new").exists())
+                        self.assertEqual(original, {path.relative_to(external): path.read_bytes() for path in external.rglob("*") if path.is_file()})
+
     def test_numbered_reports_are_removed_before_scanning(self):
         self._assert_numbered_reports_removed(linked=False)
 

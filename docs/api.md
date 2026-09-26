@@ -417,7 +417,9 @@ Invalid arguments/preconditions raise `ValueError`; I/O and Git errors propagate
 Old reports at the selected output names are removed before scanning. OSV and
 Semgrep also remove all prior numbered JSON/SARIF reports in their respective
 output directories, including symlinks, so smaller inventories leave no stale
-reports. Unrelated files and symlink targets are preserved. Native
+reports. These two scanners reject output directories with symlinks or Windows
+junctions in any path component before creating directories or removing reports.
+Unrelated files and symlink targets are preserved. Native
 schemas and locations are retained, with Gitleaks source excerpts/commit messages
 redacted in addition to native detected-secret redaction. Report directories are
 caller-owned outputs. These commands are not an assurance that unknown secrets,
