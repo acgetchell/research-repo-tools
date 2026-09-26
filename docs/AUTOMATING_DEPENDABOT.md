@@ -2,7 +2,7 @@
 
 The reusable `.github/workflows/dependabot-approve.yml` workflow provides one
 approval implementation for consumers. Each repository supplies a small caller,
-an explicit dependency/file allowlist, and its GitHub settings. This workflow is
+an explicit ecosystem/file allowlist, and its GitHub settings. This workflow is
 versioned by Git commit, independently of the Python package and PyPI releases.
 
 ## Approval contract
@@ -17,26 +17,29 @@ SHA-pinned `dependabot/fetch-metadata` action.
 Automatic approval requires all of the following:
 
 - The PR is open and ready for review, at the event's exact head commit.
-- There is exactly one commit, authored by `dependabot[bot]`, committed by GitHub's
-  `web-flow` identity, with a verified signature. The committer check rejects
-  personal signatures on commits claiming Dependabot authorship. Additional
-  commits require manual review because the metadata action
-  reads only the first commit. A normal Dependabot rebase can produce a new
-  eligible single-commit head; a maintainer merge commit is not eligible.
-- Every dependency named in the update metadata is allowlisted for the same
-  `uv` or `cargo` ecosystem, and every update is a patch upgrade. Old and new
-  versions must have three numeric release components, retain major/minor, and
-  increase patch. Missing metadata, prereleases, downgrades, minor/major updates,
-  and other ecosystems require manual review, including GitHub Actions updates.
+- The first commit is authored by `dependabot[bot]`, committed by GitHub's
+  `web-flow` identity, and has a verified signature and one parent. The committer
+  check rejects personal signatures on commits claiming Dependabot authorship.
+- Subsequent commits, if any, are verified `web-flow` merge commits. Each has
+  exactly two parents: the preceding PR commit and a commit on the current base
+  branch. The workflow verifies ancestry through GitHub's compare API. The final
+  changed-file list, statuses, and blob IDs must exactly match the original
+  Dependabot commit. Base updates that change dependency-file contents, including
+  conflict resolutions, require manual review or a fresh Dependabot rebase.
+- Every metadata entry identifies a dependency in the same configured `uv`,
+  `cargo`, or `github_actions` ecosystem. GitHub's Dependabot configuration owns
+  dependency and version eligibility, including grouping, ignore rules, cooldowns,
+  and security updates. Patch, minor, and major updates are eligible; no second
+  version or dependency-name filter is imposed by this workflow.
 - Every changed file is an existing, modified, explicitly allowlisted dependency
-  file. Added, removed, renamed, or unlisted files are ineligible. The complete
-  paginated file list must match GitHub's reported changed-file count.
+  file or workflow. Added, removed, renamed, or unlisted files are ineligible. The
+  complete paginated file list must match GitHub's reported changed-file count.
+  Missing metadata, incomplete commit lists, and untrusted commits cannot approve.
 
-The dependency-name allowlist covers the dependencies Dependabot identifies as
-update targets. It does not assert that every transitive lockfile change is a
-patch update; the full resolution still receives the repository's tests and
-vulnerability scans. Grouped PRs are approved only when every metadata entry
-passes. Existing mixed update groups may therefore require manual review.
+The earlier patch-only dependency-name policy and single-commit restriction are
+superseded by this contract. Keep update restrictions in `.github/dependabot.yml`
+and action restrictions in GitHub's selected-actions settings. Transitive lockfile
+changes still receive the repository's tests and vulnerability scans.
 
 The approval records the exact commit ID. The workflow checks that head again
 before posting, avoids duplicate current bot approvals, and enables native
@@ -74,7 +77,7 @@ settings payloads are in `.github/settings/`.
 Create a caller similar to the following. Replace `REVIEWED_COMMIT_SHA` with the
 full commit that contains the reviewed workflow; it is intentionally not a
 floating branch or an assumed PyPI release tag. Replace the repository and
-allowlists with the consumer's policy.
+file allowlists with the consumer's paths.
 
 ```yaml
 name: Dependabot approval and auto-merge
@@ -95,17 +98,19 @@ jobs:
     with:
       repository: owner/repository
       policy: >-
-        {"uv": {
-          "dependencies": ["pytest", "ruff"],
-          "files": ["pyproject.toml", "uv.lock"]
-        }, "cargo": {
-          "dependencies": ["serde", "serde_json"],
+        {"cargo": {
           "files": ["Cargo.toml", "Cargo.lock"]
+        }, "github_actions": {
+          "files": [".github/workflows/ci.yml", ".github/workflows/dependabot-auto-merge.yml"]
+        }, "uv": {
+          "files": ["pyproject.toml", "uv.lock"]
         }}
 ```
 
-Use exact dependency names from Dependabot metadata and exact repository-relative
-file paths. If the default branch differs, change `branches` in the caller. Do
+Use exact repository-relative file paths, including workspace member manifests
+and every workflow or composite action maintained by Dependabot. Keep the file
+allowlists current when adding or renaming those files; unlisted paths require
+manual review. If the default branch differs, change `branches` in the caller. Do
 not forward secrets or expose inputs through PR titles, comments, or labels.
 Review policy changes as ordinary code changes. Dependabot can maintain the
 external workflow's SHA pin through its GitHub Actions ecosystem updater.
@@ -127,16 +132,24 @@ An old run uses its original workflow revision; merely rerunning it is not a
 substitute for a new event after deployment.
 
 `research-repo-tools` checks GitHub Actions dependencies on Saturdays at 03:00
-and uv dependencies at 05:00, in `America/Los_Angeles`. The uv run is the first
-potential approval test under this policy. Cooldowns, absent patch releases,
-mixed groups, or an updater/runtime mismatch may mean no eligible PR appears.
-Do not relax the policy solely to manufacture a passing pilot.
+and uv dependencies at 05:00, in `America/Los_Angeles`. Both ecosystems are
+eligible. Cooldowns, absent releases, or an updater/runtime mismatch may mean no
+PR appears. These updater constraints are independent of approval eligibility.
 
 Verify an actual `github-actions[bot]` approval on the current head, native
 merge only after required checks pass, and continued blocking for ineligible
-updates. Then pin that tested workflow commit in other repositories. Their
-Actions settings and allowlists must be applied separately; installing a newer
-Python package does not configure GitHub.
+updates. Then pin that tested workflow commit in other repositories and replace their
+previous review-request workflow. Their Actions settings and allowlists must be
+applied separately; installing a newer Python package does not configure GitHub.
+Keep ordinary common tooling in the PyPI package. GitHub requires a reusable
+workflow to live in a repository and be referenced by Git revision, so this
+approval implementation is shared through GitHub instead. Consumers need only
+the caller, configuration, and focused integration checks.
+
+The shared workflow replaces CodeRabbit approval polling and owner-authored
+review requests using `CODERABBIT_REVIEW_TOKEN`. A required CodeRabbit status
+remains a separate merge gate. Remove that secret from a consumer only after its
+old workflow has been replaced and no other workflow uses it.
 
 A merge performed with `GITHUB_TOKEN` may not trigger downstream push workflows.
 Manually dispatch `ci.yml` using the default-branch name (for example,

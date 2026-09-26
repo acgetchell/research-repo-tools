@@ -20,7 +20,7 @@ The baseline follows Delaunay and la-stack, adapted to this Python package:
 - Read-only default workflow tokens; write permissions are limited to specific
   security-upload, Dependabot, and draft-release staging jobs. OIDC identity is
   limited to Codecov, validated-release signing, and PyPI upload jobs. Actions
-  approvals are enabled for the restricted Dependabot patch policy described below.
+  approvals are enabled for the Dependabot approval policy described below.
 - Selected Actions only, with full commit SHA pinning required. Dependabot updates
   GitHub Actions and the uv lockfile weekly, with separate security-update groups.
 - Dependabot alerts/security updates, secret scanning, push protection, and private
@@ -107,8 +107,9 @@ After the App is connected, add `"integration_id": 347564` to its entry in
 status to CodeRabbit's identity, as Delaunay does.
 
 The Dependabot caller now uses the shared
-[dependency approval workflow](AUTOMATING_DEPENDABOT.md). It approves only eligible
-patch updates, then enables native squash auto-merge. All required checks,
+[dependency approval workflow](AUTOMATING_DEPENDABOT.md). It approves eligible updates
+permitted by this repository's Dependabot configuration, including GitHub Actions,
+then enables native squash auto-merge. All required checks,
 resolved review threads, and stale-approval dismissal still apply. It does not
 wait on a runner for checks or a CodeRabbit approval.
 

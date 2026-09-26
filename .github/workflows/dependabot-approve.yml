@@ -1,4 +1,4 @@
-name: Approve Dependabot patch updates
+name: Approve Dependabot updates
 
 on:
   workflow_call:
@@ -8,7 +8,7 @@ on:
         required: true
         type: string
       policy:
-        description: JSON map of uv/cargo ecosystems to dependency and file allowlists
+        description: JSON map of uv/cargo/github_actions ecosystems to exact file allowlists
         required: true
         type: string
 
@@ -76,43 +76,54 @@ jobs:
             exit 1
           fi
 
-          # fetch-metadata reads the first commit. Require that it is the ONLY
-          # commit and the event head, so later human/bot commits cannot inherit
-          # approval from earlier patch metadata.
-          # A verified personal signature can claim Dependabot as its author.
-          # Also require GitHub's committer identity for its bot-signed commits.
-          if [[ "$(jq -r '.commits' <<< "$pr")" != 1 ]]; then
-            echo "Manual review required: expected a single Dependabot commit."
-            exit 0
-          fi
+          # fetch-metadata reads the first commit. Later commits may only be
+          # GitHub-signed base merges that preserve the original update below.
           commits="$(gh api --paginate --slurp "repos/$REPOSITORY/pulls/$PR_NUMBER/commits?per_page=100")"
-          if ! jq -e --arg sha "$PR_HEAD_SHA" '
-            add | length == 1 and all(.[];
-              .sha == $sha and .author.login == "dependabot[bot]" and
-              .committer.login == "web-flow" and
-              .commit.verification.verified == true)
+          if ! jq -e --arg sha "$PR_HEAD_SHA" --argjson count "$(jq '.commits' <<< "$pr")" '
+            def sha: type == "string" and test("^[0-9a-f]{40}$");
+            add | length > 0 and length == $count and .[-1].sha == $sha and
+            .[0].author.login == "dependabot[bot]" and (.[0].parents | length == 1) and
+            all(.[]; (.sha | sha) and .committer.login == "web-flow" and
+              .commit.verification.verified == true and all(.parents[]; .sha | sha))
           ' <<< "$commits" > /dev/null; then
-            echo "::error::Expected a GitHub-signed Dependabot commit at the event head."
+            echo "::error::Expected a complete GitHub-signed Dependabot commit chain at the event head."
             exit 1
           fi
+          if ! jq -e '
+            add | . as $commits | all(range(1; length);
+              . as $index | $commits[$index] |
+              (.parents | length == 2) and .parents[0].sha == $commits[$index - 1].sha)
+          ' <<< "$commits" > /dev/null; then
+            echo "Manual review required: additional commits are not base merges."
+            exit 0
+          fi
+          base_sha="$(jq -r '.base.sha' <<< "$pr")"
+          if [[ ! "$base_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::Invalid base commit."
+            exit 1
+          fi
+          while IFS= read -r parent; do
+            comparison="$(gh api "repos/$REPOSITORY/compare/$parent...$base_sha")"
+            if ! jq -e --arg parent "$parent" '
+              (.status == "ahead" or .status == "identical") and .merge_base_commit.sha == $parent
+            ' <<< "$comparison" > /dev/null; then
+              echo "Manual review required: merged parent is not on the current base branch."
+              exit 0
+            fi
+          done < <(jq -r 'add | .[1:][].parents[1].sha' <<< "$commits")
 
-          # Evaluate every member of a group, not just the highest known update
-          # type. Unknown versions, prereleases, and downgrades need review.
+          # Dependabot configuration owns dependency/version eligibility. Do not
+          # duplicate its allow/ignore, grouping, or security-update policies here.
           if ! jq -en --argjson deps "$DEPENDENCIES" --argjson policy "$POLICY" '
-            def version: capture("^v?(?<major>0|[1-9][0-9]*)\\.(?<minor>0|[1-9][0-9]*)\\.(?<patch>0|[1-9][0-9]*)$")
-              // error("Expected a three-component release version")
-              | [.major, .minor, .patch] | map(tonumber);
             ($deps | type == "array" and length > 0) and
             all($deps[];
               . as $dep | $policy[$dep.packageEcosystem] as $allowed |
-              ($dep.packageEcosystem == "uv" or $dep.packageEcosystem == "cargo") and
+              (["uv", "cargo", "github_actions"] | index($dep.packageEcosystem)) != null and
               $dep.packageEcosystem == $deps[0].packageEcosystem and
-              $dep.updateType == "version-update:semver-patch" and
-              ($allowed.dependencies | index($dep.dependencyName)) != null and
-              (($dep.prevVersion | version) as $old | ($dep.newVersion | version) as $new |
-                $old[0:2] == $new[0:2] and $new[2] > $old[2]))
+              ($dep.dependencyName | type == "string" and length > 0) and
+              ($allowed.files | type == "array" and length > 0))
           ' > /dev/null; then
-            echo "Manual review required: update is outside the dependency patch policy."
+            echo "Manual review required: missing metadata or unsupported dependency ecosystem."
             exit 0
           fi
 
@@ -126,6 +137,20 @@ jobs:
           ' <<< "$files" > /dev/null; then
             echo "Manual review required: changed files are outside the dependency file policy."
             exit 0
+          fi
+
+          if [[ "$(jq 'add | length' <<< "$commits")" != 1 ]]; then
+            original_sha="$(jq -r 'add | .[0].sha' <<< "$commits")"
+            original="$(gh api --paginate --slurp "repos/$REPOSITORY/commits/$original_sha?per_page=100")"
+            if ! jq -en --arg sha "$original_sha" --argjson original "$original" --argjson files "$files" '
+              def entries: map({filename, status, sha}) | sort_by(.filename);
+              ($original | length > 0 and all(.[]; .sha == $sha)) and
+              ($files | add | all(.[]; .sha | type == "string" and test("^[0-9a-f]{40}$"))) and
+              ([$original[].files[]] | entries) == ($files | add | entries)
+            ' > /dev/null; then
+              echo "Manual review required: base merges changed the original Dependabot update."
+              exit 0
+            fi
           fi
 
           reviews="$(gh api --paginate --slurp "repos/$REPOSITORY/pulls/$PR_NUMBER/reviews?per_page=100")"
@@ -143,7 +168,7 @@ jobs:
           if [[ "$approved" != true ]]; then
             gh api --method POST "repos/$REPOSITORY/pulls/$PR_NUMBER/reviews" \
               --raw-field commit_id="$PR_HEAD_SHA" --raw-field event=APPROVE \
-              --raw-field body='Approved by the dependency patch policy. Required checks and review threads still gate merging.' \
+              --raw-field body='Approved by the Dependabot policy. Required checks and review threads still gate merging.' \
               --silent
           fi
           echo "eligible=true" >> "$GITHUB_OUTPUT"
