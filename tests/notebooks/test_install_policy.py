@@ -30,6 +30,16 @@ def notebook(tmp_path, source):
         "%%time\n%pip install numpy",
         "packages = !pip install numpy",
         "!echo before && pip install numpy",
+        "!sudo env PIP_INDEX_URL=https://example.invalid/simple pip install numpy",
+        "!env MODE=test sudo env PIP_INDEX_URL=https://example.invalid/simple pip install numpy",
+        "!PIP.EXE install numpy",
+        r"!C:\Tools\Python\Scripts\pip.exe install numpy",
+        r'!"C:\Program Files\Python\Scripts\PIP.EXE" install numpy',
+        "%matplotlib inline\nimport subprocess\nsubprocess.run(['pip', 'install', 'numpy'])",
+        "%%time\nimport subprocess\nsubprocess.run(['pip', 'install', 'numpy'])",
+        "paths = !echo hello\nimport os\nos.system('pip install numpy')",
+        "if True:\n    %matplotlib inline\n    subprocess.run(['pip', 'install', 'numpy'])",
+        "%matplotlib inline\nvalue = (3\n% 2)\nsubprocess.run(['pip', 'install', 'numpy'])",
         "import subprocess\nsubprocess.run(['python', '-m', 'pip', 'install', 'numpy'])",
         "import subprocess\nsubprocess.run(args=['python', '-m', 'pip', 'install', 'numpy'])",
         "import subprocess\nsubprocess.Popen(args=('uv', 'pip', 'install', 'numpy'))",
@@ -58,6 +68,11 @@ def test_literal_installs_have_stable_source_diagnostics_and_do_not_change_bytes
         'message = f"""example\n%pip install numpy\n"""',
         "import subprocess\nsubprocess.run(['echo', 'pip', 'install'])",
         "%%bash\necho pip install numpy",
+        "%%bash\nsubprocess.run(['pip', 'install', 'numpy'])",
+        "%%javascript\nsubprocess.run(['pip', 'install', 'numpy'])",
+        'message = """\n%matplotlib inline\nsubprocess.run(["pip", "install", "numpy"])\n"""',
+        r'!"C:\Program Files\echo.exe" pip install numpy',
+        "!sudo env MODE=test pip show install",
     ],
 )
 def test_noninstalling_code_and_multiline_strings_are_not_flagged(tmp_path, source):
@@ -71,6 +86,13 @@ def test_policy_is_opt_in_and_blocks_lint(tmp_path, monkeypatch, capsys):
     settings = config.parse({"notebooks": {"prohibit-installs": True}}, root=tmp_path)
     assert notebook_lint.lint(settings, [item.path]) == 1
     assert "dependency-install" in capsys.readouterr().err
+    assert item.path.read_bytes() == item.original
+
+
+def test_magic_cell_preserves_multiline_python_call_line(tmp_path):
+    item = notebook(tmp_path, "%matplotlib inline\r\n\r\nsubprocess.run(\r\n    args=['pip', 'install', 'numpy'],\r\n)\r\n")
+    diagnostics = install_diagnostics(item)
+    assert [diagnostic.line for diagnostic in diagnostics] == [3]
     assert item.path.read_bytes() == item.original
 
 

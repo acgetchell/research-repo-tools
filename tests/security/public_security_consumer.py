@@ -14,6 +14,68 @@ from research_repo_tools.toolchain_config import load
 
 
 class TestSharedCapabilities(unittest.TestCase):
+    def test_numbered_reports_are_removed_before_scanning(self):
+        self._assert_numbered_reports_removed(linked=False)
+
+    def test_numbered_report_symlinks_are_removed_without_following_targets(self):
+        self._assert_numbered_reports_removed(linked=True)
+
+    def _assert_numbered_reports_removed(self, *, linked):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "uv.lock").write_bytes(b"version = 1\n")
+            (root / "source.py").write_bytes(b"value = 1\n")
+            external = root / "external.json"
+            external.write_bytes(b"external report\n")
+            settings = config.parse({"semgrep": {"config": "rules.yml"}}, root=root)
+            for scanner, prefix in (("osv", "osv-"), ("semgrep", "")):
+                with self.subTest(scanner=scanner):
+                    output = root / scanner
+                    output.mkdir()
+                    stale = [output / f"{prefix}{index}.{fmt}" for index in (0, 1, 12) for fmt in ("json", "sarif")]
+                    preserved = [output / name for name in ("notes.json", "gitleaks-history.sarif", f"{prefix}1.json.bak", f"{prefix}latest.json")]
+                    preserved.append(output / ("0.json" if prefix else "osv-0.json"))
+                    for index, path in enumerate(stale):
+                        if linked:
+                            try:
+                                path.symlink_to(external if index % 2 else root / "absent.json")
+                            except OSError as error:
+                                if getattr(error, "winerror", None) == 1314:
+                                    self.skipTest("native symlink fixtures require Windows symlink privileges")
+                                raise
+                            self.assertTrue(path.is_symlink())
+                            self.assertEqual(path.exists(), bool(index % 2))
+                        else:
+                            path.write_bytes(b"previous report\n")
+                    for path in preserved:
+                        path.write_bytes(b"previous report\n")
+                    nested = output / "nested"
+                    nested.mkdir()
+                    (nested / f"{prefix}12.json").write_bytes(b"nested report\n")
+
+                    def native(_binary, _args, **_kwargs):
+                        self.assertTrue(all(not path.exists() and not path.is_symlink() for path in stale))
+                        self.assertTrue(all(path.read_bytes() == b"previous report\n" for path in preserved))
+                        # A failed native scan must not leave reports from a larger inventory.
+                        return subprocess.CompletedProcess([], 19, b"", b"")
+
+                    with (
+                        patch.object(security, "security_inventory", return_value=("uv.lock",)),
+                        patch.object(security, "_binary", return_value=(root / "osv-scanner", {})),
+                        patch.object(semgrep_scan, "security_inventory", return_value=("source.py",)),
+                        patch.object(semgrep_scan, "resolve_executable", return_value=root / "semgrep"),
+                        patch.object(security, "run_command_bytes", side_effect=native) as run,
+                    ):
+                        status = (
+                            security.scan_osv(settings, ("uv.lock",), output=scanner)
+                            if prefix
+                            else semgrep_scan.scan(settings, include=("*.py",), output=scanner)
+                        )
+                    self.assertEqual(status, 19)
+                    self.assertEqual(run.call_count, 2)
+                    self.assertEqual((nested / f"{prefix}12.json").read_bytes(), b"nested report\n")
+                    self.assertEqual(external.read_bytes(), b"external report\n")
+
     def test_installed_baseline_authority_and_nonmutating_drift(self):
         authority = python_baseline.baseline()
         self.assertEqual(authority.requirement, importlib.metadata.metadata("research-repo-tools")["Requires-Python"])

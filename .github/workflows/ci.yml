@@ -94,6 +94,8 @@ jobs:
           overwrite: true
           retention-days: 7
       - name: Exercise native setup and Cargo updates from the built wheel
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: uv run --locked just check-setup
 
   codecov:

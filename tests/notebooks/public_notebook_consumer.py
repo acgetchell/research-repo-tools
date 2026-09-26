@@ -300,6 +300,19 @@ class TestAdvice(Consumer):
 
 
 class TestInstallPolicy(Consumer):
+    def test_installed_lint_checks_wrapped_windows_commands_and_python_after_magics(self):
+        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.14"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
+        for source, line in (
+            (r'!sudo env MODE=test "C:\Program Files\Python\Scripts\PIP.EXE" install never-executed', 1),
+            ("%matplotlib inline\nimport subprocess\nsubprocess.run(args=['pip', 'install', 'never-executed'])", 3),
+        ):
+            with self.subTest(source=source):
+                original = self.write([code(source, "mixed-install")])
+                status, _out, err = self.run_cli("lint")
+                self.assertEqual(status, 1)
+                self.assertIn(f"cell 1 (mixed-install):{line}:1: dependency-install", err)
+                self.assertEqual(self.path.read_bytes(), original)
+
     def test_installed_lint_blocks_install_cells_without_execution_or_rewriting(self):
         (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.14"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
         original = self.write([code("%pip install package-that-must-not-be-installed\n", "environment-policy")])

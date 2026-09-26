@@ -2,6 +2,7 @@
 
 import hashlib
 import io
+import json
 import os
 import tarfile
 from unittest.mock import patch
@@ -11,6 +12,34 @@ import pytest
 from research_repo_tools import config, toolchain_config
 from research_repo_tools import prebuilt_tools as prebuilt
 from research_repo_tools.toolchain_config import BinaryTool
+
+
+@pytest.mark.parametrize(
+    "github_token,gh_token,expected",
+    [
+        (None, None, None),
+        ("", "", None),
+        (None, "fallback-token", "fallback-token"),
+        ("", "fallback-token", "fallback-token"),
+        ("preferred-token", "fallback-token", "preferred-token"),
+    ],
+)
+def test_release_metadata_authentication_precedence(monkeypatch, github_token, gh_token, expected):
+    for name, value in (("GITHUB_TOKEN", github_token), ("GH_TOKEN", gh_token)):
+        if value is None:
+            monkeypatch.delenv(name, raising=False)
+        else:
+            monkeypatch.setenv(name, value)
+
+    def open_request(request, *, timeout):
+        assert request.full_url == "https://api.github.com/repos/google/osv-scanner/releases/tags/v2.6.0"
+        assert timeout == 30
+        assert request.get_header("Accept") == "application/vnd.github+json"
+        assert request.get_header("Authorization") == (f"Bearer {expected}" if expected else None)
+        return io.BytesIO(json.dumps({"draft": False, "prerelease": False, "tag_name": "v2.6.0"}).encode())
+
+    monkeypatch.setattr(prebuilt.urllib.request, "urlopen", open_request)
+    assert prebuilt.release_metadata("osv-scanner", "v2.6.0")["tag_name"] == "v2.6.0"
 
 
 @pytest.mark.parametrize("host", prebuilt.HOSTS)

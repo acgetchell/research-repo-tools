@@ -37,7 +37,10 @@ def release_metadata(name: str, tag: str) -> dict:
     if name not in REPOSITORIES or not re.fullmatch(r"latest|v[0-9]+\.[0-9]+\.[0-9]+", tag):
         raise ValueError("unsupported binary release")
     suffix = "latest" if tag == "latest" else f"tags/{tag}"
-    request = urllib.request.Request(f"https://api.github.com/repos/{REPOSITORIES[name]}/releases/{suffix}", headers={"User-Agent": "research-repo-tools"})
+    headers = {"Accept": "application/vnd.github+json", "User-Agent": "research-repo-tools"}
+    if token := os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"):
+        headers["Authorization"] = f"Bearer {token}"
+    request = urllib.request.Request(f"https://api.github.com/repos/{REPOSITORIES[name]}/releases/{suffix}", headers=headers)
     with urllib.request.urlopen(request, timeout=30) as response:
         payload = response.read(2 * 1024 * 1024 + 1)
     if len(payload) > 2 * 1024 * 1024:

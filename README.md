@@ -595,7 +595,9 @@ prohibit-installs = true
 `just notebook-lint FILE...` then rejects literal dependency-changing pip, uv,
 conda, and mamba commands in line magics, `!` commands, `%%bash`, `%%sh`, and
 `%%script bash/sh` cells. It also checks literal `subprocess` calls and
-`os.system` commands in plain Python cells. Diagnostics retain notebook paths,
+`os.system` commands in Python cells, including after line magics and inside
+`%%capture`, `%%debug`, `%%prun`, `%%time`, and `%%timeit` cells.
+Diagnostics retain notebook paths,
 cell IDs, and original source line numbers. The policy never runs cells or
 changes their source. Python strings and comments containing installation
 examples are not commands.

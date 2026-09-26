@@ -414,7 +414,10 @@ Scans require declared, already installed exact managed binaries. They return
 zero only for complete scans without findings, otherwise the first native
 nonzero status, 1 for invalid successful reports/findings, or 124 on timeout.
 Invalid arguments/preconditions raise `ValueError`; I/O and Git errors propagate.
-Old reports at the selected output names are removed before scanning. Native
+Old reports at the selected output names are removed before scanning. OSV and
+Semgrep also remove all prior numbered JSON/SARIF reports in their respective
+output directories, including symlinks, so smaller inventories leave no stale
+reports. Unrelated files and symlink targets are preserved. Native
 schemas and locations are retained, with Gitleaks source excerpts/commit messages
 redacted in addition to native detected-secret redaction. Report directories are
 caller-owned outputs. These commands are not an assurance that unknown secrets,

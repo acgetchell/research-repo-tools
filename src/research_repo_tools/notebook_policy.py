@@ -17,6 +17,7 @@ from research_repo_tools.notebooks import Notebook
 MUTATIONS = {"install", "uninstall", "add", "remove", "sync", "update", "upgrade", "create"}
 READ_COMMANDS = {"list", "show", "freeze", "check", "search", "info", "help", "download", "lock", "export", "run", "exec", "--version"}
 SHELL_CELL = re.compile(r"^%%(?:bash|sh|script\s+(?:bash|sh))\b")
+PYTHON_CELL_MAGICS = {"capture", "debug", "prun", "time", "timeit"}
 COMMAND_START = re.compile(r"^\s*(?:[A-Za-z_]\w*\s*=\s*)?(?:!|%(?:pip|conda|mamba)\b)|^\s*(?:python[\d.]*|pip[\d.]*|uv|conda|mamba|micromamba)\s")
 
 
@@ -24,6 +25,7 @@ def _mutates(command: str | list[str]) -> bool:
     try:
         if isinstance(command, str):
             lexer = shlex.shlex(command, posix=True, punctuation_chars=";&|")
+            lexer.escape = ""  # Retain Windows path separators while still unquoting arguments.
             lexer.whitespace_split = True
             tokens = list(lexer)
         else:
@@ -41,13 +43,11 @@ def _mutates(command: str | list[str]) -> bool:
     for segment in segments:
         if not segment:
             continue
-        if segment[0] in {"sudo", "env"}:
-            segment = segment[1:]
-        while segment and re.fullmatch(r"[A-Za-z_]\w*=.*", segment[0]):
+        while segment and (segment[0] in {"sudo", "env"} or re.fullmatch(r"[A-Za-z_]\w*=.*", segment[0])):
             segment = segment[1:]
         if not segment:
             continue
-        name = PureWindowsPath(segment[0]).name.removesuffix(".exe")
+        name = PureWindowsPath(segment[0]).name.lower().removesuffix(".exe")
         remaining = segment[1:]
         if re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", name) and remaining[:2] == ["-m", "pip"]:
             name, remaining = "pip", remaining[2:]
@@ -84,6 +84,26 @@ def _masked(source: str) -> str:
     return "".join(result)
 
 
+def _python_tree(lines: list[str], masked: list[str]) -> ast.Module | None:
+    """Parse Python around IPython escapes without changing source line numbers."""
+    scratch = list(lines)
+    while True:
+        try:
+            return ast.parse("\n".join(scratch))
+        except SyntaxError as error:
+            if error.lineno is None or not 1 <= error.lineno <= len(masked):
+                return None
+            index = error.lineno - 1
+            visible = masked[index]
+            if cell_magic := re.match(r"^\s*%%(\w+)", visible):
+                if cell_magic[1] not in PYTHON_CELL_MAGICS:
+                    return None  # Shell and other language bodies are not Python.
+            escape = re.match(r"^([ \t]*)(?:[A-Za-z_]\w*[ \t]*=[ \t]*)?[!%]", visible)
+            if escape is None or scratch[index] == escape[1] + "pass":
+                return None
+            scratch[index] = escape[1] + "pass"
+
+
 def install_diagnostics(notebook: Notebook) -> list[Diagnostic]:
     """Report original cell identities and source lines; never execute a cell."""
     result = []
@@ -100,10 +120,7 @@ def install_diagnostics(notebook: Notebook) -> list[Diagnostic]:
                 command = re.sub(r"^\s*(?:[A-Za-z_]\w*\s*=\s*)?!+", "", original).lstrip().removeprefix("%")
                 if _mutates(command):
                     failures.add(line)
-        try:
-            tree = ast.parse(source)
-        except SyntaxError:
-            tree = None
+        tree = _python_tree(lines, masked)
         if tree is not None:
             for node in ast.walk(tree):
                 if not isinstance(node, ast.Call) or not isinstance(node.func, ast.Attribute):

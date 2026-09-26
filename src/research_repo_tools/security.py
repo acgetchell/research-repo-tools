@@ -1,6 +1,7 @@
 """Native scanner gates with explicit inventory and fresh, validated reports."""
 
 import json
+import re
 import shutil
 import subprocess
 import sys
@@ -152,6 +153,14 @@ def _report_run(binary: Path, args: list[str], destination: Path, format_name: s
         return code or int(findings)
 
 
+def _clear_numbered_reports(directory: Path, *, prefix: str = "") -> None:
+    """Unlink this scanner's old reports, including links, without following them."""
+    directory.mkdir(parents=True, exist_ok=True)
+    for report in directory.iterdir():
+        if re.fullmatch(re.escape(prefix) + r"[0-9]+\.(?:json|sarif)", report.name):
+            report.unlink(missing_ok=True)
+
+
 def scan_osv(settings: config.Config, lockfiles: tuple[str, ...], *, output: str = "target/security", configuration: str | None = None) -> int:
     """Audit explicit uv.lock/Cargo.lock inputs; no dependency call analysis.
 
@@ -165,6 +174,7 @@ def scan_osv(settings: config.Config, lockfiles: tuple[str, ...], *, output: str
     if any(name not in inventory or Path(name).name not in {"uv.lock", "Cargo.lock"} for name in lockfiles):
         raise ValueError("OSV inputs must be existing tracked/nonignored uv.lock or Cargo.lock files")
     binary, env = _binary(settings, "osv-scanner")
+    _clear_numbered_reports(settings.path(output), prefix="osv-")
     code = 0
     for index, name in enumerate(sorted(lockfiles)):
         path = (settings.root / name).resolve()

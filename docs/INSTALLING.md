@@ -65,6 +65,8 @@ in the consumer's dependency groups.
 Optional `gitleaks` and `osv-scanner` release binaries use isolated host/version
 directories, upstream GitHub release-asset SHA-256 checksums, shared archive
 validation, and executable version probes before atomic file replacement.
+GitHub release-metadata requests optionally authenticate with `GITHUB_TOKEN`,
+falling back to `GH_TOKEN`; requests remain unauthenticated when neither is set.
 Missing checksums, unsupported assets and mismatched versions fail before
 publication. Setup, check, run, export and upgrade use these same managed paths;
 checks do not install or fall back to ambient scanners. Both architectures of

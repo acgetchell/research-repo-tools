@@ -10,7 +10,7 @@ from urllib.parse import quote
 
 from research_repo_tools import config, semgrep
 from research_repo_tools.process import resolve_executable
-from research_repo_tools.security import _report_run, _sarif, security_inventory
+from research_repo_tools.security import _clear_numbered_reports, _report_run, _sarif, security_inventory
 from research_repo_tools.semgrep_docs import rust_blocks
 from research_repo_tools.semgrep_findings import parse_results
 
@@ -93,6 +93,7 @@ def scan(
             "SEMGREP_VERSION_CACHE_PATH": str(temporary / "version-cache"),
             "SEMGREP_LOG_FILE": str(temporary / "semgrep.log"),
         }
+        _clear_numbered_reports(settings.path(output))
         for index, target in enumerate(targets):
             for fmt in ("json", "sarif"):
                 args = [
