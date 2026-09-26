@@ -22,11 +22,14 @@ jobs:
     with:
       repository: acgetchell/research-repo-tools
       policy: >-
-        {"uv": {
-          "dependencies": [
-            "hatchling", "packaging", "pyyaml", "rust-just",
-            "ipykernel", "nbclient", "nbformat", "actionlint-py",
-            "coverage", "pytest", "pytest-cov", "ruff", "ty", "zizmor", "pip-audit"
-          ],
+        {"github_actions": {
+          "files": [
+            ".github/workflows/audit.yml", ".github/workflows/ci.yml",
+            ".github/workflows/codecov.yml", ".github/workflows/codeql.yml",
+            ".github/workflows/dependabot-approve.yml", ".github/workflows/dependabot-auto-merge.yml",
+            ".github/workflows/prepare-release.yml", ".github/workflows/publish.yml",
+            ".github/workflows/zizmor.yml"
+          ]
+        }, "uv": {
           "files": ["pyproject.toml", "uv.lock"]
         }}

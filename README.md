@@ -177,10 +177,11 @@ strictly read-only tool checks.
 
 ### Dependabot approval and auto-merge
 
-The [shared GitHub workflow][dependabot] can approve allowlisted
-Python or Rust dependency patch updates and enable native auto-merge after the
-repository's required reviews and checks are satisfied. Each repository owns
-its dependency/file policy, Actions approval setting, and merge rules. Consumers
+The [shared GitHub workflow][dependabot] can approve Python, Rust, and GitHub
+Actions updates permitted by each repository's Dependabot configuration, including
+minor and major updates. Native auto-merge waits for required reviews and checks.
+Each repository owns its Dependabot configuration, dependency-file allowlist,
+Actions approval setting, and merge rules. Consumers
 pin the reusable workflow to a reviewed Git commit; no Python package upgrade is
 required. `research-repo-tools` is the first pilot consumer.
 
