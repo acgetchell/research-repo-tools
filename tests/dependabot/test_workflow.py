@@ -13,6 +13,8 @@ import yaml
 ROOT = Path(__file__).resolve().parents[2]
 WORKFLOW = ROOT / ".github/workflows/dependabot-approve.yml"
 SHA = "a" * 40
+BASE_SHA = "b" * 40
+ORIGINAL_SHA = "d" * 40
 DEPENDENCY = {
     "dependencyName": "pytest",
     "packageEcosystem": "uv",
@@ -21,8 +23,11 @@ DEPENDENCY = {
     "newVersion": "9.1.1",
 }
 POLICY = {
-    "uv": {"dependencies": ["pytest", "ruff"], "files": ["pyproject.toml", "uv.lock"]},
-    "cargo": {"dependencies": ["serde"], "files": ["Cargo.toml", "Cargo.lock"]},
+    "uv": {"files": ["pyproject.toml", "uv.lock"]},
+    "cargo": {"files": ["Cargo.toml", "Cargo.lock"]},
+    "github_actions": {
+        "files": [".github/workflows/codecov.yml", ".github/workflows/codeql.yml"],
+    },
 }
 FAKE_GH = r"""
 # Keep the Ubuntu workflow's LF transport when Git Bash invokes native jq.exe.
@@ -67,6 +72,13 @@ gh() {
     *"/commits?per_page=100")
       if [[ "$SCENARIO" == commits-api-error ]]; then return 1; fi
       cat "$TEST_DIR/commits.json" ;;
+    *"repos/owner/repo/compare/"*)
+      if [[ "$SCENARIO" == compare-api-error ]]; then return 1; fi
+      printf '%s\n' "$*" >> "$TEST_DIR/comparisons"
+      cat "$TEST_DIR/comparison.json" ;;
+    *"repos/owner/repo/commits/"*)
+      if [[ "$SCENARIO" == original-api-error ]]; then return 1; fi
+      cat "$TEST_DIR/original.json" ;;
     *"/files?per_page=100")
       if [[ "$SCENARIO" == files-api-error ]]; then return 1; fi
       cat "$TEST_DIR/files.json" ;;
@@ -93,7 +105,7 @@ def payloads():
             "draft": False,
             "user": {"login": "dependabot[bot]"},
             "head": {"sha": SHA, "repo": {"full_name": "owner/repo"}},
-            "base": {"ref": "main", "repo": {"full_name": "owner/repo"}},
+            "base": {"ref": "main", "sha": BASE_SHA, "repo": {"full_name": "owner/repo"}},
             "commits": 1,
             "changed_files": 2,
         },
@@ -104,10 +116,11 @@ def payloads():
                     "author": {"login": "dependabot[bot]"},
                     "committer": {"login": "web-flow"},
                     "commit": {"verification": {"verified": True}},
+                    "parents": [{"sha": BASE_SHA}],
                 }
             ]
         ],
-        "files": [[{"filename": "pyproject.toml", "status": "modified"}], [{"filename": "uv.lock", "status": "modified"}]],
+        "files": [[{"filename": "pyproject.toml", "status": "modified", "sha": "c" * 40}], [{"filename": "uv.lock", "status": "modified", "sha": "e" * 40}]],
         "rules": [
             [
                 {
@@ -201,12 +214,15 @@ def test_jq_model_preserves_exact_bytes(tmp_path, monkeypatch, binary, substitut
     assert result.stdout == expected
 
 
-@pytest.mark.parametrize("ecosystem", ["uv", "cargo"])
-def test_patch_approval_is_bound_to_verified_head(tmp_path, payloads, ecosystem):
+@pytest.mark.parametrize("ecosystem", ["uv", "cargo", "github_actions"])
+def test_approval_is_bound_to_verified_head(tmp_path, payloads, ecosystem):
     dependency = dict(DEPENDENCY, packageEcosystem=ecosystem)
     if ecosystem == "cargo":
         dependency["dependencyName"] = "serde"
         payloads["files"] = [[{"filename": file, "status": "modified"} for file in ["Cargo.toml", "Cargo.lock"]]]
+    elif ecosystem == "github_actions":
+        dependency["dependencyName"] = "codecov/codecov-action"
+        payloads["files"] = [[{"filename": file, "status": "modified"} for file in POLICY[ecosystem]["files"]]]
     result = run_step(tmp_path, payloads, [dependency])
     assert result.returncode == 0, result.stderr
     request = (tmp_path / "review-request").read_text(encoding="utf-8").splitlines()
@@ -245,7 +261,6 @@ def test_native_jq_models_preserve_workflow_decisions(tmp_path, payloads, scenar
         {"updateType": "version-update:semver-major"},
         {"updateType": ""},
         {"dependencyName": "unlisted"},
-        {"packageEcosystem": "github_actions"},
         {"prevVersion": ""},
         {"prevVersion": None},
         {"newVersion": ""},
@@ -256,7 +271,25 @@ def test_native_jq_models_preserve_workflow_decisions(tmp_path, payloads, scenar
         {"newVersion": "9.2.1"},
     ],
 )
-def test_one_ineligible_group_member_prevents_approval(tmp_path, payloads, change):
+def test_dependabot_configuration_owns_version_and_dependency_policy(tmp_path, payloads, change):
+    result = run_step(tmp_path, payloads, [DEPENDENCY, dict(DEPENDENCY, **change)])
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "review-request").exists()
+    assert (tmp_path / "outputs").read_bytes() == b"eligible=true\n"
+
+
+@pytest.mark.parametrize(
+    "change",
+    [
+        {"packageEcosystem": "github_actions"},
+        {"packageEcosystem": "npm"},
+        {"packageEcosystem": ""},
+        {"packageEcosystem": None},
+        {"dependencyName": ""},
+        {"dependencyName": None},
+    ],
+)
+def test_one_invalid_group_member_prevents_approval(tmp_path, payloads, change):
     result = run_step(tmp_path, payloads, [DEPENDENCY, dict(DEPENDENCY, **change)])
     assert result.returncode == 0, result.stderr
     assert not (tmp_path / "review-request").exists()
@@ -319,6 +352,89 @@ def test_additional_commit_cannot_inherit_first_commit_metadata(tmp_path, payloa
     result = run_step(tmp_path, payloads)
     assert result.returncode == 0, result.stderr
     assert not (tmp_path / "review-request").exists()
+
+
+@pytest.fixture
+def base_merge(payloads):
+    original = payloads["commits"][0][0]
+    original["sha"] = ORIGINAL_SHA
+    update = deepcopy(original)
+    update.update(sha=SHA, author={"login": "maintainer"}, parents=[{"sha": ORIGINAL_SHA}, {"sha": BASE_SHA}])
+    payloads["commits"].append([update])
+    payloads["pr"]["commits"] = 2
+    payloads["comparison"] = {"status": "identical", "merge_base_commit": {"sha": BASE_SHA}}
+    payloads["original"] = [{"sha": ORIGINAL_SHA, "files": deepcopy(page)} for page in payloads["files"]]
+    return payloads
+
+
+@pytest.mark.parametrize("scenario", ["fresh", "windows-jq", "posix-jq", "stdin-reading-jq"])
+@pytest.mark.parametrize("status", ["identical", "ahead"])
+def test_verified_base_merge_preserves_dependabot_update(tmp_path, base_merge, scenario, status):
+    base_merge["comparison"]["status"] = status
+    result = run_step(tmp_path, base_merge, scenario=scenario)
+    assert result.returncode == 0, result.stderr
+    request = (tmp_path / "review-request").read_text(encoding="utf-8")
+    assert f"commit_id={SHA}" in request
+    assert (tmp_path / "outputs").read_bytes() == b"eligible=true\n"
+    assert f"compare/{BASE_SHA}...{BASE_SHA}" in (tmp_path / "comparisons").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "linear",
+        "wrong-first-parent",
+        "extra-parent",
+        "unsigned",
+        "non-github",
+        "unrelated-base",
+        "diverged",
+        "behind",
+        "changed-blob",
+        "missing-blob",
+        "missing-file",
+        "wrong-original",
+        "truncated-commits",
+    ],
+)
+def test_untrusted_base_updates_do_not_approve(tmp_path, base_merge, case):
+    merge = base_merge["commits"][1][0]
+    if case == "linear":
+        merge["parents"].pop()
+    elif case == "wrong-first-parent":
+        merge["parents"][0]["sha"] = "f" * 40
+    elif case == "extra-parent":
+        merge["parents"].append({"sha": "f" * 40})
+    elif case == "unsigned":
+        merge["commit"]["verification"]["verified"] = False
+    elif case == "non-github":
+        merge["committer"]["login"] = "maintainer"
+    elif case == "unrelated-base":
+        base_merge["comparison"]["merge_base_commit"]["sha"] = "f" * 40
+    elif case in {"diverged", "behind"}:
+        base_merge["comparison"]["status"] = case
+    elif case == "changed-blob":
+        base_merge["files"][1][0]["sha"] = "f" * 40
+    elif case == "missing-blob":
+        del base_merge["files"][1][0]["sha"]
+        del base_merge["original"][1]["files"][0]["sha"]
+    elif case == "missing-file":
+        base_merge["original"].pop()
+    elif case == "wrong-original":
+        base_merge["original"][1]["sha"] = "f" * 40
+    else:
+        base_merge["pr"]["commits"] = 3
+    result = run_step(tmp_path, base_merge)
+    assert not (tmp_path / "review-request").exists(), result.stdout + result.stderr
+    assert not (tmp_path / "outputs").exists()
+
+
+@pytest.mark.parametrize("scenario", ["compare-api-error", "original-api-error", "changed", "retargeted"])
+def test_base_merge_api_errors_and_races_fail_closed(tmp_path, base_merge, scenario):
+    result = run_step(tmp_path, base_merge, scenario=scenario)
+    assert result.returncode != 0
+    assert not (tmp_path / "review-request").exists()
+    assert not (tmp_path / "outputs").exists()
 
 
 @pytest.mark.parametrize("committer", [{"login": "collaborator"}, {"login": "dependabot[bot]"}, None])
@@ -409,8 +525,42 @@ def test_absent_active_rules_prevent_approval(tmp_path, payloads):
     assert not (tmp_path / "review-request").exists()
 
 
-def test_all_patch_group_can_be_approved(tmp_path, payloads):
-    second = dict(DEPENDENCY, dependencyName="ruff", prevVersion="0.16.8", newVersion="0.16.9")
+def test_mixed_version_group_can_be_approved(tmp_path, payloads):
+    second = dict(DEPENDENCY, dependencyName="ruff", updateType="version-update:semver-minor", prevVersion="0.16.8", newVersion="0.17.0")
     result = run_step(tmp_path, payloads, [DEPENDENCY, second])
     assert result.returncode == 0, result.stderr
     assert (tmp_path / "review-request").exists()
+
+
+def test_repeated_verified_base_merges(tmp_path, base_merge):
+    prior = base_merge["commits"][1][0]
+    prior["sha"] = "f" * 40
+    newest = deepcopy(prior)
+    newest.update(sha=SHA, parents=[{"sha": prior["sha"]}, {"sha": BASE_SHA}])
+    base_merge["commits"].append([newest])
+    base_merge["pr"]["commits"] = 3
+    result = run_step(tmp_path, base_merge)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "review-request").exists()
+    assert len((tmp_path / "comparisons").read_text(encoding="utf-8").splitlines()) == 2
+
+
+def test_actions_base_merge_can_be_approved(tmp_path, base_merge):
+    # A group of action/sub-action updates plus a GitHub base merge, as in #52.
+    files = [{"filename": name, "status": "modified", "sha": "c" * 40} for name in POLICY["github_actions"]["files"]]
+    base_merge["files"] = [files]
+    base_merge["original"] = [{"sha": ORIGINAL_SHA, "files": files}]
+    dependencies = [
+        dict(DEPENDENCY, packageEcosystem="github_actions", dependencyName=name)
+        for name in ["codecov/codecov-action", "github/codeql-action/init", "github/codeql-action/analyze"]
+    ]
+    result = run_step(tmp_path, base_merge, dependencies)
+    assert result.returncode == 0, result.stderr
+    assert (tmp_path / "review-request").exists()
+
+
+def test_local_actions_policy_covers_repository_workflows():
+    caller = yaml.safe_load((ROOT / ".github/workflows/dependabot-auto-merge.yml").read_text(encoding="utf-8"))
+    policy = json.loads(caller["jobs"]["approve-and-enable-auto-merge"]["with"]["policy"])
+    files = set(policy["github_actions"]["files"])
+    assert files == {p.relative_to(ROOT).as_posix() for p in (ROOT / ".github/workflows").glob("*.yml")}
