@@ -5,6 +5,109 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.7] - 2026-09-26
+
+### Merged Pull Requests
+
+- Bump hatchling in the python group [#53](https://github.com/acgetchell/research-repo-tools/pull/53)
+- Bump the github-actions group with 4 updates [#52](https://github.com/acgetchell/research-repo-tools/pull/52)
+
+### Added
+
+- Add reusable patch approval and auto-merge [`2ef9ba8`](https://github.com/acgetchell/research-repo-tools/commit/2ef9ba8acdf35f7302b6c9515504814a9c40c874)
+
+  - Approve allowlisted uv and Cargo patch updates using repository-owned dependency and file policies, including every member of grouped updates.
+  - Bind approval to a single GitHub-signed Dependabot head commit and require active rulesets with stale-review dismissal and strict checks.
+  - Replace CodeRabbit approval polling and the personal token requirement with GITHUB_TOKEN and native squash auto-merge.
+  - Provide settings payloads and document consumer SHA pinning, setup, rollout, and post-merge verification.
+- Add shared Python adoption, security scans, and cleanup
+  [`d975bb2`](https://github.com/acgetchell/research-repo-tools/commit/d975bb293262457f44ab9e0d6484af3622911a00)
+
+  - Add opt-in Python baseline inheritance and recoverable preview/apply migration while preserving consumer runtime and lint policies.
+  - Manage cargo-deny and checksum-verified OSV/Gitleaks binaries, with explicit scan inputs, redacted reports, and blocking failure handling.
+  - Share Semgrep inventory, Rust documentation scans, and fixture checks.
+  - Support first-release preparation without a fabricated predecessor and opt-in blocking of dependency installation in notebooks.
+  - Add just clean for obsolete package-owned installations, with previews and retention roots; keep user-wide installations untouched.
+  - Preserve executable helpers and reject linked adoption environments; handle relative cleanup roots and TOML tables without final newlines.
+  - Correct Windows Bash CRLF assumptions in the Dependabot test harness.
+  - Document public configuration factories and consumer migration, cleanup, and release contracts; repair README links for PyPI.
+  - Update platformdirs to 4.11.15.
+
+### Fixed
+
+- Make Dependabot workflow tests portable [`3f1bfc9`](https://github.com/acgetchell/research-repo-tools/commit/3f1bfc92244c75bffbe6269532f37ac64ed30f60)
+
+  - Use jq's portable -b option for Ubuntu compatibility while preserving  LF output on Windows.
+  - Pass Bash scripts through binary stdin to preserve embedded quoting and prevent Windows newline translation.
+  - Add a dynamic PyPI version badge to the README linking to the package.
+- Isolate Dependabot test scripts from child stdin
+  [`937f151`](https://github.com/acgetchell/research-repo-tools/commit/937f15197a9fe0bcc5d04f1d19d9a42cb1a4f9ec)
+
+  - Run Bash from temporary files with LF line endings so child processes cannot consume the workflow script through stdin.
+  - Normalize jq output before simulating Windows CRLF behavior.
+  - Document that GITHUB_TOKEN approval replaces CodeRabbit polling and personal tokens while required CodeRabbit status checks still apply.
+- Preserve exact CRLF bytes in Dependabot test fixtures
+  [`a5aa0f5`](https://github.com/acgetchell/research-repo-tools/commit/a5aa0f5e75e4e1f89f795cb85aab4d9cab5c1b27)
+
+  - Replace sed-based newline simulation with Bash builtins to avoid platform-dependent text conversion.
+  - Assert exact LF and CRLF bytes before and after command substitution, including when external text filters normalize line endings.
+- Authenticate scanner setup and detect notebook installs
+  [`d0ae1bd`](https://github.com/acgetchell/research-repo-tools/commit/d0ae1bd92108696c642f0758e63463389f4348f1)
+
+  - Authenticate GitHub release metadata with GITHUB_TOKEN or GH_TOKEN and pass the workflow token to native setup to avoid anonymous API rate limits.
+  - Detect nested sudo/env wrappers and Windows executable paths and casing in notebook installation commands.
+  - Inspect literal subprocess calls after notebook magics while preserving original source line numbers.
+  - Remove stale numbered OSV and Semgrep JSON/SARIF reports, including symlinks, while preserving unrelated files and symlink targets.
+- Reject linked scanner report directories [`0f98931`](https://github.com/acgetchell/research-repo-tools/commit/0f98931586b15cb3767e53d09021bfa8baca8667)
+
+  - Reject symlinks and Windows junctions in OSV and Semgrep output paths, including parent components, before creating directories  or removing reports.
+  - Prevent cleanup from deleting reports through directory links while preserving numbered-report cleanup and report-symlink removal.
+- Honor configured updates and verified base merges
+  [`cbb2ea6`](https://github.com/acgetchell/research-repo-tools/commit/cbb2ea6dee8866b3f0547bca935aef48fdd71707)
+
+  - Approve configured uv, Cargo, and GitHub Actions updates, including minor and major versions, without duplicate dependency-name filters.
+  - Accept verified GitHub base merges only when ancestry and original dependency-file contents are preserved.
+  - Document file allowlists, shared workflow adoption, and retirement of CodeRabbit approval requests and personal tokens.
+
+### Maintenance
+
+- Bump hatchling in the python group [#53](https://github.com/acgetchell/research-repo-tools/pull/53)
+  [`ac5efcc`](https://github.com/acgetchell/research-repo-tools/commit/ac5efcc665828b7fcb7fcdab66f00672e720d3d7)
+
+  Bumps the python group with 1 update: [hatchling](https://github.com/pypa/hatch).
+
+  Updates `hatchling` from 1.32.0 to 1.32.3
+
+  - [Release notes](https://github.com/pypa/hatch/releases)
+  - [Commits](https://github.com/pypa/hatch/compare/hatchling-v1.32.0...hatchling-v1.32.3)
+- Bump the github-actions group with 4 updates [#52](https://github.com/acgetchell/research-repo-tools/pull/52)
+  [`d2469f6`](https://github.com/acgetchell/research-repo-tools/commit/d2469f6ffa513d4674a3311473c266167d0ae728)
+
+  Bumps the github-actions group with 4 updates: [codecov/codecov-action](https://github.com/codecov/codecov-action),
+  [github/codeql-action/init](https://github.com/github/codeql-action), [github/codeql-action/analyze](https://github.com/github/codeql-action) and
+  [github/codeql-action/upload-sarif](https://github.com/github/codeql-action).
+
+  Updates `codecov/codecov-action` from 7.1.0 to 7.1.1
+
+  - [Release notes](https://github.com/codecov/codecov-action/releases)
+  - [Changelog](https://github.com/codecov/codecov-action/blob/main/CHANGELOG.md)
+  - [Commits](https://github.com/codecov/codecov-action/compare/0b35c9ecc4f0529d0eb674914510c22f85b196b4...303a32d7a59b442fa8d48b6a1cc6825c09c847a5)
+
+  Updates `github/codeql-action/init` from 4.38.0 to 4.38.1
+  - [Release notes](https://github.com/github/codeql-action/releases)
+  - [Changelog](https://github.com/github/codeql-action/blob/main/CHANGELOG.md)
+  - [Commits](https://github.com/github/codeql-action/compare/b96794f015dfd88f77b49b1c93e0fa7110f94c63...1c5b675653bb5c22dbe9b12b556ec555138e09fd)
+
+  Updates `github/codeql-action/analyze` from 4.38.0 to 4.38.1
+  - [Release notes](https://github.com/github/codeql-action/releases)
+  - [Changelog](https://github.com/github/codeql-action/blob/main/CHANGELOG.md)
+  - [Commits](https://github.com/github/codeql-action/compare/b96794f015dfd88f77b49b1c93e0fa7110f94c63...1c5b675653bb5c22dbe9b12b556ec555138e09fd)
+
+  Updates `github/codeql-action/upload-sarif` from 4.38.0 to 4.38.1
+  - [Release notes](https://github.com/github/codeql-action/releases)
+  - [Changelog](https://github.com/github/codeql-action/blob/main/CHANGELOG.md)
+  - [Commits](https://github.com/github/codeql-action/compare/b96794f015dfd88f77b49b1c93e0fa7110f94c63...1c5b675653bb5c22dbe9b12b556ec555138e09fd)
+
 ## [0.1.6] - 2026-09-23
 
 ### Added
@@ -337,6 +440,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Document supported CLI and Python interfaces, consumer just recipes, and publisher setup.
   - Generate the initial 0.1.0 changelog from committed history.
 
+[0.1.7]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.4...v0.1.5
 [0.1.4]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.3...v0.1.4
