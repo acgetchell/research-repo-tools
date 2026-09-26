@@ -96,11 +96,15 @@ def test_native_environment_replaces_inherited_installation_and_project_override
     compiler_bin = tmp_path / "native-compiler"
     monkeypatch.setenv("PATH", os.pathsep.join([str(Path(sys.executable).parent), str(compiler_bin), str(ROOT / ".venv" / "Scripts")]))
     monkeypatch.setenv("SDKROOT", "native-sdk")
+    monkeypatch.setenv("GITHUB_TOKEN", "fixture-github-token")
+    monkeypatch.setenv("GH_TOKEN", "fixture-gh-token")
     original = dict(os.environ)
     env = harness.isolated_environment(tmp_path)
     assert dict(os.environ) == original
     assert env["PATH"] == str(compiler_bin)
     assert env["SDKROOT"] == "native-sdk"
+    assert env["GITHUB_TOKEN"] == "fixture-github-token"
+    assert env["GH_TOKEN"] == "fixture-gh-token"
     assert all(value != "outside-fixture" for name, value in env.items() if name in overrides)
     for name in ("UV_TOOL_BIN_DIR", "UV_TOOL_DIR", "UV_PYTHON_INSTALL_DIR", "UV_CACHE_DIR", "RESEARCH_REPO_TOOLS_HOME"):
         assert Path(env[name]).is_relative_to(tmp_path)

@@ -181,6 +181,52 @@ def check_clippy_sarif(consumer: Path, cli: str, env: dict[str, str]) -> None:
     run([*prefix, "sarif-fmt"], cwd=consumer, env=env, input="not SARIF", expected=1)
 
 
+def check_security_binaries(consumer: Path, cli: str, env: dict[str, str]) -> None:
+    """Run real scanners against portable synthetic inputs, with no Git mutation."""
+    prefix = [cli, "toolchain", "run", "--"]
+    rules = consumer / "synthetic-gitleaks.toml"
+    rules.write_bytes(b'[[rules]]\nid="fixture"\nregex="synthetic-fixture-value-[0-9]+"\n')
+    source = consumer / "synthetic secret.txt"
+    source.write_bytes(b'key = "synthetic-fixture-value-123456"\r\n')
+    for fmt in ("json", "sarif"):
+        report = consumer / f"gitleaks.{fmt}"
+        run(
+            [
+                *prefix,
+                "gitleaks",
+                "dir",
+                str(source),
+                "--config",
+                str(rules),
+                "--redact=100",
+                "--ignore-gitleaks-allow",
+                "--no-banner",
+                "--report-format",
+                fmt,
+                "--report-path",
+                str(report),
+            ],
+            cwd=consumer,
+            env=env,
+            expected=1,
+        )
+        payload = report.read_bytes()
+        assert b"synthetic-fixture-value-123456" not in payload, "native scanner failed to redact synthetic secret"
+        assert json.loads(payload), "native scanner did not report the synthetic finding"
+    assert "2.6.0" in run([*prefix, "osv-scanner", "--version"], cwd=consumer, env=env)
+    # Parse an empty supported lockfile locally; OSV's documented no-packages
+    # status verifies argument parsing without making advisories a setup gate.
+    lockfile = consumer / "empty" / "Cargo.lock"
+    lockfile.parent.mkdir()
+    lockfile.write_bytes(b"version = 4\n")
+    run(
+        [*prefix, "osv-scanner", "scan", "source", "--no-call-analysis=go", "--no-call-analysis=rust", "--lockfile", ":" + str(lockfile)],
+        cwd=consumer,
+        env=env,
+        expected=128,
+    )
+
+
 def check(dist: Path) -> None:
     require_hosted_runner()
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
@@ -206,7 +252,8 @@ def check(dist: Path) -> None:
             f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}, "{dev_pin}"]\n'
             f'[tool.uv]\npackage=false\ndefault-groups=[]\nrequired-version="{uv_version}"\n'
             f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(wheel.resolve()))}}}\n"
-            '[tool.research-repo-tools.toolchain.cargo]\ncargo-edit="0.13.13"\nclippy-sarif="0.8.0"\ngit-cliff="2.14.1"\nsarif-fmt="0.8.0"\n',
+            '[tool.research-repo-tools.toolchain.cargo]\ncargo-deny="0.20.2"\ncargo-edit="0.13.13"\nclippy-sarif="0.8.0"\ngit-cliff="2.14.1"\nsarif-fmt="0.8.0"\n'
+            '[tool.research-repo-tools.toolchain.binaries]\ngitleaks="8.30.1"\nosv-scanner="2.6.0"\n',
             encoding="utf-8",
             newline="\n",
         )
@@ -234,7 +281,7 @@ def check(dist: Path) -> None:
         assert selected["just"] == binary(Path(env["UV_TOOL_BIN_DIR"]), "just")
         assert selected["Python"] == binary(scripts, "python")
         # A system installation must never satisfy the managed Rust/Cargo pins.
-        for name in ("rustup", "rustc", "cargo", "cargo-edit-upgrade", "clippy-sarif", "git-cliff", "sarif-fmt"):
+        for name in ("rustup", "rustc", "cargo", "cargo-deny", "cargo-edit-upgrade", "clippy-sarif", "git-cliff", "sarif-fmt", "gitleaks", "osv-scanner"):
             assert selected[name].is_relative_to(env["RESEARCH_REPO_TOOLS_HOME"]), selected[name]
         probe = (
             "import json, shutil, sys, research_repo_tools; "
@@ -249,6 +296,7 @@ def check(dist: Path) -> None:
             assert Path(resolved[name]) == binary(selected["rustup"].parent, name), resolved
         assert Path(resolved["git-cliff"]) == selected["git-cliff"], resolved
         assert Path(resolved["cargo-upgrade"]) == selected["cargo-edit-upgrade"], resolved
+        assert run([cli, "toolchain", "run", "--", "cargo", "deny", "--version"], cwd=consumer, env=active).strip() == "cargo-deny 0.20.2"
         (consumer / "smoke.rs").write_text('fn main() { println!("native setup works"); }\n', encoding="utf-8", newline="\n")
         program = binary(consumer, "smoke")
         run([cli, "toolchain", "run", "--", "rustc", "smoke.rs", "-o", str(program)], cwd=consumer, env=active)
@@ -269,6 +317,7 @@ def check(dist: Path) -> None:
         assert json.loads(run([cli, "toolchain", "check", "--json"], cwd=consumer, env=active)) == statuses
         verify_shell(consumer, env, just_version)
         check_clippy_sarif(consumer, cli, active)
+        check_security_binaries(consumer, cli, active)
         check_cargo_update(consumer, cli, just, active)
         assert declarations == {name: (consumer / name).read_bytes() for name in declarations}, "dependency update changed tool or Python declarations"
         # Exercise explicit resolution, installation, declaration publication,
@@ -278,7 +327,8 @@ def check(dist: Path) -> None:
         run([just, "update-cargo-tools"], cwd=consumer, env=active)
         upgraded = tomllib.loads((consumer / "pyproject.toml").read_text(encoding="utf-8"))
         cargo_pins = upgraded["tool"]["research-repo-tools"]["toolchain"]["cargo"]
-        assert set(cargo_pins) == {"cargo-edit", "clippy-sarif", "git-cliff", "sarif-fmt"}
+        assert set(cargo_pins) == {"cargo-deny", "cargo-edit", "clippy-sarif", "git-cliff", "sarif-fmt"}
+        assert run([cli, "toolchain", "run", "--", "cargo", "deny", "--version"], cwd=consumer, env=active).strip() == f"cargo-deny {cargo_pins['cargo-deny']}"
         assert run([cli, "toolchain", "run", "--", "cargo", "upgrade", "--version"], cwd=consumer, env=active).strip() == (
             f"cargo-edit-upgrade {cargo_pins['cargo-edit']}"
         )
@@ -288,7 +338,17 @@ def check(dist: Path) -> None:
         for name in (".python-version", "rust-toolchain.toml", "uv.lock"):
             assert (consumer / name).read_bytes() == declarations[name]
         assert all(path.exists() for path in selected.values()), "upgrade removed old versioned tools"
-        print("PASS: native wheel setup, managed execution and upgrade, Cargo dependency update, Rust compilation, user Just, and repeat setup", flush=True)
+        # Cleanup must also work through the installed recipe on native Windows.
+        # This synthetic obsolete Cargo install belongs only to this disposable store.
+        obsolete = selected["git-cliff"].parent.parent.with_name("0.0.1")
+        obsolete.mkdir()
+        (obsolete / "sentinel").write_bytes(b"obsolete installation fixture\r\n")
+        assert str(obsolete) in run([just, "clean"], cwd=consumer, env=active)
+        assert obsolete.is_dir(), "preview removed an installation"
+        run([just, "clean", "--apply"], cwd=consumer, env=active)
+        assert not obsolete.exists(), "cleanup retained an obsolete installation"
+        assert all(status["ok"] for status in json.loads(run([cli, "toolchain", "check", "--json"], cwd=consumer, env=active)))
+        print("PASS: native setup, managed execution, upgrade and cleanup, Cargo update, Rust compilation, user Just, and repeat setup", flush=True)
 
 
 if __name__ == "__main__":

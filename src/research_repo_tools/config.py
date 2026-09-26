@@ -11,9 +11,11 @@ from typing import Literal, TypeIs, cast
 from research_repo_tools.release_policy import ReleasePolicy as ReleasePolicy
 from research_repo_tools.release_policy import ReleaseRule
 
+__all__ = ["load", "parse"]
+
 FIELDS = {
-    "notebooks": {"advice", "group", "cwd", "output-dir", "timeout", "outputs"},
-    "toolchain": {"cargo"},
+    "notebooks": {"advice", "group", "cwd", "output-dir", "timeout", "outputs", "prohibit-installs"},
+    "toolchain": {"binaries", "cargo", "inherit-python"},
     "deps": {"pyproject", "justfile", "tools", "uv"},
     "semgrep": {"config", "fixtures", "namespace", "timeout", "cwd", "counts"},
     "release": {"date-policy", "final-changelog", "required-files", "exclude", "rules", "tag-policy"},
@@ -38,14 +40,18 @@ class NotebookSettings:
     timeout: int = 600
     outputs: Literal["clear", "preserve"] = "clear"
     advice: NotebookAdvice = field(default_factory=NotebookAdvice)
+    prohibit_installs: bool = False
 
 
 @dataclass(frozen=True, slots=True)
 class ToolchainSettings:
     cargo: Mapping[str, str] = field(default_factory=dict)
+    inherit_python: bool = False
+    binaries: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cargo", MappingProxyType(dict(self.cargo)))
+        object.__setattr__(self, "binaries", MappingProxyType(dict(self.binaries)))
 
 
 @dataclass(frozen=True, slots=True)
@@ -219,6 +225,8 @@ def parse(value: object, *, root: Path) -> Config:
         raise ValueError("configuration schema must be integer 1")
     root = root.resolve()
     toolchain = _section(data, "toolchain")
+    if type(toolchain.get("inherit-python", False)) is not bool:
+        raise ValueError("toolchain.inherit-python must be a boolean")
     deps = _section(data, "deps")
     semgrep = _section(data, "semgrep")
     release = _section(data, "release")
@@ -237,6 +245,9 @@ def parse(value: object, *, root: Path) -> Config:
     notebook_outputs = notebooks.get("outputs", "clear")
     if notebook_outputs not in ("clear", "preserve"):
         raise ValueError("notebooks.outputs must be clear or preserve")
+    prohibit_installs = notebooks.get("prohibit-installs", False)
+    if type(prohibit_installs) is not bool:
+        raise ValueError("notebooks.prohibit-installs must be a boolean")
     timeout = semgrep.get("timeout", 300)
     if type(timeout) is not int or timeout <= 0:
         raise ValueError("semgrep.timeout must be a positive integer")
@@ -253,7 +264,11 @@ def parse(value: object, *, root: Path) -> Config:
     return Config(
         root=root,
         zizmor=ZizmorSettings(cast(Literal["regular", "pedantic", "auditor"] | None, persona), zizmor_timeout),
-        toolchain=ToolchainSettings(_strings(toolchain.get("cargo", {}), "toolchain.cargo")),
+        toolchain=ToolchainSettings(
+            _strings(toolchain.get("cargo", {}), "toolchain.cargo"),
+            inherit_python=toolchain.get("inherit-python", False) is True,
+            binaries=_strings(toolchain.get("binaries", {}), "toolchain.binaries"),
+        ),
         deps=DependencySettings(
             pyproject=_string(deps.get("pyproject", "pyproject.toml"), "deps.pyproject"),
             justfile=_string(deps.get("justfile", "justfile"), "deps.justfile"),
@@ -289,6 +304,7 @@ def parse(value: object, *, root: Path) -> Config:
             timeout=notebook_timeout,
             outputs="preserve" if notebook_outputs == "preserve" else "clear",
             advice=_notebook_advice(notebooks.get("advice", {})),
+            prohibit_installs=prohibit_installs,
         ),
     )
 

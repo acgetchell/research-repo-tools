@@ -154,8 +154,9 @@ command. It synchronizes `pyproject.toml`, the local package entry in `uv.lock`,
 and applicable citation metadata before generating notes. It does not generate
 notes, upgrade dependencies, tag, or publish. See
 [Shared release behavior](UPDATING_RELEASE_METADATA.md) for its contract.
-For an initial release only, set the initial project version and omit this
-update step rather than inventing a previous release.
+For a consumer's initial release, use the explicit first-release mode described
+in [Shared release behavior](UPDATING_RELEASE_METADATA.md#first-release-preparation).
+This package already has published history and must use a real predecessor.
 
 Changelog generation uses committed history as though the target tag already
 existed; no temporary tag is needed. It keeps the active minor series in

@@ -11,6 +11,8 @@ existing consumer repositories is separate work after publication.
 
 Consumers own their version declarations. The installed package owns how to
 install and verify them. There are no repository-name profiles.
+With opt-in `toolchain.inherit-python`, the installed package also owns the
+shared Python baseline; see [consumer adoption](../README.md#shared-python-adoption).
 
 | Input | Authority |
 | --- | --- |
@@ -19,6 +21,7 @@ install and verify them. There are no repository-name profiles.
 | `pyproject.toml` and `uv.lock` | Python dependencies and the pinned shared package |
 | `rust-toolchain.toml` | Stable exact Rust release, components, targets, and minimal/default profile |
 | `[tool.research-repo-tools.toolchain.cargo]` | Exact Cargo tool package versions |
+| `[tool.research-repo-tools.toolchain.binaries]` | Exact OSV-Scanner and Gitleaks release versions |
 
 uv must be at least 0.12.10 so the shared installer can enforce its Python
 installation ownership policy with `--no-bin` and `--no-registry`.
@@ -52,12 +55,24 @@ The initial contract supports stable `X.Y.Z` toolchains and the `minimal` or
 profile are rejected explicitly. Python-only consumers can omit the Rust file and
 Cargo tool table.
 
-Supported Cargo packages are `cargo-audit`, `cargo-edit`, `cargo-llvm-cov`,
+Supported Cargo packages are `cargo-audit`, `cargo-deny`, `cargo-edit`, `cargo-llvm-cov`,
 `cargo-machete`, `cargo-nextest`, `clippy-sarif`, `dprint`, `git-cliff`, `rumdl`, `samply`, `sarif-fmt`,
 `taplo-cli`, `tectonic`, `tex-fmt`, `typos-cli`, and `zizmor`. Versions accept
 canonical Cargo SemVer. `just` is supplied by the Python `rust-just` dependency;
 do not declare another installation of it under Cargo. Other Python tools belong
 in the consumer's dependency groups.
+
+Optional `gitleaks` and `osv-scanner` release binaries use isolated host/version
+directories, upstream GitHub release-asset SHA-256 checksums, shared archive
+validation, and executable version probes before atomic file replacement.
+GitHub release-metadata requests optionally authenticate with `GITHUB_TOKEN`,
+falling back to `GH_TOKEN`; requests remain unauthenticated when neither is set.
+Missing checksums, unsupported assets and mismatched versions fail before
+publication. Setup, check, run, export and upgrade use these same managed paths;
+checks do not install or fall back to ambient scanners. Both architectures of
+the supported macOS, glibc Linux and Windows hosts have explicit asset mappings.
+See [scanner commands](../README.md#dependency-and-secret-scanning) for scope,
+redaction, reports and consumer-owned exceptions.
 
 ## First adoption and setup
 
@@ -118,6 +133,7 @@ rerun it. Setup does not rewrite declarations, locks, or existing recipes.
 The consumer template provides:
 
 - `just changelog`: run the shared generator with the checked managed git-cliff.
+- `just clean`: preview obsolete package-owned installations; pass `--apply` to remove them.
 - `just help`: list all available commands and arguments in lexicographic order.
 - `just help-workflows`: alias for `help`.
 - `just setup`: synchronize declared tools and then the default Python environment.
@@ -143,7 +159,11 @@ The underlying commands are:
 | Command | Behavior |
 | --- | --- |
 | `setup` | Install user Just and declared tools, configure PATH, and sync the locked Python environment |
+| `toolchain adopt (--dry-run \| --apply)` | Plan or apply an opt-in migration to the executing shared package and its Python baseline |
 | `toolchain check [--json]` | Report expected/actual versions and selected paths; nonzero if incomplete |
+| `toolchain clean [--dry-run \| --apply] [--keep-root PATH]...` | Preview obsolete package-owned installations; explicitly apply removals while retaining the selected consumers |
+| `toolchain export [--file PATH]` | Verify tools and append their environment to an explicit file or `GITHUB_ENV` |
+| `toolchain python-check` | Reject drift from the installed shared Python baseline in opted-in consumers |
 | `toolchain run -- COMMAND ...` | Check tools, then run with their selected paths; propagate failure/exit status |
 | `toolchain sync [--dry-run]` | Install declared versions and verify results; dry run reports without installation |
 | `toolchain upgrade [--dry-run]` | Resolve stable Cargo upgrades, install and verify them, then publish the exact pins |
@@ -169,9 +189,13 @@ different installer. The package's runtime dependency also supplies Just inside
 the project environment. The user-level command makes bare `just` available
 without activating that environment.
 
-Managed Rust/Cargo installations live under `~/.cache/research-repo-tools`,
-overridden by an absolute `RESEARCH_REPO_TOOLS_HOME`. Python installation through
-uv disables user-level executable aliases and Windows registry entries.
+Managed installations live under `~/.cache/research-repo-tools`, overridden by an
+absolute `RESEARCH_REPO_TOOLS_HOME`. New Python installs default to its `python`
+subdirectory; an explicit `UV_PYTHON_INSTALL_DIR` remains honored. Existing
+compatible project environments remain usable. This replaces the former default
+of installing Python into uv's user-wide store; those existing installs are not
+migrated or cleaned. Explicit Python installation through uv disables user-level
+executable aliases and Windows registry entries.
 
 On Windows, keep a custom `RESEARCH_REPO_TOOLS_HOME` short: Rust adds nested
 toolchain and library directories, and native build tools can still hit the
@@ -184,6 +208,51 @@ by that version and host target. Cargo tool roots include host, Rust version,
 package name, and package version. Distinct consumers can keep distinct pins;
 sync never upgrades the selected release or rewrites the user's default Rust
 toolchain. Old cache entries remain available until deliberately removed.
+
+## Cleaning obsolete installations
+
+`just clean` previews removals; `just clean --apply` performs them after checking
+the inventory and declarations again. Neither command installs tools. Both use
+the locked project environment without synchronizing it or downloading Python.
+Run setup first if that environment is missing.
+
+The store can be shared across repositories. Pass `--keep-root PATH` for each
+other consumer whose declarations must be retained, in both preview and apply.
+There is no automatic registry of consumer repositories. Additional roots use
+their `pyproject.toml` configuration and conventional Python/Rust selectors;
+invalid roots fail before any removal. Paths containing spaces are supported.
+Relative retention roots resolve against the configured consumer root, including
+when `--root` selects a different directory from the invoking shell.
+
+Retention is conservative:
+
+- Cargo tools and release binaries are eligible only when older than every
+  retained pin for that package. Cargo copies built with an older Rust compiler
+  are also eligible when their package version is no newer than those pins.
+  Same-release Cargo prerelease/build variants remain with the current compiler.
+- Stable Rust toolchains older than all selected Rust pins are uninstalled using
+  the package's private rustup home. Its default toolchain is retained. Other
+  rustup manager versions, host targets and custom toolchains remain intact.
+- CPython cleanup considers only the private `python` store and current host.
+  Each minor selector retains its newest compatible installed patch; exact
+  selectors retain that patch. Versions older than all these selections can be
+  removed. Missing selections fall back to the declared version as a conservative
+  cutoff. The running interpreter, selected roots' `.venv` interpreters, active
+  or explicitly selected environments, and uv tool interpreters are protected.
+  Removal deletes only selected private directories and their uv minor-version
+  symlinks/junctions. Targets of unrecognized aliases are preserved. It does not
+  invoke uv's user alias or registry cleanup.
+  Other architectures, variants and interpreters outside the private store stay.
+
+Unknown packages, newer versions, user-wide installations, external Python
+stores, project environments, build artifacts, and download/dependency caches
+are outside cleanup. Linked or junction-backed installation boundaries are
+rejected. Close processes using obsolete tools before applying cleanup,
+especially on Windows where open executables can prevent removal. Do not install
+tools or edit declarations concurrently. Cleanup stops on the first failure;
+earlier removals remain applied. Correct the cause and preview again.
+
+## Installing and recovering tools
 
 Installers run only during explicit setup, toolchain sync, or toolchain upgrade. Rustup uses its
 versioned upstream binary and verifies the
@@ -211,6 +280,7 @@ or formatter.
 | Package | Direct executable probe | Expected output |
 | --- | --- | --- |
 | `cargo-audit` | `cargo-audit --version` | `cargo-audit X.Y.Z` |
+| `cargo-deny` | `cargo-deny --version` | `cargo-deny X.Y.Z` |
 | `cargo-machete` | `cargo-machete --version` | `X.Y.Z` |
 | `clippy-sarif` | `clippy-sarif --version` | `clippy-sarif X.Y.Z` |
 | `samply` | `samply --version` | `samply X.Y.Z` |

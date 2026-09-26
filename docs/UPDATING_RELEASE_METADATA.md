@@ -55,6 +55,27 @@ updates, and publication are separate operations. Repository profiles and comman
 Python adapters extend preparation as described below.
 
 
+## First-release preparation
+
+The first-release mode added for v0.1.7 prepares metadata without inventing a
+predecessor. After adopting that release and its consumer template, run
+`just release-first v0.1.0 YYYY-MM-DD` with the intended target and UTC date.
+The command checks GitHub's published stable history and refuses first-release
+preparation if any stable release exists. Authentication or lookup failures also
+fail; they do not establish empty history.
+
+The underlying `release update --first-release` command supports `--dry-run` for
+preview. Add `--offline` only when empty history has been independently reviewed;
+it accepts that explicit intent and performs no discovery. `--previous-release`
+cannot accompany `--first-release`. For ordinary releases, `--offline` requires
+an explicit predecessor, which already avoids discovery.
+Policies using `source = "previous-tag"` are invalid without a predecessor.
+
+An Unreleased-only changelog is accepted during this preparation step. Generate
+the dated first release afterward, then run final-release validation: published
+releases still require complete generated notes. Existing release preparation
+with a real predecessor remains unchanged.
+
 ## Declarative consumer policies
 
 These additions require a published package newer than `0.1.2` containing the

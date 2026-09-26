@@ -49,6 +49,10 @@ check-setup:
 # Run checks, tests, builds, and isolated installation checks.
 ci: check coverage install-check
 
+# Preview obsolete package-owned tool installs; pass --apply to remove them.
+clean *args:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain clean "$@"
+
 # Run tests once with branch/subprocess coverage and write a Cobertura report.
 coverage:
     uv run --locked pytest --cov --cov-report=term-missing --cov-report=xml:coverage/cobertura.xml

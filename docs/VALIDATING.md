@@ -100,6 +100,10 @@ The same job exercises an explicit Cargo upgrade, verifies the published pins
 and managed executable, and checks that old installations remain available.
 It also installs `clippy-sarif` and `sarif-fmt`, passes a small Cargo JSON diagnostic
 through the managed tools, and checks their failure statuses.
+The native setup check also probes managed Cargo deny, Gitleaks, and OSV-Scanner,
+checks a synthetic Gitleaks finding with redacted JSON/SARIF output, and parses an
+empty Cargo lockfile through OSV without advisory queries. It previews and applies
+cleanup inside the disposable managed store, then rechecks the retained tools.
 
 Wheel and sdist installation checks run the same public Python consumer suite
 outside the checkout on every platform. It imports only documented process and
@@ -117,6 +121,14 @@ non-finite estimates, stale provenance, and publication/rollback failures. HTTP
 transport failure tests use synthetic responses; release selection and access
 to a particular published asset remain consumer integration checks. The existing
 native platform matrix runs these suites against both distribution formats.
+
+Installed toolchain and security suites exercise cleanup retention roots, private
+Python aliases, adoption helper permissions and linked-environment refusal, native
+status propagation, malformed reports, and Rust-doc source line mapping. Windows
+fixtures create real junctions and verify their targets before applying checks.
+Scanner subprocess models cover report handling; native setup probes above cover
+the downloaded binaries. Installed notebook lint checks both magic and literal
+keyword-argument install commands without executing notebook cells.
 
 The installed document-publication consumer suite checks selected tables and SVGs,
 exact surrounding document bytes, retained-input snapshots, CLI preview/check modes,

@@ -4,7 +4,13 @@ schema = 1
 
 # Toolchain setup also reads the consumer pyproject.toml [tool.uv] required-version,
 # .python-version, and rust-toolchain.toml. See docs/INSTALLING.md.
+# [toolchain]
+# inherit-python = true
+# [toolchain.binaries]
+# gitleaks = "8.30.1"
+# osv-scanner = "2.6.0"
 # [toolchain.cargo]
+# cargo-deny = "0.20.2"
 # git-cliff = "2.14.1"
 
 [changelog]
@@ -30,6 +36,7 @@ cwd = "."
 output-dir = "target/notebooks"
 timeout = 600
 outputs = "clear"
+# prohibit-installs = true
 
 # Optional consumer publication assertions and selected active references.
 # See docs/UPDATING_RELEASE_METADATA.md and docs/release-policy-migration.md.

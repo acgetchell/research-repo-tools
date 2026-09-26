@@ -31,6 +31,10 @@ check: python-check semgrep-check zizmor-check
 # Local and CI use the same complete validation gate.
 ci: check
 
+# Preview obsolete package-owned tool installs; pass --apply to remove them.
+clean *args:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain clean "$@"
+
 # Show command help when invoked without a recipe.
 [default]
 [private]
@@ -80,6 +84,7 @@ performance +args:
 
 # Check every tracked/nonignored Python file, including deliberate negative fixtures.
 python-check:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain python-check
     uv run --locked --group dev research-repo-tools files run --include '*.py' --include '*.pyi' -- ruff check --no-fix --no-force-exclude
     uv run --locked --group dev research-repo-tools files run --include '*.py' --include '*.pyi' -- ruff format --check --no-force-exclude
     uv run --locked --group dev research-repo-tools files run --include '*.py' --include '*.pyi' -- ty check --no-force-exclude
@@ -87,6 +92,10 @@ python-check:
 # Check consumer release metadata.
 release-check:
     uv run --locked --group dev research-repo-tools release check
+
+# Prepare a first release after verifying empty stable published history.
+release-first tag date:
+    uv run --locked --group dev research-repo-tools release update "$1" --first-release --date "$2"
 
 # Print release notes from the root changelog or an archive.
 release-notes tag:
@@ -104,6 +113,14 @@ review base="origin/main":
 review-uncommitted:
     uv run --locked --group dev research-repo-tools review uncommitted
 
+# Audit explicitly selected uv.lock/Cargo.lock files with the managed OSV scanner.
+security-osv +lockfiles:
+    uv run --locked --group dev research-repo-tools security osv "$@"
+
+# Scan full history and current tracked/nonignored files with managed Gitleaks.
+security-secrets *args:
+    uv run --locked --group dev research-repo-tools security secrets "$@"
+
 # Validate the consumer's Semgrep rules and fixtures.
 semgrep-check:
     uv run --locked --group dev research-repo-tools semgrep check-fixtures
@@ -111,6 +128,14 @@ semgrep-check:
 # Repeat the package setup after tool declarations change.
 setup:
     uv run --locked --managed-python --only-group tooling research-repo-tools setup
+
+# Resolve and preview a shared-package/Python migration outside the old environment.
+shared-python-plan version:
+    uvx --no-config --isolated --managed-python --from "research-repo-tools==$1" research-repo-tools toolchain adopt --dry-run
+
+# Apply the validated shared-package/Python migration and recreate the environment.
+shared-python-update version:
+    uvx --no-config --isolated --managed-python --from "research-repo-tools==$1" research-repo-tools toolchain adopt --apply
 
 # Create a local annotated tag using tag-release.
 tag tag: (tag-release tag)

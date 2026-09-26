@@ -82,6 +82,35 @@ see the [README example](../README.md#calling-from-python).
   Argument parsing raises `SystemExit(0)` for help/version and `SystemExit(2)`
   for usage errors. Unexpected programming errors may propagate.
 
+## Python configuration API
+
+Use `research_repo_tools.config.load(path=None, root=None)` to construct settings
+for the APIs below. By default it reads `[tool.research-repo-tools]` from
+`pyproject.toml` under `root`, or the current directory when `root` is omitted.
+An explicit `path` selects a configuration file; relative file paths use the
+caller's directory. Files named `pyproject.toml` use the prefixed table; other
+filenames use unprefixed tables. Without an explicit root, the file's parent is
+the consumer root. A missing default manifest supplies default settings, while
+a missing explicitly selected file raises `ValueError`.
+
+`config.parse(value, *, root)` validates an in-memory unprefixed configuration
+table against the same schema. Both factories resolve the consumer root,
+reject unknown or malformed settings with `ValueError`, and perform no tool
+installation or execution. File reads can raise `OSError`; invalid TOML raises
+`tomllib.TOMLDecodeError`. Treat the returned settings as opaque: pass them to
+documented APIs and use these factories to change configuration. Dataclass
+constructors and internal attributes are not supported extension points.
+
+```python
+from pathlib import Path
+
+from research_repo_tools.config import load
+from research_repo_tools.toolchain_clean import plan_clean
+
+settings = load(root=Path.cwd())
+preview = plan_clean(settings, keep_roots=(Path("../another-consumer"),))
+```
+
 ## Python performance APIs
 
 `research_repo_tools.archives`, `research_repo_tools.criterion`, and
@@ -231,6 +260,27 @@ crash-atomic multi-file commit; callers must serialize writers. A plan is a
 short-lived in-process value, not a persisted authorization token. See the
 [worked consumer migration](release-policy-migration.md).
 
+### First releases
+
+First-release intent is explicit. `plan_release(root, "v0.1.0", first_release=True,
+release_date="2026-09-25")` requires a successfully fetched empty stable GitHub
+release history. Drafts and prereleases do not count; network, authentication,
+and malformed-response failures propagate. For a reviewed offline declaration,
+also pass `offline=True`. No predecessor or sentinel tag is invented, and
+`context.previous_tag` is `None`. Policies with `previous-tag` selectors are
+incompatible and fail before publication.
+
+An Unreleased-only changelog is valid during this preparation. Generate the
+target release notes afterwards; `final_changelog=True` and final-release checks
+still require the actual target heading. Previewing remains non-mutating and
+`apply_release(plan)` retains the normal stale-input and rollback guarantees.
+
+The CLI equivalents are `research-repo-tools release update v0.1.0
+--first-release --date 2026-09-25 --dry-run` and the same command without
+`--dry-run` to apply. Add `--offline` only when empty history has been reviewed.
+The template's `just release-first TAG DATE` uses online discovery. Existing
+`just release-update TAG PREVIOUS DATE` continues to use an explicit predecessor.
+
 ## Python file-publication API
 
 `research_repo_tools.files.replace_many(updates: Mapping[Path, bytes]) -> None`
@@ -275,9 +325,9 @@ It does not promise multi-file crash atomicity, directory `fsync`, power-loss
 recovery, or automatic recovery after process termination. Replacing open files
 can fail on Windows. Use the recovery paths in the exception before retrying.
 
-Other module functions, configuration objects, parsers, and constants remain
-implementation details; importing them creates an unsupported dependency.
-`__all__` in the process and files modules names only the supported library API.
+Names not documented here or in the linked API contracts remain implementation
+details; importing them creates an unsupported dependency. Configuration
+factories above are supported, while their concrete settings types remain private.
 The typing marker is not a stability promise for every importable symbol.
 
 ## External programs and platforms
@@ -302,3 +352,86 @@ automatic discovery of a previous release; an explicit previous release permits
 offline preparation. The optional `notebooks` extra supplies notebook validation,
 cleanup, synchronization, and execution. Notebook Python linting also requires
 consumer-declared Ruff and ty; see [the notebook contract](RUNNING_NOTEBOOKS.md).
+
+## Shared Python adoption API
+
+`research_repo_tools.python_baseline.baseline()` returns a frozen
+`PythonBaseline(requirement, selected, package_version)`. The requirement and
+package version come from installed distribution metadata; selected is the
+package-owned development minor. `drift(root)` returns mirror/pin discrepancies
+without changing files or environments. `check(root)` raises `ValueError` on
+these discrepancies. Lower consumer Ruff/ty targets are preserved; targets newer
+than the selected interpreter fail.
+
+`python_adoption.plan_python_adoption(settings)` prepares an immutable
+`PythonAdoptionPlan` with `changed_paths`, source byte snapshots, candidate
+manifest/selector/lock bytes, selected groups and notebook-kernel intent.
+It resolves and installs a private candidate before returning. Planning may
+populate uv caches and download interpreters but does not modify consumer files
+or `.venv`. `apply_python_adoption(plan)` rejects changed source snapshots, verifies
+managed tools, publishes candidate declarations, recreates `.venv` at its final
+path and installs the configured notebook kernel. Caught failures restore prior
+files/environment; recovery failures expose retained backup paths. Run from the
+standalone target package, outside the consumer environment. Exclude concurrent
+writers; abrupt termination is outside the rollback guarantee. External local
+path dependencies require separate migration planning.
+
+## Managed installation cleanup API
+
+`research_repo_tools.toolchain_clean.plan_clean(settings, *, keep_roots=())`
+returns a frozen `CleanPlan` with the current root, additional retention roots,
+store, host, declaration byte snapshots and `removals`. Each `Removal` identifies
+the installation kind, path, directory identity and optional manager command.
+Planning inventories existing installations without installing or deleting them.
+Private Python inventory requires the declared uv version.
+Relative `keep_roots` resolve against the settings' consumer root, independently
+of the caller's current directory.
+
+`apply_clean(plan, settings)` recomputes the plan and rejects changed declarations,
+installation identities or candidates before removing anything. Pass current
+settings, including a freshly loaded standalone configuration if applicable.
+It deletes owned Cargo/binary/Python directories and invokes private rustup
+uninstall commands for Rust. Failures stop subsequent removals and report partial
+progress; there is no rollback. Keep installers and other writers idle throughout
+planning and applying; revalidation is not a concurrency lock. See the
+[retention contract](INSTALLING.md#cleaning-obsolete-installations).
+
+## Security and documentation scan API
+
+`research_repo_tools.security` exports:
+
+- `scan_osv(settings, lockfiles, *, output="target/security", configuration=None)`:
+  explicit relative `uv.lock`/`Cargo.lock` paths from the shared inventory. Each
+  produces a numbered native JSON/SARIF pair with verified source coverage.
+- `scan_secrets(settings, *, output="target/security", configuration=None, exclude=())`:
+  full reachable history plus current files; rejects shallow history and selected
+  links/submodules. Native patch/binary/archive limitations remain applicable.
+- `security_inventory(root, *, include=(), exclude=())`: sorted tracked/nonignored
+  regular files, excluding standard generated/environment directories. Inclusion
+  patterns are Git pathspecs and exclusions are case-sensitive POSIX globs.
+
+Scans require declared, already installed exact managed binaries. They return
+zero only for complete scans without findings, otherwise the first native
+nonzero status, 1 for invalid successful reports/findings, or 124 on timeout.
+Invalid arguments/preconditions raise `ValueError`; I/O and Git errors propagate.
+Old reports at the selected output names are removed before scanning. OSV and
+Semgrep also remove all prior numbered JSON/SARIF reports in their respective
+output directories, including symlinks, so smaller inventories leave no stale
+reports. These two scanners reject output directories with symlinks or Windows
+junctions in any path component before creating directories or removing reports.
+Unrelated files and symlink targets are preserved. Native
+schemas and locations are retained, with Gitleaks source excerpts/commit messages
+redacted in addition to native detected-secret redaction. Report directories are
+caller-owned outputs. These commands are not an assurance that unknown secrets,
+ignored inputs or unsupported binary formats are detected.
+
+`semgrep_docs.rust_blocks(path)` returns line-padded Rust fence source strings
+from UTF-8 Markdown or line/block rustdoc comments. It does not execute code or
+change the source. Hidden Rust lines remain code; unclosed selected fences raise
+`ValueError`. Macro-generated documentation and `#[doc = ...]` are not extracted.
+
+`semgrep_scan.scan(settings, *, include, exclude=(), output="target/security/semgrep",
+rust_docs=False)` runs the native scanner with strict errors, coverage checks and
+numbered JSON/SARIF reports. `check_documentation_fixtures(settings)` adapts
+annotated Markdown fixtures to the existing shared fixture checker, including
+blocking mismatches; count-based expectations remain in a separate fixture gate.

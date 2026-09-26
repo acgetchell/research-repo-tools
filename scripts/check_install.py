@@ -239,6 +239,12 @@ def check(dist: Path) -> None:
             publication_suite = consumer / "public_publication_consumer.py"
             publication_suite.write_bytes((ROOT / "tests/publication/public_publication_consumer.py").read_bytes())
             run([str(python), "-I", str(publication_suite)], cwd=consumer, env=local_env)
+            security_suite = consumer / "public_security_consumer.py"
+            security_suite.write_bytes((ROOT / "tests/security/public_security_consumer.py").read_bytes())
+            run([str(python), "-I", str(security_suite)], cwd=consumer, env=local_env)
+            toolchain_suite = consumer / "public_toolchain_consumer.py"
+            toolchain_suite.write_bytes((ROOT / "tests/toolchain/public_toolchain_consumer.py").read_bytes())
+            run([str(python), "-I", str(toolchain_suite)], cwd=consumer, env=local_env)
             command = scripts / ("research-repo-tools.exe" if os.name == "nt" else "research-repo-tools")
             assert run([str(command), "--version"], cwd=consumer, env=local_env).strip() == version
             assert "changelog" in run([str(command), "--help"], cwd=consumer, env=local_env)

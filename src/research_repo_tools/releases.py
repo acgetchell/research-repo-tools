@@ -176,13 +176,15 @@ def _inventory(root: Path, policy: ReleasePolicy, inputs: tuple[str, ...]) -> tu
     return tuple(sorted((path.relative_to(root) for path in paths), key=lambda path: path.as_posix()))
 
 
-def discover_release(root: Path, *, policy: ReleasePolicy | None = None, adapter: ReleaseAdapter | None = None) -> ReleaseDiscovery:
+def discover_release(
+    root: Path, *, policy: ReleasePolicy | None = None, adapter: ReleaseAdapter | None = None, allow_unreleased: bool = False
+) -> ReleaseDiscovery:
     """Discover the shared and explicitly selected release files without a network call."""
     root = root.resolve()
     policy = load(root=root).release if policy is None else policy
     paths = _inventory(root, policy, adapter.input_files if adapter else ())
     package = metadata.read_package_info(root)
-    references = tuple(metadata._version_references(root, package, policy))
+    references = tuple(metadata._version_references(root, package, policy, allow_unreleased=allow_unreleased))
     captures: dict[str, list[tuple[int, int]]] = {}
     for rule in policy.rules:
         matches = rule.matches((root / rule.path).read_bytes().decode("utf-8"))
@@ -232,7 +234,9 @@ def _previous(root: Path, target: str, previous: str | None, *, required: bool) 
 
 
 def _problems(root: Path, policy: ReleasePolicy, context: ReleaseContext, *, preparing: bool) -> tuple[str, ...]:
-    mismatches = metadata.find_version_mismatches(root, policy=policy)
+    mismatches = metadata.find_version_mismatches(
+        root, policy=policy, allow_unreleased=preparing and context.previous_tag is None and not policy.final_changelog
+    )
     problems = [
         f"{item.reference.path.relative_to(root)}:{item.reference.line}: {item.reference.kind} found {item.reference.version}, expected {item.package.version}"
         for item in mismatches
@@ -308,7 +312,7 @@ def check_release(
     return ReleaseCheckResult(discovery, problems)
 
 
-def _edit_rules(root: Path, policy: ReleasePolicy, context: ReleaseContext) -> None:
+def _edit_rules(root: Path, policy: ReleasePolicy, context: ReleaseContext, *, initial_version: str) -> None:
     edits: dict[str, list[tuple[int, int, str]]] = {}
     for rule in policy.rules:
         if rule.source is None:
@@ -318,6 +322,8 @@ def _edit_rules(root: Path, policy: ReleasePolicy, context: ReleaseContext) -> N
             value = match["value"]
             if rule.source == "version" or (rule.source == "tag" and TAG.fullmatch(value)):
                 allowed = {context.version, str(context.previous_tag).removeprefix("v")} if rule.source == "version" else {context.tag, context.previous_tag}
+                if context.previous_tag is None:
+                    allowed.add(initial_version if rule.source == "version" else "v" + initial_version)
                 if value not in allowed:
                     raise ValueError(f"{rule.path}: unexpected active release version {value!r}; expected previous or target release")
             if rule.source == "previous-tag":
@@ -346,6 +352,8 @@ def plan_release(
     release_date: str | None = None,
     policy: ReleasePolicy | None = None,
     adapter: ReleaseAdapter | None = None,
+    first_release: bool = False,
+    offline: bool = False,
 ) -> ReleasePlan:
     """Prepare and validate one complete candidate without modifying source files.
 
@@ -354,7 +362,11 @@ def plan_release(
     """
     from research_repo_tools.update_release import _prepare_updates
 
-    discovery = discover_release(root, policy=policy, adapter=adapter)
+    if first_release and previous_tag is not None:
+        raise ValueError("first release cannot specify a previous release")
+    if offline and not first_release and previous_tag is None:
+        raise ValueError("offline release preparation requires first_release=True or an explicit previous_tag")
+    discovery = discover_release(root, policy=policy, adapter=adapter, allow_unreleased=first_release)
     root, policy = discovery.root, discovery.policy
     normalized = normalize_tag(tag)
     if policy.tag_policy == "canonical-stable" and tag != normalized:
@@ -367,15 +379,23 @@ def plan_release(
     fixed_context = ReleaseContext(tag, previous_tag, released)
     if problems := _rule_problems(root, policy, fixed_context, fixed_only=True):
         raise ReleaseValidationError(problems)
-    previous = _previous(root, tag, previous_tag, required=True)
-    assert previous is not None
+    if first_release:
+        if any(rule.source == "previous-tag" for rule in policy.rules):
+            raise ValueError("first release has no predecessor; previous-tag selectors are incompatible")
+        if _tag_version(tag) < _tag_version("v" + discovery.package.version):
+            raise ValueError("first release cannot downgrade the package version")
+        if not offline and published_releases(root):
+            raise ValueError("first release requires an empty stable published release history")
+        previous = None
+    else:
+        previous = _previous(root, tag, previous_tag, required=True)
     context = ReleaseContext(tag, previous, released)
     originals = {path: (root / path).read_bytes() for path in discovery.files}
     with tempfile.TemporaryDirectory(prefix="research-release-validation-") as directory:
         staged = _stage(root, Path(directory).resolve(), originals)
         for path, text in _prepare_updates(staged, tag, previous, released, policy=policy).items():
             path.write_bytes(text.encode("utf-8"))
-        _edit_rules(staged, policy, context)
+        _edit_rules(staged, policy, context, initial_version=discovery.package.version)
         if adapter is not None and adapter.prepare is not None:
             before = _snapshot(staged)
             edits = adapter.prepare(staged, context)
@@ -392,7 +412,7 @@ def plan_release(
                 (staged / path).write_bytes(payload)
         # Re-discover after edits so required files, selectors, and shared metadata
         # cannot be made invalid by an otherwise successful adapter callback.
-        discover_release(staged, policy=policy, adapter=adapter)
+        discover_release(staged, policy=policy, adapter=adapter, allow_unreleased=first_release and not policy.final_changelog)
         problems = _problems(staged, policy, context, preparing=True) + _validate_adapter(staged, context, adapter)
         if problems:
             raise ReleaseValidationError(problems)

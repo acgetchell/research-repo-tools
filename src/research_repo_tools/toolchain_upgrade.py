@@ -8,6 +8,7 @@ from dataclasses import replace
 from pathlib import Path
 
 from research_repo_tools import config, files, toolchain, toolchain_config
+from research_repo_tools.prebuilt_tools import release_metadata
 from research_repo_tools.toml_source import replace_string
 from research_repo_tools.tool_pins import SEMVER
 
@@ -79,21 +80,35 @@ def upgrade(settings: config.Config, *, source: Path | None = None, dry_run: boo
         else:
             selected.append(tool)
     changes = [(old, new) for old, new in zip(plan.cargo, selected, strict=True) if old != new]
+    binaries = []
+    binary_table = table.removesuffix("cargo") + "binaries"
+    for tool in plan.binaries:
+        proposed = release_metadata(tool.name, "latest")["tag_name"].removeprefix("v")
+        if precedence(proposed) > precedence(tool.version):
+            text = replace_string(text, binary_table, tool.name, proposed)
+            binaries.append(replace(tool, version=proposed))
+        else:
+            binaries.append(tool)
+    binary_changes = [(old, new) for old, new in zip(plan.binaries, binaries, strict=True) if old != new]
     for old, new in changes:
         print(f"{old.package}: {old.version} -> {new.version}", flush=True)
-    if not changes:
-        print("Declared Cargo tools are current; no changes made.")
+    for old, new in binary_changes:
+        print(f"{old.name}: {old.version} -> {new.version}", flush=True)
+    if not changes and not binary_changes:
+        print("Declared Cargo tools and binaries are current; no changes made.")
         return
     document = tomllib.loads(text)
     data = document["tool"]["research-repo-tools"] if source.name == "pyproject.toml" else document
     candidate = config.parse(data, root=settings.root)
     if dict(candidate.toolchain.cargo) != {tool.package: tool.version for tool in selected}:
         raise ValueError("candidate Cargo declarations do not match the selected versions")
+    if dict(candidate.toolchain.binaries) != {tool.name: tool.version for tool in binaries}:
+        raise ValueError("candidate binary declarations do not match the selected versions")
     if dry_run:
         print("Dry run: no installations or declaration changes.")
         return
     try:
-        toolchain.Runtime(replace(plan, cargo=tuple(selected))).sync()
+        toolchain.Runtime(replace(plan, cargo=tuple(selected), binaries=tuple(binaries))).sync()
         files.replace_if_unchanged(source, original, text.encode("utf-8"))
     except (OSError, ValueError, RuntimeError) as error:
         raise RuntimeError(
