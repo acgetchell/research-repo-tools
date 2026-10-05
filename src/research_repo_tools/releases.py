@@ -154,8 +154,8 @@ def _safe_file(root: Path, path: Path) -> Path:
     current = root
     for part in path.relative_to(root).parts:
         current /= part
-        if current.is_symlink():
-            raise ValueError(f"release metadata must not be a symbolic link: {current}")
+        if current.is_symlink() or current.is_junction():
+            raise ValueError(f"release metadata must not be a symbolic link or junction: {current}")
     if not path.resolve().is_relative_to(root) or not path.is_file():
         raise ValueError(f"required release file is missing or not a regular file: {path}")
     return path
@@ -257,10 +257,16 @@ def _problems(root: Path, policy: ReleasePolicy, context: ReleaseContext, *, pre
 
 
 def _snapshot(root: Path) -> dict[Path, bytes | None]:
-    paths = sorted(root.rglob("*"))
-    if any(path.is_symlink() for path in paths):
-        raise ValueError("release adapter must not create symbolic links")
-    return {path.relative_to(root): path.read_bytes() if path.is_file() else None for path in paths}
+    if root.is_symlink() or root.is_junction():
+        raise ValueError("release adapter must not create symbolic links or junctions")
+    paths = []
+    for directory, directories, filenames in root.walk():
+        for name in (*directories, *filenames):
+            path = directory / name
+            if path.is_symlink() or path.is_junction():
+                raise ValueError("release adapter must not create symbolic links or junctions")
+            paths.append(path)
+    return {path.relative_to(root): path.read_bytes() if path.is_file() else None for path in sorted(paths)}
 
 
 def _validate_adapter(root: Path, context: ReleaseContext, adapter: ReleaseAdapter | None) -> tuple[str, ...]:

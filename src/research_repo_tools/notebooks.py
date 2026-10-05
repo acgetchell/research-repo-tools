@@ -8,6 +8,7 @@ import re
 import sys
 import tempfile
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from importlib import import_module
 from importlib.metadata import version
@@ -39,6 +40,20 @@ class Notebook:
     path: Path
     original: bytes
     node: NotebookNode
+
+
+@dataclass(frozen=True)
+class NotebookExecution:
+    """One execution's artifacts and schema-1 report, including cell failures."""
+
+    source: Path
+    notebook_path: Path
+    report_path: Path
+    report: dict
+
+    @property
+    def returncode(self) -> int:
+        return 0 if self.report["status"] == "passed" else 1
 
 
 def _object(pairs: list[tuple[str, object]]) -> dict[str, object]:
@@ -266,6 +281,20 @@ def _execute(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str]
 
 
 def execute(settings: Config, paths: list[Path], *, cwd: str | None = None, output_dir: str | None = None, timeout: int | None = None) -> int:
+    return int(any(result.returncode for result in _execute_reports(settings, paths, cwd=cwd, output_dir=output_dir, timeout=timeout)))
+
+
+def _execute_reports(
+    settings: Config,
+    paths: list[Path],
+    *,
+    cwd: str | None = None,
+    output_dir: str | None = None,
+    timeout: int | None = None,
+    environment: Path | None = None,
+    kernel_env: Mapping[str, str | None] | None = None,
+    runtime_dir: Path | None = None,
+) -> tuple[NotebookExecution, ...]:
     options = settings.notebooks
     limit = options.timeout if timeout is None else timeout
     if type(limit) is not int or limit <= 0:
@@ -292,20 +321,39 @@ def execute(settings: Config, paths: list[Path], *, cwd: str | None = None, outp
         if target.exists() and not target.is_file():
             raise ValueError(f"notebook artifact is not a regular file: {target}")
     managed = runtime(settings)
-    if Path(sys.prefix).resolve() != project_environment(root):
+    selected_environment = project_environment(root) if environment is None else environment.resolve()
+    if Path(sys.prefix).resolve() != selected_environment:
         raise ValueError("execute notebooks through the consumer's locked project environment; run notebook-sync first")
-    if not managed._python_probe(sys.executable).ok:
+    python = managed._python_probe(sys.executable)
+    if not python.ok:
         raise ValueError("the running notebook interpreter does not satisfy the declared Python version")
     for name in ("nbclient", "ipykernel"):
         dependency(name)
     packages = {name: version(name) for name in ("research-repo-tools", "nbclient", "nbformat", "ipykernel")}
     lock_digest = hashlib.sha256((root / "uv.lock").read_bytes()).hexdigest()
+    results = []
     for notebook, target, report in zip(notebooks, targets, reports, strict=True):
         clear_node(notebook.node)
         progress: list[int] = []
         failure: Exception | None = None
-        with tempfile.TemporaryDirectory(prefix="research-notebook-") as temporary:
-            env = managed.environment()
+        with tempfile.TemporaryDirectory(prefix="research-notebook-", dir=runtime_dir) as temporary:
+            env = managed.environment() if environment is None else managed._environment(python)
+            for key, value in (kernel_env or {}).items():
+                # os.environ normalizes Windows names; match that behavior for
+                # caller overlays, especially None-valued removals.
+                key = key.upper() if os.name == "nt" else key
+                if value is None:
+                    env.pop(key, None)
+                else:
+                    env[key] = value
+            if environment is not None:
+                # Borrow the selected interpreter without changing the caller's
+                # process environment or permitting Python startup overrides.
+                env.pop("PYTHONHOME", None)
+                env.pop("PYTHONPATH", None)
+                env["PYTHONDONTWRITEBYTECODE"] = "1"
+                env["UV_PROJECT_ENVIRONMENT"] = str(selected_environment)
+                env["VIRTUAL_ENV"] = str(selected_environment)
             for key in ("IPYTHONDIR", "MPLCONFIGDIR", "JUPYTER_CONFIG_DIR", "JUPYTER_DATA_DIR", "JUPYTER_RUNTIME_DIR"):
                 directory = Path(temporary) / key.lower()
                 directory.mkdir()
@@ -332,8 +380,9 @@ def execute(settings: Config, paths: list[Path], *, cwd: str | None = None, outp
             "error": None if failure is None else {"type": type(failure).__name__, "message": str(failure)},
         }
         files.replace_many({target: serialize(notebook.node), report: (json.dumps(result, indent=2) + "\n").encode("utf-8")})
+        results.append(NotebookExecution(notebook.path, target, report, result))
         if failure is not None:
             print(f"{notebook.path}: cell {result['failed_cell']}: {type(failure).__name__}: {failure}\nExecution report: {report}", file=sys.stderr)
-            return 1
+            break
         print(f"OK executed {notebook.path} -> {target}; report {report}")
-    return 0
+    return tuple(results)

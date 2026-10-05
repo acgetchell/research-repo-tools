@@ -45,8 +45,8 @@ acceptance is inferred. Consumers own those policies and their report prose.
 An existing empty sample is valid in Python; a missing root or unreadable tree
 fails. The CLI additionally rejects comparisons without a common benchmark.
 Sample names are single directory components. Benchmark IDs use relative POSIX
-paths; symlinked entries are rejected. Names must be nonempty with no surrounding
-whitespace or ASCII control characters. The collector includes every matching
+paths; symlinks and Windows directory junctions are rejected. Names must be
+nonempty with no surrounding whitespace or ASCII control characters. The collector includes every matching
 benchmark; consumers select eligible cases before comparison when necessary.
 
 Criterion parser reads permit extra Criterion fields but reject duplicate JSON
@@ -94,8 +94,8 @@ silently overrides an incompatibility or invents missing historical metadata.
 `fingerprint_files` uses SHA-256 seeded with `research-repo-tools/files/v1` plus
 a NUL byte, then sorted UTF-8 relative POSIX names and file bytes, each framed
 with its eight-byte big-endian length. It rejects traversal, duplicate paths,
-and symlinks, and preserves LF/CRLF/binary distinctions. It excludes permissions,
-Git attributes, and files not in the supplied inventory. It is not a Git tree
+symlinks, and Windows directory junctions, and preserves LF/CRLF/binary distinctions.
+It excludes permissions, Git attributes, and files not in the supplied inventory. It is not a Git tree
 hash. Consumers own inventory discovery, additions/deletions, executable-mode
 evidence where relevant, and exclusion of concurrent changes. Capture source and
 harness separately, including applied uncommitted source and any substituted

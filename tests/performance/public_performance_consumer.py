@@ -3,6 +3,7 @@
 import importlib
 import io
 import json
+import os
 import random
 import subprocess
 import sys
@@ -38,6 +39,8 @@ from research_repo_tools.evidence import (
     sha256,
     verify_sha256,
 )
+from research_repo_tools.measurement import MeasurementConfig, measure_checkout
+from research_repo_tools.publication import plan_outputs
 
 
 def zip_asset(path: Path, entries: list[tuple[str, bytes]]) -> None:
@@ -172,6 +175,60 @@ class TestPerformanceConsumer(unittest.TestCase):
                 comparison = compare_samples(sample, sample)
                 artifact = Evidence(serialize_comparison(comparison), COMPARISON_SCHEMA, (("current", Provenance("a" * 40)),))
                 self.assertEqual(parse_comparison(parse_evidence(*serialize_evidence(artifact)).payload), comparison)
+
+    def test_directory_links_cannot_enter_source_and_criterion_inventories(self) -> None:
+        # Model junction detection on every host, then exercise its native link
+        # kind. Windows directory junctions need no symlink privilege.
+        for native in (False, True):
+            with self.subTest(native=native), tempfile.TemporaryDirectory() as temporary:
+                parent = Path(temporary).resolve()
+                root, external = parent / "project", parent / "external"
+                root.mkdir()
+                external.mkdir()
+                criterion = root / "criterion"
+                criterion.mkdir()
+                linked = criterion / "linked"
+                if native:
+                    target = external
+                    if os.name == "nt":
+                        subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(linked), str(target)], check=True, capture_output=True, timeout=30)
+                        self.assertTrue(linked.is_junction())
+                        self.assertFalse(linked.is_symlink())
+                    else:
+                        linked.symlink_to(target, target_is_directory=True)
+                        self.assertTrue(linked.is_symlink())
+                else:
+                    target = linked
+                    target.mkdir()
+                    self.assertFalse(linked.is_symlink())
+                source = target / "source.rs"
+                source.write_bytes(b"source\r\n")
+                estimates = target / "new/estimates.json"
+                estimates.parent.mkdir()
+                estimates.write_bytes(b'{"median":{"point_estimate":42}}')
+                (root / "source.rs").write_bytes(b"source\r\n")
+                config = MeasurementConfig(
+                    (sys.executable, "-c", "from pathlib import Path; Path('launched').write_bytes(b'launched')"),
+                    ("source.rs",),
+                    ("source.rs",),
+                    criterion_dir="criterion/linked/measurement",
+                )
+                original_junction = Path.is_junction
+                with (
+                    patch.object(Path, "is_junction", lambda path: (not native and path == linked) or original_junction(path)),
+                    patch("research_repo_tools.measurement.resolve_revision", return_value="a" * 40),
+                ):
+                    for name, inspect in (
+                        ("fingerprint", lambda: fingerprint_files(root, (Path("criterion/linked/source.rs"),))),
+                        ("Criterion", lambda: collect_sample(criterion, "new")),
+                        ("publication", lambda: plan_outputs(root, {"report.md": b"report"}, inputs={"criterion/linked/source.rs": b"source\r\n"})),
+                        ("measurement", lambda: measure_checkout(root, config, "v1.0.0", mode="tag")),
+                    ):
+                        with self.subTest(api=name), self.assertRaisesRegex(ValueError, "symlink|junction"):
+                            inspect()
+                self.assertEqual(source.read_bytes(), b"source\r\n")
+                self.assertFalse((root / "report.md").exists())
+                self.assertFalse((root / "launched").exists())
 
     def test_zip_rejects_original_names_under_windows_normalization(self) -> None:
         # Model only zipfile's Windows separator conversion, without changing

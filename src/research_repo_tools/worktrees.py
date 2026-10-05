@@ -112,8 +112,8 @@ def temporary_worktree(root: Path, destination: Path, revision: str, *, allow_gi
         raise ValueError("worktree requires a resolved full lowercase commit ID")
     root = root.resolve(strict=True)
     destination = destination.absolute()
-    if destination.exists() or destination.is_symlink() or any(parent.is_symlink() for parent in destination.parents):
-        raise ValueError(f"worktree destination must be absent and have no symlink parents: {destination}")
+    if destination.exists() or any(path.is_symlink() or path.is_junction() for path in (destination, *destination.parents)):
+        raise ValueError(f"worktree destination must be absent and have no symlink or junction parents: {destination}")
     try:
         _git(root, ["worktree", "add", "--detach", str(destination), revision], timeout=600)
     except BaseException as original:

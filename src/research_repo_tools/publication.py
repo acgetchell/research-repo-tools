@@ -2,7 +2,6 @@
 
 import difflib
 import html
-import ntpath
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
@@ -173,16 +172,14 @@ def render_svg(comparison: ComparisonSet, layout: TableLayout) -> bytes:
 
 def _publication_name(name: str) -> str:
     relative_path(name)
-    if any(ntpath.isreserved(part) or part.casefold() == ".git" or "\x7f" in part for part in name.split("/")):
-        raise ValueError(f"publication path must be portable: {name!r}")
     return _string(name, "publication path")
 
 
 def _path(root: Path, name: str) -> Path:
     _publication_name(name)
     path = root / name
-    if any(item.is_symlink() for item in (path, *path.parents) if item.is_relative_to(root)):
-        raise ValueError(f"publication path must not contain a symlink: {name}")
+    if any(item.is_symlink() or item.is_junction() for item in (path, *path.parents) if item.is_relative_to(root)):
+        raise ValueError(f"publication path must not contain a symlink or junction: {name}")
     if not path.resolve().is_relative_to(root):
         raise ValueError(f"publication path must remain inside the root: {name}")
     if path.exists() and not path.is_file():

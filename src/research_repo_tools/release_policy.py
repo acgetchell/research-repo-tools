@@ -1,23 +1,37 @@
 """Declarative release selectors, shared by configuration and Python consumers."""
 
+import ntpath
 import re
 from dataclasses import dataclass
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Literal
 
 
-def relative_path(value: str) -> str:
-    """Require a portable, normalized repository-relative file name."""
+def _relative_path(value: str, *, patterns: bool = False) -> str:
     if (
         not isinstance(value, str)
         or not value
         or "\\" in value
         or PureWindowsPath(value).drive
         or PurePosixPath(value).is_absolute()
-        or any(part in {"", ".", ".."} or part.rstrip(" .").casefold() == ".git" for part in value.split("/"))
+        or any(
+            part in {"", ".", ".."}
+            or part.rstrip(" .").casefold() == ".git"
+            or part.endswith((".", " "))
+            or any(char in part for char in ':"<>|')
+            or any(ord(char) < 32 or ord(char) == 127 or 0xD800 <= ord(char) <= 0xDFFF for char in part)
+            or ntpath.isreserved(part)
+            and (not patterns or not any(char in part for char in "*?["))
+            for part in value.split("/")
+        )
     ):
         raise ValueError(f"release path must be a normalized repository-relative path: {value!r}")
     return value
+
+
+def relative_path(value: str) -> str:
+    """Require a portable, normalized repository-relative file name."""
+    return _relative_path(value)
 
 
 @dataclass(frozen=True, slots=True)
@@ -86,8 +100,10 @@ class ReleasePolicy:
             raise ValueError("invalid release date or final-changelog policy")
         for name in ("required_files", "exclude", "rules"):
             object.__setattr__(self, name, tuple(getattr(self, name)))
-        for path in (*self.required_files, *self.exclude):
+        for path in self.required_files:
             relative_path(path)
+        for pattern in self.exclude:
+            _relative_path(pattern, patterns=True)
         for rule in self.rules:
             if not isinstance(rule, ReleaseRule):
                 raise ValueError("release rules must be ReleaseRule instances")

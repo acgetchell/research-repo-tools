@@ -28,8 +28,8 @@ GitHub `owner/name`. The inherited discovery bound is 1,000 releases.
 TOML into frozen `MeasurementConfig`. Required fields are `command`, `sources`,
 and `harness`. Commands are argument arrays without a shell. Source/harness
 entries are root-relative globs; each must match regular files. Traversal,
-symlinks, portable aliases, and unmatched patterns fail. Inventories are sorted
-and deduplicated. Optional fields follow the packaged benchmark template:
+symlinks, Windows directory junctions, portable aliases, and unmatched patterns
+fail. Inventories are sorted and deduplicated. Optional fields follow the packaged benchmark template:
 
 - `criterion-dir`, `sample`, `statistic`, `unit`, and positive integer `timeout`
   default to `target/criterion`, `new`, `median`, `ns`, and 7,200 seconds.
@@ -64,7 +64,8 @@ It rejects links/submodules; ignored files are intentionally absent.
 `apply_snapshot(checkout, snapshot)` is for a new checkout at that revision only.
 It transports binary stdin unchanged and rejects file collisions before applying.
 `temporary_worktree(root, destination, revision, *, allow_git_mutations=False)`
-creates/removes one detached checkout. Cleanup errors retain a recovery path;
+creates/removes one detached checkout. Its destination must be absent, with no
+symlink or Windows directory junction components. Cleanup errors retain a recovery path;
 combined operation/cleanup failures preserve both exceptions. Failures during
 application may partially modify only the disposable checkout. There is no
 concurrent-writer lock or promise of cleanup after process termination.

@@ -1021,6 +1021,67 @@ and binary data. Publication stages every file first and rolls back caught
 replacement failures. See [supported interfaces][api] for lookup behavior, typed
 results/errors, recovery backups, concurrency limits, and API stability.
 
+### Consumer integration tests
+
+The notebook fixture and Just inspection APIs target **v0.1.8**. Adopt an exact
+published release containing them before deleting consumer helpers. They require
+no pytest plugin; keep scientific assertions and repository-specific gate policy
+in the consumer tests.
+
+Run notebook tests in the consumer's already synchronized locked environment,
+with the notebook extra and analysis dependencies installed. A pytest test can
+borrow that interpreter and copy only its selected inputs:
+
+```python
+import sys
+from pathlib import Path
+
+from research_repo_tools.notebook_testing import isolated_project
+
+def test_analysis(tmp_path):
+    with isolated_project(
+        Path(__file__).resolve().parents[2],
+        [Path("notebooks/analysis.ipynb"), Path("data/example.csv")],
+        parent=tmp_path,
+        environment=Path(sys.prefix),
+    ) as project:
+        # Prepare domain inputs and assertions inside project.root.
+        result = project.execute(
+            Path("notebooks/analysis.ipynb"),
+            env={"ANALYSIS_OUTPUT_DIR": str(project.root / "figures")},
+        )
+        assert result.returncode == 0, result.report
+        assert result.report["failed_cell"] is None
+        assert result.notebook_path.is_file()
+```
+
+The fixture copies the manifest, lockfile and Python selector without rewriting
+them, excludes native toolchain setup, and removes only its temporary workspace
+on context exit. Returned paths live until that exit. Cell failures and timeouts
+return a failed report. The helper does not synchronize dependencies or certify
+that installed packages match the lock; run the consumer's normal setup first.
+
+Inspect Just's native metadata and dry-run text using the installed package's
+Just version:
+
+```python
+from pathlib import Path
+
+from research_repo_tools.just_inspect import dry_run, inspect_justfile
+
+root = Path.cwd()
+recipes = inspect_justfile(root).recipes
+dependencies = {item["recipe"] for item in recipes["ci"]["dependencies"]}
+assert "test-rust" in dependencies  # This assertion is consumer policy.
+preview = dry_run(root, "release-notes", ["v1.2.3"])
+assert "changelog notes" in preview.stderr
+```
+
+Dry-run preserves native stdout/stderr and argument boundaries. It does not run
+recipe bodies, but Just still evaluates configuration and expressions; use
+trusted Justfiles. See the [integration-test API contract][api] for overrides,
+errors, path boundaries, environment handling, and migration details.
+
 ### Preparing a structured release
 
 The release API requires a published version newer than `0.1.2` containing it.

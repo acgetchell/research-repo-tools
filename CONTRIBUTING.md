@@ -184,6 +184,13 @@ inspection runs without extras, and advisory checks run in the locked notebook
 environment with native Ruff. It covers repair inventories, source suppression,
 policy configuration, strict warning status, IPython skips, and unchanged inputs.
 
+The public notebook fixture suite also runs with the notebook extra after both
+installations, using fresh kernels for success, cell failure and timeout reports,
+temporary-root boundaries, borrowed interpreters and environment preservation.
+The base installations exercise Just metadata and dry-run inspection with the
+package's pinned executable. Keep these public integration checks capability
+focused; consumer scientific assertions and recipe policies stay downstream.
+
 Use `newline="\n"` for portable text-file writes, or bytes for exact serialized
 fixtures. Intentional CRLF output must select that policy explicitly. The AST
 guard in `just newline-check` checks Python under `src`, `scripts`, and `tests`,

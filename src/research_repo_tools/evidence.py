@@ -300,7 +300,7 @@ def fingerprint_files(root: Path, paths: Sequence[Path]) -> str:
     """Hash an explicit inventory of relative regular files, including names.
 
     Framing is versioned and length-prefixed; order does not matter. Reject
-    aliases, traversal, and symlinks. This is an exact filesystem fingerprint,
+    aliases, traversal, symlinks, and junctions. This is an exact filesystem fingerprint,
     not a Git tree hash or automatic source discovery. Callers own the inventory
     and must keep it stable during measurement (including additions/deletions).
     """
@@ -311,8 +311,8 @@ def fingerprint_files(root: Path, paths: Sequence[Path]) -> str:
         if path.is_absolute() or not path.parts or any(part in {".", ".."} for part in path.parts):
             raise ValueError(f"fingerprint path must be relative without traversal: {path}")
         target = root / path
-        if any(candidate.is_symlink() for candidate in (target, *target.parents) if candidate.is_relative_to(root)):
-            raise ValueError(f"fingerprint input must not be a symlink: {path}")
+        if any(candidate.is_symlink() or candidate.is_junction() for candidate in (target, *target.parents) if candidate.is_relative_to(root)):
+            raise ValueError(f"fingerprint input must not be a symlink or junction: {path}")
         if not target.is_file():
             raise ValueError(f"fingerprint input must be a regular file: {path}")
         name = path.as_posix()

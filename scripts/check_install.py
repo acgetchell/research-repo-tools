@@ -227,6 +227,9 @@ def check(dist: Path) -> None:
             public_suite = consumer / "public_api_consumer.py"
             public_suite.write_bytes((ROOT / "tests/utilities/public_api_consumer.py").read_bytes())
             run([str(python), "-I", str(public_suite)], cwd=consumer, env=local_env)
+            just_suite = consumer / "public_just_consumer.py"
+            just_suite.write_bytes((ROOT / "tests/utilities/public_just_consumer.py").read_bytes())
+            run([str(python), "-I", str(just_suite)], cwd=consumer, env=local_env)
             release_suite = consumer / "public_release_consumer.py"
             release_suite.write_bytes((ROOT / "tests/releases/public_release_consumer.py").read_bytes())
             run([str(python), "-I", str(release_suite)], cwd=consumer, env=local_env)
@@ -284,6 +287,9 @@ def check(dist: Path) -> None:
             run([str(just), "notebook-sync"], cwd=recipe_consumer, env=env)
             recipe_python = recipe_consumer / ".venv" / scripts.name / python.name
             run([str(recipe_python), "-I", str(notebook_suite)], cwd=recipe_consumer, env=env)
+            testing_suite = consumer / "public_testing_consumer.py"
+            testing_suite.write_bytes((ROOT / "tests/notebooks/public_testing_consumer.py").read_bytes())
+            run([str(recipe_python), "-I", str(testing_suite)], cwd=recipe_consumer, env=env)
             validation_suite = consumer / "public_validation_consumer.py"
             validation_suite.write_bytes((ROOT / "tests/validation/public_validation_consumer.py").read_bytes())
             validation_env = {**env, "PATH": str(recipe_python.parent) + os.pathsep + env.get("PATH", "")}
@@ -342,6 +348,24 @@ def check(dist: Path) -> None:
             assert notebook.read_bytes() == original_notebook
             assert (recipe_consumer / "uv.lock").read_bytes() == lock
             assert (recipe_consumer / ".venv/share/jupyter/kernels/research-repo-tools/kernel.json").is_file()
+            # A representative public fixture integration borrows this already
+            # synchronized environment and complete consumer lock unchanged.
+            run(
+                [
+                    str(recipe_python),
+                    "-I",
+                    "-c",
+                    "import sys; from pathlib import Path; "
+                    "from research_repo_tools.notebook_testing import isolated_project\n"
+                    "with isolated_project(Path.cwd(), [Path('notebooks/smoke.ipynb')], "
+                    "parent=Path.cwd().parent, environment=Path(sys.prefix)) as project:\n"
+                    "    result = project.execute(Path('notebooks/smoke.ipynb'))\n"
+                    "    assert result.returncode == 0, result.report\n"
+                    "    assert result.report_path.is_file() and result.notebook_path.is_file()\n",
+                ],
+                cwd=recipe_consumer,
+                env=env,
+            )
             # A real locked tooling group must start before the consumer's native
             # build backend exists. A full installation of this project would fail.
             setup_consumer = consumer / "setup consumer"

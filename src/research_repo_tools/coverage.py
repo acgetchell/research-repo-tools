@@ -1,16 +1,9 @@
 #!/usr/bin/env python3
-"""
-Utility for summarizing cargo-llvm-cov Cobertura coverage results.
+"""Summarize Cobertura reports from Python or native coverage tools.
 
-The script expects a Cobertura XML report produced by `just coverage-ci`
-(Default location: `coverage/cobertura.xml`). It prints all files that have
-coverable lines, sorted by ascending coverage percentage. Entries can be filtered
-by a path prefix so you can focus on application code (e.g. `src/`).
-
-Example usage (run from repo root):
-
-    uv run python scripts/coverage_report.py
-    uv run python scripts/coverage_report.py --prefix src/cdt --limit 5
+The default report is coverage/cobertura.xml. Print files with coverable lines,
+sorted by ascending coverage percentage, with optional path-prefix filtering.
+Use the shared CLI's ``coverage report`` command from the consumer root.
 """
 
 import argparse
@@ -91,7 +84,7 @@ def load_report(report_path: Path) -> ET.Element:
         ET.Element: Parsed XML root describing coverage information.
 
     Raises:
-        SystemExit: If the report file does not exist.
+        ValueError: If the report is missing, malformed, or not Cobertura XML.
     """
     if not report_path.is_file():
         raise ValueError(f"Coverage report not found: {report_path}")

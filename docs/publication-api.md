@@ -30,7 +30,8 @@ Import `load_publication(root, configuration)` from
 validate shared comparison evidence, and return a `PublicationPlan`.
 `root` is a `Path`; configuration, document, figure, input, link, and reference
 names are normalized root-relative POSIX strings. Paths cannot traverse, alias,
-overlap, contain symlinks, enter `.git`, or use Windows-reserved spellings.
+overlap, contain symlinks or Windows directory junctions, enter `.git`, or use
+Windows-reserved spellings.
 Case and Unicode normalization aliases are rejected on every platform, even when
 the target does not yet exist. The root itself is resolved once.
 
