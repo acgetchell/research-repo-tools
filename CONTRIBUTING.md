@@ -219,6 +219,41 @@ repositories remain read-only. Package publication requires an explicit request;
 follow [Releasing research-repo-tools](docs/RELEASING.md) for account setup, review, tagging,
 and deployment approval.
 
+## Common Windows issues and how to avoid them
+
+Review the encoding, path representation, and fixture cleanup used by both the
+checkout tests and the isolated consumers before changing package checks.
+
+- **Isolated Python and captured output:** `-I` ignores every `PYTHON*`
+  environment variable, including `PYTHONUTF8` and `PYTHONIOENCODING`. If the
+  parent decodes output as UTF-8, select that encoding in the child's startup
+  flags with `-I -X utf8`. Installation checks use `run_isolated` in
+  `scripts/check_install.py` for this contract, with `-B` preserving the
+  no-bytecode policy because isolation also ignores `PYTHONDONTWRITEBYTECODE`.
+  Include non-ASCII output on both
+  streams and conflicting inherited Python settings in transport regressions.
+  For CLI status messages in a caller-selected encoding, escape unsupported
+  characters so reporting a completed write cannot turn success into failure.
+- **Shell paths and filesystem paths:** Just's `invocation_directory()` can
+  return a Unix-style `/c/...` path on Windows. Use
+  `invocation_directory_native()` when comparing its result with `Path`.
+  Preserve the native representation when testing argument and path transport;
+  shell conversion is a separate behavior.
+- **Traversal guards and cleanup:** A mock of `os.scandir` affects temporary
+  directory cleanup as well as package traversal. Windows cleanup uses paths
+  where another host may use file descriptors. Limit the guard to the tested
+  walk operations, and let cleanup inspect ordinary modeled directories.
+  Exercise the path-based cleanup implementation locally when diagnosing this
+  difference, then verify the native Windows job.
+
+Python's [startup flags](https://docs.python.org/3.14/using/cmdline.html#cmdoption-I)
+and Just's [Windows path rules](https://just.systems/man/en/paths-on-windows.html)
+define these behaviors. Use `just check` while iterating and `just ci` for final
+local validation. Inspect all required native package jobs for the current
+commit, including their distribution installations and setup checks, before
+reporting merge readiness. Keep validation results in review notes or CI logs;
+this guide records current practices rather than a history of failures.
+
 ## Documentation conventions
 
 Keep installation, consumer commands, and usage examples in README.md; keep

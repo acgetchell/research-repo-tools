@@ -1,6 +1,7 @@
 """Reject stale or incomplete publication inputs before installation begins."""
 
 import importlib.util
+import os
 import subprocess
 import sys
 import tarfile
@@ -11,6 +12,37 @@ from pathlib import Path
 import pytest
 
 ROOT = Path(__file__).resolve().parents[2]
+
+
+@pytest.fixture
+def install_checker():
+    spec = importlib.util.spec_from_file_location("check_install", ROOT / "scripts/check_install.py")
+    assert spec is not None and spec.loader is not None
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+@pytest.mark.parametrize("utf8_setting", ["0", "1"])
+def test_isolated_consumers_use_utf8_transport(tmp_path: Path, install_checker, utf8_setting: str) -> None:
+    env = {
+        **os.environ,
+        "PYTHONHOME": str(tmp_path / "absent interpreter"),
+        "PYTHONPATH": str(tmp_path),
+        "PYTHONUTF8": utf8_setting,
+        "PYTHONIOENCODING": "cp1252:strict",
+        "PYTHONDONTWRITEBYTECODE": "0",
+    }
+    child = (
+        "import sys\n"
+        "assert sys.flags.isolated == 1\n"
+        "assert sys.flags.utf8_mode == 1\n"
+        "assert sys.dont_write_bytecode\n"
+        "assert sys.stdout.encoding == sys.stderr.encoding == 'utf-8'\n"
+        "print('分析 café')\n"
+        "print('分析 café', file=sys.stderr)\n"
+    )
+    assert install_checker.run_isolated(Path(sys.executable), ["-c", child], cwd=tmp_path, env=env) == "分析 café\n"
 
 
 @pytest.mark.parametrize("inventory", ["empty", "wheel-only", "sdist-only", "stale-wheel", "stale-sdist"])
@@ -40,11 +72,8 @@ def test_install_check_rejects_unexpected_distribution_set(tmp_path: Path, inven
     assert "PASS:" not in result.stdout
 
 
-def test_install_check_does_not_forward_external_project_locations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    spec = importlib.util.spec_from_file_location("check_install", ROOT / "scripts/check_install.py")
-    assert spec is not None and spec.loader is not None
-    module = importlib.util.module_from_spec(spec)
-    spec.loader.exec_module(module)
+def test_install_check_does_not_forward_external_project_locations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, install_checker) -> None:
+    module = install_checker
     version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
     # Only the inventory is needed: intercept the first subprocess before it can
     # create an environment or honor any inherited project-directory overrides.
