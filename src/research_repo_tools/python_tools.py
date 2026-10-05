@@ -136,7 +136,7 @@ def _locked_versions(document: dict) -> dict[str, set[str | None]]:
 
 
 def check(root: Path, *, executables: bool = True) -> None:
-    """Inspect declarations, locked versions, and selected executables; never sync."""
+    """Inspect declarations, the locked dev graph, and selected executables; never sync."""
     from research_repo_tools.process import run_command
 
     try:
@@ -147,6 +147,38 @@ def check(root: Path, *, executables: bool = True) -> None:
             locked = lock.get(name, set())
             if locked != {expected}:
                 raise ValueError(f"uv.lock must resolve {name}=={expected}; found {sorted(map(str, locked))}")
+        # Let uv select the reachable dev graph, including activated extras and
+        # conditional edges. Frozen/offline export cannot resolve or sync, and
+        # stdout plus a temporary cache leave the consumer untouched.
+        exported = run_command(
+            "uv",
+            [
+                "export",
+                "--frozen",
+                "--offline",
+                "--no-cache",
+                "--no-python-downloads",
+                "--only-group",
+                "dev",
+                "--format",
+                "requirements.txt",
+                "--no-hashes",
+                "--no-annotate",
+                "--no-header",
+                "--no-emit-local",
+                "--project",
+                str(root),
+                "--directory",
+                str(root),
+            ],
+            cwd=root,
+            timeout=30,
+        ).stdout
+        reachable = {
+            canonicalize_name(item.name) for item in _requirements(exported.splitlines(), "uv dev export") if item.marker is None or item.marker.evaluate()
+        }
+        if missing := TOOLS - reachable:
+            raise ValueError(f"{', '.join(sorted(missing))} not reachable from the locked dev profile")
         if executables:
             for name, expected in authority.items():
                 output = run_command(name, ["--version"], cwd=root, timeout=30).stdout.strip().split()

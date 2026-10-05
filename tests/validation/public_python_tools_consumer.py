@@ -33,8 +33,14 @@ class TestPythonTools(unittest.TestCase):
             "[tool.research-repo-tools.toolchain]\ninherit-python-tools=true\n"
         )
         (self.root / "pyproject.toml").write_bytes(self.manifest.encode())
-        self.lock = "\n".join(
-            f'[[package]]\nname="{name}"\nversion="{pin}"\n' for name, pin in {"research-repo-tools": version("research-repo-tools"), **self.pins}.items()
+        self.lock = (
+            'version=1\nrevision=3\nrequires-python=">=3.12"\n'
+            '[[package]]\nname="consumer"\nversion="1.0"\nsource={virtual="."}\n'
+            '[package.dev-dependencies]\ndev=[{name="research-repo-tools", extra=["python-tools"]}]\n'
+            '[package.metadata.requires-dev]\ndev=[{name="research-repo-tools", extras=["python-tools"]}]\n'
+            f'[[package]]\nname="research-repo-tools"\nversion="{version("research-repo-tools")}"\nsource={{registry="https://pypi.org/simple"}}\n'
+            '[package.optional-dependencies]\npython-tools=[{name="pytest"}, {name="ruff"}, {name="ty"}]\n'
+            + "\n".join(f'[[package]]\nname="{name}"\nversion="{pin}"\nsource={{registry="https://pypi.org/simple"}}\n' for name, pin in self.pins.items())
         )
         (self.root / "uv.lock").write_bytes(self.lock.encode())
 
@@ -98,10 +104,59 @@ class TestPythonTools(unittest.TestCase):
                 self.assertEqual(self.snapshot(), before)
 
     def test_path_drift_cannot_pass_based_only_on_installed_metadata(self) -> None:
-        with patch("subprocess.run", return_value=subprocess.CompletedProcess([], 0, b"pytest 0.1\n", b"")):
+        native = subprocess.run
+
+        def run(command, **kwargs):
+            if command[1:] == ["--version"]:
+                return subprocess.CompletedProcess(command, 0, b"pytest 0.1\n", b"")
+            return native(command, **kwargs)
+
+        with patch("subprocess.run", side_effect=run):
             status, diagnostics = self.check()
         self.assertEqual(status, 1)
         self.assertIn("PATH must select pytest", diagnostics)
+
+    def test_orphan_tool_records_do_not_satisfy_the_dev_profile(self) -> None:
+        for before, after in (
+            ('extra=["python-tools"]', "extra=[]"),
+            ('python-tools=[{name="pytest"}, {name="ruff"}, {name="ty"}]', 'python-tools=[{name="pytest"}, {name="ruff"}]'),
+            ('dev=[{name="research-repo-tools", extra=["python-tools"]}]', 'dev=[]\nother=[{name="research-repo-tools", extra=["python-tools"]}]'),
+            ('{name="ty"}', '{name="ty", marker="sys_platform == \'unsupported-fixture-platform\'"}'),
+        ):
+            with self.subTest(edge=before):
+                (self.root / "uv.lock").write_bytes(self.lock.replace(before, after).encode())
+                snapshot = self.snapshot()
+                status, diagnostics = self.check()
+                self.assertEqual(status, 1)
+                self.assertIn("not reachable from the locked dev profile", diagnostics)
+                self.assertIn("toolchain adopt --dry-run", diagnostics)
+                self.assertEqual(self.snapshot(), snapshot)
+
+    def test_direct_dev_dependencies_are_reachable_without_an_extra_edge(self) -> None:
+        lock = self.lock.replace('extra=["python-tools"]', "extra=[]").replace(
+            'dev=[{name="research-repo-tools", extra=[]}]', 'dev=[{name="research-repo-tools"}, {name="pytest"}, {name="ruff"}, {name="ty"}]'
+        )
+        (self.root / "uv.lock").write_bytes(lock.encode())
+        before = self.snapshot()
+        self.assertEqual(self.check(), (0, ""))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_dependency_update_checks_reachability_without_probing_tool_executables(self) -> None:
+        native = subprocess.run
+
+        def run(command, **kwargs):
+            self.assertEqual(command[1], "export", "dependency update probed a tool executable or ran a resolver")
+            return native(command, **kwargs)
+
+        for locked, expected in ((self.lock, 0), (self.lock.replace('extra=["python-tools"]', "extra=[]"), 1)):
+            (self.root / "uv.lock").write_bytes(locked.encode())
+            before = self.snapshot()
+            diagnostics = io.StringIO()
+            with patch("subprocess.run", side_effect=run), contextlib.redirect_stderr(diagnostics), contextlib.redirect_stdout(io.StringIO()):
+                self.assertEqual(main(["--root", str(self.root), "deps", "update-python"]), expected)
+            if expected:
+                self.assertIn("not reachable from the locked dev profile", diagnostics.getvalue())
+            self.assertEqual(self.snapshot(), before)
 
     def test_adoption_rejects_malformed_groups_before_resolution(self) -> None:
         (self.root / "pyproject.toml").write_bytes(b"dependency-groups=[]\n[tool.research-repo-tools.toolchain]\ninherit-python-tools=true\n")

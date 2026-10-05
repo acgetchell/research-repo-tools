@@ -58,14 +58,15 @@ assert main(["--root", str(consumer), "notebooks", "check", str(notebook)]) == 1
 """
 
 
-def check_python_update(consumer: Path, artifact: Path, version: str, uv: str, just: Path, env: dict[str, str]) -> None:
+def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, version: str, uv: str, just: Path, env: dict[str, str]) -> None:
     """Prove exact pins, retained constraints, full lock upgrades, and dev sync."""
     consumer.mkdir()
     wheels = consumer / "wheels"
     wheels.mkdir()
     # The script resolver uses this local registry, not project source overrides.
-    # Make the unpublished candidate available without relying on a PyPI release.
-    shutil.copyfile(artifact, wheels / artifact.name)
+    # Use this artifact's wheel so offline resolution never needs registry
+    # metadata for a same-version PyPI release or an uncached sdist build.
+    shutil.copyfile(registry_wheel, wheels / registry_wheel.name)
 
     def fixture(name: str, release: str, requires_python: str = ">=3.14") -> None:
         distribution = name.replace("-", "_")
@@ -187,7 +188,7 @@ def check(dist: Path) -> None:
     uv = shutil.which("uv")
     if uv is None:
         raise RuntimeError("uv must be installed to check distributions")
-    # Keep network/cache settings, but never let the caller redirect these
+    # Keep network settings, but never let the caller redirect these
     # temporary consumers into another project, environment, or working directory.
     external_locations = {
         "PYTHONPATH",
@@ -205,6 +206,8 @@ def check(dist: Path) -> None:
         print("Git-mutating consumer tests are skipped by RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS=1 (wheel and sdist).")
     with tempfile.TemporaryDirectory(prefix="research-repo-tools-installed-") as directory:
         temporary = Path(directory)
+        # A warm user cache can hide missing fixture artifacts in offline checks.
+        env["UV_CACHE_DIR"] = str(temporary / "uv-cache")
         for artifact in (wheel, sdist):
             name = "wheel" if artifact == wheel else "sdist"
             consumer = temporary / name
@@ -368,7 +371,7 @@ def check(dist: Path) -> None:
             assert "must be installed and available on PATH" in result.stderr, result.stderr
             assert not (setup_consumer / "scripts").exists()
             check_update_bootstrap(setup_consumer, uv, just, setup_env)
-            check_python_update(consumer / "update consumer", artifact, version, uv, just, env)
+            check_python_update(consumer / "update consumer", artifact, registry / wheel.name, version, uv, just, env)
             print(f"PASS: installed {name} outside checkout; bundled just")
 
 
