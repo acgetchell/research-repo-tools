@@ -13,6 +13,9 @@ Consumers own their version declarations. The installed package owns how to
 install and verify them. There are no repository-name profiles.
 With opt-in `toolchain.inherit-python`, the installed package also owns the
 shared Python baseline; see [consumer adoption](../README.md#shared-python-adoption).
+The independent `toolchain.inherit-python-tools` opt-in selects the installed
+`python-tools` extra as the authority for Ruff, ty, and pytest. See
+[tool-profile adoption](../README.md#shared-python-tool-versions).
 
 | Input | Authority |
 | --- | --- |
@@ -164,6 +167,7 @@ The underlying commands are:
 | `toolchain clean [--dry-run \| --apply] [--keep-root PATH]...` | Preview obsolete package-owned installations; explicitly apply removals while retaining the selected consumers |
 | `toolchain export [--file PATH]` | Verify tools and append their environment to an explicit file or `GITHUB_ENV` |
 | `toolchain python-check` | Reject drift from the installed shared Python baseline in opted-in consumers |
+| `toolchain python-tools-check` | Reject inherited tool declaration, lock, and executable drift without synchronization |
 | `toolchain run -- COMMAND ...` | Check tools, then run with their selected paths; propagate failure/exit status |
 | `toolchain sync [--dry-run]` | Install declared versions and verify results; dry run reports without installation |
 | `toolchain upgrade [--dry-run]` | Resolve stable Cargo upgrades, install and verify them, then publish the exact pins |

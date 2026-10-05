@@ -43,7 +43,7 @@ class TestPythonPolicy(unittest.TestCase):
         path.parent.mkdir(parents=True, exist_ok=True)
         path.write_text(text, encoding="utf-8", newline="\n")
 
-    def check(self, tool: str) -> int:
+    def check(self, tool: str = "check") -> int:
         native = subprocess.run
 
         def inventory_or_native(command: list[str], **kwargs: Any) -> subprocess.CompletedProcess[bytes]:
@@ -62,9 +62,9 @@ class TestPythonPolicy(unittest.TestCase):
                 result.check_returncode()
             return result
 
-        args = [tool, "check", "--no-force-exclude", *(["--no-fix"] if tool == "ruff" else [])]
+        action = {"ruff": "check", "ty": "typecheck"}.get(tool, tool)
         with patch("subprocess.run", side_effect=inventory_or_native), contextlib.redirect_stderr(io.StringIO()):
-            return main(["--root", str(self.root), "files", "run", "--include", "*.py", "--include", "*.pyi", "--", *args])
+            return main(["--root", str(self.root), "python", action])
 
     def test_complete_inventory_and_precise_exceptions(self) -> None:
         for tool in ("ruff", "ty"):
@@ -126,10 +126,30 @@ class TestPythonPolicy(unittest.TestCase):
     def test_python314_type_checking_import_needs_no_future_import(self) -> None:
         self.write(
             "annotations.py",
-            "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    from pathlib import Path\n\ndef name(path: Path) -> str:\n    return path.name\n",
+            "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    from pathlib import Path\n\n\ndef name(path: Path) -> str:\n    return path.name\n",
         )
         for tool in ("ruff", "ty"):
             self.assertEqual(self.check(tool), 0, "\n".join(self.diagnostics))
+
+    def test_native_fix_settings_cannot_modify_checked_source(self) -> None:
+        self.write("ruff.toml", 'fix=true\nfix-only=true\nforce-exclude=true\nexclude=["*.py"]\n[lint]\nselect=["F401"]\n')
+        self.write("café space.py", "import os\r\nvalue=1\r\n")
+        before = {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
+        self.assertEqual(self.check("check"), 1)
+        self.assertIn("F401", "\n".join(self.diagnostics))
+        self.assertEqual(self.check("typecheck"), 0)
+        self.assertEqual(before, {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()})
+        self.assertFalse((self.root / ".ruff_cache").exists())
+        self.assertEqual(self.check("fix"), 0)
+        self.assertEqual((self.root / "café space.py").read_bytes(), b"value = 1\r\n")
+
+    def test_nested_native_configuration_is_honored(self) -> None:
+        self.write("nested/ruff.toml", '[lint]\nselect=["F401"]\n[format]\nquote-style="single"\n')
+        self.write("nested/café space.py", 'print("double")\n')
+        self.assertEqual(self.check("check"), 1)
+        self.assertEqual(self.check("fix"), 0)
+        self.assertEqual((self.root / "nested/café space.py").read_bytes(), b"print('double')\n")
+        self.assertEqual(self.check("check"), 0)
 
     def test_packaged_gate_retains_fixture_validation(self) -> None:
         recipes = template("justfile")
@@ -138,9 +158,7 @@ class TestPythonPolicy(unittest.TestCase):
         self.assertIsNotNone(just)
         result = subprocess.run([str(just), "--dry-run", "ci"], cwd=self.root, capture_output=True, text=True, check=True)
         for command in (
-            "ruff check --no-fix --no-force-exclude",
-            "ruff format --check --no-force-exclude",
-            "ty check --no-force-exclude",
+            "research-repo-tools python check",
             "semgrep check-fixtures",
             "zizmor check",
         ):

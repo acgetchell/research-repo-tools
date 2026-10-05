@@ -34,9 +34,7 @@ alias changelog-unreleased := changelog-release
 # Check the lockfile, Python linting, formatting, newlines, types, and workflows.
 check: newline-check workflow-check
     uv lock --check
-    uv run --locked research-repo-tools files run --include '*.py' --include '*.pyi' -- ruff check --no-fix --no-force-exclude
-    uv run --locked research-repo-tools files run --include '*.py' --include '*.pyi' -- ruff format --check --no-force-exclude
-    uv run --locked research-repo-tools files run --include '*.py' --include '*.pyi' -- ty check --no-force-exclude
+    uv run --locked --no-sync --no-python-downloads research-repo-tools python check
 
 # Validate existing artifacts without rebuilding them (also used by native CI).
 check-dist:

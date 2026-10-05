@@ -43,6 +43,12 @@ It is available from installed distributions as `templates VALIDATING_WORKFLOWS.
 The `python-validation.toml` and `zizmor.yml` templates accompany it. The zizmor
 module itself is an implementation detail; use the supported CLI entry point.
 
+`python check`, `python fix`, and `python typecheck` use the same complete Git
+inventory and native consumer policy. Checks require existing Ruff/ty executables;
+only `fix` enables source edits. See the [Python gate contract](../src/research_repo_tools/templates/VALIDATING_WORKFLOWS.md#python-inventory-and-policy)
+for empty selections, batching, timeouts, and failure behavior. The `python_checks`
+module is private; use the CLI or `cli.main`.
+
 Commands return zero on success. Validation failures and handled operational
 errors return nonzero; argument errors return `2`. Help and version output are
 successful exits. Diagnostics use stderr, while reports and generated content
@@ -375,6 +381,15 @@ files/environment; recovery failures expose retained backup paths. Run from the
 standalone target package, outside the consumer environment. Exclude concurrent
 writers; abrupt termination is outside the rollback guarantee. External local
 path dependencies require separate migration planning.
+
+Tool-version inheritance uses the same adoption API when
+`toolchain.inherit-python-tools = true`, independently of `inherit-python`.
+The installed `python-tools` extra's Requires-Dist metadata owns exact Ruff, ty,
+and pytest versions. `toolchain python-tools-check` checks declarations, the lock,
+and PATH executables without modification. Adoption retains explicitly supplied
+configuration through candidate validation and final environment verification.
+Profile helpers in `python_tools` are
+private; use this CLI contract. See [tool-profile adoption and removal](../README.md#shared-python-tool-versions).
 
 ## Managed installation cleanup API
 

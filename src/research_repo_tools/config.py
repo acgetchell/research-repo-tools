@@ -15,7 +15,7 @@ __all__ = ["load", "parse"]
 
 FIELDS = {
     "notebooks": {"advice", "group", "cwd", "output-dir", "timeout", "outputs", "prohibit-installs"},
-    "toolchain": {"binaries", "cargo", "inherit-python"},
+    "toolchain": {"binaries", "cargo", "inherit-python", "inherit-python-tools"},
     "deps": {"pyproject", "justfile", "tools", "uv"},
     "semgrep": {"config", "fixtures", "namespace", "timeout", "cwd", "counts"},
     "release": {"date-policy", "final-changelog", "required-files", "exclude", "rules", "tag-policy"},
@@ -48,6 +48,7 @@ class ToolchainSettings:
     cargo: Mapping[str, str] = field(default_factory=dict)
     inherit_python: bool = False
     binaries: Mapping[str, str] = field(default_factory=dict)
+    inherit_python_tools: bool = False
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "cargo", MappingProxyType(dict(self.cargo)))
@@ -227,6 +228,8 @@ def parse(value: object, *, root: Path) -> Config:
     toolchain = _section(data, "toolchain")
     if type(toolchain.get("inherit-python", False)) is not bool:
         raise ValueError("toolchain.inherit-python must be a boolean")
+    if type(toolchain.get("inherit-python-tools", False)) is not bool:
+        raise ValueError("toolchain.inherit-python-tools must be a boolean")
     deps = _section(data, "deps")
     semgrep = _section(data, "semgrep")
     release = _section(data, "release")
@@ -268,6 +271,7 @@ def parse(value: object, *, root: Path) -> Config:
             _strings(toolchain.get("cargo", {}), "toolchain.cargo"),
             inherit_python=toolchain.get("inherit-python", False) is True,
             binaries=_strings(toolchain.get("binaries", {}), "toolchain.binaries"),
+            inherit_python_tools=toolchain.get("inherit-python-tools", False) is True,
         ),
         deps=DependencySettings(
             pyproject=_string(deps.get("pyproject", "pyproject.toml"), "deps.pyproject"),

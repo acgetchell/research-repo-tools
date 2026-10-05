@@ -112,7 +112,11 @@ run setup, then advance exact development-tool pins through
 this package's `deps update-python` command, refresh `uv.lock` within the resulting manifest
 constraints, and sync the development environment. Review the manifest and lockfile
 changes, then validate them with `just ci`. Exact runtime, build,
-and audit pins remain unchanged by this recipe.
+and audit pins remain unchanged by this recipe. Ruff, ty, and pytest are pinned
+once in the published `python-tools` extra; the maintainer dev group selects that
+extra through a self dependency. Advance those three pins deliberately together
+for a tested shared release, refresh the lock, and validate with `just ci`.
+The generic dev-pin updater retains this release-owned profile.
 
 ## Local package evaluation
 
@@ -168,6 +172,9 @@ directories. Preserve meaningful regression assertions against this package;
 merge duplicates instead of maintaining historical implementations or repository
 snapshots. Use actual child processes for byte transport and minimal disposable
 repositories for Git behavior.
+The optional Python tool profile is exercised by installed wheel/sdist consumer
+checks, including exact native versions and real adoption candidate resolution.
+
 Notebook tests use synthetic files and real fresh kernels for interpreter,
 working-directory, cell-error, and timeout behavior. They require local socket
 access for Jupyter. Optional notebook dependencies are pinned in the development

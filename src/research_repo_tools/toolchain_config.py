@@ -95,6 +95,10 @@ def load(settings: Config) -> Toolchain:
         from research_repo_tools.python_baseline import check
 
         check(root, document)
+    if settings.toolchain.inherit_python_tools:
+        from research_repo_tools.python_tools import check_declarations
+
+        check_declarations(document)
     try:
         uv = document["tool"]["uv"]["required-version"]
     except (KeyError, TypeError) as error:

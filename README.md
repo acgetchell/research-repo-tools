@@ -82,13 +82,14 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | File selection | `files list`, `run` | Tracked/nonignored inputs, exclusions and portable argument batching |
 | Notebooks | `notebooks advise`, `check`, `clear`, `execute`, `group`, `inspect`, `lint`, `sync` | Read-only review, optional locked environment, native Ruff/ty checks, and execution reports |
 | Performance | `performance assets`, `baseline`, `compare`, `convert`, `export`, `extract`, `fetch`, `measure`, `promote`, `publish`, `release-draft`, `release-upload`, `render`, `verify` | Complete configured measurement, retained evidence, release assets and publication |
+| Python | `python check`, `fix`, `typecheck` | Complete tracked/nonignored inventory; native Ruff/ty policy; explicit fixes only |
 | Release metadata | `release check`, `release update` | Infer metadata, apply declared policies, and validate complete release plans |
 | Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
 | Security | `security osv`, `secrets` | Managed OSV/Gitleaks, explicit inputs, full history, redacted native reports |
 | Semgrep | `semgrep check-fixtures`, `scan` | Validate consumer rules, explicit inventory, reports and fixture expectations |
 | Setup | `setup` | Require uv; install user Just and declared tools; sync the locked environment |
 | Templates | `templates NAME` | Shared changelog, git-cliff, just, TOML, and rumdl resources |
-| Toolchain | `toolchain adopt`, `check`, `clean`, `export`, `python-check`, `run`, `sync`, `upgrade` | Exact declarations; managed installations and cleanup; verified execution and checked CI export |
+| Toolchain | `toolchain adopt`, `check`, `clean`, `export`, `python-check`, `python-tools-check`, `run`, `sync`, `upgrade` | Exact declarations; managed installations and cleanup; verified execution and checked CI export |
 | Validation | `validation cargo-metadata`, `require`, `run` | Native package preflight, executable checks and configured example output assertions |
 | Workflow security | `zizmor check` | One declared scanner/persona, token discovery, explicit offline or required-online audits |
 
@@ -122,7 +123,9 @@ arguments in lexicographic order.
 | `just notebook-lint FILE...` | Check structure, output policy, Python syntax, Ruff rules/formatting, and ty types |
 | `just notebook-sync` | Synchronize locked notebook dependencies and the project kernel |
 | `just performance COMMAND...` | Compare Criterion samples, handle assets, and verify, render, or publish retained evidence |
-| `just python-check` | Apply full configured Ruff/ty checks to all tracked and nonignored Python, including fixtures |
+| `just python-check` | Check lint, formatting, and types for all tracked and nonignored Python, including fixtures |
+| `just python-fix` | Apply configured Ruff fixes and formatting to the same complete inventory |
+| `just python-typecheck` | Run native ty without modifying source |
 | `just release-check` | Check consumer release metadata |
 | `just release-first TAG DATE` | Prepare a first release after checking published stable history |
 | `just release-notes TAG` | Print release notes from the root changelog or an archive |
@@ -133,13 +136,14 @@ arguments in lexicographic order.
 | `just security-secrets [ARGS...]` | Scan full reachable history and current tracked/nonignored files |
 | `just semgrep-check` | Validate the consumer's Semgrep rules and fixtures |
 | `just setup` | Install and verify declared tools, then synchronize the Python environment |
-| `just shared-python-plan VERSION` | Preview an opt-in shared-package/Python migration outside the old environment |
+| `just shared-python-plan VERSION` | Preview an opt-in shared-package/Python/tool-profile migration outside the old environment |
 | `just shared-python-update VERSION` | Apply the migration and recreate the locked environment and notebook kernel |
 | `just tag TAG` | Forward to `tag-release` |
 | `just tag-force TAG` | Explicitly replace an existing local tag |
 | `just tag-release TAG` | Create a local annotated tag from validated release notes |
 | `just tools-check` | Check installed tools and versions without installing them |
 | `just tools-export` | Verify tools and append their environment to `GITHUB_ENV` |
+| `just tools-python-check` | Check inherited Python tool declarations, lock, and executable versions without changes |
 | `just update` | Upgrade tools, then Cargo and Python dependencies and the development environment |
 | `just update-cargo-dependencies` | Upgrade root Cargo requirements (including incompatible releases) and lock resolution; skip projects without a root Cargo.toml |
 | `just update-cargo-tools` | Upgrade declared Cargo tools and release binaries; publish verified TOML pins |
@@ -192,14 +196,24 @@ remains an independent merge gate.
 
 ### Workflow security and complete Python validation
 
-These additions target v0.1.6; consumers should adopt `research-repo-tools==0.1.6`
-after publication. Merge the packaged `python-validation.toml` policy into your
-pyproject and retain the full existing Ruff configuration. It enables missing
+The shared Python commands target v0.1.8; adopt an exact released pin. Merge the
+packaged `python-validation.toml` policy into your pyproject and retain the full
+existing Ruff configuration. It enables missing
 annotations (ANN001/002/003/201/202/204/205/206), TC, and UP037. The `python-check`
 recipe discovers `*.py` and `*.pyi` throughout the repository, including support
 code, tests, and negative Semgrep fixtures. Use exact per-file/rule exceptions
 for intentional violations. Extend `check` with existing Rust/domain tests and
 native notebook linting; keep `semgrep-check` in the canonical local and CI gate.
+
+The commands require an already synchronized development environment. Checks
+never install or upgrade tools. `python check` runs Ruff lint, Ruff format checks,
+and ty; `python typecheck` runs ty alone. Both disable automatic source changes.
+`python fix` applies configured Ruff fixes followed by formatting; lint failures
+from the fix pass still propagate. Native settings, nested configuration, and
+precise exceptions remain active. Empty inventories require no validators;
+opted-in declaration and lock checks still apply. Missing tools fail before
+validation starts. All batches run and the first native failure
+status propagates. Use `just setup` to prepare the locked environment.
 
 Declare one zizmor scanner pin, either `zizmor==1.30.1` in the consumer's dev
 dependency group or `zizmor = "1.30.1"` in its existing managed Cargo toolchain.
@@ -330,6 +344,62 @@ or concurrent-writer transaction. Include every required source in the tracked
 or nonignored inventory; external local path dependencies need a separately
 reviewed migration. `just python-check` detects mirror drift without repairing
 it or downloading an interpreter. Routine checks do not advance versions.
+
+### Shared Python tool versions
+
+The optional `python-tools` extra is the single Ruff, ty, and pytest version
+authority for each exact shared release. The initial profile targets v0.1.8 and
+uses Ruff 0.16.9, ty 0.0.84, and pytest 9.1.1. Base installations do not include
+these development tools. Opt in independently of `inherit-python`:
+
+```toml
+[tool.research-repo-tools.toolchain]
+inherit-python-tools = true
+```
+
+Keep your current exact shared-package pin in `tooling` and include that group
+from `dev`. After v0.1.8 is published, the same standalone adoption recipes
+prepare the new extra, declarations, lock, and environment:
+
+```sh
+just shared-python-plan 0.1.8
+just shared-python-update 0.1.8
+just tools-python-check
+just python-check
+```
+
+Preview prints concrete manifest, selector (when inherited), and lock diffs after
+resolving and installing a private candidate. Adoption adds `python-tools` to all
+shared-package group requirements, retaining other extras such as `notebooks`.
+It converts old simple exact Ruff/ty/pytest pins in dependency groups into
+unversioned requirements, so the installed release owns their versions. Compatible
+ranges can also be retired; conflicting ranges, conditional requirements, URLs,
+extra requests, and uv source/constraint overrides fail before publication.
+Public runtime or optional dependencies on these tools require a deliberate
+consumer decision: adoption does not rewrite them. Other dependencies, native
+lint/type settings, precise fixture exceptions, and notebook packages stay local.
+
+Tool inheritance alone retains `.python-version` and native Python targets.
+Real Python packages retain `project.requires-python`; uv constrains the groups
+containing the shared package to its runtime requirement. An incompatible selected
+interpreter or runtime range fails explicitly. Both forms of inheritance use the
+same candidate verification and recoverable apply process described above.
+
+`just tools-python-check` checks declarations, locked versions, and the actual
+executables selected by PATH. `just python-check`, `just python-typecheck`, and
+managed tool checks enforce the profile too. They never synchronize or upgrade.
+`just setup` synchronizes the existing lock. `just update-python-dependencies`
+updates unrelated development pins and the lock while retaining the exact shared
+release and inherited versions. Upgrade the profile only by adopting another exact
+shared release. Tools outside Ruff/ty/pytest remain consumer-owned.
+
+To opt out, disable `inherit-python-tools`, remove only `python-tools` from each
+shared-package requirement, and choose consumer-owned tool requirements in the
+appropriate groups. Keep any `notebooks` extra and `inherit-python` setting you
+still need. Run `just update-python-dependencies`, then `just setup` and your
+validation gates. Disabling the check alone does not remove the extra's pins.
+Consumer rollout is tracked in [#30](https://github.com/acgetchell/research-repo-tools/issues/30);
+retain downstream orchestration until the published pin passes its focused checks.
 
 ### Dependency and secret scanning
 
