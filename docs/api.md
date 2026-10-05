@@ -117,6 +117,115 @@ settings = load(root=Path.cwd())
 preview = plan_clean(settings, keep_roots=(Path("../another-consumer"),))
 ```
 
+## Python notebook integration-test API
+
+Targeting v0.1.8, `research_repo_tools.notebook_testing` exports
+`isolated_project`, `NotebookProject`, and `NotebookExecution`. Importing the
+module needs only the base package; execution needs the notebook extra. There
+is no pytest dependency. Use the factory/context manager; result constructors
+and private attributes are not extension points.
+
+`isolated_project(source_root, paths, *, parent, environment)` yields a
+`NotebookProject` in a new temporary directory under the existing `parent`.
+Arguments are `Path` objects; `paths` is an explicit sequence of files relative
+to `source_root`, or absolute files inside it. Directories, traversal, links
+(including Windows junctions), `.git`, `.venv`, and `rust-toolchain.toml` are
+rejected. The manifest, `.python-version`, and `uv.lock` are required and copied
+automatically, byte-for-byte. Other files are copied only when listed. `parent`
+must be outside the source project and borrowed environment. Copy/parse failures
+clean up the new workspace and preserve the originals.
+
+`environment` explicitly selects the already synchronized Python environment
+running the tests: normally `Path(sys.prefix)`. A different environment is an
+error; launch the tests with its interpreter instead. Execution verifies the
+declared uv and Python versions and notebook group, and hashes the copied lock.
+It does not re-resolve the lock or verify every installed package against it.
+No environment is created, synchronized, upgraded or deleted, and no kernel is
+registered. Notebook options and Python inheritance are retained; managed Cargo
+and binary declarations are disabled in memory, so copying the consumer manifest
+does not require a Rust toolchain or TOML text surgery.
+
+`NotebookProject` exposes `root` for consumer input preparation, `artifacts` for
+execution outputs, and `environment`. Its method
+`execute(notebook, *, cwd=None, timeout=None, env=None) -> NotebookExecution`
+uses the existing notebook engine and a fresh kernel for each call:
+
+- `notebook` and `cwd` are `Path` objects relative to `root`, or absolute paths
+  inside it. Links and escapes are rejected. Omitted `cwd` and `timeout` use
+  notebook configuration; timeout must be a positive integer in seconds.
+- `env` overlays kernel variables; `None` values remove them. The calling process
+  environment is never changed. The selected interpreter/environment and private
+  Jupyter/IPython/Matplotlib directories remain authoritative; `PYTHONHOME` and
+  `PYTHONPATH` are removed and bytecode writes disabled for the kernel.
+- Executed notebooks, schema-1 reports, and temporary kernel state stay in the
+  fixture workspace. Configured `output-dir` is replaced by `artifacts`.
+  Repeated execution of the same notebook replaces its previous artifacts.
+- `NotebookExecution` exposes `source` (the copied input), `notebook_path`,
+  `report_path`, `report` (the existing JSON report as a dictionary), and
+  `returncode` (`0` passed, `1` failed). Cell errors and timeouts return reports;
+  malformed inputs, environment failures, and publication errors raise, using
+  the existing notebook/file exception contracts. Interrupts propagate.
+- Context exit removes only the newly created workspace, including on an
+  exception. Artifact paths then expire and further execution raises `ValueError`.
+
+Notebook code is trusted executable code, not sandboxed. Consumer tests own any
+files that code writes, its domain environment variables, scientific assertions,
+and external side effects. Place intended test outputs beneath `project.root`.
+
+The [README example](../README.md#consumer-integration-tests) replaces generic
+notebook/project copying, `UV_PROJECT_ENVIRONMENT` mutation, Cargo-table string
+slicing, and sidecar-path reconstruction. MCMC adoption should retain its
+trace-root, output-destination, ACF, ESS, timing, and split-R-hat assertions;
+modify only fixture copies when injecting scientific assertion cells. Consumer
+adoption follows publication and does not follow automatically from upstream tests.
+
+## Python Just inspection API
+
+Targeting v0.1.8, `research_repo_tools.just_inspect` exports `Justfile`,
+`dry_run`, and `inspect_justfile`. Both functions require an explicit `root: Path`
+and accept keyword arguments `justfile=Path("justfile")`, `executable="just"`,
+`env=None`, and `timeout=30`. Relative Justfile and explicit executable paths
+resolve against `root`; bare executable names use `PATH`. `env` replaces the
+child environment, with omission inheriting it; it never mutates the caller.
+The timeout bounds each subprocess. The default selects the root's literal
+`justfile`, with no implicit search into parent projects.
+
+The executable must report the version of the installed `rust-just` dependency,
+the existing shared Just authority. Inspection never installs or upgrades it.
+Use the normal consumer environment or explicitly select its matching executable.
+
+| Interface | Result |
+| --- | --- |
+| `dry_run(root, recipe, arguments=(), **options)` | `subprocess.CompletedProcess[str]` with native stdout/stderr and return code; arguments remain separate argv entries |
+| `inspect_justfile(root, **options)` | `Justfile` snapshot with `recipes` and `aliases` dictionaries |
+
+`recipes` maps root-level recipe names to native JSON metadata, including
+parameter/default expressions, dependency records and body fragments. `aliases`
+maps alias names to target names. Native expressions remain JSON values: these
+helpers do not parse shell commands, infer argv from rendered text, or prescribe
+consumer CI policy. Imported root recipes follow Just's dump; nested module
+metadata is outside this small interface. Qualified module names can be passed
+to `dry_run`. Treat returned records as snapshots, not extension constructors.
+
+JSON object/recipe/alias shapes and parameter/dependency identity fields are
+validated; ambiguous duplicate keys and non-finite numbers are rejected. Missing
+files/directories, wrong versions and malformed metadata raise `ValueError`.
+Executable lookup, OS launch failures, nonzero exits, timeouts and decoding
+errors retain the [process API](#python-process-api) exceptions and
+captured diagnostics. A failed Just evaluation never becomes an empty recipe map
+or a successful preview.
+
+Native Just remains the parser and evaluation authority. Dry-run skips recipe
+bodies, but configuration/imports and expressions still matter: for example,
+an absent variable referenced through `env()` fails during dry-run. This is not
+a security sandbox for untrusted Justfiles. Commands are returned as native
+text, normally on stderr, with explicit UTF-8 decoding and preserved newlines.
+
+MCMC can replace its `_run_just` and `_recipes` boilerplate with these functions.
+Keep assertions about CI dependencies, Rust features, scanner inventory,
+credentials and review boundaries in the consumer. See the
+[README example](../README.md#consumer-integration-tests).
+
 ## Python performance APIs
 
 `research_repo_tools.archives`, `research_repo_tools.criterion`, and

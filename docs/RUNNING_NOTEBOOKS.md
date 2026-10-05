@@ -90,6 +90,13 @@ output policy; `notebooks lint` also replaces the common Python lint/format/type
 helper. Consumers retain their fast/slow selections, preparation recipes, and
 scientific assertions.
 
+For integration tests, the v0.1.8-targeted
+[public fixture API](api.md#python-notebook-integration-test-api) prepares isolated
+projects and returns executed notebooks and reports while borrowing the test
+process's locked interpreter. The [README example](../README.md#consumer-integration-tests)
+replaces temporary-file copying and manifest surgery. Adopt it after publication;
+retain scientific notebook cells, input policies, and assertions in the consumer.
+
 The inspection and advisory commands added after `0.1.4` replace generic summary
 and review helpers once the consumer has tested the published release against its
 workflow. Retain only consumer invocation and policy checks after adoption. The

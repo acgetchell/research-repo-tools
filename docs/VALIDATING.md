@@ -66,6 +66,15 @@ its public checks with exact native versions, modeled drift, and real adoption
 candidate resolution. These checks preserve public runtime constraints and
 consumer sources. Base installs omit Ruff, ty, and pytest.
 
+Both base installations exercise the public Just inspection API using the
+shipped Just version, native metadata, argument boundaries, evaluation failures,
+and unchanged recipe files. With notebook extras, they also exercise public
+temporary-project fixtures, fresh-kernel success/failure/timeout reports,
+explicit environment and working-directory selection, link/junction rejection,
+and cleanup without modifying the borrowed environment or original inputs.
+A representative fixture integration reuses the installed consumer's real lock
+and synchronized notebook environment.
+
 Both installed distributions run the validation consumer suite with native
 Ruff, ty, and offline zizmor. It verifies the shipped typing policy, precise
 negative-fixture exceptions, missing-annotation/TC/UP failures, CLI selection,

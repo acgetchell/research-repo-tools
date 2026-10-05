@@ -377,6 +377,34 @@ record="$"
                 with self.assertRaisesRegex(ValueError, "already exists"):
                     measure_checkout(root, config, "v1.0.0", mode="tag")
 
+    def test_linked_worktree_destination_fails_before_git(self) -> None:
+        for native in (False, True):
+            with self.subTest(native=native), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                target = root / "target"
+                target.mkdir()
+                linked = root / "linked"
+                if native:
+                    if os.name == "nt":
+                        subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(linked), str(target)], check=True, capture_output=True, timeout=30)
+                        self.assertTrue(linked.is_junction())
+                        self.assertFalse(linked.is_symlink())
+                    else:
+                        linked.symlink_to(target, target_is_directory=True)
+                        self.assertTrue(linked.is_symlink())
+                else:
+                    linked.mkdir()
+                original = Path.is_junction
+                with (
+                    patch.object(Path, "is_junction", lambda path: (not native and path == linked) or original(path)),
+                    patch("research_repo_tools.worktrees.run_git_bytes", side_effect=AssertionError("Git must not run")) as git,
+                ):
+                    with self.assertRaisesRegex(ValueError, "symlink|junction"):
+                        with temporary_worktree(root, linked / "checkout", "a" * 40, allow_git_mutations=True):
+                            self.fail("linked destination accepted")
+                    git.assert_not_called()
+                self.assertEqual(tuple(target.iterdir()), ())
+
     @unittest.skipIf(os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1", "Git mutations disabled by local policy")
     def test_native_binary_snapshot_and_worktree_cleanup(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

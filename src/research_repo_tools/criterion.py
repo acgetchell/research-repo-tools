@@ -218,12 +218,14 @@ def collect_sample(criterion_dir: Path, sample: str, *, statistic: Statistic = "
     """Read benchmark/SAMPLE/estimates.json below an existing Criterion directory.
 
     SAMPLE is one directory component. Benchmark IDs are relative POSIX paths.
-    Reject symlinked entries instead of following data outside the sample tree.
+    Reject symlinks and junctions instead of following data outside the sample tree.
     An existing directory with no matching estimates is an explicit empty sample.
     """
     _string(sample, "sample name")
     if sample in {".", ".."} or any(char in sample for char in "/\\:"):
         raise ValueError("sample must be a single directory component")
+    if criterion_dir.is_symlink() or criterion_dir.is_junction():
+        raise ValueError(f"Criterion tree contains a symlink or junction: {criterion_dir}")
     if not criterion_dir.is_dir():
         raise FileNotFoundError(f"Criterion directory does not exist: {criterion_dir}")
     estimates = []
@@ -233,8 +235,8 @@ def collect_sample(criterion_dir: Path, sample: str, *, statistic: Statistic = "
 
     for directory, directories, files in criterion_dir.walk(on_error=walk_error):
         for name in (*directories, *files):
-            if (directory / name).is_symlink():
-                raise ValueError(f"Criterion tree contains a symlink: {directory / name}")
+            if (directory / name).is_symlink() or (directory / name).is_junction():
+                raise ValueError(f"Criterion tree contains a symlink or junction: {directory / name}")
         if directory.name == sample and "estimates.json" in files:
             benchmark = directory.parent.relative_to(criterion_dir).as_posix()
             if benchmark == ".":

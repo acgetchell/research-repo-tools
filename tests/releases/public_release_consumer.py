@@ -3,6 +3,8 @@
 import contextlib
 import io
 import json
+import os
+import subprocess
 import tempfile
 import unittest
 from dataclasses import replace
@@ -99,6 +101,49 @@ class TestReleaseConsumer(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "repository-relative"):
                     self.plan(adapter=ReleaseAdapter(prepare=lambda *_: {name: b"changed"}))
                 self.assertEqual(self.snapshot(), before)
+
+    def test_nonportable_release_paths_fail_at_construction(self) -> None:
+        before = self.snapshot()
+        for name in ("docs/file.md:stream", "docs/NUL.txt", "docs/CON", "docs/file.", "docs/file ", "docs/bad\0name", "docs/bad\nname", "docs/bad\ud800"):
+            with self.subTest(name=name):
+                for construct in (
+                    lambda: ReleaseRule(name, "(?P<value>.+)", source="version"),
+                    lambda: ReleasePolicy(required_files=(name,)),
+                    lambda: ReleaseAdapter((name,)),
+                ):
+                    with self.assertRaisesRegex(ValueError, "repository-relative"):
+                        construct()
+        self.assertEqual(self.snapshot(), before)
+        # Exclusions are patterns, while publication inputs are literal files.
+        for pattern in ("docs/**", "docs/file?.md", "docs/[ab].md"):
+            with self.subTest(pattern=pattern):
+                policy = ReleasePolicy(exclude=(pattern,))
+                selected = {"docs/**": "docs/history.md", "docs/file?.md": "docs/file1.md", "docs/[ab].md": "docs/a.md"}[pattern]
+                self.assertTrue(policy.excludes(selected))
+        with self.assertRaisesRegex(ValueError, "repository-relative"):
+            ReleasePolicy(exclude=("docs/*:stream",))
+        with self.assertRaisesRegex(ValueError, "repository-relative"):
+            ReleaseAdapter(("docs/*.md",))
+
+    def test_junction_parents_cannot_alias_release_inputs(self) -> None:
+        directory = self.root / "data"
+        directory.mkdir()
+        (directory / "report.json").write_bytes(b"{}")
+        original = Path.is_junction
+        with patch.object(Path, "is_junction", lambda path: path == directory or original(path)):
+            with self.assertRaisesRegex(ValueError, "symbolic link|junction"):
+                discover_release(self.root, policy=self.policy, adapter=ReleaseAdapter(("data/report.json",)))
+        linked = self.root / "linked"
+        if os.name == "nt":
+            subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(linked), str(directory)], check=True, capture_output=True, timeout=30)
+            self.assertTrue(linked.is_junction())
+            self.assertFalse(linked.is_symlink())
+        else:
+            linked.symlink_to(directory, target_is_directory=True)
+            self.assertTrue(linked.is_symlink())
+        with self.assertRaisesRegex(ValueError, "symbolic link|junction"):
+            discover_release(self.root, policy=self.policy, adapter=ReleaseAdapter(("linked/report.json",)))
+        self.assertEqual((directory / "report.json").read_bytes(), b"{}")
 
     def test_release_notes_stdout_preserves_utf8_and_lf(self) -> None:
         changelog = self.root / "CHANGELOG.md"
@@ -220,6 +265,36 @@ class TestReleaseConsumer(unittest.TestCase):
         before = self.snapshot()
         with self.assertRaisesRegex(ValueError, "must not mutate"):
             self.plan(adapter=ReleaseAdapter(validate=mutate))
+        self.assertEqual(self.snapshot(), before)
+
+    def test_adapter_junction_is_rejected_before_traversal(self) -> None:
+        def mutate(candidate: Path, _context: ReleaseContext) -> tuple[str, ...]:
+            (candidate / "linked").mkdir()
+            return ()
+
+        original_junction = Path.is_junction
+        original_scandir = os.scandir
+        original_walk = Path.walk
+
+        def scandir(path):
+            if isinstance(path, (str, os.PathLike)) and Path(path).name == "linked":
+                raise AssertionError("adapter junction must not be traversed")
+            return original_scandir(path)
+
+        def walk(path, *args, **kwargs):
+            iterator = original_walk(path, *args, **kwargs)
+            while True:
+                # Guard traversal without intercepting Windows temporary cleanup.
+                with patch("os.scandir", scandir):
+                    entry = next(iterator, None)
+                if entry is None:
+                    return
+                yield entry
+
+        before = self.snapshot()
+        with patch.object(Path, "is_junction", lambda path: path.name == "linked" or original_junction(path)), patch.object(Path, "walk", walk):
+            with self.assertRaisesRegex(ValueError, "junction"):
+                self.plan(adapter=ReleaseAdapter(validate=mutate))
         self.assertEqual(self.snapshot(), before)
 
     def test_stale_sources_and_new_active_files_reject_apply(self) -> None:

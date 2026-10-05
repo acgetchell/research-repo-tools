@@ -165,8 +165,8 @@ def measure_checkout(root: Path, configuration: MeasurementConfig, tag: str, *, 
     root = root.resolve(strict=True)
     criterion = root / configuration.criterion_dir
     for ancestor in (criterion, *criterion.parents):
-        if ancestor.is_relative_to(root) and ancestor.is_symlink():
-            raise ValueError("Criterion output path contains a symlink")
+        if ancestor.is_relative_to(root) and (ancestor.is_symlink() or ancestor.is_junction()):
+            raise ValueError("Criterion output path contains a symlink or junction")
     if criterion.exists() and collect_sample(criterion, configuration.sample, statistic=configuration.statistic, unit=configuration.unit).estimates:
         raise ValueError("measurement sample already exists; use a fresh isolated checkout")
     before = capture_provenance(root, configuration, tag, mode=mode)

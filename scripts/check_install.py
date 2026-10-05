@@ -24,6 +24,12 @@ def run(command: list[str], *, cwd: Path, env: dict[str, str]) -> str:
     return result.stdout
 
 
+def run_isolated(python: Path, arguments: list[str], *, cwd: Path, env: dict[str, str]) -> str:
+    # -I ignores Python environment settings; retain UTF-8 transport and the
+    # no-bytecode policy used by the import side-effect checks.
+    return run([str(python), "-I", "-B", "-X", "utf8", *arguments], cwd=cwd, env=env)
+
+
 BASE_SMOKE = r"""
 import importlib, importlib.metadata, importlib.util, pathlib, pkgutil, socket, sys
 import research_repo_tools
@@ -218,33 +224,36 @@ def check(dist: Path) -> None:
             python = scripts / ("python.exe" if os.name == "nt" else "python")
             run([uv, "pip", "install", "--python", str(python), str(artifact)], cwd=consumer, env=env)
             local_env = {**env, "PATH": str(scripts) + os.pathsep + env.get("PATH", "")}
-            run([str(python), "-c", BASE_SMOKE, str(ROOT)], cwd=consumer, env=local_env)
+            run_isolated(python, ["-c", BASE_SMOKE, str(ROOT)], cwd=consumer, env=local_env)
             notebook_suite = consumer / "public_notebook_consumer.py"
             notebook_suite.write_bytes((ROOT / "tests/notebooks/public_notebook_consumer.py").read_bytes())
-            run([str(python), "-I", str(notebook_suite), "TestInspection"], cwd=consumer, env=local_env)
+            run_isolated(python, [str(notebook_suite), "TestInspection"], cwd=consumer, env=local_env)
             # Run the same consumer suite against each installed artifact, using
             # only documented imports and no source checkout or pytest dependency.
             public_suite = consumer / "public_api_consumer.py"
             public_suite.write_bytes((ROOT / "tests/utilities/public_api_consumer.py").read_bytes())
-            run([str(python), "-I", str(public_suite)], cwd=consumer, env=local_env)
+            run_isolated(python, [str(public_suite)], cwd=consumer, env=local_env)
+            just_suite = consumer / "public_just_consumer.py"
+            just_suite.write_bytes((ROOT / "tests/utilities/public_just_consumer.py").read_bytes())
+            run_isolated(python, [str(just_suite)], cwd=consumer, env=local_env)
             release_suite = consumer / "public_release_consumer.py"
             release_suite.write_bytes((ROOT / "tests/releases/public_release_consumer.py").read_bytes())
-            run([str(python), "-I", str(release_suite)], cwd=consumer, env=local_env)
+            run_isolated(python, [str(release_suite)], cwd=consumer, env=local_env)
             performance_suite = consumer / "public_performance_consumer.py"
             performance_suite.write_bytes((ROOT / "tests/performance/public_performance_consumer.py").read_bytes())
-            run([str(python), "-I", str(performance_suite)], cwd=consumer, env=local_env)
+            run_isolated(python, [str(performance_suite)], cwd=consumer, env=local_env)
             workflows_suite = consumer / "public_workflows_consumer.py"
             workflows_suite.write_bytes((ROOT / "tests/performance/public_workflows_consumer.py").read_bytes())
-            run([str(python), "-I", str(workflows_suite)], cwd=consumer, env=local_env)
+            run_isolated(python, [str(workflows_suite)], cwd=consumer, env=local_env)
             publication_suite = consumer / "public_publication_consumer.py"
             publication_suite.write_bytes((ROOT / "tests/publication/public_publication_consumer.py").read_bytes())
-            run([str(python), "-I", str(publication_suite)], cwd=consumer, env=local_env)
+            run_isolated(python, [str(publication_suite)], cwd=consumer, env=local_env)
             security_suite = consumer / "public_security_consumer.py"
             security_suite.write_bytes((ROOT / "tests/security/public_security_consumer.py").read_bytes())
-            run([str(python), "-I", str(security_suite)], cwd=consumer, env=local_env)
+            run_isolated(python, [str(security_suite)], cwd=consumer, env=local_env)
             toolchain_suite = consumer / "public_toolchain_consumer.py"
             toolchain_suite.write_bytes((ROOT / "tests/toolchain/public_toolchain_consumer.py").read_bytes())
-            run([str(python), "-I", str(toolchain_suite)], cwd=consumer, env=local_env)
+            run_isolated(python, [str(toolchain_suite)], cwd=consumer, env=local_env)
             command = scripts / ("research-repo-tools.exe" if os.name == "nt" else "research-repo-tools")
             assert run([str(command), "--version"], cwd=consumer, env=local_env).strip() == version
             assert "changelog" in run([str(command), "--help"], cwd=consumer, env=local_env)
@@ -283,11 +292,14 @@ def check(dist: Path) -> None:
             # and a real project kernel without touching the user's kernels.
             run([str(just), "notebook-sync"], cwd=recipe_consumer, env=env)
             recipe_python = recipe_consumer / ".venv" / scripts.name / python.name
-            run([str(recipe_python), "-I", str(notebook_suite)], cwd=recipe_consumer, env=env)
+            run_isolated(recipe_python, [str(notebook_suite)], cwd=recipe_consumer, env=env)
+            testing_suite = consumer / "public_testing_consumer.py"
+            testing_suite.write_bytes((ROOT / "tests/notebooks/public_testing_consumer.py").read_bytes())
+            run_isolated(recipe_python, [str(testing_suite)], cwd=recipe_consumer, env=env)
             validation_suite = consumer / "public_validation_consumer.py"
             validation_suite.write_bytes((ROOT / "tests/validation/public_validation_consumer.py").read_bytes())
             validation_env = {**env, "PATH": str(recipe_python.parent) + os.pathsep + env.get("PATH", "")}
-            run([str(recipe_python), "-I", str(validation_suite)], cwd=recipe_consumer, env=validation_env)
+            run_isolated(recipe_python, [str(validation_suite)], cwd=recipe_consumer, env=validation_env)
             tools_suite = consumer / "public_python_tools_consumer.py"
             tools_suite.write_bytes((ROOT / "tests/validation/public_python_tools_consumer.py").read_bytes())
             registry = consumer / "registry"
@@ -305,7 +317,7 @@ def check(dist: Path) -> None:
                 "RRT_TEST_REGISTRY": str(registry),
                 "UV_PYTHON_INSTALL_DIR": str(consumer / "profile python"),
             }
-            run([str(recipe_python), "-I", str(tools_suite)], cwd=recipe_consumer, env=profile_env)
+            run_isolated(recipe_python, [str(tools_suite)], cwd=recipe_consumer, env=profile_env)
             notebook = recipe_consumer / "notebooks" / "smoke.ipynb"
             notebook.parent.mkdir()
             notebook.write_text(
@@ -342,6 +354,23 @@ def check(dist: Path) -> None:
             assert notebook.read_bytes() == original_notebook
             assert (recipe_consumer / "uv.lock").read_bytes() == lock
             assert (recipe_consumer / ".venv/share/jupyter/kernels/research-repo-tools/kernel.json").is_file()
+            # A representative public fixture integration borrows this already
+            # synchronized environment and complete consumer lock unchanged.
+            run_isolated(
+                recipe_python,
+                [
+                    "-c",
+                    "import sys; from pathlib import Path; "
+                    "from research_repo_tools.notebook_testing import isolated_project\n"
+                    "with isolated_project(Path.cwd(), [Path('notebooks/smoke.ipynb')], "
+                    "parent=Path.cwd().parent, environment=Path(sys.prefix)) as project:\n"
+                    "    result = project.execute(Path('notebooks/smoke.ipynb'))\n"
+                    "    assert result.returncode == 0, result.report\n"
+                    "    assert result.report_path.is_file() and result.notebook_path.is_file()\n",
+                ],
+                cwd=recipe_consumer,
+                env=env,
+            )
             # A real locked tooling group must start before the consumer's native
             # build backend exists. A full installation of this project would fail.
             setup_consumer = consumer / "setup consumer"

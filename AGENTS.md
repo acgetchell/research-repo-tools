@@ -82,3 +82,9 @@
   as ready to merge, verify the required Linux, macOS, and Windows package jobs
   for the current commit. If those runs are unavailable or pending, report the
   remaining native checks explicitly; a local `just ci` covers only its host.
+
+## Common Windows issues
+
+Before changing paths, subprocesses, or package checks, read
+[Common Windows issues and how to avoid them](CONTRIBUTING.md#common-windows-issues-and-how-to-avoid-them)
+and apply its development and regression practices.

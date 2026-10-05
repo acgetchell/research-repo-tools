@@ -100,8 +100,10 @@ Use TOML multiline literal strings when a pattern contains single quotes; the
 `tag-policy` defaults to `normalized-stable`, accepting `X.Y.Z` or `vX.Y.Z`.
 `canonical-stable` requires the target argument to use canonical `vX.Y.Z` syntax.
 `required-files` lists existing regular files. Paths are normalized relative POSIX
-names; absolute paths, `..`, `.git`, and symlink components fail. `exclude` uses
-root-relative POSIX glob patterns, including `**`, to remove historical Markdown
+names; absolute paths, `..`, `.git`, symlinks, and Windows directory junctions fail.
+Names must also be portable to Windows: reserved device names, alternate-stream
+syntax, control characters, and components ending in a dot or space fail on every
+platform. `exclude` uses root-relative POSIX glob patterns, including `**`, to remove historical Markdown
 from automatic dependency-snippet updates. Built-in archive/test exclusions still
 apply. Exclusions do not disable structured metadata or DOI checks. An explicit
 rule cannot select an excluded path, and adapters cannot edit excluded files.
