@@ -133,4 +133,4 @@ def dry_run(
     if not isinstance(arguments, Sequence) or isinstance(arguments, (str, bytes)) or any(not isinstance(arg, str) or "\0" in arg for arg in arguments):
         raise TypeError("arguments must be a sequence of strings without NUL")
     binary, options, root = _command(root, justfile, executable, env, timeout)
-    return run_command(binary, [*options, "--dry-run", "--", recipe, *arguments], cwd=root, env=env, timeout=timeout)
+    return run_command(binary, [*options, "--one", "--dry-run", "--", recipe, *arguments], cwd=root, env=env, timeout=timeout)

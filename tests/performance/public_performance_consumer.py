@@ -203,8 +203,8 @@ class TestPerformanceConsumer(unittest.TestCase):
                     self.assertFalse(linked.is_symlink())
                 source = target / "source.rs"
                 source.write_bytes(b"source\r\n")
-                estimates = target / "new/estimates.json"
-                estimates.parent.mkdir()
+                estimates = target / "benchmark/new/estimates.json"
+                estimates.parent.mkdir(parents=True)
                 estimates.write_bytes(b'{"median":{"point_estimate":42}}')
                 (root / "source.rs").write_bytes(b"source\r\n")
                 config = MeasurementConfig(
@@ -217,10 +217,12 @@ class TestPerformanceConsumer(unittest.TestCase):
                 with (
                     patch.object(Path, "is_junction", lambda path: (not native and path == linked) or original_junction(path)),
                     patch("research_repo_tools.measurement.resolve_revision", return_value="a" * 40),
+                    patch("research_repo_tools.criterion.read_estimate", side_effect=AssertionError("linked estimates must not be read")),
                 ):
                     for name, inspect in (
                         ("fingerprint", lambda: fingerprint_files(root, (Path("criterion/linked/source.rs"),))),
                         ("Criterion", lambda: collect_sample(criterion, "new")),
+                        ("Criterion root", lambda: collect_sample(linked, "new")),
                         ("publication", lambda: plan_outputs(root, {"report.md": b"report"}, inputs={"criterion/linked/source.rs": b"source\r\n"})),
                         ("measurement", lambda: measure_checkout(root, config, "v1.0.0", mode="tag")),
                     ):

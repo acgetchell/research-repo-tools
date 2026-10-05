@@ -224,6 +224,8 @@ def collect_sample(criterion_dir: Path, sample: str, *, statistic: Statistic = "
     _string(sample, "sample name")
     if sample in {".", ".."} or any(char in sample for char in "/\\:"):
         raise ValueError("sample must be a single directory component")
+    if criterion_dir.is_symlink() or criterion_dir.is_junction():
+        raise ValueError(f"Criterion tree contains a symlink or junction: {criterion_dir}")
     if not criterion_dir.is_dir():
         raise FileNotFoundError(f"Criterion directory does not exist: {criterion_dir}")
     estimates = []

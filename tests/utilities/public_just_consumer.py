@@ -23,7 +23,7 @@ class TestJustInspection(unittest.TestCase):
             "alias preview := render\n"
             "prepare:\n    echo prepared > forbidden.txt\n"
             'render label="default": prepare\n    echo "{{value}}" "{{label}}" >> forbidden.txt\n'
-            'location:\n    echo "{{invocation_directory()}}"\n',
+            'location:\n    echo "{{invocation_directory_native()}}"\n',
             encoding="utf-8",
             newline="\n",
         )
@@ -69,6 +69,12 @@ class TestJustInspection(unittest.TestCase):
         env["RRT_JUST_VALUE"] = "present"
         with self.assertRaises(subprocess.CalledProcessError):
             dry_run(self.root, "render", ["too", "many"], justfile=self.file, executable=self.just, env=env)
+        self.assertFalse((self.root / "forbidden.txt").exists())
+
+    def test_dry_run_rejects_additional_recipe_invocations(self):
+        for recipe, arguments in (("location", ["prepare"]), ("preview", ["label", "location"])):
+            with self.subTest(recipe=recipe), self.assertRaises(subprocess.CalledProcessError):
+                dry_run(self.root, recipe, arguments, justfile=self.file, executable=self.just, env={**os.environ, "RRT_JUST_VALUE": "present"})
         self.assertFalse((self.root / "forbidden.txt").exists())
 
     def test_missing_inputs_and_executables_fail_explicitly(self):

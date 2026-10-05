@@ -274,14 +274,25 @@ class TestReleaseConsumer(unittest.TestCase):
 
         original_junction = Path.is_junction
         original_scandir = os.scandir
+        original_walk = Path.walk
 
         def scandir(path):
             if isinstance(path, (str, os.PathLike)) and Path(path).name == "linked":
                 raise AssertionError("adapter junction must not be traversed")
             return original_scandir(path)
 
+        def walk(path, *args, **kwargs):
+            iterator = original_walk(path, *args, **kwargs)
+            while True:
+                # Guard traversal without intercepting Windows temporary cleanup.
+                with patch("os.scandir", scandir):
+                    entry = next(iterator, None)
+                if entry is None:
+                    return
+                yield entry
+
         before = self.snapshot()
-        with patch.object(Path, "is_junction", lambda path: path.name == "linked" or original_junction(path)), patch("os.scandir", scandir):
+        with patch.object(Path, "is_junction", lambda path: path.name == "linked" or original_junction(path)), patch.object(Path, "walk", walk):
             with self.assertRaisesRegex(ValueError, "junction"):
                 self.plan(adapter=ReleaseAdapter(validate=mutate))
         self.assertEqual(self.snapshot(), before)
