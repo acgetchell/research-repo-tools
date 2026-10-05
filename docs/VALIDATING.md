@@ -44,7 +44,8 @@ environment before the consumer project's native build backend is available,
 including setup startup and its missing-uv failure. These checks do not install
 user tools or modify shell profiles.
 They run the installed Just template against a consumer with default dependency
-groups disabled, verifying that recipes restore their required tooling group.
+groups disabled, verifying that setup and mutating workflows restore their
+required groups. Python checks use an existing synchronized environment.
 Offline update fixtures verify exact dev-pin upgrades, retained ranges and
 markers, full-lock upgrades when direct pins are already current, and explicit
 dev synchronization. Ambiguous universal resolutions must leave both the
@@ -59,6 +60,11 @@ interpreter selection, cell errors, and timeouts. Native checker tests cover
 syntax, formatting, types, IPython forms, cross-cell references, configuration,
 and diagnostic cell mapping. Kernel tests require local socket access.
 `just check-dist` validates existing wheel and sdist artifacts without rebuilding.
+
+Both installed distributions resolve the optional `python-tools` extra and run
+its public checks with exact native versions, modeled drift, and real adoption
+candidate resolution. These checks preserve public runtime constraints and
+consumer sources. Base installs omit Ruff, ty, and pytest.
 
 Both installed distributions run the validation consumer suite with native
 Ruff, ty, and offline zizmor. It verifies the shipped typing policy, precise

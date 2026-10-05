@@ -6,6 +6,8 @@ schema = 1
 # .python-version, and rust-toolchain.toml. See docs/INSTALLING.md.
 # [toolchain]
 # inherit-python = true
+# Inherit Ruff/ty/pytest pins through the installed python-tools extra independently.
+# inherit-python-tools = true
 # [toolchain.binaries]
 # gitleaks = "8.30.1"
 # osv-scanner = "2.6.0"

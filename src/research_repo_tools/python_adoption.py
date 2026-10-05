@@ -14,7 +14,7 @@ from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 
-from research_repo_tools import config, files, python_baseline, toolchain, toolchain_config
+from research_repo_tools import config, files, python_baseline, python_tools, toolchain, toolchain_config
 from research_repo_tools.process import get_safe_executable, run_safe_command
 from research_repo_tools.selection import select_files
 from research_repo_tools.toml_source import key_line, replace_array_strings, set_value
@@ -30,6 +30,7 @@ class PythonAdoptionPlan:
     tools: toolchain_config.Toolchain
     groups: tuple[str, ...]
     notebook_group: str | None
+    inherit_tools: bool = False
 
     @property
     def changed_paths(self) -> tuple[str, ...]:
@@ -67,9 +68,11 @@ def _sync(uv: str, root: Path, selected: str, groups: tuple[str, ...], *, check:
     return run_safe_command(uv, arguments, cwd=root, env=_environment(root, environment), timeout=3600, check=not check)
 
 
-def _manifest(text: str, authority: python_baseline.PythonBaseline, old_selector: str) -> str:
+def _manifest(text: str, authority: python_baseline.PythonBaseline, old_selector: str, *, inherit_python: bool = True, inherit_tools: bool = False) -> str:
+    if inherit_tools:
+        text = python_tools.adopt_manifest(text)
     document = tomllib.loads(text)
-    if problems := python_baseline.target_problems(document, authority.selected):
+    if inherit_python and (problems := python_baseline.target_problems(document, authority.selected)):
         raise ValueError("; ".join(problems))
     groups = python_baseline.package_groups(document)
     for group in groups:
@@ -80,17 +83,21 @@ def _manifest(text: str, authority: python_baseline.PythonBaseline, old_selector
                 updates[raw] = f"{item.name}{extras}=={authority.package_version}"
         text = replace_array_strings(text, "dependency-groups", group, updates)
     uv = document.get("tool", {}).get("uv", {})
-    if uv.get("package") is False:
+    if uv.get("package") is False and inherit_python:
         text = set_value(text, "project", "requires-python", json.dumps(authority.requirement))
     else:
         requirement = document.get("project", {}).get("requires-python")
-        if not isinstance(requirement, str) or (SpecifierSet(requirement) & SpecifierSet(f"=={authority.selected}.*")).is_unsatisfiable():
+        selected = authority.selected if inherit_python else old_selector
+        selector = f"=={selected}.*" if selected.count(".") == 1 else f"=={selected}"
+        if not isinstance(requirement, str) or (SpecifierSet(requirement) & SpecifierSet(selector) & SpecifierSet(authority.requirement)).is_unsatisfiable():
             raise ValueError("public package runtime requirement excludes shared development Python; change compatibility deliberately before adoption")
         for group in groups:
             existing = uv.get("dependency-groups", {}).get(group, {})
             if not isinstance(existing, dict) or set(existing) - {"requires-python"}:
                 raise ValueError(f"unsupported uv dependency-group constraints for {group}")
             text = set_value(text, "tool.uv.dependency-groups", group, "{ requires-python = " + json.dumps(authority.requirement) + " }")
+    if not inherit_python:
+        return text
     # Retire redundant target mirrors while preserving intentional lower targets
     # and all rule/fixture exceptions. Ruff and ty infer from project metadata.
     for table, key, old in (("tool.ruff", "target-version", "py" + old_selector.replace(".", "")), ("tool.ty.environment", "python-version", old_selector)):
@@ -111,15 +118,21 @@ def plan_python_adoption(settings: config.Config) -> PythonAdoptionPlan:
     uv may download interpreters and populate caches. The exact executing package
     owns the target; there is no lookup of a newer shared release.
     """
-    if not settings.toolchain.inherit_python:
-        raise ValueError("opt in with tool.research-repo-tools.toolchain.inherit-python = true before adoption")
+    if not (settings.toolchain.inherit_python or settings.toolchain.inherit_python_tools):
+        raise ValueError("opt in with tool.research-repo-tools.toolchain.inherit-python or inherit-python-tools = true before adoption")
     root = settings.root
     authority = python_baseline.baseline()
     manifest = root / "pyproject.toml"
     original = manifest.read_bytes()
     selector = root / ".python-version"
     old_selector = selector.read_text(encoding="utf-8").strip() if selector.exists() else ""
-    text = _manifest(original.decode("utf-8"), authority, old_selector)
+    text = _manifest(
+        original.decode("utf-8"),
+        authority,
+        old_selector,
+        inherit_python=settings.toolchain.inherit_python,
+        inherit_tools=settings.toolchain.inherit_python_tools,
+    )
     document = tomllib.loads(text)
     declared_groups = document.get("dependency-groups", {})
     notebook_group = settings.notebooks.group if settings.notebooks.group in declared_groups else None
@@ -133,7 +146,9 @@ def plan_python_adoption(settings: config.Config) -> PythonAdoptionPlan:
         raise ValueError("adoption requires a tracked or nonignored pyproject.toml")
     originals = tuple((name, (root / name).read_bytes() if (root / name).exists() else None) for name in sorted(set(tracked) | {".python-version", "uv.lock"}))
     newline = b"\r\n" if selector.exists() and b"\r\n" in selector.read_bytes() else b"\n"
-    replacements = {"pyproject.toml": text.encode("utf-8"), ".python-version": authority.selected.encode("ascii") + newline}
+    replacements = {"pyproject.toml": text.encode("utf-8")}
+    if settings.toolchain.inherit_python:
+        replacements[".python-version"] = authority.selected.encode("ascii") + newline
     uv = get_safe_executable("uv")
     with tempfile.TemporaryDirectory(prefix="research-python-adoption-") as directory:
         candidate = Path(directory).resolve() / root.name
@@ -148,18 +163,45 @@ def plan_python_adoption(settings: config.Config) -> PythonAdoptionPlan:
                 path.chmod(path.stat().st_mode | ((root / name).stat().st_mode & 0o111))
         for name, payload in replacements.items():
             (candidate / name).write_bytes(payload)
-        candidate_settings = config.load(root=candidate)
+        candidate_settings = replace(settings, root=candidate)
         tools = toolchain_config.load(candidate_settings)
         status = toolchain.Runtime(tools).uv_status()
         if not status.ok:
             raise ValueError(f"adoption requires uv {tools.uv}; found {status.actual}")
-        run_safe_command(uv, ["lock", "--managed-python", "--python", authority.selected], cwd=candidate, env=_environment(candidate), timeout=600)
+        run_safe_command(uv, ["lock", "--managed-python", "--python", tools.python], cwd=candidate, env=_environment(candidate), timeout=600)
         replacements["uv.lock"] = (candidate / "uv.lock").read_bytes()
-        _sync(uv, candidate, authority.selected, groups, environment=toolchain.Runtime(tools).environment())
+        _sync(uv, candidate, tools.python, groups, environment=toolchain.Runtime(tools).environment())
+        _check_tools(candidate, settings.toolchain.inherit_python_tools)
         if notebook_group:
             python = toolchain_config.executable(candidate / ".venv" / ("Scripts" if os.name == "nt" else "bin"), "python")
             run_safe_command(str(python), ["-c", "import ipykernel"], cwd=candidate, env=_environment(candidate), timeout=30)
-    return PythonAdoptionPlan(root, authority, originals, tracked, tuple(replacements.items()), replace(tools, root=root), groups, notebook_group)
+    return PythonAdoptionPlan(
+        root,
+        authority,
+        originals,
+        tracked,
+        tuple(replacements.items()),
+        replace(tools, root=root),
+        groups,
+        notebook_group,
+        settings.toolchain.inherit_python_tools,
+    )
+
+
+def _check_tools(root: Path, inherited: bool) -> None:
+    if inherited:
+        python = toolchain_config.executable(root / ".venv" / ("Scripts" if os.name == "nt" else "bin"), "python")
+        env = _environment(root)
+        env["PATH"] = str(python.parent) + os.pathsep + env.get("PATH", "")
+        # Use the plan's opt-in even when settings came from a separate --config
+        # file. Verify with the candidate's installed package and executable PATH.
+        run_safe_command(
+            str(python),
+            ["-c", "from pathlib import Path; from research_repo_tools.python_tools import check; check(Path.cwd())"],
+            cwd=root,
+            env=env,
+            timeout=60,
+        )
 
 
 def apply_python_adoption(plan: PythonAdoptionPlan) -> None:
@@ -193,7 +235,8 @@ def apply_python_adoption(plan: PythonAdoptionPlan) -> None:
         except OSError, ValueError, TypeError, AttributeError:
             kernel_current = False
     if not plan.changed_paths and environment.exists() and kernel_current:
-        if _sync(uv, root, plan.baseline.selected, plan.groups, check=True).returncode == 0:
+        if _sync(uv, root, plan.tools.python, plan.groups, check=True).returncode == 0:
+            _check_tools(root, plan.inherit_tools)
             return
     # Versioned tool installations occur before declaration publication. Old
     # versions remain available if candidate verification or migration fails.
@@ -208,7 +251,8 @@ def apply_python_adoption(plan: PythonAdoptionPlan) -> None:
                 saved = True
             started = True
             files.replace_many({root / name: payload for name, payload in plan.replacements})
-            _sync(uv, root, plan.baseline.selected, plan.groups, environment=toolchain.Runtime(plan.tools).environment())
+            _sync(uv, root, plan.tools.python, plan.groups, environment=toolchain.Runtime(plan.tools).environment())
+            _check_tools(root, plan.inherit_tools)
             if plan.notebook_group:
                 python = toolchain_config.executable(environment / ("Scripts" if os.name == "nt" else "bin"), "python")
                 run_safe_command(

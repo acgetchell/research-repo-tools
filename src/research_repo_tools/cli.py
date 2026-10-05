@@ -89,6 +89,9 @@ def parser() -> argparse.ArgumentParser:
     from research_repo_tools.performance import add_commands
 
     add_commands(groups)
+    python = groups.add_parser("python", help="check, fix, or typecheck the complete Python inventory").add_subparsers(dest="action", required=True)
+    for action in ("check", "fix", "typecheck"):
+        python.add_parser(action).add_argument("--timeout", type=float, default=300, help="positive per-batch timeout in seconds (default: 300)")
     release = groups.add_parser("release", help="check and synchronize release metadata").add_subparsers(dest="action", required=True)
     command = release.add_parser("check")
     command.add_argument("--final-release", action="store_true")
@@ -141,6 +144,7 @@ def parser() -> argparse.ArgumentParser:
     clean.add_argument("--keep-root", type=Path, action="append", default=[], help="also retain this consumer's pins (repeatable)")
     toolchain.add_parser("export", help="verify tools and export their environment to GITHUB_ENV").add_argument("--file", type=Path)
     toolchain.add_parser("python-check", help="check opt-in shared Python mirrors without modifying the environment")
+    toolchain.add_parser("python-tools-check", help="check opt-in Python tool declarations, lock, and executable versions without changes")
     toolchain.add_parser("run", help="run a command with verified managed tools; never installs").add_argument("command", nargs=argparse.REMAINDER)
     toolchain.add_parser("sync", help="install and verify declared versions").add_argument("--dry-run", action="store_true")
     toolchain.add_parser("upgrade", help="upgrade declared Cargo tools and release binaries, then publish verified pins").add_argument(
@@ -165,6 +169,10 @@ def parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace, settings: config.Config) -> int:
+    if args.group == "python":
+        from research_repo_tools.python_checks import run
+
+        return run(settings, args.action, timeout=args.timeout)
     if args.group == "zizmor":
         from research_repo_tools.zizmor import check
 
@@ -248,13 +256,26 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
                 check(settings.root)
             return 0
 
+        if args.action == "python-tools-check":
+            if settings.toolchain.inherit_python_tools:
+                from research_repo_tools.python_tools import check
+
+                check(settings.root)
+            return 0
+
         if args.action == "adopt":
             from research_repo_tools.python_adoption import apply_python_adoption, plan_python_adoption
 
             plan = plan_python_adoption(settings)
-            print(f"Shared package {plan.baseline.package_version}: Python {plan.baseline.selected}; requirement {plan.baseline.requirement}")
+            print(f"Shared package {plan.baseline.package_version}: Python {plan.tools.python}; requirement {plan.baseline.requirement}")
             for path in plan.changed_paths:
                 print(f"{'Would update' if args.dry_run else 'Update'}: {path}")
+                if args.dry_run:
+                    from difflib import unified_diff
+
+                    before = (dict(plan.originals)[path] or b"").decode("utf-8").splitlines(keepends=True)
+                    after = dict(plan.replacements)[path].decode("utf-8").splitlines(keepends=True)
+                    print("".join(unified_diff(before, after, fromfile=path, tofile=path)), end="")
             if args.apply:
                 apply_python_adoption(plan)
             return 0
@@ -280,6 +301,10 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
 
             upgrade(settings, source=args.config, dry_run=args.dry_run)
             return 0
+        if settings.toolchain.inherit_python_tools and args.action in {"check", "export", "run"}:
+            from research_repo_tools.python_tools import check
+
+            check(settings.root)
         plan = toolchain_config.load(settings)
         runtime = toolchain.Runtime(plan)
         if args.action == "export":
@@ -354,13 +379,18 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         if args.action == "update-python":
             from research_repo_tools.dependencies import main
 
+            if settings.toolchain.inherit_python_tools:
+                from research_repo_tools.python_tools import check
+
+                check(settings.root, executables=False)
             return main(
                 [
                     "--pyproject",
                     str(settings.path(deps.pyproject)),
                     "--uv-executable",
                     settings.executable(deps.uv),
-                ]
+                ],
+                toolchain=settings.toolchain,
             )
         from research_repo_tools.tool_pins import check_uv, update
 

@@ -84,10 +84,15 @@ performance +args:
 
 # Check every tracked/nonignored Python file, including deliberate negative fixtures.
 python-check:
-    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain python-check
-    uv run --locked --group dev research-repo-tools files run --include '*.py' --include '*.pyi' -- ruff check --no-fix --no-force-exclude
-    uv run --locked --group dev research-repo-tools files run --include '*.py' --include '*.pyi' -- ruff format --check --no-force-exclude
-    uv run --locked --group dev research-repo-tools files run --include '*.py' --include '*.pyi' -- ty check --no-force-exclude
+    uv run --locked --no-sync --no-python-downloads research-repo-tools python check
+
+# Apply configured Ruff fixes and formatting to the complete Python inventory.
+python-fix:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools python fix
+
+# Run native ty over every tracked/nonignored Python file without fixing source.
+python-typecheck:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools python typecheck
 
 # Check consumer release metadata.
 release-check:
@@ -129,11 +134,11 @@ semgrep-check:
 setup:
     uv run --locked --managed-python --only-group tooling research-repo-tools setup
 
-# Resolve and preview a shared-package/Python migration outside the old environment.
+# Resolve and preview opted-in Python/tool-profile changes outside the old environment.
 shared-python-plan version:
     uvx --no-config --isolated --managed-python --from "research-repo-tools==$1" research-repo-tools toolchain adopt --dry-run
 
-# Apply the validated shared-package/Python migration and recreate the environment.
+# Apply the validated shared-package/Python/tool-profile migration and recreate the environment.
 shared-python-update version:
     uvx --no-config --isolated --managed-python --from "research-repo-tools==$1" research-repo-tools toolchain adopt --apply
 
@@ -155,6 +160,10 @@ tools-check:
 # Export verified managed paths to the current GitHub Actions environment file.
 tools-export:
     uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain export
+
+# Check opted-in Python tool declarations, lock, and executable versions without sync.
+tools-python-check:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain python-tools-check
 
 # Upgrade tools, then Cargo and Python dependencies and the dev environment.
 update: update-tools update-dependencies

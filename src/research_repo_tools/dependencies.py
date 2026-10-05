@@ -15,6 +15,7 @@ from packaging.requirements import InvalidRequirement, Requirement
 from packaging.specifiers import SpecifierSet
 from packaging.version import InvalidVersion, Version
 
+from research_repo_tools import config
 from research_repo_tools.files import preserve_files
 from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics, run_safe_command
 
@@ -118,10 +119,30 @@ def _group_requirements(groups: dict[str, object], name: str, ancestors: tuple[s
     return result
 
 
-def parse_project(text: str) -> tuple[SpecifierSet, list[DevPin]]:
+def parse_project(text: str, *, toolchain: config.ToolchainSettings | None = None) -> tuple[SpecifierSet, list[DevPin]]:
     """Parse Python constraints and exact direct development-tool pins."""
     data = tomllib.loads(text)
-    return _python_constraints(_required_table(data, "project")), _dev_pins(_required_table(data, "dependency-groups"))
+    from research_repo_tools import python_baseline, python_tools
+
+    project = _required_table(data, "project")
+    pins = _dev_pins(_required_table(data, "dependency-groups"))
+    if toolchain is None:
+        tool = config._table(data.get("tool", {}), "tool")
+        settings = config._table(tool.get("research-repo-tools", {}), "tool.research-repo-tools")
+        toolchain = config.parse({"toolchain": settings.get("toolchain", {})}, root=Path()).toolchain
+    constraints = _python_constraints(project)
+    if toolchain.inherit_python_tools:
+        python_tools.check_declarations(data)
+        pins = [pin for pin in pins if canonicalize_name(pin.name) not in python_tools.TOOLS | {python_tools.PACKAGE}]
+    elif toolchain.inherit_python:
+        pins = [pin for pin in pins if canonicalize_name(pin.name) != python_tools.PACKAGE]
+    if toolchain.inherit_python_tools or toolchain.inherit_python:
+        # Resolve development tools over their group support, keeping the public
+        # package's potentially broader runtime promise unchanged in its manifest.
+        constraints &= SpecifierSet(python_baseline.baseline().requirement)
+        if constraints.is_unsatisfiable():
+            raise ValueError("public Python runtime requirement excludes the shared development toolchain")
+    return constraints, pins
 
 
 def parse_resolution(output: str, pins: list[DevPin]) -> list[DevPin]:
@@ -191,6 +212,16 @@ def _resolution_requirements(text: str, pins: list[DevPin]) -> list[str]:
             msg = f"dependency-groups.dev contains an invalid requirement: {raw_requirement!r}"
             raise ValueError(msg) from error
         specifiers = list(requirement.specifier)
+        if canonicalize_name(str(project.get("name", ""))) == canonicalize_name(requirement.name) and requirement.extras:
+            # The maintainer's dev group selects its own optional tool profile.
+            # Resolve those local pins, not a different published self dependency.
+            extras = _required_table(project, "optional-dependencies")
+            for extra in sorted(requirement.extras):
+                entries = extras.get(extra)
+                if not isinstance(entries, list) or any(not isinstance(entry, str) for entry in entries):
+                    raise ValueError(f"project.optional-dependencies.{extra} must be a requirement array")
+                requirements.extend(entries)
+            continue
         pin = managed.get(canonicalize_name(requirement.name))
         if (
             pin is not None
@@ -305,10 +336,10 @@ def _masked_manifest(text: str, managed_names: frozenset[str]) -> dict[str, obje
     return cast("dict[str, object]", data)
 
 
-def _require_applied_pins(pyproject: Path, expected: list[DevPin], original: bytes) -> None:
+def _require_applied_pins(pyproject: Path, expected: list[DevPin], original: bytes, *, toolchain: config.ToolchainSettings | None = None) -> None:
     """Require uv to have changed only the exact requested manifest pins."""
     updated_text = pyproject.read_text(encoding="utf-8")
-    _requires_python, actual = parse_project(updated_text)
+    _requires_python, actual = parse_project(updated_text, toolchain=toolchain)
     expected_versions = {canonicalize_name(pin.name): pin.version for pin in expected}
     actual_versions = {canonicalize_name(pin.name): pin.version for pin in actual}
     if actual_versions != expected_versions:
@@ -321,14 +352,14 @@ def _require_applied_pins(pyproject: Path, expected: list[DevPin], original: byt
         raise ValueError(msg)
 
 
-def update_dev_pins(pyproject: Path, *, uv: str = "uv") -> dict[str, tuple[str, str]]:
+def update_dev_pins(pyproject: Path, *, uv: str = "uv", toolchain: config.ToolchainSettings | None = None) -> dict[str, tuple[str, str]]:
     """Resolve and apply all changed exact direct pins in one uv transaction."""
     manifest = _conventional_manifest(pyproject)
     uv_lock = manifest.parent / "uv.lock"
     if uv_lock.is_symlink():
         msg = f"uv.lock must not be a symbolic link: {uv_lock}"
         raise ValueError(msg)
-    requires_python, current = parse_project(manifest.read_text(encoding="utf-8"))
+    requires_python, current = parse_project(manifest.read_text(encoding="utf-8"), toolchain=toolchain)
     if not current:
         return {}
     latest = resolve_latest_pins(current, requires_python, manifest.parent, uv=uv)
@@ -352,7 +383,7 @@ def update_dev_pins(pyproject: Path, *, uv: str = "uv") -> dict[str, tuple[str, 
             cwd=manifest.parent,
             timeout=UV_ADD_TIMEOUT_SECONDS,
         )
-        _require_applied_pins(manifest, latest, snapshots[manifest] or b"")
+        _require_applied_pins(manifest, latest, snapshots[manifest] or b"", toolchain=toolchain)
     return changes
 
 
@@ -376,15 +407,15 @@ def _subprocess_detail(error: subprocess.CalledProcessError) -> str:
     return cast("str", stderr or stdout or str(error))
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, toolchain: config.ToolchainSettings | None = None) -> int:
     """Advance exact development-tool pins without touching other requirements."""
     args = parse_args(argv)
     try:
-        _requires_python, pins = parse_project(args.pyproject.read_text(encoding="utf-8"))
+        _requires_python, pins = parse_project(args.pyproject.read_text(encoding="utf-8"), toolchain=toolchain)
         if not pins:
             print("No exact direct Python development-tool pins to update.")
             return 0
-        changes = update_dev_pins(args.pyproject, uv=args.uv_executable)
+        changes = update_dev_pins(args.pyproject, uv=args.uv_executable, toolchain=toolchain)
     except ExceptionGroup as error:
         expected, unexpected = error.split((ExecutableNotFoundError, OSError, RuntimeError, subprocess.SubprocessError, TypeError, ValueError))
         if expected is not None:

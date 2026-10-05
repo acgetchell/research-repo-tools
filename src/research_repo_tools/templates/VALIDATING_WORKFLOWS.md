@@ -69,20 +69,34 @@ requiring `zizmor-action`; no hard-coded remote tag map is needed.
 
 Merge `python-validation.toml` into the consumer's pyproject, preserving all
 existing Ruff selections. It opts into ANN001/002/003/201/202/204/205/206, the TC
-family including TC003, and UP037. Keep the consumer's exact Ruff and ty pins in
-its locked development group. The package supplies discovery and invocation;
-native Ruff and ty own the policy and diagnostics.
+family including TC003, and UP037. Use the opt-in release-owned `python-tools`
+extra or keep consumer-owned Ruff/ty pins in the locked development group. The
+package supplies discovery and invocation; native Ruff and ty own the policy
+and diagnostics.
 
-The packaged `python-check` recipe applies the complete configured Ruff policy,
-format check, and ty to `*.py` and `*.pyi` selected by the existing `files run`
-command. Quoted Git pathspecs match root and nested files. Tracked files and
-nonignored new files enter automatically, including support scripts, consumer
-tests, and Semgrep fixtures. Deleted and ignored untracked files are omitted.
-Do not narrow the rule set with `--select` or exclude fixture directories. Avoid
-directory exclusions for deliberate fixtures. Ruff and ty explicitly use
-`--no-force-exclude` so supplied files are checked even if a project-wide
-exclusion would otherwise remove them. Ruff's gate uses `--no-fix` to keep
-checking read-only even when a consumer enables fixes in its configuration.
+The packaged `python-check`, `python-fix`, and `python-typecheck` recipes call
+`research-repo-tools python check`, `fix`, and `typecheck`. These commands use
+one tracked/nonignored `*.py`/`*.pyi` inventory, including support scripts,
+tests, and negative fixtures. Deleted and ignored untracked files are omitted.
+Supplied files override native directory exclusions and ignore files; precise
+per-file/rule exceptions remain active. No reduced rule selectors are injected.
+
+`check` runs native Ruff lint, format checks, and ty; `typecheck` runs ty alone.
+Ruff checks disable both `fix` and `fix-only`, and disable cache writes. `fix`
+explicitly applies configured Ruff fixes and formatting, reporting leftover
+violations. Notebook cells remain on the native notebook interface.
+
+Every command checks opted-in Python baseline drift before discovery. Empty
+inventories require no validators, but opted-in declaration and lock checks still
+apply. A nonempty inventory requires every selected validator on PATH before
+execution starts.
+Arguments are bounded and portable; each batch defaults to a 300-second timeout
+(configurable with `--timeout`). All batches run on ordinary validator failures,
+and the first native nonzero status is returned (signals map to 128 + signal).
+Operational launch/timeout errors fail immediately with diagnostics. Native
+stdout and stderr pass through unchanged. No command installs or upgrades tools.
+Recipes use the existing environment without synchronization or Python downloads;
+prepare it with `just setup` before checking.
 
 Use exact Ruff per-file/rule exceptions for deliberate violations. The template
 shows missing-annotation exceptions on one example fixture. For intentional ty

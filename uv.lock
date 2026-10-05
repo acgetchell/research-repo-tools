@@ -1020,6 +1020,11 @@ notebooks = [
     { name = "nbclient" },
     { name = "nbformat" },
 ]
+python-tools = [
+    { name = "pytest" },
+    { name = "ruff" },
+    { name = "ty" },
+]
 
 [package.dev-dependencies]
 audit = [
@@ -1031,10 +1036,8 @@ dev = [
     { name = "ipykernel" },
     { name = "nbclient" },
     { name = "nbformat" },
-    { name = "pytest" },
     { name = "pytest-cov" },
-    { name = "ruff" },
-    { name = "ty" },
+    { name = "research-repo-tools", extra = ["python-tools"] },
     { name = "zizmor" },
 ]
 
@@ -1044,10 +1047,13 @@ requires-dist = [
     { name = "nbclient", marker = "extra == 'notebooks'", specifier = ">=0.11.0,<1" },
     { name = "nbformat", marker = "extra == 'notebooks'", specifier = ">=5.10.4,<6" },
     { name = "packaging", specifier = ">=26.1" },
+    { name = "pytest", marker = "extra == 'python-tools'", specifier = "==9.1.1" },
     { name = "pyyaml", specifier = ">=6" },
+    { name = "ruff", marker = "extra == 'python-tools'", specifier = "==0.16.9" },
     { name = "rust-just", specifier = "==1.58.0" },
+    { name = "ty", marker = "extra == 'python-tools'", specifier = "==0.0.84" },
 ]
-provides-extras = ["notebooks"]
+provides-extras = ["notebooks", "python-tools"]
 
 [package.metadata.requires-dev]
 audit = [{ name = "pip-audit", specifier = "==2.10.1" }]
@@ -1057,10 +1063,8 @@ dev = [
     { name = "ipykernel", specifier = "==7.3.0" },
     { name = "nbclient", specifier = "==0.11.0" },
     { name = "nbformat", specifier = "==5.11.1" },
-    { name = "pytest", specifier = "==9.1.1" },
     { name = "pytest-cov", specifier = "==7.1.0" },
-    { name = "ruff", specifier = "==0.16.9" },
-    { name = "ty", specifier = "==0.0.84" },
+    { name = "research-repo-tools", extras = ["python-tools"] },
     { name = "zizmor", specifier = "==1.30.1" },
 ]
 

@@ -233,7 +233,7 @@ def check(dist: Path) -> None:
     version = metadata["project"]["version"]
     uv_version = metadata["tool"]["uv"]["required-version"]
     just_version = next(item.removeprefix("rust-just==") for item in metadata["project"]["dependencies"] if item.startswith("rust-just=="))
-    dev_pin = next(item for item in metadata["dependency-groups"]["dev"] if item.startswith("ruff=="))
+    dev_pin = next(item for item in metadata["project"]["optional-dependencies"]["python-tools"] if item.startswith("ruff=="))
     wheel = dist / f"research_repo_tools-{version}-py3-none-any.whl"
     if not wheel.is_file():
         raise ValueError(f"Build artifact is missing: {wheel}")
