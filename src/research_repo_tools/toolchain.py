@@ -18,7 +18,8 @@ from pathlib import Path
 
 from packaging.specifiers import SpecifierSet
 
-from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics, resolve_executable, run_safe_command
+from research_repo_tools import release_credentials
+from research_repo_tools.process import ExecutableNotFoundError, resolve_executable, run_safe_command
 from research_repo_tools.tool_pins import SEMVER
 from research_repo_tools.toolchain_config import RUSTUP_VERSION, BinaryTool, CargoTool, Toolchain, executable, home, host_target
 
@@ -71,7 +72,7 @@ def _probe(
         actual = match[1]
         return Status(name, required, actual, selected, actual == required if required else True)
     except FAILURES as error:
-        return Status(name, required, format_exception_diagnostics(error, single_line=True), selected, False)
+        return Status(name, required, release_credentials.diagnostics(error, single_line=True), selected, False)
 
 
 class Runtime:
@@ -131,19 +132,23 @@ class Runtime:
 
         path = self.binary_path(tool)
         try:
-            actual = version_at(path, tool, cwd=self.plan.root, env=self.environment())
+            actual = version_at(path, tool, cwd=self.plan.root, env=release_credentials.environment())
             return Status(tool.name, tool.version, actual, str(path), actual == tool.version)
         except FAILURES as error:
-            return Status(tool.name, tool.version, format_exception_diagnostics(error, single_line=True), str(path), False)
+            return Status(tool.name, tool.version, release_credentials.diagnostics(error, single_line=True), str(path), False)
 
     def environment(self) -> dict[str, str]:
         with self._operation():
             python = self.python_status(self.uv_status())
             return self._environment(python)
 
+    def setup_environment(self) -> dict[str, str]:
+        """Select managed tools while withholding release-lookup credentials."""
+        return release_credentials.environment(self.environment())
+
     def project_environment(self) -> dict[str, str]:
         """Keep project synchronization rooted here while preserving its venv override."""
-        env = self.environment()
+        env = self.setup_environment()
         for name in ("UV_PROJECT", "UV_WORKING_DIR", "UV_WORKING_DIRECTORY", "UV_ENV_FILE"):
             env.pop(name, None)
         return env
@@ -177,7 +182,7 @@ class Runtime:
         # uv is an external prerequisite, never installed or replaced by setup.
         selected = shutil.which("uv", path=os.environ.get("PATH", ""))
         return self._cached_probe(
-            "uv", [Path(selected)] if selected else [], lambda: _probe("uv", "uv", self.plan.uv, env=dict(os.environ), cwd=self.plan.root)
+            "uv", [Path(selected)] if selected else [], lambda: _probe("uv", "uv", self.plan.uv, env=release_credentials.environment(), cwd=self.plan.root)
         )
 
     def python_status(self, uv: Status) -> Status:
@@ -204,7 +209,7 @@ class Runtime:
                 uv.path,
                 ["python", "find", "--system", "--managed-python", "--no-python-downloads", required],
                 cwd=self.plan.root,
-                env=self._environment(),
+                env=release_credentials.environment(self._environment()),
                 timeout=30,
             )
             path = result.stdout.strip()
@@ -212,18 +217,18 @@ class Runtime:
                 raise ValueError("uv python find did not return an absolute interpreter path")
             return self._python_probe(path)
         except FAILURES as error:
-            return Status("Python", required, format_exception_diagnostics(error, single_line=True), "", False)
+            return Status("Python", required, release_credentials.diagnostics(error, single_line=True), "", False)
 
     def _python_probe(self, path: str | Path) -> Status:
         required = self.plan.python_request
-        status = _probe(path, "Python", "", env=self._environment(), cwd=self.plan.root)
+        status = _probe(path, "Python", "", env=release_credentials.environment(self._environment()), cwd=self.plan.root)
         return Status("Python", required, status.actual, status.path, status.ok and status.actual in SpecifierSet(required))
 
     def rust_statuses(self) -> list[Status]:
         rust = self.plan.rust
         if rust is None:
             return []
-        env = self.environment()
+        env = self.setup_environment()
         manager = _probe(self.rustup, "rustup", RUSTUP_VERSION, env=env, cwd=self.plan.root)
         statuses = [manager]
         if not manager.ok:
@@ -237,7 +242,7 @@ class Runtime:
                 status = _probe(selected, binary, rust.channel if binary == "rustc" else "", env=env, cwd=self.plan.root)
                 statuses.append(status)
             except FAILURES as error:
-                statuses.append(Status(binary, rust.channel, format_exception_diagnostics(error, single_line=True), "", False))
+                statuses.append(Status(binary, rust.channel, release_credentials.diagnostics(error, single_line=True), "", False))
         for kind, names in (("component", rust.components), ("target", rust.targets)):
             try:
                 installed = self._rustup([kind, "list", "--installed", "--toolchain", rust.channel]).stdout.splitlines()
@@ -246,11 +251,11 @@ class Runtime:
                     present = any(item == canonical or (kind == "component" and item == f"{canonical}-{self.host}") for item in installed)
                     statuses.append(Status(f"Rust {kind} {name}", "installed", "installed" if present else "missing", str(self.rustup), present))
             except FAILURES as error:
-                statuses.append(Status(f"Rust {kind}s", ", ".join(names), format_exception_diagnostics(error, single_line=True), str(self.rustup), False))
+                statuses.append(Status(f"Rust {kind}s", ", ".join(names), release_credentials.diagnostics(error, single_line=True), str(self.rustup), False))
         return statuses
 
     def cargo_status(self, tool: CargoTool) -> Status:
-        env = self.environment()
+        env = self.setup_environment()
         # cargo-machete changes argument parsing when CARGO is set. Probes invoke
         # executables directly, so never inherit Cargo's subcommand dispatch marker.
         env.pop("CARGO", None)
@@ -270,9 +275,9 @@ class Runtime:
         if selected is None:
             return Status("sh", "POSIX shell", "missing", "", False)
         try:
-            run_safe_command(selected, ["-cu", ":"], cwd=self.plan.root, env=dict(os.environ), timeout=30)
+            run_safe_command(selected, ["-cu", ":"], cwd=self.plan.root, env=release_credentials.environment(), timeout=30)
         except FAILURES as error:
-            return Status("sh", "POSIX shell", format_exception_diagnostics(error, single_line=True), selected, False)
+            return Status("sh", "POSIX shell", release_credentials.diagnostics(error, single_line=True), selected, False)
         return Status("sh", "POSIX shell", "available", selected, True)
 
     def inspect(self) -> list[Status]:
@@ -281,9 +286,9 @@ class Runtime:
 
     def _inspect(self) -> list[Status]:
         uv = self.uv_status()
-        just = _probe("just", "just", version("rust-just"), env=dict(os.environ), cwd=self.plan.root)
+        just = _probe("just", "just", version("rust-just"), env=release_credentials.environment(), cwd=self.plan.root)
         # Git is a system prerequisite; no implicit installation or repository mutation.
-        git = _probe("git", "git version", "", ("--no-pager", "--version"), env=dict(os.environ), cwd=self.plan.root)
+        git = _probe("git", "git version", "", ("--no-pager", "--version"), env=release_credentials.environment(), cwd=self.plan.root)
         return [
             uv,
             self.python_status(uv),
@@ -297,7 +302,7 @@ class Runtime:
 
     def _rustup(self, args: list[str], *, install: bool = False) -> subprocess.CompletedProcess[str]:
         return run_safe_command(
-            str(self.rustup), args, cwd=self.plan.root, env=self.environment(), timeout=INSTALL_TIMEOUT if install else 30, capture_output=not install
+            str(self.rustup), args, cwd=self.plan.root, env=self.setup_environment(), timeout=INSTALL_TIMEOUT if install else 30, capture_output=not install
         )
 
     def sync(self) -> None:
@@ -321,7 +326,7 @@ class Runtime:
                 raise RuntimeError("Python installation did not supply the declared interpreter")
         rust = self.plan.rust
         if rust:
-            if not _probe(self.rustup, "rustup", RUSTUP_VERSION, env=self.environment(), cwd=self.plan.root).ok:
+            if not _probe(self.rustup, "rustup", RUSTUP_VERSION, env=self.setup_environment(), cwd=self.plan.root).ok:
                 self._install_rustup()
             states = self.rust_statuses()
             if not all(status.ok for status in states):
@@ -359,18 +364,30 @@ class Runtime:
                         f"{tool.package} installation failed verification: {result.actual}; rerun toolchain sync to repair the managed installation"
                     )
 
+        self.sync_binaries()
+
+    def sync_binaries(self) -> list[Status]:
+        """Verify/repair only pinned release binaries; never sync or build packages."""
         from research_repo_tools.prebuilt_tools import install
 
+        statuses = []
         for tool in self.plan.binaries:
-            if not self.binary_status(tool).ok:
-                install(tool, self.host, self.binary_path(tool), cwd=self.plan.root, env=self.environment())
-                if not self.binary_status(tool).ok:
+            status = self.binary_status(tool)
+            if not status.ok:
+                try:
+                    install(tool, self.host, self.binary_path(tool), cwd=self.plan.root, env=release_credentials.environment())
+                except (*FAILURES, RuntimeError) as error:
+                    raise RuntimeError(f"{tool.name} installation failed: {release_credentials.diagnostics(error)}") from None
+                status = self.binary_status(tool)
+                if not status.ok:
                     raise RuntimeError(f"{tool.name} installation failed verification")
+            statuses.append(status)
+        return statuses
 
     def _install(self, command: str, args: list[str]) -> None:
         print(f"Installing: {Path(command).name} {' '.join(args)}", file=sys.stderr, flush=True)
         try:
-            run_safe_command(command, args, cwd=self.plan.root, env=self.environment(), timeout=INSTALL_TIMEOUT, capture_output=False)
+            run_safe_command(command, args, cwd=self.plan.root, env=self.setup_environment(), timeout=INSTALL_TIMEOUT, capture_output=False)
         except FAILURES as error:
             native_hint = ""
             if args[-1:] == ["tectonic"]:
@@ -380,7 +397,7 @@ class Runtime:
                     "https://tectonic-typesetting.github.io/book/latest/howto/build-tectonic/external-dep-install.html."
                 )
             raise RuntimeError(
-                f"Installation failed: {format_exception_diagnostics(error)}\n"
+                f"Installation failed: {release_credentials.diagnostics(error)}\n"
                 "Earlier successful installations are retained. Fix the reported cause and rerun toolchain sync. "
                 "Native builds require Xcode Command Line Tools on macOS, a C/C++ compiler and development libraries on Linux, "
                 f"or Visual Studio C++ Build Tools and a Windows SDK on Windows.{native_hint}"

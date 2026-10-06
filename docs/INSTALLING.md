@@ -70,6 +70,15 @@ directories, upstream GitHub release-asset SHA-256 checksums, shared archive
 validation, and executable version probes before atomic file replacement.
 GitHub release-metadata requests optionally authenticate with `GITHUB_TOKEN`,
 falling back to `GH_TOKEN`; requests remain unauthenticated when neither is set.
+Use the supported `toolchain sync-binaries` command for authenticated installation
+without package synchronization or dependency builds. The
+[GitHub Actions integration](../README.md#authenticated-release-installation-in-github-actions)
+keeps locked package installation and ordinary setup in separate steps.
+Setup commands and toolchain probes remove both lookup variables from child
+environments; explicitly requested `toolchain run` commands retain them.
+Other build settings remain inherited. This replaces the former forwarding of
+lookup credentials to every setup subprocess. Release-installation diagnostics
+redact both credential values, and asset downloads remain unauthenticated.
 Missing checksums, unsupported assets and mismatched versions fail before
 publication. Setup, check, run, export and upgrade use these same managed paths;
 checks do not install or fall back to ambient scanners. Both architectures of
@@ -141,6 +150,7 @@ The consumer template provides:
 - `just help-workflows`: alias for `help`.
 - `just setup`: synchronize declared tools and then the default Python environment.
 - `just tools-check`: inspect without syncing the environment or downloading Python.
+- `just tools-sync-binaries`: verify and repair pinned release binaries without package synchronization.
 - `just update`: upgrade tools, then Cargo and Python dependencies and synchronize dev.
 - `just update-cargo-dependencies`: upgrade root Cargo requirements and lock resolution, if present.
 - `just update-cargo-tools`: upgrade declared Cargo tools and publish verified TOML pins.
@@ -170,6 +180,7 @@ The underlying commands are:
 | `toolchain python-tools-check` | Reject inherited tool declaration, lock, and executable drift without synchronization |
 | `toolchain run -- COMMAND ...` | Check tools, then run with their selected paths; propagate failure/exit status |
 | `toolchain sync [--dry-run]` | Install declared versions and verify results; dry run reports without installation |
+| `toolchain sync-binaries` | Verify and repair only pinned release binaries; no uv prerequisite probe, package synchronization, or dependency builds |
 | `toolchain upgrade [--dry-run]` | Resolve stable Cargo upgrades, install and verify them, then publish the exact pins |
 
 Global `--root` and `--config` retain the shared CLI contract. Toolchain commands
@@ -258,7 +269,7 @@ earlier removals remain applied. Correct the cause and preview again.
 
 ## Installing and recovering tools
 
-Installers run only during explicit setup, toolchain sync, or toolchain upgrade. Rustup uses its
+Installers run only during explicit setup, toolchain sync, binary-only sync, or toolchain upgrade. Rustup uses its
 versioned upstream binary and verifies the
 published SHA-256 before execution. Cargo installs use exact versions and
 `--locked`; their build dependencies come from each crate's published lockfile.

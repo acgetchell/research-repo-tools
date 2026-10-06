@@ -38,6 +38,24 @@ against the consumer root; bare executable names use `PATH`.
 Explicit `ci export --file` and `toolchain export --file` paths follow this rule.
 The `GITHUB_ENV` fallback keeps the path supplied by the invoking environment.
 
+`toolchain sync-binaries` verifies and repairs only the consumer's exact managed
+release-binary pins. It uses the existing host/version cache, release URL/tag
+checks, SHA-256 verification and staged executable probes. Warm caches are
+probed without release requests; damaged caches use the verified installer.
+It performs no package/environment synchronization, Python/Rust/Cargo/Just
+installation, or unrelated tool probes. The command supports the usual `--root`
+and `--config` options and can be called through `cli.main` without importing
+toolchain or prebuilt implementation APIs. Failures return nonzero and retain
+previous files and earlier successful installations.
+
+Only release-metadata requests consume the first nonempty `GITHUB_TOKEN`, then
+`GH_TOKEN`. All toolchain probes and setup subprocesses remove both variables
+case-insensitively while preserving other build settings. Release-installation
+diagnostics redact both inherited values. Explicit `toolchain run` commands
+inherit the caller's credential variables. The
+[GitHub Actions example](../README.md#authenticated-release-installation-in-github-actions)
+separates package installation and ordinary setup from authenticated binary sync.
+
 `zizmor check` verifies one repository-declared scanner pin and requires an explicit
 `[tool.research-repo-tools.zizmor] persona`. It supports plain and SARIF reports,
 automatic authentication discovery, `--offline`, and `--require-online`.

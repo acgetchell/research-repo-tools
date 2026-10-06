@@ -7,6 +7,7 @@ import tempfile
 import urllib.request
 from pathlib import Path
 
+from research_repo_tools import release_credentials
 from research_repo_tools.archives import ArchiveLimits, download_asset, extract_archive
 from research_repo_tools.process import run_safe_command
 from research_repo_tools.toolchain_config import BinaryTool
@@ -41,8 +42,11 @@ def release_metadata(name: str, tag: str) -> dict:
     if token := os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN"):
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(f"https://api.github.com/repos/{REPOSITORIES[name]}/releases/{suffix}", headers=headers)
-    with urllib.request.urlopen(request, timeout=30) as response:
-        payload = response.read(2 * 1024 * 1024 + 1)
+    try:
+        with urllib.request.urlopen(request, timeout=30) as response:
+            payload = response.read(2 * 1024 * 1024 + 1)
+    except (OSError, ValueError) as error:
+        raise RuntimeError(f"binary release lookup failed: {release_credentials.diagnostics(error)}") from None
     if len(payload) > 2 * 1024 * 1024:
         raise ValueError("release metadata exceeds size limit")
     value = json.loads(payload)
@@ -63,7 +67,7 @@ def version_at(path: Path, tool: BinaryTool, *, cwd: Path, env: dict[str, str]) 
     if not path.is_file() or path.is_symlink():
         raise ValueError("missing managed executable")
     args = ["version"] if tool.name == "gitleaks" else ["--version"]
-    output = run_safe_command(str(path), args, cwd=cwd, env=env, timeout=30).stdout.strip()
+    output = run_safe_command(str(path), args, cwd=cwd, env=release_credentials.environment(env), timeout=30).stdout.strip()
     pattern = r"(?:gitleaks )?v?([0-9]+\.[0-9]+\.[0-9]+)" if tool.name == "gitleaks" else r"osv-scanner version: ([0-9]+\.[0-9]+\.[0-9]+)(?:\n.*)*"
     match = re.fullmatch(pattern, output)
     if not match:

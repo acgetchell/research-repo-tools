@@ -9,7 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
-from research_repo_tools import config, toolchain_config
+from research_repo_tools import config, release_credentials, toolchain_config
 from research_repo_tools import prebuilt_tools as prebuilt
 from research_repo_tools.toolchain_config import BinaryTool
 
@@ -54,6 +54,13 @@ def test_assets(host, name, version):
 def test_unsupported_host():
     with pytest.raises(ValueError, match="unsupported"):
         prebuilt.asset_name(BinaryTool("gitleaks", "8.30.1"), "x86_64-unknown-linux-musl")
+
+
+def test_child_environment_removes_case_insensitive_release_variables_only():
+    source = {"Github_Token": "github", "gh_token": "gh", "PATH": "native paths", "SDKROOT": "native sdk", "UV_INDEX_PASSWORD": "private index"}
+    original = source.copy()
+    assert release_credentials.environment(source) == {"PATH": "native paths", "SDKROOT": "native sdk", "UV_INDEX_PASSWORD": "private index"}
+    assert source == original
 
 
 def test_exact_config(tmp_path):
