@@ -42,7 +42,7 @@ check-dist:
 
 # Install real tools and verify setup on disposable GitHub-hosted runners only.
 check-setup:
-    uv run --locked python scripts/check_setup.py
+    uv run --locked --no-sync --no-python-downloads python scripts/check_setup.py
 
 # Run checks, tests, builds, and isolated installation checks.
 ci: check coverage install-check

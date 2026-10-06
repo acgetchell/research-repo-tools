@@ -89,7 +89,7 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | Semgrep | `semgrep check-fixtures`, `scan` | Validate consumer rules, explicit inventory, reports and fixture expectations |
 | Setup | `setup` | Require uv; install user Just and declared tools; sync the locked environment |
 | Templates | `templates NAME` | Shared changelog, git-cliff, just, TOML, and rumdl resources |
-| Toolchain | `toolchain adopt`, `check`, `clean`, `export`, `python-check`, `python-tools-check`, `run`, `sync`, `upgrade` | Exact declarations; managed installations and cleanup; verified execution and checked CI export |
+| Toolchain | `toolchain adopt`, `check`, `clean`, `export`, `python-check`, `python-tools-check`, `run`, `sync`, `sync-binaries`, `upgrade` | Exact declarations; managed installations and cleanup; verified execution and checked CI export |
 | Validation | `validation cargo-metadata`, `require`, `run` | Native package preflight, executable checks and configured example output assertions |
 | Workflow security | `zizmor check` | One declared scanner/persona, token discovery, explicit offline or required-online audits |
 
@@ -144,6 +144,7 @@ arguments in lexicographic order.
 | `just tools-check` | Check installed tools and versions without installing them |
 | `just tools-export` | Verify tools and append their environment to `GITHUB_ENV` |
 | `just tools-python-check` | Check inherited Python tool declarations, lock, and executable versions without changes |
+| `just tools-sync-binaries` | Install and verify pinned release binaries without package synchronization or dependency builds |
 | `just update` | Upgrade tools, then Cargo and Python dependencies and the development environment |
 | `just update-cargo-dependencies` | Upgrade root Cargo requirements (including incompatible releases) and lock resolution; skip projects without a root Cargo.toml |
 | `just update-cargo-tools` | Upgrade declared Cargo tools and release binaries; publish verified TOML pins |
@@ -157,6 +158,37 @@ arguments in lexicographic order.
 
 To preview a prospective release, run
 `just changelog-preview --tag v1.2.3 --date YYYY-MM-DD`.
+
+### Authenticated release installation in GitHub Actions
+
+`toolchain sync-binaries` installs only the exact `gitleaks` and `osv-scanner`
+pins declared by the consumer. It checks warm caches and repairs damaged
+executables through the same SHA-256-verified installer as setup. It does not
+install Python, Rust, Cargo tools, Just, or project dependencies.
+
+Install the locked tooling package first, then authenticate binary installation
+in a separate step. This example uses an existing uv installation and the
+consumer's committed manifest and lockfile:
+
+```yaml
+- name: Install locked tooling package
+  run: uv sync --locked --managed-python --only-group tooling
+- name: Install pinned release binaries
+  env:
+    GITHUB_TOKEN: ${{ github.token }}
+  run: uv run --locked --no-sync --no-python-downloads python -I -X utf8 -m research_repo_tools toolchain sync-binaries
+- name: Set up development tools and dependencies
+  run: uv run --locked --managed-python --only-group tooling research-repo-tools setup
+```
+
+The credential-bearing step uses the already installed package without
+synchronizing its environment. Release metadata requests authenticate with the
+first nonempty `GITHUB_TOKEN`, then `GH_TOKEN`; asset downloads carry no lookup
+credential. Setup commands and all toolchain version probes receive neither
+variable, and handled release-installation diagnostics redact both values.
+An explicit `toolchain run -- COMMAND ...` retains the caller's credentials for
+that command. Other native build and package-index settings continue to pass
+through. After setup, use `just tools-sync-binaries` for binary-only repair.
 
 To reclaim obsolete managed Cargo tools, Rust toolchains, release binaries, and
 Python interpreters, use the shared `clean` recipe. Include every other consumer

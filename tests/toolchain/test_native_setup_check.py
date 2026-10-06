@@ -103,11 +103,50 @@ def test_native_environment_replaces_inherited_installation_and_project_override
     assert dict(os.environ) == original
     assert env["PATH"] == str(compiler_bin)
     assert env["SDKROOT"] == "native-sdk"
-    assert env["GITHUB_TOKEN"] == "fixture-github-token"
-    assert env["GH_TOKEN"] == "fixture-gh-token"
+    assert "GITHUB_TOKEN" not in env and "GH_TOKEN" not in env
+    authenticated = harness.release_environment(env)
+    assert authenticated["GITHUB_TOKEN"] == "fixture-github-token"
+    assert authenticated["GH_TOKEN"] == "fixture-gh-token"
+    assert {key: value for key, value in authenticated.items() if key not in {"GITHUB_TOKEN", "GH_TOKEN"}} == env
+    assert dict(os.environ) == original
     assert all(value != "outside-fixture" for name, value in env.items() if name in overrides)
     for name in ("UV_TOOL_BIN_DIR", "UV_TOOL_DIR", "UV_PYTHON_INSTALL_DIR", "UV_CACHE_DIR", "RESEARCH_REPO_TOOLS_HOME"):
         assert Path(env[name]).is_relative_to(tmp_path)
+
+
+def test_native_release_operation_follows_credential_free_locked_package_installation(harness, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    monkeypatch.setenv("GITHUB_TOKEN", "synthetic-github")
+    monkeypatch.setenv("GH_TOKEN", "synthetic-gh")
+    monkeypatch.setattr(harness.shutil, "which", lambda _name: "uv")
+    version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
+    (tmp_path / f"research_repo_tools-{version}-py3-none-any.whl").touch()
+    calls = []
+
+    class StopBeforeNativeDownload(Exception):
+        pass
+
+    def run(command, *, cwd, env, **kwargs):
+        calls.append(command)
+        if command[0] == "uv":
+            assert "GITHUB_TOKEN" not in env and "GH_TOKEN" not in env
+            if command[1] == "lock":
+                (cwd / "uv.lock").write_bytes(b"locked fixture\n")
+                return ""
+            assert command[-3:] == ["toolchain", "check", "--json"]
+            return '[{"name":"rustup","ok":false}]'
+        scripts = cwd / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+        assert command == [str(harness.binary(scripts, "python")), "-I", "-X", "utf8", "-m", "research_repo_tools", "toolchain", "sync-binaries"]
+        assert env["GITHUB_TOKEN"] == "synthetic-github" and env["GH_TOKEN"] == "synthetic-gh"
+        assert (cwd / "uv.lock").read_bytes() == b"locked fixture\n"
+        raise StopBeforeNativeDownload
+
+    monkeypatch.setattr(harness, "run", run)
+    with pytest.raises(StopBeforeNativeDownload):
+        harness.check(tmp_path)
+    assert len(calls) == 3
 
 
 def test_native_shell_check_rejects_system_just_even_when_version_matches(harness, tmp_path, monkeypatch):

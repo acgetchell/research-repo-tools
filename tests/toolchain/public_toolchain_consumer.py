@@ -1,14 +1,19 @@
-"""Cleanup contracts repeated against isolated wheel and sdist installations."""
+"""Toolchain contracts repeated against isolated wheel and sdist installations."""
 
+import hashlib
+import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
 import unittest
+import urllib.error
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
-from research_repo_tools import cli, config, python_adoption, python_baseline, toolchain, toolchain_clean
+from research_repo_tools import archives, cli, config, prebuilt_tools, process, python_adoption, python_baseline, toolchain, toolchain_clean
 from research_repo_tools.toolchain_clean import apply_clean, plan_clean
 from research_repo_tools.toolchain_config import load
 
@@ -165,6 +170,126 @@ class TestToolchainConsumer(unittest.TestCase):
                 self.assertTrue(all(not path.exists() for path in stale))
                 self.assertTrue(all((path / "sentinel").read_bytes() == b"owned fixture\r\n" for path in retained))
                 self.assertEqual(plan_clean(settings).removals, ())
+
+
+class TestManagedReleaseConsumer(unittest.TestCase):
+    """The supported CLI authenticates only metadata and repairs verified caches."""
+
+    def setUp(self):
+        directory = self.enterContext(tempfile.TemporaryDirectory(prefix="managed release consumer "))
+        self.root = Path(directory).resolve()
+        (self.root / "pyproject.toml").write_bytes(
+            b'[tool.uv]\nrequired-version="==0.12.19"\n[tool.research-repo-tools.toolchain.binaries]\nosv-scanner="2.6.0"\n'
+        )
+        (self.root / ".python-version").write_bytes(b"3.14\n")
+        self.originals = {path: path.read_bytes() for path in self.root.iterdir()}
+        self.enterContext(
+            patch.dict(os.environ, {"RESEARCH_REPO_TOOLS_HOME": str(self.root / "managed"), "GITHUB_TOKEN": "synthetic-github", "GH_TOKEN": "synthetic-gh"})
+        )
+        runtime = toolchain.Runtime(load(config.load(root=self.root)))
+        tool = runtime.plan.binaries[0]
+        self.target = runtime.binary_path(tool)
+        self.payload = b"checksum-verified synthetic scanner"
+        asset = prebuilt_tools.asset_name(tool, runtime.host)
+        self.url = f"https://github.com/google/osv-scanner/releases/download/v2.6.0/{asset}"
+        self.metadata = {
+            "draft": False,
+            "prerelease": False,
+            "tag_name": "v2.6.0",
+            "assets": [{"name": asset, "digest": "sha256:" + hashlib.sha256(self.payload).hexdigest(), "browser_download_url": self.url}],
+        }
+        self.failure = None
+        self.requests = []
+        self.downloads = []
+        self.probes = []
+
+        def metadata(request, *, timeout):
+            self.assertEqual(request.full_url, "https://api.github.com/repos/google/osv-scanner/releases/tags/v2.6.0")
+            self.assertEqual(request.get_header("Authorization"), "Bearer synthetic-github")
+            self.requests.append(request.full_url)
+            if self.failure == "metadata":
+                raise urllib.error.URLError("synthetic-github and synthetic-gh denied")
+            return io.BytesIO(json.dumps(self.metadata).encode("utf-8"))
+
+        class AssetResponse(io.BytesIO):
+            def geturl(response):
+                return self.url
+
+        class AssetOpener:
+            def open(opener, url, *, timeout):
+                self.assertEqual(url, self.url)  # Asset downloads carry no authenticated Request.
+                self.downloads.append(url)
+                return AssetResponse(b"damaged transfer" if self.failure == "checksum" else self.payload)
+
+        def probe(command, args, *, cwd, env, **kwargs):
+            self.assertEqual(args, ["--version"])
+            self.probes.append(Path(command))
+            if self.failure == "probe":
+                raise subprocess.CalledProcessError(19, [command, *args], stderr="synthetic-github and synthetic-gh probe failure")
+            code = (
+                "import os, pathlib, sys; "
+                "assert 'GITHUB_TOKEN' not in os.environ and 'GH_TOKEN' not in os.environ; "
+                "version = '2.6.0' if pathlib.Path(sys.argv[1]).read_bytes() == b'checksum-verified synthetic scanner' else '0.0.0'; "
+                "print('osv-scanner version: ' + version)"
+            )
+            return process.run_command(sys.executable, ["-I", "-X", "utf8", "-c", code, command], cwd=cwd, env=env)
+
+        self.enterContext(patch.object(prebuilt_tools.urllib.request, "urlopen", side_effect=metadata))
+        self.enterContext(patch.object(archives.urllib.request, "build_opener", return_value=AssetOpener()))
+        self.enterContext(patch.object(prebuilt_tools, "run_safe_command", side_effect=probe))
+        # Binary-only sync must work even when ordinary tools are unavailable.
+        for name in ("sync", "inspect", "uv_status", "python_status"):
+            self.enterContext(patch.object(toolchain.Runtime, name, side_effect=AssertionError(f"binary sync called {name}")))
+
+    def invoke(self):
+        stdout, stderr = io.StringIO(), io.StringIO()
+        with redirect_stdout(stdout), redirect_stderr(stderr):
+            status = cli.main(["--root", str(self.root), "toolchain", "sync-binaries"])
+        self.assertEqual({path: path.read_bytes() for path in self.originals}, self.originals)
+        self.assertFalse((self.root / ".venv").exists())
+        self.assertEqual(os.environ["GITHUB_TOKEN"], "synthetic-github")
+        self.assertEqual(os.environ["GH_TOKEN"], "synthetic-gh")
+        self.assertNotIn("synthetic-github", stdout.getvalue() + stderr.getvalue())
+        self.assertNotIn("synthetic-gh", stdout.getvalue() + stderr.getvalue())
+        return status, stdout.getvalue(), stderr.getvalue()
+
+    def test_cold_warm_and_damaged_caches_use_exact_pins_and_credential_free_children(self):
+        self.assertEqual(self.invoke()[0], 0)
+        self.assertEqual(self.target.read_bytes(), self.payload)
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(len(self.downloads), 1)
+        self.assertEqual(len(self.probes), 2)  # Staged candidate, then published file.
+        self.assertEqual(self.invoke()[0], 0)
+        self.assertEqual(len(self.requests), 1)
+        self.assertEqual(len(self.downloads), 1)
+        self.assertEqual(self.probes[-1], self.target)
+        self.target.write_bytes(b"damaged cached binary")
+        self.assertEqual(self.invoke()[0], 0)
+        self.assertEqual(self.target.read_bytes(), self.payload)
+        self.assertEqual(len(self.requests), 2)
+        self.assertEqual(len(self.downloads), 2)
+        self.assertEqual(len(self.probes), 6)
+
+    def test_lookup_checksum_and_probe_failures_preserve_cache_and_redact_diagnostics(self):
+        self.target.parent.mkdir(parents=True)
+        for failure, expected in (("metadata", "lookup failed"), ("checksum", "does not match its recorded SHA-256 digest"), ("probe", "exit status 19")):
+            with self.subTest(failure=failure):
+                self.failure = failure
+                self.target.write_bytes(b"previous cached binary")
+                self.probes.clear()
+                status, stdout, stderr = self.invoke()
+                self.assertEqual(status, 1)
+                self.assertEqual(stdout, "")
+                self.assertIn(expected, stderr)
+                if failure in {"metadata", "probe"}:
+                    self.assertIn("[REDACTED]", stderr)
+                self.assertEqual(self.target.read_bytes(), b"previous cached binary")
+                self.assertEqual(list(self.target.parent.iterdir()), [self.target])
+                if failure in {"metadata", "checksum"}:
+                    self.assertEqual(self.probes, [self.target])
+        self.failure = None
+        self.assertEqual(self.invoke()[0], 0)
+        self.assertEqual(self.target.read_bytes(), self.payload)
 
 
 if __name__ == "__main__":

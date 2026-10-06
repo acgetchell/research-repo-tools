@@ -96,7 +96,7 @@ jobs:
       - name: Exercise native setup and Cargo updates from the built wheel
         env:
           GITHUB_TOKEN: ${{ github.token }}
-        run: uv run --locked just check-setup
+        run: uv run --locked --no-sync --no-python-downloads just check-setup
 
   codecov:
     name: Upload coverage

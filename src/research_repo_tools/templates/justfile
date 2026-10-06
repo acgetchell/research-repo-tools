@@ -165,6 +165,10 @@ tools-export:
 tools-python-check:
     uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain python-tools-check
 
+# Install and verify pinned release binaries in the existing locked environment.
+tools-sync-binaries:
+    uv run --locked --no-sync --no-python-downloads python -I -X utf8 -m research_repo_tools toolchain sync-binaries
+
 # Upgrade tools, then Cargo and Python dependencies and the dev environment.
 update: update-tools update-dependencies
 

@@ -13,6 +13,8 @@ import tempfile
 import tomllib
 from pathlib import Path
 
+from research_repo_tools import release_credentials
+
 ROOT = Path(__file__).resolve().parents[1]
 
 
@@ -26,7 +28,7 @@ def isolated_environment(directory: Path) -> dict[str, str]:
     # another project's interpreter, managed tools, or uv directory overrides.
     env = {
         key: value
-        for key, value in os.environ.items()
+        for key, value in release_credentials.environment().items()
         if not key.startswith(("UV_", "RUSTUP_", "CARGO_", "PYTHON")) and key not in {"VIRTUAL_ENV", "CONDA_PREFIX", "ZDOTDIR", "BASH_ENV", "ENV"}
     }
     env.update(
@@ -47,6 +49,11 @@ def isolated_environment(directory: Path) -> dict[str, str]:
     excluded = {Path(sys.executable).parent, ROOT / ".venv" / "bin", ROOT / ".venv" / "Scripts"}
     env["PATH"] = os.pathsep.join(entry for entry in env.get("PATH", "").split(os.pathsep) if entry and Path(entry) not in excluded)
     return env
+
+
+def release_environment(env: dict[str, str]) -> dict[str, str]:
+    """Give only installed-package release operations the parent lookup tokens."""
+    return {**env, **{name: value for name in release_credentials.VARIABLES if (value := os.environ.get(name))}}
 
 
 def run(command: list[str], *, cwd: Path, env: dict[str, str], expected: int = 0, input: str | None = None) -> str:
@@ -269,6 +276,10 @@ def check(dist: Path) -> None:
         assert not Path(env["RESEARCH_REPO_TOOLS_HOME"]).exists(), "read-only check installed tools"
         scripts = consumer / ".venv" / ("Scripts" if os.name == "nt" else "bin")
         assert not binary(scripts, "ruff").exists(), "tooling-only startup installed dev dependencies"
+        # The first launch installed the wheel without credentials. Invoke its
+        # Python directly so this authenticated operation cannot sync packages.
+        binary_sync = [str(binary(scripts, "python")), "-I", "-X", "utf8", "-m", "research_repo_tools", "toolchain", "sync-binaries"]
+        run(binary_sync, cwd=consumer, env=release_environment(env))
         run([*launch, "setup"], cwd=consumer, env=env)
         assert binary(scripts, "ruff").is_file(), "setup did not synchronize dev dependencies"
         assert not (consumer / "scripts").exists(), "setup generated obsolete bootstrap launchers"
@@ -310,6 +321,8 @@ def check(dist: Path) -> None:
         # Compare installed executable identities, declarations, and shell state.
         # Checks may access caches; access timestamps are deliberately excluded.
         installed = {path: (path.stat().st_ino, path.stat().st_size, path.stat().st_mtime_ns) for path in selected.values()}
+        run(binary_sync, cwd=consumer, env=release_environment(active))
+        assert installed == {path: (path.stat().st_ino, path.stat().st_size, path.stat().st_mtime_ns) for path in installed}, "warm binary sync replaced tools"
         run([cli, "setup"], cwd=consumer, env=active)
         assert installed == {path: (path.stat().st_ino, path.stat().st_size, path.stat().st_mtime_ns) for path in installed}, "repeat setup replaced tools"
         assert declarations == {name: (consumer / name).read_bytes() for name in declarations}, "setup changed declarations or lockfile"
@@ -322,9 +335,10 @@ def check(dist: Path) -> None:
         assert declarations == {name: (consumer / name).read_bytes() for name in declarations}, "dependency update changed tool or Python declarations"
         # Exercise explicit resolution, installation, declaration publication,
         # and managed execution on every native platform. Never use user Cargo.
-        run([cli, "toolchain", "upgrade", "--dry-run"], cwd=consumer, env=active)
+        run([cli, "toolchain", "upgrade", "--dry-run"], cwd=consumer, env=release_environment(active))
         assert (consumer / "pyproject.toml").read_bytes() == declarations["pyproject.toml"]
-        run([just, "update-cargo-tools"], cwd=consumer, env=active)
+        # Bypass uv/Just synchronization when providing release credentials.
+        run([cli, "toolchain", "upgrade"], cwd=consumer, env=release_environment(active))
         upgraded = tomllib.loads((consumer / "pyproject.toml").read_text(encoding="utf-8"))
         cargo_pins = upgraded["tool"]["research-repo-tools"]["toolchain"]["cargo"]
         assert set(cargo_pins) == {"cargo-deny", "cargo-edit", "clippy-sarif", "git-cliff", "sarif-fmt"}

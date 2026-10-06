@@ -147,6 +147,7 @@ def parser() -> argparse.ArgumentParser:
     toolchain.add_parser("python-tools-check", help="check opt-in Python tool declarations, lock, and executable versions without changes")
     toolchain.add_parser("run", help="run a command with verified managed tools; never installs").add_argument("command", nargs=argparse.REMAINDER)
     toolchain.add_parser("sync", help="install and verify declared versions").add_argument("--dry-run", action="store_true")
+    toolchain.add_parser("sync-binaries", help="install and verify pinned release binaries without package synchronization or builds")
     toolchain.add_parser("upgrade", help="upgrade declared Cargo tools and release binaries, then publish verified pins").add_argument(
         "--dry-run", action="store_true"
     )
@@ -307,6 +308,8 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             check(settings.root)
         plan = toolchain_config.load(settings)
         runtime = toolchain.Runtime(plan)
+        if args.action == "sync-binaries":
+            return 0 if toolchain.report(runtime.sync_binaries()) else 1
         if args.action == "export":
             from research_repo_tools.ci import export_environment
 

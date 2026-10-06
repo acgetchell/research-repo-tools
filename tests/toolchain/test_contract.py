@@ -1,5 +1,6 @@
 """Synthetic tool state: no live installers, package registries, or Git mutations."""
 
+import hashlib
 import io
 import json
 import os
@@ -150,6 +151,61 @@ def test_missing_python_installed_before_rust(runtime):
     instance.sync()
     installs = [args for _, args, _ in fake.calls if "install" in args]
     assert installs[0] == ["python", "install", "--no-bin", "--no-registry", "==3.14.*,>=3.14"]
+
+
+def test_setup_subprocesses_withhold_release_credentials_and_run_preserves_them(runtime, monkeypatch):
+    instance, fake = runtime
+    monkeypatch.setenv("GITHUB_TOKEN", "synthetic-lookup-github")
+    monkeypatch.setenv("GH_TOKEN", "synthetic-lookup-gh")
+    monkeypatch.setenv("SDKROOT", "synthetic-native-sdk")
+    fake.python_available = False
+    setup_module = setup_fake(runtime, monkeypatch)
+    original_setup = setup_module.run_safe_command
+    original_tools = fake.run
+    children = []
+    code = "import os, sys; assert 'GITHUB_TOKEN' not in os.environ and 'GH_TOKEN' not in os.environ; assert os.environ['SDKROOT'] == 'synthetic-native-sdk'"
+
+    def verify_child(command, args, kwargs):
+        process.run_command(sys.executable, ["-I", "-X", "utf8", "-c", code], cwd=kwargs["cwd"], env=kwargs["env"])
+        children.append((command, args))
+
+    def tools(command, args, **kwargs):
+        verify_child(command, args, kwargs)
+        if args[:1] == ["-y"]:
+            fake.install_manager()
+            return subprocess.CompletedProcess([], 0)
+        return original_tools(command, args, **kwargs)
+
+    def setup(command, args, **kwargs):
+        verify_child(command, args, kwargs)
+        return original_setup(command, args, **kwargs)
+
+    monkeypatch.setattr(toolchain, "run_safe_command", tools)
+    monkeypatch.setattr(setup_module, "run_safe_command", setup)
+    # Exercise the real rustup installer path as well as Rust and Cargo installs.
+    installer_payload = b"synthetic rustup installer"
+    checksum = hashlib.sha256(installer_payload).hexdigest().encode()
+    monkeypatch.setattr(toolchain.urllib.request, "urlopen", lambda url, **_: io.BytesIO(checksum if url.endswith(".sha256") else installer_payload))
+    monkeypatch.setattr(instance, "_install_rustup", lambda: toolchain.Runtime._install_rustup(instance))
+    setup_module.setup(instance)
+    instance.sync()  # Warm managed setup still probes without credentials.
+    assert any(args[:2] == ["python", "install"] for _, args in children)
+    assert any(args[:1] == ["-y"] for _, args in children)
+    assert any("cargo" in args and "install" in args for _, args in children)
+    assert any(args[:1] == ["sync"] for _, args in children)
+    assert all(not any(name.upper() in {"GH_TOKEN", "GITHUB_TOKEN"} for name in kwargs["env"]) for _, _, kwargs in fake.calls)
+
+    def run(command, args, **kwargs):
+        if args == ["explicit-command"]:
+            assert kwargs["env"]["GITHUB_TOKEN"] == "synthetic-lookup-github"
+            assert kwargs["env"]["GH_TOKEN"] == "synthetic-lookup-gh"
+            return subprocess.CompletedProcess([], 0)
+        return tools(command, args, **kwargs)
+
+    monkeypatch.setattr(toolchain, "run_safe_command", run)
+    assert toolchain.run_command(instance, ["git-cliff", "explicit-command"]) == 0
+    assert os.environ["GITHUB_TOKEN"] == "synthetic-lookup-github"
+    assert os.environ["GH_TOKEN"] == "synthetic-lookup-gh"
 
 
 def test_failure_retains_completed_tools_and_rerun_recovers(runtime):

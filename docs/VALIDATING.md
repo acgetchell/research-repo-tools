@@ -116,6 +116,11 @@ and managed executable, and checks that old installations remain available.
 It also installs `clippy-sarif` and `sarif-fmt`, passes a small Cargo JSON diagnostic
 through the managed tools, and checks their failure statuses.
 The native setup check also probes managed Cargo deny, Gitleaks, and OSV-Scanner,
+installs the locked tooling package without release credentials, and invokes the
+installed isolated Python for authenticated cold and warm binary-only sync.
+Ordinary setup, dependency builds, and package synchronization use credential-free
+environments; authenticated upgrade invokes the installed CLI directly.
+It also
 checks a synthetic Gitleaks finding with redacted JSON/SARIF output, and parses an
 empty Cargo lockfile through OSV without advisory queries. It previews and applies
 cleanup inside the disposable managed store, then rechecks the retained tools.
