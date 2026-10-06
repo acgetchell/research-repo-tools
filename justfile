@@ -1,5 +1,7 @@
 set positional-arguments
 
+git_cliff_version := "2.14.2"
+
 # Network-backed advisory checks are separate from routine local validation.
 audit:
     uv run --locked --group audit python scripts/audit_dependencies.py
@@ -31,6 +33,20 @@ changelog-release tag date:
 
 alias changelog-unreleased := changelog-release
 
+# Install the pinned external generator through Cargo.
+changelog-setup:
+    cargo install git-cliff --version {{git_cliff_version}} --locked
+
+# Exercise generator contracts with the exact declared external version.
+changelog-test: changelog-tools-check
+    uv run --locked pytest tests/changelog/test_contract.py tests/changelog/test_cliff_template.py
+
+# Require the declared generator rather than silently skipping integration tests.
+[private]
+changelog-tools-check:
+    git-cliff --version
+    test "$(git-cliff --version)" = "git-cliff {{git_cliff_version}}"
+
 # Check the lockfile, Python linting, formatting, newlines, types, and workflows.
 check: newline-check workflow-check
     uv lock --check
@@ -39,6 +55,10 @@ check: newline-check workflow-check
 # Validate existing artifacts without rebuilding them (also used by native CI).
 check-dist:
     uv run --locked python scripts/check_install.py
+
+# Exercise only real changelog generation from existing wheel/sdist installations.
+check-dist-changelog: changelog-tools-check
+    uv run --locked python scripts/check_install.py --changelog-only
 
 # Install real tools and verify setup on disposable GitHub-hosted runners only.
 check-setup:
@@ -75,15 +95,35 @@ newline-check:
 
 # Read-only publication preflight; does not create or push a tag.
 release-check tag:
-    uv run --locked python scripts/check_release.py "$1"
+    uv run --locked research-repo-tools release check "$1"
+
+# Prepare a first release after verifying empty stable published history.
+release-first tag date:
+    uv run --locked research-repo-tools release update "$1" --first-release --date "$2"
 
 # Print release notes from the root changelog or an archive.
 release-notes tag:
     uv run --locked research-repo-tools changelog notes "$1"
 
+# Approve the reviewed draft GitHub Release and trigger registry publication.
+release-publish tag:
+    uv run --locked research-repo-tools release publish "$1" --approve
+
+# Create a local annotated release tag from validated notes (maintainer only).
+release-tag tag:
+    uv run --locked research-repo-tools changelog tag "$1"
+
+# Preview the release annotation without changing Git state.
+release-tag-preview tag:
+    uv run --locked research-repo-tools changelog tag "$1" --dry-run
+
 # Update release metadata using an explicit previous tag and UTC release date.
-release-update version previous date:
+release-update tag previous date:
     uv run --locked research-repo-tools release update "$1" --previous-release "$2" --date "$3"
+
+# Require the stable GitHub Release/assets and exact published registry version.
+release-verify tag *args:
+    uv run --locked research-repo-tools release verify "$@"
 
 # Review branch and local changes with CodeRabbit against a verified origin/main by default.
 review base="origin/main":
@@ -100,21 +140,6 @@ setup:
 # Synchronize the locked development environment.
 sync:
     uv sync --locked
-
-# Create a local annotated tag using tag-release.
-tag tag: (tag-release tag)
-
-# Explicitly replace an existing local annotated tag.
-tag-force tag:
-    uv run --locked research-repo-tools changelog tag "$1" --force
-
-# Preview the annotated tag without changing Git state.
-tag-preview tag:
-    uv run --locked research-repo-tools changelog tag "$1" --dry-run
-
-# Create a local annotated tag from validated release notes.
-tag-release tag:
-    uv run --locked research-repo-tools changelog tag "$1"
 
 # Run the Python test suite.
 test:
@@ -142,4 +167,5 @@ update-uv:
 # Run actionlint and zizmor with authenticated online audits when available.
 workflow-check:
     uv run --locked actionlint
-    uv run --locked research-repo-tools zizmor check
+    uv run --locked actionlint src/research_repo_tools/templates/publish-crates.yml
+    uv run --locked research-repo-tools zizmor check .github src/research_repo_tools/templates/publish-crates.yml

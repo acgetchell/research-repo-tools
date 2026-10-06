@@ -10,6 +10,7 @@ from typing import Literal, TypeIs, cast
 
 from research_repo_tools.release_policy import ReleasePolicy as ReleasePolicy
 from research_repo_tools.release_policy import ReleaseRule
+from research_repo_tools.release_publishing import PublishingSettings, parse_publishing
 
 __all__ = ["load", "parse"]
 
@@ -19,7 +20,8 @@ FIELDS = {
     "deps": {"pyproject", "justfile", "tools", "uv"},
     "semgrep": {"config", "fixtures", "namespace", "timeout", "cwd", "counts"},
     "release": {"date-policy", "final-changelog", "required-files", "exclude", "rules", "tag-policy"},
-    "changelog": {"formatter", "cliff-config", "owner", "repository"},
+    "changelog": {"formatter", "cliff-config", "owner", "repository", "dependency-bodies"},
+    "publishing": {"registry", "package", "repository", "required-checks", "required-assets"},
     "zizmor": {"persona", "timeout"},
 }
 
@@ -85,6 +87,13 @@ class ChangelogSettings:
     cliff_config: str | None = None
     owner: str | None = None
     repository: str | None = None
+    dependency_bodies: Literal["concise", "preserve"] = "concise"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.dependency_bodies, str) or self.dependency_bodies not in {"concise", "preserve"}:
+            raise ValueError("changelog.dependency-bodies must be concise or preserve")
+        if self.cliff_config is not None and self.dependency_bodies != "concise":
+            raise ValueError("changelog.dependency-bodies requires the shared template; remove cliff-config")
 
 
 @dataclass(frozen=True, slots=True)
@@ -103,6 +112,7 @@ class Config:
     changelog: ChangelogSettings = field(default_factory=ChangelogSettings)
     notebooks: NotebookSettings = field(default_factory=NotebookSettings)
     zizmor: ZizmorSettings = field(default_factory=ZizmorSettings)
+    publishing: PublishingSettings | None = None
 
     def path(self, value: str) -> Path:
         path = Path(value)
@@ -300,7 +310,9 @@ def parse(value: object, *, root: Path) -> Config:
             cliff_config=_optional_string(changelog, "cliff-config", "changelog"),
             owner=_optional_string(changelog, "owner", "changelog"),
             repository=_optional_string(changelog, "repository", "changelog"),
+            dependency_bodies=cast(Literal["concise", "preserve"], changelog.get("dependency-bodies", "concise")),
         ),
+        publishing=parse_publishing(_section(data, "publishing")) if "publishing" in data else None,
         notebooks=NotebookSettings(
             group=_string(notebooks.get("group", "notebook"), "notebooks.group"),
             cwd=_string(notebooks.get("cwd", "."), "notebooks.cwd"),

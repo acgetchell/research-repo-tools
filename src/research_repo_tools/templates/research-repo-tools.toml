@@ -24,6 +24,7 @@ repository = "__REPOSITORY__"
 # formatter = "rumdl.toml"
 # Optional custom git-cliff policy instead of the packaged template:
 # cliff-config = "cliff.toml"
+# dependency-bodies = "preserve" # Keep authored dependency detail with the shared template.
 
 [deps]
 pyproject = "pyproject.toml"

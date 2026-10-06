@@ -22,9 +22,8 @@ Run `just help` for the complete command list and arguments.
 | `just changelog-release TAG DATE` | Generate and archive a prospective release with an explicit ISO date |
 | `just changelog-unreleased TAG DATE` | Alias for `changelog-release` |
 | `just release-notes TAG` | Print notes from the root file or an archive |
-| `just tag TAG` | Forward to `tag-release`; create a local annotated tag |
-| `just tag-force TAG` | Explicitly replace an existing local tag |
-| `just tag-release TAG` | Create a local annotated tag from validated release notes |
+| `just release-tag TAG` | Create a local annotated tag from validated release notes |
+| `just release-tag-preview TAG` | Inspect the annotation without changing Git state |
 
 For a prospective-release preview, use
 `just changelog-preview --tag v1.2.0 --date YYYY-MM-DD`.
@@ -68,6 +67,19 @@ not delimit releases. Dependency bumps with `chore(deps)` or `chore(deps-*)`
 scopes share the Dependencies category; breaking migration instructions remain
 in the breaking-change summary.
 
+Set `changelog.dependency-bodies = "preserve"` to retain complete authored bodies
+and their release-note, changelog and comparison links in all dependency scopes.
+The default `"concise"` suppresses dependency bodies while retaining complete
+breaking descriptions. This explicit choice also applies to grouped bot updates;
+the package does not infer authorship or delete content by meaning. It changes
+only body inclusion in the common template, retaining categories, formatting,
+code spans/fences, dates, tags and links. Remove `cliff-config` before selecting
+`"preserve"`; unsupported values and conflicting template overrides fail clearly.
+After adopting the published package, remove the copied scope-specific
+template condition, declare owner/repository, select the shared body policy,
+and regenerate and review the history. Consumers retain configuration/wiring
+checks; the shared suite owns generic generation regressions.
+
 Normalization uses UTF-8 and LF, one final newline, consistent list markers,
 160-column prose reflow, intact Markdown links/code spans, and level-four
 entry headings beneath release categories. Breaking-change and pull-request
@@ -86,8 +98,8 @@ does not infer semantic equivalence, remove contextual excerpts, or rename title
 with invented follow-up suffixes. This supersedes the earlier promotion and
 contextual deduplication policy. Entry-local titles still use level-four Markdown
 headings, and clearly labeled PR/breaking summaries remain supported.
-All dependency bumps, including CI and development tools, remain concise entries
-in the separate Dependencies category.
+All dependency bumps, including CI and development tools, stay in the separate
+Dependencies category. The selected body policy controls their detail.
 
 `changelog.formatter` optionally names the consumer's rumdl configuration.
 Every generated root and archive candidate must pass both the fixing invocation

@@ -40,14 +40,17 @@ These recipes belong to this package's root justfile. Consumer setup and daily
 commands are documented in the [README](README.md#just-recipes).
 Run `just help`, `just help-workflows`, or
 `just` for the complete lexicographically sorted command list,
-including changelog recipes and aliases.
+including changelog and release recipes.
 
 | Recipe | Purpose |
 | --- | --- |
 | `just audit` | Audit locked Python dependencies against online vulnerability advisories |
 | `just build` | Build the wheel and source distribution |
+| `just changelog-setup` | Install the declared external git-cliff version with Cargo |
+| `just changelog-test` | Require the declared git-cliff version and test generator contracts |
 | `just check` | Check the lockfile, Python linting, formatting, newlines, types, and workflows |
 | `just check-dist` | Check isolated installations of existing build artifacts |
+| `just check-dist-changelog` | Test real changelog CLI generation from existing wheel and sdist installations |
 | `just check-setup` | Exercise real setup on disposable GitHub-hosted runners only |
 | `just ci` | Run checks, tests, builds, and installation checks for final review |
 | `just clean [ARGS...]` | Preview obsolete package-owned installs; pass `--apply` to remove them |
@@ -56,13 +59,18 @@ including changelog recipes and aliases.
 | `just help-workflows` | Alias for `help` |
 | `just install-check` | Build and check isolated installations |
 | `just newline-check` | Reject implicit newline translation in Python text-file writes |
-| `just release-check TAG` | Run the read-only PyPI publication preflight |
-| `just release-update VERSION PREVIOUS DATE` | Synchronize release metadata before generating notes |
+| `just release-check TAG` | Check final release metadata and generated notes |
+| `just release-first TAG DATE` | Prepare a first release after checking stable published history |
+| `just release-notes TAG` | Print reviewed generated release notes |
+| `just release-publish TAG` | Approve a validated draft GitHub Release and trigger its registry workflow |
+| `just release-tag TAG` | Create a local annotated release tag (maintainer only) |
+| `just release-tag-preview TAG` | Preview the release annotation without changing Git state |
+| `just release-update TAG PREVIOUS DATE` | Synchronize release metadata before generating notes |
+| `just release-verify TAG [ARGS...]` | Verify the exact registry version and GitHub Release/assets |
 | `just review [base]` | Run opt-in CodeRabbit review of branch and local changes |
 | `just review-uncommitted` | Run opt-in CodeRabbit review of local changes only |
 | `just setup` | Install user Just and synchronize the declared development environment |
 | `just sync` | Synchronize the locked development environment |
-| `just tag-preview TAG` | Preview the annotated release tag without changing Git state |
 | `just test` | Run the Python test suite |
 | `just update` | Upgrade tools, then Python dependencies and the development environment |
 | `just update-dependencies` | Run the Python dependency workflow |
@@ -72,8 +80,7 @@ including changelog recipes and aliases.
 | `just workflow-check` | Run actionlint and shared zizmor audits with reported authentication policy |
 
 The maintainer justfile also exposes the [shared changelog recipes](README.md#just-recipes).
-Its `just release-check TAG` performs the package publication preflight;
-the consumer recipe `just release-check` validates consumer release metadata.
+Root and consumer `just release-check TAG` use the same final metadata/notes contract.
 
 Use `just check` while iterating, with targeted regressions when
 a behavioral change needs verification. Run `just ci` once the
@@ -151,7 +158,12 @@ just changelog-preview
 just changelog
 ```
 
-These commands require git-cliff. Run them after committing substantive changes
+These commands require git-cliff. With Cargo on PATH, run `just changelog-setup`
+to install the version declared once in the root Justfile. CI and native setup
+fixtures use that same pin. `just changelog-test` rejects a missing or mismatched
+generator before running its contracts, and `just check-dist-changelog` adds
+only the installed generation checks against existing distributions.
+Run generation after committing substantive changes
 when preparing release notes, then review and commit the generated file.
 Uncommitted changes cannot appear in a changelog generated from Git history.
 Generation includes the shared normalization and validation steps.
@@ -216,8 +228,8 @@ Follow [AGENTS.md](AGENTS.md): agents must not run mutating Git commands in this
 or consumer repositories. Leave staging, commits, tags, pushes, and branch changes
 to the user. Tests exercise Git mutations only in disposable fixtures. Source
 repositories remain read-only. Package publication requires an explicit request;
-follow [Releasing research-repo-tools](docs/RELEASING.md) for account setup, review, tagging,
-and deployment approval.
+follow [Releasing research-repo-tools](docs/RELEASING.md) for review, tagging
+and deployment approval. Keep one-time account setup in the maintainer's private task.
 
 ## Common Windows issues and how to avoid them
 

@@ -150,3 +150,29 @@ Do not remove benchmark generation, evidence selection, scientific validation,
 or publication workflows. Validate the installed release with the real consumer
 configuration before deleting the duplicate helpers and their exclusive tests.
 Package publication and downstream adoption are separate changes.
+
+## Shared release commands
+
+Adopt the exact published package containing these contracts before changing
+consumer deployment. Keep an exact registry pin and consumer lock; account setup
+belongs in the maintainer's private task. Consumer registration and live
+publication follow package adoption.
+
+| Previous surface | Canonical replacement |
+| --- | --- |
+| Untagged `release-check` recipe | `release-check TAG` with final notes/metadata validation |
+| `tag`, `tag-release` | `release-tag TAG` |
+| `tag-preview` | `release-tag-preview TAG` |
+| `tag-force` recipe | Removed; never move a published release tag |
+| Metadata-only release update variants | `release-update TAG PREVIOUS DATE` |
+| Transitional manual `publish` / Cargo upload | `release-publish TAG`, then approve the OIDC workflow |
+| Local Cargo info / registry-only checks | `release-verify TAG` for exact registry and GitHub state |
+
+Retain consumer preparation, required assets, scientific checks, feature/MSRV
+policy, crate selection and dependency ordering. Extend the shared workflow
+example there. Remove manual uploads from repeat-release guides after adoption;
+initial crate registration remains a distinct consumer setup decision. The
+package's root guide and packaged guide use the same ordered operational commands.
+
+For dependency-body configuration, see the
+[changelog guide](GENERATING_CHANGELOGS.md).

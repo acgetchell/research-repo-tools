@@ -42,7 +42,7 @@ body = """
             [`{{ commit.id | truncate(length=7, end="") }}`]\
             (https://github.com/{{ remote.github.owner }}/{{ remote.github.repo }}\
             /commit/{{ commit.id }})
-        {%- if commit.body and group != "Dependencies" %}
+        {%- if __DEPENDENCY_BODY_CONDITION__ %}
 
         {{ commit.body | indent(prefix="  ", first=true) }}
         {%- endif %}

@@ -13,7 +13,7 @@ from research_repo_tools.process import run_git_command, run_safe_command
 pytestmark = pytest.mark.skipif(shutil.which("git-cliff") is None, reason="external git-cliff is required for template rendering")
 
 
-def render(tmp_path: Path, message: str) -> str:
+def render(tmp_path: Path, message: str, *, dependency_bodies: str = "concise") -> str:
     # An empty range reads the existing checkout; --with-commit only adds
     # messages to git-cliff's input and never creates Git objects or refs.
     root = Path(__file__).resolve().parents[2]
@@ -22,7 +22,9 @@ def render(tmp_path: Path, message: str) -> str:
     if run_git_command(["--no-pager", "rev-parse", "--verify", "HEAD"], cwd=root, check=False).returncode:
         pytest.skip("custom commit parsing requires an existing HEAD")
     configuration = tmp_path / "cliff.toml"
-    configuration.write_text(template("cliff.toml", owner="example", repository="consumer"), encoding="utf-8", newline="\n")
+    configuration.write_text(
+        template("cliff.toml", owner="example", repository="consumer", dependency_bodies=dependency_bodies), encoding="utf-8", newline="\n"
+    )
     arguments = ["--offline", "--no-exec", "--config", str(configuration)]
     arguments += ["--with-commit", message, "--with-commit", "fix: retain linked entry (#987)", "HEAD..HEAD"]
     result = run_safe_command("git-cliff", arguments, cwd=root, check=False)
@@ -113,6 +115,40 @@ def test_dependency_scopes_share_one_category(tmp_path: Path, scope: str) -> Non
     assert "Bump pytest from 9.0 to 9.1" in dependencies
     assert "Dependency release details." not in result
     assert "### Maintenance" not in result
+
+
+@pytest.mark.parametrize("scope", ["deps", "deps-dev", "deps-ci"])
+def test_preserved_dependency_bodies_keep_authored_links_and_code(tmp_path: Path, scope: str) -> None:
+    body = (
+        "Ruff [release notes](https://github.com/astral-sh/ruff/releases/tag/0.16.9).\n"
+        "Ty [comparison](https://github.com/astral-sh/ty/compare/0.0.83...0.0.84).\n"
+        "setuptools [changelog](https://setuptools.pypa.io/en/latest/history.html).\n\n"
+        "Use `Result<T>` instead of <Legacy>.\n\n```rust\nfn value<T>() -> Result<T, E>;\n```"
+    )
+    message = f"chore({scope}): bump authored tools\n\n{body}"
+    result = render(tmp_path, message, dependency_bodies="preserve")
+    assert "### Dependencies" in result and "### Maintenance" not in result
+    assert "Ruff [release notes]" in result and "Ty [comparison]" in result and "setuptools [changelog]" in result
+    assert "Use `Result<T>` instead of &lt;Legacy&gt;." in result
+    assert "fn value<T>() -> Result<T, E>;" in result
+    assert result == render(tmp_path, message, dependency_bodies="preserve")
+
+
+def test_preserve_policy_retains_grouped_update_detail_and_empty_bodies(tmp_path: Path) -> None:
+    message = "chore(deps): bump the tooling group with 2 updates\n\nRetain both authored comparisons:\n- [first](https://example.com/compare/1...2)\n- [second](https://example.com/releases/2)"
+    assert "Retain both authored comparisons" in render(tmp_path, message, dependency_bodies="preserve")
+    assert "Retain both authored comparisons" not in render(tmp_path, message)
+    assert "Bump empty tool" in render(tmp_path, "chore(deps-dev): bump empty tool", dependency_bodies="preserve")
+
+
+def test_preserve_policy_keeps_full_breaking_descriptions(tmp_path: Path) -> None:
+    result = render(
+        tmp_path,
+        "chore(deps-dev)!: bump toolkit\n\n[Notes](https://example.com/releases/2)\n\nBREAKING CHANGE: Return `Result<T>`.\nMigrate explicitly.",
+        dependency_bodies="preserve",
+    )
+    assert "### ⚠️ Breaking Changes\n\n- Return `Result<T>`.\n  Migrate explicitly." in result
+    assert "[Notes](https://example.com/releases/2)" in result
 
 
 def test_breaking_dependency_scope_retains_migration_instructions(tmp_path: Path) -> None:

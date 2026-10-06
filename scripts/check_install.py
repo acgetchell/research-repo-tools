@@ -170,7 +170,7 @@ def check_update_bootstrap(consumer: Path, uv: str, just: Path, env: dict[str, s
     assert "intentionally_missing_native_backend" in result.stderr, result.stderr
 
 
-def check(dist: Path) -> None:
+def check(dist: Path, *, changelog_only: bool = False) -> None:
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     version = metadata["project"]["version"]
     expected_just = next(item.removeprefix("rust-just==") for item in metadata["project"]["dependencies"] if item.startswith("rust-just=="))
@@ -194,6 +194,8 @@ def check(dist: Path) -> None:
     uv = shutil.which("uv")
     if uv is None:
         raise RuntimeError("uv must be installed to check distributions")
+    if changelog_only and shutil.which("git-cliff") is None:
+        raise RuntimeError("git-cliff must be installed for changelog-only distribution checks")
     # Keep network settings, but never let the caller redirect these
     # temporary consumers into another project, environment, or working directory.
     external_locations = {
@@ -224,6 +226,17 @@ def check(dist: Path) -> None:
             python = scripts / ("python.exe" if os.name == "nt" else "python")
             run([uv, "pip", "install", "--python", str(python), str(artifact)], cwd=consumer, env=env)
             local_env = {**env, "PATH": str(scripts) + os.pathsep + env.get("PATH", "")}
+            publishing_suite = consumer / "public_publishing_consumer.py"
+            publishing_suite.write_bytes((ROOT / "tests/releases/public_publishing_consumer.py").read_bytes())
+            if changelog_only:
+                run_isolated(
+                    python,
+                    [str(publishing_suite), "TestPublishingConsumer.test_installed_cli_generation_with_real_external_generator"],
+                    cwd=consumer,
+                    env=local_env,
+                )
+                print(f"PASS: installed {name} changelog CLI with real git-cliff")
+                continue
             run_isolated(python, ["-c", BASE_SMOKE, str(ROOT)], cwd=consumer, env=local_env)
             notebook_suite = consumer / "public_notebook_consumer.py"
             notebook_suite.write_bytes((ROOT / "tests/notebooks/public_notebook_consumer.py").read_bytes())
@@ -239,6 +252,7 @@ def check(dist: Path) -> None:
             release_suite = consumer / "public_release_consumer.py"
             release_suite.write_bytes((ROOT / "tests/releases/public_release_consumer.py").read_bytes())
             run_isolated(python, [str(release_suite)], cwd=consumer, env=local_env)
+            run_isolated(python, [str(publishing_suite)], cwd=consumer, env=local_env)
             performance_suite = consumer / "public_performance_consumer.py"
             performance_suite.write_bytes((ROOT / "tests/performance/public_performance_consumer.py").read_bytes())
             run_isolated(python, [str(performance_suite)], cwd=consumer, env=local_env)
@@ -410,9 +424,10 @@ def check(dist: Path) -> None:
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dist", type=Path, default=ROOT / "dist")
+    parser.add_argument("--changelog-only", action="store_true", help="require git-cliff and run only installed CLI generation against both distributions")
     args = parser.parse_args()
     try:
-        check(args.dist.resolve())
+        check(args.dist.resolve(), changelog_only=args.changelog_only)
     except subprocess.CalledProcessError as error:
         print(error.stdout or "")
         print(error.stderr or "")
