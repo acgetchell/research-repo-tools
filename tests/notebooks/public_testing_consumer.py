@@ -58,7 +58,9 @@ class TestNotebookProject(unittest.TestCase):
             "assert 'prior_run' not in globals()\nprior_run = True\n"
             "assert 'RRT_TEST_REMOVE' not in os.environ\n"
             "print(json.dumps({'python': sys.executable, 'cwd': str(Path.cwd()), 'input': Path('input.bin').read_bytes().hex(), "
-            "'value': os.environ['RRT_TEST_VALUE'], 'backend': os.environ['MPLBACKEND']}))\n"
+            "'value': os.environ['RRT_TEST_VALUE'], 'backend': os.environ['MPLBACKEND'], "
+            "'history': str(get_ipython().history_manager.hist_file), "
+            "'history_files': [p.name for p in Path(os.environ['IPYTHONDIR']).rglob('history.sqlite*')]}))\n"
         )
         inputs = self.source / "work/input.bin"
         inputs.parent.mkdir()
@@ -85,6 +87,9 @@ class TestNotebookProject(unittest.TestCase):
                     self.assertEqual(Path(observed["cwd"]), project.root / "work")
                     self.assertEqual(observed["input"], inputs.read_bytes().hex())
                     self.assertEqual((observed["value"], observed["backend"]), ("分析 value", "Agg"))
+                    self.assertEqual(observed["history"], ":memory:")
+                    self.assertEqual(observed["history_files"], [])
+                    self.assertEqual(list(project.artifacts.glob("research-notebook-*")), [])
                     self.assertEqual(result.source.read_bytes(), original)
                 self.assertEqual(dict(os.environ), before)
             self.assertFalse(workspace.exists())
