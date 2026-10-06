@@ -1,20 +1,188 @@
 """Public capability contracts, repeated from isolated wheel/sdist environments."""
 
 import importlib.metadata
+import io
 import json
 import os
 import subprocess
 import tempfile
 import unittest
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from unittest.mock import patch
 
 from research_repo_tools import config, python_baseline, security, semgrep_scan
+from research_repo_tools.cli import main
 from research_repo_tools.semgrep_docs import rust_blocks
 from research_repo_tools.toolchain_config import load
 
 
 class TestSharedCapabilities(unittest.TestCase):
+    def test_cli_findings_are_actionable_once_per_scan_and_never_echo_matches(self):
+        for scanner in ("osv", "secrets", "semgrep"):
+            for behavior, expected in (
+                ("findings", 1),
+                ("clean", 0),
+                ("error", 23),
+                ("malformed", 1),
+                ("malformed-json", 23),
+                ("missing-json", 23),
+                ("timeout", 124),
+            ):
+                with self.subTest(scanner=scanner, behavior=behavior), tempfile.TemporaryDirectory(prefix="scan café ") as directory:
+                    root = Path(directory).resolve()
+                    (root / "uv.lock").write_bytes(b"version=1\n")
+                    (root / "source café.py").write_bytes(b"value = 1\n")
+                    settings = config.parse({"semgrep": {"config": "rules.yml"}}, root=root)
+                    fallback = behavior in {"malformed-json", "missing-json"}
+                    found = behavior == "findings" or fallback
+
+                    def native(binary, args, **kwargs):
+                        if behavior == "timeout":
+                            raise subprocess.TimeoutExpired("scanner", 600, output=b"RAW_SECRET", stderr=b"RAW_SECRET")
+                        flag = "--output-file" if scanner == "osv" else "--report-path" if scanner == "secrets" else "--output"
+                        destination = Path(args[args.index(flag) + 1])
+                        fmt = (
+                            args[args.index("--format") + 1]
+                            if scanner == "osv"
+                            else args[args.index("--report-format") + 1]
+                            if scanner == "secrets"
+                            else "json"
+                            if "--json" in args
+                            else "sarif"
+                        )
+                        if fallback and fmt == "json":
+                            if behavior == "malformed-json":
+                                destination.write_bytes(b"malformed MATCH_SECRET")
+                            return subprocess.CompletedProcess([], 23, b"RAW_SECRET", b"RAW_SECRET")
+                        sarif = {
+                            "version": "2.1.0",
+                            "runs": [
+                                {
+                                    "tool": {},
+                                    "results": [
+                                        {
+                                            "ruleId": "FAKE-RULE",
+                                            "message": {"text": "MESSAGE_SECRET"},
+                                            "locations": [
+                                                {
+                                                    "physicalLocation": {
+                                                        "artifactLocation": {"uri": "source café.py"},
+                                                        "region": {"startLine": 7, "snippet": {"text": "REDACTED"}},
+                                                    }
+                                                }
+                                            ],
+                                            "partialFingerprints": {"commitMessage": "COMMIT_SECRET"},
+                                        }
+                                    ]
+                                    if found
+                                    else [],
+                                }
+                            ],
+                        }
+                        if fmt == "sarif":
+                            value = sarif
+                        elif scanner == "osv":
+                            value = {
+                                "results": [
+                                    {
+                                        "source": {"path": str(root / "uv.lock")},
+                                        "packages": [
+                                            {
+                                                "package": {"name": "fixture", "version": "1.2.3"},
+                                                "vulnerabilities": [{"id": "FAKE-VULN", "summary": "SUMMARY_SECRET"}] if found else [],
+                                            }
+                                        ],
+                                    }
+                                ]
+                            }
+                        elif scanner == "secrets":
+                            value = (
+                                [
+                                    {
+                                        "RuleID": "FAKE-RULE",
+                                        "File": "source café.py",
+                                        "StartLine": 7,
+                                        "Secret": "REDACTED",
+                                        "Match": "MATCH_SECRET",
+                                        "Message": "COMMIT_SECRET",
+                                        "Description": "DESCRIPTION_SECRET",
+                                        "Fragment": "FRAGMENT_SECRET",
+                                    }
+                                ]
+                                if found
+                                else []
+                            )
+                        else:
+                            value = {
+                                "results": [
+                                    {
+                                        "check_id": "FAKE-RULE",
+                                        "path": str(root / "source café.py"),
+                                        "start": {"line": 7},
+                                        "end": {"line": 7},
+                                        "extra": {"message": "MESSAGE_SECRET", "lines": "MATCH_SECRET"},
+                                    }
+                                ]
+                                if found
+                                else [],
+                                "errors": [],
+                                "paths": {"scanned": [str(root / "source café.py")]},
+                            }
+                        destination.write_bytes(b"malformed" if behavior == "malformed" else json.dumps(value).encode())
+                        return subprocess.CompletedProcess([], 23 if behavior == "error" else 0, b"RAW_SECRET", b"RAW_SECRET")
+
+                    stdout, stderr = io.StringIO(), io.StringIO()
+                    with (
+                        patch("research_repo_tools.cli.config.load", return_value=settings),
+                        patch.object(security, "security_inventory", return_value=("uv.lock", "source café.py")),
+                        patch.object(semgrep_scan, "security_inventory", return_value=("source café.py",)),
+                        patch.object(security, "_binary", return_value=(root / "scanner", {})),
+                        patch.object(semgrep_scan, "resolve_executable", return_value=root / "scanner"),
+                        patch.object(security, "run_git_bytes", return_value=subprocess.CompletedProcess([], 0, b"false\n", b"")),
+                        patch.object(security, "run_command_bytes", side_effect=native),
+                        redirect_stdout(stdout),
+                        redirect_stderr(stderr),
+                    ):
+                        command = (
+                            ["semgrep", "scan", "--include", "*.py"]
+                            if scanner == "semgrep"
+                            else ["security", scanner, *(["uv.lock"] if scanner == "osv" else [])]
+                        )
+                        self.assertEqual(main(["--root", str(root), *command]), expected)
+                    output = stdout.getvalue() + stderr.getvalue()
+                    self.assertNotIn("_SECRET", output)
+                    if found:
+                        self.assertIn("1 finding(s)", output)
+                        self.assertIn("exit 1", output)
+                        self.assertNotIn("exit 0", output)
+                        self.assertIn(".sarif", output)
+                        if fallback:
+                            self.assertIn("exit 23", output)
+                            self.assertEqual(list((root / "target").rglob("*.json")), [])
+                            self.assertEqual(len(list((root / "target").rglob("*.sarif"))), 2 if scanner == "secrets" else 1)
+                        else:
+                            self.assertIn(".json", output)
+                        if scanner == "osv" and not fallback:
+                            self.assertIn("uv.lock", output)
+                            self.assertIn("fixture", output)
+                            self.assertIn("1.2.3", output)
+                            self.assertEqual(output.count("FAKE-VULN"), 1)
+                        else:
+                            self.assertIn("source café.py", output)
+                            self.assertIn(":7", output)
+                            self.assertEqual(output.count("FAKE-RULE"), 2 if scanner == "secrets" else 1)
+                            if scanner == "secrets":
+                                self.assertIn("Gitleaks (history)", output)
+                                self.assertIn("Gitleaks (working tree)", output)
+                    elif behavior in {"clean", "error"}:
+                        self.assertIn("0 finding(s)", output)
+                        self.assertIn(f"exit {expected}", output)
+                    elif behavior == "timeout":
+                        self.assertIn("timed out", output)
+                    else:
+                        self.assertIn("no report published", output)
+
     def test_report_directories_reject_links_before_mutation(self):
         with tempfile.TemporaryDirectory(prefix="report links ") as directory:
             root = Path(directory).resolve()

@@ -1,0 +1,42 @@
+# Select real full_id values, commands and inventories in the consumer.
+# Include every build input, dependency resolution file and toolchain declaration
+# needed by the common harness and gate, including any gate support modules.
+# Both checkouts receive these current files.
+schema = 2
+sources = ["Cargo.toml", "src/**/*.rs"]
+harness = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "benches/**/*.rs", "tests/benchmark_inputs.rs"]
+sample-count = 100
+statistics = ["mean", "median"]
+confidence-level = 0.95
+compatible = ["context.os", "context.architecture", "context.cpu"]
+
+[dependencies]
+criterion = "Cargo.lock"
+
+[probes]
+rustc = ["rustc", "--version", "--verbose"]
+
+[phases.baseline]
+command = ["cargo", "bench", "--locked", "--bench", "timings"]
+gate = ["cargo", "test", "--locked", "--test", "benchmark_inputs"]
+expected = ["library/workload", "reference/workload"]
+
+[phases.current]
+command = ["cargo", "bench", "--locked", "--bench", "timings", "--", "library/"]
+gate = ["cargo", "test", "--locked", "--test", "benchmark_inputs"]
+expected = ["library/workload"]
+
+[[series]]
+name = "Library baseline"
+phase = "baseline"
+rows = { workload = "library/workload" }
+
+[[series]]
+name = "Library current"
+phase = "current"
+rows = { workload = "library/workload" }
+
+[[series]]
+name = "Reference (baseline measurement)"
+phase = "baseline"
+rows = { workload = "reference/workload" }

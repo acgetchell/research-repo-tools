@@ -6,6 +6,11 @@ should pin an exact released version in their uv development dependencies.
 Patch releases preserve these contracts; a minor release may introduce a
 documented breaking change while the package remains below `1.0`.
 
+The [complete-run and host APIs](complete-run-api.md) extend the performance
+contracts with common-harness plans, raw sample retention, named phase series,
+immutable runs, host observations and profiling declarations. Consumer usage
+and release availability are described in the [README](../README.md#common-harness-and-complete-runs).
+
 ## Consumer just recipes
 
 The [packaged justfile template](../src/research_repo_tools/templates/justfile)

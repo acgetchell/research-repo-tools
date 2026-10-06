@@ -4,6 +4,8 @@ These additions belong to the coordinated v0.1.4 extraction. Availability in the
 working tree does not mean that release has been published. Consumer commands
 and configuration examples are in the [README](../README.md#configured-benchmark-workflows).
 The [MCMC ownership map](mcmc-extraction.md) defines the first adoption gate.
+Schema-2 common-harness measurement, complete-run retention and reusable host/
+profiling capture are described in the [complete-run contract](complete-run-api.md).
 
 ## Measurement and pair selection
 
@@ -43,7 +45,7 @@ fail. Inventories are sorted and deduplicated. Optional fields follow the packag
 
 `capture_provenance(root, config, tag, *, mode)` captures HEAD, versioned source
 and harness fingerprints, complete inventories, host OS/architecture/available
-CPU, exact command, probes, dependencies, mode, and release. Missing CPU identity
+CPU, versioned host counts/memory, exact command, probes, dependencies, mode, and release. Missing CPU identity
 stays unknown. `measure_checkout` additionally executes the trusted command with
 live inherited streams, collects the configured Criterion sample, and rejects
 changes to captured inputs or metadata. The sample must be absent before the

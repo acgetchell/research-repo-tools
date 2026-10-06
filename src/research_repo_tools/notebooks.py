@@ -267,6 +267,9 @@ def _execute(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str]
     client = nbclient.NotebookClient(
         node,
         km=km,
+        # nbclient supplies this default only for standard Python kernel names.
+        # Our project kernel must also avoid a disk history database on Windows.
+        extra_arguments=["--HistoryManager.hist_file=:memory:"],
         timeout=timeout,
         startup_timeout=60,
         allow_errors=False,

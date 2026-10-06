@@ -20,7 +20,7 @@ type RunKwargs = dict[str, Any]
 type ExceptionFamily = tuple[type[BaseException], ...]
 
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300.0
-_GENERIC_CPU_NAMES = frozenset({"amd64", "arm", "arm64", "aarch64", "i386", "i686", "unknown", "x86_64"})
+_GENERIC_CPU_NAMES = frozenset({"amd64", "arm", "arm64", "aarch64", "i386", "i686", "unavailable", "unknown", "x86_64"})
 
 __all__ = [
     "ExecutableNotFoundError",
@@ -391,9 +391,12 @@ def cpu_description() -> str:
     }
     model_factory = model_by_system.get(platform.system())
     model = "" if model_factory is None else model_factory()
+    unknown = _GENERIC_CPU_NAMES | {machine.casefold()}
+    if model.casefold() in unknown:
+        model = ""
 
     processor = platform.processor().strip()
-    if not model and processor.casefold() not in _GENERIC_CPU_NAMES:
+    if not model and processor.casefold() not in unknown:
         model = processor
     if not model:
         return "unavailable"

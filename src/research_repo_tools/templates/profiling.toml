@@ -1,0 +1,12 @@
+schema = 1
+cargo-manifest = "Cargo.toml"
+rust-toolchain = "rust-toolchain.toml"
+
+[context]
+cargo-profile = "perf"
+filter = "All benchmarks"
+mode = "production"
+
+[probes]
+cargo = ["cargo", "--version"]
+rustc = ["rustc", "--version", "--verbose"]

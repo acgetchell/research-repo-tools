@@ -115,3 +115,49 @@ regressions here. Native Linux/macOS/Windows checks and wheel/sdist checks belon
 to this package's existing CI matrix. A local run is not evidence that the other
 platforms or a migrated consumer passed. Release and adoption completion remain
 necessary before closing the parent extraction issue's published-package acceptance.
+
+## Common harness and host adoption
+
+Issues #64 and #75 target the schema-2 measurement/report and versioned host
+contracts in the [complete-run API](complete-run-api.md). Pin an exact PyPI
+release containing these contracts (target v0.1.8), then test the consumer before
+retiring working implementations. The installed suite uses a small representative
+common-harness fixture with a substituted Cargo lock/toolchain, independent input
+gates and a baseline-only reference. It is not proof of la-stack or delaunay
+adoption, nor a replacement for native package jobs.
+
+| Consumer surface | Shared replacement | Consumer responsibility |
+| --- | --- | --- |
+| la-stack `archive_performance.py`: shared harness installation, phase processes and source checks | `CommonHarnessPlan`, `measure_pair`, schema-2 measurement configuration | Rational/exact API adaptations, eligible release selection, benchmark commands and expected IDs |
+| la-stack `criterion_measurements.py`: sample arrays and mean/median intervals | `CompletePolicy`, `CompleteCase`, `collect_complete_sample` | Scientific benchmark-input assertions and interpretation |
+| la-stack `benchmark_summaries.py`: complete rows, immutable histories and latest lookup | `CompleteRun`, `RunSeries`, schema-2 report plans, `load_latest_run` | Selected labels, original legacy schemas and explicit conversions |
+| la-stack `release_baseline.py`: generic command/provenance/asset plumbing | Existing process, release-asset and measurement APIs | Release job policy, domain benchmark selection and any legacy writer still required by old releases |
+| delaunay `hardware_utils.py`: host and tool detection | `capture_host`, `HostMetadata`, `parse_host` | Historical text parsing, hardware compatibility decisions, tolerances and warning prose |
+| delaunay `scripts/ci/capture_profiling_metadata.sh`: tool probes and native TOML parsing | Profiling configuration, `capture_profile`, explicit CLI output | Profiling mode/filter, CI labels and workflow composition |
+| Benchmark provenance callers | `measurement.capture_provenance` with the same host capture | Source/harness inventories, required compatibility fields and historical interpretation |
+
+Existing CSV/JSON, fingerprints, reports and figures remain at their original
+paths. Schema-1 comparison evidence does not become a complete run: it lacks raw
+samples and may lack statistics or phase identities. Do not synthesize those
+fields, attach current host data to old evidence, or promote an old digest into
+the new framing. Legacy conversions retain their explicit origin hashes and
+schema names using the existing adapter; they do not claim complete-run status.
+
+### Plotting disposition
+
+The optional multi-series coordinate/dimension plot is deferred. The second
+consumer's host/profiling use case does not establish a shared coordinate
+contract. Named series and selected report tables are shared now. A small
+consumer renderer reads `validate_run_evidence`, obtains each series' originating
+phase, and selects its `CompleteCase.estimate` values. It owns coordinate
+extraction, axis labels, domain-specific series styling and existing figure paths.
+Pre-render its figures and prose and compose them with retained evidence through
+`publication.plan_outputs` in one publication transaction. No consumer names,
+matrix dimensions, nalgebra or faer dispatch belong in the shared runtime.
+
+Generic sample/identity, source/harness mismatch, gate failure, immutable retention,
+pointer corruption, rollback and cross-platform probe regressions belong here.
+Consumers keep focused tests proving their actual pinned release, native
+toolchain, expected full IDs, scientific gates, compatibility adapters and legacy
+artifact preservation. Publication and the Linux/macOS/Windows package jobs are
+required before declaring downstream extraction complete.

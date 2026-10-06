@@ -42,7 +42,12 @@ def add_commands(groups) -> None:
     fetch.add_argument("url")
     fetch.add_argument("destination")
     fetch.add_argument("--sha256", required=True)
+    host = commands.add_parser("host", help="capture versioned host observations without compatibility policy")
+    host.add_argument("--output", required=True)
     add_command(commands, "measure")
+    profile = commands.add_parser("profile", help="capture configured profiling context and native Rust/Cargo declarations")
+    profile.add_argument("configuration")
+    profile.add_argument("--output", required=True)
     add_command(commands, "promote")
     publish = commands.add_parser("publish", help="publish a marked document section and figures from verified retained evidence")
     publish.add_argument("configuration", help="publication TOML path relative to the consumer root")
@@ -65,7 +70,30 @@ def run(args: argparse.Namespace, settings: Config) -> int:
 
     if args.action in performance_workflows.COMMANDS:
         return performance_workflows.run(args, settings)
-    if args.action == "publish":
+    if args.action in {"host", "profile"}:
+        from research_repo_tools.files import _validate_distinct_paths
+        from research_repo_tools.host_metadata import capture_host, capture_profile, serialize_host
+        from research_repo_tools.publication import _path
+
+        output = _path(settings.root, args.output)
+        if args.action == "profile":
+            import tomllib
+
+            raw = tomllib.loads(_path(settings.root, args.configuration).read_text(encoding="utf-8"))
+            protected = [args.configuration, *(raw[key] for key in ("rust-toolchain", "cargo-manifest") if isinstance(raw.get(key), str))]
+            if isinstance(raw.get("measurement"), str):
+                from research_repo_tools.measurement import load_measurement
+                from research_repo_tools.publication import _inventory
+
+                selected = load_measurement(settings.root, raw["measurement"])
+                protected.extend((raw["measurement"], *_inventory(settings.root, selected.sources), *_inventory(settings.root, selected.harness)))
+            protected = list(dict.fromkeys(protected))
+            _validate_distinct_paths((output, *(_path(settings.root, name) for name in protected)))
+            data = capture_profile(settings.root, args.configuration)
+        else:
+            data = serialize_host(capture_host(settings.root))
+        replace_many({output: data})
+    elif args.action == "publish":
         from research_repo_tools.publication import preview_publication, publish_publication
         from research_repo_tools.publication_config import load_publication
 
@@ -110,9 +138,15 @@ def run(args: argparse.Namespace, settings: Config) -> int:
                     raise ValueError("comparison output must be outside both Criterion input roots")
         else:
             retained = evidence.load_evidence(settings.path(args.payload), settings.path(args.manifest))
-            if retained.payload_schema != criterion.COMPARISON_SCHEMA:
+            from research_repo_tools.complete_runs import RUN_SCHEMA, render_run
+
+            if retained.payload_schema not in {criterion.COMPARISON_SCHEMA, RUN_SCHEMA}:
                 raise ValueError(f"render requires {criterion.COMPARISON_SCHEMA}; use the consumer adapter for {retained.payload_schema}")
-            output = criterion.render_comparison(criterion.parse_comparison(retained.payload)).encode("utf-8")
+            output = (
+                render_run(retained)
+                if retained.payload_schema == RUN_SCHEMA
+                else criterion.render_comparison(criterion.parse_comparison(retained.payload)).encode("utf-8")
+            )
             if args.output and any(_paths_alias(settings.path(args.output), settings.path(path)) for path in (args.payload, args.manifest)):
                 raise ValueError("render output must be distinct from retained evidence inputs")
         if args.output:

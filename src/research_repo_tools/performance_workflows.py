@@ -7,7 +7,7 @@ from pathlib import Path
 from research_repo_tools import criterion, evidence, release_assets
 from research_repo_tools.config import Config
 from research_repo_tools.files import _validate_distinct_paths
-from research_repo_tools.measurement import load_measurement, measure_checkout, measure_pair, resolve_revision
+from research_repo_tools.measurement import MeasurementConfig, load_measurement, measure_checkout, measure_pair, resolve_revision
 from research_repo_tools.performance_reports import render_report
 from research_repo_tools.publication import _inventory, _path
 from research_repo_tools.release_pairs import resolve_pair
@@ -118,6 +118,8 @@ def run(args: argparse.Namespace, settings: Config) -> int:
         if resolve_revision(root, "HEAD") != resolve_revision(root, tag):
             raise ValueError("baseline packaging requires HEAD at the selected existing tag")
         config = load_measurement(root, args.configuration)
+        if not isinstance(config, MeasurementConfig):
+            raise ValueError("baseline assets require schema-1 measurement; retain complete runs through measure/promote")
         from research_repo_tools.process import run_git_bytes
         from research_repo_tools.publication import verify_tagged_files
 

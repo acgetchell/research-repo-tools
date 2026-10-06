@@ -1,0 +1,4 @@
+schema = 2
+current = "docs/complete-performance.md"
+archive = "docs/performance-runs"
+title = "Benchmark timings"

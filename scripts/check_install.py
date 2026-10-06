@@ -245,6 +245,9 @@ def check(dist: Path) -> None:
             workflows_suite = consumer / "public_workflows_consumer.py"
             workflows_suite.write_bytes((ROOT / "tests/performance/public_workflows_consumer.py").read_bytes())
             run_isolated(python, [str(workflows_suite)], cwd=consumer, env=local_env)
+            complete_suite = consumer / "public_complete_consumer.py"
+            complete_suite.write_bytes((ROOT / "tests/performance/public_complete_consumer.py").read_bytes())
+            run_isolated(python, [str(complete_suite)], cwd=consumer, env=local_env)
             publication_suite = consumer / "public_publication_consumer.py"
             publication_suite.write_bytes((ROOT / "tests/publication/public_publication_consumer.py").read_bytes())
             run_isolated(python, [str(publication_suite)], cwd=consumer, env=local_env)

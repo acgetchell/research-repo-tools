@@ -1,21 +1,26 @@
 """Configured benchmark measurement and independently captured source provenance."""
 
 import json
-import platform
 import re
 import shutil
 import tempfile
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 from research_repo_tools.criterion import COMPARISON_SCHEMA, Sample, Statistic, Unit, _statistic, _unit, collect_sample, compare_samples, serialize_comparison
 from research_repo_tools.evidence import Evidence, Provenance, _object, _string, compare_provenance, fingerprint_files
-from research_repo_tools.process import cpu_description, run_command, run_command_live, run_git_bytes
+from research_repo_tools.host_metadata import capture_host, serialize_host
+from research_repo_tools.process import run_command_live, run_git_bytes
 from research_repo_tools.publication import _inventory, _path, _publication_name
 from research_repo_tools.publication_config import _table
 from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.worktrees import apply_snapshot, capture_snapshot, temporary_worktree
+
+if TYPE_CHECKING:
+    from research_repo_tools.common_measurement import CommonHarnessPlan
 
 __all__ = ["MeasurementConfig", "capture_provenance", "load_measurement", "measure_checkout", "measure_pair", "resolve_revision"]
 
@@ -55,9 +60,26 @@ class MeasurementConfig:
         _unit(self.unit)
         if type(self.timeout) is not int or self.timeout <= 0:
             raise ValueError("measurement timeout must be a positive integer")
-        reserved = {"release", "mode", "os", "architecture", "cpu", "command", "source-inventory", "harness-inventory", "fingerprint-schema"}
+        reserved = {
+            "release",
+            "mode",
+            "os",
+            "architecture",
+            "cpu",
+            "host",
+            "command",
+            "source-inventory",
+            "harness-inventory",
+            "fingerprint-schema",
+            "phase",
+            "environment",
+            "gate-command",
+            "gate-status",
+            "original-source-sha256",
+            "original-source-inventory",
+        }
         context = dict(self.context)
-        if len(context) != len(self.context) or context.keys() & reserved or any(key.startswith(("tool.", "dependency.")) for key in context):
+        if len(context) != len(self.context) or context.keys() & reserved or any(key.startswith(("tool.", "dependency.", "host.")) for key in context):
             raise ValueError("measurement context duplicates or replaces captured metadata")
         for key, value in self.context:
             _string(key, "context name")
@@ -76,10 +98,15 @@ class MeasurementConfig:
             compare_provenance(unknown, unknown, fields=self.compatible)
 
 
-def load_measurement(root: Path, configuration: str) -> MeasurementConfig:
+def load_measurement(root: Path, configuration: str) -> MeasurementConfig | CommonHarnessPlan:
     """Read strict schema-1 TOML; commands are trusted consumer configuration."""
+    document = tomllib.loads(_path(root.resolve(), configuration).read_bytes().decode("utf-8"))
+    if type(document.get("schema")) is int and document["schema"] == 2:
+        from research_repo_tools.common_measurement import parse_plan
+
+        return parse_plan(document)
     raw = _table(
-        tomllib.loads(_path(root.resolve(), configuration).read_bytes().decode("utf-8")),
+        document,
         "measurement",
         {"schema", "command", "sources", "harness"},
         {"criterion-dir", "sample", "statistic", "unit", "timeout", "probes", "dependencies", "context", "compatible"},
@@ -116,7 +143,7 @@ def resolve_revision(root: Path, reference: str) -> str:
     return revision
 
 
-def capture_provenance(root: Path, configuration: MeasurementConfig, tag: str, *, mode: str) -> Provenance:
+def capture_provenance(root: Path, configuration: MeasurementConfig, tag: str, *, mode: str, env: Mapping[str, str] | None = None) -> Provenance:
     """Capture source/harness framing, host identity, exact command and probes."""
     root = root.resolve(strict=True)
     sources, harness = _inventory(root, configuration.sources), _inventory(root, configuration.harness)
@@ -125,21 +152,25 @@ def capture_provenance(root: Path, configuration: MeasurementConfig, tag: str, *
         {
             "release": tag,
             "mode": mode,
-            "os": platform.platform(),
-            "architecture": platform.machine(),
             "command": json.dumps(configuration.command, ensure_ascii=False),
             "source-inventory": json.dumps(sources, ensure_ascii=False),
             "harness-inventory": json.dumps(harness, ensure_ascii=False),
             "fingerprint-schema": "research-repo-tools/files/v1",
         }
     )
-    cpu = cpu_description()
-    if cpu != "unavailable":
-        context["cpu"] = " ".join(cpu.split())
-    for name, command in configuration.probes:
-        result = run_command(command[0], command[1:], cwd=root, timeout=30).stdout.strip()
-        if not result:
-            raise ValueError(f"empty tool version probe: {name}")
+    host = capture_host(root, probes=configuration.probes, env=env)
+    context["host"] = json.dumps(json.loads(serialize_host(host)), ensure_ascii=False, sort_keys=True)
+    for key in ("os", "architecture", "cpu"):
+        value = getattr(host, key)
+        if value is not None:
+            context[key] = value
+    for key in ("physical_cores", "logical_threads", "memory_bytes"):
+        value = getattr(host, key)
+        if value is not None:
+            context[f"host.{key}"] = str(value)
+    for name, result in host.tools:
+        if result is None:
+            raise ValueError(f"unavailable tool version probe: {name}")
         context[f"tool.{name}"] = json.dumps(result, ensure_ascii=False)
     for name, path in configuration.dependencies:
         lock = tomllib.loads(_path(root, path).read_bytes().decode("utf-8"))
@@ -181,7 +212,9 @@ def measure_checkout(root: Path, configuration: MeasurementConfig, tag: str, *, 
     return sample, before
 
 
-def measure_pair(root: Path, configuration: MeasurementConfig, pair: ReleasePair, *, working_tree: bool = False, allow_git_mutations: bool = False) -> Evidence:
+def measure_pair(
+    root: Path, configuration: MeasurementConfig | CommonHarnessPlan, pair: ReleasePair, *, working_tree: bool = False, allow_git_mutations: bool = False
+) -> Evidence:
     """Measure two isolated sources and return shared retained evidence.
 
     Working-tree measurement uses a captured HEAD patch and nonignored new
@@ -196,22 +229,30 @@ def measure_pair(root: Path, configuration: MeasurementConfig, pair: ReleasePair
     current_revision = snapshot.revision if snapshot else resolve_revision(root, pair.current)
     parent = Path(tempfile.mkdtemp(prefix="research-measurement-")).resolve()
     try:
-        with temporary_worktree(root, parent / "baseline", baseline_revision, allow_git_mutations=True) as baseline:
-            baseline_sample, baseline_source = measure_checkout(baseline, configuration, pair.baseline, mode="tag")
-        with temporary_worktree(root, parent / "current", current_revision, allow_git_mutations=True) as current:
+        with (
+            temporary_worktree(root, parent / "baseline", baseline_revision, allow_git_mutations=True) as baseline,
+            temporary_worktree(root, parent / "current", current_revision, allow_git_mutations=True) as current,
+        ):
             if snapshot:
                 apply_snapshot(current, snapshot)
-            current_sample, current_source = measure_checkout(current, configuration, pair.current, mode="working-tree" if snapshot else "tag")
+            if isinstance(configuration, MeasurementConfig):
+                baseline_sample, baseline_source = measure_checkout(baseline, configuration, pair.baseline, mode="tag")
+                current_sample, current_source = measure_checkout(current, configuration, pair.current, mode="working-tree" if snapshot else "tag")
+                if configuration.compatible:
+                    compatibility = compare_provenance(baseline_source, current_source, fields=configuration.compatible)
+                    if not compatibility.compatible:
+                        raise ValueError(f"required benchmark provenance differs or is unknown: {compatibility.differences}")
+                comparison = compare_samples(baseline_sample, current_sample)
+                if not comparison.comparisons:
+                    raise ValueError("measurements have no common benchmark rows")
+                retained = Evidence(serialize_comparison(comparison), COMPARISON_SCHEMA, (("baseline", baseline_source), ("current", current_source)))
+            else:
+                from research_repo_tools.common_measurement import measure_prepared_pair
+
+                retained = measure_prepared_pair(baseline, current, configuration, pair, working_tree=working_tree)
         if snapshot and snapshot != capture_snapshot(root):
             raise ValueError("source working tree changed while measurement ran; no evidence published")
-        if configuration.compatible:
-            compatibility = compare_provenance(baseline_source, current_source, fields=configuration.compatible)
-            if not compatibility.compatible:
-                raise ValueError(f"required benchmark provenance differs or is unknown: {compatibility.differences}")
-        comparison = compare_samples(baseline_sample, current_sample)
-        if not comparison.comparisons:
-            raise ValueError("measurements have no common benchmark rows")
-        return Evidence(serialize_comparison(comparison), COMPARISON_SCHEMA, (("baseline", baseline_source), ("current", current_source)))
+        return retained
     finally:
         # Never erase recovery checkouts when Git removal failed.
         if not any(parent.iterdir()):

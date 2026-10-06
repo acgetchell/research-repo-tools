@@ -9,7 +9,9 @@ import tempfile
 from pathlib import Path
 
 from research_repo_tools import config, files, toolchain, toolchain_config
+from research_repo_tools.evidence import _load_json
 from research_repo_tools.process import run_command_bytes, run_git_bytes
+from research_repo_tools.scanner_output import FindingOutput
 from research_repo_tools.selection import select_files
 
 __all__ = ["scan_osv", "scan_secrets", "security_inventory"]
@@ -119,7 +121,7 @@ def _gitleaks_report(value: object, format_name: str) -> bool:
     return bool(value)
 
 
-def _report_run(binary: Path, args: list[str], destination: Path, format_name: str, *, root: Path, env: dict[str, str], validate) -> int:
+def _report_run(binary: Path, args: list[str], destination: Path, format_name: str, *, root: Path, env: dict[str, str], validate, present=None) -> int:
     if destination.is_symlink():
         raise ValueError("report destination must not be a symlink")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -142,7 +144,7 @@ def _report_run(binary: Path, args: list[str], destination: Path, format_name: s
                 payload = stream.read(128 * 1024 * 1024 + 1)
             if len(payload) > 128 * 1024 * 1024:
                 raise ValueError("scanner report exceeds size limit")
-            value = json.loads(payload)
+            value = _load_json(payload, "scanner report")
             findings = validate(value, format_name)
         except OSError, ValueError, TypeError, KeyError:
             print(f"{binary.name}: missing, malformed, incomplete, or unredacted {format_name} report (exit {code}); no report published", file=sys.stderr)
@@ -150,7 +152,10 @@ def _report_run(binary: Path, args: list[str], destination: Path, format_name: s
         # Keep the native schema and diagnostics; Gitleaks metadata redactions
         # above are the only changes to finding content.
         files.replace_many({destination: (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")})
-        return code or int(findings)
+        status = code or int(findings)
+        if present is not None:
+            present(value, format_name, destination, status, findings)
+        return status
 
 
 def _clear_numbered_reports(directory: Path, *, prefix: str = "") -> None:
@@ -181,6 +186,7 @@ def scan_osv(settings: config.Config, lockfiles: tuple[str, ...], *, output: str
     code = 0
     for index, name in enumerate(sorted(lockfiles)):
         path = (settings.root / name).resolve()
+        present = FindingOutput("OSV", "dependencies", settings.root)
         for format_name in ("json", "sarif"):
             args = [
                 "scan",
@@ -205,6 +211,7 @@ def scan_osv(settings: config.Config, lockfiles: tuple[str, ...], *, output: str
                 root=settings.root,
                 env=env,
                 validate=lambda value, fmt: _osv_report(value, {path}) if fmt == "json" else bool(_sarif(value)),
+                present=present,
             )
             code = code or status
     return code
@@ -246,6 +253,7 @@ def scan_secrets(settings: config.Config, *, output: str = "target/security", co
         ignore = stage / "empty-ignore"
         ignore.write_bytes(b"")
         for label, mode, source in (("history", "git", settings.root), ("working", "dir", snapshot)):
+            present = FindingOutput("Gitleaks", "history" if label == "history" else "working tree", settings.root, snapshot=snapshot)
             for format_name in ("json", "sarif"):
                 args = [
                     mode,
@@ -267,7 +275,14 @@ def scan_secrets(settings: config.Config, *, output: str = "target/security", co
                 if mode == "git":
                     args.append("--log-opts=--all --full-history")
                 status = _report_run(
-                    binary, args, settings.path(output) / f"gitleaks-{label}.{format_name}", format_name, root=settings.root, env=env, validate=_gitleaks_report
+                    binary,
+                    args,
+                    settings.path(output) / f"gitleaks-{label}.{format_name}",
+                    format_name,
+                    root=settings.root,
+                    env=env,
+                    validate=_gitleaks_report,
+                    present=present,
                 )
                 code = code or status
     return code
