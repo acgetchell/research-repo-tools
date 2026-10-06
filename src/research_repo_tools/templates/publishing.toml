@@ -1,0 +1,15 @@
+# Merge this policy into [tool.research-repo-tools.publishing] in pyproject.toml,
+# or into [publishing] in an explicit research-repo-tools.toml configuration.
+# Consumer required check names/provider IDs must match actual exact-commit CI.
+[publishing]
+registry = "crates-io"
+package = "example-crate"
+repository = "__OWNER__/__REPOSITORY__"
+required-checks = [
+    {name = "check (ubuntu-24.04)", app-id = 15368},
+    {name = "check (macos-15)", app-id = 15368},
+    {name = "check (windows-2025)", app-id = 15368},
+]
+# Native validation must include Cargo package verification for the exact SHA.
+# Declare benchmark assets here only when required by the consumer's policy.
+required-assets = []

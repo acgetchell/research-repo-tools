@@ -126,13 +126,11 @@ not revoke a token shared with other repositories.
 The repository is pushed and normal changes go through pull requests. The
 maintainer performs Git mutations under [AGENTS.md](../AGENTS.md).
 
-The desired Actions allowlist includes `pypa/gh-action-pypi-publish@*` for the
-publication workflow; apply that payload before the first release. GitHub-owned
-`actions/attest` is covered by `github_owned_allowed`, with its full SHA pin. The
-`pypi` environment protections and PyPI Trusted Publisher are separate account
-settings. Follow [Releasing research-repo-tools](RELEASING.md) to configure them and verify
-the first release. Committing workflow YAML does not configure those accounts
-or publish distributions.
+Registry trust and deployment approvals must be configured before publishing.
+Keep account-specific registration and approval choices in the maintainer's
+private setup task. Follow [Releasing research-repo-tools](RELEASING.md) for
+repeat releases. Committing workflow YAML does not apply account settings or
+publish distributions.
 
 ## Follow-up work
 

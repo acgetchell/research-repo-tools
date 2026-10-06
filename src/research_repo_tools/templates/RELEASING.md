@@ -1,20 +1,14 @@
-# Releasing research-repo-tools
+# Releasing
 
-Use this checklist for repeat releases after the maintainer has completed the
-private account-setup task. PyPI distributes the package; GitHub hosts the source,
-review, CI and release notes. Install uv and run repository setup to install
-user-level Just, then use `just` without activating an environment.
+Use this checklist after the maintainer has configured registry publishing and
+deployment approval. Keep account setup in the maintainer's private checklist.
+Install uv, run repository setup to install user-level Just, and use `just`
+without activating an environment. Keep an exact published research-repo-tools
+pin in the locked tooling group.
 
-Pushing the reviewed tag starts [release preparation](../.github/workflows/prepare-release.yml).
-It builds the wheel and sdist once, validates those distributions on Linux, macOS
-and Windows, signs them, and attaches them to a draft GitHub Release. Publishing
-that release starts [package publication](../.github/workflows/publish.yml), which
-verifies the assets and uploads those same files after deployment approval.
-Committing workflow files does not configure registry accounts or approvals.
-
-The shared recipe names and ordered commands below also apply to Rust consumers.
-Consumers retain their native packaging, feature, MSRV and scientific checks.
-Release history belongs in the generated [CHANGELOG.md](../CHANGELOG.md).
+Publishing the GitHub Release starts the package-upload workflow. That workflow
+checks the release and waits for deployment approval before uploading. Verification
+then confirms that both the GitHub Release and registry version exist.
 
 ## Prepare
 

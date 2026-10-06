@@ -20,6 +20,15 @@ def harness():
     return module
 
 
+def generator_pin(harness, command, cwd, env):
+    expected = [str(harness.binary(Path(sys.executable).parent, "just")), "--justfile", str(ROOT / "justfile"), "--evaluate", "git_cliff_version"]
+    if command != expected:
+        return None
+    assert cwd == ROOT
+    assert "GITHUB_TOKEN" not in env and "GH_TOKEN" not in env
+    return "2.14.2\n"
+
+
 @pytest.mark.parametrize("actions,runner", [(None, None), ("true", None), ("true", "self-hosted"), ("false", "github-hosted")])
 def test_native_check_refuses_local_and_self_hosted_execution(harness, tmp_path, monkeypatch, actions, runner):
     for name, value in (("GITHUB_ACTIONS", actions), ("RUNNER_ENVIRONMENT", runner)):
@@ -55,12 +64,15 @@ def test_native_workspace_uses_runner_temp_instead_of_nested_user_temp(harness, 
         pass
 
     def stop(command, *, cwd, env, **kwargs):
+        if (pin := generator_pin(harness, command, cwd, env)) is not None:
+            return pin
         assert command == ["uv", "lock", "--managed-python"]
         assert cwd.name == "consumer with spaces"
         assert cwd.parent.parent == runner_temp.resolve()
         assert Path(env["RESEARCH_REPO_TOOLS_HOME"]).is_relative_to(cwd.parent)
         manifest = tomllib.loads((cwd / "pyproject.toml").read_text(encoding="utf-8"))
         assert manifest["tool"]["research-repo-tools"]["toolchain"]["cargo"]["cargo-edit"] == "0.13.13"
+        assert manifest["tool"]["research-repo-tools"]["toolchain"]["cargo"]["git-cliff"] == "2.14.2"
         workspaces.append(cwd.parent)
         raise StopBeforeInstalling
 
@@ -130,6 +142,8 @@ def test_native_release_operation_follows_credential_free_locked_package_install
 
     def run(command, *, cwd, env, **kwargs):
         calls.append(command)
+        if (pin := generator_pin(harness, command, cwd, env)) is not None:
+            return pin
         if command[0] == "uv":
             assert "GITHUB_TOKEN" not in env and "GH_TOKEN" not in env
             if command[1] == "lock":
@@ -146,7 +160,7 @@ def test_native_release_operation_follows_credential_free_locked_package_install
     monkeypatch.setattr(harness, "run", run)
     with pytest.raises(StopBeforeNativeDownload):
         harness.check(tmp_path)
-    assert len(calls) == 3
+    assert len(calls) == 4
 
 
 def test_native_shell_check_rejects_system_just_even_when_version_matches(harness, tmp_path, monkeypatch):

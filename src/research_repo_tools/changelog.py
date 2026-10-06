@@ -17,6 +17,7 @@ from research_repo_tools.release_tags import _GITHUB_TAG_ANNOTATION_LIMIT, SEMVE
 
 TEMPLATES = (
     "CHANGELOG.md",
+    "RELEASING.md",
     "VALIDATING_WORKFLOWS.md",
     "benchmark.toml",
     "cliff.toml",
@@ -26,6 +27,8 @@ TEMPLATES = (
     "justfile",
     "performance-report.toml",
     "profiling.toml",
+    "publish-crates.yml",
+    "publishing.toml",
     "python-validation.toml",
     "research-repo-tools.toml",
     "rumdl.toml",
@@ -34,10 +37,12 @@ TEMPLATES = (
 _COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 
 
-def template(name: str, *, owner: str | None = None, repository: str | None = None) -> str:
+def template(name: str, *, owner: str | None = None, repository: str | None = None, dependency_bodies: str = "concise") -> str:
     """Read a packaged template; resolve remote parameters without code interpolation."""
     if name not in TEMPLATES:
         raise ValueError(f"unknown template {name!r}; choose {', '.join(TEMPLATES)}")
+    if dependency_bodies not in {"concise", "preserve"}:
+        raise ValueError("dependency_bodies must be concise or preserve")
     text = files("research_repo_tools").joinpath("templates", name).read_text(encoding="utf-8")
     for placeholder, value in (("__OWNER__", owner), ("__REPOSITORY__", repository)):
         if placeholder not in text or value is None:
@@ -45,7 +50,8 @@ def template(name: str, *, owner: str | None = None, repository: str | None = No
         if not _COMPONENT.fullmatch(value) or value in {".", ".."}:
             raise ValueError("GitHub owner and repository must be single URL path components")
         text = text.replace(placeholder, value)
-    return text.replace("__SEMVER_PATTERN__", SEMVER_PATTERN)
+    condition = 'commit.body and group != "Dependencies"' if dependency_bodies == "concise" else "commit.body"
+    return text.replace("__SEMVER_PATTERN__", SEMVER_PATTERN).replace("__DEPENDENCY_BODY_CONDITION__", condition)
 
 
 def write_template(path: Path, text: str) -> None:
@@ -122,7 +128,7 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
     else:
         if section.owner is None or section.repository is None:
             raise ValueError("changelog generation requires owner and repository, or cliff-config")
-        rendered = template("cliff.toml", owner=section.owner, repository=section.repository)
+        rendered = template("cliff.toml", owner=section.owner, repository=section.repository, dependency_bodies=section.dependency_bodies)
     tomllib.loads(rendered)
     with tempfile.TemporaryDirectory(prefix="research-repo-tools-cliff-") as directory:
         cliff = Path(directory) / "cliff.toml"

@@ -247,6 +247,10 @@ def check(dist: Path) -> None:
     uv = shutil.which("uv")
     if uv is None:
         raise RuntimeError("uv must already be installed")
+    just_program = binary(Path(sys.executable).parent, "just")
+    generator_version = run(
+        [str(just_program), "--justfile", str(ROOT / "justfile"), "--evaluate", "git_cliff_version"], cwd=ROOT, env=release_credentials.environment()
+    ).strip()
     # Windows' user TEMP plus the managed Rust hierarchy can exceed link.exe's
     # path limit. RUNNER_TEMP provides a short, runner-owned workspace on all hosts.
     with tempfile.TemporaryDirectory(prefix="rrt-", dir=os.environ["RUNNER_TEMP"]) as temporary:
@@ -259,7 +263,8 @@ def check(dist: Path) -> None:
             f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}, "{dev_pin}"]\n'
             f'[tool.uv]\npackage=false\ndefault-groups=[]\nrequired-version="{uv_version}"\n'
             f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(wheel.resolve()))}}}\n"
-            '[tool.research-repo-tools.toolchain.cargo]\ncargo-deny="0.20.2"\ncargo-edit="0.13.13"\nclippy-sarif="0.8.0"\ngit-cliff="2.14.1"\nsarif-fmt="0.8.0"\n'
+            '[tool.research-repo-tools.toolchain.cargo]\ncargo-deny="0.20.2"\ncargo-edit="0.13.13"\nclippy-sarif="0.8.0"\n'
+            f'git-cliff="{generator_version}"\nsarif-fmt="0.8.0"\n'
             '[tool.research-repo-tools.toolchain.binaries]\ngitleaks="8.30.1"\nosv-scanner="2.6.0"\n',
             encoding="utf-8",
             newline="\n",

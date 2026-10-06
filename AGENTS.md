@@ -33,13 +33,18 @@
 
 ## Git operations
 
-- **Never run Git commands that mutate version-control state.** This includes
-  staging, committing, pushing, tagging, switching branches, merging, rebasing,
-  resetting, stashing, cleaning, and other index, ref, or checkout mutations.
+- **Run Git mutations only when the user explicitly requests or authorizes
+  them for the current task.** This includes staging, committing, pushing,
+  tagging, switching branches, merging, rebasing, resetting, stashing,
+  cleaning, and other index, ref, or checkout mutations.
+- An explicit user request for a Git operation overrides the default
+  restriction for that operation and its necessary routine steps. Do not
+  request repeated confirmation for operations already authorized in the task.
 - Use `git --no-pager` for read-only inspection, including status, diff, log,
   show, and blame.
-- Suggest mutating Git commands for the user to run manually; do not execute
-  them. Do not bypass this rule through other tools, APIs, or direct `.git` edits.
+- Without explicit authorization, suggest mutating Git commands for the user
+  to run manually; do not execute them or bypass this restriction through
+  other tools, APIs, or direct `.git` edits.
 - Preserve user changes and do not revert unrelated work.
 
 ## Validation

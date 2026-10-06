@@ -72,17 +72,44 @@ def test_install_check_rejects_unexpected_distribution_set(tmp_path: Path, inven
     assert "PASS:" not in result.stdout
 
 
-def test_install_check_does_not_forward_external_project_locations(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, install_checker) -> None:
-    module = install_checker
+@pytest.fixture
+def distribution_inventory(tmp_path: Path) -> Path:
     version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
-    # Only the inventory is needed: intercept the first subprocess before it can
-    # create an environment or honor any inherited project-directory overrides.
     with zipfile.ZipFile(tmp_path / f"research_repo_tools-{version}-py3-none-any.whl", "w") as archive:
         for name in ("templates/cliff.toml", "toolchain_setup.py", "py.typed", "LICENSE"):
             archive.writestr(f"research_repo_tools/{name}", "")
     with tarfile.open(tmp_path / f"research_repo_tools-{version}.tar.gz", "w:gz") as archive:
         for name in ("tests/changelog/test_contract.py", "LICENSE"):
             archive.addfile(tarfile.TarInfo(f"research_repo_tools-{version}/{name}"))
+    return tmp_path
+
+
+def test_changelog_only_requires_external_generator_before_installing(distribution_inventory: Path, monkeypatch: pytest.MonkeyPatch, install_checker) -> None:
+    monkeypatch.setattr(install_checker.shutil, "which", lambda program: "uv" if program == "uv" else None)
+    with pytest.raises(RuntimeError, match="git-cliff must be installed"):
+        install_checker.check(distribution_inventory, changelog_only=True)
+
+
+def test_changelog_only_runs_one_installed_generation_contract_per_artifact(
+    distribution_inventory: Path, monkeypatch: pytest.MonkeyPatch, install_checker
+) -> None:
+    monkeypatch.setattr(install_checker.shutil, "which", lambda program: program)
+    monkeypatch.setattr(install_checker, "run", lambda *args, **kwargs: "")
+    calls = []
+    monkeypatch.setattr(install_checker, "run_isolated", lambda python, args, **kwargs: calls.append((python, args)))
+    install_checker.check(distribution_inventory, changelog_only=True)
+    assert len(calls) == 2
+    assert {python.parent.parent.parent.name for python, _ in calls} == {"wheel", "sdist"}
+    for _, args in calls:
+        assert Path(args[0]).name == "public_publishing_consumer.py"
+        assert args[1:] == ["TestPublishingConsumer.test_installed_cli_generation_with_real_external_generator"]
+
+
+def test_install_check_does_not_forward_external_project_locations(distribution_inventory: Path, monkeypatch: pytest.MonkeyPatch, install_checker) -> None:
+    module = install_checker
+    tmp_path = distribution_inventory
+    # Intercept the first subprocess before it can create an environment or
+    # honor inherited project-directory overrides.
     external = tmp_path / "external project"
     external.mkdir()
     sentinel = external / "uv.lock"

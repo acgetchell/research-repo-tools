@@ -23,6 +23,11 @@ The [toolchain guide](INSTALLING.md) defines managed execution, and the
 [changelog guide](GENERATING_CHANGELOGS.md) describes generation and archiving.
 Package development and publication preflight recipes belong to
 [Contributing](../CONTRIBUTING.md#maintainer-commands).
+Root and consumer release recipes share names and argument contracts; see
+[reviewed publication](#reviewed-registry-publication-api), the
+[release checklist](RELEASING.md), and [migration](release-policy-migration.md).
+These interfaces cover PyPI and crates.io; consumers retain native packaging
+and deployment policy.
 
 ## Command line and configuration
 
@@ -329,6 +334,52 @@ failure before decoding, so invalid output cannot hide a command error. Successf
 or unchecked text output is decoded using `encoding` and `errors`. Diagnostic
 formatting does not redact arguments or output; consumers own sensitive-data
 policy. See the [Python examples](../README.md#calling-from-python).
+
+## Reviewed registry publication API
+
+`research_repo_tools.release_publishing` exposes immutable `PublishingSettings`,
+`RequiredCheck`, and `ReviewedRelease` values, `parse_publishing`, `validate_event`,
+`require_checks`, `check_metadata`, `check_reviewed_release`,
+`publish_reviewed_release`, and `verify_publication`. Configuration declares one
+registry (`pypi` or `crates-io`), package, GitHub repository, a nonempty list of
+check name/provider IDs, and optional required asset filenames. Unknown fields,
+invalid identities, duplicates, and missing checks raise `ValueError`.
+
+`check_metadata(config, tag, previous_tag=None)` reuses final release metadata and
+changelog checks. An explicit predecessor is validated and passed through to
+release-policy checks; tagged CLI checks retain `--previous-release` semantics.
+`validate_event(event, repository, commit, ref)` parses a stable published event;
+`check_reviewed_release(config, tag, event=...)` binds it to the clean checkout and
+remote tag, release lifecycle, protected-default-branch ancestry, complete latest
+check evidence and configured assets. These operations are read-only.
+`require_checks(pages, commit, checks)` consumes paginated/slurped REST check-runs
+pages: one exact-SHA successful latest result is required for each name/app ID.
+It rejects incomplete/changing pagination, duplicate IDs and ambiguous matches.
+Provider IDs must be positive integers; booleans and floating-point IDs reject.
+Release events, GitHub evidence and registry responses use strict UTF-8 JSON
+parsing that rejects duplicate fields, non-finite numbers and excessive nesting.
+
+`publish_reviewed_release(config, tag)` validates a stable draft twice and publishes
+that GitHub Release as the invoking maintainer. Calling it constitutes approval;
+the CLI additionally requires `--approve`. It never changes Git state or uploads
+registry packages. Consumers retain native Cargo packaging/upload commands.
+`verify_publication(config, tag, attempts=1, interval=10)` requires a published
+stable GitHub Release, configured assets and the exact registry version.
+
+`research_repo_tools.registry` exposes `RegistryVersion`, `RegistryLookupError`,
+`lookup_version(registry, package, version)` and `wait_for_version(...)`.
+`present=False` means only a proven exact-endpoint 404. Every unavailable,
+malformed, yanked, mismatched or partial-upload response raises an error.
+Verification asserts metadata visibility, not archive-byte provenance. Waits
+retry only absence, with 1..31 requests, a 0..10 second interval and a
+15-second timeout per request. PyPI requires both wheel and sdist upload evidence;
+crates.io requires an archive checksum. Neither lookup retries uploads.
+
+The canonical recipe surface is identical in root and consumer templates:
+`release-check TAG`, `release-first TAG DATE`, `release-notes TAG`,
+`release-publish TAG`, `release-tag TAG`, `release-tag-preview TAG`,
+`release-update TAG PREVIOUS DATE`, and `release-verify TAG [ARGS...]`.
+The low-level CLI also retains untagged `release check` for metadata inspection.
 
 ## Python release API
 

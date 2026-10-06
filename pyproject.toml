@@ -51,6 +51,18 @@ required-version = "==0.12.23"
 owner = "acgetchell"
 repository = "research-repo-tools"
 
+[tool.research-repo-tools.publishing]
+registry = "pypi"
+package = "research-repo-tools"
+repository = "acgetchell/research-repo-tools"
+required-checks = [
+    {name = "check (ubuntu-24.04)", app-id = 15368},
+    {name = "check (macos-15)", app-id = 15368},
+    {name = "check (windows-2025)", app-id = 15368},
+    {name = "changelog-integration", app-id = 15368},
+]
+required-assets = ["research_repo_tools-{version}-py3-none-any.whl", "research_repo_tools-{version}.tar.gz", "release-attestation.json"]
+
 [tool.research-repo-tools.zizmor]
 persona = "regular"
 

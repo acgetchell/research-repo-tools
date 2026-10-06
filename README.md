@@ -83,12 +83,12 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | Notebooks | `notebooks advise`, `check`, `clear`, `execute`, `group`, `inspect`, `lint`, `sync` | Read-only review, optional locked environment, native Ruff/ty checks, and execution reports |
 | Performance | `performance assets`, `baseline`, `compare`, `convert`, `export`, `extract`, `fetch`, `host`, `measure`, `profile`, `promote`, `publish`, `release-draft`, `release-upload`, `render`, `verify` | Complete configured measurement, retained evidence, release assets and publication |
 | Python | `python check`, `fix`, `typecheck` | Complete tracked/nonignored inventory; native Ruff/ty policy; explicit fixes only |
-| Release metadata | `release check`, `release update` | Infer metadata, apply declared policies, and validate complete release plans |
+| Releases | `release check`, `gate`, `publish`, `registry`, `update`, `verify` | Metadata preparation, reviewed publication gates and exact registry/GitHub verification |
 | Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
 | Security | `security osv`, `secrets` | Managed OSV/Gitleaks, explicit inputs, full history, redacted native reports |
 | Semgrep | `semgrep check-fixtures`, `scan` | Validate consumer rules, explicit inventory, reports and fixture expectations |
 | Setup | `setup` | Require uv; install user Just and declared tools; sync the locked environment |
-| Templates | `templates NAME` | Shared changelog, git-cliff, just, TOML, and rumdl resources |
+| Templates | `templates NAME` | Shared changelog, release guide/OIDC workflow, just, TOML, and rumdl resources |
 | Toolchain | `toolchain adopt`, `check`, `clean`, `export`, `python-check`, `python-tools-check`, `run`, `sync`, `sync-binaries`, `upgrade` | Exact declarations; managed installations and cleanup; verified execution and checked CI export |
 | Validation | `validation cargo-metadata`, `require`, `run` | Native package preflight, executable checks and configured example output assertions |
 | Workflow security | `zizmor check` | One declared scanner/persona, token discovery, explicit offline or required-online audits |
@@ -126,10 +126,14 @@ arguments in lexicographic order.
 | `just python-check` | Check lint, formatting, and types for all tracked and nonignored Python, including fixtures |
 | `just python-fix` | Apply configured Ruff fixes and formatting to the same complete inventory |
 | `just python-typecheck` | Run native ty without modifying source |
-| `just release-check` | Check consumer release metadata |
+| `just release-check TAG` | Check final release metadata and generated notes |
 | `just release-first TAG DATE` | Prepare a first release after checking published stable history |
 | `just release-notes TAG` | Print release notes from the root changelog or an archive |
+| `just release-publish TAG` | Approve a validated draft GitHub Release and trigger its registry workflow |
+| `just release-tag TAG` | Create a local annotated tag from validated release notes |
+| `just release-tag-preview TAG` | Inspect the release annotation without changing Git state |
 | `just release-update TAG PREVIOUS DATE` | Prepare metadata with an explicit predecessor and date |
+| `just release-verify TAG [ARGS...]` | Verify the exact stable registry version and GitHub Release/assets |
 | `just review [base]` | Review branch and local changes; default to verified `origin/main` |
 | `just review-uncommitted` | Review staged, unstaged, and non-ignored untracked changes |
 | `just security-osv LOCKFILE...` | Audit explicitly selected uv.lock/Cargo.lock files |
@@ -138,9 +142,6 @@ arguments in lexicographic order.
 | `just setup` | Install and verify declared tools, then synchronize the Python environment |
 | `just shared-python-plan VERSION` | Preview an opt-in shared-package/Python/tool-profile migration outside the old environment |
 | `just shared-python-update VERSION` | Apply the migration and recreate the locked environment and notebook kernel |
-| `just tag TAG` | Forward to `tag-release` |
-| `just tag-force TAG` | Explicitly replace an existing local tag |
-| `just tag-release TAG` | Create a local annotated tag from validated release notes |
 | `just tools-check` | Check installed tools and versions without installing them |
 | `just tools-export` | Verify tools and append their environment to `GITHUB_ENV` |
 | `just tools-python-check` | Check inherited Python tool declarations, lock, and executable versions without changes |
@@ -319,7 +320,7 @@ against current code before acting on them.
 just changelog-archive
 just changelog-preview --tag v1.2.3 --date 2026-09-07
 just help
-just release-check
+just release-check v1.2.3
 just release-notes v1.2.3
 just tools-check
 just update
@@ -335,6 +336,35 @@ before their commands will run. Review the generated changes before committing.
 
 The underlying CLI remains available for integrations and custom recipes; see
 [supported interfaces][api].
+
+### Reviewed registry publication
+
+Use the shared [release procedure](docs/RELEASING.md) and packaged `RELEASING.md`
+template for the same ordered commands in Python and Rust repositories.
+`just release-publish TAG` approves a validated draft GitHub Release; the consumer's
+reviewed workflow performs the registry upload after environment approval.
+`just release-verify TAG --attempts 7 --interval 10` checks both the stable GitHub
+Release/assets and the exact PyPI or crates.io version. Registry lookup failures
+never imply absence or authorize another upload.
+
+The packaged `publishing.toml` and `publish-crates.yml` templates define the shared
+policy and official crates.io Trusted Publishing/OIDC action wiring. Consumers
+declare required exact-commit checks and assets and retain native Cargo selection,
+features, MSRV, dependency order and deployment settings. See the
+[release checklist](docs/RELEASING.md), [API](docs/api.md#reviewed-registry-publication-api),
+and [migration](docs/release-policy-migration.md#shared-release-commands). Adopt the exact published v0.1.8
+package before consumer deployment. Publisher registration and live uploads are
+separate adoption steps recorded in the maintainer's private setup task.
+
+`toolchain run` uses a managed `CARGO_HOME`; an ordinary local `cargo login` may
+configure a different home. The OIDC workflow supplies its temporary token through
+the upload step's environment. Review consumer credential-provider overrides for
+that flow.
+
+To retain authored dependency release-note links while using the common changelog
+template, set `changelog.dependency-bodies = "preserve"` in the package configuration
+and remove the copied `cliff-config`. The default `"concise"` keeps short dependency
+summaries; both policies retain the common grouping and full breaking descriptions.
 
 ### Shared Python adoption
 

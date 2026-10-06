@@ -94,9 +94,9 @@ python-fix:
 python-typecheck:
     uv run --locked --no-sync --no-python-downloads research-repo-tools python typecheck
 
-# Check consumer release metadata.
-release-check:
-    uv run --locked --group dev research-repo-tools release check
+# Check final release metadata and dated notes against the canonical stable tag.
+release-check tag:
+    uv run --locked --group dev research-repo-tools release check "$1"
 
 # Prepare a first release after verifying empty stable published history.
 release-first tag date:
@@ -106,9 +106,25 @@ release-first tag date:
 release-notes tag:
     uv run --locked --group dev research-repo-tools changelog notes {{quote(tag)}}
 
+# Approve the reviewed draft GitHub Release and trigger registry publication.
+release-publish tag:
+    uv run --locked --group dev research-repo-tools release publish "$1" --approve
+
+# Create a local annotated release tag from validated notes (maintainer only).
+release-tag tag:
+    uv run --locked --group dev research-repo-tools changelog tag "$1"
+
+# Preview the release annotation without changing Git state.
+release-tag-preview tag:
+    uv run --locked --group dev research-repo-tools changelog tag "$1" --dry-run
+
 # Prepare release metadata offline with a reviewed predecessor and date.
 release-update tag previous date:
     uv run --locked --group dev research-repo-tools release update "$1" --previous-release "$2" --date "$3"
+
+# Require the stable GitHub Release/assets and exact published registry version.
+release-verify tag *args:
+    uv run --locked --group dev research-repo-tools release verify "$@"
 
 # Review branch and local changes with CodeRabbit against a verified origin/main by default.
 review base="origin/main":
@@ -141,17 +157,6 @@ shared-python-plan version:
 # Apply the validated shared-package/Python/tool-profile migration and recreate the environment.
 shared-python-update version:
     uvx --no-config --isolated --managed-python --from "research-repo-tools==$1" research-repo-tools toolchain adopt --apply
-
-# Create a local annotated tag using tag-release.
-tag tag: (tag-release tag)
-
-# Explicitly replace an existing local annotated tag.
-tag-force tag:
-    uv run --locked --group dev research-repo-tools changelog tag {{quote(tag)}} --force
-
-# Create a local annotated tag from validated release notes.
-tag-release tag:
-    uv run --locked --group dev research-repo-tools changelog tag {{quote(tag)}}
 
 # The environment must already exist; checking never syncs or downloads Python.
 tools-check:

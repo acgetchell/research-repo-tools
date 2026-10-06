@@ -9,7 +9,9 @@ history belong in the generated [CHANGELOG.md](../CHANGELOG.md). See
 | Command | Purpose |
 | --- | --- |
 | `just audit` | Check locked third-party Python dependencies against online vulnerability advisories |
+| `just changelog-test` | Require the pinned git-cliff version and exercise generator contracts |
 | `just check` | Workflow, lockfile, lint, format, newline, and type checks during development |
+| `just check-dist-changelog` | Exercise real CLI generation from existing wheel and sdist installations |
 | `just ci` | Final checks, tests, wheel/sdist builds, and isolated installation checks |
 | `just coverage` | Run tests with branch and subprocess coverage; write `coverage/cobertura.xml` |
 | `just newline-check` | Reject implicit newline translation in Python text-file writes |
@@ -60,6 +62,12 @@ interpreter selection, cell errors, and timeouts. Native checker tests cover
 syntax, formatting, types, IPython forms, cross-cell references, configuration,
 and diagnostic cell mapping. Kernel tests require local socket access.
 `just check-dist` validates existing wheel and sdist artifacts without rebuilding.
+The dedicated Linux changelog job installs the generator through
+`just changelog-setup`, tests generation with `just changelog-test`, and runs
+`just check-dist-changelog` against the same built wheel and sdist. This last
+component exercises only the installed CLI generation contract, without replaying
+the remaining distribution suites. Missing or mismatched generators fail this gate;
+ordinary base installation checks may omit the external generator.
 
 Both installed distributions resolve the optional `python-tools` extra and run
 its public checks with exact native versions, modeled drift, and real adoption

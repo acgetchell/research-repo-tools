@@ -69,6 +69,10 @@ def test_loaded_settings_preserve_defaults_and_explicit_values(tmp_path):
         ({"semgrep": {"counts": {"fixture.py": {"rule": -1}}}}, "nonnegative integer"),
         ({"release": {"date-policy": "invalid"}}, "date-policy"),
         ({"release": {"final-changelog": "false"}}, "boolean"),
+        ({"changelog": {"dependency-bodies": "deps-dev"}}, "concise or preserve"),
+        ({"changelog": {"cliff-config": "cliff.toml", "dependency-bodies": "preserve"}}, "remove cliff-config"),
+        ({"publishing": {}}, "requires registry"),
+        ({"publishing": {"unknown": True}}, "unknown"),
     ],
 )
 def test_invalid_values_are_rejected_by_the_config_parser(tmp_path, raw, diagnostic):

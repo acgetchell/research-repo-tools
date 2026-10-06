@@ -92,10 +92,19 @@ def parser() -> argparse.ArgumentParser:
     python = groups.add_parser("python", help="check, fix, or typecheck the complete Python inventory").add_subparsers(dest="action", required=True)
     for action in ("check", "fix", "typecheck"):
         python.add_parser(action).add_argument("--timeout", type=float, default=300, help="positive per-batch timeout in seconds (default: 300)")
-    release = groups.add_parser("release", help="check and synchronize release metadata").add_subparsers(dest="action", required=True)
+    release = groups.add_parser("release", help="prepare, check, publish, and verify reviewed releases").add_subparsers(dest="action", required=True)
     command = release.add_parser("check")
+    command.add_argument("tag", nargs="?", help="canonical stable tag; requires final metadata and release notes")
     command.add_argument("--final-release", action="store_true")
     command.add_argument("--previous-release")
+    command = release.add_parser("gate", help="require reviewed exact-commit evidence for a published release event")
+    command.add_argument("tag")
+    command = release.add_parser("publish", help="approve a validated draft GitHub Release and trigger its publication workflow")
+    command.add_argument("tag")
+    command.add_argument("--approve", action="store_true", required=True, help="explicit approval of the reviewed draft")
+    command = release.add_parser("registry", help="require an absent or present exact registry version; never uploads")
+    command.add_argument("tag")
+    command.add_argument("--expect", choices=("absent", "present"), required=True)
     command = release.add_parser("update")
     command.add_argument("version")
     command.add_argument("--date")
@@ -104,6 +113,10 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--first-release", action="store_true", help="require empty stable published history; prepare without a predecessor")
     command.add_argument("--offline", action="store_true", help="use reviewed first-release intent or an explicit previous release without GitHub")
     command.add_argument("--previous-release")
+    command = release.add_parser("verify", help="verify the published GitHub Release/assets and exact registry version")
+    command.add_argument("tag")
+    command.add_argument("--attempts", type=int, default=1)
+    command.add_argument("--interval", type=int, default=10)
     review = groups.add_parser("review", help="run an opt-in CodeRabbit review").add_subparsers(dest="action", required=True)
     review.add_parser("branch", help="review branch and local changes against a verified base").add_argument("--base", default="origin/main")
     review.add_parser("uncommitted", help="review only staged, unstaged, and untracked changes")
@@ -130,6 +143,7 @@ def parser() -> argparse.ArgumentParser:
     templates.add_argument("name", choices=TEMPLATES)
     templates.add_argument("--owner")
     templates.add_argument("--repository")
+    templates.add_argument("--dependency-bodies", choices=("concise", "preserve"), default="concise", help="body policy for the shared cliff.toml")
     templates.add_argument("--output", type=Path, help="create a new file; existing files are never overwritten")
     toolchain = groups.add_parser("toolchain", help="check, install, and select declared development tools").add_subparsers(dest="action", required=True)
     adoption = toolchain.add_parser("adopt", help="migrate an opted-in consumer to the exact executing shared package")
@@ -350,7 +364,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
     if args.group == "templates":
         from research_repo_tools.changelog import template, write_template
 
-        rendered = template(args.name, owner=args.owner, repository=args.repository)
+        rendered = template(args.name, owner=args.owner, repository=args.repository, dependency_bodies=args.dependency_bodies)
         if args.output:
             write_template(settings.path(str(args.output)), rendered)
         else:
@@ -416,6 +430,44 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
 
         return review.run(settings.root, base=args.base if args.action == "branch" else None)
     if args.group == "release":
+        from research_repo_tools import release_publishing
+
+        if args.action == "gate":
+            from research_repo_tools.evidence import _load_json
+
+            if os.environ.get("GITHUB_EVENT_NAME") != "release" or os.environ.get("GITHUB_REPOSITORY") != release_publishing._settings(settings).repository:
+                raise ValueError("release gate requires the configured repository's GitHub release event")
+            event_file = os.environ.get("GITHUB_EVENT_PATH")
+            if not event_file:
+                raise ValueError("release gate requires GITHUB_EVENT_PATH")
+            with Path(event_file).open("rb") as stream:
+                payload = stream.read(1024 * 1024 + 1)
+            if len(payload) > 1024 * 1024:
+                raise ValueError("release event exceeds the byte limit")
+            event = release_publishing.validate_event(
+                _load_json(payload, "GitHub release event"), os.environ["GITHUB_REPOSITORY"], os.environ.get("GITHUB_SHA", ""), os.environ.get("GITHUB_REF", "")
+            )
+            release_publishing.check_reviewed_release(settings, args.tag, event=event)
+            return 0
+        if args.action == "publish":
+            release_publishing.publish_reviewed_release(settings, args.tag)
+            return 0
+        if args.action == "registry":
+            from research_repo_tools.registry import lookup_version
+
+            publishing = release_publishing._settings(settings)
+            result = lookup_version(publishing.registry, publishing.package, release_publishing._tag(args.tag))
+            if result.present != (args.expect == "present"):
+                raise ValueError(f"registry version is {'already present; inspect before retrying uploads' if result.present else 'not yet visible'}")
+            return 0
+        if args.action == "verify":
+            release_publishing.verify_publication(settings, args.tag, attempts=args.attempts, interval=args.interval)
+            print(f"Verified published GitHub Release and registry version {args.tag}.")
+            return 0
+        if args.action == "check" and args.tag:
+            release_publishing.check_metadata(settings, args.tag, previous_tag=args.previous_release)
+            print(f"Ready to validate packages for {args.tag}.")
+            return 0
         policy = replace(settings.release, final_changelog=True) if args.final_release else settings.release
         from research_repo_tools import release_metadata, update_release
 
