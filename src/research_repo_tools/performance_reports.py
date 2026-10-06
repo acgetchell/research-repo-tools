@@ -49,6 +49,12 @@ def _link(document: str, target: str) -> str:
 
 def render_report(evidence: Evidence, *, title: str = "Benchmark timings", prose: str = "", links: tuple[tuple[str, str], ...] = ()) -> bytes:
     """Render retained numeric meaning and source context without measuring/I/O."""
+    from research_repo_tools.complete_runs import RUN_SCHEMA, render_run
+
+    if evidence.payload_schema == RUN_SCHEMA:
+        if prose or links:
+            raise ValueError("complete runs use configured series; compose custom prose through the publication API")
+        return render_run(evidence, title=title)
     pair = evidence_pair(evidence)
     comparison = parse_comparison(evidence.payload)
     report = render_comparison(comparison)
@@ -90,7 +96,12 @@ def load_report_plan(root: Path, configuration: str, *, payload: str | None = No
     """
     root = root.resolve(strict=True)
     config_bytes = _path(root, configuration).read_bytes()
-    raw = _table(tomllib.loads(config_bytes.decode("utf-8")), "report", {"schema", "current", "archive", "title"}, {"prose-file"})
+    document = tomllib.loads(config_bytes.decode("utf-8"))
+    if type(document.get("schema")) is int and document["schema"] == 2:
+        from research_repo_tools.run_reports import load_run_report_plan
+
+        return load_run_report_plan(root, configuration, payload=payload, manifest=manifest)
+    raw = _table(document, "report", {"schema", "current", "archive", "title"}, {"prose-file"})
     if type(raw["schema"]) is not int or raw["schema"] != 1:
         raise ValueError("report schema must be integer 1")
     from research_repo_tools.evidence import _string

@@ -10,6 +10,7 @@ from urllib.parse import quote
 
 from research_repo_tools import config, semgrep
 from research_repo_tools.process import resolve_executable
+from research_repo_tools.scanner_output import FindingOutput
 from research_repo_tools.security import _clear_numbered_reports, _report_run, _sarif, security_inventory
 from research_repo_tools.semgrep_docs import rust_blocks
 from research_repo_tools.semgrep_findings import parse_results
@@ -95,6 +96,7 @@ def scan(
         }
         _clear_numbered_reports(settings.path(output))
         for index, target in enumerate(targets):
+            present = FindingOutput("Semgrep", "source", settings.root)
             for fmt in ("json", "sarif"):
                 args = [
                     "scan",
@@ -137,6 +139,8 @@ def scan(
                     value.update(mapped)
                     return found
 
-                status = _report_run(binary, args, settings.path(output) / f"{index}.{fmt}", fmt, root=settings.root, env=env, validate=validate)
+                status = _report_run(
+                    binary, args, settings.path(output) / f"{index}.{fmt}", fmt, root=settings.root, env=env, validate=validate, present=present
+                )
                 code = code or status
     return code
