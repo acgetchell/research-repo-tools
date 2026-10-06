@@ -41,7 +41,9 @@ def test_http_failure_is_not_absence(monkeypatch, code):
         registry.wait_for_version("crates-io", "sample", "1.2.3", attempts=3)
 
 
-@pytest.mark.parametrize("payload", [b"null", b"[]", b"{", b"\xff", b"x" * (registry.LIMIT + 1)])
+@pytest.mark.parametrize(
+    "payload", [b"null", b"[]", b"{", b"\xff", b"x" * (registry.LIMIT + 1)], ids=["null", "array", "truncated", "invalid-utf8", "oversized"]
+)
 def test_malformed_and_oversized_json_are_not_absence(monkeypatch, payload):
     monkeypatch.setattr(registry.urllib.request, "urlopen", lambda *args, **kwargs: Response(payload))
     with pytest.raises(registry.RegistryLookupError):
