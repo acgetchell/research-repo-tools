@@ -127,9 +127,19 @@ def test_version_precedence_never_downgrades_or_replaces_equal_builds(consumer, 
     monkeypatch.setattr(upgrade, "latest_stable", lambda name: latest if name == "git-cliff" else "0.9.100")
     calls = []
     monkeypatch.setattr(toolchain.Runtime, "sync", lambda self: calls.append(self.plan))
+    monkeypatch.setattr(toolchain.Runtime, "cargo_status", lambda self, tool: toolchain.Status(tool.package, tool.version, tool.version, "managed", True))
     upgrade.upgrade(config.load(root=consumer.parent))
     assert config.load(root=consumer.parent).toolchain.cargo["git-cliff"] == expected
     assert bool(calls) == (pin != expected)
+
+
+def test_missing_current_tool_is_not_a_successful_skip(consumer, monkeypatch):
+    original = consumer.read_bytes()
+    monkeypatch.setattr(upgrade, "latest_stable", lambda name: {"cargo-nextest": "0.9.100", "git-cliff": "2.14.1"}[name])
+    monkeypatch.setattr(toolchain.Runtime, "cargo_status", lambda self, tool: toolchain.Status(tool.package, tool.version, "missing", "", False))
+    with pytest.raises(ValueError, match="run toolchain sync to repair"):
+        upgrade.upgrade(config.load(root=consumer.parent))
+    assert consumer.read_bytes() == original
 
 
 def test_standalone_config_updates_its_own_pins(consumer, monkeypatch):

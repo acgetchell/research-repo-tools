@@ -24,7 +24,7 @@ The independent `toolchain.inherit-python-tools` opt-in selects the installed
 | `pyproject.toml` and `uv.lock` | Python dependencies and the pinned shared package |
 | `rust-toolchain.toml` | Stable exact Rust release, components, targets, and minimal/default profile |
 | `[tool.research-repo-tools.toolchain.cargo]` | Exact Cargo tool package versions |
-| `[tool.research-repo-tools.toolchain.binaries]` | Exact OSV-Scanner and Gitleaks release versions |
+| `[tool.research-repo-tools.toolchain.binaries]` | Exact dprint, Gitleaks, OSV-Scanner, and rumdl release versions |
 
 uv must be at least 0.12.10 so the shared installer can enforce its Python
 installation ownership policy with `--no-bin` and `--no-registry`.
@@ -65,7 +65,7 @@ canonical Cargo SemVer. `just` is supplied by the Python `rust-just` dependency;
 do not declare another installation of it under Cargo. Other Python tools belong
 in the consumer's dependency groups.
 
-Optional `gitleaks` and `osv-scanner` release binaries use isolated host/version
+Optional `dprint`, `gitleaks`, `osv-scanner`, and `rumdl` release binaries use isolated host/version
 directories, upstream GitHub release-asset SHA-256 checksums, shared archive
 validation, and executable version probes before atomic file replacement.
 GitHub release-metadata requests optionally authenticate with `GITHUB_TOKEN`,
@@ -81,8 +81,9 @@ lookup credentials to every setup subprocess. Release-installation diagnostics
 redact both credential values, and asset downloads remain unauthenticated.
 Missing checksums, unsupported assets and mismatched versions fail before
 publication. Setup, check, run, export and upgrade use these same managed paths;
-checks do not install or fall back to ambient scanners. Both architectures of
-the supported macOS, glibc Linux and Windows hosts have explicit asset mappings.
+checks do not install or fall back to ambient executables. Both architectures of
+the supported macOS, glibc Linux and Windows hosts have explicit asset mappings,
+except native Windows ARM64 rumdl, which requires its explicit Cargo owner.
 See [scanner commands](../README.md#dependency-and-secret-scanning) for scope,
 redaction, reports and consumer-owned exceptions.
 
@@ -152,13 +153,15 @@ The consumer template provides:
 - `just tools-check`: inspect without syncing the environment or downloading Python.
 - `just tools-sync-binaries`: verify and repair pinned release binaries without package synchronization.
 - `just update`: upgrade tools, then Cargo and Python dependencies and synchronize dev.
+- `just update-actions`: explicitly update selected Actions commit pins; preview with `--dry-run` or `--check`.
 - `just update-cargo-dependencies`: upgrade root Cargo requirements and lock resolution, if present.
 - `just update-cargo-tools`: upgrade declared Cargo tools and publish verified TOML pins.
 - `just update-dependencies`: run the Cargo and Python dependency workflows.
 - `just update-python-dependencies`: update direct dev pins, upgrade the full Python lock, and synchronize dev.
 - `just update-python-deps`: alias for `update-python-dependencies`.
-- `just update-tools`: upgrade uv and declared Cargo tools, then run setup.
+- `just update-tools`: upgrade uv and declared tools without shell/bootstrap setup.
 - `just update-uv`: upgrade uv through its installation owner and reconcile its pin.
+- `just workflow-allowlist-check`: check external step/job references against strict consumer selected-actions policy.
 
 Bare `just` shows help. When merging the template, reconcile its default recipe
 with the consuming repository's existing default.
@@ -181,7 +184,7 @@ The underlying commands are:
 | `toolchain run -- COMMAND ...` | Check tools, then run with their selected paths; propagate failure/exit status |
 | `toolchain sync [--dry-run]` | Install declared versions and verify results; dry run reports without installation |
 | `toolchain sync-binaries` | Verify and repair only pinned release binaries; no uv prerequisite probe, package synchronization, or dependency builds |
-| `toolchain upgrade [--dry-run]` | Resolve stable Cargo upgrades, install and verify them, then publish the exact pins |
+| `toolchain upgrade [--dry-run]` | Resolve stable managed Cargo and release-binary upgrades, install and verify them, then publish the exact pins |
 
 Global `--root` and `--config` retain the shared CLI contract. Toolchain commands
 also read the conventional files at the consumer root. A standalone configuration
@@ -347,6 +350,9 @@ review its release notes, then rerun setup.
 `just update-tools` and `just update-uv` also start with the uv owner upgrade.
 Standalone uv uses its official self-updater; Homebrew uv is upgraded through
 Homebrew. Self-update requires a matching standalone installation receipt.
+`uv tool` installations require a receipt binding the selected entrypoint to its
+environment binary. Their native upgrade verifies the actual interpreter identity and retains requirement
+constraints and selects stable releases without downloading another Python.
 Other installation owners receive a diagnostic before any upgrade is attempted;
 upgrade uv through that manager and reconcile its project pin manually, or use
 the official standalone installer to enable automatic updates. A supported,
@@ -358,7 +364,7 @@ Upgrading the user-level uv affects other checkouts using it. Their exact uv pin
 must also be reconciled before running their locked commands. An installed uv
 upgrade cannot be rolled back if
 writing the project pin fails. Fix the reported cause and rerun `just update`.
-The remaining tools steps upgrade declared Cargo tools and run setup, retaining
+The remaining tools steps upgrade and synchronize declared tools, retaining
 the Rust compiler and shared package pins. Changing those pins remains a manual,
 reviewed operation. The dependency steps then update Cargo requirements and
 resolution, update Python pins, refresh the full Python lock, and sync dev.
@@ -367,9 +373,10 @@ Cargo exclusions, extra manifests, and Python-only behavior.
 The Python pin updater preserves included tooling-group pins as resolver
 constraints; it updates only direct exact `dev` requirements.
 
-Use `just update-cargo-tools` for only the managed Cargo upgrade. It resolves the
-latest non-yanked stable release of each declared supported package from the
-crates.io sparse index. It never downgrades a pin or opts into a prerelease;
+Use `just update-cargo-tools` for declared managed Cargo tools and release binaries.
+It resolves the latest non-yanked stable Cargo releases from the crates.io sparse
+index and stable release binaries from their upstream GitHub repositories.
+It never downgrades a pin or opts into a prerelease;
 an existing prerelease advances when a newer stable release exists. Build
 metadata does not change SemVer precedence, so equal-precedence pins are retained.
 No undeclared package is queried or installed. Rust compatibility is verified by
@@ -380,10 +387,11 @@ The command checks the exact stable uv prerequisite before resolution, reports
 proposed changes, installs in distinct managed version directories, and verifies
 every selected executable before changing the TOML source. `toolchain upgrade
 --dry-run` performs resolution and prints changes without installing or writing.
-Current declarations produce a no-op; use sync to repair missing installations.
+Current declarations produce a verified no-op. Missing/current installations
+fail verification; use sync to repair them before retrying upgrades.
 Comments, unrelated configuration, line endings, permissions, and symlink targets
 are preserved. Standalone configuration updates its own `[toolchain.cargo]`
-table. Dotted and quoted keys work; inline-table Cargo declarations must first be
+and `[toolchain.binaries]` tables. Dotted and quoted keys work; inline-table declarations must first be
 expanded into standalone assignments. Unsupported source forms fail before installation.
 
 If resolution, installation, or publication fails, old declarations and old
@@ -393,11 +401,16 @@ detected before publication and are never deliberately overwritten. No lockfile,
 user Cargo installation, or Rust compiler pin is changed by this command.
 
 `deps update-tools` supports consumers whose Just variables track user-installed
-Cargo tools and uv. It reconciles explicitly mapped pins after the consumer's
+Cargo tools, explicitly declared Homebrew tools, and uv. It reconciles mapped pins after the consumer's
 native package-manager update; it never installs tools itself. Machine-configuration
 repositories can use the [user-installed tool recipes](../README.md#user-installed-tool-updates),
 including `cargo install-update --all --locked`. This separate ownership model
 does not change the isolated TOML toolchain contract or its standard template.
+For mixed inventories, see the [portable ownership composition](../README.md#mixed-installation-owners-on-linux-and-macos).
+Prebuilt dprint and rumdl use `toolchain.binaries`; their authoritative TOML pins
+are upgraded by the existing verified release-binary machinery. Do not map those
+managed tools back into competing Just variables. Just remains supplied by
+`rust-just`. Native Windows ARM64 rumdl binaries are unavailable; use Cargo there.
 
 Upstream behavior: [uv installation](https://docs.astral.sh/uv/getting-started/installation/),
 [user tools](https://docs.astral.sh/uv/concepts/tools/),

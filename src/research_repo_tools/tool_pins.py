@@ -1,10 +1,11 @@
 """Reconcile explicitly mapped Just pins with installed Cargo tools and uv."""
 
 import re
+import shutil
 from collections.abc import Mapping
 from pathlib import Path
 
-from research_repo_tools.files import replace
+from research_repo_tools.files import replace_if_unchanged
 from research_repo_tools.process import run_safe_command
 
 STABLE = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)")
@@ -53,6 +54,18 @@ def check_uv(*, executable: str = "uv", output: str | None = None) -> str:
     return parse_tool_version(output, "uv")
 
 
+def _homebrew_version(output: str, tool: str) -> str:
+    match = re.match(rf"^{re.escape(tool)}[ \t]+(?P<version>{STABLE.pattern})(?=\s|$)", output.strip())
+    if match is None:
+        raise ValueError(f"expected {tool} version output starting with '{tool} X.Y.Z'")
+    version = match["version"]
+    if tool == "cargo-nextest":
+        releases = [line.strip().removeprefix("release:").strip() for line in output.splitlines() if line.strip().startswith("release:")]
+        if releases and releases != [version]:
+            raise ValueError("cargo-nextest release metadata disagrees with its version header")
+    return version
+
+
 def update_text(text: str, installed: Mapping[str, str], mapping: Mapping[str, str]) -> tuple[str, dict[str, tuple[str, str]]]:
     changes: dict[str, tuple[str, str]] = {}
     for pin, tool in mapping.items():
@@ -75,19 +88,51 @@ def update_text(text: str, installed: Mapping[str, str], mapping: Mapping[str, s
 
 def reconcile(path: Path, installed: Mapping[str, str], mapping: Mapping[str, str], *, dry_run: bool = False) -> dict[str, tuple[str, str]]:
     """Validate every managed pin before atomically replacing the original bytes."""
-    payload, changes = update_text(path.read_bytes().decode("utf-8"), installed, mapping)
+    original = path.read_bytes()
+    payload, changes = update_text(original.decode("utf-8"), installed, mapping)
     if changes and not dry_run:
-        replace(path, payload.encode("utf-8"))
+        replace_if_unchanged(path, original, payload.encode("utf-8"))
     return changes
 
 
-def update(path: Path, mapping: Mapping[str, str], *, uv: str = "uv", dry_run: bool = False) -> dict[str, tuple[str, str]]:
+def update(
+    path: Path, mapping: Mapping[str, str], *, uv: str = "uv", owners: Mapping[str, str] | None = None, dry_run: bool = False
+) -> dict[str, tuple[str, str]]:
     if not mapping:
         raise ValueError("deps.tools must explicitly map Just variable names to Cargo package names or uv")
     installed: dict[str, str] = {}
+    owners = owners or {}
+    if owners.keys() - set(mapping.values()) or any(owner not in {"cargo", "homebrew"} for owner in owners.values()):
+        raise ValueError("tool ownership must select cargo or homebrew for mapped tools")
     if "uv" in mapping.values():
         installed["uv"] = check_uv(executable=uv)
-    if any(tool != "uv" for tool in mapping.values()):
+    cargo_tools = {tool for tool in mapping.values() if tool != "uv" and owners.get(tool, "cargo") == "cargo"}
+    if cargo_tools:
         packages = parse_installed_packages(run_safe_command("cargo", ["install", "--list"], timeout=30).stdout)
-        installed.update({package: version for package, version in packages.items() if package != "uv"})
-    return reconcile(path, installed, mapping, dry_run=dry_run)
+        for tool in sorted(cargo_tools):
+            if tool not in packages:
+                raise ValueError(f"{tool}: absent from Cargo inventory; unsupported owner or missing required tool; no pins changed")
+            installed[tool] = packages[tool]
+            print(f"Verified cargo owner: {tool} {packages[tool]}; reconcile only (no installation)")
+    for tool, owner in sorted(owners.items()):
+        if owner != "homebrew":
+            continue
+        if re.fullmatch(r"[A-Za-z0-9_-]+", tool) is None:
+            raise ValueError(f"unsupported Homebrew formula: {tool}")
+        prefix = Path(run_safe_command("brew", ["--prefix", tool], timeout=30).stdout.strip())
+        binary = shutil.which(tool)
+        if not prefix.is_absolute() or binary is None or not Path(binary).resolve().is_relative_to(prefix.resolve()):
+            raise ValueError(f"{tool}: active executable does not belong to the declared Homebrew formula")
+        inventory = run_safe_command("brew", ["list", "--versions", tool], timeout=30).stdout.split()
+        if len(inventory) != 2 or inventory[0] != tool:
+            raise ValueError(f"{tool}: expected one installed Homebrew version")
+        version = _homebrew_version(run_safe_command(binary, ["--version"], timeout=30).stdout, tool)
+        if version != inventory[1].split("_", 1)[0]:
+            raise ValueError(f"{tool}: executable version disagrees with Homebrew inventory")
+        installed[tool] = version
+        print(f"Verified homebrew owner: {tool} {version}; reconcile only (consumer owns package updates)")
+    changes = reconcile(path, installed, mapping, dry_run=dry_run)
+    for pin, tool in sorted(mapping.items()):
+        if pin not in changes:
+            print(f"Unchanged {pin}: verified {tool} {installed[tool]}")
+    return changes

@@ -21,7 +21,7 @@ changelog-preview *args:
 
 # Generate and archive a prospective release with an explicit YYYY-MM-DD date.
 changelog-release tag date:
-    uv run --locked --group dev research-repo-tools toolchain run -- research-repo-tools changelog generate --tag {{quote(tag)}} --date {{quote(date)}}
+    uv run --locked --group dev research-repo-tools toolchain run -- research-repo-tools changelog generate --tag {{ quote(tag) }} --date {{ quote(date) }}
 
 alias changelog-unreleased := changelog-release
 
@@ -44,9 +44,9 @@ default: help
 files +args:
     uv run --locked --group dev research-repo-tools files "$@"
 
-# List available commands and arguments in lexicographic order.
+# List recipes and arguments in lexicographic order, with aliases inline.
 help:
-    @just --justfile {{quote(justfile())}} --alias-style separate --list
+    @just --justfile {{ quote(justfile()) }} --alias-style right --list
 
 alias help-workflows := help
 
@@ -104,7 +104,7 @@ release-first tag date:
 
 # Print release notes from the root changelog or an archive.
 release-notes tag:
-    uv run --locked --group dev research-repo-tools changelog notes {{quote(tag)}}
+    uv run --locked --group dev research-repo-tools changelog notes {{ quote(tag) }}
 
 # Approve the reviewed draft GitHub Release and trigger registry publication.
 release-publish tag:
@@ -177,12 +177,16 @@ tools-sync-binaries:
 # Upgrade tools, then Cargo and Python dependencies and the dev environment.
 update: update-tools update-dependencies
 
+# Explicit opt-in: append this stage after update-dependencies to check final tool pins.
+update-actions *args:
+    uv run --locked --only-group tooling --inexact research-repo-tools actions update --policy .github/action-updates.toml .github/workflows "$@"
+
 # Upgrade root Cargo requirements and resolution; retain consumer exclusions/extra roots here.
 update-cargo-dependencies:
     if [ -f Cargo.toml ]; then uv run --locked --only-group tooling --inexact research-repo-tools toolchain run -- cargo upgrade --incompatible allow; fi
     if [ -f Cargo.toml ]; then uv run --locked --only-group tooling --inexact research-repo-tools toolchain run -- cargo update; fi
 
-# Upgrade only declared managed Cargo tools and publish verified TOML pins.
+# Upgrade declared managed Cargo tools and release binaries; publish verified TOML pins.
 update-cargo-tools:
     uv run --locked --only-group tooling --inexact research-repo-tools toolchain upgrade
 
@@ -197,16 +201,20 @@ update-python-dependencies:
 
 alias update-python-deps := update-python-dependencies
 
-# Upgrade uv and declared Cargo tools, then install Just and sync declared tools.
-update-tools: update-uv update-cargo-tools setup
+# Upgrade uv and declared tools, then sync without shell/bootstrap configuration.
+update-tools: update-uv update-cargo-tools
 
 # Upgrade uv through its installation owner and reconcile the project pin.
-update-uv:
-    uv run --no-config --no-sync --no-python-downloads research-repo-tools deps update-uv
+update-uv *args:
+    uv run --no-config --no-sync --no-python-downloads research-repo-tools deps update-uv "$@"
 
 # Run declared scientific examples or validators in configuration order.
 validate configuration *names:
     uv run --locked --group dev research-repo-tools toolchain run -- research-repo-tools validation run "$@"
+
+# Use the consumer's committed strict selected-actions settings as the sole allowlist.
+workflow-allowlist-check:
+    uv run --locked --group dev research-repo-tools actions allowlist --policy .github/settings/allowed-actions.json .github/workflows
 
 # Audit with the declared version/persona; pass --require-online in CI or --offline deliberately.
 zizmor-check *args:

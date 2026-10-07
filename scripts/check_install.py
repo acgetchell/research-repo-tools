@@ -246,6 +246,12 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             public_suite = consumer / "public_api_consumer.py"
             public_suite.write_bytes((ROOT / "tests/utilities/public_api_consumer.py").read_bytes())
             run_isolated(python, [str(public_suite)], cwd=consumer, env=local_env)
+            actions_suite = consumer / "public_actions_consumer.py"
+            actions_suite.write_bytes((ROOT / "tests/dependencies/public_actions_consumer.py").read_bytes())
+            run_isolated(python, [str(actions_suite)], cwd=consumer, env=local_env)
+            owners_suite = consumer / "public_owners_consumer.py"
+            owners_suite.write_bytes((ROOT / "tests/toolchain/public_owners_consumer.py").read_bytes())
+            run_isolated(python, [str(owners_suite)], cwd=consumer, env=local_env)
             just_suite = consumer / "public_just_consumer.py"
             just_suite.write_bytes((ROOT / "tests/utilities/public_just_consumer.py").read_bytes())
             run_isolated(python, [str(just_suite)], cwd=consumer, env=local_env)

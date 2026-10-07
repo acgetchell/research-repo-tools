@@ -19,6 +19,10 @@ def recipes(tmp_path, monkeypatch, request):
     source = changelog.template("justfile") if consumer else Path(__file__).resolve().parents[2].joinpath("justfile").read_text()
     justfile = tmp_path / "justfile"
     justfile.write_text(source, newline="\n")
+    if not consumer:
+        template = tmp_path / "src/research_repo_tools/templates/justfile"
+        template.parent.mkdir(parents=True)
+        template.write_bytes(changelog.template("justfile").encode())
     # Record the outer uv invocations, including the checked toolchain command.
     # No updater, installer, resolver, or Git command is executed.
     python = tmp_path / "Python's executable with spaces"
@@ -50,7 +54,6 @@ def commands(consumer, cargo):
     prefix = ["run", "--locked", *(["--only-group", "tooling", "--inexact"] if consumer else []), "research-repo-tools"]
     uv = [["run", "--no-config", "--no-sync", "--no-python-downloads", "research-repo-tools", "deps", "update-uv"]]
     tools = [[*prefix, "toolchain", "upgrade"]] if consumer else []
-    setup = [["run", "--locked", "--managed-python", "--only-group", "tooling", "research-repo-tools", "setup"]] if consumer else [[*prefix, "setup"]]
     rust = [[*prefix, "toolchain", "run", "--", "cargo", *args] for args in (["upgrade", "--incompatible", "allow"], ["update"])] if cargo else []
     sync = ["sync", "--locked", "--group", "dev"]
     if consumer:
@@ -72,13 +75,13 @@ def commands(consumer, cargo):
         ]
     python = [[*prefix, "deps", "update-python"], ["lock", "--upgrade"], sync]
     return {
-        "update": uv + tools + setup + rust + python,
+        "update": uv + tools + rust + python,
         "update-cargo-dependencies": rust,
         "update-cargo-tools": tools,
         "update-dependencies": rust + python,
         "update-python-dependencies": python,
         "update-python-deps": python,
-        "update-tools": uv + tools + setup,
+        "update-tools": uv + tools,
         "update-uv": uv,
     }
 
@@ -131,7 +134,7 @@ def test_consumer_owns_exclusions_and_additional_resolution_roots(recipes):
         "    uv run --locked --only-group tooling --inexact research-repo-tools toolchain run -- cargo {command} "
         '--manifest-path "fixtures/extra root/Cargo.toml"{args}\n'
     )
-    start = source.index("\n# Upgrade only declared managed Cargo tools")
+    start = source.rfind("\n\n", 0, source.index("\nupdate-cargo-tools:")) + 1
     source = source[:start] + extra.format(command="upgrade", args=" --incompatible allow") + extra.format(command="update", args="") + source[start:]
     justfile.write_text(source, newline="\n")
     justfile.with_name("Cargo.toml").touch()
@@ -144,3 +147,78 @@ def test_consumer_owns_exclusions_and_additional_resolution_roots(recipes):
         ["upgrade", "--manifest-path", "fixtures/extra root/Cargo.toml", "--incompatible", "allow"],
         ["update", "--manifest-path", "fixtures/extra root/Cargo.toml"],
     ]
+
+
+def test_opted_in_actions_stage_checks_final_dependency_pins(recipes):
+    justfile, consumer = recipes
+    if not consumer:
+        pytest.skip("Actions maintenance is a consumer opt-in")
+    source = justfile.read_text().replace("update: update-tools update-dependencies", "update: update-tools update-dependencies update-actions")
+    justfile.write_text(source, newline="\n")
+    result, calls = invoke(justfile, "update")
+    assert result.returncode == 0, result.stderr
+    assert calls == commands(True, False)["update"] + [
+        [
+            "run",
+            "--locked",
+            "--only-group",
+            "tooling",
+            "--inexact",
+            "research-repo-tools",
+            "actions",
+            "update",
+            "--policy",
+            ".github/action-updates.toml",
+            ".github/workflows",
+        ]
+    ]
+
+
+def maintainer_checks():
+    return [
+        ["lock", "--check"],
+        ["run", "--locked", "python", "scripts/check_newlines.py"],
+        ["run", "--locked", "--no-sync", "--no-python-downloads", "research-repo-tools", "python", "check"],
+        ["run", "--locked", "actionlint"],
+        ["run", "--locked", "actionlint", "src/research_repo_tools/templates/publish-crates.yml"],
+        ["run", "--locked", "research-repo-tools", "zizmor", "check", ".github", "src/research_repo_tools/templates/publish-crates.yml"],
+    ]
+
+
+def test_maintainer_ci_checks_early_and_coalesces_lock_validation(recipes):
+    justfile, consumer = recipes
+    if consumer:
+        pytest.skip("maintainer validation tiers")
+    result, calls = invoke(justfile, "ci")
+    assert result.returncode == 0, result.stderr
+    assert calls == maintainer_checks() + [
+        ["run", "--locked", "pytest", "--cov", "--cov-report=term-missing", "--cov-report=xml:coverage/cobertura.xml"],
+        ["build", "--no-sources", "--clear"],
+        ["run", "--locked", "python", "scripts/check_install.py"],
+    ]
+
+
+@pytest.mark.parametrize("failure_step", [1, 3])
+def test_maintainer_static_failure_prevents_workflow_audits_tests_and_builds(recipes, monkeypatch, failure_step):
+    justfile, consumer = recipes
+    if consumer:
+        pytest.skip("maintainer validation tiers")
+    monkeypatch.setenv("FAIL_STEP", str(failure_step))
+    result, calls = invoke(justfile, "ci")
+    assert result.returncode == 23, result.stderr
+    assert calls == maintainer_checks()[:failure_step]
+
+
+def test_maintainer_format_failure_stops_before_python_and_workflow_checks(recipes):
+    justfile, consumer = recipes
+    if consumer:
+        pytest.skip("maintainer validation tiers")
+    template = justfile.parent / "src/research_repo_tools/templates/justfile"
+    source = template.read_bytes()
+    malformed = source.replace(b"{{ quote(justfile()) }}", b"{{quote(justfile())}}")
+    assert malformed != source
+    template.write_bytes(malformed)
+    result, calls = invoke(justfile, "ci")
+    assert result.returncode != 0
+    assert "formatted justfile differs" in result.stderr
+    assert calls == [["lock", "--check"]]

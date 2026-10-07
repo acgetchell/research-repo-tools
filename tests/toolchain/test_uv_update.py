@@ -48,6 +48,8 @@ def test_updates_with_owner_and_reconciles_project_pin(project, monkeypatch, own
             output = f"uv {current}" + (" (Homebrew)" if owner == "homebrew" else "")
         elif args == ["--prefix", "uv"]:
             output = str(installed.parent)
+        elif args == ["list", "--versions", "uv"]:
+            output = f"uv {current}"
         else:
             assert args == (["upgrade", "uv"] if owner == "homebrew" else ["self", "update", "--no-config"])
             current = "0.12.16"
@@ -75,7 +77,7 @@ def test_failed_upgrade_preserves_repository_files(project, monkeypatch):
         raise subprocess.CalledProcessError(1, [command, *args], stderr="external package manager")
 
     monkeypatch.setattr(uv_update, "run_safe_command", run)
-    with pytest.raises(subprocess.CalledProcessError):
+    with pytest.raises(RuntimeError, match="project pin unchanged"):
         uv_update.update(project)
     assert {path: path.read_bytes() for path in project.rglob("*") if path.is_file()} == originals
 
@@ -136,8 +138,8 @@ def test_unverified_owner_never_invokes_self_update_or_changes_pin(project, monk
     monkeypatch.setattr(uv_update, "check_uv", lambda **_: "0.12.15")
 
     def run(command, args, **kwargs):
-        assert args == ["--version"], "an unverified owner must never reach the self-updater"
-        return subprocess.CompletedProcess([], 0, "uv 0.12.15", "")
+        assert args in (["--version"], ["tool", "dir", "--no-config"]), "an unverified owner must never reach an updater"
+        return subprocess.CompletedProcess([], 0, "uv 0.12.15" if args == ["--version"] else str(project / "tool store"), "")
 
     monkeypatch.setattr(uv_update, "run_safe_command", run)
     original = (project / "pyproject.toml").read_bytes()
@@ -172,3 +174,111 @@ def test_xdg_receipt_does_not_fall_through_to_another_installation(project, monk
     primary.mkdir(parents=True)
     primary.joinpath("uv-receipt.json").write_text("{}", newline="\n")
     assert not uv_update._standalone_installation(installed)
+
+
+@pytest.mark.parametrize("failure", ["missing-entrypoint", "wrong-entrypoint", "different-binary", "missing-environment", "malformed"])
+def test_uv_tool_receipt_never_grants_arbitrary_path_ownership(project, monkeypatch, failure):
+    tools = project / "uv tools"
+    environment = tools / "uv"
+    scripts = environment / ("Scripts" if os.name == "nt" else "bin")
+    scripts.mkdir(parents=True)
+    installed = scripts / ("uv.exe" if os.name == "nt" else "uv")
+    installed.write_bytes(b"uv binary")
+    (environment / "pyvenv.cfg").write_bytes(b"Python environment")
+    receipt = environment / "uv-receipt.toml"
+    data = f'[tool]\nentrypoints=[{{name="uv",install-path={json.dumps(str(installed))}}}]\n'
+    if failure == "missing-entrypoint":
+        data = "[tool]\nentrypoints=[]\n"
+    elif failure == "wrong-entrypoint":
+        data = data.replace(json.dumps(str(installed)), json.dumps(str(project / "unrelated uv")))
+    elif failure == "different-binary":
+        external = project / "active uv"
+        external.write_bytes(b"arbitrary different executable")
+        data = data.replace(json.dumps(str(installed)), json.dumps(str(external)))
+        installed = external
+    elif failure == "missing-environment":
+        (environment / "pyvenv.cfg").unlink()
+    elif failure == "malformed":
+        data = "["
+    receipt.write_bytes(data.encode())
+    monkeypatch.setattr(uv_update, "run_safe_command", lambda *_, **__: subprocess.CompletedProcess([], 0, str(tools), ""))
+    if failure == "wrong-entrypoint":
+        assert uv_update._uv_tool_installation(installed) is None
+    else:
+        with pytest.raises(ValueError):
+            uv_update._uv_tool_installation(installed)
+
+
+@pytest.mark.parametrize("failure", ["downgrade", "receipt-change", "malformed-receipt", "local-edit"])
+def test_uv_verification_and_pin_publication_failure_report_recovery(project, monkeypatch, failure):
+    installed = project / "uv"
+    installed.write_bytes(b"binary")
+    original = (project / "pyproject.toml").read_bytes()
+    receipt = project / "uv-receipt.toml"
+    tool = {"python": "3.14", "requirements": [{"name": "uv"}]}
+    version = "0.12.19"
+    ownership = tool
+
+    def run(command, args, **kwargs):
+        nonlocal version, ownership
+        if args == ["--version"]:
+            return subprocess.CompletedProcess([], 0, f"uv {version}", "")
+        version = "0.12.18" if failure == "downgrade" else "0.12.21"
+        if failure == "receipt-change":
+            ownership = {"python": "3.15", "requirements": [{"name": "uv"}]}
+        if failure == "local-edit":
+            (project / "pyproject.toml").write_bytes(original + b"# user edit\n")
+        return subprocess.CompletedProcess([], 0, "", "")
+
+    monkeypatch.setattr(uv_update.shutil, "which", lambda _: str(installed))
+    monkeypatch.setattr(uv_update, "_standalone_installation", lambda _: False)
+
+    def installation(_):
+        if failure == "malformed-receipt" and version == "0.12.21":
+            raise ValueError("invalid ownership receipt")
+        return uv_update._ToolInstallation(receipt, ownership, (("home", "interpreter"),))
+
+    monkeypatch.setattr(uv_update, "_uv_tool_installation", installation)
+    monkeypatch.setattr(uv_update, "check_uv", lambda **_: version)
+    monkeypatch.setattr(uv_update, "run_safe_command", run)
+    with pytest.raises((ValueError, RuntimeError), match="project pin"):
+        uv_update.update(project)
+    assert (project / "pyproject.toml").read_bytes() == original + (b"# user edit\n" if failure == "local-edit" else b"")
+
+
+def test_uv_tool_actual_interpreter_change_preserves_pin_and_reports_recovery(project, monkeypatch):
+    environment = project / "tools" / "uv"
+    scripts = environment / ("Scripts" if os.name == "nt" else "bin")
+    scripts.mkdir(parents=True)
+    installed = scripts / ("uv.exe" if os.name == "nt" else "uv")
+    installed.write_bytes(b"native uv")
+    configuration = environment / "pyvenv.cfg"
+    configuration.write_bytes(b"home = original interpreter\nversion_info = 3.14.7\n")
+    (environment / "uv-receipt.toml").write_bytes(
+        f'[tool]\npython="3.14"\nrequirements=[{{name="uv"}}]\nentrypoints=[{{name="uv",install-path={json.dumps(str(installed))}}}]\n'.encode()
+    )
+    version = "0.12.19"
+    mutations = []
+
+    def run(command, args, **kwargs):
+        nonlocal version
+        if args == ["--version"]:
+            output = f"uv {version}"
+        elif args == ["tool", "dir", "--no-config"]:
+            output = str(environment.parent)
+        else:
+            assert args[:3] == ["tool", "upgrade", "uv"]
+            mutations.append(args)
+            configuration.write_bytes(b"home = another interpreter\nversion_info = 3.14.8\n")
+            version = "0.12.21"
+            output = ""
+        return subprocess.CompletedProcess([], 0, output, "")
+
+    monkeypatch.setattr(uv_update.shutil, "which", lambda _: str(installed))
+    monkeypatch.setattr(uv_update, "run_safe_command", run)
+    monkeypatch.setattr(uv_update, "check_uv", lambda **_: version)
+    original = (project / "pyproject.toml").read_bytes()
+    with pytest.raises(ValueError, match="interpreter.*installation changed, project pin unchanged; inspect and retry"):
+        uv_update.update(project)
+    assert len(mutations) == 1
+    assert (project / "pyproject.toml").read_bytes() == original

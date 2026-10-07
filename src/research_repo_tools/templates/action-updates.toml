@@ -1,0 +1,12 @@
+# Consumer-owned opt-in targets. "latest" permits major upgrades; use an
+# explicit stable version tag to control the permitted target. Nothing outside
+# these exact action/subpath identities is rewritten.
+[actions]
+"actions/checkout" = "latest"
+
+# Prefer invoking the shared zizmor scanner directly. If retaining a wrapper,
+# verify its upstream supported-version inventory at the selected/retained SHA.
+# The tool version comes from the consumer's existing authoritative declaration.
+# [compatibility."zizmorcore/zizmor-action"]
+# path = "support/versions"
+# tool = "zizmor"

@@ -95,7 +95,15 @@ def upgrade(settings: config.Config, *, source: Path | None = None, dry_run: boo
     for old, new in binary_changes:
         print(f"{old.name}: {old.version} -> {new.version}", flush=True)
     if not changes and not binary_changes:
-        print("Declared Cargo tools and binaries are current; no changes made.")
+        statuses = [*(current.cargo_status(tool) for tool in plan.cargo), *(current.binary_status(tool) for tool in plan.binaries)]
+        if failures := [status for status in statuses if not status.ok]:
+            details = "; ".join(f"{status.name}: {status.actual}" for status in failures)
+            raise ValueError(f"required managed tools failed verification: {details}; run toolchain sync to repair, then retry; no pins changed")
+        print(
+            "Declared Cargo tools and binaries are verified and current; no changes made."
+            if statuses
+            else "Skipped managed tool upgrades: no Cargo/prebuilt declarations."
+        )
         return
     document = tomllib.loads(text)
     data = document["tool"]["research-repo-tools"] if source.name == "pyproject.toml" else document

@@ -5,6 +5,7 @@ import io
 import json
 import os
 import tarfile
+import zipfile
 from unittest.mock import patch
 
 import pytest
@@ -154,3 +155,90 @@ def test_verified_binary_published(tmp_path):
     ):
         prebuilt.install(tool, host, target, cwd=tmp_path, env={})
     assert target.read_bytes() == payload
+
+
+@pytest.mark.parametrize(
+    "name,host",
+    [("dprint", "aarch64-apple-darwin"), ("dprint", "x86_64-pc-windows-msvc"), ("rumdl", "x86_64-unknown-linux-gnu"), ("rumdl", "x86_64-pc-windows-msvc")],
+)
+def test_formatter_archive_install_uses_upstream_checksum_and_tag(tmp_path, monkeypatch, name, host):
+    tool = BinaryTool(name, "0.1.2")
+    asset = prebuilt.asset_name(tool, host)
+    binary = name + (".exe" if "windows" in host else "")
+    stream = io.BytesIO()
+    if asset.endswith(".zip"):
+        with zipfile.ZipFile(stream, "w") as archive:
+            archive.writestr(binary, b"verified binary")
+    else:
+        with tarfile.open(fileobj=stream, mode="w:gz") as archive:
+            member = tarfile.TarInfo(f"release/{binary}")
+            member.size = len(b"verified binary")
+            archive.addfile(member, io.BytesIO(b"verified binary"))
+    payload = stream.getvalue()
+    metadata = release(tool, host, payload)
+    if name == "dprint":
+        metadata["assets"][0]["browser_download_url"] = metadata["assets"][0]["browser_download_url"].replace("/v0.1.2/", "/0.1.2/")
+    target = tmp_path / "bin" / binary
+
+    def download(url, path, **kwargs):
+        assert url == metadata["assets"][0]["browser_download_url"]
+        assert kwargs["expected_sha256"] == hashlib.sha256(payload).hexdigest()
+        path.write_bytes(payload)
+
+    monkeypatch.setattr(prebuilt, "release_metadata", lambda *_: metadata)
+    monkeypatch.setattr(prebuilt, "download_asset", download)
+    monkeypatch.setattr(prebuilt, "version_at", lambda *_, **__: "0.1.2")
+    prebuilt.install(tool, host, target, cwd=tmp_path, env={})
+    assert target.read_bytes() == b"verified binary"
+
+
+def test_binary_and_cargo_ownership_is_unambiguous(tmp_path):
+    (tmp_path / "pyproject.toml").write_bytes(b'[tool.uv]\nrequired-version="==0.12.19"\n')
+    (tmp_path / ".python-version").write_bytes(b"3.14\n")
+    (tmp_path / "rust-toolchain.toml").write_bytes(b'[toolchain]\nchannel="1.98.0"\n')
+    settings = config.parse({"toolchain": {"cargo": {"dprint": "0.60.1"}, "binaries": {"dprint": "0.60.1"}}}, root=tmp_path)
+    with pytest.raises(ValueError, match="ownership is ambiguous"):
+        toolchain_config.load(settings)
+
+
+def test_dprint_release_uses_unprefixed_upstream_tag(monkeypatch):
+    def request(req, **_):
+        assert req.full_url.endswith("/dprint/dprint/releases/tags/0.60.1")
+        return io.BytesIO(b'{"draft":false,"prerelease":false,"tag_name":"0.60.1"}')
+
+    monkeypatch.setattr(prebuilt.urllib.request, "urlopen", request)
+    assert prebuilt.release_metadata("dprint", "v0.60.1")["tag_name"] == "0.60.1"
+
+
+@pytest.mark.parametrize(
+    "name,host,expected",
+    [
+        ("dprint", "aarch64-apple-darwin", "dprint-aarch64-apple-darwin.zip"),
+        ("dprint", "x86_64-apple-darwin", "dprint-x86_64-apple-darwin.zip"),
+        ("dprint", "aarch64-unknown-linux-gnu", "dprint-aarch64-unknown-linux-gnu.zip"),
+        ("dprint", "x86_64-unknown-linux-gnu", "dprint-x86_64-unknown-linux-gnu.zip"),
+        ("dprint", "aarch64-pc-windows-msvc", "dprint-aarch64-pc-windows-msvc.zip"),
+        ("dprint", "x86_64-pc-windows-msvc", "dprint-x86_64-pc-windows-msvc.zip"),
+        ("rumdl", "aarch64-apple-darwin", "rumdl-v0.1.2-aarch64-apple-darwin.tar.gz"),
+        ("rumdl", "x86_64-apple-darwin", "rumdl-v0.1.2-x86_64-apple-darwin.tar.gz"),
+        ("rumdl", "aarch64-unknown-linux-gnu", "rumdl-v0.1.2-aarch64-unknown-linux-gnu.tar.gz"),
+        ("rumdl", "x86_64-unknown-linux-gnu", "rumdl-v0.1.2-x86_64-unknown-linux-gnu.tar.gz"),
+        ("rumdl", "x86_64-pc-windows-msvc", "rumdl-v0.1.2-x86_64-pc-windows-msvc.zip"),
+    ],
+)
+def test_formatter_asset_names_have_independent_platform_expectations(name, host, expected):
+    assert prebuilt.asset_name(BinaryTool(name, "0.1.2"), host) == expected
+
+
+def test_rumdl_windows_arm64_requires_cargo():
+    with pytest.raises(ValueError, match="explicit Cargo owner"):
+        prebuilt.asset_name(BinaryTool("rumdl", "0.1.2"), "aarch64-pc-windows-msvc")
+
+
+@pytest.mark.parametrize("name,tag", [("dprint", "v0.60.1"), ("rumdl", "0.2.78"), ("gitleaks", "8.30.1"), ("osv-scanner", "2.6.0")])
+def test_latest_release_requires_repository_tag_convention(monkeypatch, name, tag):
+    monkeypatch.setattr(
+        prebuilt.urllib.request, "urlopen", lambda *_, **__: io.BytesIO(json.dumps({"draft": False, "prerelease": False, "tag_name": tag}).encode())
+    )
+    with pytest.raises(ValueError, match="binary release tag mismatch"):
+        prebuilt.release_metadata(name, "latest")

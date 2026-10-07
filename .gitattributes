@@ -1,0 +1,2 @@
+# Keep both maintainer and packaged recipes compatible with Just's formatter.
+justfile text eol=lf

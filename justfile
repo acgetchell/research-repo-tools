@@ -7,8 +7,7 @@ audit:
     uv run --locked --group audit python scripts/audit_dependencies.py
 
 # Replace stale build artifacts with the current wheel and source distribution.
-build:
-    uv lock --check
+build: lock-check
     uv build --no-sources --clear
 
 # Generate, normalize, and rotate completed minor series into docs/archives/changelog.
@@ -35,7 +34,7 @@ alias changelog-unreleased := changelog-release
 
 # Install the pinned external generator through Cargo.
 changelog-setup:
-    cargo install git-cliff --version {{git_cliff_version}} --locked
+    cargo install git-cliff --version {{ git_cliff_version }} --locked
 
 # Exercise generator contracts with the exact declared external version.
 changelog-test: changelog-tools-check
@@ -45,12 +44,10 @@ changelog-test: changelog-tools-check
 [private]
 changelog-tools-check:
     git-cliff --version
-    test "$(git-cliff --version)" = "git-cliff {{git_cliff_version}}"
+    test "$(git-cliff --version)" = "git-cliff {{ git_cliff_version }}"
 
-# Check the lockfile, Python linting, formatting, newlines, types, and workflows.
-check: newline-check workflow-check
-    uv lock --check
-    uv run --locked --no-sync --no-python-downloads research-repo-tools python check
+# Check the lockfile, Justfiles, Python policies, and workflows.
+check: lock-check justfile-check newline-check python-check workflow-check
 
 # Validate existing artifacts without rebuilding them (also used by native CI).
 check-dist:
@@ -80,18 +77,31 @@ coverage:
 [private]
 default: help
 
-# List available commands and arguments in lexicographic order.
+# List recipes and arguments in lexicographic order, with aliases inline.
 help:
-    @just --justfile {{quote(justfile())}} --alias-style separate --list
+    @just --justfile {{ quote(justfile()) }} --alias-style right --list
 
 alias help-workflows := help
 
 # Build and check isolated wheel and source-distribution installations.
 install-check: build check-dist
 
+# Check the maintainer and packaged consumer recipes with the pinned Just formatter.
+justfile-check:
+    just --justfile {{ quote(justfile()) }} --fmt --check
+    just --justfile src/research_repo_tools/templates/justfile --fmt --check
+
+# Verify the manifest and lock agree without changing dependencies.
+lock-check:
+    uv lock --check
+
 # Reject implicit platform-dependent newlines in Python text-file writes.
 newline-check:
     uv run --locked python scripts/check_newlines.py
+
+# Check lint, formatting, and types for the complete tracked/nonignored Python inventory.
+python-check:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools python check
 
 # Read-only publication preflight; does not create or push a tag.
 release-check tag:
@@ -157,12 +167,12 @@ update-python-dependencies:
     uv lock --upgrade
     uv sync --locked --group dev
 
-# Upgrade uv, then install the declared Just and Python environment.
-update-tools: update-uv setup
+# Upgrade uv without repeating shell/bootstrap configuration.
+update-tools: update-uv
 
 # Upgrade uv through its installation owner and reconcile the project pin.
-update-uv:
-    uv run --no-config --no-sync --no-python-downloads research-repo-tools deps update-uv
+update-uv *args:
+    uv run --no-config --no-sync --no-python-downloads research-repo-tools deps update-uv "$@"
 
 # Run actionlint and zizmor with authenticated online audits when available.
 workflow-check:
