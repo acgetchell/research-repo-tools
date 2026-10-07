@@ -67,7 +67,7 @@ def argument_batches(command: Sequence[str], files: Iterable[str], *, batch_size
         if not isinstance(name, str) or not name or "\0" in name:
             raise ValueError("file arguments must be nonempty strings without NUL")
         # ./ prevents a leading dash from being interpreted as a tool option.
-        argument = "./" + name
+        argument = name if Path(name).is_absolute() else "./" + name
         if _argument_size([*command, argument]) > argument_limit:
             raise ValueError(f"file argument exceeds the argument limit: {name!r}")
         if batch and (len(batch) >= batch_size or _argument_size([*command, *batch, argument]) > argument_limit):

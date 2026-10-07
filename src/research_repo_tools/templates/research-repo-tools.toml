@@ -57,6 +57,23 @@ outputs = "clear"
 # pattern = '^doi: (?P<value>[^\s]+)[ \t]*\r?$'
 # value = "10.1234/your-concept-doi"
 
+# Optional SARIF selection. Driver names are exact; [] keeps all rule IDs.
+# [sarif]
+# category-prefix = "analysis"
+# [sarif.drivers]
+# "Scanner" = ["project."]
+
+# Semgrep scan policy; repository-owned rules and exclusions remain local.
+# [semgrep]
+# batch-size = 100
+# config = "semgrep.yaml"
+# inline-suppressions = false
+# jobs = 1
+# report-category = "semgrep"
+# report-layout = "aggregate"
+# target-timeout = 120
+# timeout = 300
+
 # Declare the scanner pin in dependency-groups.dev OR toolchain.cargo.
 [zizmor]
 persona = "regular"

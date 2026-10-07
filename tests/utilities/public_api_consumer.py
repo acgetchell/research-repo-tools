@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from research_repo_tools.files import RecoveryError, replace_many
+from research_repo_tools.files import RecoveryError, publish_directory, replace_many
 from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics, resolve_executable, run_command, run_command_bytes, run_git_bytes
 
 
@@ -328,6 +328,128 @@ class TestPublication(ConsumerCase):
         self.assertIsNone(detail.backup)
         self.assertEqual(first.read_bytes(), b"new")
         self.assertEqual(list(self.root.iterdir()), [first])
+
+
+class TestDirectoryPublication(unittest.TestCase):
+    def test_complete_generation_removes_stale_members_and_empty_generations_are_supported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory).resolve() / "figures"
+            with publish_directory(output) as stage:
+                (stage / "old.png").write_bytes(b"old\r\n\xff")
+                (stage / "nested").mkdir()
+                (stage / "nested/old.png").write_bytes(b"old")
+            with publish_directory(output) as stage:
+                self.assertEqual((output / "old.png").read_bytes(), b"old\r\n\xff")
+                (stage / "new.png").write_bytes(b"new\r\n\xff")
+            self.assertEqual([path.name for path in output.iterdir()], ["new.png"])
+            self.assertEqual((output / "new.png").read_bytes(), b"new\r\n\xff")
+            with publish_directory(output):
+                pass
+            self.assertEqual(list(output.iterdir()), [])
+            self.assertEqual(list(output.parent.iterdir()), [output])
+
+    def test_generation_and_commit_failures_restore_the_original_directory(self):
+        from research_repo_tools import files
+
+        for phase in ("generation", "commit", "move-original"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory).resolve() / "reports"
+                output.mkdir()
+                (output / "old").write_bytes(b"original\r\n")
+                native = files._replace_path
+
+                def replace(source, destination):
+                    if phase == "commit" and source.name == "candidate" or phase == "move-original" and source == output:
+                        raise OSError("injected publication failure")
+                    native(source, destination)
+
+                with patch.object(files, "_replace_path", side_effect=replace), self.assertRaisesRegex(OSError, "injected"):
+                    with publish_directory(output) as stage:
+                        (stage / "new").write_bytes(b"candidate")
+                        if phase == "generation":
+                            raise OSError("injected generation failure")
+                self.assertEqual((output / "old").read_bytes(), b"original\r\n")
+                self.assertEqual(list(output.parent.iterdir()), [output])
+
+    def test_incomplete_rollback_retains_the_original_tree_and_recovery_location(self):
+        from research_repo_tools import files
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory).resolve() / "reports"
+            output.mkdir()
+            (output / "old").write_bytes(b"recovery\xff")
+            native = files._replace_path
+
+            def replace(source, destination):
+                if source.name in {"candidate", "previous"}:
+                    raise OSError("injected filesystem failure")
+                native(source, destination)
+
+            with patch.object(files, "_replace_path", side_effect=replace), self.assertRaises(ExceptionGroup) as caught:
+                with publish_directory(output) as stage:
+                    (stage / "new").write_bytes(b"candidate")
+            primary, recovery = caught.exception.exceptions
+            self.assertIsInstance(primary, OSError)
+            self.assertIsInstance(recovery, RecoveryError)
+            assert isinstance(recovery, RecoveryError)
+            assert recovery.backup is not None
+            self.assertEqual(recovery.target, output)
+            self.assertEqual((recovery.backup / "old").read_bytes(), b"recovery\xff")
+            self.assertFalse((recovery.backup.parent / "candidate").exists())
+            self.assertIn(str(recovery.backup), str(caught.exception))
+
+    def test_interruption_after_each_completed_rename_restores_original_state(self):
+        from research_repo_tools import files
+
+        for existing, phase in ((True, "move-original"), (True, "commit"), (False, "commit")):
+            with self.subTest(existing=existing, phase=phase), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory).resolve() / "reports"
+                if existing:
+                    output.mkdir()
+                    (output / "original").write_bytes(b"original\r\n\xff")
+                native = files._replace_path
+                interrupted = False
+
+                def replace(source, destination):
+                    nonlocal interrupted
+                    native(source, destination)
+                    if not interrupted and (phase == "move-original" and source == output or phase == "commit" and source.name == "candidate"):
+                        interrupted = True
+                        raise KeyboardInterrupt("injected after rename")
+
+                with patch.object(files, "_replace_path", side_effect=replace), self.assertRaises(KeyboardInterrupt):
+                    with publish_directory(output) as stage:
+                        (stage / "candidate").write_bytes(b"candidate")
+                if existing:
+                    self.assertEqual((output / "original").read_bytes(), b"original\r\n\xff")
+                    self.assertEqual(list(output.parent.iterdir()), [output])
+                else:
+                    self.assertEqual(list(output.parent.iterdir()), [])
+
+    def test_absent_destination_failure_removes_transaction_parents(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            with self.assertRaisesRegex(RuntimeError, "generation"):
+                with publish_directory(root / "new/nested/reports"):
+                    raise RuntimeError("generation failure")
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_generated_junction_is_rejected_before_traversal_or_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory).resolve() / "figures"
+            output.mkdir()
+            (output / "original").write_bytes(b"original")
+            with self.assertRaisesRegex(ValueError, "link or special entry"):
+                with publish_directory(output) as stage:
+                    junction = stage / "junction"
+                    junction.mkdir()
+                    # Focused Windows junction model, without changing OS identity.
+                    with patch.object(Path, "is_junction", autospec=True, side_effect=lambda path: path == junction):
+                        from research_repo_tools import files
+
+                        files._sync_directory_tree(stage)
+            self.assertEqual((output / "original").read_bytes(), b"original")
+            self.assertEqual(list(output.parent.iterdir()), [output])
 
 
 if __name__ == "__main__":

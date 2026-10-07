@@ -1,6 +1,6 @@
 # Shared capability migration
 
-These capabilities target v0.1.7, the next planned package release. Consumers adopt
+The baseline capabilities below shipped in v0.1.7. Consumers adopt
 an exact registry pin after publication and run their complete native gate;
 they do not depend on sibling checkouts. Release history belongs in
 [CHANGELOG.md](../CHANGELOG.md).
@@ -39,3 +39,31 @@ Review adoption on Linux, macOS and Windows. Local deterministic models suppleme
 native installed-package checks; a successful host-only check does not establish
 another platform's support. See [README](../README.md) for operational commands
 and [CONTRIBUTING](../CONTRIBUTING.md) for package development.
+
+## SARIF and batched scan adoption
+
+These capabilities target v0.1.8 ([#72](https://github.com/acgetchell/research-repo-tools/issues/72),
+[#74](https://github.com/acgetchell/research-repo-tools/issues/74)). Pin an exact
+published PyPI version containing the interfaces, then validate the paired
+delaunay adoption before retiring its working implementations. An upstream merge
+or local wheel evaluation alone does not satisfy that publication prerequisite.
+
+| Consumer implementation to remove | Shared replacement | Retained consumer responsibility |
+| --- | --- | --- |
+| `scripts/ci/filter_codacy_sarif.py` parsing, filtering, splitting, staging and command-file writer | `sarif split`, consumer `sarif.drivers`, `files.publish_directory`, `ci.export_environment` | Codacy driver names/namespaces, upload conditions, permissions and category prefix |
+| `_copy_file`, `_replace_path` and generic directory swap in `scripts/notebook_validation_rendering.py` | `files.publish_directory`, copying or rendering into the yielded directory | Figure names, rendering, complete-set validation and scientific assertions |
+| Shell target-array and native launch/report plumbing in `just semgrep-scan` | `semgrep scan` with the same shared inventory for the findings gate and upload | Include/exclude patterns, deliberate fixture exclusions, inline suppression review and rule YAML |
+| Native scan launch in `.github/workflows/semgrep-sarif.yml` | Thin consumer recipe calling the configured shared scanner and uploading `semgrep.sarif` | Actions pins, permissions, fork/upload conditions and stable category policy |
+
+Generic upstream regressions cover finite/duplicate-free input, metadata and rule
+index preservation, repeated driver names, empty/stale generations, staging and
+commit failure, retained recovery trees, bounded native launches, paired-report
+agreement, exact coverage and suppression policy. Keep focused consumer recipe,
+pinned-package, Codacy selection and figure/scientific policy tests downstream.
+
+The new Semgrep contract replaces 0.1.7's two launches per file with one launch
+per bounded batch. Its dedicated directory replaces every prior member rather
+than preserving unrelated files; choose a separate output directory. Aggregate
+SARIF uses one run/category. Configure reviewed suppressions explicitly instead
+of retaining the former unconditional `--disable-nosem` policy. Defaults are
+one job and a 120-second rule/target timeout; rules and exclusions stay local.

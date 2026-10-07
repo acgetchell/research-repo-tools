@@ -28,6 +28,19 @@ def test_other_languages_excluded_and_unclosed_rust_blocks(tmp_path):
         rust_blocks(path)
 
 
+def test_windows_snippet_paths_map_native_json_and_both_sarif_uri_forms():
+    from pathlib import PureWindowsPath
+
+    from research_repo_tools.semgrep_scan import _source_mapping
+
+    mapping = _source_mapping(PureWindowsPath("D:/temporary inputs/block.rs"), PureWindowsPath("C:/repository/tests/source.rs"))
+    assert mapping == {
+        "D:\\temporary inputs\\block.rs": "C:\\repository\\tests\\source.rs",
+        "D:/temporary inputs/block.rs": "C:/repository/tests/source.rs",
+        "D%3A/temporary%20inputs/block.rs": "C%3A/repository/tests/source.rs",
+    }
+
+
 def test_native_scan_requires_complete_coverage_and_retains_findings(tmp_path, monkeypatch):
     import json
     import subprocess
@@ -43,26 +56,38 @@ def test_native_scan_requires_complete_coverage_and_retains_findings(tmp_path, m
 
     def execute(_binary, args, **kwargs):
         assert "--disable-nosem" in args and "--strict" in args and "--error" in args
-        value = (
-            {
-                "results": [{"check_id": "local.rule", "path": str(source), "start": {"line": 1}, "end": {"line": 1}}],
-                "errors": [],
-                "paths": {"scanned": [str(source)] if covered else []},
-            }
-            if "--json" in args
-            else {"version": "2.1.0", "runs": [{"tool": {}, "results": [{"message": {"text": "local finding"}}]}]}
-        )
+        value = {
+            "results": [{"check_id": "local.rule", "path": str(source), "start": {"line": 1}, "end": {"line": 1}}],
+            "errors": [],
+            "paths": {"scanned": [str(source)] if covered else []},
+        }
+        sarif = {
+            "version": "2.1.0",
+            "runs": [
+                {
+                    "tool": {"driver": {"name": "Semgrep"}},
+                    "results": [
+                        {
+                            "ruleId": "local.rule",
+                            "message": {"text": "local finding"},
+                            "locations": [{"physicalLocation": {"artifactLocation": {"uri": source.as_posix()}, "region": {"startLine": 1}}}],
+                        }
+                    ],
+                }
+            ],
+        }
         from pathlib import Path
 
         Path(args[args.index("--output") + 1]).write_bytes(json.dumps(value).encode())
+        Path(args[args.index("--sarif-output") + 1]).write_bytes(json.dumps(sarif).encode())
         return subprocess.CompletedProcess([], 0, b"", b"")
 
     monkeypatch.setattr(security, "run_command_bytes", execute)
     assert semgrep_scan.scan(settings, include=("*.py",)) == 1
-    assert not (tmp_path / "target/security/semgrep/0.json").exists()
+    assert not (tmp_path / "target/security/semgrep/semgrep.json").exists()
     covered = True
     assert semgrep_scan.scan(settings, include=("*.py",)) == 1
-    assert json.loads((tmp_path / "target/security/semgrep/0.json").read_bytes())["results"][0]["check_id"] == "local.rule"
+    assert json.loads((tmp_path / "target/security/semgrep/semgrep.json").read_bytes())["results"][0]["check_id"] == "local.rule"
 
 
 def test_documentation_fixture_assertions_use_shared_checker(tmp_path, monkeypatch):
