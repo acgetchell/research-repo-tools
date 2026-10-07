@@ -17,7 +17,7 @@ __all__ = ["load", "parse"]
 FIELDS = {
     "notebooks": {"advice", "group", "cwd", "output-dir", "timeout", "outputs", "prohibit-installs"},
     "toolchain": {"binaries", "cargo", "inherit-python", "inherit-python-tools"},
-    "deps": {"pyproject", "justfile", "tools", "uv"},
+    "deps": {"pyproject", "justfile", "tools", "tool-owners", "uv"},
     "semgrep": {"config", "fixtures", "namespace", "timeout", "cwd", "counts"},
     "release": {"date-policy", "final-changelog", "required-files", "exclude", "rules", "tag-policy"},
     "changelog": {"formatter", "cliff-config", "owner", "repository", "dependency-bodies"},
@@ -63,9 +63,17 @@ class DependencySettings:
     justfile: str = "justfile"
     tools: Mapping[str, str] = field(default_factory=dict)
     uv: str = "uv"
+    tool_owners: Mapping[str, str] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tools", MappingProxyType(dict(self.tools)))
+        object.__setattr__(self, "tool_owners", MappingProxyType(dict(self.tool_owners)))
+        if any(owner not in {"cargo", "homebrew"} for owner in self.tool_owners.values()):
+            raise ValueError("deps.tool-owners supports cargo and homebrew; migrate prebuilt tools to toolchain.binaries")
+        if self.tool_owners.keys() - set(self.tools.values()) or "uv" in self.tool_owners:
+            raise ValueError("deps.tool-owners must name mapped tools other than uv (uv ownership is detected)")
+        if "just" in self.tool_owners:
+            raise ValueError("Just is supplied by the shared rust-just dependency; remove its competing Just variable and ownership declaration")
 
 
 @dataclass(frozen=True, slots=True)
@@ -241,6 +249,10 @@ def parse(value: object, *, root: Path) -> Config:
     if type(toolchain.get("inherit-python-tools", False)) is not bool:
         raise ValueError("toolchain.inherit-python-tools must be a boolean")
     deps = _section(data, "deps")
+    mapped = _strings(deps.get("tools", {}), "deps.tools")
+    managed = _strings(toolchain.get("cargo", {}), "toolchain.cargo") | _strings(toolchain.get("binaries", {}), "toolchain.binaries")
+    if overlap := set(mapped.values()) & managed.keys():
+        raise ValueError(f"tool ownership is ambiguous between user pins and managed declarations: {', '.join(sorted(overlap))}")
     semgrep = _section(data, "semgrep")
     release = _section(data, "release")
     changelog = _section(data, "changelog")
@@ -286,8 +298,9 @@ def parse(value: object, *, root: Path) -> Config:
         deps=DependencySettings(
             pyproject=_string(deps.get("pyproject", "pyproject.toml"), "deps.pyproject"),
             justfile=_string(deps.get("justfile", "justfile"), "deps.justfile"),
-            tools=_strings(deps.get("tools", {}), "deps.tools"),
+            tools=mapped,
             uv=_string(deps.get("uv", "uv"), "deps.uv"),
+            tool_owners=_strings(deps.get("tool-owners", {}), "deps.tool-owners"),
         ),
         semgrep=SemgrepSettings(
             config=_optional_string(semgrep, "config", "semgrep"),

@@ -48,17 +48,20 @@ including changelog and release recipes.
 | `just build` | Build the wheel and source distribution |
 | `just changelog-setup` | Install the declared external git-cliff version with Cargo |
 | `just changelog-test` | Require the declared git-cliff version and test generator contracts |
-| `just check` | Check the lockfile, Python linting, formatting, newlines, types, and workflows |
+| `just check` | Check the lock, Justfiles, Python/newline policies, then workflows |
 | `just check-dist` | Check isolated installations of existing build artifacts |
 | `just check-dist-changelog` | Test real changelog CLI generation from existing wheel and sdist installations |
 | `just check-setup` | Exercise real setup on disposable GitHub-hosted runners only |
 | `just ci` | Run checks, tests, builds, and installation checks for final review |
 | `just clean [ARGS...]` | Preview obsolete package-owned installs; pass `--apply` to remove them |
 | `just coverage` | Run tests with branch and subprocess coverage; write `coverage/cobertura.xml` |
-| `just help` | List available commands and arguments in lexicographic order |
+| `just help` | List recipes and arguments in lexicographic order, with aliases inline |
 | `just help-workflows` | Alias for `help` |
 | `just install-check` | Build and check isolated installations |
+| `just justfile-check` | Check maintainer and packaged recipes with the pinned Just formatter |
+| `just lock-check` | Verify the manifest and lock agree without changing dependencies |
 | `just newline-check` | Reject implicit newline translation in Python text-file writes |
+| `just python-check` | Check lint, formatting, and types for the complete Python inventory |
 | `just release-check TAG` | Check final release metadata and generated notes |
 | `just release-first TAG DATE` | Prepare a first release after checking stable published history |
 | `just release-notes TAG` | Print reviewed generated release notes |
@@ -75,8 +78,8 @@ including changelog and release recipes.
 | `just update` | Upgrade tools, then Python dependencies and the development environment |
 | `just update-dependencies` | Run the Python dependency workflow |
 | `just update-python-dependencies` | Update direct dev pins, upgrade the full lock, and synchronize dev |
-| `just update-tools` | Upgrade uv, then install declared Just and synchronize the environment |
-| `just update-uv` | Upgrade uv through its installation owner and reconcile its pin |
+| `just update-tools` | Upgrade uv without repeating shell/bootstrap configuration |
+| `just update-uv [ARGS...]` | Upgrade uv through its verified owner; use `--dry-run` to preview |
 | `just workflow-check` | Run actionlint and shared zizmor audits with reported authentication policy |
 
 The maintainer justfile also exposes the [shared changelog recipes](README.md#just-recipes).
@@ -109,13 +112,18 @@ asset verification and the approval-gated PyPI upload without rebuilding.
 
 `just check` lints, formats, and type-checks every tracked and nonignored Python
 file using shared selection, including `src`, `scripts`, and `tests`. It also runs
-the newline guard and the locked actionlint and zizmor workflow validators.
+the lock and Justfile checks, newline guard, and locked actionlint and zizmor workflow validators.
+Lock, recipe formatting, and Python policies run before network-backed workflow
+audits. These component recipes can also be run independently. `just ci`
+coalesces the lock check shared by `check` and `build` within that invocation.
+The repository's `.gitattributes` keeps Justfiles at LF on every platform so
+the formatter sees the same recipe bytes on Windows checkouts.
 `just audit` performs the separate network-backed Python dependency audit.
 GitHub repository settings and required checks are documented in
 [GitHub setup](docs/CONFIGURING_GITHUB.md); their API payloads live in `.github/settings/`.
 
 Run `just update` to upgrade uv through its owner, reconcile its manifest pin,
-run setup, then advance exact development-tool pins through
+then advance exact development-tool pins through
 this package's `deps update-python` command, refresh `uv.lock` within the resulting manifest
 constraints, and sync the development environment. Review the manifest and lockfile
 changes, then validate them with `just ci`. Exact runtime, build,

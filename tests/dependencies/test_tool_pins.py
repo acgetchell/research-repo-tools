@@ -6,7 +6,7 @@ from pathlib import Path
 
 import pytest
 
-from research_repo_tools import cli, tool_pins
+from research_repo_tools import cli, files, tool_pins
 from research_repo_tools.process import ExecutableNotFoundError
 
 
@@ -34,6 +34,25 @@ def test_atomic_reconciliation_preserves_unmanaged_text_and_crlf(tmp_path, polic
     assert path.read_bytes() == expected
     assert sorted((p.name for p in tmp_path.iterdir())) == ["justfile"]
     assert tool_pins.reconcile(path, versions, policy["tools"]) == {}
+
+
+def test_pin_reconciliation_preserves_edit_during_staging(tmp_path, monkeypatch):
+    path = tmp_path / "justfile"
+    original = b'format_pin := "1.0.0"\r\n'
+    path.write_bytes(original)
+    stage = files._stage_bytes
+    edited = original + b"# concurrent edit\r\n"
+
+    def edit_during_staging(target, payload):
+        staged = stage(target, payload)
+        target.write_bytes(edited)
+        return staged
+
+    monkeypatch.setattr(files, "_stage_bytes", edit_during_staging)
+    with pytest.raises(ValueError, match="file changed before publication"):
+        tool_pins.reconcile(path, {"dprint": "2.0.0"}, {"format_pin": "dprint"})
+    assert path.read_bytes() == edited
+    assert list(tmp_path.iterdir()) == [path]
 
 
 @pytest.mark.parametrize("problem", ["missing-tool", "duplicate-pin", "missing-pin", "malformed-uv"])

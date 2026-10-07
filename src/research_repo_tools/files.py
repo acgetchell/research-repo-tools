@@ -273,7 +273,7 @@ def preserve_files(paths: Sequence[Path]) -> Iterator[Mapping[Path, bytes | None
         _cleanup_temporary_paths(backup_paths)
 
 
-def _publish(writes: Sequence[tuple[Path, bytes]]) -> None:
+def _publish(writes: Sequence[tuple[Path, bytes]], *, expected: Mapping[Path, bytes] | None = None) -> None:
     """Publish byte sequences as one rollback-capable transaction.
 
     All replacement files and backups are prepared before the first visible
@@ -287,11 +287,22 @@ def _publish(writes: Sequence[tuple[Path, bytes]]) -> None:
     if any(not isinstance(payload, bytes) for _path, payload in writes):
         raise TypeError("Transaction payloads must be bytes")
     writes = tuple((target, payload) for target, (_path, payload) in zip(targets, writes, strict=True))
+    guards = tuple(expected.items()) if expected is not None else ()
+    guard_targets = _validate_targets([path for path, _payload in guards])
+    if any(not isinstance(payload, bytes) for _path, payload in guards):
+        raise TypeError("Expected publication snapshots must be bytes")
+    if expected is not None and set(targets) - set(guard_targets):
+        raise ValueError("Expected publication snapshots must cover every replacement target")
 
     staged_writes, created_directories = _stage_writes(writes)
 
     committed: list[_StagedWrite] = []
     try:
+        if _validate_targets([path for path, _payload in guards]) != guard_targets:
+            raise ValueError("file changed before publication: snapshot paths changed; refusing to overwrite them")
+        for target, (_path, original) in zip(guard_targets, guards, strict=True):
+            if target.read_bytes() != original:
+                raise ValueError(f"file changed before publication: {target}; refusing to overwrite it")
         for item in staged_writes:
             _replace_path(item.staged, item.target)
             committed.append(item)
@@ -309,7 +320,7 @@ def _publish(writes: Sequence[tuple[Path, bytes]]) -> None:
     _cleanup_temporary_paths(backup_paths)
 
 
-def replace_many(updates: Mapping[Path, bytes]) -> None:
+def replace_many(updates: Mapping[Path, bytes], *, expected: Mapping[Path, bytes] | None = None) -> None:
     """Stage all replacements and backups, then publish with rollback on failure.
 
     Paths resolve relative to the caller's working directory. Targets must be
@@ -321,8 +332,11 @@ def replace_many(updates: Mapping[Path, bytes]) -> None:
     fails, an exception group retains the original failure first, followed by
     RecoveryError instances pointing to retained backups. Cleanup is best effort.
     This does not serialize concurrent writers or make the group crash atomic.
+    Optional expected snapshots cover every replacement and may include unchanged
+    input files. They are rechecked after staging, before the first replacement.
+    A mismatch rejects the transaction and preserves current source files.
     """
-    _publish(tuple(updates.items()))
+    _publish(tuple(updates.items()), expected=expected)
 
 
 def replace(path: Path, payload: bytes) -> None:

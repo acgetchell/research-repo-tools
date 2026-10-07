@@ -42,7 +42,7 @@ audit = ["pip-audit==2.10.1"]
 packages = ["src/research_repo_tools"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "docs", "scripts", "pyproject.toml", "uv.lock", "README.md", "CONTRIBUTING.md", "AGENTS.md", "CHANGELOG.md", "LICENSE", "justfile", ".python-version"]
+include = ["src", "tests", "docs", "scripts", "pyproject.toml", "uv.lock", "README.md", "CONTRIBUTING.md", "AGENTS.md", "CHANGELOG.md", "LICENSE", "justfile", ".gitattributes", ".python-version"]
 
 [tool.uv]
 required-version = "==0.12.23"

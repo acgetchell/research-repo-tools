@@ -19,6 +19,7 @@ TEMPLATES = (
     "CHANGELOG.md",
     "RELEASING.md",
     "VALIDATING_WORKFLOWS.md",
+    "action-updates.toml",
     "benchmark.toml",
     "cliff.toml",
     "common-benchmark.toml",

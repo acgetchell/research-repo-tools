@@ -155,9 +155,11 @@ def load(settings: Config) -> Toolchain:
     if cargo and rust is None:
         raise ValueError("Cargo tools require a pinned rust-toolchain.toml")
     binaries = []
+    if overlap := settings.toolchain.cargo.keys() & settings.toolchain.binaries.keys():
+        raise ValueError(f"tool ownership is ambiguous between Cargo and prebuilt declarations: {', '.join(sorted(overlap))}")
     for name, version in sorted(settings.toolchain.binaries.items()):
-        if name not in {"gitleaks", "osv-scanner"} or not STABLE.fullmatch(version):
-            raise ValueError("toolchain.binaries supports exact stable X.Y.Z pins for gitleaks and osv-scanner")
+        if name not in {"dprint", "gitleaks", "osv-scanner", "rumdl"} or not STABLE.fullmatch(version):
+            raise ValueError("toolchain.binaries supports exact stable X.Y.Z pins for dprint, gitleaks, osv-scanner, and rumdl; Just is supplied by rust-just")
         binaries.append(BinaryTool(name, version))
     return Toolchain(root, uv[2:], python, rust, tuple(cargo), requires, tuple(binaries))
 

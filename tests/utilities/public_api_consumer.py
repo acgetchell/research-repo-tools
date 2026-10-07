@@ -132,6 +132,23 @@ class TestProcess(ConsumerCase):
 
 
 class TestPublication(ConsumerCase):
+    def test_expected_snapshots_guard_replacements_and_unchanged_inputs(self) -> None:
+        first, context = self.root / "first", self.root / "context"
+        first.write_bytes(b"original\r\n")
+        context.write_bytes(b"context\x00\xff")
+        snapshots = {first: first.read_bytes(), context: context.read_bytes()}
+        context.write_bytes(b"editor save\r\n")
+        with self.assertRaisesRegex(ValueError, "file changed before publication"):
+            replace_many({first: b"candidate"}, expected=snapshots)
+        self.assertEqual(first.read_bytes(), snapshots[first])
+        self.assertEqual(context.read_bytes(), b"editor save\r\n")
+        self.assertEqual(set(self.root.iterdir()), {first, context})
+        with self.assertRaisesRegex(ValueError, "cover every replacement"):
+            replace_many({first: b"candidate"}, expected={context: context.read_bytes()})
+        replace_many({first: b"candidate\r\n"}, expected={first: first.read_bytes(), context: context.read_bytes()})
+        self.assertEqual(first.read_bytes(), b"candidate\r\n")
+        self.assertEqual(context.read_bytes(), b"editor save\r\n")
+
     def test_publication_preserves_bytes_and_permissions(self) -> None:
         first, second = self.root / "existing", self.root / "nested/données.bin"
         first.write_bytes(b"original")

@@ -166,3 +166,28 @@ version variables after adopting a release with the catalog additions. Move the
 exact `clippy-sarif` and `sarif-fmt` pins to the managed Cargo table; keep Clippy's
 arguments, managed Rust component declaration, SARIF upload, and pipeline failure
 handling in the consumer.
+
+## Portable update and Actions policy adoption
+
+Pin a published package containing these capabilities before downstream adoption;
+the intended release is 0.1.8. Release publication and consumer PRs are separate
+operations. Follow the [Actions policy wiring](../README.md#actions-allowlists-and-opt-in-pin-updates)
+and [mixed installation ownership](../README.md#mixed-installation-owners-on-linux-and-macos).
+
+Move generic YAML allowlist checks upstream while retaining the consumer's existing
+strict selected-actions JSON and focused integration tests. Remove duplicate
+Semgrep allowlist regex lists after the shared gate is exercised; retain scanner
+coverage and pin/security checks. No policy or GitHub settings change is implicit.
+Actions updates remain explicit opt-in by exact identity, workflow scope, and
+target; scheduled Dependabot review remains consumer policy.
+
+The update aggregate no longer invokes shell/bootstrap setup. Run explicit setup
+when adopting/changing declarations. This supersedes the previous update-tools
+composition ending in setup. Linux requires no Homebrew; macOS Brewfile updates
+stay conditional and consumer-owned. uv-tool ownership extends the existing
+receipt-verified contract without trusting arbitrary PATH version probes.
+Move prebuilt dprint/rumdl to managed binary declarations and delete old Cargo/Just
+pin mappings. Shared Just uses the package's rust-just authority. Keep Cargo
+exclusions, extra roots, and deliberate user-wide upgrades in the consumer.
+An unchanged managed version now requires a verified installation before an
+upgrade can succeed; this supersedes a successful no-op for missing current tools.

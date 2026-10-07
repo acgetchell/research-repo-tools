@@ -23,6 +23,30 @@ def require_hosted_runner() -> None:
         raise RuntimeError("check-setup requires a disposable GitHub-hosted runner; it installs tools and updates the runner user's PATH")
 
 
+def check_uv_tool_owner(consumer: Path, uv: str, cli: str, python: Path, version: str, env: dict[str, str]) -> None:
+    """Exercise real uv-tool receipt binding, stale-pin launch, and repeat updates."""
+    root = consumer / "uv owner probe"
+    root.mkdir()
+    selected = {**env, "UV_TOOL_DIR": str(root / "tools"), "UV_TOOL_BIN_DIR": str(root / "bin")}
+    run([uv, "tool", "install", f"uv=={version}", "--python", str(python), "--no-config"], cwd=root, env=selected)
+    executable = binary(root / "bin", "uv")
+    manifest = root / "pyproject.toml"
+    original = (f'[tool.uv]\nrequired-version="==0.12.10" # stale\n[tool.research-repo-tools.deps]\nuv={json.dumps(str(executable))}\n').encode()
+    manifest.write_bytes(original)
+    receipt = root / "tools" / "uv" / "uv-receipt.toml"
+    constraints = tomllib.loads(receipt.read_text(encoding="utf-8"))["tool"]
+    command = [cli, "--root", str(root), "deps", "update-uv"]
+    assert "uv owner: uv-tool" in run([*command, "--dry-run"], cwd=root, env=selected)
+    assert manifest.read_bytes() == original
+    run(command, cwd=root, env=selected)
+    expected = original.replace(b"==0.12.10", f"=={version}".encode())
+    assert manifest.read_bytes() == expected
+    run(command, cwd=root, env=selected)
+    assert manifest.read_bytes() == expected
+    after = tomllib.loads(receipt.read_text(encoding="utf-8"))["tool"]
+    assert all(after.get(key) == constraints.get(key) for key in ("python", "requirements", "constraints", "overrides"))
+
+
 def isolated_environment(directory: Path) -> dict[str, str]:
     # Preserve native compiler/SDK and network configuration, but never inherit
     # another project's interpreter, managed tools, or uv directory overrides.
@@ -265,7 +289,7 @@ def check(dist: Path) -> None:
             f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(wheel.resolve()))}}}\n"
             '[tool.research-repo-tools.toolchain.cargo]\ncargo-deny="0.20.2"\ncargo-edit="0.13.13"\nclippy-sarif="0.8.0"\n'
             f'git-cliff="{generator_version}"\nsarif-fmt="0.8.0"\n'
-            '[tool.research-repo-tools.toolchain.binaries]\ngitleaks="8.30.1"\nosv-scanner="2.6.0"\n',
+            '[tool.research-repo-tools.toolchain.binaries]\ndprint="0.60.1"\ngitleaks="8.30.1"\nosv-scanner="2.6.0"\nrumdl="0.2.78"\n',
             encoding="utf-8",
             newline="\n",
         )
@@ -297,7 +321,20 @@ def check(dist: Path) -> None:
         assert selected["just"] == binary(Path(env["UV_TOOL_BIN_DIR"]), "just")
         assert selected["Python"] == binary(scripts, "python")
         # A system installation must never satisfy the managed Rust/Cargo pins.
-        for name in ("rustup", "rustc", "cargo", "cargo-deny", "cargo-edit-upgrade", "clippy-sarif", "git-cliff", "sarif-fmt", "gitleaks", "osv-scanner"):
+        for name in (
+            "rustup",
+            "rustc",
+            "cargo",
+            "cargo-deny",
+            "cargo-edit-upgrade",
+            "clippy-sarif",
+            "dprint",
+            "git-cliff",
+            "sarif-fmt",
+            "gitleaks",
+            "osv-scanner",
+            "rumdl",
+        ):
             assert selected[name].is_relative_to(env["RESEARCH_REPO_TOOLS_HOME"]), selected[name]
         probe = (
             "import json, shutil, sys, research_repo_tools; "
@@ -334,6 +371,8 @@ def check(dist: Path) -> None:
         assert shell_state() == configured, "repeat setup changed shell configuration"
         assert json.loads(run([cli, "toolchain", "check", "--json"], cwd=consumer, env=active)) == statuses
         verify_shell(consumer, env, just_version)
+        check_uv_tool_owner(consumer, uv, cli, selected["Python"], uv_version.removeprefix("=="), active)
+        assert shell_state() == configured, "uv owner updates changed shell configuration"
         check_clippy_sarif(consumer, cli, active)
         check_security_binaries(consumer, cli, active)
         check_cargo_update(consumer, cli, just, active)

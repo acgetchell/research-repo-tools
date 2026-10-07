@@ -10,11 +10,15 @@ history belong in the generated [CHANGELOG.md](../CHANGELOG.md). See
 | --- | --- |
 | `just audit` | Check locked third-party Python dependencies against online vulnerability advisories |
 | `just changelog-test` | Require the pinned git-cliff version and exercise generator contracts |
-| `just check` | Workflow, lockfile, lint, format, newline, and type checks during development |
+| `just check` | Lock, Justfile, Python/newline, and workflow checks during development |
 | `just check-dist-changelog` | Exercise real CLI generation from existing wheel and sdist installations |
 | `just ci` | Final checks, tests, wheel/sdist builds, and isolated installation checks |
 | `just coverage` | Run tests with branch and subprocess coverage; write `coverage/cobertura.xml` |
+| `just help` | List recipes and arguments in lexicographic order, with aliases inline |
+| `just justfile-check` | Check maintainer and packaged recipes with the pinned Just formatter |
+| `just lock-check` | Verify the manifest and lock agree without changing dependencies |
 | `just newline-check` | Reject implicit newline translation in Python text-file writes |
+| `just python-check` | Check lint, formatting, and types for the complete Python inventory |
 | `just test` | Run the test suite |
 
 Run the [contributor setup](../CONTRIBUTING.md#development-environment)
@@ -22,6 +26,12 @@ before using these recipes. Environment activation is not required.
 Run focused regressions when a behavioral change needs verification, then
 `just ci` when the work is ready for review. A passing `just check` does not
 establish that tests, builds, or installation checks passed.
+
+`just check` checks the lock, Justfiles, and Python policies before workflow
+audits. `just justfile-check` validates both the maintainer recipes and the
+packaged consumer template; their pinned formatter is installed during setup.
+The repository's `.gitattributes` preserves LF for both files on Windows checkouts.
+`just ci` shares the lock check between validation and building.
 
 `just check` includes `just newline-check`, so both local `just ci` and every
 native package job enforce explicit newline policies. The guard's positive and

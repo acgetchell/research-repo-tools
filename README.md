@@ -74,6 +74,7 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 
 | Capability | Commands | Contract |
 | --- | --- | --- |
+| Actions | `actions allowlist`, `update` | [Strict consumer allowlists and opt-in commit pin updates](#actions-allowlists-and-opt-in-pin-updates) |
 | Changelog | `changelog archive`, `check`, `generate`, `normalize`, `notes`, `tag` | Root `CHANGELOG.md`; completed minor series in `docs/archives/changelog/` |
 | CI environment | `ci export` | Validate all single-line values before appending a GitHub environment command file |
 | Coverage | `coverage report` | Cobertura summaries with deduplicated source lines |
@@ -113,7 +114,7 @@ arguments in lexicographic order.
 | `just ci` | Run the same canonical consumer gate as local validation |
 | `just clean [ARGS...]` | Preview obsolete package-owned installs; `--apply` removes them; repeat `--keep-root PATH` to retain other consumers' pins |
 | `just files COMMAND...` | List selected tracked/nonignored files or run a command over them |
-| `just help` | List available commands and arguments in lexicographic order |
+| `just help` | List recipes and arguments in lexicographic order, with aliases inline |
 | `just help-workflows` | Alias for `help` |
 | `just notebook-advise FILE... [--strict]` | Report configured review warnings, optionally failing on them |
 | `just notebook-check FILE...` | Validate notebook structure, cell IDs, and output policy |
@@ -147,14 +148,16 @@ arguments in lexicographic order.
 | `just tools-python-check` | Check inherited Python tool declarations, lock, and executable versions without changes |
 | `just tools-sync-binaries` | Install and verify pinned release binaries without package synchronization or dependency builds |
 | `just update` | Upgrade tools, then Cargo and Python dependencies and the development environment |
+| `just update-actions [ARGS...]` | Opt-in Actions pin update; use `--dry-run` or `--check` to preview the selected scope |
 | `just update-cargo-dependencies` | Upgrade root Cargo requirements (including incompatible releases) and lock resolution; skip projects without a root Cargo.toml |
 | `just update-cargo-tools` | Upgrade declared Cargo tools and release binaries; publish verified TOML pins |
 | `just update-dependencies` | Run the Cargo and Python dependency workflows |
 | `just update-python-dependencies` | Update direct dev pins, upgrade the full Python lock, and synchronize dev |
 | `just update-python-deps` | Alias for `update-python-dependencies` |
-| `just update-tools` | Upgrade uv and managed tools, then run setup |
+| `just update-tools` | Upgrade uv and managed tools without repeating shell configuration |
 | `just update-uv` | Upgrade uv through its installation owner and reconcile its pin |
 | `just validate CONFIGURATION [NAME...]` | Check configured example outputs |
+| `just workflow-allowlist-check` | Check steps and reusable workflows against strict consumer selected-actions settings |
 | `just zizmor-check [ARGS...]` | Run local workflow audits; accept `--offline`, `--require-online`, and `--format sarif` |
 
 To preview a prospective release, run
@@ -162,8 +165,8 @@ To preview a prospective release, run
 
 ### Authenticated release installation in GitHub Actions
 
-`toolchain sync-binaries` installs only the exact `gitleaks` and `osv-scanner`
-pins declared by the consumer. It checks warm caches and repairs damaged
+`toolchain sync-binaries` installs the exact release-binary pins declared by the
+consumer (dprint, gitleaks, osv-scanner, and rumdl). It checks warm caches and repairs damaged
 executables through the same SHA-256-verified installer as setup. It does not
 install Python, Rust, Cargo tools, Just, or project dependencies.
 
@@ -327,8 +330,10 @@ just update
 ```
 
 `just update` upgrades uv first. Standalone uv installations use
-`uv self update`; Homebrew installations use `brew upgrade uv`. Other installation
-owners must update uv themselves. The updater records the resulting stable version
+`uv self update`; Homebrew installations use `brew upgrade uv`; verified `uv tool`
+installations use their native tool upgrader with the verified existing interpreter and
+requirement constraints. Other installation owners must update uv themselves.
+The updater records the resulting stable version
 in `pyproject.toml`. This changes the shared
 user installation; other projects with different exact uv pins must be reconciled
 before their commands will run. Review the generated changes before committing.
@@ -594,7 +599,6 @@ owns:
 
 ```toml
 [tool.research-repo-tools.deps.tools]
-just_version = "just"
 nextest_version = "cargo-nextest"
 uv_version = "uv"
 ```
@@ -636,6 +640,150 @@ synchronizes `dev`.
 Shell bootstrap, Homebrew, stow, and machine-wide update ordering remain consumer
 policy. The standard research-project template continues to use isolated managed
 Cargo installations through `toolchain upgrade`.
+
+#### Mixed installation owners on Linux and macOS
+
+Declare Homebrew ownership explicitly for mapped user tools. Tools without an
+owner entry retain the verified Cargo-inventory contract; a working PATH binary
+does not establish ownership. The selected executable must resolve into the
+formula prefix and agree with Homebrew's installed inventory before reconciliation:
+
+```toml
+[tool.research-repo-tools.deps.tools]
+nextest_version = "cargo-nextest"
+format_version = "dprint"
+
+[tool.research-repo-tools.deps.tool-owners]
+cargo-nextest = "cargo"
+dprint = "homebrew"
+```
+
+For prebuilt dprint and rumdl, migrate their pins to the managed release-binary
+table and remove the corresponding Cargo declaration or Just variable. The
+managed store verifies upstream release URLs, SHA-256 digests, and executable
+versions before publishing pins. Just remains supplied by the shared package's
+exact `rust-just` dependency; remove competing Just pins when adopting this model.
+
+```toml
+[tool.research-repo-tools.toolchain.binaries]
+dprint = "0.60.1"
+rumdl = "0.2.78"
+```
+
+Both tools support x86_64/aarch64 macOS and glibc Linux, plus x86_64 Windows;
+dprint also supports Windows ARM64. Missing release assets or checksums fail.
+Use the explicit Cargo declaration for rumdl on Windows ARM64.
+
+Keep a machine's Homebrew/Brewfile policy conditional in its own recipe. This
+example composes the portable stages without invoking shell setup:
+
+```just
+update: update-platform update-tools update-dependencies
+
+update-platform:
+    if [ "$(uname -s)" = Darwin ]; then brew update && brew upgrade && brew bundle; else echo "Skipped Homebrew/Brewfile stage: macOS policy only"; fi
+
+update-tools: update-uv update-cargo-tools
+
+update-uv *args:
+    uv run --no-config --no-sync --no-python-downloads research-repo-tools deps update-uv "$@"
+```
+
+Linux needs no Homebrew. Retain the existing dependency recipes, Cargo exclusions,
+and additional manifests. User-wide Cargo upgrades remain an explicit consumer
+choice. Updating never installs Homebrew or invokes shell/bootstrap setup.
+`just update-uv --dry-run` identifies the selected installation owner and operation
+and previews project-pin reconciliation without upgrading or writing. The native
+owner determines the available upgrade within its retained constraints;
+`toolchain upgrade --dry-run` previews exact managed Cargo/prebuilt targets, and
+`deps update-tools --dry-run` previews verified user-tool pin reconciliation.
+Unknown ownership and missing tools fail. After a package-manager failure,
+completed installations remain; dependent recipes stop. Repair the reported cause
+and retry. There is no transaction across managers.
+
+### Actions allowlists and opt-in pin updates
+
+The consumer's committed GitHub selected-actions payload is the sole allowlist.
+Use the strict payload with `github_owned_allowed: false`, `verified_allowed:
+false`, and `patterns_allowed` containing exact `owner/repo[/path]@*` identities.
+Wildcards in identities, owner-wide exemptions, duplicate JSON fields, and other
+policy shapes fail. Repository identity matching ignores case; nested paths match
+exactly. A repository entry does not also approve its subpaths.
+
+Merge the packaged `workflow-allowlist-check` recipe, pointing it at that existing
+policy, then add it to the consumer's check/CI gate:
+
+```just
+workflow-allowlist-check:
+    uv run --locked --group dev research-repo-tools actions allowlist --policy .github/settings/allowed-actions.json .github/workflows
+```
+
+```sh
+just workflow-allowlist-check
+```
+
+The checker reads explicit files or YAML directories and inspects both
+`jobs.<id>.uses` calls and every step's `uses`. Quoted/folded scalars and aliases
+are supported; alias findings point to the anchor. Duplicate/merge mappings and
+recursive aliases fail with file/line diagnostics. Local `./` actions and
+`docker://` containers are outside this external policy. Keep actionlint for
+workflow schema and zizmor for full-SHA pinning/security; no repository settings
+are changed. Consumers can delete their generic YAML allowlist checker after
+pinning a published version with this capability and validating their own policy.
+
+Action updates require separate, explicit opt-in targets in
+`.github/action-updates.toml` (also available as the `action-updates.toml` template):
+
+```toml
+[actions]
+"actions/checkout" = "latest"
+"owner/repo/subpath" = "v2.1.0"
+```
+
+`latest` selects GitHub's published stable release and permits major upgrades.
+An explicit stable version tag restricts the target. GitHub CLI (`gh`) is required
+for read-only release/tag lookup, including private repositories. Annotated tags
+are peeled to full commit SHAs. Existing selected references must already use
+full SHAs and ordinary version comments, such as `# v1.2.3`; the updater retains
+subpaths, quote style, trailing comment text, other workflow bytes, and line endings.
+Unsupported scalar forms, aliases when rewriting workflows, missing targets, or lookup
+failures abort before publication. References outside the selected identities
+remain unchanged and appear as skipped in the report.
+
+Merge the packaged `update-actions` recipe and review the report before applying:
+
+```sh
+just update-actions --dry-run
+just update-actions --check
+just update-actions
+```
+
+Preview/check reports include action identity, location, old/new full SHAs, and
+old/new version comments. `--check` returns nonzero if updates are needed;
+`--dry-run` returns zero for a valid preview. Unchanged targets are no-ops.
+To include this stage in deliberate maintenance, opt in by changing the aggregate
+to `update: update-tools update-dependencies update-actions`. Actions compatibility
+then checks the final tool and Python dependency pins. Keep Dependabot's
+scheduled PR review policy in the consumer; this command neither enables nor
+disables it. Review overlapping proposals before merging.
+
+Prefer the shared direct zizmor scanner, with one scanner pin. A retained
+`zizmorcore/zizmor-action` fails maintenance unless its upstream support inventory
+is explicitly checked, including when that wrapper is outside the update targets:
+
+```toml
+[compatibility."zizmorcore/zizmor-action"]
+path = "support/versions"
+tool = "zizmor"
+```
+
+The tool version comes from its existing exact Cargo/prebuilt, Python-group, or
+mapped Just declaration. Conflicting authorities fail. The inventory at the
+candidate or retained SHA must contain that version in the first column of a
+plain version list (optional opaque columns, comments/blank lines and `latest`
+are allowed; duplicate or unsupported entries fail). This avoids an embedded compatibility
+table. Other wrappers may opt into the same contract. This detects absent version
+support, not every possible runtime incompatibility; retain focused consumer CI.
 
 `changelog tag TAG` creates a local annotated tag when explicitly invoked.
 `--dry-run` previews it. Generation needs git-cliff; tagging needs Git. Optional
@@ -1260,7 +1408,6 @@ repository = "consumer"
 # formatter = "rumdl.toml"  # optional external formatting
 
 [tool.research-repo-tools.deps.tools]
-just_version = "just"
 rumdl_version = "rumdl"
 uv_version = "uv"
 
@@ -1279,8 +1426,8 @@ Unknown settings fail. There are no repository profiles.
 
 `deps.tools` values name packages installed separately with Cargo, as listed by
 `cargo install --list`. The special `uv` entry reads the selected uv executable.
-The Cargo package is named `just`; the Python dependency that supplies the bundled
-executable is named `rust-just`.
+Just is supplied by the shared package's exact `rust-just` dependency. Do not
+introduce a competing Just variable or independently installed Cargo Just pin.
 
 ```sh
 uv run --locked research-repo-tools templates CHANGELOG.md

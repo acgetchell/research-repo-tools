@@ -19,6 +19,17 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--config", type=Path, help="TOML config; defaults to [tool.research-repo-tools] in pyproject.toml")
     result.add_argument("--root", type=Path, help="consumer root; defaults to the configuration directory")
     groups = result.add_subparsers(dest="group", required=True)
+    actions = groups.add_parser("actions", help="check external allowlists and update explicitly selected commit pins").add_subparsers(
+        dest="action", required=True
+    )
+    for name in ("allowlist", "update"):
+        command = actions.add_parser(name)
+        command.add_argument("--policy", type=Path, required=True, help="consumer selected-actions JSON or Actions update TOML")
+        command.add_argument("paths", nargs="+", help="explicit workflow files or directories")
+        if name == "update":
+            mode = command.add_mutually_exclusive_group()
+            mode.add_argument("--check", action="store_true", help="preview and return nonzero when selected pins differ")
+            mode.add_argument("--dry-run", action="store_true", help="preview resolved pins without writing")
     changelog = groups.add_parser("changelog", help="generate, normalize, archive, and extract release history").add_subparsers(dest="action", required=True)
     for name, help_text in {
         "archive": "rotate completed minor series from the existing changelog",
@@ -54,7 +65,7 @@ def parser() -> argparse.ArgumentParser:
     deps.add_parser("update-python")
     tools = deps.add_parser("update-tools")
     tools.add_argument("--dry-run", action="store_true")
-    deps.add_parser("update-uv", help="upgrade uv through its owner and reconcile its project pin")
+    deps.add_parser("update-uv", help="upgrade uv through its owner and reconcile its project pin").add_argument("--dry-run", action="store_true")
     docs = groups.add_parser("docs", help="check Markdown source files").add_subparsers(dest="action", required=True)
     docs.add_parser("check-lines").add_argument("files", nargs="+")
     files = groups.add_parser("files", help="select tracked and nonignored inputs and batch commands").add_subparsers(dest="action", required=True)
@@ -184,6 +195,15 @@ def parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace, settings: config.Config) -> int:
+    if args.group == "actions":
+        policy = settings.path(str(args.policy))
+        if args.action == "allowlist":
+            from research_repo_tools.workflow_allowlist import check
+
+            return check(settings.root, policy, args.paths)
+        from research_repo_tools.action_updates import update
+
+        return update(settings, policy, args.paths, dry_run=args.dry_run, check=args.check)
     if args.group == "python":
         from research_repo_tools.python_checks import run
 
@@ -391,7 +411,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         if args.action == "update-uv":
             from research_repo_tools.uv_update import update
 
-            update(settings.root, uv=settings.executable(deps.uv))
+            update(settings.root, uv=settings.executable(deps.uv), dry_run=args.dry_run)
             return 0
         if args.action == "update-python":
             from research_repo_tools.dependencies import main
@@ -420,6 +440,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             settings.path(deps.justfile),
             deps.tools,
             uv=settings.executable(deps.uv),
+            owners=deps.tool_owners,
             dry_run=args.dry_run,
         )
         for pin, (old, new) in changes.items():

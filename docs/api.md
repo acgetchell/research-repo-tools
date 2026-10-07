@@ -43,6 +43,32 @@ against the consumer root; bare executable names use `PATH`.
 Explicit `ci export --file` and `toolchain export --file` paths follow this rule.
 The `GITHUB_ENV` fallback keeps the path supplied by the invoking environment.
 
+`actions allowlist --policy PATH INPUT...` checks consumer-owned selected-actions
+JSON against structured workflow job/step references. Only the strict false/false
+owner-mode payload with exact `owner/repo[/path]@*` patterns is supported. Local
+actions and containers are outside this policy. YAML aliases are supported with
+anchor locations; duplicate/merge keys and recursive aliases fail. Explicit
+directories expand to regular `.yml`/`.yaml` files; repeated paths are deduplicated.
+Leaf symlinks are rejected and parent paths are resolved. Inputs and
+repository settings remain unchanged. See [consumer wiring](../README.md#actions-allowlists-and-opt-in-pin-updates).
+
+`actions update --policy PATH INPUT... [--check | --dry-run]` resolves explicit
+Actions targets from consumer TOML through GitHub CLI and preserves workflow
+source bytes outside scalar SHAs/version comments. `--check` returns 1 for drift;
+`--dry-run` previews without drift failure. All candidates and compatibility
+inventories are checked before any workflow replacement. Caught publication
+failures use the shared rollback/recovery contract. The YAML/update modules are
+implementation details; use the CLI or `cli.main`.
+
+`deps update-uv --dry-run` inspects standalone, Homebrew, or `uv tool` ownership
+and reports the native operation and intended project-pin reconciliation. Applying
+verifies the resulting stable version before preserving/replacing the project
+pin. The existing project pin may differ from installed uv; launch with the
+packaged `update-uv` recipe. Installation upgrades persist if verification or
+publication fails; reported recovery is inspection/repair and retry.
+`deps.tool-owners` explicitly selects `cargo`/`homebrew` for mapped user tools;
+prebuilt tools migrate to the authoritative `toolchain.binaries` contract.
+
 `toolchain sync-binaries` verifies and repairs only the consumer's exact managed
 release-binary pins. It uses the existing host/version cache, release URL/tag
 checks, SHA-256 verification and staged executable probes. Warm caches are
@@ -472,7 +498,7 @@ The template's `just release-first TAG DATE` uses online discovery. Existing
 
 ## Python file-publication API
 
-`research_repo_tools.files.replace_many(updates: Mapping[Path, bytes]) -> None`
+`research_repo_tools.files.replace_many(updates: Mapping[Path, bytes], *, expected: Mapping[Path, bytes] | None = None) -> None`
 publishes a mapping in iteration order. An empty mapping is a no-op. It is the
 single supported publication entry point; pass one entry for one file.
 
@@ -488,6 +514,11 @@ single supported publication entry point; pass one entry for one file.
   to an exclusive sibling temporary file and flushed with `fsync` before any target
   replacement. Each replacement uses the filesystem's atomic rename operation;
   readers can observe intermediate states across multiple files.
+- Optional `expected` snapshots must cover every replacement target and may also
+  guard unchanged input files. Paths follow the same validation rules; snapshots
+  must be bytes. After staging, changed path resolutions or source bytes reject
+  before the first replacement, preserving current files and cleaning staged
+  artifacts. This optimistic guard does not serialize writers with the renames.
 - New files use mode `0600` subject to the platform/umask. Existing permission bits
   are retained where supported; Windows only supports a subset of POSIX modes.
   Publication creates new inodes: ownership, ACLs, extended attributes, timestamps,
