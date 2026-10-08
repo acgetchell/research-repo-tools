@@ -79,9 +79,10 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | CI environment | `ci export` | Validate all single-line values before appending a GitHub environment command file |
 | Coverage | `coverage report` | Cobertura summaries with deduplicated source lines |
 | Dependencies | `deps check-uv`, `update-python`, `update-tools`, `update-uv` | Exact development pins; canonical Cargo SemVer; stable uv pins |
-| Documentation | `docs check-lines` | UTF-8 Markdown line checks with table exemptions |
-| File selection | `files list`, `run` | Tracked/nonignored inputs, exclusions and portable argument batching |
+| Documentation | `docs check-lines` | Existing explicit-path Markdown policy: 160 characters with table exemptions |
+| File selection | `files check-lines`, `list`, `run` | Configurable raw line gate, tracked/nonignored inputs, exclusions and portable argument batching |
 | Notebooks | `notebooks advise`, `check`, `clear`, `execute`, `group`, `inspect`, `launch`, `lint`, `reset`, `sync` | Read-only review, locked JupyterLab, native Ruff/ty checks, execution reports, and explicit restoration |
+| Papers | `papers check`, `normalize`, `source-date` | Explicit UTC dates, optional PDF text/geometry checks and validated metadata normalization |
 | Performance | `performance assets`, `baseline`, `compare`, `convert`, `export`, `extract`, `fetch`, `host`, `measure`, `profile`, `promote`, `publish`, `release-draft`, `release-upload`, `render`, `verify` | Complete configured measurement, retained evidence, release assets and publication |
 | Python | `python check`, `fix`, `typecheck` | Complete tracked/nonignored inventory; native Ruff/ty policy; explicit fixes only |
 | Releases | `release check`, `gate`, `publish`, `registry`, `update`, `verify` | Metadata preparation, reviewed publication gates and exact registry/GitHub verification |
@@ -89,6 +90,7 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | SARIF | `sarif split` | Consumer-selected drivers/namespaces, corrected rule indices and complete output generations |
 | Security | `security osv`, `secrets` | Managed OSV/Gitleaks, explicit inputs, full history, redacted native reports |
 | Semgrep | `semgrep check-fixtures`, `scan` | Validate consumer rules, explicit inventory, reports and fixture expectations |
+| Tectonic dependencies | `tectonic discover`, `export` | Read-only pkg-config/vcpkg discovery; consumer-owned provisioning |
 | Setup | `setup` | Require uv; install user Just and declared tools; sync the locked environment |
 | Templates | `templates NAME` | Shared changelog, release guide/OIDC workflow, just, TOML, and rumdl resources |
 | Toolchain | `toolchain adopt`, `check`, `clean`, `export`, `python-check`, `python-tools-check`, `run`, `sync`, `sync-binaries`, `upgrade` | Exact declarations; managed installations and cleanup; verified execution and checked CI export |
@@ -114,7 +116,7 @@ arguments in lexicographic order.
 | `just check` | Run Python, Semgrep fixture, and zizmor validation; extend with consumer domain gates |
 | `just ci` | Run the same canonical consumer gate as local validation |
 | `just clean [ARGS...]` | Preview obsolete package-owned installs; `--apply` removes them; repeat `--keep-root PATH` to retain other consumers' pins |
-| `just files COMMAND...` | List selected tracked/nonignored files or run a command over them |
+| `just files COMMAND...` | Check raw line limits, list selected files or run a command over them |
 | `just help` | List recipes and arguments in lexicographic order, with aliases inline |
 | `just help-workflows` | Alias for `help` |
 | `just notebook-advise FILE... [--strict]` | Report configured review warnings, optionally failing on them |
@@ -126,6 +128,7 @@ arguments in lexicographic order.
 | `just notebook-lint FILE...` | Check structure, output policy, Python syntax, Ruff rules/formatting, and ty types |
 | `just notebook-reset [PATH...] [--revision REF] [--apply]` | Preview source restoration and declared cleanup; explicitly apply with `--apply` |
 | `just notebook-sync` | Synchronize locked notebook dependencies and the project kernel |
+| `just papers COMMAND...` | Read explicit source dates, check PDFs or normalize their metadata |
 | `just performance COMMAND...` | Compare Criterion samples, handle assets, and verify, render, or publish retained evidence |
 | `just python-check` | Check lint, formatting, and types for all tracked and nonignored Python, including fixtures |
 | `just python-fix` | Apply configured Ruff fixes and formatting to the same complete inventory |
@@ -146,6 +149,7 @@ arguments in lexicographic order.
 | `just setup` | Install and verify declared tools, then synchronize the Python environment |
 | `just shared-python-plan VERSION` | Preview mandatory Python-minimum and optional tool-profile adoption outside the old environment |
 | `just shared-python-update VERSION` | Apply the migration and recreate the locked environment and notebook kernel |
+| `just tectonic COMMAND...` | Discover or export existing native dependency environments |
 | `just tools-check` | Check installed tools and versions without installing them |
 | `just tools-export` | Verify tools and append their environment to `GITHUB_ENV` |
 | `just tools-python-check` | Check inherited Python tool declarations, lock, and executable versions without changes |
@@ -1066,6 +1070,116 @@ put quoted Python examples in strings or Markdown. Review unusual shell cells
 manually; the consumer can disable this policy and retain its own stricter gate
 if its syntax is outside the supported set. Native Ruff and ty remain responsible
 for Python syntax and type checks.
+
+### Raw text line limits
+
+These interfaces target v0.1.8. Adopt an exact published version containing them;
+an upstream merge does not update consumer pins. The consumer declares selection
+and the positive limit in its `pyproject.toml`:
+
+```toml
+[tool.research-repo-tools.text]
+line-limit = 160
+include = ["*.md"]
+exclude = ["CHANGELOG.md", "docs/archive/**", "docs/archives/changelog/**"]
+```
+
+```sh
+just files check-lines
+just files check-lines --limit 100 --include '*.txt' --exclude 'generated/**'
+```
+
+Each supplied option replaces its configured value; repeated include/exclude
+options form that override's list. Shared selection uses Git pathspec includes
+and case-sensitive POSIX glob excludes, fails on discovery errors, and checks
+every selected raw line. Fences, tables, URLs, tabs and trailing spaces count.
+Lengths are Unicode code points, independent of locale, rather than bytes or
+display columns. LF/CRLF/CR endings do not count; final lines without a newline
+do. Diagnostics are `file:one-based-line: line length N exceeds LIMIT` on stderr.
+Violations return 1, a clean or empty inventory returns 0, and read/selection or
+configuration errors return 1. The gate never formats source. The separate
+`docs check-lines FILE...` preserves its established fixed 160 limit and table
+exemption. Use `files check-lines` for a strict raw-source policy.
+
+### Reproducible papers and native dependency discovery
+
+PDF operations are opt-in. Add `research-repo-tools[papers]==X.Y.Z` to the
+consumer's tooling group, using an exact published version containing the
+interfaces, refresh its lock and run setup. Source-date and dependency discovery
+work with the base package. Keep content, figures, bibliography, source/output
+locations, fixed dates and refresh decisions in the consumer.
+
+```toml
+[tool.research-repo-tools.papers.documents.example]
+tex = "papers/example.tex"
+pdf = "target/papers/example.pdf"
+identity = "papers/example.tex"
+min-pages = 1
+require-text = ["Example title", "REFERENCES"]
+forbid-text = ['\today']
+# reference = "papers/example.pdf" # Enable retained-artifact equivalence.
+```
+
+The source must contain exactly one uncommented explicit `\date{July 6, 2026}`
+in the canonical English form. Parsing uses a fixed month map and UTC midnight,
+with no wall clock or locale dependency. A consumer build recipe can use:
+
+```sh
+export SOURCE_DATE_EPOCH="$(just papers source-date --paper example)"
+# Consumer recipe compiles into its declared build directory using that environment.
+just papers normalize --paper example
+just papers check --paper example
+just papers check --paper example --reference papers/example.pdf
+# Explicit refresh intent, after consumer scientific and build checks:
+just papers normalize --paper example --output papers/example.pdf
+```
+
+Literal-path commands are also supported: `papers source-date SOURCE.tex`,
+`papers check BUILT.pdf --min-pages 1 --require-text TITLE --reference RETAINED.pdf`,
+and `papers normalize BUILT.pdf --tex SOURCE.tex --identity STABLE_NAME`.
+CLI options override named policy. Normalization defaults to the input PDF;
+`--output` explicitly selects a separate destination. Every input and candidate
+is validated before replacement, and caught publication failures preserve prior
+artifacts using the shared transaction contract. Exclude concurrent writers.
+
+The supported normalization profile is Tectonic's uncompressed XMP timestamps,
+document/instance UUIDs and 16-byte trailer IDs. Same-width edits preserve xref
+offsets, and the complete candidate must retain page text and geometry. Any
+Info creation/modification dates must already match the explicit UTC epoch,
+including when stored in compressed objects. Missing fields, unsupported profiles,
+encrypted or malformed PDFs fail without replacing output. Structural equivalence
+compares per-page text, media/crop boxes, rotation and units; it allows different
+native PDF bytes and does not certify rendering or scientific meaning.
+
+Native discovery never installs host packages or modifies process environment:
+
+```sh
+just tectonic discover
+just tectonic discover --format shell
+just tectonic export --file target/tectonic.env
+```
+
+Linux/macOS resolve `freetype2`, `graphite2`, `icu-uc`, `libpng` and `zlib` with
+pkg-config; Linux also requires `fontconfig` and `openssl`. Existing
+`PKG_CONFIG_PATH`, `PKG_CONFIG_LIBDIR` and `PKG_CONFIG_SYSROOT_DIR` are retained;
+repeat `--prefix PATH` to discover existing `lib/pkgconfig` and `share/pkgconfig`.
+macOS also discovers existing Homebrew metadata and SDK shims. Windows requires
+`TECTONIC_DEP_BACKEND=vcpkg`, `VCPKG_ROOT` and an existing
+`installed/VCPKGRS_TRIPLET` directory (default `x64-windows-static-md`). Discovery
+checks locations/resolution; consumers still verify library versions and ABI.
+JSON is the default output on every platform; shell output is POSIX syntax.
+Windows callers can apply JSON assignments with PowerShell:
+
+```powershell
+$native = just tectonic discover | ConvertFrom-Json
+$native.PSObject.Properties | ForEach-Object { Set-Item "Env:$($_.Name)" $_.Value }
+```
+
+`tectonic export` appends validated UTF-8 LF assignments to the explicit file or
+`GITHUB_ENV`. Missing prerequisites and probe errors return nonzero and publish
+no assignments. Provision hosts explicitly in consumer setup/CI before discovery.
+See the [API contracts](docs/api.md#paper-date-pdf-and-native-discovery-api) and
+[consumer deletion maps](docs/shared-capability-migration.md#paper-and-raw-line-adoption).
 
 ### Performance evidence
 

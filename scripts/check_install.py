@@ -43,7 +43,7 @@ before = sorted(pathlib.Path.cwd().rglob("*"))
 for module in pkgutil.walk_packages(research_repo_tools.__path__, research_repo_tools.__name__ + "."):
     importlib.import_module(module.name)
 assert sorted(pathlib.Path.cwd().rglob("*")) == before
-for optional in ("nbformat", "nbclient", "matplotlib", "numpy", "pandas", "polars", "torch", "pytest", "ruff", "ty"):
+for optional in ("nbformat", "nbclient", "pypdf", "matplotlib", "numpy", "pandas", "polars", "torch", "pytest", "ruff", "ty"):
     assert importlib.util.find_spec(optional) is None, optional
 from research_repo_tools.changelog import TEMPLATES, template
 for name in TEMPLATES:
@@ -286,6 +286,19 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             toolchain_suite = consumer / "public_toolchain_consumer.py"
             toolchain_suite.write_bytes((ROOT / "tests/toolchain/public_toolchain_consumer.py").read_bytes())
             run_isolated(python, [str(toolchain_suite)], cwd=consumer, env=local_env)
+            text_suite = consumer / "public_text_consumer.py"
+            text_suite.write_bytes((ROOT / "tests/validation/public_text_consumer.py").read_bytes())
+            run_isolated(python, [str(text_suite)], cwd=consumer, env=local_env)
+            native_suite = consumer / "public_native_consumer.py"
+            native_suite.write_bytes((ROOT / "tests/papers/public_native_consumer.py").read_bytes())
+            run_isolated(python, [str(native_suite)], cwd=consumer, env=local_env)
+            # Date/discovery APIs work in base installs; PDF operations fail
+            # clearly until the opt-in extra from the same distribution resolves.
+            paper_suite = consumer / "public_paper_consumer.py"
+            paper_suite.write_bytes((ROOT / "tests/papers/public_paper_consumer.py").read_bytes())
+            run_isolated(python, [str(paper_suite), "TestDates", "TestMissingExtra"], cwd=consumer, env=local_env)
+            run([uv, "pip", "install", "--python", str(python), f"{artifact}[papers]"], cwd=consumer, env=env)
+            run_isolated(python, [str(paper_suite), "TestDates", "TestPdf"], cwd=consumer, env=local_env)
             command = scripts / ("research-repo-tools.exe" if os.name == "nt" else "research-repo-tools")
             assert run([str(command), "--version"], cwd=consumer, env=local_env).strip() == version
             assert "changelog" in run([str(command), "--help"], cwd=consumer, env=local_env)

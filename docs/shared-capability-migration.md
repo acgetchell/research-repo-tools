@@ -67,3 +67,41 @@ than preserving unrelated files; choose a separate output directory. Aggregate
 SARIF uses one run/category. Configure reviewed suppressions explicitly instead
 of retaining the former unconditional `--disable-nosem` policy. Defaults are
 one job and a 120-second rule/target timeout; rules and exclusions stay local.
+
+## Paper and raw line adoption
+
+These interfaces target v0.1.8 ([#70](https://github.com/acgetchell/research-repo-tools/issues/70),
+[#76](https://github.com/acgetchell/research-repo-tools/issues/76)). Adoption requires
+an exact published PyPI release containing them. This change does not implement
+[delaunay#625](https://github.com/acgetchell/delaunay/issues/625),
+[delaunay#633](https://github.com/acgetchell/delaunay/issues/633), or the separate
+[rollout](https://github.com/acgetchell/research-repo-tools/issues/69).
+
+| Consumer implementation to remove after published adoption | Shared replacement | Retained consumer responsibility |
+| --- | --- | --- |
+| `scripts/paper_source_date.py`, its entry point and generic date tests | `papers source-date`, `paper_dates` | Explicit TeX dates, source paths and build recipe exporting `SOURCE_DATE_EPOCH` |
+| `scripts/paper_pdf_normalize.py`, its entry point and generic metadata/atomic-write tests | `papers normalize`, `paper_pdf.normalize_pdf` and shared file publication | Stable identity, candidate/output paths, refresh intent and supported builder profile |
+| `scripts/paper_check.py`, its entry point and generic parsing/text/geometry tests | `papers check`, `paper_pdf.check_pdf` and `compare_structure` | Title/reference expectations, forbidden text, minimum pages and scientific/visual assertions |
+| `scripts/tectonic_native_dependencies.sh` generic discovery and shell-specific tests | `tectonic discover`/`export`, `tectonic.discover_environment` | Explicit host provisioning, SDK/library versions, permissions and environment application |
+| `just markdown-check` target arrays and raw-line shell loop | `files check-lines` using shared selection | Active Markdown includes, generated/history excludes and 160-character limit |
+| Duplicated Markdown discovery in check/fix recipes | `files run` with consumer include/exclude declarations | rumdl policy and explicit formatting intent; the raw gate never formats |
+| Generic paper launches and discovery exports in recipes and `.github/workflows/papers.yml` | Thin configured `papers`/`tectonic` wrappers | TeX lint/format, compilation, figures, cache ownership, CI triggers and uploads |
+
+Upstream regressions use synthetic TeX and complete PDFs. They cover date/comment
+and calendar failures, deterministic/idempotent metadata, malformed/encrypted
+PDFs, per-page differences, validated refresh/publication failures, optional
+extras, read-only discovery, all-line Unicode counts, missing final newline,
+empty selection and fail-closed discovery. Both installed distributions run
+these contracts on each supported native CI host. Native pkg-config fixtures
+use the actual executable; Windows fixtures use native triplet-directory paths.
+They verify discovery rather than native library compilation. Keep focused
+consumer recipe, exact-pin, title/references, figure and scientific tests local.
+
+The shared normalizer validates complete input/candidate PDFs before replacement;
+the former malformed metadata-only byte stubs no longer qualify as PDFs. Info
+dates must match the source epoch, including compressed objects. Unsupported
+profiles fail without replacing output. Build into staging paths before deciding
+to refresh retained artifacts, rather than deleting valid outputs before success.
+The strict `files check-lines` gate counts tables, fences and URLs; the existing
+`docs check-lines` Markdown table exemption remains its separate policy.
+Native PDF bytes may differ while page text, boxes, rotation and units match.

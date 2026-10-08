@@ -89,6 +89,17 @@ its public checks with exact native versions, modeled drift, and real adoption
 candidate resolution. These checks preserve public runtime constraints and
 consumer sources. Base installs omit Ruff, ty, and pytest.
 
+Base installations also omit pypdf. Both distributions run source-date, raw-line
+and read-only Tectonic discovery consumers without PDF dependencies, then resolve
+their own `papers` extra and run complete synthetic PDF consumers. Coverage
+includes date/comment failures, deterministic same-width normalization,
+text/geometry equivalence across different bytes, validated refresh, failure
+preservation and CLI/configuration policy. Native pkg-config tests use small
+`.pc` fixtures; Windows tests use triplet-directory fixtures. These prove
+discovery/export on each host, not native library ABI or Tectonic compilation.
+Raw-line tests include native Git selection, Unicode/CRLF, fences/tables/URLs,
+missing final newline and unchanged inputs.
+
 Both base installations also adopt a synthetic installable application through
 the packaged bootstrap under native Python 3.13. They check mandatory metadata
 enforcement without development opt-ins, unchanged dry runs and Git state,

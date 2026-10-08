@@ -4,25 +4,30 @@ import argparse
 import sys
 from pathlib import Path
 
+from research_repo_tools.text_lines import inspect_lines
+
 MAX_LINE_LENGTH = 160
 
 
 def main(argv: list[str] | None = None) -> int:
-    """Check UTF-8 files, preserving the Markdown recipe's table exemption."""
+    """Preserve the existing explicit-path Markdown policy and table exemption."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("files", nargs="+", type=Path)
     args = parser.parse_args(argv)
     failed = False
     for path in args.files:
         try:
-            with path.open(encoding="utf-8") as source:
-                for line_number, line in enumerate(source, start=1):
-                    # Text mode normalizes CRLF; whitespace still counts toward the limit.
-                    line = line.removesuffix("\n")
-                    if not line.startswith("|") and len(line) > MAX_LINE_LENGTH:
-                        print(f"{path}:{line_number}: line length {len(line)} exceeds {MAX_LINE_LENGTH}", file=sys.stderr)
-                        failed = True
-        except (OSError, UnicodeError) as error:
+            violations = inspect_lines(path, limit=MAX_LINE_LENGTH)
+            # This established Markdown-only policy stays separate from the
+            # generic all-line gate. Character counting has one implementation.
+            with path.open(encoding="utf-8", newline=None) as source:
+                tables = {number for number, line in enumerate(source, 1) if line.startswith("|")}
+            for violation in violations:
+                if violation.line in tables:
+                    continue
+                print(violation, file=sys.stderr)
+                failed = True
+        except (OSError, UnicodeError, ValueError) as error:
             print(f"{path}: {error}", file=sys.stderr)
             failed = True
     if failed:

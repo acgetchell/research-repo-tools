@@ -69,11 +69,13 @@ def parser() -> argparse.ArgumentParser:
     docs = groups.add_parser("docs", help="check Markdown source files").add_subparsers(dest="action", required=True)
     docs.add_parser("check-lines").add_argument("files", nargs="+")
     files = groups.add_parser("files", help="select tracked and nonignored inputs and batch commands").add_subparsers(dest="action", required=True)
-    for action in ("list", "run"):
+    for action in ("check-lines", "list", "run"):
         command = files.add_parser(action)
-        command.add_argument("--include", action="append", default=[], help="Git pathspec; may be repeated")
-        command.add_argument("--exclude", action="append", default=[], help="POSIX glob; may be repeated")
-        if action == "list":
+        command.add_argument("--include", action="append", default=None if action == "check-lines" else [], help="Git pathspec; may be repeated")
+        command.add_argument("--exclude", action="append", default=None if action == "check-lines" else [], help="POSIX glob; may be repeated")
+        if action == "check-lines":
+            command.add_argument("--limit", type=int, help="positive raw Unicode character limit; overrides text.line-limit")
+        elif action == "list":
             command.add_argument("--null", action="store_true", help="separate file names with NUL")
         else:
             command.add_argument("--batch-size", type=int, default=100)
@@ -109,6 +111,21 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--timeout", type=int, default=30, help="positive per-checker timeout in seconds (default: 30)")
     from research_repo_tools.performance import add_commands
 
+    papers = groups.add_parser("papers", help="explicit reproducible dates, optional PDF checks and normalization").add_subparsers(dest="action", required=True)
+    for action in ("check", "normalize", "source-date"):
+        command = papers.add_parser(action)
+        source = command.add_mutually_exclusive_group(required=True)
+        source.add_argument("path", nargs="?", help="TeX source for source-date; PDF for check/normalize")
+        source.add_argument("--paper", help="named consumer papers.documents declaration")
+        if action != "source-date":
+            command.add_argument("--min-pages", type=int)
+            command.add_argument("--require-text", action="append")
+            command.add_argument("--forbid-text", action="append")
+            command.add_argument("--reference")
+        if action == "normalize":
+            command.add_argument("--tex")
+            command.add_argument("--identity", help="stable consumer identity, independent of filesystem paths")
+            command.add_argument("--output", help="explicit destination; defaults to in-place normalization")
     add_commands(groups)
     python = groups.add_parser("python", help="check, fix, or typecheck the complete Python inventory").add_subparsers(dest="action", required=True)
     for action in ("check", "fix", "typecheck"):
@@ -169,9 +186,20 @@ def parser() -> argparse.ArgumentParser:
     scan.add_argument("--rust-docs", action="store_true")
     scan.add_argument("--target-timeout", type=int)
     groups.add_parser("setup", help="install Just and declared tools, configure PATH, and sync the locked environment")
-    templates = groups.add_parser("templates", help="print or explicitly create shared package resources")
     from research_repo_tools.changelog import TEMPLATES
 
+    tectonic = groups.add_parser("tectonic", help="read-only native dependency discovery; provisioning stays consumer-owned").add_subparsers(
+        dest="action", required=True
+    )
+    for action in ("discover", "export"):
+        command = tectonic.add_parser(action)
+        command.add_argument("--pkg-config", default="pkg-config")
+        command.add_argument("--prefix", action="append", default=[], help="existing native prefix; may be repeated")
+        if action == "discover":
+            command.add_argument("--format", choices=("json", "shell"), default="json")
+        else:
+            command.add_argument("--file", type=Path, help="append assignments to this command file, or GITHUB_ENV")
+    templates = groups.add_parser("templates", help="print or explicitly create shared package resources")
     templates.add_argument("name", choices=TEMPLATES)
     templates.add_argument("--owner")
     templates.add_argument("--repository")
@@ -254,6 +282,23 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
     if args.group == "files":
         from research_repo_tools.selection import run_selected, select_files
 
+        if args.action == "check-lines":
+            from research_repo_tools.text_lines import check_lines
+
+            limit = args.limit if args.limit is not None else settings.text.line_limit
+            if limit is None:
+                raise ValueError("files check-lines requires --limit or text.line-limit")
+            result = check_lines(
+                settings.root,
+                limit=limit,
+                include=settings.text.include if args.include is None else args.include,
+                exclude=settings.text.exclude if args.exclude is None else args.exclude,
+            )
+            for violation in result.violations:
+                print(violation, file=sys.stderr)
+            if not result.files:
+                print("No matching files.")
+            return int(bool(result.violations))
         if args.action == "list":
             separator = "\0" if args.null else "\n"
             names = select_files(settings.root, include=args.include, exclude=args.exclude)
@@ -263,6 +308,58 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             count = run_selected(settings.root, command, include=args.include, exclude=args.exclude, batch_size=args.batch_size, timeout=args.timeout)
             if not count:
                 print("No matching files.")
+        return 0
+    if args.group == "papers":
+        from research_repo_tools.paper_dates import read_source_date
+        from research_repo_tools.paper_pdf import PdfPolicy, check_pdf, normalize_pdf
+
+        document = settings.papers.get(args.paper) if args.paper else None
+        if args.paper and document is None:
+            raise ValueError(f"unknown papers.documents declaration: {args.paper}")
+        if args.action == "source-date":
+            path = document.tex if document is not None else args.path
+            print(read_source_date(settings.path(path)).source_date_epoch)
+            return 0
+        path = settings.path(document.pdf if document is not None else args.path)
+        declared = document.policy if document is not None else PdfPolicy()
+        policy = PdfPolicy(
+            declared.min_pages if args.min_pages is None else args.min_pages,
+            declared.required_text if args.require_text is None else tuple(args.require_text),
+            declared.forbidden_text if args.forbid_text is None else tuple(args.forbid_text),
+        )
+        reference = args.reference if args.reference is not None else document.reference if document is not None else None
+        reference = settings.path(reference) if reference is not None else None
+        if args.action == "check":
+            inspection = check_pdf(path, policy=policy, reference=reference)
+        else:
+            tex = args.tex if args.tex is not None else document.tex if document is not None else None
+            identity = args.identity if args.identity is not None else document.identity if document is not None else None
+            if tex is None or identity is None:
+                raise ValueError("papers normalize requires --tex and --identity, or a named --paper declaration")
+            inspection = normalize_pdf(
+                path, tex=settings.path(tex), identity=identity, output=settings.path(args.output) if args.output else None, policy=policy, reference=reference
+            )
+        print(f"OK {path}: {inspection.page_count} page(s)")
+        return 0
+    if args.group == "tectonic":
+        import json
+        import shlex
+
+        from research_repo_tools.tectonic import discover_environment
+
+        environment = discover_environment(pkg_config=settings.executable(args.pkg_config), prefixes=tuple(settings.path(path) for path in args.prefix))
+        if args.action == "export":
+            from research_repo_tools.ci import export_environment
+
+            destination = settings.path(str(args.file)) if args.file is not None else os.environ.get("GITHUB_ENV")
+            if not destination:
+                raise ValueError("tectonic export requires --file or GITHUB_ENV")
+            export_environment(Path(destination), sorted(environment), environment=environment)
+        elif args.format == "json":
+            print(json.dumps(environment, ensure_ascii=True, sort_keys=True))
+        else:
+            for name, value in sorted(environment.items()):
+                print(f"export {name}={shlex.quote(value)}")
         return 0
     if args.group == "performance":
         from research_repo_tools.performance import run
