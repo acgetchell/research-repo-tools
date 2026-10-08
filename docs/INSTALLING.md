@@ -1,11 +1,9 @@
 # Installing and managing toolchains
 
-Issue [#2](https://github.com/acgetchell/research-repo-tools/issues/2) is a
-prerequisite for the first PyPI release. This implementation provides explicit
-setup, checks, synchronization, and managed execution. uv is a hard prerequisite.
-Native installer verification and isolated installed-package validation are
-release gates; package unit tests alone do not close the issue. Migration of
-existing consumer repositories is separate work after publication.
+Toolchain management provides explicit setup, checks, synchronization, and
+managed execution. uv is a hard prerequisite. Native installer verification and
+isolated installed-package validation are release gates. Consumers migrate to
+an exact published package and validate their selected configuration.
 
 ## Ownership and declarations
 
@@ -185,11 +183,11 @@ The underlying commands are:
 | Command | Behavior |
 | --- | --- |
 | `setup` | Install user Just and declared tools, configure PATH, and sync the locked Python environment |
-| `toolchain adopt (--dry-run \| --apply)` | Plan or apply an opt-in migration to the executing shared package and its Python baseline |
+| `toolchain adopt (--dry-run \| --apply)` | Plan or apply migration to the executing shared package and its mandatory Python minimum, plus enabled development mirrors |
 | `toolchain check [--json]` | Report expected/actual versions and selected paths; nonzero if incomplete |
 | `toolchain clean [--dry-run \| --apply] [--keep-root PATH]...` | Preview obsolete package-owned installations; explicitly apply removals while retaining the selected consumers |
 | `toolchain export [--file PATH]` | Verify tools and append their environment to an explicit file or `GITHUB_ENV` |
-| `toolchain python-check` | Reject drift from the installed shared Python baseline in opted-in consumers |
+| `toolchain python-check` | Enforce the installed shared Python minimum and check enabled development mirrors |
 | `toolchain python-tools-check` | Reject inherited tool declaration, lock, and executable drift without synchronization |
 | `toolchain run -- COMMAND ...` | Check tools, then run with their selected paths; propagate failure/exit status |
 | `toolchain sync [--dry-run]` | Install declared versions and verify results; dry run reports without installation |

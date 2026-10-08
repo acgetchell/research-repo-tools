@@ -1,5 +1,7 @@
 """Batched Semgrep behavior through the installed public API and CLI."""
 
+import contextlib
+import io
 import json
 import subprocess
 import tempfile
@@ -14,6 +16,29 @@ from research_repo_tools.selection import argument_batches
 
 
 class TestScanConsumer(unittest.TestCase):
+    def test_fixture_cli_rejects_duplicate_json_fields(self):
+        (self.root / "fixture.py").write_bytes(b"# ruleid: example.rule\nbad()\n")
+        (self.root / "rules.yml").write_bytes(
+            b"rules:\n  - id: example.rule\n    pattern: bad()\n    message: example\n    languages: [python]\n    severity: ERROR\n"
+        )
+        (self.root / "pyproject.toml").write_bytes(b'[tool.research-repo-tools.semgrep]\nconfig="rules.yml"\nfixtures="fixture.py"\n')
+        finding = '{"check_id":"example.rule","path":"fixture.py","start":{"line":2},"end":{"line":2}}'
+        for payload in (
+            '{"results":[' + finding + '],"errors":[{}],"errors":[]}',
+            '{"results":[{}],"results":[' + finding + "]}",
+            '{"results":[' + finding.replace('"check_id":', '"check_id":"discarded","check_id":') + "]}",
+        ):
+            with (
+                self.subTest(payload=payload),
+                patch("research_repo_tools.semgrep.run_safe_command", return_value=subprocess.CompletedProcess([], 0, payload, "")),
+            ):
+                out, err = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(out), contextlib.redirect_stderr(err):
+                    status = main(["--root", str(self.root), "semgrep", "check-fixtures"])
+                self.assertEqual(status, 1)
+                self.assertEqual(out.getvalue(), "")
+                self.assertIn("duplicate JSON field", err.getvalue())
+
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="scan café ")
         self.addCleanup(self.temporary.cleanup)

@@ -137,6 +137,23 @@ def test_invalid_events_fail_before_remote_access(script, tmp_path, monkeypatch,
         script.verify(payload, commit, tmp_path / "verified-dist")
 
 
+@pytest.mark.parametrize(
+    ("payload", "field"),
+    [([], "event"), ({**event(), "repository": None}, "event.repository"), ({**event(), "release": []}, "event.release")],
+)
+def test_invalid_event_shapes_use_cli_diagnostics_without_effects(script, tmp_path, monkeypatch, capsys, payload, field):
+    source = tmp_path / "event.json"
+    source.write_bytes(json.dumps(payload).encode())
+    output = tmp_path / "verified-dist"
+    monkeypatch.setattr(script.sys, "argv", ["release_assets.py", "verify", "--event", str(source), "--commit", COMMIT, "--output", str(output)])
+    monkeypatch.setattr(script, "api", lambda endpoint: pytest.fail("unexpected API request"))
+    assert script.main() == 1
+    diagnostics = capsys.readouterr().err
+    assert f"Release assets failed: {field} must be a JSON object" in diagnostics
+    assert "Traceback" not in diagnostics
+    assert list(tmp_path.iterdir()) == [source]
+
+
 @pytest.fixture
 def staged_files(tmp_path):
     dist = tmp_path / "dist"

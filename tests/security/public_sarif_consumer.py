@@ -34,6 +34,77 @@ def document():
 
 
 class TestSarifConsumer(unittest.TestCase):
+    def test_source_link_stored_inside_output_is_rejected(self):
+        for directory_link in (False, True):
+            with self.subTest(directory_link=directory_link), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                output, external = root / "reports", root / "external"
+                output.mkdir()
+                external.mkdir()
+                source = external / "input.sarif"
+                original = b'{"version":"2.1.0","runs":[]}\r\n'
+                source.write_bytes(original)
+                (output / "old.sarif").write_bytes(b"previous\r\n")
+                alias = output / "alias"
+                try:
+                    alias.symlink_to(external if directory_link else source, target_is_directory=directory_link)
+                except OSError:
+                    self.skipTest("symlinks are unavailable")
+                selected = alias / source.name if directory_link else alias
+                self.assertEqual(selected.resolve(), source)
+                with self.assertRaisesRegex(ValueError, "source must be outside"):
+                    sarif.split(selected, output, sarif.SarifPolicy({"Scanner": ()}))
+                self.assertTrue(alias.is_symlink())
+                self.assertEqual(selected.read_bytes(), original)
+                self.assertEqual((output / "old.sarif").read_bytes(), b"previous\r\n")
+                self.assertEqual(sorted(path.name for path in output.iterdir()), ["alias", "old.sarif"])
+
+    def test_portable_case_alias_of_source_parent_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            output = root / "reports"
+            output.mkdir()
+            source = output / "input.sarif"
+            original = b'{"version":"2.1.0","runs":[]}\r\n'
+            source.write_bytes(original)
+            with self.assertRaisesRegex(ValueError, "source must be outside"):
+                sarif.split(source, root / "REPORTS", sarif.SarifPolicy({"Scanner": ()}))
+            self.assertEqual(source.read_bytes(), original)
+            self.assertEqual([path.name for path in root.iterdir()], ["reports"])
+
+    def test_source_alias_into_output_is_rejected(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            output = root / "reports"
+            output.mkdir()
+            source = output / "input.sarif"
+            original = b'{"version":"2.1.0","runs":[]}\r\n'
+            source.write_bytes(original)
+            alias = root / "alias.sarif"
+            try:
+                alias.symlink_to(source)
+            except OSError:
+                self.skipTest("file symlinks are unavailable")
+            self.assertEqual(alias.resolve(), source)
+            with self.assertRaisesRegex(ValueError, "source must be outside"):
+                sarif.split(alias, output, sarif.SarifPolicy({"Scanner": ()}))
+            self.assertEqual(source.read_bytes(), original)
+            self.assertTrue(alias.is_symlink())
+
+    def test_input_inside_output_is_rejected_without_replacing_any_bytes(self):
+        for value in (document(), {"version": "2.1.0", "runs": []}):
+            for nested in (False, True):
+                with self.subTest(value=value, nested=nested), tempfile.TemporaryDirectory() as directory:
+                    output = Path(directory).resolve() / "reports"
+                    source = output / "nested" / "input.sarif" if nested else output / "input.sarif"
+                    source.parent.mkdir(parents=True)
+                    source.write_bytes(json.dumps(value).encode())
+                    (output / "old.sarif").write_bytes(b"previous\r\n")
+                    before = {path.relative_to(output): path.read_bytes() for path in output.rglob("*") if path.is_file()}
+                    with self.assertRaisesRegex(ValueError, "source must be outside"):
+                        sarif.split(source, output, sarif.SarifPolicy({"Scanner": ()}))
+                    self.assertEqual(before, {path.relative_to(output): path.read_bytes() for path in output.rglob("*") if path.is_file()})
+
     def test_publication_status_survives_a_strict_legacy_terminal_encoding(self):
         with tempfile.TemporaryDirectory(prefix="sarif 漢字 ") as directory:
             root = Path(directory).resolve()

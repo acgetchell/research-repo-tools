@@ -26,7 +26,7 @@ __all__ = ["MeasurementConfig", "capture_provenance", "load_measurement", "measu
 
 
 def _strings(value: object, context: str, *, nonempty: bool = True) -> tuple[str, ...]:
-    if not isinstance(value, list) or (nonempty and not value):
+    if not isinstance(value, (list, tuple)) or (nonempty and not value):
         raise ValueError(f"{context} must be an array{' with at least one entry' if nonempty else ''}")
     return tuple(_string(item, context) for item in value)
 
@@ -47,11 +47,11 @@ class MeasurementConfig:
     compatible: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "probes", tuple((key, tuple(value)) for key, value in self.probes))
+        object.__setattr__(self, "probes", tuple((key, _strings(value, f"probe {key}")) for key, value in self.probes))
         object.__setattr__(self, "dependencies", tuple(tuple(item) for item in self.dependencies))
         object.__setattr__(self, "context", tuple(tuple(item) for item in self.context))
         for name in ("command", "sources", "harness", "compatible"):
-            object.__setattr__(self, name, _strings(list(getattr(self, name)), name, nonempty=name != "compatible"))
+            object.__setattr__(self, name, _strings(getattr(self, name), name, nonempty=name != "compatible"))
         _publication_name(self.criterion_dir)
         _publication_name(self.sample)
         if "/" in self.sample:
@@ -84,9 +84,8 @@ class MeasurementConfig:
         for key, value in self.context:
             _string(key, "context name")
             _string(value, f"context {key}")
-        for name, command in self.probes:
+        for name, _command in self.probes:
             _string(name, "probe name")
-            _strings(list(command), f"probe {name}")
         if len(dict(self.probes)) != len(self.probes) or len(dict(self.dependencies)) != len(self.dependencies):
             raise ValueError("measurement probes/dependencies must have unique names")
         for name, path in self.dependencies:

@@ -73,9 +73,9 @@ normalization preserves those names in prose, code spans, and link destinations.
 
 [Shared toolchain setup](INSTALLING.md) requires uv and provides explicit
 installation and verification of declared Python, Rust, and Cargo tools.
-Native installer and isolated installed-package validation are required before
-closing issue #2. Issue #1 covers publication and a clean PyPI setup check;
-consumer migrations are separate downstream issues. Optional [notebook infrastructure](RUNNING_NOTEBOOKS.md)
+Native installer and isolated installed-package validation are release gates;
+consumer migrations are tracked in downstream repositories and use an exact
+published package. Optional [notebook infrastructure](RUNNING_NOTEBOOKS.md)
 provides environment/kernel setup, execution reports, cleanup, structural validation,
 and Python lint/format/type gates using the consumer's Ruff and ty. Scientific
 notebook content and experiment choices remain consumer-owned. Native notebook

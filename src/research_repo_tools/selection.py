@@ -90,11 +90,11 @@ def run_selected(
     timeout: float | None = 300,
 ) -> int:
     """Run selected files in bounded batches, stopping on the first failure."""
-    files = select_files(root, include=include, exclude=exclude)
     if not command:
         raise ValueError("files run requires a command after --")
+    argument_batches(command, (), batch_size=batch_size)
+    files = select_files(root, include=include, exclude=exclude)
     if not files:
-        argument_batches(command, (), batch_size=batch_size)
         return 0
     executable = resolve_executable(command[0], cwd=root, env=env)
     batches = argument_batches([str(executable), *command[1:]], files, batch_size=batch_size)

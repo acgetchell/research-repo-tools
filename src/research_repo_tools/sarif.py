@@ -9,7 +9,7 @@ from pathlib import Path
 from types import MappingProxyType
 
 from research_repo_tools.evidence import _load_json, _object, deterministic_json
-from research_repo_tools.files import publish_directory
+from research_repo_tools.files import _path_keys, publish_directory
 
 __all__ = ["SarifOutput", "SarifPolicy", "split", "transform"]
 
@@ -219,6 +219,10 @@ def transform(document: object, policy: SarifPolicy) -> tuple[SarifOutput, ...]:
 
 def split(source: Path, destination: Path, policy: SarifPolicy) -> tuple[SarifOutput, ...]:
     """Parse and render before publishing a complete owned directory generation."""
+    destination_keys = _path_keys(destination)
+    sources = (source.absolute(), source.resolve())
+    if any(not destination_keys.isdisjoint(_path_keys(parent)) for path in sources for parent in (path, *path.parents)):
+        raise ValueError("SARIF source must be outside the output directory")
     outputs = transform(_load_json(source.read_bytes(), "SARIF"), policy)
     with publish_directory(destination) as candidate:
         for output in outputs:

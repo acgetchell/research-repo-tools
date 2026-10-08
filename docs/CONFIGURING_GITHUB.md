@@ -132,10 +132,6 @@ private setup task. Follow [Releasing research-repo-tools](RELEASING.md) for
 repeat releases. Committing workflow YAML does not apply account settings or
 publish distributions.
 
-## Follow-up work
-
-- [First PyPI release and Trusted Publishing](https://github.com/acgetchell/research-repo-tools/issues/1).
-- [External Rust and Python tool installation](https://github.com/acgetchell/research-repo-tools/issues/2).
-- [Shared Jupyter notebook infrastructure](https://github.com/acgetchell/research-repo-tools/issues/3).
-- [MCMC changelog pilot](https://github.com/acgetchell/markov-chain-monte-carlo/issues/157),
-  after its current work is complete; durable adoption requires the first PyPI release.
+For consumer adoption, follow the [migration guide](migration.md) and
+[installation guide](INSTALLING.md), then validate the exact published package
+with the consumer's native checks.

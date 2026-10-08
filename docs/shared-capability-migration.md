@@ -7,7 +7,7 @@ they do not depend on sibling checkouts. Release history belongs in
 
 | Consumer implementation | Shared replacement | Retained consumer responsibility |
 | --- | --- | --- |
-| Repeated Python baseline literals and migration scripts | Installed `python_baseline`, `python_adoption`, and `toolchain adopt` | Opt-in declaration, exact package pin, public runtime support, lint policy and exceptions |
+| Repeated Python baseline literals and migration scripts | Installed `python_baseline`, `python_adoption`, and `toolchain adopt` | Development opt-ins, exact package pin, application compatibility, lint policy and exceptions |
 | Cargo deny installer/version wrapper | `toolchain.cargo.cargo-deny`, setup/check/run/export/upgrade | `deny.toml`, accepted advisories/licenses and scan scope |
 | First-release special cases and fake predecessor tags | `release update --first-release`, validated release plans | Canonical target, release date, offline intent and publication |
 | Notebook dependency installation checker | `notebooks.prohibit-installs`, blocking notebook lint | Opt-in policy, dependencies in locked groups, unsupported dynamic-call review |
@@ -29,8 +29,12 @@ contract. Shared cleanup handles obsolete owned installations. New package-manag
 Python installs use the private store; existing user-wide uv interpreters remain
 user-owned. See the [installation guide](INSTALLING.md#cleaning-obsolete-installations).
 
-The former independent Python target mirrors are superseded only for opted-in
-consumers. Explicit lower lint/type targets remain consumer policy. Unreleased-only
+Starting in v0.1.8, the installed package's Python support minimum applies to
+managed consumers regardless of development opt-ins. This supersedes v0.1.7
+policies that allowed application metadata below that minimum. Development-selector
+mirroring remains opt-in; explicit lower lint/type targets remain consumer policy.
+See [shared Python adoption](../README.md#shared-python-adoption) before updating
+the exact package pin. Unreleased-only
 changelogs are accepted only during explicit first-release preparation; final
 release validation remains strict. Native scanner schemas and Semgrep assertion
 semantics remain upstream-owned rather than becoming consumer-specific variants.

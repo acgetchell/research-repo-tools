@@ -5,10 +5,11 @@ configuration, packaged templates, and the Python APIs listed below. Consumers
 should pin an exact released version in their uv development dependencies.
 Patch releases preserve these contracts; a minor release may introduce a
 documented breaking change while the package remains below `1.0`.
-The v0.1.8 [Semgrep scan migration](shared-capability-migration.md#sarif-and-batched-scan-adoption)
-is an explicit exception: it changes the default report layout and gives scans
-exclusive ownership of their output directory. Review that migration before
-updating a consumer's exact pin.
+v0.1.8 has two explicit exceptions: the [Semgrep scan migration](shared-capability-migration.md#sarif-and-batched-scan-adoption)
+changes the default report layout and gives scans exclusive ownership of their
+output directory, and [shared Python adoption](../README.md#shared-python-adoption)
+enforces the installed package's Python minimum regardless of development opt-ins.
+Review both migrations before updating a consumer's exact pin.
 
 The [complete-run and host APIs](complete-run-api.md) extend the performance
 contracts with common-harness plans, raw sample retention, named phase series,
@@ -910,8 +911,9 @@ include that separator.
 
 `sarif.split(source: Path, destination: Path, policy) -> tuple[SarifOutput, ...]`
 parses duplicate-free strict UTF-8 JSON, transforms and serializes all outputs
-before publishing a complete directory generation. Invalid input leaves the old
-generation unchanged; empty output removes stale files. CLI `sarif split SOURCE
+before publishing a complete directory generation. The source must be outside
+the destination directory, including symlink and portable case/Unicode aliases. Invalid input leaves
+the old generation unchanged; empty output removes stale files. CLI `sarif split SOURCE
 --output DIRECTORY` uses the configured policy. Optional `--github-output PATH`
 calls `ci.export_environment` after publication, exporting `SARIF_DIRECTORY`,
 `SARIF_HAS_UPLOADABLE_RUNS` and `SARIF_RUN_COUNT`. That append is a separate

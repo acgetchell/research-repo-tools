@@ -39,6 +39,8 @@ def api(endpoint: str) -> Any:
 
 def require_release(release: dict[str, Any], tag: str, *, draft: bool) -> None:
     """Require the intended lifecycle state, rejecting prereleases and retargets."""
+    if not isinstance(release, dict):
+        raise ValueError("release must be a JSON object")
     if release.get("tag_name") != tag or release.get("draft") is not draft or release.get("prerelease") is not False:
         raise ValueError(f"expected {'draft' if draft else 'published'} stable release for {tag}")
 
@@ -81,11 +83,18 @@ def stage(tag: str, dist: Path, bundle: Path) -> None:
 
 def verify(event: dict[str, Any], commit: str, output: Path) -> None:
     """Download a published release by asset IDs and verify its signed subjects."""
-    if event.get("action") != "published" or event.get("repository", {}).get("full_name") != REPOSITORY:
+    if not isinstance(event, dict):
+        raise ValueError("event must be a JSON object")
+    repository = event.get("repository")
+    if not isinstance(repository, dict):
+        raise ValueError("event.repository must be a JSON object")
+    if event.get("action") != "published" or repository.get("full_name") != REPOSITORY:
         raise ValueError("expected a published release event from the owning repository")
     if re.fullmatch(r"[0-9a-f]{40}", commit) is None:
         raise ValueError("expected the release event's full commit SHA")
-    released = event["release"]
+    released = event.get("release")
+    if not isinstance(released, dict):
+        raise ValueError("event.release must be a JSON object")
     tag = released["tag_name"]
     names = distribution_names(tag)
     require_release(released, tag, draft=False)

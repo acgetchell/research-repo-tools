@@ -1,9 +1,11 @@
 """Literal notebook installation policy without executing user cells."""
 
+import warnings
+
 import nbformat
 import pytest
 
-from research_repo_tools import config, notebook_lint, notebooks
+from research_repo_tools import config, notebook_lint, notebook_policy, notebooks
 from research_repo_tools.notebook_policy import install_diagnostics
 
 
@@ -67,6 +69,11 @@ def test_literal_installs_have_stable_source_diagnostics_and_do_not_change_bytes
         'message = """example\n%pip install numpy\n!uv pip install numpy\n"""',
         'message = f"""example\n%pip install numpy\n"""',
         "import subprocess\nsubprocess.run(['echo', 'pip', 'install'])",
+        "import subprocess\nsubprocess.run(['echo', ';', 'pip', 'install', 'numpy'], timeout=10)",
+        "import subprocess\nsubprocess.run(('echo', '&&', 'pip', 'install', 'numpy'), timeout=10)",
+        "import subprocess\nsubprocess.run(['echo', '||', 'uv', 'sync'], timeout=10)",
+        "import subprocess\nsubprocess.run(['echo', '|', 'conda', 'install', 'numpy'], timeout=10)",
+        "import subprocess\nsubprocess.run(['echo', '&', 'pip', 'install', 'numpy'], timeout=10)",
         "%%bash\necho pip install numpy",
         "%%bash\nsubprocess.run(['pip', 'install', 'numpy'])",
         "%%javascript\nsubprocess.run(['pip', 'install', 'numpy'])",
@@ -96,6 +103,121 @@ def test_magic_cell_preserves_multiline_python_call_line(tmp_path):
     assert item.path.read_bytes() == item.original
 
 
+@pytest.mark.parametrize("separator", ["\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"])
+@pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
+def test_string_separators_preserve_physical_lines_and_token_offsets(tmp_path, separator, newline):
+    source = f'message = "before{separator}after"{newline}example = "!pip install ignored"{newline}!pip install numpy'
+    item = notebook(tmp_path, source)
+    assert [diagnostic.line for diagnostic in install_diagnostics(item)] == [3]
+    assert item.path.read_bytes() == item.original
+    # A later multiline string must stay masked even after a separator changed
+    # the apparent line count under str.splitlines().
+    source = f'message = "before{separator}after"{newline}example = """{newline}!pip install ignored{newline}"""'
+    item = notebook(tmp_path, source)
+    assert install_diagnostics(item) == []
+    assert item.path.read_bytes() == item.original
+
+
 def test_policy_rejects_nonboolean_configuration(tmp_path):
     with pytest.raises(ValueError, match="must be a boolean"):
         config.parse({"notebooks": {"prohibit-installs": "true"}}, root=tmp_path)
+
+
+@pytest.mark.parametrize("operator", [";", "&&", "||", "|", "&"])
+@pytest.mark.parametrize("quote", ['"', "'"])
+def test_quoted_shell_operators_remain_literal_arguments(tmp_path, operator, quote):
+    for prefix in ("!", "%%bash\n"):
+        item = notebook(tmp_path, f"{prefix}echo {quote}{operator}{quote} pip install numpy")
+        assert install_diagnostics(item) == []
+        assert item.path.read_bytes() == item.original
+
+
+@pytest.mark.parametrize(
+    "source",
+    [r"!echo \; pip install numpy", "!echo safe # comment; pip install numpy", "!echo ok;# comment; pip install numpy"],
+)
+def test_escaped_operators_and_comments_do_not_create_commands(tmp_path, source):
+    assert install_diagnostics(notebook(tmp_path, source)) == []
+
+
+def test_shell_comment_does_not_hide_the_next_line(tmp_path):
+    source = "import os\nos.system('echo ok # harmless; pip install ignored\\npip install numpy')"
+    assert [item.line for item in install_diagnostics(notebook(tmp_path, source))] == [2]
+
+
+def test_windows_quoted_caret_does_not_escape_the_closing_quote(tmp_path, monkeypatch):
+    monkeypatch.setattr(notebook_policy, "_WINDOWS", True)
+    source = "import os\nos.system('echo \"^\" & pip install numpy')"
+    assert [item.line for item in install_diagnostics(notebook(tmp_path, source))] == [2]
+
+
+@pytest.mark.parametrize("windows", [False, True])
+def test_system_escapes_use_the_host_shell_but_bash_cells_stay_posix(tmp_path, monkeypatch, windows):
+    monkeypatch.setattr(notebook_policy, "_WINDOWS", windows)
+    command = "echo # harmless & pip install numpy"
+    assert bool(install_diagnostics(notebook(tmp_path, "!" + command))) is windows
+    assert install_diagnostics(notebook(tmp_path, "%%bash\n" + command)) == []
+
+
+@pytest.mark.parametrize("windows", [False, True])
+@pytest.mark.parametrize("uses_shell", [False, True])
+def test_subprocess_strings_respect_shell_mode(tmp_path, monkeypatch, windows, uses_shell):
+    monkeypatch.setattr(notebook_policy, "_WINDOWS", windows)
+    for command, expected in (
+        ('python -c "print(1)" & pip install numpy', uses_shell),
+        ("pip install numpy", uses_shell or windows),
+    ):
+        item = notebook(tmp_path, f"import subprocess\nsubprocess.run({command!r}, shell={uses_shell!r})")
+        assert bool(install_diagnostics(item)) is expected
+        assert item.path.read_bytes() == item.original
+
+
+@pytest.mark.parametrize("windows", [False, True])
+@pytest.mark.parametrize("function", ["Popen", "run", "call", "check_call", "check_output"])
+@pytest.mark.parametrize("shell", [True, False, 1, 0, None, "yes", ""])
+def test_literal_shell_values_and_forwarded_positional_arguments(tmp_path, monkeypatch, windows, function, shell):
+    monkeypatch.setattr(notebook_policy, "_WINDOWS", windows)
+    command = "echo safe & pip install numpy"
+    for arguments in (f"{command!r}, shell={shell!r}", f"{command!r}, -1, None, None, None, None, None, True, {shell!r}"):
+        item = notebook(tmp_path, f"import subprocess\nsubprocess.{function}({arguments})")
+        assert bool(install_diagnostics(item)) is bool(shell)
+        assert item.path.read_bytes() == item.original
+
+
+def test_dynamic_shell_selection_and_starred_arguments_are_not_evaluated(tmp_path):
+    source = 'import subprocess\nsubprocess.Popen("echo safe & pip install numpy", shell=choose_shell())'
+    assert install_diagnostics(notebook(tmp_path, source)) == []
+    source = 'subprocess.Popen("echo safe & pip install numpy", *options, None, None, None, None, None, True, True)'
+    assert install_diagnostics(notebook(tmp_path, source)) == []
+
+
+@pytest.mark.parametrize("windows", [False, True])
+@pytest.mark.parametrize("operator", ["&", "&&", "||", "|"])
+def test_shell_argument_vectors_follow_native_command_serialization(tmp_path, monkeypatch, windows, operator):
+    monkeypatch.setattr(notebook_policy, "_WINDOWS", windows)
+    item = notebook(tmp_path, f"import subprocess\nsubprocess.run(['echo', {operator!r}, 'pip', 'install', 'numpy'], shell=True)")
+    diagnostics = install_diagnostics(item)
+    assert [item.line for item in diagnostics] == ([2] if windows else [])
+    assert item.path.read_bytes() == item.original
+    # The first POSIX vector member is itself the shell program; cmd receives
+    # this one argument quoted, so it is not the same command on Windows.
+    if not windows:
+        item = notebook(tmp_path, "subprocess.run(['pip install numpy', 'ignored'], shell=True)")
+        assert [item.line for item in install_diagnostics(item)] == [1]
+
+
+@pytest.mark.parametrize("action", ["always", "error"])
+def test_parser_warnings_do_not_hide_later_literal_installs(tmp_path, action):
+    source = 'import subprocess\npattern = "\\q"\nsubprocess.run(["pip", "install", "numpy"])'
+    item = notebook(tmp_path, source)
+    with warnings.catch_warnings(record=True) as caught:
+        warnings.simplefilter(action, SyntaxWarning)
+        filters = list(warnings.filters)
+        assert [item.line for item in install_diagnostics(item)] == [3]
+        assert warnings.filters == filters
+    assert caught == []
+    assert item.path.read_bytes() == item.original
+
+
+def test_real_syntax_errors_are_left_to_native_syntax_checks(tmp_path):
+    assert install_diagnostics(notebook(tmp_path, "value = (\nsubprocess.run(['pip', 'install', 'numpy'])")) == []
