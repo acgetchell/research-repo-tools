@@ -4,6 +4,7 @@ import hashlib
 import json
 import os
 import subprocess
+import sys
 import tarfile
 import tempfile
 import tomllib
@@ -19,6 +20,33 @@ from research_repo_tools.python_baseline import baseline
 
 
 class TestPythonMinimumConsumer(unittest.TestCase):
+    def test_malformed_group_constraint_has_installed_cli_diagnostic(self):
+        authority = baseline()
+        with tempfile.TemporaryDirectory(prefix="invalid Python constraint ") as directory:
+            root = Path(directory)
+            (root / "pyproject.toml").write_bytes(
+                (
+                    '[project]\nname="invalid-constraint"\nversion="1.0.0"\n'
+                    f"requires-python={json.dumps(authority.minimum_requirement)}\n"
+                    f'[dependency-groups]\ntooling=["research-repo-tools=={authority.package_version}"]\n'
+                    '[tool.uv]\npackage=true\ndependency-groups={tooling="invalid"}\n'
+                    "[tool.research-repo-tools.toolchain]\ninherit-python=true\n"
+                ).encode()
+            )
+            (root / ".python-version").write_bytes(authority.selected.encode() + b"\n")
+            before = {path.name: path.read_bytes() for path in root.iterdir()}
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", "-X", "utf8", "-m", "research_repo_tools", "--root", str(root), "toolchain", "python-check"],
+                capture_output=True,
+                encoding="utf-8",
+                timeout=30,
+                check=False,
+            )
+            self.assertEqual(result.returncode, 1)
+            self.assertIn("tool.uv.dependency-groups.tooling must be a table", result.stderr)
+            self.assertNotIn("Traceback", result.stderr)
+            self.assertEqual(before, {path.name: path.read_bytes() for path in root.iterdir()})
+
     def test_standalone_bootstrap_adoption_and_application_installers(self):
         if os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1":
             self.skipTest("disposable Git initialization disabled")
