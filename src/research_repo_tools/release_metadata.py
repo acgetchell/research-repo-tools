@@ -472,8 +472,12 @@ def _changelog_comparison_references(path: Path, version: str) -> list[VersionRe
 
 def _iter_markdown_files(root: Path, policy: ReleasePolicy | None = None) -> list[Path]:
     """Return active Markdown files that can carry current release references."""
+
+    def fail_traversal(error: OSError) -> None:
+        raise ReleaseCheckError(f"cannot inspect active Markdown: {error}") from error
+
     markdown_files: list[Path] = []
-    for dirpath, dirnames, filenames in os.walk(root):
+    for dirpath, dirnames, filenames in os.walk(root, onerror=fail_traversal):
         relative_dir = Path(dirpath).relative_to(root)
         dirnames[:] = [dirname for dirname in dirnames if not (set((relative_dir / dirname).parts) & SKIP_DIRS)]
         markdown_files.extend(Path(dirpath) / filename for filename in filenames if filename.endswith(".md") and filename not in SKIP_MARKDOWN_FILES)

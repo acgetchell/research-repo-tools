@@ -1,7 +1,7 @@
 # Security policy
 
 Security fixes target the latest published `research-repo-tools` release.
-Before the first release, reports against the current main branch are welcome.
+Reports against the current main branch are also welcome.
 
 ## Report a vulnerability
 

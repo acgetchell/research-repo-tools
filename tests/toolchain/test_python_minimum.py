@@ -208,3 +208,17 @@ def test_malformed_group_constraints_fail_with_cli_diagnostics(consumer, constra
     assert cli.main(["--root", str(root), "toolchain", "python-check"]) == 1
     assert field in capsys.readouterr().err
     assert not calls and snapshot(root) == before
+
+
+@pytest.mark.parametrize("field", ["tool", "tool.ruff", "tool.ty", "tool.ty.environment"])
+@pytest.mark.parametrize("invalid", ["invalid", [], True, 42])
+def test_target_configuration_requires_tables(field, invalid):
+    document = {}
+    table = document
+    parts = field.split(".")
+    for part in parts[:-1]:
+        table[part] = {}
+        table = table[part]
+    table[parts[-1]] = invalid
+    with pytest.raises(ValueError, match=rf"^{field} must be a table$"):
+        python_baseline.target_problems(document, "3.14")

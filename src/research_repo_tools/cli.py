@@ -363,8 +363,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         elif args.format == "json":
             print(json.dumps(environment, ensure_ascii=True, sort_keys=True))
         else:
-            for name, value in sorted(environment.items()):
-                print(f"export {name}={shlex.quote(value)}")
+            _write_stdout("".join(f"export {name}={shlex.quote(value)}\n" for name, value in sorted(environment.items())).encode("utf-8"))
         return 0
     if args.group == "performance":
         from research_repo_tools.performance import run

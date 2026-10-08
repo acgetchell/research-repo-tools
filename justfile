@@ -177,5 +177,5 @@ update-uv *args:
 # Run actionlint and zizmor with authenticated online audits when available.
 workflow-check:
     uv run --locked actionlint
-    uv run --locked actionlint src/research_repo_tools/templates/publish-crates.yml
-    uv run --locked research-repo-tools zizmor check .github src/research_repo_tools/templates/publish-crates.yml
+    uv run --locked actionlint src/research_repo_tools/templates/publish-crates.yml src/research_repo_tools/templates/zizmor.yml
+    uv run --locked research-repo-tools zizmor check .github src/research_repo_tools/templates/publish-crates.yml src/research_repo_tools/templates/zizmor.yml

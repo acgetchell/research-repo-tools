@@ -87,6 +87,28 @@ class TestReleaseConsumer(unittest.TestCase):
     def plan(self, **kwargs):
         return plan_release(self.root, "1.2.4", previous_tag="v1.2.3", release_date="2026-09-20", policy=self.policy, **kwargs)
 
+    def test_unreadable_active_markdown_fails_discovery_check_and_plan_without_edits(self):
+        before = self.snapshot()
+        walk = os.walk
+
+        def unreadable(root, *args, onerror=None, **kwargs):
+            for entry in walk(root, *args, onerror=onerror, **kwargs):
+                if Path(entry[0]) == self.root / "docs":
+                    if onerror is not None:
+                        onerror(PermissionError(13, "fixture access denied", str(self.root / "docs")))
+                    continue
+                yield entry
+
+        for operation in (
+            lambda: discover_release(self.root, policy=self.policy),
+            lambda: check_release(self.root, policy=self.policy, previous_tag="v1.2.2"),
+            self.plan,
+        ):
+            with self.subTest(operation=operation), patch("os.walk", side_effect=unreadable):
+                with self.assertRaisesRegex(ValueError, "cannot inspect active Markdown.*docs"):
+                    operation()
+            self.assertEqual(self.snapshot(), before)
+
     def test_git_metadata_aliases_fail_before_planning_or_publication(self) -> None:
         before = self.snapshot()
         for name in (".git/config", ".GIT/config", ".Git/config", ".git./config", ".git /config", "nested/.GIT. /config"):

@@ -17,6 +17,7 @@ from unittest.mock import patch
 
 from research_repo_tools.files import RecoveryError, publish_directory, replace_many
 from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics, resolve_executable, run_command, run_command_bytes, run_git_bytes
+from research_repo_tools.selection import run_selected
 
 
 class ConsumerCase(unittest.TestCase):
@@ -28,6 +29,17 @@ class ConsumerCase(unittest.TestCase):
 
 
 class TestProcess(ConsumerCase):
+    def test_selected_file_commands_reject_scalar_strings_before_resolution(self) -> None:
+        for files in ((), ("input.txt",)):
+            for command in ("echo", b"echo"):
+                with (
+                    self.subTest(files=files, command=command),
+                    patch("research_repo_tools.selection.select_files", return_value=files),
+                    patch("research_repo_tools.selection.resolve_executable", side_effect=AssertionError("must not resolve malformed command")),
+                    self.assertRaisesRegex(ValueError, "argument vector"),
+                ):
+                    run_selected(self.root, command)  # ty: ignore[invalid-argument-type] -- malformed public boundary input
+
     def test_resolution_and_literal_arguments(self) -> None:
         python = resolve_executable(sys.executable)
         self.assertTrue(python.is_absolute())

@@ -90,8 +90,8 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | SARIF | `sarif split` | Consumer-selected drivers/namespaces, corrected rule indices and complete output generations |
 | Security | `security osv`, `secrets` | Managed OSV/Gitleaks, explicit inputs, full history, redacted native reports |
 | Semgrep | `semgrep check-fixtures`, `scan` | Validate consumer rules, explicit inventory, reports and fixture expectations |
-| Tectonic dependencies | `tectonic discover`, `export` | Read-only pkg-config/vcpkg discovery; consumer-owned provisioning |
 | Setup | `setup` | Require uv; install user Just and declared tools; sync the locked environment |
+| Tectonic dependencies | `tectonic discover`, `export` | Read-only pkg-config/vcpkg discovery; consumer-owned provisioning |
 | Templates | `templates NAME` | Shared changelog, release guide/OIDC workflow, just, TOML, and rumdl resources |
 | Toolchain | `toolchain adopt`, `check`, `clean`, `export`, `python-check`, `python-tools-check`, `run`, `sync`, `sync-binaries`, `upgrade` | Exact declarations; managed installations and cleanup; verified execution and checked CI export |
 | Validation | `validation cargo-examples`, `cargo-metadata`, `require`, `run` | Runtime Cargo example discovery, bounded live execution, package preflight and configured assertions |
@@ -670,7 +670,8 @@ ruff = []
 ```
 
 A consumer recipe can invoke `sarif split input.sarif --output target/sarif`
-and upload that dedicated directory. Repeated driver names get distinct stable
+and upload that dedicated directory. Keep the input outside the output directory;
+overlapping source paths and portable case/Unicode aliases are rejected. Repeated driver names get distinct stable
 categories; unrelated metadata is retained and indexed driver rule references
 are corrected. Empty generations remove stale output files. Invalid/non-finite
 input fails before publication. Extension rule references are rejected; see the
@@ -1034,9 +1035,8 @@ tracked cleanup targets, links, and junctions are rejected before restoration.
 See [the workflow contract](docs/RUNNING_NOTEBOOKS.md#interactive-launch-and-explicit-reset)
 for failure behavior, supported paths, and the consumer deletion map.
 
-Read-only review commands require the release containing #39 and #40, targeted
-for `0.1.5`; they are absent from `0.1.4`. Merge the new recipes from the packaged
-template when adopting that release. Inspection uses only the base installation
+Read-only review commands are available from `0.1.5`. Merge their recipes from
+the packaged template when updating an older consumer. Inspection uses only the base installation
 and tolerates older nbformat 4 files and cell fields awaiting repair:
 
 ```sh
@@ -1366,8 +1366,8 @@ at new paths. See the [publication API](https://github.com/acgetchell/research-r
 
 ### Configured benchmark workflows
 
-The coordinated v0.1.4 work adds complete workflows around the retained-evidence
-APIs. Pin that version once published; source availability is not a release.
+Configured workflows around the retained-evidence APIs are available from v0.1.4.
+Pin an exact published version containing the capabilities your consumer uses.
 Start with the packaged `benchmark.toml`, `examples.toml`, and
 `performance-report.toml` templates, selecting your actual workloads and paths.
 For example, a measurement configuration contains:

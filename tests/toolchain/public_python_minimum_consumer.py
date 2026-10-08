@@ -20,6 +20,37 @@ from research_repo_tools.python_baseline import baseline
 
 
 class TestPythonMinimumConsumer(unittest.TestCase):
+    def test_malformed_target_tables_have_installed_cli_diagnostics(self):
+        authority = baseline()
+        for invalid, field in (
+            ('[tool]\nruff="invalid"\n', "tool.ruff"),
+            ("[tool]\nty=[]\n", "tool.ty"),
+            ("[tool.ty]\nenvironment=false\n", "tool.ty.environment"),
+        ):
+            with self.subTest(field=field), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                (root / "pyproject.toml").write_bytes(
+                    (
+                        f"[project]\nrequires-python={json.dumps(authority.minimum_requirement)}\n"
+                        f'[dependency-groups]\ntooling=["research-repo-tools=={authority.package_version}"]\n'
+                        + invalid
+                        + "[tool.uv]\npackage=false\n[tool.research-repo-tools.toolchain]\ninherit-python=true\n"
+                    ).encode()
+                )
+                (root / ".python-version").write_bytes(authority.selected.encode() + b"\n")
+                before = {path.name: path.read_bytes() for path in root.iterdir()}
+                result = subprocess.run(
+                    [sys.executable, "-I", "-B", "-X", "utf8", "-m", "research_repo_tools", "--root", str(root), "toolchain", "python-check"],
+                    capture_output=True,
+                    encoding="utf-8",
+                    timeout=30,
+                    check=False,
+                )
+                self.assertEqual(result.returncode, 1)
+                self.assertIn(f"{field} must be a table", result.stderr)
+                self.assertNotIn("Traceback", result.stderr)
+                self.assertEqual(before, {path.name: path.read_bytes() for path in root.iterdir()})
+
     def test_malformed_group_constraint_has_installed_cli_diagnostic(self):
         authority = baseline()
         with tempfile.TemporaryDirectory(prefix="invalid Python constraint ") as directory:

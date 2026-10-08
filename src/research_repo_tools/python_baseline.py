@@ -183,8 +183,11 @@ def drift(root: Path, document: dict | None = None) -> tuple[str, ...]:
 
 def target_problems(document: dict, selected: str) -> tuple[str, ...]:
     """Retain deliberate lower targets; reject targets newer than the interpreter."""
-    tool = document.get("tool", {})
-    targets = (("Ruff", tool.get("ruff", {}).get("target-version")), ("ty", tool.get("ty", {}).get("environment", {}).get("python-version")))
+    tool = _table(document.get("tool", {}), "tool")
+    ruff = _table(tool.get("ruff", {}), "tool.ruff")
+    ty = _table(tool.get("ty", {}), "tool.ty")
+    environment = _table(ty.get("environment", {}), "tool.ty.environment")
+    targets = (("Ruff", ruff.get("target-version")), ("ty", environment.get("python-version")))
     problems = []
     for name, target in targets:
         if target is None:

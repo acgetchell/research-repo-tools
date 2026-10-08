@@ -1,8 +1,8 @@
 # Validating workflows and Python
 
 This guide ships with the package alongside `justfile`, `python-validation.toml`,
-and `zizmor.yml`. These additions target research-repo-tools 0.1.6. Adopt the exact
-registry pin `research-repo-tools==0.1.6` after that release is published. A local
+and `zizmor.yml`. The complete contract described here targets v0.1.8. Adopt
+an exact published registry version containing these capabilities. A local
 wheel can verify a candidate; it does not establish registry availability.
 
 ## Audit contract
@@ -86,8 +86,9 @@ Ruff checks disable both `fix` and `fix-only`, and disable cache writes. `fix`
 explicitly applies configured Ruff fixes and formatting, reporting leftover
 violations. Notebook cells remain on the native notebook interface.
 
-Every command checks opted-in Python baseline drift before discovery. Empty
-inventories require no validators, but opted-in declaration and lock checks still
+Every command enforces the installed shared Python minimum for managed consumers
+and checks enabled development mirrors before discovery. Empty inventories
+require no validators, but minimum, opted-in declaration and lock checks still
 apply. A nonempty inventory requires every selected validator on PATH before
 execution starts.
 Arguments are bounded and portable; each batch defaults to a 300-second timeout

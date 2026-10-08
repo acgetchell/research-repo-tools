@@ -180,8 +180,17 @@ def maintainer_checks():
         ["run", "--locked", "python", "scripts/check_newlines.py"],
         ["run", "--locked", "--no-sync", "--no-python-downloads", "research-repo-tools", "python", "check"],
         ["run", "--locked", "actionlint"],
-        ["run", "--locked", "actionlint", "src/research_repo_tools/templates/publish-crates.yml"],
-        ["run", "--locked", "research-repo-tools", "zizmor", "check", ".github", "src/research_repo_tools/templates/publish-crates.yml"],
+        ["run", "--locked", "actionlint", "src/research_repo_tools/templates/publish-crates.yml", "src/research_repo_tools/templates/zizmor.yml"],
+        [
+            "run",
+            "--locked",
+            "research-repo-tools",
+            "zizmor",
+            "check",
+            ".github",
+            "src/research_repo_tools/templates/publish-crates.yml",
+            "src/research_repo_tools/templates/zizmor.yml",
+        ],
     ]
 
 

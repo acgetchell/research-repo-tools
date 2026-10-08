@@ -5,6 +5,7 @@ import io
 import json
 import os
 import platform
+import shlex
 import shutil
 import subprocess
 import tempfile
@@ -23,6 +24,26 @@ class TestNativeDiscovery(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="native libraries café ")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
+
+    def test_shell_assignments_preserve_utf8_with_ascii_stdout(self) -> None:
+        assignments = {"PKG_CONFIG_PATH": "/tmp/café/分析's metadata", "TECTONIC_DEP_BACKEND": "pkg-config"}
+        buffer = io.BytesIO()
+        with io.TextIOWrapper(buffer, encoding="ascii", errors="strict", newline="\n") as output:
+            with patch.object(tectonic, "discover_environment", return_value=assignments), contextlib.redirect_stdout(output):
+                self.assertEqual(main(["tectonic", "discover", "--format", "shell"]), 0)
+            output.flush()
+            payload = buffer.getvalue()
+        decoded = payload.decode("utf-8")
+        self.assertIn("café", decoded)
+        self.assertNotIn("\\xe9", decoded)
+        actual = {}
+        for line in decoded.splitlines():
+            command, assignment = shlex.split(line)
+            self.assertEqual(command, "export")
+            key, value = assignment.split("=", 1)
+            actual[key] = value
+        self.assertEqual(actual, assignments)
+        self.assertEqual(list(actual), sorted(assignments))
 
     def test_native_host_discovery_export_and_unchanged_environment(self) -> None:
         env = dict(os.environ)

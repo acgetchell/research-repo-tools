@@ -87,6 +87,22 @@ def retained(current: str = "v1.1.0", baseline: str = "v1.0.0", point: float = 5
 
 
 class TestWorkflowConsumer(unittest.TestCase):
+    def test_measurement_vectors_reject_strings_and_freeze_lists(self):
+        for field in ("command", "sources", "harness", "compatible", "probes"):
+            for invalid in ("echo", b"echo"):
+                with self.subTest(field=field, invalid=invalid):
+                    values = {"command": ("echo",), "sources": ("source",), "harness": ("source",)}
+                    values[field] = (("tool", invalid),) if field == "probes" else invalid
+                    with self.assertRaisesRegex(ValueError, "must be an array"):
+                        MeasurementConfig(**values)  # ty: ignore[invalid-argument-type] -- malformed public boundary input
+        arguments = ["echo", "literal argument"]
+        probe = ["echo", "version"]
+        configuration = MeasurementConfig(arguments, ["source"], ["source"], probes=[("tool", probe)])  # ty: ignore[invalid-argument-type] -- defensive freezing
+        arguments.append("changed")
+        probe.append("changed")
+        self.assertEqual(configuration.command, ("echo", "literal argument"))
+        self.assertEqual(configuration.probes, (("tool", ("echo", "version")),))
+
     def test_setup_sync_uses_explicit_consumer_root_despite_uv_selectors(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory).resolve()

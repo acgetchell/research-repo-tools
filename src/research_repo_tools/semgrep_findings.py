@@ -1,13 +1,14 @@
 """Validate repository-owned Semgrep fixture annotations."""
 
 import collections
-import json
 import os
 import re
 import sys
 from dataclasses import dataclass
 from pathlib import Path
 from typing import TypeIs
+
+from research_repo_tools.evidence import _load_json
 
 RULE_ANNOTATION = re.compile(r"\bruleid:\s*([A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*)")
 
@@ -97,7 +98,7 @@ def _parse_finding(value: object, index: int) -> Finding:
 
 def parse_results(text: str) -> SemgrepResults:
     """Reject malformed or incomplete scan output before trusting its findings."""
-    data: object = json.loads(text)
+    data = _load_json(text.encode("utf-8"), "Semgrep output")
     if not _is_parsed_object(data):
         raise ValueError("expected a JSON object")
     errors = data.get("errors", [])

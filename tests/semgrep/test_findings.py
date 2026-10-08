@@ -49,6 +49,27 @@ def test_result_parser_rejects_missing_fields_before_returning_a_model():
         check_semgrep_fixtures.parse_results('{"results":[{}]}')
 
 
+@pytest.mark.parametrize(
+    "payload",
+    [
+        '{"results":[],"errors":[{"type":"ParseError"}],"errors":[]}',
+        '{"results":[{}],"results":[]}',
+        '{"results":[{"check_id":"lost","check_id":"kept"}]}',
+    ],
+)
+def test_duplicate_json_members_cannot_discard_scan_evidence(payload, tmp_path, monkeypatch, capsys):
+    with pytest.raises(ValueError, match="duplicate JSON field"):
+        check_semgrep_fixtures.parse_results(payload)
+    fixture = tmp_path / "fixture.rs"
+    fixture.write_bytes(b"// no findings expected\n")
+    monkeypatch.setenv("SEMGREP_JSON", payload)
+    monkeypatch.setattr(check_semgrep_fixtures.sys, "argv", ["check_semgrep_fixtures.py", str(fixture)])
+    assert check_semgrep_fixtures.main() == 1
+    result = capsys.readouterr()
+    assert result.out == ""
+    assert "duplicate JSON field" in result.err
+
+
 def test_semgrep_results_parses_valid_result_objects(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("SEMGREP_JSON", json.dumps({"results": [_result("rust.foo", 2), _result("rust.bar", 4)]}))
     results = check_semgrep_fixtures._semgrep_results()
