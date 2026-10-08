@@ -170,8 +170,12 @@ def drift(root: Path, document: dict | None = None) -> tuple[str, ...]:
     uv = document.get("tool", {}).get("uv", {})
     problems.extend(target_problems(document, authority.selected))
     if uv.get("package") is not False:
+        constraints = _table(uv.get("dependency-groups", {}), "tool.uv.dependency-groups")
         for group in groups:
-            requirement = uv.get("dependency-groups", {}).get(group, {}).get("requires-python")
+            field = f"tool.uv.dependency-groups.{group}"
+            requirement = _table(constraints.get(group, {}), field).get("requires-python")
+            if requirement is not None and not isinstance(requirement, str):
+                raise ValueError(f"{field}.requires-python must be a version specifier string")
             if requirement is None or reconcile_requirement(requirement, authority) != requirement:
                 problems.append(f"tool.uv.dependency-groups.{group}.requires-python must enforce {authority.minimum_requirement}")
     return tuple(problems)

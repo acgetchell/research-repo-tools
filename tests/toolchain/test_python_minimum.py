@@ -187,3 +187,24 @@ def test_missing_application_metadata_is_created_by_adoption_but_rejected_by_che
         python_baseline.check_minimum(root)
     plan = adoption.plan_python_adoption(config.load(root=root))
     assert tomllib.loads(dict(plan.replacements)["pyproject.toml"].decode())["project"]["requires-python"] == ">=3.15"
+
+
+@pytest.mark.parametrize(
+    ("constraint", "field"),
+    [
+        ('dependency-groups = "invalid"', "tool.uv.dependency-groups"),
+        ('dependency-groups = {tooling = "invalid"}', "tool.uv.dependency-groups.tooling"),
+        ("dependency-groups = {tooling = []}", "tool.uv.dependency-groups.tooling"),
+        ("dependency-groups = {tooling = {requires-python = 315}}", "tool.uv.dependency-groups.tooling.requires-python"),
+    ],
+)
+def test_malformed_group_constraints_fail_with_cli_diagnostics(consumer, constraint, field, capsys):
+    root, calls = consumer
+    path = root / "pyproject.toml"
+    text = path.read_bytes().decode().replace("package = false", f"package = true\r\n{constraint}").replace(">=3.14", ">=3.15")
+    path.write_bytes(text.encode())
+    (root / ".python-version").write_bytes(b"3.15\r\n")
+    before = snapshot(root)
+    assert cli.main(["--root", str(root), "toolchain", "python-check"]) == 1
+    assert field in capsys.readouterr().err
+    assert not calls and snapshot(root) == before
