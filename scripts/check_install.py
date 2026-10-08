@@ -241,6 +241,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             notebook_suite = consumer / "public_notebook_consumer.py"
             notebook_suite.write_bytes((ROOT / "tests/notebooks/public_notebook_consumer.py").read_bytes())
             run_isolated(python, [str(notebook_suite), "TestInspection"], cwd=consumer, env=local_env)
+            workflows_suite = consumer / "public_workflows_consumer.py"
+            workflows_suite.write_bytes((ROOT / "tests/notebooks/public_workflows_consumer.py").read_bytes())
+            run_isolated(python, [str(workflows_suite)], cwd=consumer, env=local_env)
             # Run the same consumer suite against each installed artifact, using
             # only documented imports and no source checkout or pytest dependency.
             public_suite = consumer / "public_api_consumer.py"

@@ -16,7 +16,7 @@ from research_repo_tools.sarif import SarifPolicy
 __all__ = ["load", "parse"]
 
 FIELDS = {
-    "notebooks": {"advice", "group", "cwd", "output-dir", "timeout", "outputs", "prohibit-installs"},
+    "notebooks": {"advice", "group", "cwd", "id-pattern", "lab", "output-dir", "timeout", "outputs", "prohibit-installs", "reset"},
     "toolchain": {"binaries", "cargo", "inherit-python", "inherit-python-tools"},
     "deps": {"pyproject", "justfile", "tools", "tool-owners", "uv"},
     "sarif": {"category-prefix", "drivers"},
@@ -50,6 +50,30 @@ class NotebookAdvice:
 
 
 @dataclass(frozen=True, slots=True)
+class NotebookLab:
+    browser: bool = False
+    scratch_dir: str = "target/jupyter"
+
+
+@dataclass(frozen=True, slots=True)
+class NotebookReset:
+    sources: tuple[str, ...] = ()
+    scratch: tuple[str, ...] = ()
+    checkpoints: tuple[str, ...] = ()
+
+
+def notebook_id_pattern(value: object) -> re.Pattern[str] | None:
+    """Compile an opt-in full-match policy; nbformat validity remains separate."""
+    if value is None:
+        return None
+    pattern = _string(value, "notebooks.id-pattern")
+    try:
+        return re.compile(pattern)
+    except re.PatternError as error:
+        raise ValueError(f"notebooks.id-pattern must be a valid regular expression: {error}") from error
+
+
+@dataclass(frozen=True, slots=True)
 class NotebookSettings:
     group: str = "notebook"
     cwd: str = "."
@@ -58,6 +82,12 @@ class NotebookSettings:
     outputs: Literal["clear", "preserve"] = "clear"
     advice: NotebookAdvice = field(default_factory=NotebookAdvice)
     prohibit_installs: bool = False
+    id_pattern: str | None = None
+    lab: NotebookLab = field(default_factory=NotebookLab)
+    reset: NotebookReset = field(default_factory=NotebookReset)
+
+    def __post_init__(self) -> None:
+        notebook_id_pattern(self.id_pattern)
 
 
 @dataclass(frozen=True, slots=True)
@@ -295,6 +325,31 @@ def _notebook_advice(value: object) -> NotebookAdvice:
     )
 
 
+def _notebook_lab(value: object) -> NotebookLab:
+    section = _table(value, "notebooks.lab")
+    if section.keys() - {"browser", "scratch-dir"}:
+        raise ValueError("unknown notebooks.lab field")
+    return NotebookLab(
+        browser=_boolean(section.get("browser", False), "notebooks.lab.browser"),
+        scratch_dir=_string(section.get("scratch-dir", "target/jupyter"), "notebooks.lab.scratch-dir"),
+    )
+
+
+def _notebook_reset(value: object) -> NotebookReset:
+    section = _table(value, "notebooks.reset")
+    if section.keys() - {"sources", "scratch", "checkpoints"}:
+        raise ValueError("unknown notebooks.reset field")
+    paths = {}
+    for key in ("sources", "scratch", "checkpoints"):
+        raw = section.get(key, [])
+        if not isinstance(raw, list) or any(not isinstance(path, str) or not path or "\0" in path for path in raw):
+            raise ValueError(f"notebooks.reset.{key} must be an array of nonempty literal paths without NUL")
+        if len(set(raw)) != len(raw):
+            raise ValueError(f"notebooks.reset.{key} paths must be distinct")
+        paths[key] = tuple(raw)
+    return NotebookReset(**paths)
+
+
 def parse(value: object, *, root: Path) -> Config:
     """Reject invalid fields and ambiguous paths before publishing trusted settings."""
     data = _table(value, "research-repo-tools configuration")
@@ -403,6 +458,9 @@ def parse(value: object, *, root: Path) -> Config:
             outputs="preserve" if notebook_outputs == "preserve" else "clear",
             advice=_notebook_advice(notebooks.get("advice", {})),
             prohibit_installs=prohibit_installs,
+            id_pattern=_optional_string(notebooks, "id-pattern", "notebooks"),
+            lab=_notebook_lab(notebooks.get("lab", {})),
+            reset=_notebook_reset(notebooks.get("reset", {})),
         ),
     )
 

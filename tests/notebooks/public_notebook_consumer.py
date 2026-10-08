@@ -299,6 +299,28 @@ class TestAdvice(Consumer):
         self.assertFalse((self.root / "target").exists())
 
 
+class TestIdPattern(Consumer):
+    def test_configured_pattern_cli_override_and_broad_default_preserve_existing_ids(self):
+        original = self.write([code("value = 1", cell_id="Calculate_Value")])
+        status, _out, err = self.run_cli("lint")
+        self.assertEqual(status, 0, err)
+        (self.root / "pyproject.toml").write_text(
+            "[tool.research-repo-tools.notebooks]\nid-pattern='[a-z0-9]+(?:-[a-z0-9]+)*'\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        status, out, err = self.run_cli("lint")
+        self.assertEqual((status, out), (1, ""))
+        self.assertIn("cell 1 (Calculate_Value): id-pattern", err)
+        status, _out, err = self.run_cli("lint", "--id-pattern", "[A-Za-z_]+")
+        self.assertEqual(status, 0, err)
+        self.assertEqual(self.path.read_bytes(), original)
+        original = self.write([code("value = 1", cell_id="calculate-value")])
+        status, _out, err = self.run_cli("lint")
+        self.assertEqual(status, 0, err)
+        self.assertEqual(self.path.read_bytes(), original)
+
+
 class TestInstallPolicy(Consumer):
     def test_installed_lint_checks_wrapped_windows_commands_and_python_after_magics(self):
         (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.14"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')

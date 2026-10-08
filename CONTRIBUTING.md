@@ -205,6 +205,10 @@ The public notebook consumer suite runs against both installed distributions:
 inspection runs without extras, and advisory checks run in the locked notebook
 environment with native Ruff. It covers repair inventories, source suppression,
 policy configuration, strict warning status, IPython skips, and unchanged inputs.
+Installed consumers also cover full-match cell-ID spelling, locked JupyterLab
+launch with a stand-in server, and opt-in source-reset/deletion maps. Reset Git
+fixtures follow the shared mutation control; preflight and modeled failure tests
+remain runnable without Git mutations.
 
 The public notebook fixture suite also runs with the notebook extra after both
 installations, using fresh kernels for success, cell failure and timeout reports,

@@ -11,9 +11,11 @@ from pathlib import Path
 
 from packaging.version import Version
 
-from research_repo_tools.config import Config
+from research_repo_tools.config import Config, notebook_id_pattern
 from research_repo_tools.notebooks import Notebook, generated_state, selected
 from research_repo_tools.process import format_exception_diagnostics, run_safe_command
+
+__all__ = ["lint"]
 
 MINIMUM_VERSIONS = {"ruff": "0.16.8", "ty": "0.0.82"}
 RUFF_COMMON = ["--no-cache", "--no-force-exclude", "--no-respect-gitignore", "--output-format", "json"]
@@ -131,9 +133,10 @@ def python_notebooks(paths: list[Path]) -> list[Notebook]:
     return notebooks
 
 
-def lint(settings: Config, paths: list[Path], *, timeout: int = 30) -> int:
+def lint(settings: Config, paths: list[Path], *, timeout: int = 30, id_pattern: str | None = None) -> int:
     if type(timeout) is not int or timeout <= 0:
         raise ValueError("notebook lint timeout must be a positive integer")
+    pattern = notebook_id_pattern(settings.notebooks.id_pattern if id_pattern is None else id_pattern)
     notebooks = python_notebooks(paths)
     require_checkers()
     checks = (
@@ -159,6 +162,12 @@ def lint(settings: Config, paths: list[Path], *, timeout: int = 30) -> int:
     failed = False
     for notebook in notebooks:
         diagnostics = []
+        if pattern is not None:
+            diagnostics.extend(
+                Diagnostic(f"id-pattern: existing ID {cell.id!r} must fully match {pattern.pattern!r}", number)
+                for number, cell in enumerate(notebook.node.cells, 1)
+                if pattern.fullmatch(cell.id) is None
+            )
         if settings.notebooks.prohibit_installs:
             from research_repo_tools.notebook_policy import install_diagnostics
 
