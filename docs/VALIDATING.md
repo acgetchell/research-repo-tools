@@ -134,6 +134,15 @@ hosted jobs passed.
 Platform models and fake executables do not substitute for native installer
 verification; see the [toolchain contract](INSTALLING.md) for prerequisites.
 
+Source and both installed distributions also run the public Cargo example suite.
+Small dependency-free crates exercise native metadata discovery of nested and
+explicit targets, one default-feature build, separate feature overrides, required
+features, custom target directories, literal arguments and CLI failures. Real
+child-process handshakes prove stdout arrives before completion with and without
+assertions; exact-byte, marker-boundary, nonzero-exit and timeout-cleanup cases
+cover the shared live runner. Cargo and a native toolchain are required on PATH.
+These generic fixtures do not replace consumer coverage or scientific assertions.
+
 The Linux test pass collects coverage of package code and repository scripts,
 including Python subprocesses, and omits tests and the development environment.
 Linux retains its Cobertura report as a seven-day Actions artifact. A

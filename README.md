@@ -94,8 +94,42 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | Setup | `setup` | Require uv; install user Just and declared tools; sync the locked environment |
 | Templates | `templates NAME` | Shared changelog, release guide/OIDC workflow, just, TOML, and rumdl resources |
 | Toolchain | `toolchain adopt`, `check`, `clean`, `export`, `python-check`, `python-tools-check`, `run`, `sync`, `sync-binaries`, `upgrade` | Exact declarations; managed installations and cleanup; verified execution and checked CI export |
-| Validation | `validation cargo-metadata`, `require`, `run` | Native package preflight, executable checks and configured example output assertions |
+| Validation | `validation cargo-examples`, `cargo-metadata`, `require`, `run` | Runtime Cargo example discovery, bounded live execution, package preflight and configured assertions |
 | Workflow security | `zizmor check` | One declared scanner/persona, token discovery, explicit offline or required-online audits |
+
+### Cargo examples
+
+With the published release containing this capability pinned, define a consumer
+plan such as `tooling/examples.toml`. Cargo discovers binary examples, including
+nested and explicit targets. Consumers own feature choices, selection, budgets
+and scientific assertions:
+
+```toml
+schema = 1
+profile = "release"
+timeout = 600
+build-timeout = 1800
+
+[examples.diagnostics]
+features = ["diagnostics"]
+expect = ["consumer-defined success marker"]
+```
+
+Omit `include` to run every discovered binary example. Ordinary examples build
+once with default features; feature overrides build and run separately. Copy
+your existing scientific markers into per-example `expect` arrays unchanged.
+Add a thin consumer recipe and run `just examples`:
+
+```just
+examples:
+    uv run --locked research-repo-tools validation cargo-examples tooling/examples.toml
+```
+
+Output is inherited by default. `expect` opts stdout into live byte forwarding
+and literal matching; the child's buffering may change and temporary disk use
+scales with output. Stdin and stderr remain inherited. See the
+[CLI/configuration/Python contract](docs/cargo-examples-api.md) and
+[migration from static validation plans](docs/cargo-examples-migration.md).
 
 ### Just recipes
 
