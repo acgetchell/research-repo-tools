@@ -186,10 +186,16 @@ class TestPdf(unittest.TestCase):
                 normalize_pdf(self.pdf, tex=self.tex, identity="stable")
         self.assertEqual(self.pdf.read_bytes(), self.original)
         self.assertEqual(sorted(path.name for path in self.root.iterdir()), ["rebuilt.pdf", "source.tex"])
-        self.tex.write_text(r"\date{\today}", encoding="utf-8", newline="\n")
-        with self.assertRaises(ValueError):
-            normalize_pdf(self.pdf, tex=self.tex, identity="stable")
-        self.assertEqual(self.pdf.read_bytes(), self.original)
+        for payload in (b"\\date{\\today}", b"bad\xff"):
+            self.tex.write_bytes(payload)
+            with self.subTest(payload=payload), self.assertRaisesRegex(ValueError, "source.tex.*failed to read paper source date"):
+                normalize_pdf(self.pdf, tex=self.tex, identity="stable")
+            error = io.StringIO()
+            with contextlib.redirect_stderr(error):
+                self.assertEqual(main(["papers", "normalize", str(self.pdf), "--tex", str(self.tex), "--identity", "stable"]), 1)
+            self.assertIn(str(self.tex), error.getvalue())
+            self.assertNotIn("Traceback", error.getvalue())
+            self.assertEqual((self.tex.read_bytes(), self.pdf.read_bytes()), (payload, self.original))
         with self.assertRaisesRegex(ValueError, "TeX source"):
             normalize_pdf(self.pdf, tex=self.tex, identity="stable", output=self.tex)
 

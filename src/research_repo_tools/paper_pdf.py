@@ -235,7 +235,10 @@ def normalize_pdf(
     if destination.resolve() == tex.resolve():
         raise ValueError("PDF output must not replace its TeX source")
     originals = {path: path.read_bytes(), tex: tex.read_bytes()}
-    date = parse_source_date(originals[tex].decode("utf-8"))
+    try:
+        date = parse_source_date(originals[tex].decode("utf-8"))
+    except ValueError as error:
+        raise ValueError(f"{tex}: failed to read paper source date: {error}") from error
     retained = None
     if reference is not None:
         originals[reference] = reference.read_bytes()
