@@ -8,6 +8,7 @@ from pathlib import Path
 from types import MappingProxyType
 from typing import Literal, TypeIs, cast
 
+from research_repo_tools.paper_pdf import PdfPolicy
 from research_repo_tools.release_policy import ReleasePolicy as ReleasePolicy
 from research_repo_tools.release_policy import ReleaseRule
 from research_repo_tools.release_publishing import PublishingSettings, parse_publishing
@@ -16,6 +17,8 @@ from research_repo_tools.sarif import SarifPolicy
 __all__ = ["load", "parse"]
 
 FIELDS = {
+    "papers": {"documents"},
+    "text": {"line-limit", "include", "exclude"},
     "notebooks": {"advice", "group", "cwd", "id-pattern", "lab", "output-dir", "timeout", "outputs", "prohibit-installs", "reset"},
     "toolchain": {"binaries", "cargo", "inherit-python", "inherit-python-tools"},
     "deps": {"pyproject", "justfile", "tools", "tool-owners", "uv"},
@@ -39,6 +42,22 @@ FIELDS = {
     "publishing": {"registry", "package", "repository", "required-checks", "required-assets"},
     "zizmor": {"persona", "timeout"},
 }
+
+
+@dataclass(frozen=True, slots=True)
+class TextSettings:
+    line_limit: int | None = None
+    include: tuple[str, ...] = ()
+    exclude: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True, slots=True)
+class PaperDocument:
+    tex: str
+    pdf: str
+    identity: str
+    policy: PdfPolicy = field(default_factory=PdfPolicy)
+    reference: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -183,6 +202,11 @@ class Config:
     zizmor: ZizmorSettings = field(default_factory=ZizmorSettings)
     publishing: PublishingSettings | None = None
     sarif: SarifPolicy | None = None
+    text: TextSettings = field(default_factory=TextSettings)
+    papers: Mapping[str, PaperDocument] = field(default_factory=dict)
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "papers", MappingProxyType(dict(self.papers)))
 
     def path(self, value: str) -> Path:
         path = Path(value)
@@ -350,6 +374,26 @@ def _notebook_reset(value: object) -> NotebookReset:
     return NotebookReset(**paths)
 
 
+def _papers(section: dict[str, object]) -> dict[str, PaperDocument]:
+    documents = {}
+    for name, raw in _table(section.get("documents", {}), "papers.documents").items():
+        document = _table(raw, f"papers.documents.{name}")
+        if document.keys() - {"tex", "pdf", "identity", "min-pages", "require-text", "forbid-text", "reference"}:
+            raise ValueError(f"unknown paper document field: {name}")
+        documents[_string(name, "paper name")] = PaperDocument(
+            tex=_string(document.get("tex"), "paper tex"),
+            pdf=_string(document.get("pdf"), "paper pdf"),
+            identity=_string(document.get("identity"), "paper identity"),
+            policy=PdfPolicy(
+                _positive_integer(document.get("min-pages", 1), "paper min-pages"),
+                _release_paths(document.get("require-text", []), "paper require-text"),
+                _release_paths(document.get("forbid-text", []), "paper forbid-text"),
+            ),
+            reference=_optional_string(document, "reference", "paper"),
+        )
+    return documents
+
+
 def parse(value: object, *, root: Path) -> Config:
     """Reject invalid fields and ambiguous paths before publishing trusted settings."""
     data = _table(value, "research-repo-tools configuration")
@@ -359,6 +403,7 @@ def parse(value: object, *, root: Path) -> Config:
     if type(data.get("schema", 1)) is not int or data.get("schema", 1) != 1:
         raise ValueError("configuration schema must be integer 1")
     root = root.resolve()
+    text = _section(data, "text")
     toolchain = _section(data, "toolchain")
     if type(toolchain.get("inherit-python", False)) is not bool:
         raise ValueError("toolchain.inherit-python must be a boolean")
@@ -405,6 +450,12 @@ def parse(value: object, *, root: Path) -> Config:
         raise ValueError("release.final-changelog must be a boolean")
     return Config(
         root=root,
+        text=TextSettings(
+            _positive_integer(text["line-limit"], "text.line-limit") if "line-limit" in text else None,
+            _release_paths(text.get("include", []), "text.include"),
+            _release_paths(text.get("exclude", []), "text.exclude"),
+        ),
+        papers=_papers(_section(data, "papers")),
         zizmor=ZizmorSettings(cast(Literal["regular", "pedantic", "auditor"] | None, persona), zizmor_timeout),
         toolchain=ToolchainSettings(
             _strings(toolchain.get("cargo", {}), "toolchain.cargo"),

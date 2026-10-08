@@ -187,7 +187,7 @@ See [Supported interfaces](docs/api.md) for the CLI, configuration, and public
 Python entry-point contract.
 
 Maintain one implementation per common capability under `src/research_repo_tools/`.
-Organize tests under `tests/changelog`, `dependencies`, `notebooks`, `performance`,
+Organize tests under `tests/changelog`, `dependencies`, `notebooks`, `papers`, `performance`,
 `publication`, `releases`, `review`, `security`, `semgrep`, `toolchain`, `utilities`, `validation`,
 and `zizmor`. Fixtures should be small representative inputs generated in temporary
 directories. Preserve meaningful regression assertions against this package;

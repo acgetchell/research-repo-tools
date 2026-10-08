@@ -864,6 +864,15 @@ wheels = [
 ]
 
 [[package]]
+name = "pypdf"
+version = "6.19.0"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/1f/ac/63d71aaedb59acbcdef491e6ca6469165e3771c9c74358204818fd9bc5a6/pypdf-6.19.0.tar.gz", hash = "sha256:bbc43aca292369ccc6cbc8a921991ecf2538a3587ab5a116eff06c321d647155", size = 7033266, upload-time = "2026-09-16T09:32:05.946Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/3c/2c/c43c03eaf630435f023f1dc61ec4a4a78951ad5530a62c71cc89bde307b7/pypdf-6.19.0-py3-none-any.whl", hash = "sha256:7e5d6e730e7dae87d560a2cee218b852f6498c8be61966f3cd02ead971e48d14", size = 395480, upload-time = "2026-09-16T09:32:04.087Z" },
+]
+
+[[package]]
 name = "pytest"
 version = "9.1.1"
 source = { registry = "https://pypi.org/simple" }
@@ -1021,6 +1030,9 @@ notebooks = [
     { name = "nbclient" },
     { name = "nbformat" },
 ]
+papers = [
+    { name = "pypdf" },
+]
 python-tools = [
     { name = "pytest" },
     { name = "ruff" },
@@ -1038,7 +1050,7 @@ dev = [
     { name = "nbclient" },
     { name = "nbformat" },
     { name = "pytest-cov" },
-    { name = "research-repo-tools", extra = ["python-tools"] },
+    { name = "research-repo-tools", extra = ["papers", "python-tools"] },
     { name = "zizmor" },
 ]
 
@@ -1048,13 +1060,14 @@ requires-dist = [
     { name = "nbclient", marker = "extra == 'notebooks'", specifier = ">=0.11.0,<1" },
     { name = "nbformat", marker = "extra == 'notebooks'", specifier = ">=5.10.4,<6" },
     { name = "packaging", specifier = ">=26.1" },
+    { name = "pypdf", marker = "extra == 'papers'", specifier = ">=6,<7" },
     { name = "pytest", marker = "extra == 'python-tools'", specifier = "==9.1.1" },
     { name = "pyyaml", specifier = ">=6" },
     { name = "ruff", marker = "extra == 'python-tools'", specifier = "==0.16.9" },
     { name = "rust-just", specifier = "==1.58.0" },
     { name = "ty", marker = "extra == 'python-tools'", specifier = "==0.0.84" },
 ]
-provides-extras = ["notebooks", "python-tools"]
+provides-extras = ["notebooks", "papers", "python-tools"]
 
 [package.metadata.requires-dev]
 audit = [{ name = "pip-audit", specifier = "==2.10.1" }]
@@ -1065,7 +1078,7 @@ dev = [
     { name = "nbclient", specifier = "==0.11.0" },
     { name = "nbformat", specifier = "==5.11.1" },
     { name = "pytest-cov", specifier = "==7.1.0" },
-    { name = "research-repo-tools", extras = ["python-tools"] },
+    { name = "research-repo-tools", extras = ["papers", "python-tools"] },
     { name = "zizmor", specifier = "==1.30.1" },
 ]
 

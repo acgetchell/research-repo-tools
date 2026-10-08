@@ -51,6 +51,22 @@ outputs = "clear"
 # Optional full-match policy for lowercase kebab-case IDs:
 # id-pattern = '[a-z0-9]+(?:-[a-z0-9]+)*'
 
+# Optional declarations; dates are explicit in the consumer's TeX source.
+# [papers.documents.example]
+# tex = "papers/example.tex"
+# pdf = "target/papers/example.pdf"
+# identity = "papers/example.tex"
+# min-pages = 1
+# require-text = ["Example title", "REFERENCES"]
+# forbid-text = ['\today']
+# reference = "papers/example.pdf" # Opt-in retained-artifact equivalence.
+
+# Every raw line counts, including fences, tables, URLs and trailing whitespace.
+# [text]
+# line-limit = 160
+# include = ["*.md"]
+# exclude = ["CHANGELOG.md", "docs/archive/**", "docs/archives/changelog/**"]
+
 [notebooks.lab]
 browser = false
 scratch-dir = "target/jupyter"

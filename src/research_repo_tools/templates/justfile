@@ -40,7 +40,7 @@ clean *args:
 [private]
 default: help
 
-# Run a validator on tracked and nonignored inputs, with portable batching.
+# Check raw lines, list inputs, or batch a validator over tracked/nonignored files.
 files +args:
     uv run --locked --group dev research-repo-tools files "$@"
 
@@ -85,6 +85,10 @@ notebook-reset *args:
 # Synchronize the locked notebook environment and register its project kernel.
 notebook-sync:
     uv run --locked --managed-python --only-group tooling research-repo-tools notebooks sync
+
+# Read explicit TeX dates, check PDF structure, or normalize a declared PDF.
+papers +args:
+    uv run --locked --group dev research-repo-tools papers "$@"
 
 # Compare timings, handle assets, and verify, render, or publish retained evidence.
 performance +args:
@@ -165,6 +169,10 @@ shared-python-plan version:
 # Apply the validated shared-package/Python/tool-profile migration and recreate the environment.
 shared-python-update version:
     uv run --no-config --no-project --isolated --managed-python --script python-bootstrap.py "$1" --apply
+
+# Discover/export existing native dependencies; never install host packages.
+tectonic +args:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools tectonic "$@"
 
 # The environment must already exist; checking never syncs or downloads Python.
 tools-check:

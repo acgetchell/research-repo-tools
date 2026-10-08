@@ -64,4 +64,4 @@ def test_compare_rejects_output_below_a_symlinked_input_root(tmp_path: Path, lin
 
 def test_help_lists_commands_lexicographically() -> None:
     text = parser().format_help()
-    assert "notebooks,performance,python,release" in text
+    assert "notebooks,papers,performance,python,release" in text
