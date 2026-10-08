@@ -131,6 +131,11 @@ def parser() -> argparse.ArgumentParser:
     review = groups.add_parser("review", help="run an opt-in CodeRabbit review").add_subparsers(dest="action", required=True)
     review.add_parser("branch", help="review branch and local changes against a verified base").add_argument("--base", default="origin/main")
     review.add_parser("uncommitted", help="review only staged, unstaged, and untracked changes")
+    sarif = groups.add_parser("sarif", help="filter and split consumer-selected SARIF runs").add_subparsers(dest="action", required=True)
+    split = sarif.add_parser("split", help="publish a complete filtered SARIF generation")
+    split.add_argument("source")
+    split.add_argument("--github-output", type=Path, help="append SARIF_DIRECTORY, SARIF_HAS_UPLOADABLE_RUNS and SARIF_RUN_COUNT after publication")
+    split.add_argument("--output", required=True, help="owned directory replaced as a complete generation")
     security = groups.add_parser("security", help="run managed native dependency and secret scanners").add_subparsers(dest="action", required=True)
     osv = security.add_parser("osv", help="scan explicit tracked/nonignored uv.lock and Cargo.lock files")
     osv.add_argument("lockfiles", nargs="+")
@@ -143,10 +148,16 @@ def parser() -> argparse.ArgumentParser:
     semgrep = groups.add_parser("semgrep", help="validate consumer rules and fixtures").add_subparsers(dest="action", required=True)
     semgrep.add_parser("check-fixtures").add_argument("--rust-docs", action="store_true")
     scan = semgrep.add_parser("scan", help="scan explicit inventory with strict native reports")
-    scan.add_argument("--include", action="append", required=True)
+    scan.add_argument("--batch-size", type=int)
     scan.add_argument("--exclude", action="append", default=[])
+    scan.add_argument("--include", action="append", required=True)
+    scan.add_argument("--inline-suppressions", action=argparse.BooleanOptionalAction, default=None)
+    scan.add_argument("--jobs", type=int)
     scan.add_argument("--output", default="target/security/semgrep")
+    scan.add_argument("--report-category")
+    scan.add_argument("--report-layout", choices=("aggregate", "numbered"))
     scan.add_argument("--rust-docs", action="store_true")
+    scan.add_argument("--target-timeout", type=int)
     groups.add_parser("setup", help="install Just and declared tools, configure PATH, and sync the locked environment")
     templates = groups.add_parser("templates", help="print or explicitly create shared package resources")
     from research_repo_tools.changelog import TEMPLATES
@@ -390,6 +401,29 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         else:
             _write_stdout(rendered.encode("utf-8"))
         return 0
+    if args.group == "sarif":
+        from research_repo_tools.sarif import split
+        from research_repo_tools.scanner_output import _print
+
+        if settings.sarif is None:
+            raise ValueError("sarif split requires explicit sarif.drivers configuration")
+        outputs = split(settings.path(args.source), settings.path(args.output), settings.sarif)
+        if args.github_output is not None:
+            from research_repo_tools.ci import export_environment
+
+            export_environment(
+                settings.path(str(args.github_output)),
+                ("SARIF_DIRECTORY", "SARIF_HAS_UPLOADABLE_RUNS", "SARIF_RUN_COUNT"),
+                environment={
+                    "SARIF_DIRECTORY": str(settings.path(args.output)),
+                    "SARIF_HAS_UPLOADABLE_RUNS": "true" if outputs else "false",
+                    "SARIF_RUN_COUNT": str(len(outputs)),
+                },
+            )
+        for output in outputs:
+            _print(f"Published {settings.path(args.output) / output.filename} with category {output.category}")
+        _print(f"Published {len(outputs)} uploadable SARIF run(s)")
+        return 0
     if args.group == "security":
         from research_repo_tools.security import scan_osv, scan_secrets
 
@@ -400,7 +434,19 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         from research_repo_tools.semgrep_scan import check_documentation_fixtures, scan
 
         if args.action == "scan":
-            return scan(settings, include=tuple(args.include), exclude=tuple(args.exclude), output=args.output, rust_docs=args.rust_docs)
+            return scan(
+                settings,
+                include=tuple(args.include),
+                exclude=tuple(args.exclude),
+                output=args.output,
+                rust_docs=args.rust_docs,
+                batch_size=args.batch_size,
+                inline_suppressions=args.inline_suppressions,
+                jobs=args.jobs,
+                report_category=args.report_category,
+                report_layout=args.report_layout,
+                target_timeout=args.target_timeout,
+            )
         if args.rust_docs:
             return check_documentation_fixtures(settings)
         from research_repo_tools.semgrep import check

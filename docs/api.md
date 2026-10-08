@@ -5,6 +5,10 @@ configuration, packaged templates, and the Python APIs listed below. Consumers
 should pin an exact released version in their uv development dependencies.
 Patch releases preserve these contracts; a minor release may introduce a
 documented breaking change while the package remains below `1.0`.
+The v0.1.8 [Semgrep scan migration](shared-capability-migration.md#sarif-and-batched-scan-adoption)
+is an explicit exception: it changes the default report layout and gives scans
+exclusive ownership of their output directory. Review that migration before
+updating a consumer's exact pin.
 
 The [complete-run and host APIs](complete-run-api.md) extend the performance
 contracts with common-harness plans, raw sample retention, named phase series,
@@ -498,9 +502,26 @@ The template's `just release-first TAG DATE` uses online discovery. Existing
 
 ## Python file-publication API
 
+`research_repo_tools.files.publish_directory(destination: Path)` is a context
+manager yielding an empty private staging `Path` beside the destination.
+Generate or copy the complete set and validate consumer assertions inside the
+context. Exit publishes the generation, including an empty set, replacing all
+old members. Generation failures leave the original untouched. Caught commit
+failures restore it; incomplete rollback raises an exception group with the
+original failure first and `RecoveryError.target` / `RecoveryError.backup`
+identifying the retained original directory. All path components must be free of
+symlinks/junctions; generated trees allow only regular files and directories,
+with portable case/Unicode aliases rejected. Files are synced before publication.
+New directories start owner-only; caller-created file modes are retained and
+existing destination directory permission bits are preserved where supported.
+Missing transaction-created parents are cleaned up when still empty. Cleanup
+is best effort. Ownership/ACL metadata is not preserved. Callers must own the
+whole destination exclusively: the two renames can briefly leave it absent,
+and neither concurrent-writer serialization nor crash atomicity is promised.
+
 `research_repo_tools.files.replace_many(updates: Mapping[Path, bytes], *, expected: Mapping[Path, bytes] | None = None) -> None`
 publishes a mapping in iteration order. An empty mapping is a no-op. It is the
-single supported publication entry point; pass one entry for one file.
+supported named-file publication entry point; pass one entry for one file.
 
 - All targets and byte payloads are checked before staging or directory creation.
   Paths resolve relative to the caller's directory. Duplicate paths and
@@ -643,12 +664,13 @@ Scans require declared, already installed exact managed binaries. They return
 zero only for complete scans without findings, otherwise the first native
 nonzero status, 1 for invalid successful reports/findings, or 124 on timeout.
 Invalid arguments/preconditions raise `ValueError`; I/O and Git errors propagate.
-Old reports at the selected output names are removed before scanning. OSV and
-Semgrep also remove all prior numbered JSON/SARIF reports in their respective
-output directories, including symlinks, so smaller inventories leave no stale
-reports. These two scanners reject output directories with symlinks or Windows
+Old OSV reports at the selected output names are removed before scanning. OSV
+also removes all prior numbered JSON/SARIF reports in its output directory,
+including symlinks, so smaller inventories leave no stale reports. OSV and
+Semgrep reject output directories with symlinks or Windows
 junctions in any path component before creating directories or removing reports.
-Unrelated files and symlink targets are preserved. Native
+OSV preserves unrelated files and symlink targets. Semgrep owns and replaces
+its complete output directory through `files.publish_directory`. Native
 schemas and locations are retained, with Gitleaks source excerpts/commit messages
 redacted in addition to native detected-secret redaction. Report directories are
 caller-owned outputs. These commands are not an assurance that unknown secrets,
@@ -660,7 +682,78 @@ change the source. Hidden Rust lines remain code; unclosed selected fences raise
 `ValueError`. Macro-generated documentation and `#[doc = ...]` are not extracted.
 
 `semgrep_scan.scan(settings, *, include, exclude=(), output="target/security/semgrep",
-rust_docs=False)` runs the native scanner with strict errors, coverage checks and
-numbered JSON/SARIF reports. `check_documentation_fixtures(settings)` adapts
+rust_docs=False, batch_size=None, inline_suppressions=None, jobs=None,
+report_category=None, report_layout=None, target_timeout=None)` runs the native
+scanner once per bounded batch, generating JSON and SARIF in the same invocation.
+Optional overrides follow `config.SemgrepSettings`: positive integer batch size,
+jobs and target timeout; boolean inline suppressions; `aggregate` or `numbered`
+layout; filename-safe report category. Defaults are 100 files, one job, 120
+seconds per rule/target, disabled suppressions, aggregate layout and `semgrep`
+category. Existing `semgrep.timeout` is the positive process/fixture timeout
+(default 300 seconds). CLI flags use corresponding hyphenated names.
+
+Both report formats must be fresh finite JSON and agree on active rule/path/line
+findings. JSON must declare exactly the selected scanned inputs and no errors.
+Explicit source files include tests normally ignored by Semgrep, while native
+rule path filters remain active. Excluded fixtures are never selected.
+Accepted SARIF suppressions and JSON `extra.is_ignored` findings are inactive
+only when inline suppressions are enabled. Invalid pairs or process timeouts
+commit an empty generation, removing stale members. Precondition, generation
+and publication exceptions preserve/restore the previous generation. Valid
+reports remain available when findings or native status make the gate fail.
+
+Aggregate layout publishes `semgrep.json` and `semgrep.sarif`. JSON contains
+combined `results`, `errors`, `paths.scanned` and full native JSON in `batches`.
+SARIF merges one run with deduplicated rule descriptors and reindexed rule,
+artifact and invocation references; conflicting metadata/descriptors reject
+aggregation. Unrelated run metadata must agree across batches. The declared
+category followed by `/` becomes `automationDetails.id`, leaving the run ID
+empty so GitHub recognizes the category. Numbered layout publishes `N.json` /
+`N.sarif` pairs per batch, retaining native metadata and assigning distinct
+categories. Both layouts replace the whole owned output directory, superseding
+0.1.7's per-file double launches and partial numbered-file cleanup.
+
+`check_documentation_fixtures(settings)` adapts
 annotated Markdown fixtures to the existing shared fixture checker, including
 blocking mismatches; count-based expectations remain in a separate fixture gate.
+
+## SARIF API
+
+`sarif.SarifPolicy(drivers: Mapping[str, tuple[str, ...]], category_prefix="analysis")`
+selects exact driver names and rule-ID prefixes. The mapping is frozen; empty
+prefix tuples keep all rules for that driver. TOML `[sarif]` supports
+`category-prefix` and a `drivers` table of name-to-prefix arrays (prefixed with
+`tool.research-repo-tools` in pyproject.toml). At least one driver is required.
+
+`sarif.transform(document: object, policy) -> tuple[SarifOutput, ...]` validates
+the whole document before selection and returns serialized immutable outputs
+with `filename`, `category` and UTF-8 byte `payload`. It requires finite JSON,
+version 2.1.0, a runs array, named drivers, unique rule IDs, object result/message
+shapes and consistent rule references. Missing results/rules mean empty arrays;
+explicit null is invalid. Legacy `ruleId`/`ruleIndex` and nested `rule.id` /
+`rule.index` are supported, including ID-only findings without descriptor tables.
+Extension `toolComponent` rule references are rejected. Invocations, when
+present, must report successful execution. This validates the transform's
+supported subset rather than every optional SARIF schema field.
+
+Namespace-selected rules are retained even without findings. Runs without rules
+or results are omitted. Rule indices in retained results, descriptor relationships,
+notification `associatedRule` metadata and invocation `ruleConfigurationOverrides`
+are reindexed. Supplied rule IDs and indices must agree; metadata referencing removed indices
+rejects the transform. Arbitrary `properties` are preserved. Other root/run
+metadata and automation fields remain unchanged except `automationDetails.id`.
+Categories include the prefix, driver slug, driver-name digest and occurrence
+among all input runs, including empty ones. Repeated names and slug collisions
+have distinct categories; ordering same-name runs defines their stable identity.
+Each `automationDetails.id` is the category followed by `/`, leaving the run ID
+empty for GitHub code scanning. `SarifOutput.category` and filenames do not
+include that separator.
+
+`sarif.split(source: Path, destination: Path, policy) -> tuple[SarifOutput, ...]`
+parses duplicate-free strict UTF-8 JSON, transforms and serializes all outputs
+before publishing a complete directory generation. Invalid input leaves the old
+generation unchanged; empty output removes stale files. CLI `sarif split SOURCE
+--output DIRECTORY` uses the configured policy. Optional `--github-output PATH`
+calls `ci.export_environment` after publication, exporting `SARIF_DIRECTORY`,
+`SARIF_HAS_UPLOADABLE_RUNS` and `SARIF_RUN_COUNT`. That append is a separate
+operation: failure reports nonzero after the SARIF directory has committed.

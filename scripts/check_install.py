@@ -274,6 +274,12 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             security_suite = consumer / "public_security_consumer.py"
             security_suite.write_bytes((ROOT / "tests/security/public_security_consumer.py").read_bytes())
             run_isolated(python, [str(security_suite)], cwd=consumer, env=local_env)
+            sarif_suite = consumer / "public_sarif_consumer.py"
+            sarif_suite.write_bytes((ROOT / "tests/security/public_sarif_consumer.py").read_bytes())
+            run_isolated(python, [str(sarif_suite)], cwd=consumer, env=local_env)
+            scan_suite = consumer / "public_scan_consumer.py"
+            scan_suite.write_bytes((ROOT / "tests/semgrep/public_scan_consumer.py").read_bytes())
+            run_isolated(python, [str(scan_suite)], cwd=consumer, env=local_env)
             toolchain_suite = consumer / "public_toolchain_consumer.py"
             toolchain_suite.write_bytes((ROOT / "tests/toolchain/public_toolchain_consumer.py").read_bytes())
             run_isolated(python, [str(toolchain_suite)], cwd=consumer, env=local_env)

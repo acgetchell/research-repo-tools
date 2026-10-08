@@ -11,6 +11,7 @@ from typing import Literal, TypeIs, cast
 from research_repo_tools.release_policy import ReleasePolicy as ReleasePolicy
 from research_repo_tools.release_policy import ReleaseRule
 from research_repo_tools.release_publishing import PublishingSettings, parse_publishing
+from research_repo_tools.sarif import SarifPolicy
 
 __all__ = ["load", "parse"]
 
@@ -18,7 +19,21 @@ FIELDS = {
     "notebooks": {"advice", "group", "cwd", "output-dir", "timeout", "outputs", "prohibit-installs"},
     "toolchain": {"binaries", "cargo", "inherit-python", "inherit-python-tools"},
     "deps": {"pyproject", "justfile", "tools", "tool-owners", "uv"},
-    "semgrep": {"config", "fixtures", "namespace", "timeout", "cwd", "counts"},
+    "sarif": {"category-prefix", "drivers"},
+    "semgrep": {
+        "batch-size",
+        "config",
+        "fixtures",
+        "inline-suppressions",
+        "jobs",
+        "namespace",
+        "report-category",
+        "report-layout",
+        "target-timeout",
+        "timeout",
+        "cwd",
+        "counts",
+    },
     "release": {"date-policy", "final-changelog", "required-files", "exclude", "rules", "tag-policy"},
     "changelog": {"formatter", "cliff-config", "owner", "repository", "dependency-bodies"},
     "publishing": {"registry", "package", "repository", "required-checks", "required-assets"},
@@ -84,8 +99,24 @@ class SemgrepSettings:
     timeout: int = 300
     cwd: str = "."
     counts: Mapping[Path, Mapping[str, int]] = field(default_factory=dict)
+    batch_size: int = 100
+    inline_suppressions: bool = False
+    jobs: int = 1
+    report_category: str = "semgrep"
+    report_layout: Literal["aggregate", "numbered"] = "aggregate"
+    target_timeout: int = 120
 
     def __post_init__(self) -> None:
+        for name in ("batch_size", "jobs", "target_timeout", "timeout"):
+            value = getattr(self, name)
+            if type(value) is not int or value <= 0:
+                raise ValueError(f"semgrep.{name.replace('_', '-')} must be a positive integer")
+        if type(self.inline_suppressions) is not bool:
+            raise ValueError("semgrep.inline-suppressions must be a boolean")
+        if self.report_layout not in ("aggregate", "numbered"):
+            raise ValueError("semgrep.report-layout must be aggregate or numbered")
+        if not isinstance(self.report_category, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", self.report_category) is None:
+            raise ValueError("semgrep.report-category must be a filename-safe identifier")
         object.__setattr__(self, "counts", MappingProxyType({path: MappingProxyType(dict(counts)) for path, counts in self.counts.items()}))
 
 
@@ -121,6 +152,7 @@ class Config:
     notebooks: NotebookSettings = field(default_factory=NotebookSettings)
     zizmor: ZizmorSettings = field(default_factory=ZizmorSettings)
     publishing: PublishingSettings | None = None
+    sarif: SarifPolicy | None = None
 
     def path(self, value: str) -> Path:
         path = Path(value)
@@ -152,6 +184,35 @@ def _string(value: object, context: str) -> str:
     if not isinstance(value, str) or not value:
         raise ValueError(f"invalid value for {context}: {value!r}; expected a nonempty string")
     return value
+
+
+def _positive_integer(value: object, context: str) -> int:
+    if type(value) is not int or value <= 0:
+        raise ValueError(f"{context} must be a positive integer")
+    return value
+
+
+def _boolean(value: object, context: str) -> bool:
+    if type(value) is not bool:
+        raise ValueError(f"{context} must be a boolean")
+    return value
+
+
+def _report_layout(value: object) -> Literal["aggregate", "numbered"]:
+    if value == "aggregate":
+        return "aggregate"
+    if value == "numbered":
+        return "numbered"
+    raise ValueError("semgrep.report-layout must be aggregate or numbered")
+
+
+def _sarif_policy(section: dict[str, object]) -> SarifPolicy:
+    drivers = {}
+    for name, prefixes in _table(section.get("drivers"), "sarif.drivers").items():
+        if not isinstance(prefixes, list):
+            raise ValueError("sarif driver namespaces must be arrays")
+        drivers[name] = tuple(_string(prefix, "sarif namespace") for prefix in prefixes)
+    return SarifPolicy(drivers, _string(section.get("category-prefix", "analysis"), "sarif.category-prefix"))
 
 
 def _optional_string(section: dict[str, object], key: str, context: str) -> str | None:
@@ -254,6 +315,7 @@ def parse(value: object, *, root: Path) -> Config:
     if overlap := set(mapped.values()) & managed.keys():
         raise ValueError(f"tool ownership is ambiguous between user pins and managed declarations: {', '.join(sorted(overlap))}")
     semgrep = _section(data, "semgrep")
+    sarif = _section(data, "sarif")
     release = _section(data, "release")
     changelog = _section(data, "changelog")
     notebooks = _section(data, "notebooks")
@@ -309,7 +371,14 @@ def parse(value: object, *, root: Path) -> Config:
             timeout=timeout,
             cwd=_string(semgrep.get("cwd", "."), "semgrep.cwd"),
             counts=_counts(semgrep.get("counts", {}), root),
+            batch_size=_positive_integer(semgrep.get("batch-size", 100), "semgrep.batch-size"),
+            inline_suppressions=_boolean(semgrep.get("inline-suppressions", False), "semgrep.inline-suppressions"),
+            jobs=_positive_integer(semgrep.get("jobs", 1), "semgrep.jobs"),
+            report_category=_string(semgrep.get("report-category", "semgrep"), "semgrep.report-category"),
+            report_layout=_report_layout(semgrep.get("report-layout", "aggregate")),
+            target_timeout=_positive_integer(semgrep.get("target-timeout", 120), "semgrep.target-timeout"),
         ),
+        sarif=_sarif_policy(sarif) if "sarif" in data else None,
         release=ReleasePolicy(
             date_policy,
             final,

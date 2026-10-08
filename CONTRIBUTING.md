@@ -92,6 +92,8 @@ It runs checks and tests with coverage, builds wheel and sdist artifacts, and in
 outside the checkout with uv. Installation checks exercise the console entry
 point, public process/file-publication/release-plan/performance/document-publication consumer contracts,
 imports, packaged templates, runtime dependencies, and the bundled `just` executable.
+Installed public suites also cover complete-directory rollback/recovery, SARIF
+selection/indexing, and batched Semgrep policy and paired-report coverage.
 See [Validation](docs/VALIDATING.md) for check coverage and agent restrictions.
 New Git-mutating pytest fixtures must depend on `git_mutations_allowed`.
 Standalone unittest consumer suites must skip those fixtures before setup when

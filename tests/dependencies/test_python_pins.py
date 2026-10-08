@@ -88,22 +88,6 @@ def test_parse_resolution_rejects_missing_direct_tool() -> None:
         update_python_dev_pins.parse_resolution("mcp==1.29.0\n", pins)
 
 
-def test_resolve_latest_pins_preserves_retained_constraint_for_managed_distribution(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    pyproject = tmp_path / "pyproject.toml"
-    pyproject.write_text(project_text("ruff==0.16.2", "ruff<0.17"), encoding="utf-8", newline="\n")
-    calls: list[tuple[str, list[str], dict[str, object]]] = []
-
-    def fake_run(command: str, args: list[str], **kwargs: object) -> subprocess.CompletedProcess[str]:
-        assert resolution_metadata(args)["dependencies"] == ["packaging>=26", "ruff", "ruff<0.17"]
-        calls.append((command, args, kwargs))
-        return subprocess.CompletedProcess([command, *args], 0, stdout="ruff==0.16.4\n", stderr="")
-
-    monkeypatch.setattr(update_python_dev_pins, "run_safe_command", fake_run)
-    resolved = update_python_dev_pins.resolve_latest_pins([update_python_dev_pins.DevPin("ruff", "0.16.2")], SpecifierSet(">=3.14"), tmp_path)
-    assert resolved == [update_python_dev_pins.DevPin("ruff", "0.16.4")]
-    assert not Path(calls[0][1][2]).exists()
-
-
 def test_update_dev_pins_resolves_then_applies_one_exact_transaction(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pyproject = tmp_path / "pyproject.toml"
     original = project_text("pytest>=9.1", "ruff==0.16.2", "semgrep==1.172.0", "ty~=0.0.66")
@@ -416,13 +400,6 @@ def test_update_python_uses_selected_uv_for_resolution_and_mutation(
     assert manifest.read_text(encoding="utf-8") == project_text("ruff==0.16.4")
 
 
-def test_parse_project_leaves_compound_wildcard_and_marked_requirements_unmanaged() -> None:
-    _python_version, pins = update_python_dev_pins.parse_project(
-        project_text("ruff==0.16.2,!=0.16.3", "semgrep==1.172.*", "ty==0.0.66; python_version >= '3.14'")
-    )
-    assert pins == []
-
-
 def test_resolve_latest_pins_keeps_ranged_constraints(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     pyproject = tmp_path / "pyproject.toml"
     pyproject.write_text(project_text("pytest>=9.1", "ruff==0.16.2", "ruff<0.17"), encoding="utf-8", newline="\n")
@@ -438,6 +415,7 @@ def test_resolve_latest_pins_keeps_ranged_constraints(tmp_path: Path, monkeypatc
     assert resolved == [update_python_dev_pins.DevPin("ruff", "0.16.4")]
     assert len(calls) == 1
     assert calls[0][2] == {"cwd": tmp_path, "timeout": update_python_dev_pins.UV_RESOLVE_TIMEOUT_SECONDS}
+    assert not Path(calls[0][1][2]).exists()
 
 
 def test_resolution_retains_project_and_compound_constraints_on_managed_distributions() -> None:

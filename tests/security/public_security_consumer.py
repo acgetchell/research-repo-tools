@@ -59,7 +59,7 @@ class TestSharedCapabilities(unittest.TestCase):
                             "version": "2.1.0",
                             "runs": [
                                 {
-                                    "tool": {},
+                                    "tool": {"driver": {"name": "Semgrep"}},
                                     "results": [
                                         {
                                             "ruleId": "FAKE-RULE",
@@ -130,6 +130,8 @@ class TestSharedCapabilities(unittest.TestCase):
                                 "paths": {"scanned": [str(root / "source café.py")]},
                             }
                         destination.write_bytes(b"malformed" if behavior == "malformed" else json.dumps(value).encode())
+                        if scanner == "semgrep":
+                            Path(args[args.index("--sarif-output") + 1]).write_bytes(json.dumps(sarif).encode())
                         return subprocess.CompletedProcess([], 23 if behavior == "error" else 0, b"RAW_SECRET", b"RAW_SECRET")
 
                     stdout, stderr = io.StringIO(), io.StringIO()
@@ -152,7 +154,10 @@ class TestSharedCapabilities(unittest.TestCase):
                         self.assertEqual(main(["--root", str(root), *command]), expected)
                     output = stdout.getvalue() + stderr.getvalue()
                     self.assertNotIn("_SECRET", output)
-                    if found:
+                    if fallback and scanner == "semgrep":
+                        self.assertIn("no report published", output)
+                        self.assertEqual(list((root / "target").rglob("*.sarif")), [])
+                    elif found:
                         self.assertIn("1 finding(s)", output)
                         self.assertIn("exit 1", output)
                         self.assertNotIn("exit 0", output)
@@ -263,7 +268,10 @@ class TestSharedCapabilities(unittest.TestCase):
                     (nested / f"{prefix}12.json").write_bytes(b"nested report\n")
 
                     def native(_binary, _args, **_kwargs):
-                        self.assertTrue(all(not path.exists() and not path.is_symlink() for path in stale))
+                        if scanner == "osv":
+                            self.assertTrue(all(not path.exists() and not path.is_symlink() for path in stale))
+                        else:
+                            self.assertTrue(all(path.exists() or path.is_symlink() for path in stale))
                         self.assertTrue(all(path.read_bytes() == b"previous report\n" for path in preserved))
                         # A failed native scan must not leave reports from a larger inventory.
                         return subprocess.CompletedProcess([], 19, b"", b"")
@@ -281,8 +289,11 @@ class TestSharedCapabilities(unittest.TestCase):
                             else semgrep_scan.scan(settings, include=("*.py",), output=scanner)
                         )
                     self.assertEqual(status, 19)
-                    self.assertEqual(run.call_count, 2)
-                    self.assertEqual((nested / f"{prefix}12.json").read_bytes(), b"nested report\n")
+                    self.assertEqual(run.call_count, 2 if scanner == "osv" else 1)
+                    if scanner == "osv":
+                        self.assertEqual((nested / f"{prefix}12.json").read_bytes(), b"nested report\n")
+                    else:
+                        self.assertEqual(list(output.iterdir()), [])
                     self.assertEqual(external.read_bytes(), b"external report\n")
 
     def test_installed_baseline_authority_and_nonmutating_drift(self):
@@ -342,38 +353,29 @@ class TestSharedCapabilities(unittest.TestCase):
             self.assertEqual(rust_blocks(path), ("\n\nlet value = 1;\nassert_eq!(value, 1);\n",))
             self.assertEqual(path.read_bytes(), original)
 
-    def test_malformed_scanner_reports_fail_without_publishing(self):
+    def test_malformed_osv_sarif_invocations_fail_without_publishing(self):
         with tempfile.TemporaryDirectory(prefix="scanner consumer ") as directory:
             root = Path(directory).resolve()
             (root / "uv.lock").write_bytes(b"version = 1\n")
-            (root / "source.py").write_bytes(b"value = 1\n")
-            settings = config.parse({"semgrep": {"config": "rules.yml"}}, root=root)
+            settings = config.parse({}, root=root)
 
             def native(_binary, args, **_kwargs):
-                if "--output-file" in args:
-                    output = args[args.index("--output-file") + 1]
-                    value = (
-                        {"results": [{"source": {"path": str(root / "uv.lock")}, "packages": [{"package": {"name": "example"}}]}]}
-                        if args[args.index("--format") + 1] == "json"
-                        else {"version": "2.1.0", "runs": [{"tool": {}, "results": [], "invocations": [{"executionSuccessful": "false"}]}]}
-                    )
-                else:
-                    output = args[args.index("--output") + 1]
-                    value = {"results": [], "errors": [], "paths": []} if "--json" in args else {"version": "2.1.0", "runs": [{"tool": {}, "results": []}]}
+                output = args[args.index("--output-file") + 1]
+                value = (
+                    {"results": [{"source": {"path": str(root / "uv.lock")}, "packages": [{"package": {"name": "example"}}]}]}
+                    if args[args.index("--format") + 1] == "json"
+                    else {"version": "2.1.0", "runs": [{"tool": {}, "results": [], "invocations": [{"executionSuccessful": "false"}]}]}
+                )
                 Path(output).write_bytes(json.dumps(value).encode())
                 return subprocess.CompletedProcess([], 0, b"", b"")
 
             with (
                 patch.object(security, "security_inventory", return_value=("uv.lock",)),
                 patch.object(security, "_binary", return_value=(root / "osv-scanner", {})),
-                patch.object(semgrep_scan, "security_inventory", return_value=("source.py",)),
-                patch.object(semgrep_scan, "resolve_executable", return_value=root / "semgrep"),
                 patch.object(security, "run_command_bytes", side_effect=native),
             ):
                 self.assertEqual(security.scan_osv(settings, ("uv.lock",)), 1)
                 self.assertFalse((root / "target/security/osv-0.sarif").exists())
-                self.assertEqual(semgrep_scan.scan(settings, include=("*.py",)), 1)
-                self.assertFalse((root / "target/security/semgrep/0.json").exists())
 
 
 if __name__ == "__main__":

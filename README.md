@@ -86,6 +86,7 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | Python | `python check`, `fix`, `typecheck` | Complete tracked/nonignored inventory; native Ruff/ty policy; explicit fixes only |
 | Releases | `release check`, `gate`, `publish`, `registry`, `update`, `verify` | Metadata preparation, reviewed publication gates and exact registry/GitHub verification |
 | Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
+| SARIF | `sarif split` | Consumer-selected drivers/namespaces, corrected rule indices and complete output generations |
 | Security | `security osv`, `secrets` | Managed OSV/Gitleaks, explicit inputs, full history, redacted native reports |
 | Semgrep | `semgrep check-fixtures`, `scan` | Validate consumer rules, explicit inventory, reports and fixture expectations |
 | Setup | `setup` | Require uv; install user Just and declared tools; sync the locked environment |
@@ -537,13 +538,90 @@ requires a dated release heading. No synthetic `v0.0.0` predecessor is inserted.
 
 Consumers can wrap `semgrep scan --include '*.rs' --include '*.py' --include '*.md'
 --rust-docs` in their own `just semgrep-scan` recipe. Keep rules and scope local.
-The shared scan checks native errors and coverage, disables inline `nosem`, and
-writes native JSON/SARIF reports with original source locations. Rust fences in
+The shared scan checks native errors, exact coverage and agreement of active
+JSON/SARIF findings from the same native invocation. It scans batches of at most
+100 files, also bounded by portable command length. Defaults are one job,
+120 seconds per rule/target, a 300-second process timeout, disabled inline
+`nosem`, and aggregate `semgrep.json`/`semgrep.sarif` reports. The aggregate
+SARIF contains one run with the stable `semgrep` category. Set consumer policy
+explicitly when reviewed suppressions should apply:
+
+```toml
+[tool.research-repo-tools.semgrep]
+config = "semgrep.yaml"
+fixtures = "tests/semgrep"
+batch-size = 100
+inline-suppressions = true
+jobs = 1
+report-category = "semgrep-repository-rules"
+report-layout = "aggregate"
+target-timeout = 120
+timeout = 600
+```
+
+Matching CLI overrides are `--batch-size`, `--inline-suppressions` /
+`--no-inline-suppressions`, `--jobs`, `--report-category`, `--report-layout`
+and `--target-timeout`. `numbered` layout writes one JSON/SARIF pair per batch.
+Each layout owns the entire output directory: successful generations remove
+all prior members, including reports from larger inventories or other layouts.
+Missing/malformed reports, scan errors in JSON, incomplete coverage and timeouts
+publish an empty generation. Generation or filesystem failures preserve or
+restore the previous directory, with recovery backups retained if rollback fails.
+Use a dedicated output directory. Native failures and active findings block;
+accepted inline suppressions remain marked in SARIF and do not count as active
+findings. Explicit file arguments include Python/Rust tests normally ignored by
+Semgrep; deliberately excluded fixtures remain consumer policy. Rule path filters
+remain active, and skipped required inputs fail the coverage gate.
+
+Rust fences in
 Markdown and line/block rustdoc comments preserve source line numbers and hidden
 `# ` lines. Macro-generated docs and `#[doc = ...]` attributes are outside this
 adapter's scope. `semgrep check-fixtures --rust-docs` adapts annotated Markdown
 fixtures to the existing shared assertion checker; count-based expectations use
 a separate fixture gate. Findings and fixture mismatches remain blocking.
+
+### SARIF selection and complete figure publication
+
+Declare exact driver names and rule-ID namespace prefixes. An empty prefix list
+keeps all rules for that driver; unlisted drivers are omitted. No Codacy or
+repository-specific selection is built into the package.
+
+```toml
+[tool.research-repo-tools.sarif]
+category-prefix = "codacy"
+
+[tool.research-repo-tools.sarif.drivers]
+"Opengrep (reported by Codacy)" = ["project."]
+ruff = []
+```
+
+A consumer recipe can invoke `sarif split input.sarif --output target/sarif`
+and upload that dedicated directory. Repeated driver names get distinct stable
+categories; unrelated metadata is retained and indexed driver rule references
+are corrected. Empty generations remove stale output files. Invalid/non-finite
+input fails before publication. Extension rule references are rejected; see the
+[supported SARIF API](https://github.com/acgetchell/research-repo-tools/blob/main/docs/api.md#sarif-api) for the precise subset.
+Add `--github-output "$GITHUB_OUTPUT"` to append `SARIF_DIRECTORY`,
+`SARIF_HAS_UPLOADABLE_RUNS` and `SARIF_RUN_COUNT` after publication through the
+existing checked `ci.export_environment` API. Upload permissions, conditions and
+categories remain consumer-owned.
+
+Use the same directory primitive for a complete scientific figure set:
+
+```python
+from pathlib import Path
+from research_repo_tools.files import publish_directory
+
+with publish_directory(Path("figures/validation")) as candidate:
+    render_figures(candidate)  # Consumer-owned rendering and figure names.
+    validate_figures(candidate)  # Consumer-owned scientific assertions.
+```
+
+Only after generation and validation finish does the directory replace the
+previous figure set. Caught commit failures restore the original tree; incomplete
+rollback reports a retained recovery directory. See the
+[consumer deletion map](https://github.com/acgetchell/research-repo-tools/blob/main/docs/shared-capability-migration.md) before removing
+working implementations; adoption requires an exact published release.
 
 ### Dependency and tool updates
 

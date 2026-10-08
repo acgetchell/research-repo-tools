@@ -5,6 +5,7 @@ import os
 import secrets
 import shutil
 import stat
+import tempfile
 import unicodedata
 from collections.abc import Iterator, Mapping, Sequence
 from contextlib import contextmanager
@@ -14,7 +15,7 @@ from typing import Never
 
 LOGGER = logging.getLogger(__name__)
 
-__all__ = ["RecoveryError", "replace_many"]
+__all__ = ["RecoveryError", "publish_directory", "replace_many"]
 
 
 class RecoveryError(OSError):
@@ -26,7 +27,7 @@ class RecoveryError(OSError):
     ``__cause__`` retains the underlying recovery error.
     """
 
-    def __init__(self, target: Path, backup: Path | None, error: OSError):
+    def __init__(self, target: Path, backup: Path | None, error: BaseException):
         super().__init__(f"failed to restore {target}: {error}")
         self.target = target
         self.backup = backup
@@ -337,6 +338,132 @@ def replace_many(updates: Mapping[Path, bytes], *, expected: Mapping[Path, bytes
     A mismatch rejects the transaction and preserves current source files.
     """
     _publish(tuple(updates.items()), expected=expected)
+
+
+def _directory_target(destination: Path) -> Path:
+    if not isinstance(destination, Path):
+        raise TypeError("Directory destination must be a pathlib.Path")
+    # Inspect the lexical path before resolving it: resolving hides links.
+    for component in (destination, *destination.parents):
+        if component.is_symlink() or component.is_junction():
+            raise ValueError(f"report directory must not contain symlinks or junctions: {component}")
+    target = destination.resolve()
+    if target == target.parent:
+        raise ValueError("Cannot publish a filesystem root directory")
+    if target.exists() and not target.is_dir():
+        raise NotADirectoryError(f"Directory destination is not a directory: {destination}")
+    return target
+
+
+def _sync_directory_tree(candidate: Path) -> None:
+    """Reject links/special entries and sync each generated regular file."""
+    if not candidate.is_dir():
+        raise ValueError("Generated directory must remain a directory")
+    paths, pending = [], [candidate]
+    while pending:
+        path = pending.pop()
+        if path.is_symlink() or path.is_junction() or not (path.is_dir() or path.is_file()):
+            raise ValueError(f"Generated directory contains a link or special entry: {path}")
+        paths.append(path)
+        if path.is_dir():
+            children = list(path.iterdir())
+            # Check siblings, including empty directories, for portable aliases.
+            _validate_distinct_paths(children)
+            pending.extend(children)
+    _validate_distinct_paths([path for path in paths if path.is_file()])
+    for path in paths:
+        if path.is_file():
+            mode = stat.S_IMODE(path.stat().st_mode)
+            try:
+                # Windows needs a writable handle for fsync. The private staged
+                # file can temporarily gain owner access without changing the
+                # permissions of the published generation.
+                path.chmod(mode | stat.S_IRUSR | stat.S_IWUSR)
+                with path.open("rb+") as stream:
+                    os.fsync(stream.fileno())
+            finally:
+                path.chmod(mode)
+
+
+def _cleanup_directory(path: Path) -> None:
+    try:
+        shutil.rmtree(path)
+    except OSError as error:
+        LOGGER.warning("Could not remove transaction directory %s: %s", path, error)
+
+
+@contextmanager
+def publish_directory(destination: Path) -> Iterator[Path]:
+    """Generate an entire owned directory privately, then replace its contents.
+
+    Yield an empty sibling staging directory. The caller writes or copies the
+    complete generation and validates its domain policy before leaving the
+    context. An empty generation removes all old members. Only regular files
+    and directories are allowed; output components cannot be links/junctions.
+    Existing directory permissions are preserved where supported. New staging
+    directories start owner-only; caller-created files retain their own modes.
+    Files are synced before commit. Caught generation failures preserve the old
+    directory; caught commit failures restore it. Incomplete rollback raises an
+    exception group with the original failure first and RecoveryError pointing
+    to a retained original directory. Cleanup is best effort. Exclusive ownership
+    is required: this does not serialize writers or provide crash atomicity, and
+    the destination can briefly be absent between the two directory renames.
+    """
+    target = _directory_target(destination)
+    created = _ensure_parent_directory(target.parent)
+    try:
+        transaction = Path(tempfile.mkdtemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent))
+    except BaseException:
+        _remove_created_directories(created)
+        raise
+    candidate, backup = transaction / "candidate", transaction / "previous"
+    retained = False
+    try:
+        candidate.mkdir(mode=0o700)
+        yield candidate
+        _sync_directory_tree(candidate)
+        if _directory_target(destination) != target:
+            raise ValueError("Directory destination changed during generation")
+        had_destination = target.exists()
+        if had_destination:
+            candidate.chmod(stat.S_IMODE(target.stat().st_mode))
+        try:
+            if had_destination:
+                _replace_path(target, backup)
+            _replace_path(candidate, target)
+        except BaseException as error:
+            # Signals can be delivered after a rename succeeded but before its
+            # Python call returned. Inspect the actual entries, not a flag set
+            # after the call. Move a committed candidate aside before restoring
+            # a nonempty original directory (required on Windows and POSIX).
+            try:
+                if backup.exists():
+                    if target.exists():
+                        _replace_path(target, candidate)
+                    _replace_path(backup, target)
+                elif not had_destination and target.exists() and not candidate.exists():
+                    _replace_path(target, candidate)
+            except BaseException as recovery:
+                retained = backup.exists()
+                # A recovery rename can itself return through an interrupt
+                # after succeeding; an absent backup then means restoration
+                # completed. Preserve failures only while recovery is needed.
+                if retained or (not had_destination and target.exists()):
+                    message = "Directory publication failed and rollback was incomplete"
+                    if retained:
+                        message += f"; original content retained at {backup}"
+                    raise BaseExceptionGroup(
+                        message,
+                        [error, RecoveryError(target, backup if retained else None, recovery)],
+                    ) from None
+            raise
+    finally:
+        if retained:
+            if candidate.exists():
+                _cleanup_directory(candidate)
+        else:
+            _cleanup_directory(transaction)
+        _remove_created_directories(created)
 
 
 def replace(path: Path, payload: bytes) -> None:

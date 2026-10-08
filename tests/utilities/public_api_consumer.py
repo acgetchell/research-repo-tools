@@ -15,7 +15,7 @@ import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from research_repo_tools.files import RecoveryError, replace_many
+from research_repo_tools.files import RecoveryError, publish_directory, replace_many
 from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics, resolve_executable, run_command, run_command_bytes, run_git_bytes
 
 
@@ -165,7 +165,7 @@ class TestPublication(ConsumerCase):
 
     def test_invalid_targets_leave_no_directories(self) -> None:
         target = self.root / "new/file"
-        with self.assertRaisesRegex(ValueError, "duplicate"):
+        with self.assertRaisesRegex(ValueError, "duplicate target"):
             replace_many({target: b"a", target.parent / "../new/file": b"b"})
         with self.assertRaisesRegex(ValueError, "overlapping"):
             replace_many({target.parent: b"a", target: b"b"})
@@ -288,7 +288,7 @@ class TestPublication(ConsumerCase):
                 raise recovery
             return original(source, target)
 
-        with patch.object(Path, "replace", replace), self.assertRaises(ExceptionGroup) as raised:
+        with patch.object(Path, "replace", replace), self.assertRaisesRegex(ExceptionGroup, "rollback was incomplete") as raised:
             replace_many({first: b"candidate", last: b"candidate"})
         self.assertIs(raised.exception.exceptions[0], failure)
         detail = raised.exception.exceptions[1]
@@ -328,6 +328,200 @@ class TestPublication(ConsumerCase):
         self.assertIsNone(detail.backup)
         self.assertEqual(first.read_bytes(), b"new")
         self.assertEqual(list(self.root.iterdir()), [first])
+
+
+class TestDirectoryPublication(unittest.TestCase):
+    def test_read_only_generated_files_preserve_bytes_and_permissions(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory).resolve() / "reports"
+            try:
+                with publish_directory(output) as stage:
+                    generated = stage / "read-only.bin"
+                    generated.write_bytes(b"readonly\r\n\xff")
+                    generated.chmod(0o444)
+                    expected_mode = stat.S_IMODE(generated.stat().st_mode)
+                self.assertEqual((output / "read-only.bin").read_bytes(), b"readonly\r\n\xff")
+                self.assertEqual(stat.S_IMODE((output / "read-only.bin").stat().st_mode), expected_mode)
+            finally:
+                # Windows cleanup needs write access even after the assertion.
+                if (output / "read-only.bin").exists():
+                    (output / "read-only.bin").chmod(0o600)
+
+    def test_complete_generation_removes_stale_members_and_empty_generations_are_supported(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory).resolve() / "figures"
+            with publish_directory(output) as stage:
+                (stage / "old.png").write_bytes(b"old\r\n\xff")
+                (stage / "nested").mkdir()
+                (stage / "nested/old.png").write_bytes(b"old")
+            with publish_directory(output) as stage:
+                self.assertEqual((output / "old.png").read_bytes(), b"old\r\n\xff")
+                (stage / "new.png").write_bytes(b"new\r\n\xff")
+            self.assertEqual([path.name for path in output.iterdir()], ["new.png"])
+            self.assertEqual((output / "new.png").read_bytes(), b"new\r\n\xff")
+            with publish_directory(output):
+                pass
+            self.assertEqual(list(output.iterdir()), [])
+            self.assertEqual(list(output.parent.iterdir()), [output])
+
+    def test_generation_and_commit_failures_restore_the_original_directory(self):
+        from research_repo_tools import files
+
+        for phase in ("generation", "commit", "move-original"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory).resolve() / "reports"
+                output.mkdir()
+                (output / "old").write_bytes(b"original\r\n")
+                native = files._replace_path
+
+                def replace(source, destination):
+                    if phase == "commit" and source.name == "candidate" or phase == "move-original" and source == output:
+                        raise OSError("injected publication failure")
+                    native(source, destination)
+
+                with patch.object(files, "_replace_path", side_effect=replace), self.assertRaisesRegex(OSError, "injected"):
+                    with publish_directory(output) as stage:
+                        (stage / "new").write_bytes(b"candidate")
+                        if phase == "generation":
+                            raise OSError("injected generation failure")
+                self.assertEqual((output / "old").read_bytes(), b"original\r\n")
+                self.assertEqual(list(output.parent.iterdir()), [output])
+
+    def test_incomplete_rollback_retains_the_original_tree_and_recovery_location(self):
+        from research_repo_tools import files
+
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory).resolve() / "reports"
+            output.mkdir()
+            (output / "old").write_bytes(b"recovery\xff")
+            native = files._replace_path
+
+            def replace(source, destination):
+                if source.name in {"candidate", "previous"}:
+                    raise OSError("injected filesystem failure")
+                native(source, destination)
+
+            with patch.object(files, "_replace_path", side_effect=replace), self.assertRaises(ExceptionGroup) as caught:
+                with publish_directory(output) as stage:
+                    (stage / "new").write_bytes(b"candidate")
+            primary, recovery = caught.exception.exceptions
+            self.assertIsInstance(primary, OSError)
+            self.assertIsInstance(recovery, RecoveryError)
+            assert isinstance(recovery, RecoveryError)
+            assert recovery.backup is not None
+            self.assertEqual(recovery.target, output)
+            self.assertEqual((recovery.backup / "old").read_bytes(), b"recovery\xff")
+            self.assertFalse((recovery.backup.parent / "candidate").exists())
+            self.assertIn(str(recovery.backup), str(caught.exception))
+
+    def test_interruption_after_each_completed_rename_restores_original_state(self):
+        from research_repo_tools import files
+
+        for existing, phase in ((True, "move-original"), (True, "commit"), (False, "commit")):
+            with self.subTest(existing=existing, phase=phase), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory).resolve() / "reports"
+                if existing:
+                    output.mkdir()
+                    (output / "original").write_bytes(b"original\r\n\xff")
+                native = files._replace_path
+                interrupted = False
+
+                def replace(source, destination):
+                    nonlocal interrupted
+                    native(source, destination)
+                    if not interrupted and (phase == "move-original" and source == output or phase == "commit" and source.name == "candidate"):
+                        interrupted = True
+                        raise KeyboardInterrupt("injected after rename")
+
+                with patch.object(files, "_replace_path", side_effect=replace), self.assertRaises(KeyboardInterrupt):
+                    with publish_directory(output) as stage:
+                        (stage / "candidate").write_bytes(b"candidate")
+                if existing:
+                    self.assertEqual((output / "original").read_bytes(), b"original\r\n\xff")
+                    self.assertEqual(list(output.parent.iterdir()), [output])
+                else:
+                    self.assertEqual(list(output.parent.iterdir()), [])
+
+    def test_interruption_during_recovery_preserves_original_state_or_backup(self):
+        from research_repo_tools import files
+
+        for existing, phase in ((True, "move-candidate"), (True, "restore-original"), (False, "move-candidate")):
+            with self.subTest(existing=existing, phase=phase), tempfile.TemporaryDirectory() as directory:
+                output = Path(directory).resolve() / "reports"
+                if existing:
+                    output.mkdir()
+                    (output / "original").write_bytes(b"original\r\n\xff")
+                native = files._replace_path
+                primary = KeyboardInterrupt("commit interrupted after rename")
+                secondary = KeyboardInterrupt("recovery interrupted after rename")
+
+                def replace(source, destination):
+                    native(source, destination)
+                    if source.name == "candidate" and destination == output:
+                        raise primary
+                    if phase == "move-candidate" and destination.name == "candidate" or phase == "restore-original" and source.name == "previous":
+                        raise secondary
+
+                retained = existing and phase == "move-candidate"
+                with (
+                    patch.object(files, "_replace_path", side_effect=replace),
+                    self.assertRaises(BaseExceptionGroup if retained else KeyboardInterrupt) as caught,
+                ):
+                    with publish_directory(output) as stage:
+                        (stage / "new").write_bytes(b"candidate")
+                if retained:
+                    assert isinstance(caught.exception, BaseExceptionGroup)
+                    error, recovery = caught.exception.exceptions
+                    self.assertIs(error, primary)
+                    self.assertIsInstance(recovery, RecoveryError)
+                    assert isinstance(recovery, RecoveryError)
+                    assert recovery.backup is not None
+                    self.assertIs(recovery.__cause__, secondary)
+                    self.assertEqual(recovery.target, output)
+                    self.assertEqual((recovery.backup / "original").read_bytes(), b"original\r\n\xff")
+                    self.assertFalse((recovery.backup.parent / "candidate").exists())
+                    self.assertFalse(output.exists())
+                else:
+                    self.assertIs(caught.exception, primary)
+                    if existing:
+                        self.assertEqual((output / "original").read_bytes(), b"original\r\n\xff")
+                        self.assertEqual(list(output.iterdir()), [output / "original"])
+                        self.assertEqual(list(output.parent.iterdir()), [output])
+                    else:
+                        self.assertEqual(list(output.parent.iterdir()), [])
+
+    def test_absent_destination_failure_removes_transaction_parents(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            with self.assertRaisesRegex(RuntimeError, "generation"):
+                with publish_directory(root / "new/nested/reports"):
+                    raise RuntimeError("generation failure")
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_generated_junction_is_rejected_before_traversal_or_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            output = Path(directory).resolve() / "figures"
+            output.mkdir()
+            (output / "original").write_bytes(b"original")
+            junction = None
+            native_iterdir = Path.iterdir
+
+            def iterdir(path):
+                self.assertNotEqual(path, junction, "generated junction was traversed")
+                return native_iterdir(path)
+
+            # Keep the focused Windows model active through public context exit.
+            # Path.iterdir is limited to generation traversal, not rmtree cleanup.
+            with (
+                patch.object(Path, "is_junction", autospec=True, side_effect=lambda path: path == junction),
+                patch.object(Path, "iterdir", autospec=True, side_effect=iterdir),
+                self.assertRaisesRegex(ValueError, "link or special entry"),
+            ):
+                with publish_directory(output) as stage:
+                    junction = stage / "junction"
+                    junction.mkdir()
+            self.assertEqual((output / "original").read_bytes(), b"original")
+            self.assertEqual(list(output.parent.iterdir()), [output])
 
 
 if __name__ == "__main__":

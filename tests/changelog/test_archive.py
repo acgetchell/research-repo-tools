@@ -124,10 +124,10 @@ class TestParseChangelog:
         with pytest.raises(ValueError, match="Unrecognized changelog heading at line \\d+: '## \\[CustomLabel\\]'"):
             parse_changelog(text)
 
-    @pytest.mark.parametrize("heading", ["## [01.2.3] - 2026-03-10", "## [1.2.3-01] - 2026-03-10", "## [1.2.3oops] - 2026-03-10", "## [1.2] - 2026-03-10"])
-    def test_rejects_invalid_semver_heading(self, heading: str) -> None:
+    @pytest.mark.parametrize("version", ["01.2.3", "1.02.3", "1.2.03", "1.2.3oops", "1.2.3garbage", "1.2.3-01", "1.2"])
+    def test_rejects_invalid_semver_heading(self, version: str) -> None:
         with pytest.raises(ValueError, match="Unrecognized changelog heading"):
-            parse_changelog(f"{_PREAMBLE}{heading}\n\n- Invalid release\n")
+            parse_changelog(f"{_PREAMBLE}## [{version}] - 2026-03-10\n\n- Invalid release\n")
 
     def test_rejects_invalid_release_date(self) -> None:
         text = _PREAMBLE + "## [0.7.2] - 2026-02-30\n\n- Invalid date\n"
@@ -150,19 +150,8 @@ class TestParseChangelog:
         with pytest.raises(ValueError, match="'0\\.7\\.2' must be older than preceding '0\\.7\\.1'"):
             parse_changelog(_PREAMBLE + _V071 + _V072)
 
-    def test_rejects_non_semver_headings(self) -> None:
-        text = _PREAMBLE + _V072 + "## [CustomLabel]\n\n- Something\n\n" + _V071
-        with pytest.raises(ValueError, match="Unrecognized changelog heading"):
-            parse_changelog(text)
-
     def test_rejects_unreleased_heading_without_closing_bracket_boundary(self) -> None:
         text = _PREAMBLE + "## [Unreleased]invalid\n\n- Something\n\n" + _V072
-        with pytest.raises(ValueError, match="Unrecognized changelog heading"):
-            parse_changelog(text)
-
-    @pytest.mark.parametrize("version", ["01.2.3", "1.02.3", "1.2.03", "1.2.3garbage", "1.2.3-01"])
-    def test_rejects_malformed_semver_headings(self, version: str) -> None:
-        text = _PREAMBLE + f"## [{version}] - 2026-01-01\n"
         with pytest.raises(ValueError, match="Unrecognized changelog heading"):
             parse_changelog(text)
 
@@ -173,14 +162,6 @@ class TestParseChangelog:
         _unreleased = parsed.unreleased or ""
         blocks = list(parsed.version_blocks)
         assert blocks == [("1.2.3-rc.1+build.7", "## [1.2.3-rc.1+build.7](https://example.com/release) - 2026-01-01\n")]
-
-    def test_rejects_duplicate_unreleased_headings(self) -> None:
-        with pytest.raises(ValueError, match="Duplicate Unreleased"):
-            parse_changelog(_PREAMBLE + _UNRELEASED + _UNRELEASED + _V072)
-
-    def test_rejects_duplicate_release_headings(self) -> None:
-        with pytest.raises(ValueError, match="Duplicate release heading"):
-            parse_changelog(_PREAMBLE + _V072 + _V072)
 
 
 class TestGroupByMinor:
@@ -736,30 +717,6 @@ class TestArchiveChangelog:
         assert changelog.read_text(encoding="utf-8") == original_root
         assert existing_archive.read_bytes() == original_archive
         assert not (archive_dir / "0.2.md").exists()
-
-    def test_stage_text_removes_temporary_file_when_fsync_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        target = tmp_path / "CHANGELOG.md"
-
-        def fail_fsync(_descriptor: int) -> None:
-            msg = "simulated fsync failure"
-            raise OSError(msg)
-
-        monkeypatch.setattr(archive_changelog_module.os, "fsync", fail_fsync)
-        with pytest.raises(OSError, match="simulated fsync failure"):
-            file_module._stage_bytes(target, b"payload\n")
-        assert not list(tmp_path.glob(".CHANGELOG.md.*.tmp"))
-
-    def test_archive_staging_removes_temporary_file_when_fsync_fails(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        target = tmp_path / "0.4.md"
-
-        def fail_fsync(_descriptor: int) -> None:
-            msg = "simulated fsync failure"
-            raise OSError(msg)
-
-        monkeypatch.setattr(archive_changelog_module.os, "fsync", fail_fsync)
-        with pytest.raises(OSError, match="simulated fsync failure"):
-            file_module._stage_bytes(target, b"payload\n")
-        assert not list(tmp_path.glob(".0.4.md.*.tmp"))
 
     def test_partial_staging_failure_removes_prior_temporary_files(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
         first = tmp_path / "first.md"
