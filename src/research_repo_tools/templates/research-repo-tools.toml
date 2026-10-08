@@ -46,6 +46,17 @@ output-dir = "target/notebooks"
 timeout = 600
 outputs = "clear"
 # prohibit-installs = true
+# Optional full-match policy for lowercase kebab-case IDs:
+# id-pattern = '[a-z0-9]+(?:-[a-z0-9]+)*'
+
+[notebooks.lab]
+browser = false
+scratch-dir = "target/jupyter"
+
+[notebooks.reset]
+sources = []
+scratch = []
+checkpoints = []
 
 # Optional consumer publication assertions and selected active references.
 # See docs/UPDATING_RELEASE_METADATA.md and docs/release-policy-migration.md.

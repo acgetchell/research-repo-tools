@@ -79,13 +79,13 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--batch-size", type=int, default=100)
             command.add_argument("--timeout", type=float, default=300)
             command.add_argument("command", nargs=argparse.REMAINDER)
-    notebooks = groups.add_parser("notebooks", help="inspect, review, validate, clean, execute, and synchronize notebooks").add_subparsers(
+    notebooks = groups.add_parser("notebooks", help="inspect, review, validate, clean, execute, launch, reset, and synchronize notebooks").add_subparsers(
         dest="action", required=True
     )
-    for action in ("advise", "check", "clear", "execute", "group", "inspect", "lint", "sync"):
+    for action in ("advise", "check", "clear", "execute", "group", "inspect", "launch", "lint", "reset", "sync"):
         command = notebooks.add_parser(action)
-        if action not in ("group", "sync"):
-            command.add_argument("files", nargs="+", help="explicit notebook paths relative to the consumer root")
+        if action not in ("group", "launch", "sync"):
+            command.add_argument("files", nargs="*" if action == "reset" else "+", help="literal paths relative to the consumer root")
         if action == "execute":
             command.add_argument("--cwd")
             command.add_argument("--output-dir")
@@ -95,6 +95,16 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--no-preview", action="store_true", help="omit source text previews")
         if action == "advise":
             command.add_argument("--strict", action="store_true", help="fail on advisory warnings as well as errors")
+        if action == "launch":
+            command.add_argument("--browser", action=argparse.BooleanOptionalAction, default=None, help="open a browser (default: configured policy, false)")
+            command.add_argument("--scratch-dir", help="consumer-relative directory for private Jupyter/IPython/Matplotlib state")
+        if action == "lint":
+            command.add_argument("--id-pattern", help="full-match regular expression for existing cell IDs; overrides configured policy")
+        if action == "reset":
+            command.add_argument(
+                "--apply", action="store_true", help="explicitly restore source notebooks and delete declared scratch/checkpoints; default: preview"
+            )
+            command.add_argument("--revision", help="explicit Git revision to restore; default: index")
         if action in ("advise", "lint"):
             command.add_argument("--timeout", type=int, default=30, help="positive per-checker timeout in seconds (default: 30)")
     from research_repo_tools.performance import add_commands
@@ -267,6 +277,15 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         if args.action == "sync":
             notebooks.sync(settings)
             return 0
+        if args.action == "launch":
+            from research_repo_tools.notebook_workflows import launch
+
+            return launch(settings, browser=args.browser, scratch_dir=args.scratch_dir)
+        if args.action == "reset":
+            from research_repo_tools.notebook_workflows import reset
+
+            reset(settings, [Path(path) for path in args.files], revision=args.revision, apply=args.apply)
+            return 0
         paths = [settings.path(path) for path in args.files]
         if args.action == "advise":
             from research_repo_tools.notebook_advice import advise
@@ -283,7 +302,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         elif args.action == "lint":
             from research_repo_tools.notebook_lint import lint
 
-            return lint(settings, paths, timeout=args.timeout)
+            return lint(settings, paths, timeout=args.timeout, id_pattern=args.id_pattern)
         else:
             return notebooks.execute(settings, paths, cwd=args.cwd, output_dir=args.output_dir, timeout=args.timeout)
         return 0

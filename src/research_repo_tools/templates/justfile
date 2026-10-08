@@ -70,9 +70,17 @@ notebook-execute +files:
 notebook-inspect +files:
     uv run --locked --only-group tooling --inexact research-repo-tools notebooks inspect "$@"
 
+# Launch configured JupyterLab with private session caches and explicit browser policy.
+notebook-launch *args:
+    uv run --locked --managed-python --only-group tooling --inexact research-repo-tools notebooks launch "$@"
+
 # Check structure, Python syntax, Ruff rules/formatting, and ty types.
 notebook-lint +files:
     notebook_group="$(uv run --locked --only-group tooling --inexact research-repo-tools notebooks group)" && uv run --locked --group dev --group "$notebook_group" research-repo-tools notebooks lint "$@"
+
+# Preview tracked notebook restoration and declared cleanup; pass --apply to mutate.
+notebook-reset *args:
+    uv run --locked --only-group tooling --inexact research-repo-tools notebooks reset "$@"
 
 # Synchronize the locked notebook environment and register its project kernel.
 notebook-sync:

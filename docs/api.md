@@ -128,7 +128,9 @@ maps to 128 plus the signal number, and keyboard interruption returns 130.
 File-changing commands operate only when invoked: dependency and release updates,
 changelog generation/normalization/archiving, template output, local tagging,
 explicit setup/toolchain synchronization and upgrades, and notebook synchronization
-or output cleanup. Notebook execution publishes separate artifacts. Performance
+or output cleanup. Notebook launch synchronizes its locked environment and uses
+private session caches; notebook reset previews by default and requires `--apply`
+for restoration and declared deletion. Notebook execution publishes separate artifacts. Performance
 output, asset retrieval, and extraction publish only when explicitly invoked.
 Dry runs are available only where command help lists them. Importing the package
 does not install tools, access the network, or modify consumer files.
@@ -174,6 +176,44 @@ from research_repo_tools.toolchain_clean import plan_clean
 settings = load(root=Path.cwd())
 preview = plan_clean(settings, keep_roots=(Path("../another-consumer"),))
 ```
+
+## Python notebook policy and workflow API
+
+Targeting v0.1.8, `research_repo_tools.config.load` and `parse` accept
+`notebooks.id-pattern`, `notebooks.lab`, and `notebooks.reset` as described in
+[the notebook contract](RUNNING_NOTEBOOKS.md). Use configuration parsing to
+construct settings for these public interfaces:
+
+- `research_repo_tools.notebook_lint.lint(settings, paths, *, timeout=30,
+  id_pattern=None) -> int`: optional full-match pattern override; `None` uses
+  configuration. Paths are explicit `Path` objects; the notebook extra and
+  consumer's locked Ruff/ty environment are required. It returns zero for a
+  clean selection and one for findings. Configuration/structure failures raise
+  `ValueError`; missing notebook dependencies raise `RuntimeError`.
+- `research_repo_tools.notebook_workflows.launch(settings, *, browser=None,
+  scratch_dir=None) -> int`: `None` selects configuration. It requires uv and
+  the consumer's declared, locked notebook environment with JupyterLab and
+  project kernel. Exit status propagates; interruption returns 130. Caches
+  are private beneath scratch and the caller's environment remains unchanged.
+  A `UV_PROJECT_ENVIRONMENT` override must remain strictly beneath the consumer
+  root without symlink or junction components.
+- `research_repo_tools.notebook_workflows.reset(settings, paths=(), *,
+  revision=None, apply=False) -> NotebookResetPlan`: `paths` is a sequence of
+  literal `Path` files/directories, relative to the consumer root or absolute
+  within it. Empty paths use configured sources. `revision=None` selects the
+  index; a string explicitly selects a verified Git tree. Preview performs
+  only reads. `apply=True` explicitly opts into working-file restoration and
+  declared cleanup. The base package suffices; notebook dependencies are not
+  loaded. Git/OS discovery errors propagate during preflight; unsafe maps raise
+  `ValueError`. Restore/cleanup failures raise `RuntimeError` with phase and
+  partial-progress diagnostics. Interrupts propagate.
+
+`NotebookResetPlan` is frozen and exposes `sources` and `cleanup` as tuples of
+absolute `Path` objects, and `revision` as a pinned tree ID or `None` for the
+index. It describes the requested operation, not a mutable execution handle or
+proof of successful application. The CLI and these functions share validation,
+preview output, and failure behavior. See the [README](../README.md#notebooks)
+for consumer commands and the exact deletion map.
 
 ## Python notebook integration-test API
 

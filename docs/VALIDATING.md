@@ -66,7 +66,12 @@ Maintenance-only installations must not contain notebook dependencies. Each
 distribution is also installed with its notebook extra through a locked consumer
 group, then checked with project-kernel synchronization, native Ruff/ty linting,
 and real notebook execution. Installed recipes cover both the default notebook
-group and a custom group, including output cleanup.
+group and a custom group, including output cleanup and opt-in cell-ID patterns.
+Base-package installed consumers exercise locked JupyterLab launch with a
+stand-in server, private native caches, browser policy, and exit propagation.
+Git-enabled fixtures verify source restoration from index and explicit revisions,
+deleted tracked notebooks, literal filenames, index preservation, and declared
+cleanup. These reset fixtures honor the shared Git-mutation skip control.
 Synthetic tests exercise malformed notebooks, stable IDs, output cleanup,
 interpreter selection, cell errors, and timeouts. Native checker tests cover
 syntax, formatting, types, IPython forms, cross-cell references, configuration,

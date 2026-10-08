@@ -81,7 +81,7 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | Dependencies | `deps check-uv`, `update-python`, `update-tools`, `update-uv` | Exact development pins; canonical Cargo SemVer; stable uv pins |
 | Documentation | `docs check-lines` | UTF-8 Markdown line checks with table exemptions |
 | File selection | `files list`, `run` | Tracked/nonignored inputs, exclusions and portable argument batching |
-| Notebooks | `notebooks advise`, `check`, `clear`, `execute`, `group`, `inspect`, `lint`, `sync` | Read-only review, optional locked environment, native Ruff/ty checks, and execution reports |
+| Notebooks | `notebooks advise`, `check`, `clear`, `execute`, `group`, `inspect`, `launch`, `lint`, `reset`, `sync` | Read-only review, locked JupyterLab, native Ruff/ty checks, execution reports, and explicit restoration |
 | Performance | `performance assets`, `baseline`, `compare`, `convert`, `export`, `extract`, `fetch`, `host`, `measure`, `profile`, `promote`, `publish`, `release-draft`, `release-upload`, `render`, `verify` | Complete configured measurement, retained evidence, release assets and publication |
 | Python | `python check`, `fix`, `typecheck` | Complete tracked/nonignored inventory; native Ruff/ty policy; explicit fixes only |
 | Releases | `release check`, `gate`, `publish`, `registry`, `update`, `verify` | Metadata preparation, reviewed publication gates and exact registry/GitHub verification |
@@ -122,7 +122,9 @@ arguments in lexicographic order.
 | `just notebook-clear FILE...` | Deliberately clear generated notebook state |
 | `just notebook-execute FILE...` | Execute selected notebooks and write results and reports |
 | `just notebook-inspect FILE... [--json] [--no-preview]` | Inventory cells and repair problems without generating IDs or loading Jupyter |
+| `just notebook-launch [--browser \| --no-browser] [--scratch-dir PATH]` | Launch locked JupyterLab with private session caches |
 | `just notebook-lint FILE...` | Check structure, output policy, Python syntax, Ruff rules/formatting, and ty types |
+| `just notebook-reset [PATH...] [--revision REF] [--apply]` | Preview source restoration and declared cleanup; explicitly apply with `--apply` |
 | `just notebook-sync` | Synchronize locked notebook dependencies and the project kernel |
 | `just performance COMMAND...` | Compare Criterion samples, handle assets, and verify, render, or publish retained evidence |
 | `just python-check` | Check lint, formatting, and types for all tracked and nonignored Python, including fixtures |
@@ -904,6 +906,61 @@ destinations. See the [notebook contract](https://github.com/acgetchell/research
 policy, failure reports, and environment configuration. Linting uses the locked
 project's Ruff and ty with the consumer's configuration and preserves cell IDs
 in diagnostics. `notebook-check` provides structure and output checks alone.
+
+The ID-pattern, JupyterLab launch, and source-reset interfaces target **v0.1.8**.
+Adopt an exact published PyPI version containing them before retiring consumer
+implementations. Merge their recipes from the packaged template after publication.
+
+For lowercase kebab-case cell IDs, opt into a full-match spelling policy:
+
+```toml
+[tool.research-repo-tools.notebooks]
+id-pattern = '[a-z0-9]+(?:-[a-z0-9]+)*'
+```
+
+`just notebook-lint FILE...` applies this pattern to every existing cell ID.
+`--id-pattern PATTERN` overrides it for one invocation. Presence, uniqueness,
+ASCII spelling, and the nbformat 1–64 character limit still apply. Without a
+pattern, the broad nbformat contract is preserved. Descriptive-ID advice remains
+an independent gate through `just notebook-advise FILE... --strict`. Neither
+command generates, repairs, or renumbers IDs.
+
+For interactive work, declare JupyterLab in the consumer's notebook dependency
+group, refresh the lockfile, and run `just notebook-sync`. Configure browser and
+scratch storage in the consumer manifest:
+
+```toml
+[tool.research-repo-tools.notebooks.lab]
+browser = false
+scratch-dir = "target/jupyter"
+
+[tool.research-repo-tools.notebooks.reset]
+sources = ["notebooks"]
+scratch = ["target/notebooks", "target/jupyter"]
+checkpoints = ["notebooks/.ipynb_checkpoints"]
+```
+
+```sh
+just notebook-launch --browser
+just notebook-reset
+just notebook-reset --apply
+```
+
+Launch selects the locked managed Python, `dev`, and configured notebook group.
+Its private Jupyter, IPython, and Matplotlib session state lives beneath the
+selected scratch directory and is removed when the server exits. Browser opening
+defaults to false; `--browser` and `--no-browser` override configuration.
+
+Reset previews the exact restore and deletion map. `--apply` explicitly approves
+both working-tree restoration and declared cleanup. Source entries are literal
+files or directories selecting tracked `.ipynb` files, including deleted working
+files. The default restore source is the index; `--revision REF` selects a pinned
+Git tree. The index and other working files are preserved. Cleanup deletes only
+the declared scratch files/directories and explicitly named checkpoint directories;
+it never discovers checkpoint directories recursively. Unsafe paths, source aliases,
+tracked cleanup targets, links, and junctions are rejected before restoration.
+See [the workflow contract](docs/RUNNING_NOTEBOOKS.md#interactive-launch-and-explicit-reset)
+for failure behavior, supported paths, and the consumer deletion map.
 
 Read-only review commands require the release containing #39 and #40, targeted
 for `0.1.5`; they are absent from `0.1.4`. Merge the new recipes from the packaged
