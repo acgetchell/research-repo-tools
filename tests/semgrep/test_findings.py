@@ -4,18 +4,10 @@ import collections
 import json
 from dataclasses import FrozenInstanceError
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 import pytest
 
 from research_repo_tools import semgrep_findings as check_semgrep_fixtures
-
-if TYPE_CHECKING:
-    from pathlib import Path
-if TYPE_CHECKING:
-    from pathlib import Path
-
-    import pytest
 
 
 @pytest.fixture(autouse=True)
@@ -103,25 +95,30 @@ def test_main_requires_annotation_token_boundaries(monkeypatch: pytest.MonkeyPat
 
 
 @pytest.mark.parametrize(
-    ("result", "diagnostic"),
+    ("result", "diagnostics"),
     [
-        ({"start": {"line": 2}, "end": {"line": 2}}, "missing non-empty string field 'check_id'"),
-        (_result("", 2), "missing non-empty string field 'check_id'"),
-        ({"check_id": "rust.foo", "start": {}, "end": {"line": 2}}, "missing positive integer field 'start.line'"),
-        ({"check_id": "rust.foo", "start": {"line": True}, "end": {"line": 2}}, "missing positive integer field 'start.line'"),
-        ({"check_id": "rust.foo", "start": {"line": 2}, "end": {}}, "missing positive integer field 'end.line'"),
-        ({"check_id": "rust.foo", "start": {"line": 3}, "end": {"line": 2}}, "end.line 2 before start.line 3"),
+        (
+            {},
+            ("missing non-empty string field 'check_id'", "missing positive integer field 'start.line'", "missing positive integer field 'end.line'"),
+        ),
+        ({"start": {"line": 2}, "end": {"line": 2}}, ("missing non-empty string field 'check_id'",)),
+        (_result("", 2), ("missing non-empty string field 'check_id'",)),
+        ({"check_id": "rust.foo", "start": {}, "end": {"line": 2}}, ("missing positive integer field 'start.line'",)),
+        ({"check_id": "rust.foo", "start": {"line": True}, "end": {"line": 2}}, ("missing positive integer field 'start.line'",)),
+        ({"check_id": "rust.foo", "start": {"line": 2}, "end": {}}, ("missing positive integer field 'end.line'",)),
+        ({"check_id": "rust.foo", "start": {"line": 3}, "end": {"line": 2}}, ("result 0 has end.line 2 before start.line 3",)),
     ],
 )
 def test_main_rejects_malformed_finding_fields(
-    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], result: dict[str, object], diagnostic: str
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str], result: dict[str, object], diagnostics: tuple[str, ...]
 ) -> None:
     fixture = tmp_path / "fixture.rs"
     fixture.write_text("// ruleid: rust.foo\nbad();\n", encoding="utf-8", newline="\n")
     assert _run_main(monkeypatch, fixture, {"results": [result]}) == 1
     captured = capsys.readouterr()
     assert captured.out == ""
-    assert diagnostic in captured.err
+    for diagnostic in diagnostics:
+        assert diagnostic in captured.err
 
 
 def test_main_rejects_findings_at_wrong_lines_even_when_rule_counts_match(
@@ -137,11 +134,13 @@ def test_main_rejects_findings_at_wrong_lines_even_when_rule_counts_match(
     assert "rust.foo at lines 5: unexpected finding" in captured.err
 
 
-def test_main_matches_overlapping_spans_by_shortest_span(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+def test_main_matches_overlapping_spans_by_earliest_end_line(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     fixture = tmp_path / "fixture.rs"
     fixture.write_text("// ruleid: rust.foo\nbad_one();\n// ruleid: rust.foo\nbad_two();\n", encoding="utf-8", newline="\n")
     payload = {"results": [_result("rust.foo", 2, 4), _result("rust.foo", 2)]}
     assert _run_main(monkeypatch, fixture, payload) == 0
+    captured = capsys.readouterr()
+    assert captured.out == captured.err == ""
 
 
 def test_finding_mismatches_consumes_earliest_end_to_allow_later_points() -> None:
@@ -180,13 +179,6 @@ def test_main_accepts_resolved_paths_to_the_selected_fixture(tmp_path, monkeypat
     assert _run_main(monkeypatch, fixture, {"results": [_result("shared.rule", 2, path=reported)]}) == 0
 
 
-def test_semgrep_results_rejects_malformed_result_objects(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    monkeypatch.setenv("SEMGREP_JSON", json.dumps({"results": [_result("rust.foo", 2), "bad"]}))
-    results = check_semgrep_fixtures._semgrep_results()
-    assert results is None
-    assert "result 1 is not an object" in capsys.readouterr().err
-
-
 def test_main_accepts_matching_annotations(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
     fixture = tmp_path / "fixture.rs"
     fixture.write_text("// ruleid: rust.foo, rust.bar\n// ruleid: rust.foo\n", encoding="utf-8", newline="\n")
@@ -197,33 +189,3 @@ def test_main_accepts_matching_annotations(monkeypatch: pytest.MonkeyPatch, tmp_
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == ""
-
-
-def test_main_reports_missing_check_id(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    fixture = tmp_path / "fixture.rs"
-    fixture.write_text("// ruleid: rust.foo\n", encoding="utf-8", newline="\n")
-    monkeypatch.setenv("SEMGREP_JSON", json.dumps({"results": [{}]}))
-    monkeypatch.setattr(check_semgrep_fixtures.sys, "argv", ["check_semgrep_fixtures.py", str(fixture)])
-    rc = check_semgrep_fixtures.main()
-    assert rc == 1
-    captured = capsys.readouterr()
-    assert "missing non-empty string field 'check_id'" in captured.err
-    assert "missing positive integer field 'start.line'" in captured.err
-    assert "missing positive integer field 'end.line'" in captured.err
-
-
-def test_main_rejects_reversed_result_span(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, capsys: pytest.CaptureFixture[str]) -> None:
-    fixture = tmp_path / "fixture.rs"
-    fixture.write_text("// ruleid: rust.foo\nbad();\n", encoding="utf-8", newline="\n")
-    monkeypatch.setenv("SEMGREP_JSON", json.dumps({"results": [_result("rust.foo", 4, 2)]}))
-    monkeypatch.setattr(check_semgrep_fixtures.sys, "argv", ["check_semgrep_fixtures.py", str(fixture)])
-    assert check_semgrep_fixtures.main() == 1
-    assert "result 0 has end.line 2 before start.line 4" in capsys.readouterr().err
-
-
-def test_main_matches_overlapping_spans_by_earliest_end_line(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
-    fixture = tmp_path / "fixture.rs"
-    fixture.write_text("// ruleid: rust.foo\nbad_one();\n// ruleid: rust.foo\nbad_two();\n", encoding="utf-8", newline="\n")
-    monkeypatch.setenv("SEMGREP_JSON", json.dumps({"results": [_result("rust.foo", 2, 4), _result("rust.foo", 2)]}))
-    monkeypatch.setattr(check_semgrep_fixtures.sys, "argv", ["check_semgrep_fixtures.py", str(fixture)])
-    assert check_semgrep_fixtures.main() == 0

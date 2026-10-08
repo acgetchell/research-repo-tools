@@ -152,14 +152,6 @@ class TestStripTrailingBlanks:
         postprocess(f)
         assert f.read_text(encoding="utf-8") == "\n"
 
-    @pytest.mark.skipif(os.name == "nt", reason="POSIX mode preservation is not meaningful on Windows")
-    def test_atomic_write_preserves_file_mode(self, tmp_path: Path) -> None:
-        f = tmp_path / "CHANGELOG.md"
-        f.write_text("# Changelog\n\n- Item\n\n\n", encoding="utf-8", newline="\n")
-        f.chmod(416)
-        postprocess(f)
-        assert f.stat().st_mode & 511 == 416
-
     @pytest.mark.parametrize("failure_point", ["stage", "fsync", "replace"])
     def test_atomic_write_failure_preserves_original(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, failure_point: str) -> None:
         f = tmp_path / "CHANGELOG.md"
@@ -986,23 +978,10 @@ class TestIntegration:
         changelog.write_text("# Changelog\n\n* Original entry\n", encoding="utf-8", newline="\n")
         changelog.chmod(416)
         original_mode = stat.S_IMODE(changelog.stat().st_mode)
+        if os.name != "nt":
+            assert original_mode == 416
         postprocess(changelog)
         assert stat.S_IMODE(changelog.stat().st_mode) == original_mode
-
-    def test_failed_atomic_replace_preserves_original(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-        changelog = tmp_path / "CHANGELOG.md"
-        original = "# Changelog\n\n* Original entry\n"
-        changelog.write_bytes(original.encode("utf-8"))
-
-        def fail_replace(_source: Path, _target: Path) -> Path:
-            message = "simulated replacement failure"
-            raise OSError(message)
-
-        monkeypatch.setattr(Path, "replace", fail_replace)
-        with pytest.raises(OSError, match="simulated replacement failure"):
-            postprocess(changelog)
-        assert changelog.read_bytes().decode("utf-8") == original
-        assert list(tmp_path.glob(".CHANGELOG.md.*.tmp")) == []
 
     def test_cli_reports_malformed_utf8_without_traceback(self, tmp_path: Path, capsys) -> None:
         changelog = tmp_path / "CHANGELOG.md"

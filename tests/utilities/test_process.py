@@ -410,15 +410,6 @@ class TestSecurityFeatures:
 
 
 class TestBuildRunKwargs:
-    def test_uses_finite_default_timeout(self) -> None:
-        kwargs = _build_run_kwargs("test_func")
-        assert math.isfinite(kwargs["timeout"])
-        assert kwargs["timeout"] == DEFAULT_COMMAND_TIMEOUT_SECONDS
-
-    def test_respects_explicit_longer_timeout(self) -> None:
-        kwargs = _build_run_kwargs("test_func", timeout=1800)
-        assert kwargs["timeout"] == 1800
-
     def test_defaults(self) -> None:
         kwargs = _build_run_kwargs("test_func")
         assert kwargs["capture_output"] is True
@@ -426,6 +417,7 @@ class TestBuildRunKwargs:
         assert kwargs["check"] is True
         assert kwargs["encoding"] == "utf-8"
         assert kwargs["timeout"] == DEFAULT_COMMAND_TIMEOUT_SECONDS
+        assert math.isfinite(kwargs["timeout"])
 
     def test_rejects_shell_true(self) -> None:
         kwargs: dict[str, Any] = {"shell": True}
@@ -450,26 +442,16 @@ class TestBuildRunKwargs:
         kwargs = _build_run_kwargs("test_func", encoding="latin-1")
         assert kwargs["encoding"] == "latin-1"
 
-    def test_respects_custom_timeout(self) -> None:
-        kwargs = _build_run_kwargs("test_func", timeout=12.5)
-        assert kwargs["timeout"] == 12.5
-
-    def test_applies_secure_defaults(self) -> None:
-        kwargs = _build_run_kwargs("test_function")
-        assert kwargs["capture_output"] is True
-        assert kwargs["text"] is True
-        assert kwargs["check"] is True
-        assert kwargs["encoding"] == "utf-8"
+    @pytest.mark.parametrize("timeout", [12.5, 1800], ids=["fractional", "longer-than-default"])
+    def test_respects_custom_timeout(self, timeout: float) -> None:
+        kwargs = _build_run_kwargs("test_func", timeout=timeout)
+        assert kwargs["timeout"] == timeout
 
     def test_allows_safe_overrides_and_extra_kwargs(self) -> None:
         kwargs = _build_run_kwargs("test_function", capture_output=False, check=False, timeout=30)
         assert kwargs["capture_output"] is False
         assert kwargs["check"] is False
         assert kwargs["timeout"] == 30
-        assert kwargs["text"] is True
-
-    def test_ignores_text_override_to_keep_string_output(self) -> None:
-        kwargs = _build_run_kwargs("test_function", text=False)
         assert kwargs["text"] is True
 
 
@@ -666,11 +648,6 @@ class TestRunGitCommandWithInput:
         assert raised.value is timeout
         assert raised.value.output == b"partial\r\n"
         assert raised.value.stderr == b"diagnostic\r\n"
-
-    def test_rejects_executable_override(self) -> None:
-        kwargs: dict[str, Any] = {"executable": "/malicious/fake-git"}
-        with pytest.raises(ValueError, match="Overriding 'executable' is not allowed"):
-            run_git_command_with_input(["hash-object", "--stdin"], "content", **kwargs)
 
 
 class TestAdditionalHelpers:

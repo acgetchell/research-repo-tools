@@ -99,8 +99,8 @@ def _run(value: object) -> tuple[dict[str, object], dict[str, object], list[dict
         if type(invocation.get("executionSuccessful")) is not bool or not invocation["executionSuccessful"]:
             raise ValueError("SARIF invocation must report executionSuccessful=true")
     identity_indices = {index: index for index in range(len(rules))}
-    _metadata_references(copy.deepcopy(run), identity_indices)
-    _rule_relationships(copy.deepcopy(rules), identity_indices)
+    _metadata_references(copy.deepcopy(run), identity_indices, rule_table=rules)
+    _rule_relationships(copy.deepcopy(rules), identity_indices, rule_table=rules)
     return run, driver, rules, results
 
 
@@ -112,33 +112,49 @@ def _reindex_reference(reference: dict[str, object], indices: dict[int, int], ke
         reference[key] = indices[old]
 
 
-def _metadata_references(value: object, indices: dict[int, int]) -> None:
-    """Reindex standard notification rule references without touching properties."""
+def _metadata_reference(reference: dict[str, object], indices: dict[int, int], rule_table: list[dict[str, object]] | None) -> None:
+    if "toolComponent" in reference:
+        raise ValueError("SARIF extension rule references are unsupported")
+    if rule_table is not None:
+        # Check the index before resolving identities to retain the same invalid
+        # index diagnostic. The validation pass uses an identity mapping.
+        _reindex_reference(reference, indices, "index")
+        if "id" in reference or "index" in reference:
+            _rule_id({"rule": reference}, rule_table)
+    else:
+        _reindex_reference(reference, indices, "index")
+
+
+def _metadata_references(value: object, indices: dict[int, int], *, rule_table: list[dict[str, object]] | None = None) -> None:
+    """Reindex notification and configuration rule references, preserving properties."""
     if isinstance(value, list):
         for item in value:
-            _metadata_references(item, indices)
+            _metadata_references(item, indices, rule_table=rule_table)
     elif isinstance(value, dict):
         if "associatedRule" in value:
             reference = _object(value["associatedRule"], "associatedRule")
-            if "toolComponent" in reference:
-                raise ValueError("SARIF extension rule references are unsupported")
-            _reindex_reference(reference, indices, "index")
+            _metadata_reference(reference, indices, rule_table)
             value["associatedRule"] = reference
+        if "ruleConfigurationOverrides" in value:
+            overrides = _objects(value["ruleConfigurationOverrides"], "ruleConfigurationOverrides")
+            for override in overrides:
+                reference = _object(override.get("descriptor"), "ruleConfigurationOverrides.descriptor")
+                _metadata_reference(reference, indices, rule_table)
+                override["descriptor"] = reference
+            value["ruleConfigurationOverrides"] = overrides
         for key, item in value.items():
-            if key not in {"properties", "associatedRule", "results", "tool"}:
-                _metadata_references(item, indices)
+            if key not in {"properties", "associatedRule", "ruleConfigurationOverrides", "results", "tool"}:
+                _metadata_references(item, indices, rule_table=rule_table)
 
 
-def _rule_relationships(rules: list[dict[str, object]], indices: dict[int, int]) -> None:
+def _rule_relationships(rules: list[dict[str, object]], indices: dict[int, int], *, rule_table: list[dict[str, object]] | None = None) -> None:
     for rule in rules:
         if "relationships" not in rule:
             continue
         relationships = _objects(rule["relationships"], "rule.relationships")
         for relationship in relationships:
             target = _object(relationship.get("target"), "relationship.target")
-            if "toolComponent" in target:
-                raise ValueError("SARIF extension rule references are unsupported")
-            _reindex_reference(target, indices, "index")
+            _metadata_reference(target, indices, rule_table)
             relationship["target"] = target
         rule["relationships"] = relationships
 
@@ -193,7 +209,7 @@ def transform(document: object, policy: SarifPolicy) -> tuple[SarifOutput, ...]:
         digest = hashlib.sha256(name.encode("utf-8")).hexdigest()[:12]
         category = f"{policy.category_prefix}-{slug[:80]}-{digest}-{seen[name]}"
         automation = _object(run.get("automationDetails", {}), "automationDetails")
-        automation["id"] = category
+        automation["id"] = f"{category}/"
         run["automationDetails"] = automation
         rendered = {key: value for key, value in raw.items() if key != "runs"}
         rendered["runs"] = [run]

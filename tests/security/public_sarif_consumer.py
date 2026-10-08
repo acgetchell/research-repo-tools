@@ -59,7 +59,9 @@ class TestSarifConsumer(unittest.TestCase):
         self.assertEqual(run["properties"], {"ruleIndex": 99})
         self.assertEqual(run["originalUriBaseIds"], original["runs"][0]["originalUriBaseIds"])
         self.assertEqual(run["automationDetails"]["guid"], original["runs"][0]["automationDetails"]["guid"])
-        self.assertEqual(run["automationDetails"]["id"], output.category)
+        # GitHub splits at the last slash into category and optional run ID.
+        self.assertEqual(run["automationDetails"]["id"].rpartition("/"), (output.category, "/", ""))
+        self.assertEqual(output.filename, f"{output.category}.sarif")
         self.assertEqual(result["properties"], original["properties"])
         self.assertEqual(source, original)
 
@@ -72,22 +74,61 @@ class TestSarifConsumer(unittest.TestCase):
         policy = sarif.SarifPolicy({"Scanner": (), "SCANNER": ()})
         outputs = sarif.transform(source, policy)
         self.assertEqual(len({item.filename for item in outputs}), 3)
+        categories = [json.loads(item.payload)["runs"][0]["automationDetails"]["id"].rpartition("/")[0] for item in outputs]
+        self.assertEqual(categories, [item.category for item in outputs])
+        self.assertEqual(len(set(categories)), 3)
         self.assertTrue(outputs[0].category.endswith("-2"))
         empty.update(tool={"driver": {"name": "Scanner", "rules": [{"id": "project.empty"}]}})
         self.assertEqual([item.category for item in sarif.transform(source, policy)[1:]], [item.category for item in outputs])
 
-    def test_descriptor_relationships_and_notification_indices_are_reindexed_or_rejected(self):
+    def test_descriptor_relationships_notifications_and_overrides_are_reindexed(self):
         source = document()
         run = source["runs"][0]
         run["tool"]["driver"]["rules"][1]["relationships"] = [{"target": {"id": "project.rule", "index": 1}, "kinds": ["superset"]}]
         run["invocations"][0]["toolExecutionNotifications"] = [{"associatedRule": {"id": "project.rule", "index": 1}, "message": {"text": "note"}}]
+        run["invocations"][0]["ruleConfigurationOverrides"] = [{"descriptor": {"id": "project.rule", "index": 1}, "configuration": {"level": "warning"}}]
         (output,) = sarif.transform(source, sarif.SarifPolicy({"Scanner": ("project.",)}))
         transformed = json.loads(output.payload)["runs"][0]
         self.assertEqual(transformed["tool"]["driver"]["rules"][0]["relationships"][0]["target"]["index"], 0)
         self.assertEqual(transformed["invocations"][0]["toolExecutionNotifications"][0]["associatedRule"]["index"], 0)
-        run["invocations"][0]["toolExecutionNotifications"][0]["associatedRule"]["index"] = 99
-        with self.assertRaisesRegex(ValueError, "invalid rule index"):
-            sarif.transform(source, sarif.SarifPolicy({"unselected": ()}))
+        self.assertEqual(transformed["invocations"][0]["ruleConfigurationOverrides"][0]["descriptor"]["index"], 0)
+
+    def test_invalid_metadata_references_preserve_previous_publication_even_in_unselected_runs(self):
+        for kind in ("relationship", "notification", "override"):
+            for reference, diagnostic in (
+                ({"id": "foreign.rule", "index": 1}, "inconsistent rule identity"),
+                ({"id": "", "index": 1}, "nonempty string"),
+                ({"id": 12}, "nonempty string"),
+                ({"index": 99}, "removed or invalid rule index"),
+                ({"id": "project.rule", "toolComponent": {"index": 0}}, "extension rule references"),
+            ):
+                for selected in ("Scanner", "unselected"):
+                    with self.subTest(kind=kind, reference=reference, selected=selected), tempfile.TemporaryDirectory() as directory:
+                        root = Path(directory).resolve()
+                        source, output = root / "input.sarif", root / "reports"
+                        output.mkdir()
+                        (output / "old.sarif").write_bytes(b"previous\r\n")
+                        value = document()
+                        run = value["runs"][0]
+                        if kind == "relationship":
+                            run["tool"]["driver"]["rules"][1]["relationships"] = [{"target": reference}]
+                        elif kind == "notification":
+                            run["invocations"][0]["toolExecutionNotifications"] = [{"associatedRule": reference, "message": {"text": "note"}}]
+                        else:
+                            run["invocations"][0]["ruleConfigurationOverrides"] = [{"descriptor": reference, "configuration": {"level": "warning"}}]
+                        source.write_bytes(json.dumps(value).encode())
+                        with self.assertRaisesRegex(ValueError, diagnostic):
+                            sarif.split(source, output, sarif.SarifPolicy({selected: ("project.",)}))
+                        self.assertEqual({path.name for path in output.iterdir()}, {"old.sarif"})
+                        self.assertEqual((output / "old.sarif").read_bytes(), b"previous\r\n")
+
+    def test_metadata_referencing_a_removed_rule_rejects_selection(self):
+        value = document()
+        value["runs"][0]["invocations"][0]["ruleConfigurationOverrides"] = [
+            {"descriptor": {"id": "foreign.rule", "index": 0}, "configuration": {"level": "warning"}}
+        ]
+        with self.assertRaisesRegex(ValueError, "removed or invalid"):
+            sarif.transform(value, sarif.SarifPolicy({"Scanner": ("project.",)}))
 
     def test_validation_precedes_publication_and_empty_generation_removes_stale_members(self):
         with tempfile.TemporaryDirectory() as directory:

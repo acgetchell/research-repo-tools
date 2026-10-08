@@ -14,7 +14,7 @@ from urllib.parse import quote, unquote
 
 from research_repo_tools import config, security, semgrep
 from research_repo_tools.evidence import _load_json, _object, deterministic_json
-from research_repo_tools.files import publish_directory
+from research_repo_tools.files import _path_keys, publish_directory
 from research_repo_tools.process import resolve_executable
 from research_repo_tools.sarif import _metadata_references, _objects, _reindex_reference, _rule_id, _rule_relationships, _run
 from research_repo_tools.scanner_output import FindingOutput
@@ -70,18 +70,33 @@ def _source_mapping(snippet: PurePath, source: PurePath) -> dict[str, str]:
     }
 
 
+def _offset_artifact_location(value, offset, length):
+    location = _object(value, "SARIF artifact location")
+    if "index" in location:
+        if type(location["index"]) is not int or not 0 <= location["index"] < length:
+            raise ValueError("invalid SARIF artifact index")
+        location["index"] += offset
+    return location
+
+
 def _offset_artifacts(value, offset, length):
     if isinstance(value, dict):
         for key, item in value.items():
-            if key == "artifactLocation" and isinstance(item, dict) and "index" in item:
-                if type(item["index"]) is not int or not 0 <= item["index"] < length:
-                    raise ValueError("invalid SARIF artifact index")
-                item["index"] += offset
+            if key in {"artifactLocation", "analysisTarget"}:
+                value[key] = _offset_artifact_location(item, offset, length)
             elif key != "properties":
                 _offset_artifacts(item, offset, length)
     elif isinstance(value, list):
         for item in value:
             _offset_artifacts(item, offset, length)
+
+
+def _invocation_index(result: dict[str, object], length: int) -> int:
+    provenance = _object(result.get("provenance", {}), "result.provenance")
+    index = provenance.get("invocationIndex", -1)
+    if type(index) is not int or not -1 <= index < length:
+        raise ValueError("invalid SARIF invocation index")
+    return index
 
 
 def _aggregate_sarif(documents: list[dict], category: str) -> dict:
@@ -131,7 +146,18 @@ def _aggregate_sarif(documents: list[dict], category: str) -> dict:
             _offset_artifacts(artifacts, len(all_artifacts), len(artifacts))
             _offset_artifacts(invocations, len(all_artifacts), len(artifacts))
             _metadata_references(invocations, indices)
+            for invocation in invocations:
+                for field in ("executableLocation", "workingDirectory", "stdin", "stdout", "stderr", "stdoutStderr"):
+                    if field in invocation:
+                        invocation[field] = _offset_artifact_location(invocation[field], len(all_artifacts), len(artifacts))
+                if "responseFiles" in invocation:
+                    invocation["responseFiles"] = [
+                        _offset_artifact_location(item, len(all_artifacts), len(artifacts))
+                        for item in _objects(invocation["responseFiles"], "invocation.responseFiles")
+                    ]
             for artifact in artifacts:
+                if "location" in artifact:
+                    artifact["location"] = _offset_artifact_location(artifact["location"], len(all_artifacts), len(artifacts))
                 if "parentIndex" in artifact:
                     parent = artifact["parentIndex"]
                     if type(parent) is not int or not 0 <= parent < len(artifacts):
@@ -143,11 +169,12 @@ def _aggregate_sarif(documents: list[dict], category: str) -> dict:
                     reference = _object(result["rule"], "result.rule")
                     _reindex_reference(reference, indices, "index")
                     result["rule"] = reference
-                if "invocationIndex" in result:
-                    old = result["invocationIndex"]
-                    if type(old) is not int or not 0 <= old < len(invocations):
-                        raise ValueError("invalid SARIF invocation index")
-                    result["invocationIndex"] = old + len(all_invocations)
+                old = _invocation_index(result, len(invocations))
+                # SARIF uses -1 for an unknown invocation; only offset known ones.
+                if old >= 0:
+                    provenance = _object(result["provenance"], "result.provenance")
+                    provenance["invocationIndex"] = old + len(all_invocations)
+                    result["provenance"] = provenance
             all_results.extend(results)
             all_artifacts.extend(artifacts)
             all_invocations.extend(invocations)
@@ -158,7 +185,7 @@ def _aggregate_sarif(documents: list[dict], category: str) -> dict:
         results=all_results,
         artifacts=all_artifacts,
         invocations=all_invocations,
-        automationDetails={"id": category},
+        automationDetails={"id": f"{category}/"},
     )
     merged["runs"] = [combined]
     return merged
@@ -194,8 +221,10 @@ def _batch_reports(json_path: Path, sarif_path: Path, targets: set[Path], root: 
     runs = _objects(sarif.get("runs"), "SARIF runs")
     if not runs:
         raise ValueError("missing SARIF runs")
-    for _native_run, _driver, rules, results in [_run(run) for run in runs]:
+    for native_run, _driver, rules, results in [_run(run) for run in runs]:
+        invocations = _objects(native_run.get("invocations", []), "invocations")
         for result in results:
+            _invocation_index(result, len(invocations))
             suppressions = _objects(result.get("suppressions", []), "SARIF suppressions")
             suppressed = any(item.get("status", "accepted") == "accepted" for item in suppressions)
             if suppressed and not inline_suppressions:
@@ -252,10 +281,14 @@ def scan(
     names = security_inventory(settings.root, include=include, exclude=exclude)
     if not names:
         raise ValueError("no Semgrep inputs selected")
-    if any((settings.root / name).resolve().is_relative_to(settings.path(output).resolve()) for name in names):
-        raise ValueError("Semgrep output directory must not contain selected inputs")
+    destination = settings.path(output)
+    destination_keys = _path_keys(destination)
+    for name in names:
+        source = (settings.root / name).resolve()
+        if any(not destination_keys.isdisjoint(_path_keys(parent)) for parent in (source, *source.parents)):
+            raise ValueError("Semgrep output directory must not contain selected inputs")
     binary = resolve_executable("semgrep", cwd=settings.root)
-    with publish_directory(settings.path(output)) as candidate, tempfile.TemporaryDirectory(prefix="research-semgrep-scan-") as directory:
+    with publish_directory(destination) as candidate, tempfile.TemporaryDirectory(prefix="research-semgrep-scan-") as directory:
         temporary = Path(directory)
         targets, mapping = [], {}
         for name in names:
@@ -344,7 +377,7 @@ def scan(
         else:
             for index, (data, sarif, _) in enumerate(reports):
                 for run_index, run in enumerate(sarif["runs"]):
-                    run["automationDetails"] = {**run.get("automationDetails", {}), "id": f"{policy.report_category}-{index}-{run_index}"}
+                    run["automationDetails"] = {**run.get("automationDetails", {}), "id": f"{policy.report_category}-{index}-{run_index}/"}
                 payloads.update({f"{index}.json": data, f"{index}.sarif": sarif})
         for name, value in payloads.items():
             (candidate / name).write_bytes(deterministic_json(value))

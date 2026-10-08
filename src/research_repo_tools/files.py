@@ -373,8 +373,16 @@ def _sync_directory_tree(candidate: Path) -> None:
     _validate_distinct_paths([path for path in paths if path.is_file()])
     for path in paths:
         if path.is_file():
-            with path.open("rb+") as stream:
-                os.fsync(stream.fileno())
+            mode = stat.S_IMODE(path.stat().st_mode)
+            try:
+                # Windows needs a writable handle for fsync. The private staged
+                # file can temporarily gain owner access without changing the
+                # permissions of the published generation.
+                path.chmod(mode | stat.S_IRUSR | stat.S_IWUSR)
+                with path.open("rb+") as stream:
+                    os.fsync(stream.fileno())
+            finally:
+                path.chmod(mode)
 
 
 def _cleanup_directory(path: Path) -> None:

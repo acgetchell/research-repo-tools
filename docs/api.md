@@ -5,6 +5,10 @@ configuration, packaged templates, and the Python APIs listed below. Consumers
 should pin an exact released version in their uv development dependencies.
 Patch releases preserve these contracts; a minor release may introduce a
 documented breaking change while the package remains below `1.0`.
+The v0.1.8 [Semgrep scan migration](shared-capability-migration.md#sarif-and-batched-scan-adoption)
+is an explicit exception: it changes the default report layout and gives scans
+exclusive ownership of their output directory. Review that migration before
+updating a consumer's exact pin.
 
 The [complete-run and host APIs](complete-run-api.md) extend the performance
 contracts with common-harness plans, raw sample retention, named phase series,
@@ -703,7 +707,8 @@ combined `results`, `errors`, `paths.scanned` and full native JSON in `batches`.
 SARIF merges one run with deduplicated rule descriptors and reindexed rule,
 artifact and invocation references; conflicting metadata/descriptors reject
 aggregation. Unrelated run metadata must agree across batches. The declared
-category becomes `automationDetails.id`. Numbered layout publishes `N.json` /
+category followed by `/` becomes `automationDetails.id`, leaving the run ID
+empty so GitHub recognizes the category. Numbered layout publishes `N.json` /
 `N.sarif` pairs per batch, retaining native metadata and assigning distinct
 categories. Both layouts replace the whole owned output directory, superseding
 0.1.7's per-file double launches and partial numbered-file cleanup.
@@ -732,13 +737,17 @@ present, must report successful execution. This validates the transform's
 supported subset rather than every optional SARIF schema field.
 
 Namespace-selected rules are retained even without findings. Runs without rules
-or results are omitted. Rule indices in retained results, descriptor relationships and standard notification
-`associatedRule` metadata are reindexed; metadata referencing removed indices
+or results are omitted. Rule indices in retained results, descriptor relationships,
+notification `associatedRule` metadata and invocation `ruleConfigurationOverrides`
+are reindexed. Supplied rule IDs and indices must agree; metadata referencing removed indices
 rejects the transform. Arbitrary `properties` are preserved. Other root/run
 metadata and automation fields remain unchanged except `automationDetails.id`.
 Categories include the prefix, driver slug, driver-name digest and occurrence
 among all input runs, including empty ones. Repeated names and slug collisions
 have distinct categories; ordering same-name runs defines their stable identity.
+Each `automationDetails.id` is the category followed by `/`, leaving the run ID
+empty for GitHub code scanning. `SarifOutput.category` and filenames do not
+include that separator.
 
 `sarif.split(source: Path, destination: Path, policy) -> tuple[SarifOutput, ...]`
 parses duplicate-free strict UTF-8 JSON, transforms and serializes all outputs

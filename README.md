@@ -600,7 +600,7 @@ and upload that dedicated directory. Repeated driver names get distinct stable
 categories; unrelated metadata is retained and indexed driver rule references
 are corrected. Empty generations remove stale output files. Invalid/non-finite
 input fails before publication. Extension rule references are rejected; see the
-[supported SARIF API](docs/api.md#sarif-api) for the precise subset.
+[supported SARIF API](https://github.com/acgetchell/research-repo-tools/blob/main/docs/api.md#sarif-api) for the precise subset.
 Add `--github-output "$GITHUB_OUTPUT"` to append `SARIF_DIRECTORY`,
 `SARIF_HAS_UPLOADABLE_RUNS` and `SARIF_RUN_COUNT` after publication through the
 existing checked `ci.export_environment` API. Upload permissions, conditions and
@@ -620,7 +620,7 @@ with publish_directory(Path("figures/validation")) as candidate:
 Only after generation and validation finish does the directory replace the
 previous figure set. Caught commit failures restore the original tree; incomplete
 rollback reports a retained recovery directory. See the
-[consumer deletion map](docs/shared-capability-migration.md) before removing
+[consumer deletion map](https://github.com/acgetchell/research-repo-tools/blob/main/docs/shared-capability-migration.md) before removing
 working implementations; adoption requires an exact published release.
 
 ### Dependency and tool updates

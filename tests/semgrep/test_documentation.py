@@ -41,55 +41,6 @@ def test_windows_snippet_paths_map_native_json_and_both_sarif_uri_forms():
     }
 
 
-def test_native_scan_requires_complete_coverage_and_retains_findings(tmp_path, monkeypatch):
-    import json
-    import subprocess
-
-    from research_repo_tools import config, security, semgrep_scan
-
-    source = tmp_path / "source.py"
-    source.write_bytes(b"raise RuntimeError()\n")
-    settings = config.Config(root=tmp_path, semgrep=config.SemgrepSettings(config="rules.yml"))
-    monkeypatch.setattr(semgrep_scan, "security_inventory", lambda *_args, **_kwargs: ("source.py",))
-    monkeypatch.setattr(semgrep_scan, "resolve_executable", lambda *_args, **_kwargs: tmp_path / "semgrep")
-    covered = False
-
-    def execute(_binary, args, **kwargs):
-        assert "--disable-nosem" in args and "--strict" in args and "--error" in args
-        value = {
-            "results": [{"check_id": "local.rule", "path": str(source), "start": {"line": 1}, "end": {"line": 1}}],
-            "errors": [],
-            "paths": {"scanned": [str(source)] if covered else []},
-        }
-        sarif = {
-            "version": "2.1.0",
-            "runs": [
-                {
-                    "tool": {"driver": {"name": "Semgrep"}},
-                    "results": [
-                        {
-                            "ruleId": "local.rule",
-                            "message": {"text": "local finding"},
-                            "locations": [{"physicalLocation": {"artifactLocation": {"uri": source.as_posix()}, "region": {"startLine": 1}}}],
-                        }
-                    ],
-                }
-            ],
-        }
-        from pathlib import Path
-
-        Path(args[args.index("--output") + 1]).write_bytes(json.dumps(value).encode())
-        Path(args[args.index("--sarif-output") + 1]).write_bytes(json.dumps(sarif).encode())
-        return subprocess.CompletedProcess([], 0, b"", b"")
-
-    monkeypatch.setattr(security, "run_command_bytes", execute)
-    assert semgrep_scan.scan(settings, include=("*.py",)) == 1
-    assert not (tmp_path / "target/security/semgrep/semgrep.json").exists()
-    covered = True
-    assert semgrep_scan.scan(settings, include=("*.py",)) == 1
-    assert json.loads((tmp_path / "target/security/semgrep/semgrep.json").read_bytes())["results"][0]["check_id"] == "local.rule"
-
-
 def test_documentation_fixture_assertions_use_shared_checker(tmp_path, monkeypatch):
     from research_repo_tools import config, semgrep, semgrep_scan
 

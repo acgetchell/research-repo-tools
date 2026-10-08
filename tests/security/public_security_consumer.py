@@ -353,38 +353,29 @@ class TestSharedCapabilities(unittest.TestCase):
             self.assertEqual(rust_blocks(path), ("\n\nlet value = 1;\nassert_eq!(value, 1);\n",))
             self.assertEqual(path.read_bytes(), original)
 
-    def test_malformed_scanner_reports_fail_without_publishing(self):
+    def test_malformed_osv_sarif_invocations_fail_without_publishing(self):
         with tempfile.TemporaryDirectory(prefix="scanner consumer ") as directory:
             root = Path(directory).resolve()
             (root / "uv.lock").write_bytes(b"version = 1\n")
-            (root / "source.py").write_bytes(b"value = 1\n")
-            settings = config.parse({"semgrep": {"config": "rules.yml"}}, root=root)
+            settings = config.parse({}, root=root)
 
             def native(_binary, args, **_kwargs):
-                if "--output-file" in args:
-                    output = args[args.index("--output-file") + 1]
-                    value = (
-                        {"results": [{"source": {"path": str(root / "uv.lock")}, "packages": [{"package": {"name": "example"}}]}]}
-                        if args[args.index("--format") + 1] == "json"
-                        else {"version": "2.1.0", "runs": [{"tool": {}, "results": [], "invocations": [{"executionSuccessful": "false"}]}]}
-                    )
-                else:
-                    output = args[args.index("--output") + 1]
-                    value = {"results": [], "errors": [], "paths": []} if "--json" in args else {"version": "2.1.0", "runs": [{"tool": {}, "results": []}]}
+                output = args[args.index("--output-file") + 1]
+                value = (
+                    {"results": [{"source": {"path": str(root / "uv.lock")}, "packages": [{"package": {"name": "example"}}]}]}
+                    if args[args.index("--format") + 1] == "json"
+                    else {"version": "2.1.0", "runs": [{"tool": {}, "results": [], "invocations": [{"executionSuccessful": "false"}]}]}
+                )
                 Path(output).write_bytes(json.dumps(value).encode())
                 return subprocess.CompletedProcess([], 0, b"", b"")
 
             with (
                 patch.object(security, "security_inventory", return_value=("uv.lock",)),
                 patch.object(security, "_binary", return_value=(root / "osv-scanner", {})),
-                patch.object(semgrep_scan, "security_inventory", return_value=("source.py",)),
-                patch.object(semgrep_scan, "resolve_executable", return_value=root / "semgrep"),
                 patch.object(security, "run_command_bytes", side_effect=native),
             ):
                 self.assertEqual(security.scan_osv(settings, ("uv.lock",)), 1)
                 self.assertFalse((root / "target/security/osv-0.sarif").exists())
-                self.assertEqual(semgrep_scan.scan(settings, include=("*.py",)), 1)
-                self.assertFalse((root / "target/security/semgrep/0.json").exists())
 
 
 if __name__ == "__main__":
