@@ -184,6 +184,12 @@ are resolved first. A failed command or missing marker fails the workflow.
 description, keywords and category counts; native Cargo packaging remains the
 complete publication preflight.
 
+`validation cargo-examples CONFIG` and `cargo_examples.discover_examples` /
+`run_examples` add metadata discovery, feature-specific builds and bounded live
+execution. This separate plan keeps consumer selection, budgets and stdout
+assertions declarative; see the [Cargo example contract](cargo-examples-api.md)
+and [static-plan migration](cargo-examples-migration.md).
+
 `ci.export_environment(destination, names, *, environment=None)` validates every
 requested name and nonempty value before appending UTF-8/LF `NAME=value` lines.
 NUL/CR/LF, duplicate or invalid names, reserved GitHub/runner variables and

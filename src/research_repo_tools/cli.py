@@ -226,6 +226,7 @@ def parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true"
     )
     validation = groups.add_parser("validation", help="run configured command and prerequisite checks").add_subparsers(dest="action", required=True)
+    validation.add_parser("cargo-examples", help="discover, build and run Cargo examples with consumer policy").add_argument("configuration")
     validation.add_parser("cargo-metadata").add_argument("--package")
     validation.add_parser("require").add_argument("names", nargs="+")
     command = validation.add_parser("run")
@@ -264,7 +265,11 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
     if args.group == "validation":
         from research_repo_tools.validation import check_cargo_metadata, require_executables, run_checks
 
-        if args.action == "cargo-metadata":
+        if args.action == "cargo-examples":
+            from research_repo_tools.cargo_examples import run_examples
+
+            run_examples(settings.root, args.configuration)
+        elif args.action == "cargo-metadata":
             check_cargo_metadata(settings.root, package=args.package)
         elif args.action == "require":
             require_executables(settings.root, tuple(args.names))

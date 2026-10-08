@@ -18,6 +18,9 @@ on PATH. On macOS, the system Bash is sufficient and Homebrew provides jq
 On Windows, use Git for Windows' Bash and install jq with `winget install jqlang.jq`,
 then open a new terminal. The Python setup command below does not install these
 system executables; missing prerequisites fail the tests with setup guidance.
+Cargo and a native Rust toolchain must also be on PATH for the small dependency-free
+example-runner fixtures in source and installed-distribution suites. Hosted package
+jobs use their native Rust toolchains for these fixtures on all three platforms.
 
 ```sh
 uv run --locked --managed-python research-repo-tools setup
@@ -187,7 +190,8 @@ See [Supported interfaces](docs/api.md) for the CLI, configuration, and public
 Python entry-point contract.
 
 Maintain one implementation per common capability under `src/research_repo_tools/`.
-Organize tests under `tests/changelog`, `dependencies`, `notebooks`, `papers`, `performance`,
+Organize tests by capability under `tests/`, including `cargo_examples`,
+`changelog`, `dependencies`, `notebooks`, `papers`, `performance`,
 `publication`, `releases`, `review`, `security`, `semgrep`, `toolchain`, `utilities`, `validation`,
 and `zizmor`. Fixtures should be small representative inputs generated in temporary
 directories. Preserve meaningful regression assertions against this package;
@@ -238,10 +242,11 @@ Imports must have no network or consumer-file side effects. Changes involving
 multiple files must validate candidates before replacement and preserve originals
 on caught failures; incomplete rollback must report recovery files.
 
-Follow [AGENTS.md](AGENTS.md): agents must not run mutating Git commands in this
-or consumer repositories. Leave staging, commits, tags, pushes, and branch changes
-to the user. Tests exercise Git mutations only in disposable fixtures. Source
-repositories remain read-only. Package publication requires an explicit request;
+Follow [AGENTS.md](AGENTS.md): agents need explicit task authorization for Git
+mutations, including staging, commits, tags, pushes, and branch changes. Authorized
+tests exercise Git mutations only in disposable fixtures; without that authorization,
+use the documented fixture skip control. Validation leaves source repositories
+unchanged. Package publication requires an explicit request;
 follow [Releasing research-repo-tools](docs/RELEASING.md) for review, tagging
 and deployment approval. Keep one-time account setup in the maintainer's private task.
 

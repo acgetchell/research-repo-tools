@@ -453,7 +453,7 @@ as the CLI. Type annotations are shipped through `py.typed`.
 | `resolve_executable(command, *, cwd=None, env=None) -> Path` | Resolve a name or explicit `str`/`Path` to an absolute executable path without executing it |
 | `run_command(command, args=(), *, cwd=None, env=None, input=None, encoding="utf-8", errors="strict", timeout=300.0, check=True) -> CompletedProcess[str]` | Encode text stdin and decode captured stdout/stderr with the specified codec; preserve newlines on every platform |
 | `run_command_bytes(command, args=(), *, cwd=None, env=None, input=None, timeout=300.0, check=True) -> CompletedProcess[bytes]` | Capture stdout/stderr and transport stdin without decoding or newline translation |
-| `run_command_live(command, args=(), *, cwd=None, env=None, timeout=300.0, check=True) -> CompletedProcess` | Inherit stdin/stdout/stderr for trusted long-running commands; streams are not captured |
+| `run_command_live(command, args=(), *, cwd=None, env=None, timeout=300.0, check=True, stdout_markers=()) -> CompletedProcess[bytes]` | Inherit streams by default; optional exact-byte stdout assertions echo output live; result streams are not captured |
 | `run_git_bytes(args, cwd=None, *, env=None, input=None, timeout=300.0, check=True) -> CompletedProcess[bytes]` | Byte execution with `git` resolved from the selected environment; Git retains responsibility for attributes, clean filters, and all configuration |
 
 `args` is a sequence of strings, without the executable name. `cwd` is a `Path`
@@ -469,7 +469,7 @@ execution retains the operating system's shell behavior; prefer native executabl
 for literal argument transport.
 
 The runners request no shell. Capturing runners keep both output streams in memory;
-the live runner inherits them and returns `None` for stdout/stderr. They do not
+the live runner inherits them by default and returns `None` for stdout/stderr. They do not
 provide pipelines, redirection, or detached processes.
 `input=None` inherits stdin; an empty string/byte string supplies an empty pipe.
 Text input is encoded once, without platform newline conversion. Binary input
@@ -494,6 +494,16 @@ failure before decoding, so invalid output cannot hide a command error. Successf
 or unchecked text output is decoded using `encoding` and `errors`. Diagnostic
 formatting does not redact arguments or output; consumers own sensitive-data
 policy. See the [Python examples](../README.md#calling-from-python).
+
+The release containing the [Cargo example runner](cargo-examples-api.md) adds
+`stdout_markers: Sequence[bytes] = ()` to `run_command_live`. Nonempty markers
+enable temporary-file stdout spooling, exact live byte forwarding and incremental
+matching with bounded memory. Stdin/stderr remain inherited; disk use scales
+with output. This changes stdout's TTY/buffering behavior. Markers must be
+nonempty bytes; invalid options raise `TypeError` before launch. Missing markers
+raise `ValueError` after exit 0, including with `check=False`; nonzero exits and
+timeouts retain precedence and their original process contract. No output is
+retained in the result or exception. See the Cargo contract for detailed limits.
 
 ## Reviewed registry publication API
 

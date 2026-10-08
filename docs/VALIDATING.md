@@ -134,6 +134,15 @@ hosted jobs passed.
 Platform models and fake executables do not substitute for native installer
 verification; see the [toolchain contract](INSTALLING.md) for prerequisites.
 
+Source and both installed distributions also run the public Cargo example suite.
+Small dependency-free crates exercise native metadata discovery of nested and
+explicit targets, one default-feature build, separate feature overrides, required
+features, custom target directories, literal arguments and CLI failures. Real
+child-process handshakes prove stdout arrives before completion with and without
+assertions; exact-byte, marker-boundary, nonzero-exit and timeout-cleanup cases
+cover the shared live runner. Cargo and a native toolchain are required on PATH.
+These generic fixtures do not replace consumer coverage or scientific assertions.
+
 The Linux test pass collects coverage of package code and repository scripts,
 including Python subprocesses, and omits tests and the development environment.
 Linux retains its Cobertura report as a seven-day Actions artifact. A
@@ -211,8 +220,9 @@ for a clean PyPI installation and setup check before closing the release issue.
 
 ## Validation under the agent Git policy
 
-[AGENTS.md](../AGENTS.md) prohibits agents from mutating Git state, including in
-disposable test repositories. Set the shared test control for agent-run validation:
+[AGENTS.md](../AGENTS.md) requires explicit task authorization for Git mutations,
+including disposable test repositories. Without that authorization, set the shared
+test control for agent-run validation:
 
 ```sh
 RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS=1 just ci
@@ -224,7 +234,9 @@ executed wheel and sdist consumer suites skip their Git-mutating fixtures too.
 Read-only Git checks still run. Tests requiring a disposable Git repository remain
 unverified by this command; report the skips with the validation result.
 
-Maintainers and hosted CI leave this setting unset and run the full suite.
+Authorized agent validation, maintainers, and hosted CI leave this setting unset
+and run the full suite. Authorization for fixture mutations does not authorize
+unrequested operations on the source repository.
 
 ## Reporting results
 

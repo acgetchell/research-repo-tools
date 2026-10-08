@@ -249,6 +249,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             public_suite = consumer / "public_api_consumer.py"
             public_suite.write_bytes((ROOT / "tests/utilities/public_api_consumer.py").read_bytes())
             run_isolated(python, [str(public_suite)], cwd=consumer, env=local_env)
+            cargo_suite = consumer / "public_cargo_examples_consumer.py"
+            cargo_suite.write_bytes((ROOT / "tests/cargo_examples/public_cargo_examples_consumer.py").read_bytes())
+            run_isolated(python, [str(cargo_suite)], cwd=consumer, env=local_env)
             actions_suite = consumer / "public_actions_consumer.py"
             actions_suite.write_bytes((ROOT / "tests/dependencies/public_actions_consumer.py").read_bytes())
             run_isolated(python, [str(actions_suite)], cwd=consumer, env=local_env)
