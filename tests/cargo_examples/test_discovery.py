@@ -176,3 +176,23 @@ def test_missing_or_malformed_build_artifacts_never_run(tmp_path, metadata, monk
     with pytest.raises(ValueError):
         run_examples(tmp_path, "examples.toml")
     execute.assert_not_called()
+
+
+@pytest.mark.parametrize("separator", ["\u0085", "\u2028", "\u2029"])
+def test_unicode_separators_inside_cargo_json_are_not_record_boundaries(tmp_path, metadata, monkeypatch, separator):
+    (tmp_path / "examples.toml").write_text("schema=1\ninclude=['flat']", encoding="utf-8", newline="\n")
+    executable = tmp_path / f"directory{separator}name" / "flat"
+    artifact = {
+        "reason": "compiler-artifact",
+        "package_id": "fixture-id",
+        "target": metadata["packages"][0]["targets"][0],
+        "executable": str(executable),
+    }
+    stdout = json.dumps(artifact, ensure_ascii=False) + '\n{"reason":"build-finished","success":true}\n'
+    assert separator in stdout and stdout.count("\n") == 2
+    monkeypatch.setattr(cargo_examples, "run_command", Mock(side_effect=[response(metadata), subprocess.CompletedProcess(["cargo"], 0, stdout, "")]))
+    execute = Mock()
+    monkeypatch.setattr(cargo_examples, "run_command_live", execute)
+    run_examples(tmp_path, "examples.toml")
+    assert execute.call_args.args[0] == executable
+    execute.assert_called_once()

@@ -8,11 +8,18 @@ import os
 import sys
 import time
 from pathlib import Path
+from typing import BinaryIO
+
+
+def open_spool(spool: Path) -> BinaryIO:
+    """Reopen a private delete-on-close spool with independent read position."""
+    flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_TEMPORARY", 0)
+    return os.fdopen(os.open(spool, flags), "rb", buffering=0)
 
 
 def forward(spool: Path, done: Path) -> None:
     """Forward exact spool bytes, stopping at the parent's published endpoint."""
-    with spool.open("rb", buffering=0) as reader, os.fdopen(os.dup(1), "wb", buffering=0) as output:
+    with open_spool(spool) as reader, os.fdopen(os.dup(1), "wb", buffering=0) as output:
         endpoint = None
         while True:
             if endpoint is None and done.exists():

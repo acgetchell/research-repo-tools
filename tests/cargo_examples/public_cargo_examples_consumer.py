@@ -92,8 +92,13 @@ class TestLiveProcess(unittest.TestCase):
                     "import subprocess,sys\nfrom research_repo_tools.process import run_command_live\n"
                     "try:\n"
                     f" r=run_command_live(sys.executable,['-I','-c','raise SystemExit(19)'],check={check!r},stdout_markers=(b'absent',))\n"
-                    " assert r.returncode == 19\n"
-                    "except subprocess.CalledProcessError as e:\n assert e.returncode == 19 and e.stdout is None\n"
+                    f" assert {not check!r}, 'checked failure returned instead of raising'\n"
+                    " assert r.returncode == 19 and r.stdout is None and r.stderr is None\n"
+                    " assert r.args[0] == sys.executable\n"
+                    "except subprocess.CalledProcessError as e:\n"
+                    f" assert {check!r}, 'unchecked failure raised'\n"
+                    " assert e.returncode == 19 and e.stdout is None and e.stderr is None\n"
+                    " assert e.cmd[0] == sys.executable\n"
                 )
                 self.assertEqual(result.returncode, 0, result.stderr)
         result = self.probe(
@@ -154,6 +159,79 @@ class TestLiveProcess(unittest.TestCase):
                 self.fail("stdout backpressure bypassed the configured deadline")
             _stdout, stderr = runner.communicate(timeout=5)
             self.assertEqual(runner.returncode, 0, stderr)
+
+    def test_pending_caller_output_cannot_block_the_deadline(self) -> None:
+        body = (
+            "import os,subprocess,sys\nfrom research_repo_tools.process import run_command_live\n"
+            "os.set_blocking(1,False)\n"
+            "try:\n"
+            " while True: os.write(1,b'x'*4096)\n"
+            "except BlockingIOError: pass\n"
+            "os.set_blocking(1,True)\n"
+            "sys.stdout.write('caller buffered bytes')\n"
+            "try:\n"
+            " run_command_live(sys.executable,['-I','-c','import time;time.sleep(30)'],timeout=1,stdout_markers=(b'absent',))\n"
+            "except subprocess.TimeoutExpired as e:\n"
+            " assert e.timeout == 1 and e.cmd[0] == sys.executable\n"
+            " os._exit(0)\n"
+            "os._exit(1)\n"
+        )
+        with subprocess.Popen([sys.executable, "-I", "-c", body], stdout=subprocess.PIPE, stderr=subprocess.PIPE) as runner:
+            try:
+                runner.wait(timeout=10)
+            except subprocess.TimeoutExpired:
+                # Draining lets the defective synchronous flush return, then
+                # its command's own timeout reaps the child before failure.
+                runner.communicate(timeout=10)
+                self.fail("caller-buffer flush bypassed the configured deadline")
+            _stdout, stderr = runner.communicate(timeout=5)
+            self.assertEqual(runner.returncode, 0, stderr)
+
+    def test_descendant_stdout_handle_preserves_result_and_eventual_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            spools = root / "spools"
+            spools.mkdir()
+            ready, release, closed = (root / name for name in ("ready", "release", "closed"))
+            descendant = (
+                "import os,pathlib,sys,time\n"
+                f"pathlib.Path({str(ready)!r}).touch()\n"
+                f"while not pathlib.Path({str(release)!r}).exists(): time.sleep(0.01)\n"
+                "os.close(1)\n"
+                f"pathlib.Path({str(closed)!r}).touch()\n"
+            )
+            for mode in ("success", "failure", "timeout"):
+                with self.subTest(mode=mode):
+                    for signal in (ready, release, closed):
+                        signal.unlink(missing_ok=True)
+                    child = (
+                        "import pathlib,subprocess,sys,time\n"
+                        f"subprocess.Popen([sys.executable,'-I','-c',{descendant!r}],stdin=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
+                        f"while not pathlib.Path({str(ready)!r}).exists(): time.sleep(0.01)\n"
+                        "print('marker',flush=True)\n" + ("time.sleep(30)\n" if mode == "timeout" else f"raise SystemExit({19 if mode == 'failure' else 0})\n")
+                    )
+                    body = (
+                        "import pathlib,subprocess,sys,tempfile,time\nfrom research_repo_tools.process import run_command_live\n"
+                        f"tempfile.tempdir={str(spools)!r}\n"
+                        "try:\n"
+                        " try:\n"
+                        f"  r=run_command_live(sys.executable,['-I','-c',{child!r}],timeout=2,stdout_markers=(b'marker',))\n"
+                        f"  assert {mode == 'success'!r} and r.returncode == 0\n"
+                        " except subprocess.CalledProcessError as e:\n"
+                        f"  assert {mode == 'failure'!r} and e.returncode == 19\n"
+                        " except subprocess.TimeoutExpired as e:\n"
+                        f"  assert {mode == 'timeout'!r} and e.timeout == 2\n"
+                        f" assert pathlib.Path({str(ready)!r}).exists()\n"
+                        f" assert not pathlib.Path({str(closed)!r}).exists()\n"
+                        "finally:\n"
+                        f" pathlib.Path({str(release)!r}).touch()\n"
+                        " deadline=time.monotonic()+8\n"
+                        f" while not pathlib.Path({str(closed)!r}).exists() and time.monotonic()<deadline: time.sleep(0.01)\n"
+                        f" assert pathlib.Path({str(closed)!r}).exists(), 'descendant did not close stdout'\n"
+                    )
+                    result = self.probe(body)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(list(spools.iterdir()), [])
 
 
 class TestNativeCargo(unittest.TestCase):
@@ -255,6 +333,29 @@ class TestNativeCargo(unittest.TestCase):
                 self.assertIn(message, result.stderr)
                 self.assertNotIn("Traceback", result.stderr)
                 self.assertFalse((self.root / "nested-ran").exists())
+
+    def test_feature_only_selection_omits_ordinary_build_and_excluded_targets(self) -> None:
+        self.write(
+            "examples.toml",
+            'schema=1\nprofile="dev"\ninclude=["diagnostics","gated"]\nexclude=["diagnostics"]\n'
+            '[examples.gated]\nfeatures=["gated"]\nno-default-features=true\nexpect=["gated"]\n',
+        )
+        original = subprocess.run
+        commands: list[list[str]] = []
+
+        def record(*args, **kwargs):
+            commands.append(args[0])
+            return original(*args, **kwargs)
+
+        with patch("subprocess.run", side_effect=record):
+            run_examples(self.root, "examples.toml")
+        builds = [command for command in commands if len(command) > 1 and command[1] == "build"]
+        self.assertEqual(len(builds), 1)
+        self.assertNotIn("--examples", builds[0])
+        self.assertEqual(builds[0][builds[0].index("--example") + 1], "gated")
+        self.assertTrue((self.root / "gated-ran").is_file())
+        for name in ("flat", "nested", "diagnostics"):
+            self.assertFalse((self.root / f"{name}-ran").exists())
 
     def test_missing_required_feature_artifact_fails_before_execution(self) -> None:
         self.write("examples.toml", 'schema=1\nprofile="dev"\ninclude=["flat","gated"]\n')

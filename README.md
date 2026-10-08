@@ -122,14 +122,14 @@ Add a thin consumer recipe and run `just examples`:
 
 ```just
 examples:
-    uv run --locked research-repo-tools validation cargo-examples tooling/examples.toml
+    uv run --locked --group dev research-repo-tools toolchain run -- research-repo-tools validation cargo-examples tooling/examples.toml
 ```
 
 Output is inherited by default. `expect` opts stdout into live byte forwarding
 and literal matching; the child's buffering may change and temporary disk use
 scales with output. Stdin and stderr remain inherited. See the
-[CLI/configuration/Python contract](docs/cargo-examples-api.md) and
-[migration from static validation plans](docs/cargo-examples-migration.md).
+[CLI/configuration/Python contract][cargo-examples-api] and
+[migration from static validation plans][cargo-examples-migration].
 
 ### Just recipes
 
@@ -1781,6 +1781,8 @@ BSD-3-Clause. See [LICENSE][license].
 [publishing]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RELEASING.md
 [contributing]: https://github.com/acgetchell/research-repo-tools/blob/main/CONTRIBUTING.md
 [api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/api.md
+[cargo-examples-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/cargo-examples-api.md
+[cargo-examples-migration]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/cargo-examples-migration.md
 [toolchain]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/INSTALLING.md
 [dependabot]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/AUTOMATING_DEPENDABOT.md
 [changelog]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/GENERATING_CHANGELOGS.md

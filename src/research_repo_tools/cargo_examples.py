@@ -149,7 +149,9 @@ def _build(root: Path, examples: tuple[CargoExample, ...], profile: str, timeout
     print(result.stderr, end="", file=sys.stderr)
     executables: dict[str, Path] = {}
     wanted = {example.name for example in examples}
-    for line in result.stdout.splitlines():
+    # Cargo emits one JSON record per LF. Unicode line separators may occur
+    # inside valid JSON strings (including native paths), so splitlines is wrong.
+    for line in result.stdout.removesuffix("\n").split("\n"):
         message = _object(_load_json(line.encode("utf-8"), "Cargo build message"), "Cargo build message")
         reason = _string(message.get("reason"), "Cargo build message reason")
         if reason != "compiler-artifact" or message.get("package_id") != first.package_id:

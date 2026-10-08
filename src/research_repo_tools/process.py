@@ -19,6 +19,8 @@ from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, cast
 
+from research_repo_tools._stdout_forwarder import open_spool
+
 type RunKwargs = dict[str, Any]
 type ExceptionFamily = tuple[type[BaseException], ...]
 
@@ -178,19 +180,27 @@ def _run_with_stdout_markers(
             raise subprocess.TimeoutExpired(argv, timeout)
         return remaining
 
-    sys.stdout.flush()
-    with tempfile.TemporaryDirectory(prefix="research-repo-tools-stdout-") as directory:
-        spool = Path(directory) / "stdout"
+    # Never flush caller-owned buffered stdout here: a full sink can block
+    # that flush outside the subprocess deadline. Inherited mode also leaves
+    # callers responsible for their own buffered output.
+    with (
+        tempfile.TemporaryDirectory(prefix="research-repo-tools-stdout-control-") as directory,
+        tempfile.NamedTemporaryFile(prefix="research-repo-tools-stdout-", buffering=0) as writer,
+    ):
+        # Keep the spool outside the control directory. Windows deletes it
+        # when the last inherited delete-sharing handle closes, which may be
+        # later than the direct child's exit; control cleanup stays immediate.
+        spool = Path(writer.name)
         done = Path(directory) / "done"
         forward_command = [sys.executable, "-I", "-S", str(Path(__file__).with_name("_stdout_forwarder.py")), str(spool), str(done)]
-        with spool.open("wb", buffering=0) as writer, subprocess.Popen(argv, cwd=cwd, env=env, stdout=writer) as child:
+        with open_spool(spool) as reader, subprocess.Popen(argv, cwd=cwd, env=env, stdout=writer) as child:
             forwarder = None
             try:
                 forwarder = subprocess.Popen(forward_command, stdin=subprocess.DEVNULL)
                 child.wait(timeout=budget())
                 # Publish a fixed endpoint: output from any still-running
                 # descendant cannot prolong forwarding past the direct child.
-                endpoint = spool.stat().st_size
+                endpoint = os.fstat(writer.fileno()).st_size
                 pending_done = done.with_suffix(".tmp")
                 pending_done.write_bytes(str(endpoint).encode("ascii"))
                 pending_done.replace(done)
@@ -204,16 +214,15 @@ def _run_with_stdout_markers(
                     remaining = set(markers)
                     overlap = max(map(len, markers)) - 1
                     tail = b""
-                    with spool.open("rb") as reader:
-                        while endpoint:
-                            budget()
-                            chunk = reader.read(min(endpoint, 65536))
-                            if not chunk:
-                                raise OSError("live stdout spool ended before its recorded endpoint")
-                            endpoint -= len(chunk)
-                            data = tail + chunk
-                            remaining.difference_update(marker for marker in tuple(remaining) if marker in data)
-                            tail = data[-overlap:] if overlap else b""
+                    while endpoint:
+                        budget()
+                        chunk = reader.read(min(endpoint, 65536))
+                        if not chunk:
+                            raise OSError("live stdout spool ended before its recorded endpoint")
+                        endpoint -= len(chunk)
+                        data = tail + chunk
+                        remaining.difference_update(marker for marker in tuple(remaining) if marker in data)
+                        tail = data[-overlap:] if overlap else b""
                     if remaining:
                         raise ValueError(f"command is missing expected stdout markers: {sorted(remaining)!r}")
             except subprocess.TimeoutExpired as error:

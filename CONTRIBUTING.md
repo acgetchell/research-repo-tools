@@ -242,10 +242,11 @@ Imports must have no network or consumer-file side effects. Changes involving
 multiple files must validate candidates before replacement and preserve originals
 on caught failures; incomplete rollback must report recovery files.
 
-Follow [AGENTS.md](AGENTS.md): agents must not run mutating Git commands in this
-or consumer repositories. Leave staging, commits, tags, pushes, and branch changes
-to the user. Tests exercise Git mutations only in disposable fixtures. Source
-repositories remain read-only. Package publication requires an explicit request;
+Follow [AGENTS.md](AGENTS.md): agents need explicit task authorization for Git
+mutations, including staging, commits, tags, pushes, and branch changes. Authorized
+tests exercise Git mutations only in disposable fixtures; without that authorization,
+use the documented fixture skip control. Validation leaves source repositories
+unchanged. Package publication requires an explicit request;
 follow [Releasing research-repo-tools](docs/RELEASING.md) for review, tagging
 and deployment approval. Keep one-time account setup in the maintainer's private task.
 

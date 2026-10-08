@@ -102,10 +102,14 @@ a stdout assertion. Progress messages go to stderr.
 Assertion mode changes the child's stdout from a terminal to a regular file, so
 programs may buffer differently. Programs needing immediate progress must flush
 stdout themselves. The spool uses disk proportional to stdout volume until the
-command ends, then is removed. Consumers own output volume and budgets. There is
+command ends, then is removed. On Windows, a descendant that retains inherited
+stdout can delay deletion until its last spool handle closes; this does not delay
+the direct child's result or replace its failure. Consumers own output volume and budgets. There is
 no guarantee of relative ordering between the separately inherited stderr and
 forwarded stdout. Matching performs no Unicode or newline normalization and
 makes no scientific judgment: marker choice and validity remain consumer policy.
+The runner does not flush output already buffered by its caller; callers own that
+buffering, as with inherited streams.
 
 Both modes fail fast on command errors, deadline expiry or missing markers. A
 command error or timeout takes precedence over absent markers. No later example

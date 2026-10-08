@@ -220,8 +220,9 @@ for a clean PyPI installation and setup check before closing the release issue.
 
 ## Validation under the agent Git policy
 
-[AGENTS.md](../AGENTS.md) prohibits agents from mutating Git state, including in
-disposable test repositories. Set the shared test control for agent-run validation:
+[AGENTS.md](../AGENTS.md) requires explicit task authorization for Git mutations,
+including disposable test repositories. Without that authorization, set the shared
+test control for agent-run validation:
 
 ```sh
 RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS=1 just ci
@@ -233,7 +234,9 @@ executed wheel and sdist consumer suites skip their Git-mutating fixtures too.
 Read-only Git checks still run. Tests requiring a disposable Git repository remain
 unverified by this command; report the skips with the validation result.
 
-Maintainers and hosted CI leave this setting unset and run the full suite.
+Authorized agent validation, maintainers, and hosted CI leave this setting unset
+and run the full suite. Authorization for fixture mutations does not authorize
+unrequested operations on the source repository.
 
 ## Reporting results
 
