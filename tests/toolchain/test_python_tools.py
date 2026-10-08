@@ -48,7 +48,7 @@ def test_adoption_retires_stale_pins_preserves_policy_and_repeats(tools_consumer
     assert not adoption.plan_python_adoption(config.load(root=root)).changed_paths
 
 
-def test_tools_only_preserve_python_selector_targets_and_runtime(tools_consumer):
+def test_tools_only_preserve_supported_selector_targets_and_enforce_runtime_minimum(tools_consumer):
     root, _ = tools_consumer
     path = root / "pyproject.toml"
     path.write_bytes(path.read_bytes().replace(b"inherit-python = true", b"inherit-python = false").replace(b"package = false", b"package = true"))
@@ -61,10 +61,10 @@ def test_tools_only_preserve_python_selector_targets_and_runtime(tools_consumer)
         patch.setattr(python_baseline, "baseline", lambda: python_baseline.PythonBaseline(">=3.14", "3.14", "0.1.7"))
         plan = adoption.plan_python_adoption(config.load(root=root))
     data = tomllib.loads(dict(plan.replacements)["pyproject.toml"].decode())
-    assert data["project"]["requires-python"] == ">=3.12"
+    assert data["project"]["requires-python"] == ">=3.12,>=3.14"
     assert data["tool"]["ruff"]["target-version"] == "py314"
     assert data["tool"]["ty"]["environment"]["python-version"] == "3.14"
-    assert ".python-version" not in dict(plan.replacements)
+    assert dict(plan.replacements)[".python-version"] == b"3.14\r\n"
     assert plan.tools.python == "3.14"
 
 

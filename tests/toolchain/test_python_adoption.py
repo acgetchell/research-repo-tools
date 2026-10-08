@@ -6,6 +6,7 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from packaging.specifiers import SpecifierSet
 
 from research_repo_tools import config, python_baseline, toolchain
 from research_repo_tools import python_adoption as adoption
@@ -82,7 +83,7 @@ def test_314_to_315_preview_preserves_sources_and_applies_complete_migration(con
     adoption.apply_python_adoption(plan)
     text = (root / "pyproject.toml").read_bytes()
     document = tomllib.loads(text.decode())
-    assert document["project"]["requires-python"] == ">=3.15"
+    assert SpecifierSet(document["project"]["requires-python"]) == SpecifierSet(">=3.14,>=3.15")
     assert document["dependency-groups"]["tooling"] == ["research-repo-tools==0.1.7"]
     assert document["dependency-groups"]["notebook"] == ["research-repo-tools[notebooks]==0.1.7"]
     assert document["tool"]["ruff"]["line-length"] == 100
@@ -103,13 +104,13 @@ def test_314_to_315_preview_preserves_sources_and_applies_complete_migration(con
 
 
 @pytest.mark.parametrize("final_table", [b"", b"\r\n[tool.uv.dependency-groups]"])
-def test_public_package_runtime_promise_is_preserved(consumer, final_table):
+def test_installable_package_inherits_minimum_with_tooling_constraints(consumer, final_table):
     root, _ = consumer
     manifest = root / "pyproject.toml"
     manifest.write_bytes(manifest.read_bytes().replace(b"package = false", b"package = true").replace(b">=3.14", b">=3.12") + final_table)
     plan = adoption.plan_python_adoption(config.load(root=root))
     document = tomllib.loads(dict(plan.replacements)["pyproject.toml"].decode())
-    assert document["project"]["requires-python"] == ">=3.12"
+    assert SpecifierSet(document["project"]["requires-python"]) == SpecifierSet(">=3.12,>=3.15")
     assert document["tool"]["uv"]["dependency-groups"] == {
         "tooling": {"requires-python": ">=3.15"},
         "notebook": {"requires-python": ">=3.15"},

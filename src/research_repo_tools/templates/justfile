@@ -158,13 +158,13 @@ semgrep-check:
 setup:
     uv run --locked --managed-python --only-group tooling research-repo-tools setup
 
-# Resolve and preview opted-in Python/tool-profile changes outside the old environment.
+# Preview mandatory Python-minimum and optional tool-profile adoption outside the old environment.
 shared-python-plan version:
-    uvx --no-config --isolated --managed-python --from "research-repo-tools==$1" research-repo-tools toolchain adopt --dry-run
+    uv run --no-config --no-project --isolated --managed-python --script python-bootstrap.py "$1" --dry-run
 
 # Apply the validated shared-package/Python/tool-profile migration and recreate the environment.
 shared-python-update version:
-    uvx --no-config --isolated --managed-python --from "research-repo-tools==$1" research-repo-tools toolchain adopt --apply
+    uv run --no-config --no-project --isolated --managed-python --script python-bootstrap.py "$1" --apply
 
 # The environment must already exist; checking never syncs or downloads Python.
 tools-check:

@@ -7,6 +7,45 @@ scanner path, reuses file selection for complete Python coverage, and retains
 consumer scientific annotations, precise fixture exceptions, and gate wiring.
 Publication does not complete consumer adoption.
 
+## Mandatory Python support inheritance
+
+The v0.1.8 capability supersedes the earlier policy that preserved an installable
+consumer's lower application minimum while only its development settings advanced.
+Every managed consumer's `project.requires-python` must enforce at least the exact
+installed release's published minimum. This guards required language features even
+when the application is installed without development dependencies. The shared
+support minimum remains Python 3.14; this feature does not increase it.
+`inherit-python = false`, an absent setting, and tool-profile opt-out cannot bypass
+ordinary validation. Development selection and minimum support remain distinct.
+
+After an exact release containing the implementation is published:
+
+1. Review the release's `Requires-Python` compatibility implications, consumer
+   upper bounds/exclusions, and any stricter minimum. Keep scientific dependencies,
+   native build behavior, lint rules, notebook content, and artifact contracts local.
+2. Copy the published `justfile` and `python-bootstrap.py` templates together,
+   then use `just shared-python-plan VERSION`. The standard-library-only helper
+   runs on older uv-supported Python and reads the exact release's PyPI JSON
+   `Requires-Python` to request a compatible interpreter for isolated uvx startup.
+   The installed target package then owns the support minimum. The old project's
+   interpreter, environment and lock do not control startup. Review the candidate diff.
+3. Use `just shared-python-update VERSION` to apply the validated plan. Adoption
+   reconciles application metadata, direct package pins/extras, tooling constraints,
+   `.python-version`, `uv.lock`, the environment, and the notebook kernel. It
+   preserves stricter bounds and unrelated restrictions, and rejects conflicts.
+4. Run ordinary Python/toolchain checks and the consumer's canonical CI. Build
+   its wheel and sdist, inspect `Requires-Python`, and test independent installation on
+   supported and unsupported interpreters before reviewing a consumer release.
+
+Dry runs and checks leave source files, environments and Git state untouched.
+Checks do not select a newer shared release or repair metadata. Apply restores
+prior declarations and the environment on caught failures; recovery errors name
+retained backups. See [adoption and recovery](../README.md#shared-python-adoption).
+Merge, shared-package publication, and consumer rollout are separate steps:
+[#85](https://github.com/acgetchell/research-repo-tools/issues/85) implements the
+guard; [#69](https://github.com/acgetchell/research-repo-tools/issues/69) and the
+consumer issues track upgrades after an exact PyPI publication.
+
 The first version provides changelog generation, normalization, archiving, release
 notes and local tags; declared toolchain setup; release metadata synchronization; dependency pin maintenance;
 Semgrep fixture validation; Markdown line checks; and coverage summaries.

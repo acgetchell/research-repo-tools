@@ -144,7 +144,7 @@ arguments in lexicographic order.
 | `just security-secrets [ARGS...]` | Scan full reachable history and current tracked/nonignored files |
 | `just semgrep-check` | Validate the consumer's Semgrep rules and fixtures |
 | `just setup` | Install and verify declared tools, then synchronize the Python environment |
-| `just shared-python-plan VERSION` | Preview an opt-in shared-package/Python/tool-profile migration outside the old environment |
+| `just shared-python-plan VERSION` | Preview mandatory Python-minimum and optional tool-profile adoption outside the old environment |
 | `just shared-python-update VERSION` | Apply the migration and recreate the locked environment and notebook kernel |
 | `just tools-check` | Check installed tools and versions without installing them |
 | `just tools-export` | Verify tools and append their environment to `GITHUB_ENV` |
@@ -376,36 +376,59 @@ summaries; both policies retain the common grouping and full breaking descriptio
 
 ### Shared Python adoption
 
-Opt in once in the consumer manifest:
+Every managed consumer automatically inherits the exact installed release's
+published `Requires-Python` minimum, currently Python 3.14. This mandatory
+language-feature guard applies to installable applications and dependency-only
+projects. It does not raise the current baseline. No opt-in is required, and
+development inheritance controls cannot disable the guard.
+
+Optionally mirror the release's selected development interpreter as well:
 
 ```toml
 [tool.research-repo-tools.toolchain]
 inherit-python = true
 ```
 
-The installed package owns its runtime requirement from distribution metadata
-and its selected development minor (currently Python 3.14). Exact package pins,
-`.python-version`, and dependency-only `project.requires-python` are checked
-mirrors. Public Python packages retain their own runtime compatibility; only
-the groups containing the shared tool get uv Python constraints. Ruff and ty
+The installed release's support minimum and selected development minor are
+separate authorities. Adoption intersects `project.requires-python` with the
+published minimum, preserving stricter lower bounds, upper bounds, and exclusions.
+Incompatible ranges fail for review before resolution or publication. Installable
+consumers also retain and reconcile uv constraints on the shared tooling groups.
+With `inherit-python = true`, `.python-version` mirrors the selected development
+minor. Otherwise a compatible local selector remains; an obsolete or missing
+selector advances to the shared selection. A stricter range excluding that
+selection needs a compatible local selector or an explicit compatibility decision.
+Ruff and ty
 infer targets from project metadata. Consumer lint rules, fixture exceptions,
 notebook policy, and deliberate lower targets remain consumer decisions.
 
 After the target version is published, use the packaged standalone bootstrap:
 
 ```sh
-just shared-python-plan 0.1.7
-just shared-python-update 0.1.7
+research-repo-tools templates python-bootstrap.py --output python-bootstrap.py
+# Merge the matching published Justfile recipes into the consumer's Justfile.
+just shared-python-plan 0.1.8
+just shared-python-update 0.1.8
 just python-check
 ```
 
 These recipes run the exact target package outside the old project environment,
-so an obsolete selector, lock or environment cannot prevent startup. Preview
+using the packaged standard-library-only `python-bootstrap.py` beside the Justfile.
+Copy both templates when installing this contract. The helper runs on older
+uv-supported Python, reads the exact target release's PyPI `Requires-Python`, then
+requests a compatible managed interpreter for the isolated target package. The
+executing package's installed metadata remains the support authority. An obsolete
+selector, lock, environment or Python on PATH cannot control startup. Preview
 resolves and installs a temporary candidate; it may download Python/packages
 and populate caches, but leaves consumer files and `.venv` unchanged. Apply
-updates all direct shared-package pins (including extras), Python mirrors,
+updates all direct shared-package pins (including extras), application metadata,
 `uv.lock`, the environment, and the configured notebook group's project kernel.
 Resolution and candidate installation must succeed before publication.
+
+For offline bootstrap or local wheel/sdist evaluation, the helper accepts
+`--metadata-file PATH` containing saved exact-release PyPI JSON. Supply the local
+artifact registry through uv's `UV_FIND_LINKS`; target name/version are verified,
+and the installed distribution still enforces its own metadata before adoption.
 
 A caught failure restores original files and the prior environment. Recovery
 errors identify the retained backup; do not delete it before recovering. Close
@@ -413,7 +436,17 @@ processes using `.venv` on Windows before applying. This is not a crash-atomic
 or concurrent-writer transaction. Include every required source in the tracked
 or nonignored inventory; external local path dependencies need a separately
 reviewed migration. `just python-check` detects mirror drift without repairing
-it or downloading an interpreter. Routine checks do not advance versions.
+it or downloading an interpreter. Ordinary Python/toolchain checks and setup
+reject insufficient application metadata even with `inherit-python = false`
+or no setting. Routine checks do not advance versions or rewrite declarations.
+
+The metadata change is a public compatibility change: rebuild and validate the
+consumer wheel and sdist after adoption, then publish those artifacts through
+the consumer's reviewed release workflow. Their `Requires-Python` rejects older
+interpreters before execution, including installation without tooling groups or
+research-repo-tools. Run the ordinary guard in CI before consumer builds.
+An implementation merge does not publish this capability; consumer upgrades
+require an exact PyPI release containing it. See the [migration guide][migration].
 
 ### Shared Python tool versions
 
@@ -449,10 +482,11 @@ Public runtime or optional dependencies on these tools require a deliberate
 consumer decision: adoption does not rewrite them. Other dependencies, native
 lint/type settings, precise fixture exceptions, and notebook packages stay local.
 
-Tool inheritance alone retains `.python-version` and native Python targets.
-Real Python packages retain `project.requires-python`; uv constrains the groups
-containing the shared package to its runtime requirement. An incompatible selected
-interpreter or runtime range fails explicitly. Both forms of inheritance use the
+Tool inheritance retains compatible `.python-version` and native Python targets;
+the mandatory application minimum still applies. uv constrains the groups
+containing the shared package to its runtime requirement while retaining local
+restrictions. An incompatible selected interpreter or runtime range fails
+explicitly. Both forms of inheritance use the
 same candidate verification and recoverable apply process described above.
 
 `just tools-python-check` checks declarations, locked versions, and the actual

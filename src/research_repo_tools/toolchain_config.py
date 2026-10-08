@@ -108,8 +108,8 @@ def load(settings: Config) -> Toolchain:
     if tuple(map(int, uv[2:].split("."))) < (0, 12, 10):
         raise ValueError("toolchain setup requires uv 0.12.10 or newer")
     python = (root / ".python-version").read_text(encoding="utf-8").strip()
-    if not re.fullmatch(r"3\.(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*))?", python) or int(python.split(".")[1]) < 14:
-        raise ValueError(".python-version must select Python 3.14 or newer as 3.MINOR[.PATCH]")
+    if not re.fullmatch(r"3\.(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*))?", python):
+        raise ValueError(".python-version must select Python as 3.MINOR[.PATCH]")
     project = document.get("project", {})
     if not isinstance(project, dict):
         raise ValueError("project must be a table")
@@ -124,7 +124,10 @@ def load(settings: Config) -> Toolchain:
     else:
         compatible = python in constraints
     if not compatible:
-        raise ValueError(".python-version must satisfy project.requires-python")
+        raise ValueError(".python-version must satisfy project.requires-python; run the target pinned package's toolchain adopt --dry-run, then --apply")
+    from research_repo_tools.python_baseline import check_minimum
+
+    check_minimum(root, document)
     rust = None
     rust_file = root / "rust-toolchain.toml"
     if rust_file.exists():

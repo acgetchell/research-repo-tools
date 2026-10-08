@@ -15,6 +15,7 @@ from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 
 from research_repo_tools import config, files, python_baseline, python_tools, toolchain, toolchain_config
+from research_repo_tools.config import _table
 from research_repo_tools.process import get_safe_executable, run_safe_command
 from research_repo_tools.selection import select_files
 from research_repo_tools.toml_source import key_line, replace_array_strings, set_value
@@ -72,7 +73,10 @@ def _manifest(text: str, authority: python_baseline.PythonBaseline, old_selector
     if inherit_tools:
         text = python_tools.adopt_manifest(text)
     document = tomllib.loads(text)
-    if inherit_python and (problems := python_baseline.target_problems(document, authority.selected)):
+    project = _table(document.get("project", {}), "project")
+    requirement = python_baseline.reconcile_requirement(project.get("requires-python"), authority)
+    selected = _development_selector(old_selector, requirement, authority, inherit_python=inherit_python)
+    if problems := python_baseline.target_problems(document, selected):
         raise ValueError("; ".join(problems))
     groups = python_baseline.package_groups(document)
     for group in groups:
@@ -82,21 +86,28 @@ def _manifest(text: str, authority: python_baseline.PythonBaseline, old_selector
                 extras = "[" + ",".join(sorted(item.extras)) + "]" if item.extras else ""
                 updates[raw] = f"{item.name}{extras}=={authority.package_version}"
         text = replace_array_strings(text, "dependency-groups", group, updates)
-    uv = document.get("tool", {}).get("uv", {})
-    if uv.get("package") is False and inherit_python:
-        text = set_value(text, "project", "requires-python", json.dumps(authority.requirement))
-    else:
-        requirement = document.get("project", {}).get("requires-python")
-        selected = authority.selected if inherit_python else old_selector
-        selector = f"=={selected}.*" if selected.count(".") == 1 else f"=={selected}"
-        if not isinstance(requirement, str) or (SpecifierSet(requirement) & SpecifierSet(selector) & SpecifierSet(authority.requirement)).is_unsatisfiable():
-            raise ValueError("public package runtime requirement excludes shared development Python; change compatibility deliberately before adoption")
-        for group in groups:
-            existing = uv.get("dependency-groups", {}).get(group, {})
-            if not isinstance(existing, dict) or set(existing) - {"requires-python"}:
-                raise ValueError(f"unsupported uv dependency-group constraints for {group}")
-            text = set_value(text, "tool.uv.dependency-groups", group, "{ requires-python = " + json.dumps(authority.requirement) + " }")
-    if not inherit_python:
+    uv = _table(_table(document.get("tool", {}), "tool").get("uv", {}), "tool.uv")
+    group_constraints = _table(uv.get("dependency-groups", {}), "tool.uv.dependency-groups")
+    text = set_value(text, "project", "requires-python", json.dumps(requirement))
+    for group in groups:
+        existing = group_constraints.get(group, {})
+        if not isinstance(existing, dict) or set(existing) - {"requires-python"}:
+            raise ValueError(f"unsupported uv dependency-group constraints for {group}")
+        local = existing.get("requires-python", "")
+        if not isinstance(local, str):
+            raise ValueError(f"tool.uv.dependency-groups.{group}.requires-python must be a version specifier string")
+        constraint = SpecifierSet(local) & SpecifierSet(authority.requirement)
+        selector = _selector_requirement(selected)
+        if (constraint & SpecifierSet(requirement) & SpecifierSet(selector)).is_unsatisfiable():
+            raise ValueError(f"tool.uv.dependency-groups.{group}.requires-python conflicts with shared Python; review compatibility before adoption")
+        if group in group_constraints:
+            try:
+                key_line(text, "tool.uv.dependency-groups", group)
+            except ValueError:
+                text = set_value(text, f"tool.uv.dependency-groups.{group}", "requires-python", json.dumps(str(constraint)))
+                continue
+        text = set_value(text, "tool.uv.dependency-groups", group, "{ requires-python = " + json.dumps(str(constraint)) + " }")
+    if not inherit_python and selected == old_selector:
         return text
     # Retire redundant target mirrors while preserving intentional lower targets
     # and all rule/fixture exceptions. Ruff and ty infer from project metadata.
@@ -112,14 +123,27 @@ def _manifest(text: str, authority: python_baseline.PythonBaseline, old_selector
     return text
 
 
+def _selector_requirement(selected: str) -> str:
+    return f"=={selected}.*" if selected.count(".") == 1 else f"=={selected}"
+
+
+def _development_selector(old: str, requirement: str, authority: python_baseline.PythonBaseline, *, inherit_python: bool) -> str:
+    constraints = SpecifierSet(requirement) & SpecifierSet(authority.requirement)
+    if not inherit_python and old and not (constraints & SpecifierSet(_selector_requirement(old))).is_unsatisfiable():
+        return old
+    if (constraints & SpecifierSet(_selector_requirement(authority.selected))).is_unsatisfiable():
+        raise ValueError(
+            "project.requires-python excludes shared development Python; retain a compatible local .python-version or review compatibility before adoption"
+        )
+    return authority.selected
+
+
 def plan_python_adoption(settings: config.Config) -> PythonAdoptionPlan:
     """Resolve and validate a private candidate; leave source files/environment intact.
 
     uv may download interpreters and populate caches. The exact executing package
     owns the target; there is no lookup of a newer shared release.
     """
-    if not (settings.toolchain.inherit_python or settings.toolchain.inherit_python_tools):
-        raise ValueError("opt in with tool.research-repo-tools.toolchain.inherit-python or inherit-python-tools = true before adoption")
     root = settings.root
     authority = python_baseline.baseline()
     manifest = root / "pyproject.toml"
@@ -147,8 +171,8 @@ def plan_python_adoption(settings: config.Config) -> PythonAdoptionPlan:
     originals = tuple((name, (root / name).read_bytes() if (root / name).exists() else None) for name in sorted(set(tracked) | {".python-version", "uv.lock"}))
     newline = b"\r\n" if selector.exists() and b"\r\n" in selector.read_bytes() else b"\n"
     replacements = {"pyproject.toml": text.encode("utf-8")}
-    if settings.toolchain.inherit_python:
-        replacements[".python-version"] = authority.selected.encode("ascii") + newline
+    selected = _development_selector(old_selector, document["project"]["requires-python"], authority, inherit_python=settings.toolchain.inherit_python)
+    replacements[".python-version"] = selected.encode("ascii") + newline
     uv = get_safe_executable("uv")
     with tempfile.TemporaryDirectory(prefix="research-python-adoption-") as directory:
         candidate = Path(directory).resolve() / root.name

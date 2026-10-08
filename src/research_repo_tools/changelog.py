@@ -30,6 +30,7 @@ TEMPLATES = (
     "profiling.toml",
     "publish-crates.yml",
     "publishing.toml",
+    "python-bootstrap.py",
     "python-validation.toml",
     "research-repo-tools.toml",
     "rumdl.toml",

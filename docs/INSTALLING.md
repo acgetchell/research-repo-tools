@@ -9,18 +9,28 @@ existing consumer repositories is separate work after publication.
 
 ## Ownership and declarations
 
-Consumers own their version declarations. The installed package owns how to
-install and verify them. There are no repository-name profiles.
-With opt-in `toolchain.inherit-python`, the installed package also owns the
-shared Python baseline; see [consumer adoption](../README.md#shared-python-adoption).
+Consumers own tool declarations; the exact installed shared release owns the
+mandatory Python support minimum through its published `Requires-Python` metadata.
+This language-feature guard applies to application packaging and dependency-only
+projects without an enablement switch. `toolchain.inherit-python` controls only
+development-selector mirroring and cannot bypass the minimum. See
+[consumer adoption](../README.md#shared-python-adoption). There are no repository-name profiles.
 The independent `toolchain.inherit-python-tools` opt-in selects the installed
 `python-tools` extra as the authority for Ruff, ty, and pytest. See
 [tool-profile adoption](../README.md#shared-python-tool-versions).
 
+Install the published `python-bootstrap.py` template beside the matching Justfile
+adoption recipes. This standard-library-only helper starts under older Python,
+reads the exact requested release's PyPI metadata, and selects a compatible managed
+interpreter before importing the target package. The installed target distribution
+then owns the mandatory floor. See [standalone adoption](../README.md#shared-python-adoption)
+for offline/local-artifact metadata and dry-run/apply behavior.
+
 | Input | Authority |
 | --- | --- |
 | `[tool.uv].required-version` | Exact uv version, `==X.Y.Z` |
-| `.python-version` | Managed Python selection, `3.MINOR` or `3.MINOR.PATCH`, at least 3.14 |
+| `.python-version` | Managed development selection, `3.MINOR` or `3.MINOR.PATCH`, compatible with the published minimum and consumer constraints |
+| `[project].requires-python` | Application support range intersected with the installed release's minimum; stricter bounds and exclusions retained |
 | `pyproject.toml` and `uv.lock` | Python dependencies and the pinned shared package |
 | `rust-toolchain.toml` | Stable exact Rust release, components, targets, and minimal/default profile |
 | `[tool.research-repo-tools.toolchain.cargo]` | Exact Cargo tool package versions |

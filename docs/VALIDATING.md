@@ -89,6 +89,14 @@ its public checks with exact native versions, modeled drift, and real adoption
 candidate resolution. These checks preserve public runtime constraints and
 consumer sources. Base installs omit Ruff, ty, and pytest.
 
+Both base installations also adopt a synthetic installable application through
+the packaged bootstrap under native Python 3.13. They check mandatory metadata
+enforcement without development opt-ins, unchanged dry runs and Git state,
+repeat-apply environment stability, and preserved upper bounds/exclusions.
+The resulting application wheel and sdist reject old Python and install on a
+supported interpreter without the shared tooling package as a runtime dependency.
+Focused fixtures model future minimum changes, stricter bounds, and rollback.
+
 Both base installations exercise the public Just inspection API using the
 shipped Just version, native metadata, argument boundaries, evaluation failures,
 and unchanged recipe files. With notebook extras, they also exercise public
