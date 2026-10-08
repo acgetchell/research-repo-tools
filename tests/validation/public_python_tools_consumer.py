@@ -230,7 +230,7 @@ class TestPythonTools(unittest.TestCase):
         self.assertTrue((self.root / ".venv/pyvenv.cfg").is_file())
         after = {name: (self.root / name).read_bytes() for name in ("pyproject.toml", ".python-version", "uv.lock")}
         self.assertNotIn(b"ruff==0.1.0", after["pyproject.toml"])
-        self.assertIn(b'requires-python=">=3.12"', after["pyproject.toml"])
+        self.assertIn(b'requires-python=">=3.12,>=3.14"', after["pyproject.toml"])
         self.assertEqual(after[".python-version"], b"3.14\n")
         with patch("subprocess.run", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main([*command, "--apply"]), 0)

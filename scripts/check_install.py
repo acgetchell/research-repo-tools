@@ -350,6 +350,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
                 "UV_PYTHON_INSTALL_DIR": str(consumer / "profile python"),
             }
             run_isolated(recipe_python, [str(tools_suite)], cwd=recipe_consumer, env=profile_env)
+            minimum_suite = consumer / "public_python_minimum_consumer.py"
+            minimum_suite.write_bytes((ROOT / "tests/toolchain/public_python_minimum_consumer.py").read_bytes())
+            run_isolated(python, [str(minimum_suite)], cwd=consumer, env=profile_env)
             notebook = recipe_consumer / "notebooks" / "smoke.ipynb"
             notebook.parent.mkdir()
             notebook.write_text(

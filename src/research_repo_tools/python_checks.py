@@ -18,6 +18,7 @@ def run(settings: config.Config, action: str, *, timeout: float = 300) -> int:
         raise ValueError(f"unknown Python action: {action}")
     if not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("Python validator timeout must be positive and finite")
+    python_baseline.check_minimum(settings.root)
     if settings.toolchain.inherit_python:
         python_baseline.check(settings.root)
     names = select_files(settings.root, include=("*.py", "*.pyi"))

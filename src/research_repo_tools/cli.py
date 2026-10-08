@@ -178,7 +178,7 @@ def parser() -> argparse.ArgumentParser:
     templates.add_argument("--dependency-bodies", choices=("concise", "preserve"), default="concise", help="body policy for the shared cliff.toml")
     templates.add_argument("--output", type=Path, help="create a new file; existing files are never overwritten")
     toolchain = groups.add_parser("toolchain", help="check, install, and select declared development tools").add_subparsers(dest="action", required=True)
-    adoption = toolchain.add_parser("adopt", help="migrate an opted-in consumer to the exact executing shared package")
+    adoption = toolchain.add_parser("adopt", help="inherit the minimum from the exact executing shared package and reconcile consumer settings")
     mode = adoption.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--apply", action="store_true")
@@ -189,7 +189,7 @@ def parser() -> argparse.ArgumentParser:
     mode.add_argument("--dry-run", action="store_true", help="preview only (the default)")
     clean.add_argument("--keep-root", type=Path, action="append", default=[], help="also retain this consumer's pins (repeatable)")
     toolchain.add_parser("export", help="verify tools and export their environment to GITHUB_ENV").add_argument("--file", type=Path)
-    toolchain.add_parser("python-check", help="check opt-in shared Python mirrors without modifying the environment")
+    toolchain.add_parser("python-check", help="check mandatory shared Python support and optional development mirrors without mutation")
     toolchain.add_parser("python-tools-check", help="check opt-in Python tool declarations, lock, and executable versions without changes")
     toolchain.add_parser("run", help="run a command with verified managed tools; never installs").add_argument("command", nargs=argparse.REMAINDER)
     toolchain.add_parser("sync", help="install and verify declared versions").add_argument("--dry-run", action="store_true")
@@ -315,6 +315,9 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         from research_repo_tools import toolchain, toolchain_config
 
         if args.action == "python-check":
+            from research_repo_tools.python_baseline import check_minimum
+
+            check_minimum(settings.root)
             if settings.toolchain.inherit_python:
                 from research_repo_tools.python_baseline import check
 
