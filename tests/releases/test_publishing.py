@@ -298,7 +298,16 @@ def test_common_release_recipes_and_guides_share_argument_contracts(tmp_path):
     def commands(text):
         return [line for line in text.splitlines() if line.startswith("just ")]
 
-    assert commands((root / "docs/RELEASING.md").read_text(encoding="utf-8")) == commands(changelog.template("RELEASING.md"))
+    common = commands(changelog.template("RELEASING.md"))
+    shared_recipes = {command.split()[1] for command in common}
+    documented = commands((root / "docs/RELEASING.md").read_text(encoding="utf-8"))
+    shared = [command for command in documented if command.split()[1] in shared_recipes]
+    # Package-specific setup and checks may extend the guide, but shared recipe
+    # arguments and workflow order must agree. Read-only notes may be repeated.
+    assert set(shared) == set(common)
+    assert [command for command in shared if not command.startswith("just release-notes ")] == [
+        command for command in common if not command.startswith("just release-notes ")
+    ]
 
 
 def test_cli_release_gate_reads_current_event_and_rejects_wrong_tag(consumer, monkeypatch):
