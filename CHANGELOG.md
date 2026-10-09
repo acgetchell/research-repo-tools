@@ -5,6 +5,263 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.8] - 2026-10-09
+
+### ⚠️ Breaking Changes
+
+- replace tag and tag-release with release-tag, and
+  tag-preview with release-tag-preview. Remove tag-force and require TAG
+  for release-check. The untagged release check CLI remains available.
+- Semgrep scan owns its complete output directory and defaults
+  to aggregate semgrep.json/semgrep.sarif reports. Use a dedicated output
+  directory. Numbered reports are now emitted per batch.
+- managed consumers must enforce the installed release's
+  Python minimum in application metadata regardless of inheritance settings.
+  The current Python 3.14 baseline remains unchanged.
+
+### Merged Pull Requests
+
+- Bump hatchling [#68](https://github.com/acgetchell/research-repo-tools/pull/68)
+- Bump the github-actions group with 4 updates [#67](https://github.com/acgetchell/research-repo-tools/pull/67)
+
+### Added
+
+- Centralize validation and shared tool versions [`b8da6c1`](https://github.com/acgetchell/research-repo-tools/commit/b8da6c1773a6bcc9ded1150d6d15c4fdb3bf65ea)
+
+  - Add check, fix, and typecheck commands for complete Python inventories
+    while preserving native policies and read-only checks.
+  - Offer opt-in Ruff, ty, and pytest versions through the installed
+    release's python-tools extra.
+  - Preview and apply tool adoption with drift checks, rollback, and
+    preserved consumer runtime support and configuration.
+  - Retain inherited versions during dependency updates and provide thin
+    Just recipes with adoption and opt-out guidance.
+- Add notebook fixtures and Just inspection APIs [`030f121`](https://github.com/acgetchell/research-repo-tools/commit/030f121d7179973033cf2adf4bd916b2e05600c7)
+
+  - Run notebook integrations in isolated projects with the caller's locked
+    interpreter, preserving manifests and avoiding native toolchain setup.
+  - Expose pinned Just metadata and dry-run results for consumer recipe policy.
+  - Reject junction aliases in evidence, measurement, publication, release,
+    and worktree paths, and reject nonportable release filenames.
+  - Refresh uv and notebook development dependencies and document the public
+    integration contracts and portable path boundaries.
+- Add complete runs and host profiling [`3cd0d52`](https://github.com/acgetchell/research-repo-tools/commit/3cd0d520e7c26a9c2f26f8327bc5ecb37b3c8d53)
+
+  - Apply a captured common harness to both revisions with independent gates,
+    complete Criterion samples, and explicit phase provenance.
+  - Retain immutable runs with validated latest selection and named reference
+    series for offline reports.
+  - Capture typed host observations and configured native Rust/Cargo profiling
+    declarations while preserving unknown values and original TOML.
+  - Print validated OSV, Gitleaks, and Semgrep finding summaries without
+    exposing sensitive scanner output.
+- [**breaking**] Add reviewed publishing and shared release recipes
+  [`9c9be75`](https://github.com/acgetchell/research-repo-tools/commit/9c9be752aa544ba44dcdbac3caec3ee97c4b2de3)
+
+  - Gate stable GitHub Releases on reviewed source, protected-branch ancestry,
+    successful exact-commit checks, and required assets.
+  - Ship a consumer-owned crates.io OIDC workflow using a temporary token
+    with native Cargo packaging and bounded publication verification.
+  - Share release recipes and ordered release instructions across registries,
+    with account-specific setup kept in a private maintainer task.
+  - Preserve authored dependency bodies and links through the shared
+    changelog policy while retaining common grouping and breaking notes.
+  - Keep the declared changelog generator consistent across setup and CI.
+  - Honor explicit task-specific authorization for Git operations while
+    retaining a read-only default.
+- Add Actions maintenance and portable tool updates
+  [`63b94f7`](https://github.com/acgetchell/research-repo-tools/commit/63b94f74f5fef4315a17d57ba955dd38a7fc97d0)
+
+  - Add opt-in Actions updates with immutable commit pins, version reports,
+    and compatibility checks for retained tool wrapper actions.
+  - Check steps and reusable workflows against consumer-owned GitHub
+    selected-actions policies with precise source diagnostics.
+  - Support verified uv-tool and Homebrew owners and managed dprint/rumdl
+    binaries while preserving authoritative pins and installation constraints.
+  - Keep tool updates separate from shell setup, protect staged file
+    publication from concurrent edits, and run cheap checks before workflows.
+- [**breaking**] Add SARIF policies and batched Semgrep reports
+  [`0fb811e`](https://github.com/acgetchell/research-repo-tools/commit/0fb811e1a7604878a78f8d2dda49da591edc3796)
+
+  Add strict driver and namespace selection for SARIF, preserving metadata
+  and correcting indexed rule references with distinct upload categories.
+  Publish complete SARIF and figure generations through a shared directory
+  transaction with rollback and retained recovery data.
+
+  Scan bounded Semgrep batches once for paired JSON/SARIF reports. Expose
+  consumer suppression, jobs, target timeout, category and layout policies;
+  verify exact coverage and active findings agreement before publication.
+  Document the supported interfaces and downstream implementation deletion map.
+- Add ID policies and opt-in launch/reset workflows
+  [`f1fdb1b`](https://github.com/acgetchell/research-repo-tools/commit/f1fdb1baaa27f8acb9b59c399ecf1a628664a53b)
+
+  Support configurable full-match cell-ID policies while preserving the
+  default nbformat contract and existing source IDs.
+
+  Launch locked JupyterLab with explicit browser behavior and private
+  session caches. Preview tracked-notebook restoration from the index or
+  a selected revision, applying only declared cleanup after opt-in and
+  path validation.
+- [**breaking**] Enforce the installed Python support minimum
+  [`5ed34f1`](https://github.com/acgetchell/research-repo-tools/commit/5ed34f1a0cd72183caef697a21325fe0183dec73)
+
+  Reconcile application Requires-Python alongside exact shared-package pins,
+  extras, tooling constraints and development settings during adoption.
+  Preserve stricter consumer ranges and reject incompatible constraints.
+
+  Reject stale packaging metadata in ordinary Python, toolchain and setup
+  gates without mutation or an opt-out. Bootstrap an exact target release
+  under older consumer interpreters using its published support metadata.
+- Add reproducible papers and raw line limits [`1ffd3c7`](https://github.com/acgetchell/research-repo-tools/commit/1ffd3c75a6dc67fe9ea3496e3fc1cb33fa0935d5)
+
+  Expose optional paper date and PDF checks with deterministic Tectonic metadata normalization, consumer-declared policy, and validated artifact publication.
+  Discover native build environments without provisioning host packages.
+
+  Add configurable all-line UTF-8 validation over shared Git selection while preserving the existing Markdown table exemption.
+- Run Cargo examples with discovery and live output
+  [`bd0fd33`](https://github.com/acgetchell/research-repo-tools/commit/bd0fd332a06b24c20bac4b63192e2dd4483aee8b)
+
+  Discover binary examples through Cargo metadata and execute native build
+  artifacts with consumer-owned selection, features, deadlines, and assertions.
+  Build ordinary examples once and run each feature override immediately after
+  its build so shared binary paths cannot inherit a later feature policy.
+
+  Add optional exact stdout assertions to live execution while preserving
+  nonzero exits and deadlines, including when the output sink is blocked.
+  Document the public contracts and migration from static validation plans.
+
+### Changed
+
+- Name oversized payload cases explicitly [`3ef6c34`](https://github.com/acgetchell/research-repo-tools/commit/3ef6c34d7bad189baaabe816ade9878bd7310841)
+
+  - Use short case names so pytest can set its current-test environment
+    variable on Windows, including for the one-megabyte response fixture.
+- Cover installed group-constraint diagnostics [`6516808`](https://github.com/acgetchell/research-repo-tools/commit/65168086de417a467285ee675c292c98ebcc1606)
+
+### Documentation
+
+- Centralize Windows development guidance [`759f8a3`](https://github.com/acgetchell/research-repo-tools/commit/759f8a3749e6b0ddb29b413f718b54eead217df9)
+
+  - Require agents to read the Windows guidance in CONTRIBUTING.md before
+    changing paths, subprocesses, or package checks.
+- Clarify capability test directory paths [`a639d2e`](https://github.com/acgetchell/research-repo-tools/commit/a639d2e29bb6908849a07197845dff11f01f21f9)
+
+  State that the capability directory names in the contributor guide are
+  relative to tests/.
+
+### Fixed
+
+- Verify tool reachability and isolate install checks
+  [`4f01dcd`](https://github.com/acgetchell/research-repo-tools/commit/4f01dcdcebe5a68076e83788ad84eb59388d551d)
+
+  - Reject inherited tool locks whose matching Ruff, ty, or pytest records
+    are unreachable from the selected dev dependency graph.
+  - Keep offline package-update fixtures self-contained by resolving against
+    a wheel built from the tested artifact and using a fresh test cache.
+- Reject linked samples and extra Just recipes [`06c8b6f`](https://github.com/acgetchell/research-repo-tools/commit/06c8b6fb05672e745e27fe6c3f607e5aac0f123f)
+
+  - Reject symlink and junction Criterion roots before reading estimates.
+  - Limit Just dry runs to one recipe invocation while preserving dependency
+    previews.
+  - Correct Windows package checks to preserve temporary cleanup and compare
+    native Just invocation paths.
+- Preserve UTF-8 output in isolated package checks
+  [`a89da02`](https://github.com/acgetchell/research-repo-tools/commit/a89da02fd91acd79229d2db5ee71aa9812fa4e9c)
+
+  - Select UTF-8 explicitly for isolated Python consumers while retaining
+    startup isolation and the import checks' no-bytecode policy.
+  - Document Windows encoding, native path, and fixture cleanup rules for
+    contributors and agents.
+- Keep kernel history in memory [`825fa17`](https://github.com/acgetchell/research-repo-tools/commit/825fa17bada66ece0b199be06de58fa3a01c7275)
+
+  Apply in-memory IPython history explicitly for the project kernel so
+  Windows can remove temporary execution files after the kernel exits.
+- Isolate managed-release lookup credentials [`11e29c7`](https://github.com/acgetchell/research-repo-tools/commit/11e29c7b543c44d6c6b4474405b5443b2d00c2d0)
+
+  - Add toolchain sync-binaries to install exact release pins without
+    package synchronization or dependency builds.
+  - Withhold GITHUB_TOKEN and GH_TOKEN from setup commands and version
+    probes while preserving credentials for explicit toolchain run commands.
+  - Redact lookup credentials in diagnostics and scope GitHub Actions
+    authentication to installed-package release operations.
+- Preserve SARIF references and deduplicate tests [`77abfdc`](https://github.com/acgetchell/research-repo-tools/commit/77abfdcbda786b3255bcf47b367542fd428f2343)
+
+  Keep GitHub upload categories distinct and reindex SARIF rule metadata,
+  artifact locations, and invocation provenance when reports are combined.
+  Reject output aliases that could replace selected source trees, and
+  preserve read-only generated file permissions during publication.
+
+  Consolidate 23 redundant test definitions across the repository while
+  retaining distinct failure cases and installed-package regressions.
+  Clarify Semgrep migration guidance and fix documentation links.
+- Diagnose malformed Python group constraints [`0357e32`](https://github.com/acgetchell/research-repo-tools/commit/0357e32601e8c909e50ed8ba375de91b0cd9083a)
+
+  Reject malformed uv dependency-group tables and Python range values with
+  field-specific diagnostics instead of exposing attribute errors from
+  ordinary shared Python checks.
+- Identify invalid TeX sources during normalization
+  [`3b621e6`](https://github.com/acgetchell/research-repo-tools/commit/3b621e6a2c8245b05846c411a8b907df9ac2bbc6)
+
+  Include the TeX path when decoding or parsing its declared date fails. Preserve the source and PDF while reporting a consistent diagnostic through Python and
+  the CLI.
+- Preserve deadlines and portable Cargo output [`556106e`](https://github.com/acgetchell/research-repo-tools/commit/556106ed52a45dfa82e287687c42d92a91ba6bd2)
+
+  - Frame Cargo JSON on LF without splitting Unicode characters in native paths.
+  - Avoid flushing caller buffers outside the deadline and share delete-on-close
+    spool handles so descendant stdout cannot mask direct-child results on Windows.
+  - Strengthen installed process and feature-only selection regressions.
+  - Route the documented recipe through managed tools and clarify navigation and
+    authorized Git-fixture validation guidance.
+- Harden shared tooling input and notebook policy handling
+  [`637d1ae`](https://github.com/acgetchell/research-repo-tools/commit/637d1ae92d89c997c44295d15003b44883ec597b)
+
+  - Preserve physical notebook source lines and distinguish literal commands
+    from shell programs across POSIX and Windows invocation forms.
+  - Reject malformed Python baseline tables, duplicate Semgrep result keys,
+    scalar argument vectors, and invalid release event objects.
+  - Protect SARIF inputs from output-directory replacement, surface release
+    documentation traversal errors, and preserve UTF-8 shell output paths.
+  - Validate packaged workflow templates and clarify consumer migration,
+    Python baseline, and release metadata guidance.
+
+### Maintenance
+
+- Bump the github-actions group with 4 updates [#67](https://github.com/acgetchell/research-repo-tools/pull/67)
+  [`58649a8`](https://github.com/acgetchell/research-repo-tools/commit/58649a81e313548790344f00a16c62b74daf9aae)
+
+  Bumps the github-actions group with 4 updates: [astral-sh/setup-uv](https://github.com/astral-sh/setup-uv),
+  [github/codeql-action/init](https://github.com/github/codeql-action), [github/codeql-action/analyze](https://github.com/github/codeql-action) and
+  [github/codeql-action/upload-sarif](https://github.com/github/codeql-action).
+
+  Updates `astral-sh/setup-uv` from 10.1.0 to 10.2.0
+
+  - [Release notes](https://github.com/astral-sh/setup-uv/releases)
+  - [Commits](https://github.com/astral-sh/setup-uv/compare/bec219d24cd3e171d82865faccec33120bb574f4...c18668ad3cf93ea998bef934396af7bb5c839dc7)
+
+  Updates `github/codeql-action/init` from 4.38.1 to 4.38.2
+  - [Release notes](https://github.com/github/codeql-action/releases)
+  - [Changelog](https://github.com/github/codeql-action/blob/main/CHANGELOG.md)
+  - [Commits](https://github.com/github/codeql-action/compare/1c5b675653bb5c22dbe9b12b556ec555138e09fd...2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2)
+
+  Updates `github/codeql-action/analyze` from 4.38.1 to 4.38.2
+  - [Release notes](https://github.com/github/codeql-action/releases)
+  - [Changelog](https://github.com/github/codeql-action/blob/main/CHANGELOG.md)
+  - [Commits](https://github.com/github/codeql-action/compare/1c5b675653bb5c22dbe9b12b556ec555138e09fd...2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2)
+
+  Updates `github/codeql-action/upload-sarif` from 4.38.1 to 4.38.2
+  - [Release notes](https://github.com/github/codeql-action/releases)
+  - [Changelog](https://github.com/github/codeql-action/blob/main/CHANGELOG.md)
+  - [Commits](https://github.com/github/codeql-action/compare/1c5b675653bb5c22dbe9b12b556ec555138e09fd...2892aa5e19bbd11bc0cff5427e3b750a04d9e3c2)
+- Bump hatchling [#68](https://github.com/acgetchell/research-repo-tools/pull/68)
+  [`b972cbf`](https://github.com/acgetchell/research-repo-tools/commit/b972cbfd717319abaa68d9b1373711ad6f163294)
+
+  Bumps the python group with 1 update: [hatchling](https://github.com/pypa/hatch).
+
+  Updates `hatchling` from 1.32.3 to 1.32.4
+
+  - [Release notes](https://github.com/pypa/hatch/releases)
+  - [Commits](https://github.com/pypa/hatch/compare/hatchling-v1.32.3...hatchling-v1.32.4)
+
 ## [0.1.7] - 2026-09-26
 
 ### Merged Pull Requests
@@ -440,6 +697,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Document supported CLI and Python interfaces, consumer just recipes, and publisher setup.
   - Generate the initial 0.1.0 changelog from committed history.
 
+[0.1.8]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.5...v0.1.6
 [0.1.5]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.4...v0.1.5
