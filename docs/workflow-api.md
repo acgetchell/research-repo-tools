@@ -76,9 +76,10 @@ concurrent-writer lock or promise of cleanup after process termination.
 
 `release_assets.lookup_release(root, repository, tag)` uses authenticated `gh`
 and returns `GitHubRelease` with identity, draft/immutable/prerelease state and
-asset names, IDs, sizes, and optional provider digests. Draft-aware
+asset names, IDs, sizes, states, title, and optional provider digests. Draft-aware
 [`gh release view`](https://cli.github.com/manual/gh_release_view) supplies the
-database ID; the REST lookup revalidates its identity and state. Malformed responses fail.
+database ID; the REST lookup revalidates its repository URL, identity and state,
+then reads the full paginated asset inventory. Malformed responses fail.
 `require_draft(release)` requires a mutable stable draft.
 
 `download_release_asset(root, repository, tag, name, destination, *, limits,
@@ -95,12 +96,94 @@ extraction and verifies the shared schema and envelope. Explicit legacy layout
 configuration is used only when neither shared entry exists. Broken shared
 archives cannot fall back to a more permissive legacy reader.
 
-`publish_release_asset(root, repository, tag, asset, *, publish=False)` stages
-inert bytes, requires a mutable draft, uploads absent names without overwrite,
-and downloads for exact comparison. Identical retries succeed; differing bytes
-fail. Unrelated assets remain unchanged. Immediately before publication it
-rechecks draft mutability and release identity, then clears the draft flag only
-when `publish=True`. There is no cross-client lock across GitHub API calls.
+`ReleaseTarget(repository, tag, release_id, commit, expected_title=None)` is a
+frozen validated identity. Repository is a GitHub `owner/name`, ID is a positive
+integer (booleans reject), tag is canonical stable `vX.Y.Z`, and commit is a full
+40-character lowercase GitHub SHA. An optional title is an exact, nonempty
+single-line assertion; title-equals-tag is expressed with `expected_title=tag`.
+No repository name selects policy. Existing `GitHubRelease` positional fields
+remain compatible, with trailing `title` and `(asset_id, state)` pairs added.
+
+`preflight_release_target(root, repository, tag, commit, *, expected_title=None)`
+is read-only. It requires exactly one matching release across authenticated
+paginated release listings, a mutable stable draft, and the expected tag commit.
+Fully qualified `git/ref/tags/...` lookup excludes same-named branches; annotated
+tags are peeled through at most five objects, rejecting cycles and malformed
+identities. `target_commitish` is not accepted as evidence of the tag commit.
+No checkout, consumer configuration, benchmark code, or Git mutation is required.
+
+`serialize_release_target(target)` returns sorted, indented UTF-8 JSON with LF
+and a final newline. `parse_release_target(payload)` accepts bytes, requires
+exactly the following fields and schema, and rejects duplicate JSON keys,
+unknown/missing fields, non-finite values, malformed identities and excessive
+nesting. All six fields are required, including nullable `expected_title`:
+
+```json
+{
+  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+  "expected_title": "v1.2.3",
+  "release_id": 9,
+  "repository": "example/project",
+  "schema": "research-repo-tools/release-target/v1",
+  "tag": "v1.2.3"
+}
+```
+
+Parsing proves structural validity, not authenticity, freshness or approval.
+Consumers own a trusted job-output/artifact handoff and must prevent benchmark
+code from replacing the captured target. See the [trusted-job example](../README.md#trusted-release-target-handoff).
+`revalidate_release_target(root, target)` reads the captured ID directly and
+returns `GitHubRelease` after checking identity, title assertion, mutable stable
+draft state and resolved tag SHA. A missing/deleted ID fails; it never substitutes
+a replacement draft selected by tag.
+
+`publish_release_asset(root, repository, tag, asset, *, target=None,
+publish=False, limits=ArchiveLimits())` snapshots nonempty regular-file bytes to
+private staging. Repository/tag must agree with the target. Without `target`,
+existing callers capture and verify a fresh target inside this invocation; bare
+stable tags still normalize to `vX.Y.Z`. That mode cannot protect an earlier build.
+Long-running jobs must supply their preflight target. The old call signature and
+`None` return remain compatible, with stronger validation for all uploads.
+
+Immediately before upload, after upload, and after byte verification it rechecks
+the captured identity, tag commit, optional title and lifecycle. Upload addresses
+`https://uploads.github.com/repos/OWNER/REPO/releases/ID/assets` with raw bytes,
+never a tag-selected release. Complete paginated asset inventories reject duplicate
+names/IDs and malformed metadata. Only a completed `uploaded` asset with matching
+size and required `sha256:` provider digest may be reused. Missing digest metadata,
+incomplete uploads and conflicts fail without overwrite or deletion. The exact
+asset ID is downloaded with bounded byte output and a deadline, then compared
+byte for byte. A final check requires the same ID, size, digest and completed state.
+Unrelated assets remain unchanged. Historical read-only downloads still permit
+missing digests; this deliberately supersedes optional digests for attachment.
+See the [GitHub asset API](https://docs.github.com/en/rest/releases/assets#upload-a-release-asset)
+and [gh raw-body transport](https://cli.github.com/manual/gh_api).
+
+Only `publish=True` requests the lifecycle mutation, addressing the captured ID.
+The response must confirm the same repository URL, ID, tag, title assertion,
+published stable lifecycle and verified asset. Becoming immutable on publication
+is permitted. A missing, malformed, invalid or unavailable publication response
+raises `ReleasePublicationUnknownError(RuntimeError)`: the mutation may have
+succeeded, and neither success nor rollback is claimed. There is no automatic
+publication retry or cleanup. Inspect the exact release ID, tag and asset before
+choosing a recovery action. An ordinary retry against an already published
+release rejects before another mutation. A failed upload propagates its transport
+error; a subsequent invocation may reuse a completed identical asset.
+
+Invalid inputs, identity/lifecycle drift and failed prerequisites raise
+`ValueError`; filesystem and pre-publication subprocess failures retain their
+normal exceptions. The CLI reports errors on stderr without a traceback and
+returns 1. Prerequisite failure leaves the draft unpublished by this operation;
+verified attachments may remain for inspection/retry. The reviewed-release path
+shares stable-tag/SHA parsing, tag resolution, captured-target revalidation and
+publication-response validation, while retaining checkout, ancestry, check and
+configured-asset gates.
+
+These are client-side checks across separate API requests. GitHub does not provide
+an atomic conditional check-and-publish transaction here: a concurrent actor can
+change a tag, draft or asset between the last check and mutation. A failed response
+cannot undo publication. Consumers retain concurrency and permission policy and
+must not interpret these checks as a server-side lock.
 
 Keep benchmark jobs read-only and credential-free. A separate writer job should
 install the exact registry package, download the inert artifact, and invoke this

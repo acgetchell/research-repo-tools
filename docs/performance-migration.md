@@ -161,3 +161,42 @@ Consumers keep focused tests proving their actual pinned release, native
 toolchain, expected full IDs, scientific gates, compatibility adapters and legacy
 artifact preservation. Publication and the Linux/macOS/Windows package jobs are
 required before declaring downstream extraction complete.
+
+## Captured release target adoption
+
+[Issue #94](https://github.com/acgetchell/research-repo-tools/issues/94) supplies
+the post-v0.1.8 [release-target contract](workflow-api.md#release-assets).
+Upstream merge alone does not authorize downstream deletion. After code,
+documentation and required native validation are merged, record the exact release
+containing this capability in the issue. Consumers must pin that published package
+and pass focused integration checks before deleting their working implementation.
+This does not reopen completed v0.1.8 capabilities or their existing adoption gates.
+
+The following map refers to la-stack's
+[release benchmark workflow](https://github.com/acgetchell/la-stack/blob/b8ffb208addb5eda68c71eb142253b382b384028/.github/workflows/release-benchmarks.yml)
+and [release-baseline tests](https://github.com/acgetchell/la-stack/blob/b8ffb208addb5eda68c71eb142253b382b384028/scripts/tests/test_release_baseline.py)
+at the reviewed source revision. Reconcile subsequent consumer changes before
+applying it. No downstream files are changed by this implementation.
+
+| Consumer surface eligible for deletion | Shared replacement | Consumer code retained |
+| --- | --- | --- |
+| `Validate draft release target`: stable-tag/ID/SHA parsing, paginated unique draft lookup, title/lifecycle checks, qualified tag resolution and commit comparison | `performance release-draft ... --commit ... --expected-title ...` and versioned target JSON | Dispatch input/ref equality, expected workflow SHA, permissions, trusted target handoff and output wiring |
+| `Attach baseline and publish draft`: `check_draft`, `matching_assets`, `verify_asset`, digest/size computation, captured-ID upload, identical retry handling, final target checks and PATCH-response validation | `performance release-upload ... --target ... --publish` | Expected la-stack asset filename, downloaded-artifact selection, fresh-preflight/run-attempt policy, permissions and explicit publication decision |
+| `test_preflight_captures_draft_identity_and_peeled_tag_commit`, `test_preflight_rejects_tag_moved_since_dispatch`, `test_preflight_rejects_invalid_tag_before_api_access`, `test_preflight_rejects_unsuitable_release`, `test_preflight_rejects_malformed_api_response`, `test_missing_or_invalid_tag_commit_stops_preflight`: generic API cases | Shared preflight/parser fixtures run from source, wheel and sdist | Focused tests proving dispatch/ref policy, expected commit argument, title assertion and trusted target wiring with the pinned CLI |
+| `test_publisher_verifies_durable_asset_before_publication`, `test_changed_release_stops_publication`, `test_moved_tag_stops_publication`, `test_bad_durable_asset_stops_publication`, `test_upload_failure_leaves_draft_unpublished`, `test_publication_failure_propagates_without_deleting_uploaded_asset`: generic API cases and their substantial `gh` shell stub | Shared target/asset/lifecycle/response fixtures, including exact downloaded bytes and unknown mutation outcomes | Focused tests proving the actual pinned command, asset argument, captured target and explicit publication flag are connected to the right job |
+
+Keep `test_preflight_rejects_dispatch_outside_release_tag`,
+`test_benchmark_retry_requires_current_preflight`, workflow permission/preflight
+tests, and setup/timing-budget tests. Adapt their command wiring where necessary.
+Retain complete benchmark inventories, scientific input/correctness gates,
+raw Criterion files, consumer archive round trips, artifact names and transfer,
+recipe integration, and summary behavior. The shared publisher handles inert
+bytes without interpreting or converting la-stack's raw archive format.
+
+Required adoption evidence includes a fresh preflight tied to the dispatched
+commit, a trusted handoff across the long run, failure on stale/changed target,
+the consumer's own asset filename and raw archive, attachment verification, and
+explicit publication intent. Generic provider failure matrices belong in this
+package; consumers retain tests for their actual workflow composition.
+Benchmark measurements, scientific eligibility, plotting, historical evidence
+conversion, registry publication and live GitHub settings remain outside #94.
