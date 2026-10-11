@@ -1,6 +1,5 @@
 """Shared release gates and human-reviewed GitHub publication, without Cargo policy."""
 
-import re
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
@@ -9,7 +8,21 @@ from urllib.parse import quote
 from research_repo_tools.evidence import _load_json
 from research_repo_tools.process import run_git_command, run_safe_command
 from research_repo_tools.registry import identity, wait_for_version
-from research_repo_tools.release_assets import GitHubRelease, _asset_name, _repository, lookup_release, require_draft
+from research_repo_tools.release_assets import (
+    GitHubRelease,
+    ReleasePublicationUnknownError,
+    ReleaseTarget,
+    _asset_name,
+    _publish_release,
+    _remote_commit,
+    _repository,
+    _require_identity,
+    _sha,
+    _stable_tag,
+    lookup_release,
+    require_draft,
+    revalidate_release_target,
+)
 
 if TYPE_CHECKING:
     from research_repo_tools.config import Config
@@ -94,15 +107,7 @@ def _settings(config: Config) -> PublishingSettings:
 
 
 def _tag(tag: str) -> str:
-    if not isinstance(tag, str) or re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag) is None:
-        raise ValueError("publication requires a canonical stable vX.Y.Z tag")
-    return tag[1:]
-
-
-def _sha(value: object) -> str:
-    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
-        raise ValueError("release commit must be a full lowercase GitHub commit SHA")
-    return value
+    return _stable_tag(tag)[1:]
 
 
 @dataclass(frozen=True, slots=True)
@@ -157,26 +162,6 @@ def _api(root: Path, repository: str, endpoint: str, *, paginate: bool = False) 
     args = ["api", *(["--paginate", "--slurp"] if paginate else []), f"repos/{repository}" + (f"/{endpoint}" if endpoint else "")]
     payload = run_safe_command("gh", args, cwd=root, timeout=120).stdout
     return _load_json(payload.encode("utf-8"), "GitHub release evidence")
-
-
-def _remote_commit(root: Path, repository: str, tag: str) -> str:
-    data = _api(root, repository, f"git/ref/tags/{quote(tag, safe='')}")
-    if not isinstance(data, dict) or data.get("ref") != f"refs/tags/{tag}":
-        raise ValueError("remote release tag is missing or differs")
-    obj = data.get("object")
-    for _ in range(5):
-        if not isinstance(obj, dict):
-            break
-        sha = _sha(obj.get("sha"))
-        if obj.get("type") == "commit":
-            return sha
-        if obj.get("type") != "tag":
-            break
-        data = _api(root, repository, f"git/tags/{sha}")
-        if not isinstance(data, dict) or data.get("sha") != sha:
-            break
-        obj = data.get("object")
-    raise ValueError("remote tag does not resolve to one bounded commit identity")
 
 
 def require_checks(pages: object, commit: str, checks: tuple[RequiredCheck, ...]) -> None:
@@ -258,6 +243,7 @@ def check_reviewed_release(config: Config, tag: str, *, event: ReviewedRelease |
     release = lookup_release(config.root, settings.repository, tag)
     if release.prerelease or release.draft != draft or (event is not None and release.identifier != event.release_id):
         raise ValueError("GitHub release lifecycle or identity differs from the reviewed release")
+    _require_identity(release, ReleaseTarget(settings.repository, tag, event.release_id if event is not None else release.identifier, head))
     _assets(release, settings, _tag(tag))
     return release
 
@@ -268,6 +254,7 @@ def publish_reviewed_release(config: Config, tag: str) -> None:
     Invocation is approval of the draft. This never uploads registry packages,
     creates tags, replaces assets, or configures a trusted publisher.
     """
+    head = _sha(run_git_command(["--no-pager", "rev-parse", "HEAD"], cwd=config.root).stdout.strip())
     release = check_reviewed_release(config, tag, draft=True)
     require_draft(release)
     # Recheck immediately before the one lifecycle mutation, including tag/checks.
@@ -275,7 +262,16 @@ def publish_reviewed_release(config: Config, tag: str) -> None:
     require_draft(current)
     if current.identifier != release.identifier:
         raise ValueError("draft release identity changed before publication")
-    run_safe_command("gh", ["api", "--method", "PATCH", f"repos/{release.repository}/releases/{release.identifier}", "--field", "draft=false"], cwd=config.root)
+    target = ReleaseTarget(release.repository, tag, release.identifier, head)
+    final = revalidate_release_target(config.root, target)
+    _assets(final, _settings(config), _tag(tag))
+    published = _publish_release(config.root, target)
+    try:
+        _assets(published, _settings(config), _tag(tag))
+    except ValueError as error:
+        raise ReleasePublicationUnknownError(
+            f"publication outcome unknown for {target.repository} release {target.release_id}: response did not confirm required assets; inspect before retrying"
+        ) from error
 
 
 def verify_publication(config: Config, tag: str, *, attempts: int = 1, interval: int = 10) -> None:

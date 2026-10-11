@@ -534,6 +534,11 @@ parsing that rejects duplicate fields, non-finite numbers and excessive nesting.
 that GitHub Release as the invoking maintainer. Calling it constitutes approval;
 the CLI additionally requires `--approve`. It never changes Git state or uploads
 registry packages. Consumers retain native Cargo packaging/upload commands.
+It captures the reviewed commit, revalidates the exact release ID and tag commit
+before mutation, and validates the publication response through the shared
+[release-target contract](workflow-api.md#release-assets). An invalid/unavailable
+publication response raises `release_assets.ReleasePublicationUnknownError`;
+inspect the captured ID before retrying because publication may have succeeded.
 `verify_publication(config, tag, attempts=1, interval=10)` requires a published
 stable GitHub Release, configured assets and the exact registry version.
 
