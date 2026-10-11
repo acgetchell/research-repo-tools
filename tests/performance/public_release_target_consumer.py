@@ -6,15 +6,17 @@ import hashlib
 import io
 import json
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from unittest.mock import patch
 
-from research_repo_tools import cli, config
+from research_repo_tools import cli, config, release_assets
 from research_repo_tools.release_assets import (
     ReleasePublicationUnknownError,
     ReleaseTarget,
+    download_release_asset,
     parse_release_target,
     preflight_release_target,
     publish_release_asset,
@@ -46,6 +48,7 @@ class GitHubFixture:
         self.annotation = False
         self.annotation_object = None
         self.ref_object = None
+        self.tag_objects = {}
         self.calls = []
         self.uploaded = []
         self.published = 0
@@ -97,6 +100,8 @@ class GitHubFixture:
                 if self.ref_object is not None
                 else {"type": "tag" if self.annotation else "commit", "sha": "b" * 40 if self.annotation else self.commit},
             }
+        elif args[-1] in self.tag_objects:
+            value = self.tag_objects[args[-1]]
         elif args[-1] == f"repos/{REPOSITORY}/git/tags/" + "b" * 40:
             value = {"sha": "b" * 40, "object": {"type": "commit", "sha": self.commit}} if self.annotation_object is None else self.annotation_object
         else:
@@ -118,6 +123,7 @@ class TestReleaseTargetConsumer(unittest.TestCase):
         self.asset = self.root / "baseline.tar.gz"
         self.asset.write_bytes(PAYLOAD)
         self.server = GitHubFixture()
+        self.download_transport = release_assets._download
         self.addCleanup(patch.stopall)
         patch("research_repo_tools.release_assets.run_command_bytes", side_effect=self.server.run).start()
         patch("research_repo_tools.release_assets._download", side_effect=self.server.download).start()
@@ -170,6 +176,68 @@ class TestReleaseTargetConsumer(unittest.TestCase):
         for identifier in [True, 0, -1]:
             with self.subTest(identifier=identifier), self.assertRaises(ValueError):
                 ReleaseTarget(REPOSITORY, TAG, identifier, SHA)
+
+    def test_target_wire_format_has_an_independent_v1_oracle(self):
+        payload = (
+            "{\n"
+            '  "commit": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",\n'
+            '  "expected_title": "café baseline",\n'
+            '  "release_id": 9,\n'
+            '  "repository": "example/project",\n'
+            '  "schema": "research-repo-tools/release-target/v1",\n'
+            '  "tag": "v1.2.3"\n'
+            "}\n"
+        ).encode("utf-8")
+        target = ReleaseTarget(REPOSITORY, TAG, 9, SHA, "café baseline")
+        self.assertEqual(serialize_release_target(target), payload)
+        self.assertEqual(parse_release_target(payload), target)
+
+    def test_target_rejects_unicode_line_separators_before_api_access(self):
+        for separator in ("\u0085", "\u2028", "\u2029"):
+            title = "first" + separator + "second"
+            with self.subTest(separator=separator):
+                with self.assertRaisesRegex(ValueError, "single line"):
+                    ReleaseTarget(REPOSITORY, TAG, 9, SHA, title)
+                value = {
+                    "schema": "research-repo-tools/release-target/v1",
+                    "repository": REPOSITORY,
+                    "tag": TAG,
+                    "release_id": 9,
+                    "commit": SHA,
+                    "expected_title": title,
+                }
+                with self.assertRaisesRegex(ValueError, "single line"):
+                    parse_release_target(json.dumps(value).encode("utf-8"))
+                with self.assertRaisesRegex(ValueError, "single line"):
+                    preflight_release_target(self.root, REPOSITORY, TAG, SHA, expected_title=title)
+        self.assertFalse(self.server.calls)
+
+    def test_download_preserves_real_child_bytes_and_rejects_translation(self):
+        self.server.release["draft"] = False
+        self.server.release["assets"] = [self.server.asset()]
+        destination = self.root / "download café.tar.gz"
+        popen = subprocess.Popen
+        for emitted in (PAYLOAD, PAYLOAD.replace(b"\r\n", b"\n")):
+            with self.subTest(emitted=emitted):
+                destination.write_bytes(b"prior artifact")
+                program = f"import sys; sys.stdout.buffer.write({emitted!r})"
+                with (
+                    patch("research_repo_tools.release_assets._download", self.download_transport),
+                    patch("research_repo_tools.release_assets.resolve_executable", return_value=Path(sys.executable)),
+                    patch(
+                        "research_repo_tools.release_assets.subprocess.Popen",
+                        side_effect=lambda command, **kwargs: popen([sys.executable, "-c", program], **kwargs),
+                    ),
+                ):
+                    if emitted == PAYLOAD:
+                        download_release_asset(self.root, REPOSITORY, TAG, "baseline.tar.gz", destination)
+                        self.assertEqual(destination.read_bytes(), PAYLOAD)
+                    else:
+                        with self.assertRaisesRegex(ValueError, "size differs"):
+                            download_release_asset(self.root, REPOSITORY, TAG, "baseline.tar.gz", destination)
+                        self.assertEqual(destination.read_bytes(), b"prior artifact")
+        self.assertFalse(self.server.uploaded)
+        self.assertEqual(self.server.published, 0)
 
     def test_repository_url_identity_accepts_case_only_spelling_differences(self):
         self.server.release["url"] = self.server.release["url"].replace(REPOSITORY, REPOSITORY.upper())
@@ -231,6 +299,29 @@ class TestReleaseTargetConsumer(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.target()
         self.assertEqual(self.server.published, 0)
+
+    def test_annotated_tag_depth_limit_has_an_acyclic_boundary(self):
+        for depth in (4, 5):
+            with self.subTest(depth=depth):
+                identifiers = [f"{index:040x}" for index in range(1, depth + 1)]
+                self.server.ref_object = {"type": "tag", "sha": identifiers[0]}
+                self.server.tag_objects = {
+                    f"repos/{REPOSITORY}/git/tags/{identifier}": {
+                        "sha": identifier,
+                        "object": {"type": "tag" if index + 1 < depth else "commit", "sha": identifiers[index + 1] if index + 1 < depth else SHA},
+                    }
+                    for index, identifier in enumerate(identifiers)
+                }
+                self.server.calls.clear()
+                if depth == 4:
+                    self.assertEqual(self.target(), ReleaseTarget(REPOSITORY, TAG, 9, SHA, TAG))
+                else:
+                    with self.assertRaisesRegex(ValueError, "bounded commit identity"):
+                        self.target()
+                annotation_requests = [args for args in self.server.calls if args[-1].startswith(f"repos/{REPOSITORY}/git/tags/")]
+                self.assertEqual(len(annotation_requests), depth)
+                self.assertFalse(self.server.uploaded)
+                self.assertEqual(self.server.published, 0)
 
     def test_invalid_post_upload_metadata_retains_attachment_without_publication(self):
         target = self.target()
@@ -457,6 +548,26 @@ class TestReleaseTargetConsumer(unittest.TestCase):
         self.assertIn("duplicate JSON field", stderr.getvalue())
         self.assertNotIn("Traceback", stderr.getvalue())
         self.assertEqual(self.server.published, 1)
+
+    def test_cli_explicit_empty_values_never_downgrade_release_binding(self):
+        for value in ("", " "):
+            for action, extra, diagnostic in [
+                ("release-draft", ["--commit", value], "full lowercase GitHub commit SHA"),
+                ("release-draft", ["--commit", SHA, "--output", value], "--output must be a nonempty path"),
+                ("release-upload", [str(self.asset), "--target", value, "--publish"], "--target must be a nonempty path"),
+            ]:
+                with self.subTest(value=value, action=action, extra=extra):
+                    stdout, stderr = io.StringIO(), io.StringIO()
+                    with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                        status = cli.main(["--root", str(self.root), "performance", action, REPOSITORY, TAG, *extra])
+                    self.assertEqual(status, 1)
+                    self.assertEqual(stdout.getvalue(), "")
+                    self.assertIn(diagnostic, stderr.getvalue())
+                    self.assertNotIn("Traceback", stderr.getvalue())
+                    self.assertFalse(self.server.calls)
+                    self.assertFalse(self.server.uploaded)
+                    self.assertEqual(self.server.published, 0)
+                    self.assertEqual(self.asset.read_bytes(), PAYLOAD)
 
     def test_mismatched_handoff_and_invalid_assertions_fail_before_api(self):
         target = ReleaseTarget("other/repo", TAG, 9, SHA)

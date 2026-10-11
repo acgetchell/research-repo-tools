@@ -1,7 +1,7 @@
 # Configured workflow contracts
 
-These additions belong to the coordinated v0.1.4 extraction. Availability in the
-working tree does not mean that release has been published. Consumer commands
+The original workflow APIs belong to the coordinated v0.1.4 extraction.
+Availability in the working tree does not mean that release has been published. Consumer commands
 and configuration examples are in the [README](../README.md#configured-benchmark-workflows).
 The [MCMC ownership map](mcmc-extraction.md) defines the first adoption gate.
 Schema-2 common-harness measurement, complete-run retention and reusable host/
@@ -96,6 +96,10 @@ extraction and verifies the shared schema and envelope. Explicit legacy layout
 configuration is used only when neither shared entry exists. Broken shared
 archives cannot fall back to a more permissive legacy reader.
 
+The captured release-target APIs require an exact published package version
+after v0.1.8; they are not available in v0.1.8. Record the containing release when
+published before adopting the [trusted handoff](../README.md#trusted-release-target-handoff).
+
 `ReleaseTarget(repository, tag, release_id, commit, expected_title=None)` is a
 frozen validated identity. Repository is a GitHub `owner/name`, ID is a positive
 integer (booleans reject), tag is canonical stable `vX.Y.Z`, and commit is a full
@@ -170,8 +174,10 @@ choosing a recovery action. An ordinary retry against an already published
 release rejects before another mutation. A failed upload propagates its transport
 error; a subsequent invocation may reuse a completed identical asset.
 
-Invalid inputs, identity/lifecycle drift and failed prerequisites raise
-`ValueError`; filesystem and pre-publication subprocess failures retain their
+Malformed values, identity/lifecycle drift and failed prerequisites raise
+`ValueError`. Passing an object other than `ReleaseTarget` to serialization,
+revalidation or the publisher's `target` argument raises `TypeError`.
+Filesystem and pre-publication subprocess failures retain their
 normal exceptions. The CLI reports errors on stderr without a traceback and
 returns 1. Prerequisite failure leaves the draft unpublished by this operation;
 verified attachments may remain for inspection/retry. The reviewed-release path

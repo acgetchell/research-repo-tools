@@ -1596,9 +1596,9 @@ publish_release_asset(root, captured.repository, captured.tag,
 
 An invalid or unavailable publication response reports an unknown outcome.
 Inspect the captured release ID and attached asset before retrying; no rollback
-or automatic publication retry occurs. The [API contract](docs/workflow-api.md#release-assets)
+or automatic publication retry occurs. The [API contract](https://github.com/acgetchell/research-repo-tools/blob/main/docs/workflow-api.md#release-assets)
 details validation, retry guarantees and the limits of client-side rechecks.
-The [la-stack deletion map](docs/performance-migration.md#captured-release-target-adoption)
+The [la-stack deletion map](https://github.com/acgetchell/research-repo-tools/blob/main/docs/performance-migration.md#captured-release-target-adoption)
 keeps downstream migration tied to an exact published package and integration checks.
 
 Once no local executable modules remain, remove the consumer's build backend,

@@ -244,7 +244,15 @@ def test_changed_draft_blocks_publication_without_external_mutation(consumer, mo
     values = iter([replace(release, draft=True), changed])
     monkeypatch.setattr(publishing, "lookup_release", lambda *args: next(values))
     commands = []
-    monkeypatch.setattr(publishing, "run_safe_command", lambda *args, **kwargs: commands.append(args))
+    original_gh = assets._gh
+
+    def gh(root, args):
+        if "--method" in args:
+            commands.append(args)
+            raise AssertionError("unexpected release mutation")
+        return original_gh(root, args)
+
+    monkeypatch.setattr(assets, "_gh", gh)
     with pytest.raises(ValueError, match="identity changed" if damage == "identity" else "mutable stable draft"):
         publishing.publish_reviewed_release(settings, "v1.2.3")
     assert commands == []

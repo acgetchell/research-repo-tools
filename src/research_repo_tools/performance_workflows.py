@@ -70,8 +70,8 @@ def add_command(commands, name: str) -> None:
             "and pass its trusted JSON output with --target."
         )
         command.add_argument("asset")
-        command.add_argument("--target", help="trusted JSON target captured by release-draft --commit; repository/tag must match")
         command.add_argument("--publish", action="store_true", help="publish only after attachment verification and a fresh mutable-draft check")
+        command.add_argument("--target", help="trusted JSON target captured by release-draft --commit; repository/tag must match")
     if name == "release-draft":
         command.add_argument("--commit", help="expected full tag commit; enables verified target output")
         command.add_argument("--expected-title", help="assert an exact release title, for example the tag")
@@ -119,23 +119,27 @@ def _asset_pair(args: argparse.Namespace, settings: Config) -> evidence.Evidence
 def run(args: argparse.Namespace, settings: Config) -> int:
     root = settings.root
     if args.action == "release-draft":
-        if args.commit:
+        if args.output is not None and not args.output.strip():
+            raise ValueError("--output must be a nonempty path")
+        if args.commit is not None:
             from research_repo_tools.performance import _write_stdout
 
             target = release_assets.preflight_release_target(root, args.repository, args.tag, args.commit, expected_title=args.expected_title)
             payload = release_assets.serialize_release_target(target)
-            if args.output:
+            if args.output is not None:
                 from research_repo_tools.files import replace_many
 
                 replace_many({settings.path(args.output): payload})
             else:
                 _write_stdout(payload)
         else:
-            if args.output or args.expected_title is not None:
+            if args.output is not None or args.expected_title is not None:
                 raise ValueError("release target output/title assertions require --commit")
             release_assets.require_draft(release_assets.lookup_release(root, args.repository, args.tag))
     elif args.action == "release-upload":
-        target = release_assets.parse_release_target(settings.path(args.target).read_bytes()) if args.target else None
+        if args.target is not None and not args.target.strip():
+            raise ValueError("--target must be a nonempty path")
+        target = release_assets.parse_release_target(settings.path(args.target).read_bytes()) if args.target is not None else None
         release_assets.publish_release_asset(root, args.repository, args.tag, settings.path(args.asset), target=target, publish=args.publish)
     elif args.action == "baseline":
         from research_repo_tools.release_discovery import normalize_tag

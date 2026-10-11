@@ -79,7 +79,9 @@ def _sha(value: object) -> str:
 
 def _expected_title(value: object) -> str | None:
     if value is not None and (
-        not isinstance(value, str) or not value.strip() or any(ord(char) < 32 or ord(char) == 127 or 0xD800 <= ord(char) <= 0xDFFF for char in value)
+        not isinstance(value, str)
+        or not value.strip()
+        or any(ord(char) < 32 or ord(char) in {127, 0x85, 0x2028, 0x2029} or 0xD800 <= ord(char) <= 0xDFFF for char in value)
     ):
         raise ValueError("expected release title must be a nonempty single line")
     return value
