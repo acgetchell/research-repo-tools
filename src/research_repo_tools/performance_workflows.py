@@ -63,6 +63,12 @@ def add_command(commands, name: str) -> None:
         command.add_argument("repository")
         command.add_argument("tag")
     if name == "release-upload":
+        command.description = (
+            "Without --target, capture the current remote tag commit for this invocation. "
+            "This cannot detect tag movement before invocation or bind an earlier build. "
+            "To bind an expected commit, run release-draft --commit before the build "
+            "and pass its trusted JSON output with --target."
+        )
         command.add_argument("asset")
         command.add_argument("--target", help="trusted JSON target captured by release-draft --commit; repository/tag must match")
         command.add_argument("--publish", action="store_true", help="publish only after attachment verification and a fresh mutable-draft check")
