@@ -134,7 +134,8 @@ class TestPublishingConsumer(unittest.TestCase):
         changed = GitHubRelease("example/project", "v1.2.3", 9, True, True, False, ())
         with (
             patch("research_repo_tools.release_publishing.check_reviewed_release", side_effect=[draft, changed]),
-            patch("research_repo_tools.release_publishing.run_safe_command") as command,
+            patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, "a" * 40, "")),
+            patch("research_repo_tools.release_assets.run_command_bytes") as command,
         ):
             with self.assertRaisesRegex(ValueError, "mutable stable draft"):
                 publish_reviewed_release(self.settings("crates-io"), "v1.2.3")

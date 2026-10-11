@@ -192,6 +192,12 @@ non-finite estimates, stale provenance, and publication/rollback failures. HTTP
 transport failure tests use synthetic responses; release selection and access
 to a particular published asset remain consumer integration checks. The existing
 native platform matrix runs these suites against both distribution formats.
+Both installations also exercise release-target preflight and JSON handoff,
+lightweight/annotated tag resolution, captured-ID attachment, title/lifecycle and
+commit drift, duplicate/incomplete assets, required provider digests, exact bytes,
+retry behavior and publication-response uncertainty through public API/CLI calls.
+Synthetic GitHub fixtures never publish a live release. The required native
+package matrix runs the same contracts; local execution covers only its host.
 
 Installed toolchain and security suites exercise cleanup retention roots, private
 Python aliases, adoption helper permissions and linked-environment refusal, native

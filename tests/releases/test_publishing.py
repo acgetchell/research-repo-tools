@@ -10,6 +10,7 @@ from pathlib import Path
 import pytest
 
 from research_repo_tools import changelog, cli, config
+from research_repo_tools import release_assets as assets
 from research_repo_tools import release_publishing as publishing
 from research_repo_tools.release_assets import GitHubRelease
 
@@ -60,6 +61,7 @@ def consumer(tmp_path, monkeypatch):
         f"commits/{SHA}/check-runs?filter=latest&per_page=100": pages(),
     }
     monkeypatch.setattr(publishing, "_api", lambda root, repo, endpoint, **kwargs: evidence[endpoint])
+    monkeypatch.setattr(assets, "_gh", lambda root, args: json.dumps(evidence[args[-1].removeprefix("repos/example/project/")]).encode())
     release = GitHubRelease("example/project", "v1.2.3", 9, False, False, False, (("sample-1.2.3.tgz", 3, 42, None),))
     monkeypatch.setattr(publishing, "lookup_release", lambda *args: release)
     return settings, evidence, release
@@ -206,7 +208,27 @@ def test_explicit_draft_publication_rechecks_before_one_lifecycle_mutation(consu
     settings, _, release = consumer
     monkeypatch.setattr(publishing, "lookup_release", lambda *args: replace(release, draft=True))
     commands = []
-    monkeypatch.setattr(publishing, "run_safe_command", lambda program, args, **kwargs: commands.append((program, args)))
+    monkeypatch.setattr(assets, "_release_by_id", lambda *args: replace(release, draft=True))
+    gh = assets._gh
+
+    def response(root, args):
+        if "PATCH" not in args:
+            return gh(root, args)
+        commands.append(("gh", args))
+        return json.dumps(
+            {
+                "url": "https://api.github.com/repos/example/project/releases/9",
+                "id": 9,
+                "tag_name": "v1.2.3",
+                "name": None,
+                "draft": False,
+                "prerelease": False,
+                "immutable": False,
+                "assets": [{"name": "sample-1.2.3.tgz", "id": 3, "size": 42, "digest": None, "state": "uploaded"}],
+            }
+        ).encode()
+
+    monkeypatch.setattr(assets, "_gh", response)
     publishing.publish_reviewed_release(settings, "v1.2.3")
     assert commands == [("gh", ["api", "--method", "PATCH", "repos/example/project/releases/9", "--field", "draft=false"])]
     monkeypatch.setattr(publishing, "lookup_release", lambda *args: release)
