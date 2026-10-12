@@ -112,14 +112,16 @@ class TestCriterionConsumer(unittest.TestCase):
                     with patch.object(Path, "is_file", regular), self.assertRaisesRegex(ValueError, "regular"):
                         validate_saved_sample(root, "v1.2.3", policy)
 
-    @unittest.skipUnless(hasattr(os, "mkfifo"), "native FIFO creation is unavailable")
     def test_native_fifo_core_file_rejection_is_bounded(self):
+        mkfifo = getattr(os, "mkfifo", None)
+        if mkfifo is None:
+            self.skipTest("native FIFO creation is unavailable")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             samples(root)
             target = root / "sanitized_0/v1.2.3/sample.json"
             target.unlink()
-            os.mkfifo(target)
+            mkfifo(target)
             self.assertTrue(stat.S_ISFIFO(target.stat().st_mode))
             self.assertFalse(target.is_file())
             code = (
