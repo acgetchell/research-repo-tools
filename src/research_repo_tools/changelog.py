@@ -24,6 +24,8 @@ TEMPLATES = (
     "cliff.toml",
     "common-benchmark.toml",
     "complete-report.toml",
+    "criterion-inventory.toml",
+    "criterion-saved.toml",
     "examples.toml",
     "justfile",
     "performance-report.toml",

@@ -162,6 +162,53 @@ toolchain, expected full IDs, scientific gates, compatibility adapters and legac
 artifact preservation. Publication and the Linux/macOS/Windows package jobs are
 required before declaring downstream extraction complete.
 
+## Criterion discovery and saved-baseline adoption
+
+Issue #98 targets v0.1.9 for these [public contracts](criterion-api.md). Pin an
+exact published package containing them, run a focused consumer integration
+test, then remove the generic helpers. An implementation merge does not unblock
+consumer adoption. Existing raw baselines, archives, legacy fingerprints and
+scientific gates remain intact; this extraction authorizes no history pruning or
+rewriting. Examples and ordered commands live in the
+[README](../README.md#criterion-inventory-and-saved-baselines).
+
+The deletion map refers to la-stack's merged `f3eb43d` consumer sources:
+[release_baseline.py](https://github.com/acgetchell/la-stack/blob/f3eb43dde08bef4a5aba04baf0e57e1c79de443c/scripts/release_baseline.py)
+and [performance_runs.py](https://github.com/acgetchell/la-stack/blob/f3eb43dde08bef4a5aba04baf0e57e1c79de443c/scripts/performance_runs.py).
+
+| Consumer surface | Shared replacement | Consumer responsibility |
+| --- | --- | --- |
+| `release_baseline.py::parse_benchmark_list` | `criterion_inventory.parse_benchmark_list` | No generic parser retained; flat and sanitized semantic IDs are supported |
+| `release_baseline.py::discover`: native list-command loop, suite uniqueness and inventory writer | `DiscoveryPlan`, `discover_inventory`, `serialize_inventory`, `performance discover` | Declare actual suite commands, cwd, environments, bounds and required report IDs |
+| `release_baseline.py::inventory_ids`: generic shape/duplicate checks | `CriterionInventory`, `parse_inventory` | Keep `required_report_ids` and domain coverage assertions, or declare their exact IDs as discovery `required` |
+| `release_baseline.py::validate`: baseline-name checks and raw-file copy comparisons | `CompletePolicy`, `criterion_baselines.validate_saved_sample`, `performance verify-saved` | Declare sample/interval policy and required files, including `tukey.json`; keep any domain-specific storage-path assertions |
+| `performance_runs.py::measurement_plan`: repeated native discovery loops | Schema-2 phase `discovery` tables and `DiscoveryPolicy` within `CommonHarnessPlan` | Keep exact historical API availability, compatibility adapters, selected report IDs and reference-series assignments |
+
+The old consumer parser's requirement for a slash in every semantic ID is
+superseded by Criterion's semantic-ID contract; filesystem storage paths are
+validated independently. Discovery uses fresh private Criterion output rather
+than the retained measurement directory and rejects unknown exclusions. Saved
+validation checks both full inventories through the same completeness engine;
+stale/extra saved cases cannot hide behind fresh-only iteration. Every required
+raw file must parse as JSON and match exact binary bytes, including line endings.
+
+Required selections, rational/exact compatibility decisions, library names,
+dimensions, suite/phase assignments, sample counts and confidence levels stay in
+consumer declarations. If a historical harness cannot list against its source,
+the consumer can run configured discovery against an appropriate prepared source,
+apply its domain availability policy, and supply the resulting exact
+`CompletePolicy`; the shared package supplies discovery without choosing that
+scientific workflow.
+
+Validate discovery before correctness gates, run those gates before measurement,
+then verify the saved baseline before packaging or publication. Exercise the
+pinned package with the consumer's actual native list command, a complete saved
+fixture, one failed-save fixture after a successful benchmark exit, and its
+scientific coverage assertions. Shared failure tests and isolated wheel/sdist
+consumer suites live here; native Linux, macOS and Windows jobs remain required
+package evidence.
+
+
 ## Captured release target adoption
 
 [Issue #94](https://github.com/acgetchell/research-repo-tools/issues/94) supplies

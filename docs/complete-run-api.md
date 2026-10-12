@@ -12,11 +12,13 @@ Existing comparison, baseline asset and report schema-1 contracts remain support
 The latter contains a shared `measurement` configuration, `baseline` and
 `current` `MeasurementPhase` objects, and a tuple of `RunSeries` views.
 `MeasurementPhase(command, gate, policy, environment=())` uses immutable argument
-vectors, a completeness policy and string environment pairs.
+vectors, a completeness policy and string environment pairs. The v0.1.9 additions
+also accept `DiscoveryPolicy`; see the [Criterion contracts](criterion-api.md).
 
 Schema 2 requires `sources`, `harness`, `phases.baseline`, `phases.current` and
-`series`. Each phase requires `command`, `gate`, and nonempty exact `expected`
-semantic IDs, with optional `environment`. Each series table requires `name`,
+`series`. Each phase requires `command`, `gate`, and either nonempty exact
+`expected` semantic IDs or a configured `discovery` table, with optional
+`environment`. Each series table requires `name`,
 `phase` and `rows` mapping display labels to semantic IDs from that phase.
 Series order controls table column order; labels are sorted. Unselected cases
 remain part of the run. A reused reference is a view of its original phase,

@@ -1,0 +1,14 @@
+# Discover complete semantic IDs before correctness gates and measurement.
+# Commands are trusted consumer code and may compile native benchmarks.
+schema = 1
+required = ["workload/library/2", "workload/reference/2"]
+# Exact compatibility exclusions are consumer policy; every exclusion must exist.
+excluded = []
+
+[[suites]]
+name = "workload"
+command = ["cargo", "bench", "--locked", "--bench", "workload", "--", "--list"]
+cwd = "."
+timeout = 7200
+environment = { RUSTFLAGS = "--cap-lints=warn" }
+# CRITERION_HOME is always replaced with a private discovery directory.

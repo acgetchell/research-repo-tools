@@ -15,6 +15,9 @@ The [complete-run and host APIs](complete-run-api.md) extend the performance
 contracts with common-harness plans, raw sample retention, named phase series,
 immutable runs, host observations and profiling declarations. Consumer usage
 and release availability are described in the [README](../README.md#common-harness-and-complete-runs).
+The [Criterion discovery and saved-sample APIs](criterion-api.md) add configured
+native inventories, common-harness discovery policies and exact saved-file
+verification, targeting v0.1.9.
 
 ## Consumer just recipes
 

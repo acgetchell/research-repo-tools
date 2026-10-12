@@ -2,6 +2,7 @@
 
 import io
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -15,7 +16,7 @@ from unittest.mock import patch
 
 from research_repo_tools import process
 from research_repo_tools.cli import main
-from research_repo_tools.common_measurement import CommonHarnessPlan, measure_prepared_pair
+from research_repo_tools.common_measurement import CommonHarnessPlan, DiscoveryPolicy, measure_prepared_pair
 from research_repo_tools.complete_runs import (
     CompleteCase,
     CompletePolicy,
@@ -29,6 +30,7 @@ from research_repo_tools.complete_runs import (
     serialize_run,
     validate_run_evidence,
 )
+from research_repo_tools.criterion_inventory import DiscoveryCommand, DiscoveryPlan, parse_inventory
 from research_repo_tools.evidence import Evidence, deterministic_json, publish_evidence
 from research_repo_tools.host_metadata import HostMetadata, capture_host, capture_profile, parse_host, serialize_host
 from research_repo_tools.measurement import load_measurement
@@ -116,6 +118,152 @@ def measured(parent: Path, *, point: bytes = b"10", same_label: bool = False) ->
 
 
 class TestCompleteConsumer(unittest.TestCase):
+    def test_required_discovery_compatibility_is_checked_before_gates(self):
+        for matching in (True, False, "missing"):
+            with self.subTest(matching=matching), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                current, baseline = root / "current", root / "baseline"
+                plan = fixture(current)
+                bench = BENCHMARK.replace("(['reference / 2'] if os.environ['PHASE'] == 'baseline' else [])", "['reference / 2']")
+                (current / "bench.py").write_text(bench, encoding="utf-8", newline="\n")
+                fixture(baseline)
+                command = DiscoveryCommand("suite", (sys.executable, "-c", "print('library / 2: benchmark'); print('reference / 2: benchmark')"))
+                policy = DiscoveryPolicy(DiscoveryPlan((command,)), sample_count=3)
+                plan = replace(
+                    plan,
+                    measurement=replace(plan.measurement, compatible=(*plan.measurement.compatible, "context.discovery-inventory")),
+                    baseline=replace(plan.baseline, policy=policy),
+                    current=replace(
+                        plan.current, policy=policy if matching is True else DiscoveryPolicy(DiscoveryPlan((replace(command, name="other"),)), sample_count=3)
+                    ),
+                )
+                if matching == "missing":
+                    plan = replace(plan, current=replace(plan.current, policy=CompletePolicy(("library / 2", "reference / 2"), sample_count=3)))
+                with patch("research_repo_tools.measurement.resolve_revision", return_value="a" * 40):
+                    if matching is True:
+                        evidence = measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.0.0"))
+                        validate_run_evidence(evidence)
+                        self.assertEqual(
+                            dict(evidence.sources[0][1].context)["discovery-inventory"], dict(evidence.sources[1][1].context)["discovery-inventory"]
+                        )
+                    else:
+                        with patch("research_repo_tools.common_measurement.run_command_live") as live, self.assertRaisesRegex(ValueError, "before timing"):
+                            measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.0.0"))
+                        live.assert_not_called()
+
+    def test_mixed_case_phase_path_reaches_probes_discovery_gates_and_measurement(self):
+        with tempfile.TemporaryDirectory(prefix="phase path café ") as directory:
+            root = Path(directory)
+            current, baseline = root / "current", root / "baseline"
+            plan = fixture(current)
+            fixture(baseline)
+            python = Path(sys.executable)
+            selected = str(python.parent)
+            check = f"import os\nassert os.environ['PATH'] == {selected!r}\n"
+            for name in ("bench.py", "gate.py"):
+                path = current / name
+                path.write_text(check + path.read_text(encoding="utf-8"), encoding="utf-8", newline="\n")
+            phases = {}
+            for phase in ("baseline", "current"):
+                original = getattr(plan, phase)
+                listing = (
+                    "import os; assert os.environ['PATH'] == "
+                    + repr(selected)
+                    + "; "
+                    + "; ".join(f"print({identity + ': benchmark'!r})" for identity in original.policy.expected)
+                )
+                discovery = DiscoveryPolicy(DiscoveryPlan((DiscoveryCommand("suite", (python.name, "-c", listing)),)), sample_count=3)
+                phases[phase] = replace(
+                    original,
+                    command=(python.name, *original.command[1:]),
+                    gate=(python.name, *original.gate[1:]),
+                    environment=(*original.environment, ("Path", selected)),
+                    policy=discovery,
+                )
+            plan = replace(plan, measurement=replace(plan.measurement, probes=(("python", (python.name, "--version")),)), **phases)
+            with patch("research_repo_tools.measurement.resolve_revision", return_value="a" * 40), patch.dict(os.environ, {"PATH": str(root / "absent")}):
+                evidence = measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.0.0"))
+            self.assertEqual(len(dict(validate_run_evidence(evidence).phases)["current"].cases), 1)
+
+    def test_retained_environments_preserve_constructor_invariants(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = measured(Path(directory))
+            for environment in ({"A": "1", "a": "2"}, {"INVALID=KEY": "1"}, {" KEY": "1"}, {"KEY\v": "1"}, {"KEY": "\0"}):
+                with self.subTest(environment=environment):
+                    name, source = evidence.sources[0]
+                    changed = replace(source, context=tuple({**dict(source.context), "environment": json.dumps(environment)}.items()))
+                    with self.assertRaises(ValueError):
+                        validate_run_evidence(replace(evidence, sources=((name, changed), evidence.sources[1])))
+            name, source = evidence.sources[0]
+            changed = replace(source, context=tuple({**dict(source.context), "environment": '{"EMPTY":""}'}.items()))
+            validate_run_evidence(replace(evidence, sources=((name, changed), evidence.sources[1])))
+
+    def test_common_plan_native_discovery_before_gates_retains_inventory(self):
+        with tempfile.TemporaryDirectory(prefix="discovered café ") as directory:
+            root = Path(directory)
+            current, baseline = root / "current", root / "baseline"
+            fixture(current)
+            listing = """import sys
+if '--list' in sys.argv:
+    from pathlib import Path
+    import os
+    home = Path(os.environ['CRITERION_HOME'])
+    (home / 'private-list-output').write_bytes(b'discovery')
+    for identity in ['library / 2'] + (['reference / 2'] if os.environ['PHASE'] == 'baseline' else []):
+        sys.stdout.buffer.write((identity + ': benchmark\\r\\n').encode('utf-8'))
+    sys.exit(0)
+"""
+            (current / "bench.py").write_text(listing + BENCHMARK, encoding="utf-8", newline="\n")
+            config = (current / "benchmark.toml").read_text(encoding="utf-8")
+            command = json.dumps([sys.executable, "-X", "utf8", "bench.py", "--list"])
+            for expected in ('["library / 2", "reference / 2"]', '["library / 2"]'):
+                config = config.replace(f"expected={expected}", 'discovery={suites=[{name="native", command=' + command + ", timeout=20}]}")
+            (current / "benchmark.toml").write_text(config, encoding="utf-8", newline="\n")
+            plan = load_measurement(current, "benchmark.toml")
+            assert isinstance(plan, CommonHarnessPlan)
+            self.assertIsInstance(plan.baseline.policy, DiscoveryPolicy)
+            shutil.copytree(current, baseline)
+            (baseline / "src/point.txt").write_bytes(b"10")
+            with patch("research_repo_tools.measurement.resolve_revision", return_value="a" * 40):
+                evidence = measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.0.0"))
+            run = validate_run_evidence(evidence)
+            for phase, source in evidence.sources:
+                inventory = parse_inventory(dict(source.context)["discovery-inventory"].encode("utf-8"))
+                self.assertEqual(inventory.expected, dict(run.phases)[phase].policy.expected)
+                self.assertFalse(any((root / phase).rglob("private-list-output")))
+            context = dict(evidence.sources[0][1].context)
+            context["discovery-inventory"] = context["discovery-inventory"].replace("library / 2", "wrong ID")
+            altered = replace(evidence.sources[0][1], context=tuple(context.items()))
+            with self.assertRaisesRegex(ValueError, "discovered inventory differs"):
+                validate_run_evidence(replace(evidence, sources=((evidence.sources[0][0], altered), evidence.sources[1])))
+
+    def test_discovery_missing_series_or_leaked_output_stops_before_gates(self):
+        for failure in ("missing series", "leaked output"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                current, baseline = root / "current", root / "baseline"
+                plan = fixture(current)
+                fixture(baseline)
+                code = (
+                    "print('unselected: benchmark')"
+                    if failure == "missing series"
+                    else (
+                        "from pathlib import Path; Path('target/criterion').mkdir(parents=True); "
+                        "print('library / 2: benchmark'); print('reference / 2: benchmark')"
+                    )
+                )
+                policy = DiscoveryPolicy(DiscoveryPlan((DiscoveryCommand("suite", (sys.executable, "-c", code)),)), sample_count=3)
+                plan = replace(plan, baseline=replace(plan.baseline, policy=policy))
+                with (
+                    patch("research_repo_tools.measurement.resolve_revision", return_value="a" * 40),
+                    patch("research_repo_tools.common_measurement.run_command_live") as live,
+                    self.assertRaisesRegex(ValueError, "omits series IDs|discovery produced timing output"),
+                ):
+                    measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.0.0"))
+                live.assert_not_called()
+                if failure == "leaked output":
+                    self.assertTrue((baseline / "target/criterion").is_dir())
+
     def test_generic_cpu_labels_do_not_become_known_provenance(self):
         # Replace only the process module's provider; global OS identity is intact.
         for reported in ("arm64", "unavailable", "unknown"):

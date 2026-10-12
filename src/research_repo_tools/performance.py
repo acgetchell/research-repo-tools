@@ -33,6 +33,9 @@ def add_commands(groups) -> None:
     compare.add_argument("--statistic", choices=("mean", "median"), default="median")
     compare.add_argument("--unit", choices=("ms", "ns", "s", "us"), default="ns")
     add_command(commands, "convert")
+    discover = commands.add_parser("discover", help="run configured native list commands and retain semantic Criterion IDs")
+    discover.add_argument("configuration")
+    discover.add_argument("--output", required=True)
     add_command(commands, "export")
     extract = commands.add_parser("extract", help="safely extract a tar/ZIP asset into an absent directory")
     extract.add_argument("archive")
@@ -63,6 +66,8 @@ def add_commands(groups) -> None:
     verify = commands.add_parser("verify", help="verify an evidence envelope and its exact payload digest")
     verify.add_argument("payload")
     verify.add_argument("manifest")
+    saved = commands.add_parser("verify-saved", help="validate complete fresh and saved Criterion samples and exact raw bytes")
+    saved.add_argument("configuration")
 
 
 def run(args: argparse.Namespace, settings: Config) -> int:
@@ -70,7 +75,27 @@ def run(args: argparse.Namespace, settings: Config) -> int:
 
     if args.action in performance_workflows.COMMANDS:
         return performance_workflows.run(args, settings)
-    if args.action in {"host", "profile"}:
+    if args.action == "discover":
+        from research_repo_tools.criterion_inventory import discover_inventory, load_discovery, serialize_inventory
+        from research_repo_tools.publication import _path
+
+        output = _path(settings.root, args.output)
+        if _paths_alias(output, _path(settings.root, args.configuration)):
+            raise ValueError("inventory output must be distinct from configuration")
+        if output.exists():
+            raise ValueError("inventory output already exists; select a new path to preserve evidence")
+        inventory = discover_inventory(settings.root, load_discovery(settings.root, args.configuration))
+        replace_many({output: serialize_inventory(inventory)})
+    elif args.action == "verify-saved":
+        from research_repo_tools.criterion_baselines import load_saved_sample, validate_saved_sample
+        from research_repo_tools.criterion_inventory import _directory
+
+        plan = load_saved_sample(settings.root, args.configuration)
+        result = validate_saved_sample(
+            _directory(settings.root, plan.criterion_dir), plan.saved_sample, plan.policy, fresh_sample=plan.fresh_sample, raw_files=plan.raw_files
+        )
+        print(f"Verified {len(result.cases)} complete saved Criterion benchmarks")
+    elif args.action in {"host", "profile"}:
         from research_repo_tools.files import _validate_distinct_paths
         from research_repo_tools.host_metadata import capture_host, capture_profile, serialize_host
         from research_repo_tools.publication import _path

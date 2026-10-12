@@ -20,6 +20,13 @@ rustc = ["rustc", "--version", "--verbose"]
 command = ["cargo", "bench", "--locked", "--bench", "timings"]
 gate = ["cargo", "test", "--locked", "--test", "benchmark_inputs"]
 expected = ["library/workload", "reference/workload"]
+# Alternatively replace expected with a discovery table (target v0.1.9):
+# [phases.baseline.discovery]
+# required = ["library/workload", "reference/workload"]
+# [[phases.baseline.discovery.suites]]
+# name = "timings"
+# command = ["cargo", "bench", "--locked", "--bench", "timings", "--", "--list"]
+# timeout = 7200
 
 [phases.current]
 command = ["cargo", "bench", "--locked", "--bench", "timings", "--", "library/"]

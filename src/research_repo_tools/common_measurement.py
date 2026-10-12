@@ -12,11 +12,21 @@ from research_repo_tools.complete_runs import (
     RunSeries,
     _array,
     _integer,
+    _sample_settings,
     collect_complete_sample,
     serialize_run,
     validate_run_evidence,
 )
-from research_repo_tools.criterion import _positive, _statistic, _unit
+from research_repo_tools.criterion import Statistic, Unit, _positive, _statistic, _unit
+from research_repo_tools.criterion_inventory import (
+    DiscoveryPlan,
+    _environment,
+    _environment_value,
+    _overlay_environment,
+    _parse_discovery,
+    discover_inventory,
+    serialize_inventory,
+)
 from research_repo_tools.evidence import Evidence, Provenance, _object, _string, compare_provenance, fingerprint_files
 from research_repo_tools.measurement import MeasurementConfig, _strings, capture_provenance
 from research_repo_tools.process import run_command_live
@@ -24,14 +34,32 @@ from research_repo_tools.publication import _inventory, _path
 from research_repo_tools.publication_config import _table
 from research_repo_tools.release_pairs import ReleasePair
 
-__all__ = ["CommonHarnessPlan", "MeasurementPhase", "measure_prepared_pair"]
+__all__ = ["CommonHarnessPlan", "DiscoveryPolicy", "MeasurementPhase", "measure_prepared_pair"]
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveryPolicy:
+    """Validated sample requirements whose exact IDs come from native discovery."""
+
+    discovery: DiscoveryPlan
+    sample_count: int = 100
+    statistics: tuple[Statistic, ...] = ("mean", "median")
+    confidence_level: float = 0.95
+    unit: Unit = "ns"
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.discovery, DiscoveryPlan):
+            raise TypeError("discovery policy requires a DiscoveryPlan")
+        statistics, level = _sample_settings(self.sample_count, self.statistics, self.confidence_level, self.unit)
+        object.__setattr__(self, "statistics", statistics)
+        object.__setattr__(self, "confidence_level", level)
 
 
 @dataclass(frozen=True, slots=True)
 class MeasurementPhase:
     command: tuple[str, ...]
     gate: tuple[str, ...]
-    policy: CompletePolicy
+    policy: CompletePolicy | DiscoveryPolicy
     environment: tuple[tuple[str, str], ...] = ()
 
     def __post_init__(self) -> None:
@@ -39,16 +67,9 @@ class MeasurementPhase:
             if isinstance(getattr(self, key), str):
                 raise ValueError(f"{key} must be an argument vector")
             object.__setattr__(self, key, _strings(list(getattr(self, key)), key))
-        if not isinstance(self.policy, CompletePolicy):
+        if not isinstance(self.policy, CompletePolicy | DiscoveryPolicy):
             raise TypeError("phase requires a completeness policy")
-        environment = tuple(sorted(tuple(item) for item in self.environment))
-        if len({key.casefold() for key, _ in environment}) != len(environment):
-            raise ValueError("environment keys must be unique on every platform")
-        for key, value in environment:
-            _string(key, "environment key")
-            if "=" in key or not isinstance(value, str) or "\0" in value:
-                raise ValueError("invalid environment entry")
-        object.__setattr__(self, "environment", environment)
+        object.__setattr__(self, "environment", _environment(self.environment))
 
 
 @dataclass(frozen=True, slots=True)
@@ -76,10 +97,11 @@ class CommonHarnessPlan:
         if not self.series or len({series.name for series in self.series}) != len(self.series):
             raise ValueError("plan series must have unique names")
         for series in self.series:
-            if any(full_id not in getattr(self, series.phase).policy.expected for _, full_id in series.rows):
+            policy = getattr(self, series.phase).policy
+            if isinstance(policy, CompletePolicy) and any(full_id not in policy.expected for _, full_id in series.rows):
                 raise ValueError("series refers to an unexpected benchmark")
         left, right = self.baseline.policy, self.current.policy
-        if replace(left, expected=right.expected) != right:
+        if (left.sample_count, left.statistics, left.confidence_level, left.unit) != (right.sample_count, right.statistics, right.confidence_level, right.unit):
             raise ValueError("phases must share sample count, statistics, confidence and unit")
         object.__setattr__(self, "series", tuple(self.series))
 
@@ -102,13 +124,19 @@ def parse_plan(document: dict) -> CommonHarnessPlan:
     phases = _object(raw["phases"], "phases", {"baseline", "current"})
     parsed = {}
     for name, data in phases.items():
-        phase = _table(data, name, {"command", "gate", "expected"}, {"environment"})
-        policy = CompletePolicy(
-            _strings(phase["expected"], "expected"),
+        phase = _table(data, name, {"command", "gate"}, {"expected", "discovery", "environment"})
+        if ("expected" in phase) == ("discovery" in phase):
+            raise ValueError("phase requires exactly one of expected or discovery")
+        settings = (
             _integer(raw.get("sample-count", 100), "sample count"),
             tuple(_statistic(item) for item in _array(raw.get("statistics", ["mean", "median"]), "statistics")),
             _positive(raw.get("confidence-level", 0.95), "confidence level"),
             _unit(raw.get("unit", "ns")),
+        )
+        policy = (
+            CompletePolicy(_strings(phase["expected"], "expected"), *settings)
+            if "expected" in phase
+            else DiscoveryPolicy(_parse_discovery(phase["discovery"]), *settings)
         )
         parsed[name] = MeasurementPhase(
             _strings(phase["command"], "command"),
@@ -145,12 +173,6 @@ def parse_plan(document: dict) -> CommonHarnessPlan:
         compatible=compatible,
     )
     return CommonHarnessPlan(config, parsed["baseline"], parsed["current"], tuple(series))
-
-
-def _environment_value(value: object) -> str:
-    if not isinstance(value, str) or "\0" in value:
-        raise ValueError("environment value must be text without NUL")
-    return value
 
 
 def measure_prepared_pair(baseline: Path, current: Path, plan: CommonHarnessPlan, pair: ReleasePair, *, working_tree: bool = False) -> Evidence:
@@ -201,10 +223,7 @@ def measure_prepared_pair(baseline: Path, current: Path, plan: CommonHarnessPlan
         selected = getattr(plan, phase)
         config = replace(plan.measurement, command=selected.command)
         configurations[phase] = config
-        # Fold keys when overlaying so Windows and POSIX reject ambiguous plans.
-        keys = {key.casefold() for key, _ in selected.environment}
-        env = {key: value for key, value in os.environ.items() if key.casefold() not in keys}
-        env.update(selected.environment)
+        env = _overlay_environment(os.environ, selected.environment)
         environments[phase] = env
         before[phase] = capture_provenance(root, config, getattr(pair, phase), mode="working-tree" if phase == "current" and working_tree else "tag", env=env)
         declared[phase] = replace(
@@ -220,7 +239,8 @@ def measure_prepared_pair(baseline: Path, current: Path, plan: CommonHarnessPlan
                 }.items()
             ),
         )
-    compatibility = compare_provenance(declared["baseline"], declared["current"], fields=plan.measurement.compatible)
+    early_fields = tuple(field for field in plan.measurement.compatible if field != "context.discovery-inventory")
+    compatibility = compare_provenance(declared["baseline"], declared["current"], fields=early_fields)
     if not compatibility.compatible:
         raise ValueError(f"required benchmark provenance differs or is unknown before timing: {compatibility.differences}")
 
@@ -228,6 +248,30 @@ def measure_prepared_pair(baseline: Path, current: Path, plan: CommonHarnessPlan
         source = before[phase]
         if capture_provenance(roots[phase], configurations[phase], getattr(pair, phase), mode=dict(source.context)["mode"], env=environments[phase]) != source:
             raise ValueError(f"{phase} measurement inputs or host/tool identity changed")
+
+    policies = {}
+    for phase, root in roots.items():
+        policy = getattr(plan, phase).policy
+        if isinstance(policy, DiscoveryPolicy):
+            inventory = discover_inventory(root, policy.discovery, env=environments[phase])
+            policies[phase] = CompletePolicy(inventory.expected, policy.sample_count, policy.statistics, policy.confidence_level, policy.unit)
+            rows = {full_id for series in plan.series if series.phase == phase for _, full_id in series.rows}
+            if not rows <= set(inventory.expected):
+                raise ValueError(f"{phase} discovered inventory omits series IDs: {sorted(rows - set(inventory.expected))}")
+            source = declared[phase]
+            declared[phase] = replace(
+                source, context=(*source.context, ("discovery-inventory", json.dumps(json.loads(serialize_inventory(inventory)), sort_keys=True)))
+            )
+        else:
+            policies[phase] = policy
+        for selected in roots:
+            unchanged(selected)
+            if (roots[selected] / plan.measurement.criterion_dir).exists():
+                raise ValueError("discovery produced timing output before measurement")
+
+    compatibility = compare_provenance(declared["baseline"], declared["current"], fields=plan.measurement.compatible)
+    if not compatibility.compatible:
+        raise ValueError(f"required benchmark provenance differs or is unknown before timing: {compatibility.differences}")
 
     for phase, root in roots.items():
         gate = getattr(plan, phase).gate
@@ -246,7 +290,7 @@ def measure_prepared_pair(baseline: Path, current: Path, plan: CommonHarnessPlan
         result = run_command_live(selected.command[0], selected.command[1:], cwd=root, env=environments[phase], timeout=plan.measurement.timeout)
         if result.returncode:
             raise ValueError(f"{phase} measurement failed")
-        samples.append((phase, collect_complete_sample(root / plan.measurement.criterion_dir, plan.measurement.sample, selected.policy)))
+        samples.append((phase, collect_complete_sample(root / plan.measurement.criterion_dir, plan.measurement.sample, policies[phase])))
         unchanged(phase)
         source = declared[phase]
         context = {**dict(source.context), "gate-status": "passed"}
