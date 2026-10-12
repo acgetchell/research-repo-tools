@@ -277,6 +277,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             complete_suite = consumer / "public_complete_consumer.py"
             complete_suite.write_bytes((ROOT / "tests/performance/public_complete_consumer.py").read_bytes())
             run_isolated(python, [str(complete_suite)], cwd=consumer, env=local_env)
+            criterion_suite = consumer / "public_criterion_consumer.py"
+            criterion_suite.write_bytes((ROOT / "tests/performance/public_criterion_consumer.py").read_bytes())
+            run_isolated(python, [str(criterion_suite)], cwd=consumer, env=local_env)
             publication_suite = consumer / "public_publication_consumer.py"
             publication_suite.write_bytes((ROOT / "tests/publication/public_publication_consumer.py").read_bytes())
             run_isolated(python, [str(publication_suite)], cwd=consumer, env=local_env)

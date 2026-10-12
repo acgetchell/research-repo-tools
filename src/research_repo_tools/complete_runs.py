@@ -50,6 +50,17 @@ def _names(values, context: str) -> tuple[str, ...]:
     return result
 
 
+def _sample_settings(sample_count: int, statistics: tuple[Statistic, ...], confidence_level: float, unit: Unit) -> tuple[tuple[Statistic, ...], float]:
+    statistics = tuple(sorted(_statistic(item) for item in _names(statistics, "statistics")))
+    if type(sample_count) is not int or sample_count < 2:
+        raise ValueError("sample count must be an integer of at least two")
+    level = _positive(confidence_level, "confidence level")
+    if level >= 1:
+        raise ValueError("confidence level must lie strictly between zero and one")
+    _unit(unit)
+    return statistics, level
+
+
 @dataclass(frozen=True, slots=True)
 class CompletePolicy:
     expected: tuple[str, ...]
@@ -60,14 +71,9 @@ class CompletePolicy:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "expected", tuple(sorted(_names(self.expected, "expected full IDs"))))
-        object.__setattr__(self, "statistics", tuple(sorted(_statistic(item) for item in _names(self.statistics, "statistics"))))
-        if type(self.sample_count) is not int or self.sample_count < 2:
-            raise ValueError("sample count must be an integer of at least two")
-        level = _positive(self.confidence_level, "confidence level")
-        if level >= 1:
-            raise ValueError("confidence level must lie strictly between zero and one")
+        statistics, level = _sample_settings(self.sample_count, self.statistics, self.confidence_level, self.unit)
+        object.__setattr__(self, "statistics", statistics)
         object.__setattr__(self, "confidence_level", level)
-        _unit(self.unit)
 
 
 @dataclass(frozen=True, slots=True)
@@ -154,10 +160,13 @@ def collect_complete_sample(criterion_dir: Path, sample: str, policy: CompletePo
         if directory != criterion_dir and directory.name == sample and (required.intersection(files) or not directories):
             if not required <= set(files):
                 raise ValueError(f"incomplete Criterion sample: {directory}")
+            raw_paths = tuple(directory / name for name in ("benchmark.json", "estimates.json", "sample.json"))
+            if any(not path.is_file() for path in raw_paths):
+                raise ValueError(f"Criterion sample requires regular core JSON files: {directory}")
             cases.append(
                 CompleteCase(
                     directory.parent.relative_to(criterion_dir).as_posix(),
-                    *((directory / name).read_bytes() for name in ("benchmark.json", "estimates.json", "sample.json")),
+                    *(path.read_bytes() for path in raw_paths),
                 )
             )
     return CompleteSample(policy, tuple(cases))
@@ -292,6 +301,11 @@ def validate_run_evidence(evidence: Evidence) -> CompleteRun:
         raise ValueError("run provenance requires baseline and current sources")
     for phase, source in sources.items():
         context = dict(source.context)
+        if "discovery-inventory" in context:
+            from research_repo_tools.criterion_inventory import parse_inventory
+
+            if parse_inventory(context["discovery-inventory"].encode("utf-8")).expected != dict(run.phases)[phase].policy.expected:
+                raise ValueError("retained discovered inventory differs from complete policy")
         if source.source_sha256 is None or context.get("phase") != phase or context.get("gate-status") != "passed":
             raise ValueError("run requires source identity and a passed gate attributed to each phase")
         for key in (
@@ -320,8 +334,9 @@ def validate_run_evidence(evidence: Evidence) -> CompleteRun:
             for value in values:
                 _string(value, key)
         environment = _object(_load_json(context["environment"].encode("utf-8"), "environment"), "environment")
-        if any(not isinstance(value, str) or "\0" in value for value in environment.values()):
-            raise ValueError("invalid recorded environment")
+        from research_repo_tools.criterion_inventory import _environment
+
+        _environment(environment.items())
     ReleasePair(dict(sources["current"].context)["release"], dict(sources["baseline"].context)["release"])
     compatibility = compare_provenance(sources["baseline"], sources["current"], fields=run.compatible)
     if not compatibility.compatible:

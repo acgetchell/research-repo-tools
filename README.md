@@ -83,7 +83,7 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | File selection | `files check-lines`, `list`, `run` | Configurable raw line gate, tracked/nonignored inputs, exclusions and portable argument batching |
 | Notebooks | `notebooks advise`, `check`, `clear`, `execute`, `group`, `inspect`, `launch`, `lint`, `reset`, `sync` | Read-only review, locked JupyterLab, native Ruff/ty checks, execution reports, and explicit restoration |
 | Papers | `papers check`, `normalize`, `source-date` | Explicit UTC dates, optional PDF text/geometry checks and validated metadata normalization |
-| Performance | `performance assets`, `baseline`, `compare`, `convert`, `export`, `extract`, `fetch`, `host`, `measure`, `profile`, `promote`, `publish`, `release-draft`, `release-upload`, `render`, `verify` | Complete configured measurement, retained evidence, release assets and publication |
+| Performance | `performance assets`, `baseline`, `compare`, `convert`, `discover`, `export`, `extract`, `fetch`, `host`, `measure`, `profile`, `promote`, `publish`, `release-draft`, `release-upload`, `render`, `verify`, `verify-saved` | Complete configured measurement, retained evidence, release assets and publication |
 | Python | `python check`, `fix`, `typecheck` | Complete tracked/nonignored inventory; native Ruff/ty policy; explicit fixes only |
 | Releases | `release check`, `gate`, `publish`, `registry`, `update`, `verify` | Metadata preparation, reviewed publication gates and exact registry/GitHub verification |
 | Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
@@ -1482,6 +1482,75 @@ partial inputs fail; they never select a different run as a fallback.
 Dimension plots remain consumer renderers over the retained run API. The shared
 tables support arbitrary named series; axis semantics, workload coordinates,
 scientific interpretation and release eligibility remain consumer decisions.
+
+### Criterion inventory and saved baselines
+
+These additions target v0.1.9. Pin an exact published release containing them
+before removing consumer discovery or baseline-copy helpers. Start with the
+packaged `criterion-inventory.toml` and `criterion-saved.toml` templates.
+Discovery configuration declares native list commands, suite names, working
+directories, environments and bounded timeouts. It can require exact IDs and
+exclude explicitly named compatibility cases. IDs stay separate from Criterion's
+sanitized filesystem paths. Empty, malformed and duplicate inventories fail.
+
+```toml
+schema = 1
+required = ["workload/library/2"]
+excluded = []
+
+[[suites]]
+name = "workload"
+command = ["cargo", "bench", "--locked", "--bench", "workload", "--", "--list"]
+cwd = "."
+timeout = 7200
+```
+
+Use the template's `just performance` wrapper to save the discovered inventory:
+
+```sh
+just performance discover criterion-inventory.toml --output target/criterion-inventory.json
+```
+
+Discovery may compile. Every suite gets a private `CRITERION_HOME`; commands
+must honor it. Existing inventory outputs are preserved; select a fresh path
+for another discovery. Schema-2 common-harness phases can replace `expected`
+with a `discovery` table containing the same suite declarations. The shared
+measurement then discovers both inventories after installing the current harness,
+validates series coverage, runs both correctness gates, and measures. It retains
+the discovered suite inventories with the complete run. See the
+[configuration and API reference](https://github.com/acgetchell/research-repo-tools/blob/main/docs/criterion-api.md).
+
+For saved release baselines, declare a verification plan:
+
+```toml
+schema = 1
+criterion-dir = "target/criterion"
+fresh-sample = "new"
+saved-sample = "v1.2.0"
+inventory = "target/criterion-inventory.json"
+raw-files = ["benchmark.json", "estimates.json", "sample.json", "tukey.json"]
+sample-count = 100
+statistics = ["mean", "median"]
+confidence-level = 0.95
+unit = "ns"
+```
+
+Run inventory discovery first, then the consumer's correctness gates and native
+measurement with its saved-baseline option. Next validate the saved copy:
+
+```sh
+just performance verify-saved criterion-saved.toml
+```
+
+Package and publish only after validation succeeds. Criterion can report a copy
+error while returning success: verification requires complete fresh and saved
+inventories and exact binary equality for every configured raw JSON file.
+`tukey.json` is required by the scaffold above; configure additional JSON files
+when the consumer requires them. Rejection leaves evidence unchanged.
+Required cases, exclusions, suite/phase assignments, statistical settings and
+release eligibility remain consumer declarations. The
+[consumer deletion map](https://github.com/acgetchell/research-repo-tools/blob/main/docs/performance-migration.md#criterion-discovery-and-saved-baseline-adoption)
+identifies the generic helpers these contracts replace.
 
 ### Host and profiling metadata
 
