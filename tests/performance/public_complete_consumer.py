@@ -24,19 +24,24 @@ from research_repo_tools import process
 from research_repo_tools.cli import main
 from research_repo_tools.common_measurement import CommonHarnessPlan, DiscoveryPolicy, measure_prepared_pair
 from research_repo_tools.complete_runs import (
+    LEGACY_RUN_SCHEMA,
     RUN_SCHEMA,
+    RUN_SCHEMA_V2,
     CompleteCase,
     CompletePolicy,
     CompleteRun,
     CompleteSample,
     RunSeries,
     collect_complete_sample,
+    parse_policy,
     parse_run,
     render_run,
     run_identity,
+    serialize_policy,
     serialize_run,
     validate_run_evidence,
 )
+from research_repo_tools.criterion_baselines import load_saved_sample, validate_saved_sample
 from research_repo_tools.criterion_inventory import DiscoveryCommand, DiscoveryPlan, parse_inventory
 from research_repo_tools.evidence import Evidence, Provenance, deterministic_json, parse_evidence, publish_evidence, serialize_evidence
 from research_repo_tools.host_metadata import HostMetadata, capture_host, capture_profile, parse_host, serialize_host
@@ -1282,6 +1287,453 @@ if '--list' in sys.argv:
                 with redirect_stderr(io.StringIO()):
                     self.assertEqual(main([*base, "profile", "profile.toml", "--output", "src/point.txt"]), 1)
                 self.assertEqual((root / "src/point.txt").read_bytes(), b"5")
+
+
+COUNTS = (("library / 2", 10), ("geometry café / 15", 15), ("geometry / 20", 20), ("geometry / 25", 25), ("reference / 2", 100))
+
+
+def mixed_case(identity: str, count: int) -> CompleteCase:
+    """Synthetic original native bytes with deliberately unrelated storage names."""
+    estimates = (
+        b'{"mean":{"point_estimate":2,"confidence_interval":{"lower_bound":1,"upper_bound":3,"confidence_level":0.95}},'
+        b'"median":{"point_estimate":2,"confidence_interval":{"lower_bound":1,"upper_bound":3,"confidence_level":0.95}}}\r\n'
+    )
+    return CompleteCase(
+        f"stored_{count}",
+        (json.dumps({"full_id": identity}, ensure_ascii=False) + "\r\n").encode("utf-8"),
+        estimates,
+        (json.dumps({"iters": list(range(1, count + 1)), "times": [2 * i for i in range(1, count + 1)], "sampling_mode": "Linear"}) + "\r\n").encode("utf-8"),
+    )
+
+
+def heterogeneous_plan(root: Path, *, discovery: bool = False) -> CommonHarnessPlan:
+    fixture(root)
+    configuration = (root / "benchmark.toml").read_text(encoding="utf-8").replace("schema=2", "schema=3").replace("sample-count=3\n", "")
+    assignments = "sample-counts=" + json.dumps(dict(COUNTS), ensure_ascii=False).replace(": ", " = ")
+    if discovery:
+        listing = "; ".join(f"print({identity + ': benchmark'!r})" for identity, _ in COUNTS)
+        inventory = 'discovery={suites=[{name="suite", command=' + json.dumps([sys.executable, "-X", "utf8", "-c", listing]) + "}]}"
+    else:
+        inventory = "expected=" + json.dumps([identity for identity, _ in COUNTS], ensure_ascii=False)
+    for old in ('expected=["library / 2", "reference / 2"]', 'expected=["library / 2"]'):
+        configuration = configuration.replace(old, inventory + "\n" + assignments)
+    (root / "benchmark.toml").write_text(configuration, encoding="utf-8", newline="\n")
+    benchmark = BENCHMARK.replace(
+        "for identity in ['library / 2'] + (['reference / 2'] if os.environ['PHASE'] == 'baseline' else []):",
+        f"for identity, count in {dict(COUNTS)!r}.items():",
+    ).replace(
+        "{'iters': [1, 2, 3], 'times': [point, point * 2, point * 3]}",
+        "{'iters': list(range(1, count + 1)), 'times': [point * i for i in range(1, count + 1)]}",
+    )
+    (root / "bench.py").write_text(benchmark, encoding="utf-8", newline="\n")
+    plan = load_measurement(root, "benchmark.toml")
+    assert isinstance(plan, CommonHarnessPlan)
+    return plan
+
+
+def sampling_evidence(run: CompleteRun, sources: tuple[tuple[str, Provenance], ...]) -> Evidence:
+    """Explicitly record new policies when constructing synthetic v2 evidence."""
+    sources = tuple(
+        (
+            phase,
+            replace(
+                source, context=tuple({**dict(source.context), "sampling-policy": serialize_policy(dict(run.phases)[phase].policy).decode("utf-8")}.items())
+            ),
+        )
+        for phase, source in sources
+    )
+    return Evidence(serialize_run(run), run.schema, sources)
+
+
+class TestHeterogeneousConsumer(unittest.TestCase):
+    def test_default_run_constructor_preserves_uniform_v1_workflow(self):
+        original = retained_fixture()
+        parsed = parse_run(original.payload)
+        run = CompleteRun(parsed.phases, parsed.series, parsed.compatible)
+        evidence = Evidence(serialize_run(run), RUN_SCHEMA, original.sources)
+        self.assertEqual(RUN_SCHEMA, "research-repo-tools/complete-run/v1")
+        self.assertEqual(run.schema, RUN_SCHEMA)
+        self.assertEqual(evidence, original)
+        self.assertEqual(validate_run_evidence(evidence), run)
+        self.assertTrue(all("sampling-policy" not in dict(source.context) for _, source in evidence.sources))
+
+    def test_default_common_plan_preserves_uniform_measurement_provenance(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            current, baseline = root / "current", root / "baseline"
+            parsed = fixture(current)
+            plan = CommonHarnessPlan(parsed.measurement, parsed.baseline, parsed.current, parsed.series)
+            self.assertEqual(plan.schema, 2)
+            shutil.copytree(current, baseline)
+            with patch("research_repo_tools.measurement.resolve_revision", return_value="a" * 40):
+                evidence = measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.0.0"))
+            self.assertEqual(evidence.payload_schema, RUN_SCHEMA)
+            self.assertEqual(validate_run_evidence(evidence).schema, RUN_SCHEMA)
+            self.assertTrue(all("sampling-policy" not in dict(source.context) for _, source in evidence.sources))
+
+    def test_packaged_measurement_template_declares_exact_counts(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(main(["templates", "common-benchmark.toml"]), 0)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "benchmark.toml").write_text(output.getvalue(), encoding="utf-8", newline="\n")
+            plan = load_measurement(root, "benchmark.toml")
+        self.assertIsInstance(plan, CommonHarnessPlan)
+        assert isinstance(plan, CommonHarnessPlan)
+        self.assertEqual(plan.schema, 3)
+        self.assertEqual(dict(plan.baseline.policy.sample_counts), {"library/workload": 10, "reference/workload": 100})
+
+    def test_exact_counts_and_original_bytes_round_trip_through_public_api(self):
+        policy = CompletePolicy(tuple(identity for identity, _ in COUNTS), sample_count=None, sample_counts=COUNTS)
+        cases = tuple(mixed_case(identity, count) for identity, count in COUNTS)
+        sample = CompleteSample(policy, cases)
+        self.assertEqual(tuple(policy.count_for(identity) for identity, _ in COUNTS), (10, 15, 20, 25, 100))
+        self.assertEqual(parse_policy(serialize_policy(policy)), policy)
+        run = CompleteRun((("baseline", sample), ("current", sample)), (RunSeries("Selected", "current", (("small", "library / 2"),)),), schema=RUN_SCHEMA_V2)
+        evidence = sampling_evidence(run, retained_fixture().sources)
+        self.assertEqual(validate_run_evidence(evidence), run)
+        self.assertEqual(parse_run(serialize_run(run)), run)
+        self.assertEqual(evidence.payload_schema, "research-repo-tools/complete-run/v2")
+        self.assertEqual({case.full_id: case.sample_count for case in dict(parse_run(evidence.payload).phases)["current"].cases}, dict(COUNTS))
+        for actual in dict(parse_run(evidence.payload).phases)["current"].cases:
+            self.assertEqual(actual, next(case for case in cases if case.full_id == actual.full_id))
+        self.assertIn(run_identity(evidence), render_run(evidence).decode())
+        self.assertEqual(len(dict(run.phases)["current"].cases), 5)
+        self.assertEqual(policy.count_for("geometry café / 15"), 15)
+        with self.assertRaisesRegex(ValueError, "unexpected"):
+            policy.count_for("stored_15")
+        for uniform in (10, 100):
+            with self.assertRaisesRegex(ValueError, "raw samples"):
+                CompleteSample(CompletePolicy(policy.expected, sample_count=uniform), cases)
+
+    def test_policy_rejects_missing_extra_overlapping_and_invalid_assignments(self):
+        expected = tuple(identity for identity, _ in COUNTS)
+        for assignments in ((), COUNTS[:-1], (*COUNTS, ("unexpected", 10)), (*COUNTS, COUNTS[0])):
+            with self.subTest(assignments=assignments), self.assertRaises(ValueError):
+                CompletePolicy(expected, sample_count=None, sample_counts=assignments)
+        for count in (True, 1, 0, -1, 10.0, "10", None):
+            with self.subTest(count=count), self.assertRaises(ValueError):
+                CompletePolicy(("case",), sample_count=None, sample_counts=(("case", count),))  # ty: ignore[invalid-argument-type]  Exercise untyped input.
+        with self.assertRaisesRegex(ValueError, "exactly one"):
+            CompletePolicy(expected, sample_counts=COUNTS)
+        mutable = list(COUNTS)
+        policy = CompletePolicy(expected, None, sample_counts=mutable)  # ty: ignore[invalid-argument-type]  Verify defensive copying.
+        mutable.clear()
+        self.assertEqual(policy.sample_counts, tuple(sorted(COUNTS)))
+
+    def test_mixed_samples_still_require_inventory_counts_and_complete_intervals(self):
+        policy = CompletePolicy(tuple(identity for identity, _ in COUNTS), None, sample_counts=COUNTS)
+        cases = tuple(mixed_case(identity, count) for identity, count in COUNTS)
+        first = cases[0]
+        for changed in (
+            cases[:-1],
+            (*cases, replace(first, storage_path="duplicate")),
+            (replace(first, benchmark=b'{"full_id":"unexpected"}'), *cases[1:]),
+            (mixed_case(first.full_id, 9), *cases[1:]),
+            (replace(first, estimates=first.estimates.replace(b'"median"', b'"other"')), *cases[1:]),
+            (replace(first, estimates=first.estimates.replace(b"0.95", b"0.9")), *cases[1:]),
+            (replace(first, estimates=first.estimates.replace(b'"upper_bound":3', b'"upper_bound":0.5')), *cases[1:]),
+        ):
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                CompleteSample(policy, changed)
+
+    def test_phase_counts_are_independent_and_bound_into_provenance_and_identity(self):
+        old = retained_fixture()
+        run = replace(parse_run(old.payload), schema=RUN_SCHEMA_V2)
+        uniform = sampling_evidence(run, old.sources)
+        self.assertEqual(validate_run_evidence(uniform), run)
+        phases = tuple(
+            (
+                phase,
+                replace(sample, policy=replace(sample.policy, sample_count=None, sample_counts=tuple((identity, 3) for identity in sample.policy.expected))),
+            )
+            for phase, sample in run.phases
+        )
+        explicit_run = replace(run, phases=phases)
+        explicit = sampling_evidence(explicit_run, old.sources)
+        self.assertNotEqual(run_identity(uniform), run_identity(explicit))
+        self.assertEqual([sample.cases for _, sample in run.phases], [sample.cases for _, sample in explicit_run.phases])
+        with self.assertRaisesRegex(ValueError, "sampling policy differs"):
+            validate_run_evidence(replace(uniform, payload=explicit.payload))
+        for missing in ("sampling-policy", "gate-status", "gate-command"):
+            sources = tuple(
+                (name, replace(source, context=tuple((key, value) for key, value in source.context if key != missing))) for name, source in explicit.sources
+            )
+            with self.subTest(missing=missing), self.assertRaises(ValueError):
+                validate_run_evidence(replace(explicit, sources=sources))
+        policy = CompletePolicy(("case",), None, sample_counts=(("case", 10),))
+        sample = CompleteSample(policy, (mixed_case("case", 10),))
+        other = CompleteSample(replace(policy, sample_counts=(("case", 15),)), (mixed_case("case", 15),))
+        independent = CompleteRun((("baseline", sample), ("current", other)), (RunSeries("Selected", "current", (("x", "case"),)),), schema=RUN_SCHEMA_V2)
+        validate_run_evidence(sampling_evidence(independent, old.sources))
+        with self.assertRaisesRegex(ValueError, "uniform"):
+            replace(independent, schema=LEGACY_RUN_SCHEMA)
+
+    def test_old_schema_preserves_its_contract_and_does_not_invent_policy_provenance(self):
+        evidence = retained_fixture()
+        run = parse_run(evidence.payload)
+        self.assertEqual(run.schema, LEGACY_RUN_SCHEMA)
+        self.assertEqual(serialize_run(run), evidence.payload)
+        self.assertTrue(all("sampling-policy" not in dict(source.context) for _, source in evidence.sources))
+        self.assertTrue(all("sample_counts" not in phase["policy"] for phase in json.loads(evidence.payload)["phases"].values()))
+        for schema in (RUN_SCHEMA_V2, "legacy/schema-3", "research-repo-tools/complete-run/v3"):
+            raw = json.loads(evidence.payload)
+            raw["schema"] = schema
+            with self.subTest(schema=schema), self.assertRaises(ValueError):
+                parse_run(deterministic_json(raw))
+        with self.assertRaisesRegex(ValueError, "schemas differ"):
+            validate_run_evidence(replace(evidence, payload_schema=RUN_SCHEMA_V2))
+        explicit_run = replace(run, schema=RUN_SCHEMA_V2)
+        with self.assertRaisesRegex(ValueError, "sampling-policy"):
+            validate_run_evidence(Evidence(serialize_run(explicit_run), RUN_SCHEMA_V2, evidence.sources))
+
+    def test_serialized_policy_and_run_reject_missing_extra_and_duplicate_fields(self):
+        policy = CompletePolicy(tuple(identity for identity, _ in COUNTS), None, sample_counts=COUNTS)
+        valid = json.loads(serialize_policy(policy))
+        for changed in (
+            {key: value for key, value in valid.items() if key != "sample_counts"},
+            {**valid, "sample_counts": {}},
+            {**valid, "sample_counts": {**dict(COUNTS), "extra": 10}},
+            {**valid, "sample_counts": {"library / 2": 10}},
+            {**valid, "sample_count": 10},
+            {**valid, "sample_counts": []},
+            {**valid, "sample_counts": {identity: True for identity, _ in COUNTS}},
+            {**valid, "unit": "unknown"},
+            {**valid, "confidence_level": 1},
+            {**valid, "statistics": ["mean", "mean"]},
+            {**valid, "unexpected": 10},
+        ):
+            with self.subTest(policy=changed), self.assertRaises(ValueError):
+                parse_policy(deterministic_json(changed))
+        payload = serialize_policy(policy).replace(b'"library / 2":10', b'"library / 2":10,"library / 2":10')
+        self.assertNotEqual(payload, serialize_policy(policy))
+        with self.assertRaisesRegex(ValueError, "duplicate JSON field"):
+            parse_policy(payload)
+        run = replace(parse_run(retained_fixture().payload), schema=RUN_SCHEMA_V2)
+        raw = json.loads(serialize_run(run))
+        del raw["phases"]["current"]["policy"]["sample_counts"]
+        with self.assertRaisesRegex(ValueError, "fields"):
+            parse_run(deterministic_json(raw))
+        raw = json.loads(retained_fixture().payload)
+        raw["phases"]["current"]["policy"]["sample_counts"] = {}
+        with self.assertRaisesRegex(ValueError, "fields"):
+            parse_run(deterministic_json(raw))
+
+    def test_schema3_defaults_preserve_uniform_policy_and_legacy_plan_rules(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            old = fixture(root)
+            self.assertEqual(old.schema, 2)
+            config = (root / "benchmark.toml").read_text(encoding="utf-8").replace("schema=2", "schema=3").replace("sample-count=3\n", "")
+            (root / "benchmark.toml").write_text(config, encoding="utf-8", newline="\n")
+            new = load_measurement(root, "benchmark.toml")
+            assert isinstance(new, CommonHarnessPlan)
+            self.assertEqual(new.schema, 3)
+            self.assertEqual(new.baseline.policy.sample_count, 100)
+            self.assertEqual(new.current.policy.sample_counts, ())
+            self.assertEqual(parse_policy(serialize_policy(CompletePolicy(("case",)))), CompletePolicy(("case",)))
+            with self.assertRaisesRegex(ValueError, "uniform"):
+                replace(new, schema=2, current=replace(new.current, policy=CompletePolicy(("library / 2",), sample_count=10)))
+
+    def test_v2_policy_evidence_flows_through_document_and_figure_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            presentation_fixture(root)
+            old = retained_fixture()
+            run = replace(parse_run(old.payload), schema=RUN_SCHEMA_V2)
+            run = replace(
+                run,
+                phases=tuple(
+                    (
+                        phase,
+                        replace(
+                            sample, policy=replace(sample.policy, sample_count=None, sample_counts=tuple((identity, 3) for identity in sample.policy.expected))
+                        ),
+                    )
+                    for phase, sample in run.phases
+                ),
+            )
+            evidence = sampling_evidence(run, old.sources)
+            publish_evidence(evidence, root / "run.json", root / "envelope.json")
+            payload, manifest = serialize_evidence(evidence)
+            plan = load_publication(root, "publication.toml")
+            publish_publication(plan)
+            self.assertIn(run_identity(evidence).encode(), (root / "README.md").read_bytes())
+            self.assertEqual((root / "run.json").read_bytes(), payload)
+            self.assertEqual((root / "envelope.json").read_bytes(), manifest)
+            self.assertFalse(load_publication(root, "publication.toml").changed_paths)
+            self.assertEqual(ET.fromstring((root / "figures/coordinates.svg").read_bytes()).attrib["data-run-id"], run_identity(evidence))
+
+    def test_native_mixed_measurement_discovery_and_cli_retention_on_installed_package(self):
+        for discovery in (False, True):
+            with self.subTest(discovery=discovery), tempfile.TemporaryDirectory(prefix="mixed café ") as directory:
+                root = Path(directory).resolve()
+                current, baseline = root / "current", root / "baseline"
+                plan = heterogeneous_plan(current, discovery=discovery)
+                shutil.copytree(current, baseline)
+                (baseline / "src/point.txt").write_bytes(b"10")
+                from research_repo_tools.common_measurement import run_command_live
+
+                with (
+                    patch("research_repo_tools.measurement.resolve_revision", return_value="a" * 40),
+                    patch("research_repo_tools.common_measurement.run_command_live", wraps=run_command_live) as live,
+                ):
+                    evidence = measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.0.0"))
+                self.assertEqual([call.args[1][0] for call in live.call_args_list], ["gate.py", "gate.py", "bench.py", "bench.py"])
+                self.assertEqual(evidence.payload_schema, RUN_SCHEMA_V2)
+                for phase, sample in validate_run_evidence(evidence).phases:
+                    self.assertEqual(dict(sample.policy.sample_counts), dict(COUNTS))
+                    self.assertEqual(json.loads(dict(dict(evidence.sources)[phase].context)["sampling-policy"])["sample_counts"], dict(COUNTS))
+                    for case in sample.cases:
+                        for key in ("benchmark", "estimates", "sample"):
+                            self.assertEqual(getattr(case, key), (root / phase / "target/criterion" / case.storage_path / "new" / f"{key}.json").read_bytes())
+                publish_evidence(evidence, root / "run.json", root / "envelope.json")
+                (root / "report.toml").write_bytes(b'schema=2\ncurrent="docs/current.md"\narchive="history"\ntitle="Mixed timings"\n')
+                base = ["--root", str(root), "performance"]
+                self.assertEqual(main([*base, "render", "run.json", "envelope.json", "--output", "mixed.md"]), 0)
+                self.assertEqual(main([*base, "promote", "report.toml", "--payload", "run.json", "--manifest", "envelope.json"]), 0)
+                before = {path: path.read_bytes() for path in (root / "history/runs").rglob("*") if path.is_file()}
+                shutil.rmtree(current / "target")
+                shutil.rmtree(baseline / "target")
+                with patch("research_repo_tools.host_metadata.capture_host", side_effect=AssertionError("offline must not probe")):
+                    self.assertEqual(main([*base, "promote", "report.toml", "--check"]), 0)
+                    self.assertEqual(load_latest_run(root, "history"), evidence)
+                self.assertEqual(before, {path: path.read_bytes() for path in before})
+
+    def test_schema3_cli_measure_publishes_complete_policy(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            plan = heterogeneous_plan(root)
+            retained = sampling_evidence(
+                CompleteRun(
+                    tuple(
+                        (phase, CompleteSample(getattr(plan, phase).policy, tuple(mixed_case(identity, count) for identity, count in COUNTS)))
+                        for phase in ("baseline", "current")
+                    ),
+                    plan.series,
+                    schema=RUN_SCHEMA_V2,
+                ),
+                retained_fixture().sources,
+            )
+            with patch("research_repo_tools.performance_workflows.measure_pair", return_value=retained) as measure:
+                self.assertEqual(
+                    main(
+                        [
+                            "--root",
+                            str(root),
+                            "performance",
+                            "measure",
+                            "benchmark.toml",
+                            "v1.1.0",
+                            "v1.0.0",
+                            "--allow-git-mutations",
+                            "--payload",
+                            "run.json",
+                            "--manifest",
+                            "envelope.json",
+                        ]
+                    ),
+                    0,
+                )
+            self.assertEqual(measure.call_args.args[1], plan)
+            self.assertEqual(parse_evidence((root / "run.json").read_bytes(), (root / "envelope.json").read_bytes()), retained)
+
+    def test_schema3_configuration_rejects_incomplete_or_ambiguous_maps_before_commands(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            heterogeneous_plan(root)
+            config = (root / "benchmark.toml").read_text(encoding="utf-8")
+            for changed in (
+                config.replace("schema=3", "schema=2"),
+                config.replace("schema=3", "schema=3\nsample-count=100"),
+                config.replace('"library / 2" = 10, ', ""),
+                config.replace('"library / 2" = 10', '"unexpected" = 10'),
+                config.replace('"library / 2" = 10', '"library / 2" = true'),
+                config.replace('"library / 2" = 10', '"library / 2" = 10.0'),
+                config.replace('"library / 2" = 10', '"library / 2" = 1'),
+                config.replace('"library / 2" = 10', '"library / 2" = 10, "library / 2" = 10'),
+            ):
+                (root / "benchmark.toml").write_text(changed, encoding="utf-8", newline="\n")
+                with self.subTest(config=changed), patch("research_repo_tools.common_measurement.run_command_live") as live, self.assertRaises(ValueError):
+                    load_measurement(root, "benchmark.toml")
+                live.assert_not_called()
+
+    def test_discovered_count_coverage_and_required_policy_compatibility_precede_gates(self):
+        for failure in ("missing", "extra", "compatibility"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                current, baseline = root / "current", root / "baseline"
+                plan = heterogeneous_plan(current, discovery=True)
+                policy = plan.baseline.policy
+                assert isinstance(policy, DiscoveryPolicy)
+                counts = COUNTS[:-1] if failure == "missing" else (*COUNTS, ("extra", 10)) if failure == "extra" else COUNTS
+                policy = replace(policy, sample_counts=counts)
+                plan = replace(plan, baseline=replace(plan.baseline, policy=policy))
+                if failure == "compatibility":
+                    plan = replace(
+                        plan,
+                        current=replace(plan.current, policy=replace(policy, sample_counts=tuple((identity, count + 1) for identity, count in COUNTS))),
+                        measurement=replace(plan.measurement, compatible=(*plan.measurement.compatible, "context.sampling-policy")),
+                    )
+                shutil.copytree(current, baseline)
+                with (
+                    patch("research_repo_tools.measurement.resolve_revision", return_value="a" * 40),
+                    patch("research_repo_tools.common_measurement.run_command_live") as live,
+                ):
+                    with self.assertRaisesRegex(ValueError, "sample count inventory differs" if failure != "compatibility" else "before timing"):
+                        measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.0.0"))
+                live.assert_not_called()
+                self.assertFalse((current / "target/criterion").exists())
+                self.assertFalse((baseline / "target/criterion").exists())
+
+    def test_mixed_policy_still_runs_both_independent_gates_before_timing(self):
+        for phase in ("baseline", "current"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                current, baseline = root / "current", root / "baseline"
+                plan = heterogeneous_plan(current)
+                shutil.copytree(current, baseline)
+                (root / phase / "src/point.txt").write_bytes(b"-1")
+                with (
+                    patch("research_repo_tools.measurement.resolve_revision", return_value="a" * 40),
+                    self.assertRaisesRegex(ValueError, f"{phase} preflight gate failed"),
+                ):
+                    measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.0.0"))
+                self.assertFalse((current / "target/criterion").exists())
+                self.assertFalse((baseline / "target/criterion").exists())
+
+    def test_saved_mixed_samples_keep_exact_bytes_and_cli_policy(self):
+        with tempfile.TemporaryDirectory(prefix="saved café ") as directory:
+            root = Path(directory).resolve()
+            policy = CompletePolicy(tuple(identity for identity, _ in COUNTS), None, sample_counts=COUNTS)
+            for identity, count in COUNTS:
+                case = mixed_case(identity, count)
+                for sample in ("new", "v1.1.0"):
+                    target = root / "criterion" / case.storage_path / sample
+                    target.mkdir(parents=True)
+                    for key in ("benchmark", "estimates", "sample"):
+                        (target / f"{key}.json").write_bytes(getattr(case, key))
+            config = (
+                'schema=2\ncriterion-dir="criterion"\nsaved-sample="v1.1.0"\nexpected='
+                + json.dumps(policy.expected, ensure_ascii=False)
+                + "\nsample-counts="
+                + json.dumps(dict(COUNTS), ensure_ascii=False).replace(": ", " = ")
+                + "\n"
+            )
+            (root / "saved.toml").write_text(config, encoding="utf-8", newline="\n")
+            self.assertEqual(load_saved_sample(root, "saved.toml").policy, policy)
+            before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            self.assertEqual(main(["--root", str(root), "performance", "verify-saved", "saved.toml"]), 0)
+            self.assertEqual({path: path.read_bytes() for path in before}, before)
+            target = root / "criterion/stored_10/v1.1.0/sample.json"
+            target.write_bytes(target.read_bytes().replace(b"\r\n", b"\n"))
+            with self.assertRaisesRegex(ValueError, "differs from fresh"):
+                validate_saved_sample(root / "criterion", "v1.1.0", policy)
+            for changed in (config.replace("schema=2", "schema=1"), config.replace("schema=2", "schema=2\nsample-count=100")):
+                (root / "saved.toml").write_text(changed, encoding="utf-8", newline="\n")
+                with self.assertRaises(ValueError):
+                    load_saved_sample(root, "saved.toml")
 
 
 if __name__ == "__main__":

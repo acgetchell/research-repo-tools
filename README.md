@@ -1454,13 +1454,19 @@ consumer tooling. Use the packaged `common-benchmark.toml`,
 and commands to match the consumer. See the [contracts](https://github.com/acgetchell/research-repo-tools/blob/main/docs/complete-run-api.md)
 and [adoption map](https://github.com/acgetchell/research-repo-tools/blob/main/docs/performance-migration.md#common-harness-and-host-adoption).
 
-Schema-2 measurements capture the selected current harness once, including
+Schema-2/3 measurements capture the selected current harness once, including
 declared lockfiles and toolchain files, and apply it to both isolated revisions.
 Every phase declares a command, an independent preflight gate, its expected
 Criterion `full_id` inventory, and optional environment overrides. Both gates
-must pass before either phase is timed. Configure 100 samples, both mean and
-median, and 0.95 confidence for that completeness policy; smaller or different
-policies must be explicitly declared. Commands must actually configure Criterion
+must pass before either phase is timed. The defaults are 100 samples, both mean
+and median, and 0.95 confidence; different policies must be explicitly declared.
+Schema 3 (target v0.1.9) also supports exhaustive per-case sample counts, such as
+10, 15, 20, 25 and 100 in one phase. Edit each phase's `sample-counts` map in the
+packaged template to match every full ID, or omit both maps and set a shared
+top-level `sample-count` for uniform sampling. Schema 2 retains its shared
+uniform count and v1 evidence contract. Direct Python plan/run constructors also
+retain those defaults; select `CommonHarnessPlan(..., schema=3)` or
+`CompleteRun(..., schema=RUN_SCHEMA_V2)` explicitly for v2. Commands must actually configure Criterion
 to emit those samples and intervals. The shared reader verifies the output.
 
 Named report series select rows from a recorded phase. For example, a reference

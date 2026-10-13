@@ -43,9 +43,9 @@ def retained_paths(archive: str, pair: ReleasePair) -> tuple[str, str, str]:
 
 def render_report(evidence: Evidence, *, title: str = "Benchmark timings", prose: str = "", links: tuple[tuple[str, str], ...] = ()) -> bytes:
     """Render retained numeric meaning and source context without measuring/I/O."""
-    from research_repo_tools.complete_runs import RUN_SCHEMA, render_run
+    from research_repo_tools.complete_runs import RUN_SCHEMAS, render_run
 
-    if evidence.payload_schema == RUN_SCHEMA:
+    if evidence.payload_schema in RUN_SCHEMAS:
         if prose or links:
             raise ValueError("complete runs use configured series; compose custom prose through the publication API")
         return render_run(evidence, title=title)

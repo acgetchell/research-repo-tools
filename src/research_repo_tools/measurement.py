@@ -78,6 +78,7 @@ class MeasurementConfig:
             "original-source-sha256",
             "original-source-inventory",
             "discovery-inventory",
+            "sampling-policy",
         }
         context = dict(self.context)
         if len(context) != len(self.context) or context.keys() & reserved or any(key.startswith(("tool.", "dependency.", "host.")) for key in context):
@@ -99,9 +100,9 @@ class MeasurementConfig:
 
 
 def load_measurement(root: Path, configuration: str) -> MeasurementConfig | CommonHarnessPlan:
-    """Read strict schema-1 TOML; commands are trusted consumer configuration."""
+    """Read strict measurement TOML; commands are trusted consumer configuration."""
     document = tomllib.loads(_path(root.resolve(), configuration).read_bytes().decode("utf-8"))
-    if type(document.get("schema")) is int and document["schema"] == 2:
+    if type(document.get("schema")) is int and document["schema"] in (2, 3):
         from research_repo_tools.common_measurement import parse_plan
 
         return parse_plan(document)

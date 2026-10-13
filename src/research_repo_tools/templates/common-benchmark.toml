@@ -2,10 +2,12 @@
 # Include every build input, dependency resolution file and toolchain declaration
 # needed by the common harness and gate, including any gate support modules.
 # Both checkouts receive these current files.
-schema = 2
+# Schema 3 retains exhaustive per-case counts and their phase provenance (v0.1.9).
+# For a uniform policy, omit both phase sample-counts maps and set a top-level
+# sample-count = 100 instead (100 is also the uniform default).
+schema = 3
 sources = ["Cargo.toml", "src/**/*.rs"]
 harness = ["Cargo.toml", "Cargo.lock", "rust-toolchain.toml", "benches/**/*.rs", "tests/benchmark_inputs.rs"]
-sample-count = 100
 statistics = ["mean", "median"]
 confidence-level = 0.95
 compatible = ["context.os", "context.architecture", "context.cpu"]
@@ -20,6 +22,7 @@ rustc = ["rustc", "--version", "--verbose"]
 command = ["cargo", "bench", "--locked", "--bench", "timings"]
 gate = ["cargo", "test", "--locked", "--test", "benchmark_inputs"]
 expected = ["library/workload", "reference/workload"]
+sample-counts = { "library/workload" = 10, "reference/workload" = 100 }
 # Alternatively replace expected with a discovery table (target v0.1.9):
 # [phases.baseline.discovery]
 # required = ["library/workload", "reference/workload"]
@@ -32,6 +35,7 @@ expected = ["library/workload", "reference/workload"]
 command = ["cargo", "bench", "--locked", "--bench", "timings", "--", "library/"]
 gate = ["cargo", "test", "--locked", "--test", "benchmark_inputs"]
 expected = ["library/workload"]
+sample-counts = { "library/workload" = 10 }
 
 [[series]]
 name = "Library baseline"

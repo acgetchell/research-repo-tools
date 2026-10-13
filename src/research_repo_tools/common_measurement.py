@@ -2,19 +2,22 @@
 
 import json
 import os
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any
 
 from research_repo_tools.complete_runs import (
     RUN_SCHEMA,
+    RUN_SCHEMA_V2,
     CompletePolicy,
     CompleteRun,
     RunSeries,
     _array,
     _integer,
     _sample_settings,
+    _sampling_counts,
     collect_complete_sample,
+    serialize_policy,
     serialize_run,
     validate_run_evidence,
 )
@@ -43,14 +46,16 @@ class DiscoveryPolicy:
     """Validated sample requirements whose exact IDs come from native discovery."""
 
     discovery: DiscoveryPlan
-    sample_count: int = 100
+    sample_count: int | None = 100
     statistics: tuple[Statistic, ...] = ("mean", "median")
     confidence_level: float = 0.95
     unit: Unit = "ns"
+    sample_counts: tuple[tuple[str, int], ...] = field(default=(), kw_only=True)
 
     def __post_init__(self) -> None:
         if not isinstance(self.discovery, DiscoveryPlan):
             raise TypeError("discovery policy requires a DiscoveryPlan")
+        object.__setattr__(self, "sample_counts", _sampling_counts(self.sample_count, self.sample_counts))
         statistics, level = _sample_settings(self.sample_count, self.statistics, self.confidence_level, self.unit)
         object.__setattr__(self, "statistics", statistics)
         object.__setattr__(self, "confidence_level", level)
@@ -79,8 +84,11 @@ class CommonHarnessPlan:
     baseline: MeasurementPhase
     current: MeasurementPhase
     series: tuple[RunSeries, ...]
+    schema: int = field(default=2, kw_only=True)
 
     def __post_init__(self) -> None:
+        if type(self.schema) is not int or self.schema not in (2, 3):
+            raise ValueError("common measurement schema must be integer 2 or 3")
         if not isinstance(self.measurement, MeasurementConfig) or any(not isinstance(phase, MeasurementPhase) for phase in (self.baseline, self.current)):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
             raise TypeError("common plan requires measurement settings and two phases")
         if "harness_sha256" not in self.measurement.compatible:
@@ -102,8 +110,10 @@ class CommonHarnessPlan:
             if isinstance(policy, CompletePolicy) and any(full_id not in policy.expected for _, full_id in series.rows):
                 raise ValueError("series refers to an unexpected benchmark")
         left, right = self.baseline.policy, self.current.policy
-        if (left.sample_count, left.statistics, left.confidence_level, left.unit) != (right.sample_count, right.statistics, right.confidence_level, right.unit):
-            raise ValueError("phases must share sample count, statistics, confidence and unit")
+        if self.schema == 2 and (left.sample_count is None or right.sample_count is None or left.sample_count != right.sample_count):
+            raise ValueError("schema-2 phases must share a uniform sample count")
+        if (left.statistics, left.confidence_level, left.unit) != (right.statistics, right.confidence_level, right.unit):
+            raise ValueError("phases must share statistics, confidence and unit")
         object.__setattr__(self, "series", tuple(self.series))
 
     @property
@@ -123,21 +133,27 @@ def parse_plan(document: dict[str, Any]) -> CommonHarnessPlan:
         {"criterion-dir", "sample", "sample-count", "statistics", "confidence-level", "unit", "timeout", "probes", "dependencies", "context", "compatible"},
     )
     phases = _object(raw["phases"], "phases", {"baseline", "current"})
+    schema = _integer(raw["schema"], "common measurement schema")
+    if schema not in (2, 3):
+        raise ValueError("common measurement schema must be integer 2 or 3")
     parsed = {}
     for name, data in phases.items():
-        phase = _table(data, name, {"command", "gate"}, {"expected", "discovery", "environment"})
+        phase = _table(data, name, {"command", "gate"}, {"expected", "discovery", "environment"} | ({"sample-counts"} if schema == 3 else set()))
         if ("expected" in phase) == ("discovery" in phase):
             raise ValueError("phase requires exactly one of expected or discovery")
+        if "sample-counts" in phase and "sample-count" in raw:
+            raise ValueError("choose exactly one of shared sample-count or phase sample-counts")
+        counts = tuple((key, _integer(value, "sample count")) for key, value in _object(phase.get("sample-counts", {}), "sample counts").items())
         settings = (
-            _integer(raw.get("sample-count", 100), "sample count"),
+            None if "sample-counts" in phase else _integer(raw.get("sample-count", 100), "sample count"),
             tuple(_statistic(item) for item in _array(raw.get("statistics", ["mean", "median"]), "statistics")),
             _positive(raw.get("confidence-level", 0.95), "confidence level"),
             _unit(raw.get("unit", "ns")),
         )
         policy = (
-            CompletePolicy(_strings(phase["expected"], "expected"), *settings)
+            CompletePolicy(_strings(phase["expected"], "expected"), *settings, sample_counts=counts)
             if "expected" in phase
-            else DiscoveryPolicy(_parse_discovery(phase["discovery"]), *settings)
+            else DiscoveryPolicy(_parse_discovery(phase["discovery"]), *settings, sample_counts=counts)
         )
         parsed[name] = MeasurementPhase(
             _strings(phase["command"], "command"),
@@ -173,7 +189,7 @@ def parse_plan(document: dict[str, Any]) -> CommonHarnessPlan:
         context=tuple((key, _string(value, "context")) for key, value in _object(raw.get("context", {}), "context").items()),
         compatible=compatible,
     )
-    return CommonHarnessPlan(config, parsed["baseline"], parsed["current"], tuple(series))
+    return CommonHarnessPlan(config, parsed["baseline"], parsed["current"], tuple(series), schema=schema)
 
 
 def measure_prepared_pair(baseline: Path, current: Path, plan: CommonHarnessPlan, pair: ReleasePair, *, working_tree: bool = False) -> Evidence:
@@ -240,7 +256,7 @@ def measure_prepared_pair(baseline: Path, current: Path, plan: CommonHarnessPlan
                 }.items()
             ),
         )
-    early_fields = tuple(field for field in plan.measurement.compatible if field != "context.discovery-inventory")
+    early_fields = tuple(field for field in plan.measurement.compatible if field not in {"context.discovery-inventory", "context.sampling-policy"})
     compatibility = compare_provenance(declared["baseline"], declared["current"], fields=early_fields)
     if not compatibility.compatible:
         raise ValueError(f"required benchmark provenance differs or is unknown before timing: {compatibility.differences}")
@@ -255,7 +271,9 @@ def measure_prepared_pair(baseline: Path, current: Path, plan: CommonHarnessPlan
         policy = getattr(plan, phase).policy
         if isinstance(policy, DiscoveryPolicy):
             inventory = discover_inventory(root, policy.discovery, env=environments[phase])
-            policies[phase] = CompletePolicy(inventory.expected, policy.sample_count, policy.statistics, policy.confidence_level, policy.unit)
+            policies[phase] = CompletePolicy(
+                inventory.expected, policy.sample_count, policy.statistics, policy.confidence_level, policy.unit, sample_counts=policy.sample_counts
+            )
             rows = {full_id for series in plan.series if series.phase == phase for _, full_id in series.rows}
             if not rows <= set(inventory.expected):
                 raise ValueError(f"{phase} discovered inventory omits series IDs: {sorted(rows - set(inventory.expected))}")
@@ -265,6 +283,9 @@ def measure_prepared_pair(baseline: Path, current: Path, plan: CommonHarnessPlan
             )
         else:
             policies[phase] = policy
+        if plan.schema == 3:
+            source = declared[phase]
+            declared[phase] = replace(source, context=(*source.context, ("sampling-policy", serialize_policy(policies[phase]).decode("utf-8"))))
         for selected in roots:
             unchanged(selected)
             if (roots[selected] / plan.measurement.criterion_dir).exists():
@@ -298,6 +319,7 @@ def measure_prepared_pair(baseline: Path, current: Path, plan: CommonHarnessPlan
         sources.append((phase, Provenance(source.revision, source.source_sha256, source.harness_sha256, tuple(context.items()))))
     for phase in roots:
         unchanged(phase)
-    retained = Evidence(serialize_run(CompleteRun(tuple(samples), plan.series, plan.measurement.compatible)), RUN_SCHEMA, tuple(sources))
+    run = CompleteRun(tuple(samples), plan.series, plan.measurement.compatible, schema=RUN_SCHEMA_V2 if plan.schema == 3 else RUN_SCHEMA)
+    retained = Evidence(serialize_run(run), run.schema, tuple(sources))
     validate_run_evidence(retained)
     return retained
