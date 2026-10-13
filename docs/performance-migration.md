@@ -143,6 +143,16 @@ fields, attach current host data to old evidence, or promote an old digest into
 the new framing. Legacy conversions retain their explicit origin hashes and
 schema names using the existing adapter; they do not claim complete-run status.
 
+The standard provenance report (issue #96, targeting v0.1.9) replaces a consumer's
+second renderer for generic audit context. Pin the published implementation,
+then use the schema-2 report configuration with the existing current/archive
+paths. No new metadata capture or measurement is needed to rerender retained
+complete-run evidence. The mutable index migrates to version 2; old retained
+reports and exact payload/envelope bytes remain immutable. Current and new
+retained reports expose recorded phase provenance and evidence links. Consumer
+scientific interpretation and figures remain consumer responsibilities. See the
+[renderer and migration contract](complete-run-api.md#retention-and-publication).
+
 ### Plotting disposition
 
 The optional multi-series coordinate/dimension plot is deferred. The second

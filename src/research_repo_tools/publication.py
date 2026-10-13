@@ -2,10 +2,12 @@
 
 import difflib
 import html
+import posixpath
 import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from urllib.parse import quote
 
 from research_repo_tools.criterion import Comparison, ComparisonSet, Unit, _format_estimate, _markdown_text, _unit
 from research_repo_tools.evidence import _string, sha256
@@ -173,6 +175,11 @@ def render_svg(comparison: ComparisonSet, layout: TableLayout) -> bytes:
 def _publication_name(name: str) -> str:
     relative_path(name)
     return _string(name, "publication path")
+
+
+def _relative_link(document: str, target: str) -> str:
+    """URL-encode a POSIX path relative to a publication document."""
+    return quote(posixpath.relpath(target, posixpath.dirname(document) or "."), safe="/.")
 
 
 def _path(root: Path, name: str) -> Path:

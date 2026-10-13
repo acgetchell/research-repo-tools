@@ -3,17 +3,28 @@
 import re
 import tomllib
 from pathlib import Path
+from typing import Literal
 
-from research_repo_tools.complete_runs import render_run, run_identity, validate_run_evidence
+from research_repo_tools.complete_runs import _render_run_v1, render_run, run_identity, validate_run_evidence
 from research_repo_tools.evidence import Evidence, _load_json, _object, _string, deterministic_json, parse_evidence, serialize_evidence
+from research_repo_tools.files import _validate_distinct_paths
 from research_repo_tools.publication import PublicationPlan, _path, _publication_name, plan_outputs
 from research_repo_tools.publication_config import _table
 from research_repo_tools.release_pairs import ReleasePair
 
 __all__ = ["load_latest_run", "load_run_report_plan"]
 
-_INDEX = "research-repo-tools/run-index/v1"
+_INDEX = "research-repo-tools/run-index/v2"
+_LEGACY_INDEX = "research-repo-tools/run-index/v1"
 _LATEST = "research-repo-tools/latest-run/v1"
+
+type _ReportRenderer = Literal[1, 2]
+
+
+def _report_renderer(value: object) -> _ReportRenderer:
+    if type(value) is not int or value not in {1, 2}:
+        raise ValueError("unsupported retained report renderer")
+    return 1 if value == 1 else 2
 
 
 def _entry(evidence: Evidence) -> dict[str, str]:
@@ -53,10 +64,11 @@ def _stored_runs(root: Path) -> set[str]:
     return result
 
 
-def _history(root: Path, archive: str) -> tuple[dict[str, dict[str, str]], dict[str, bytes], dict[str, str] | None]:
+def _history(root: Path, archive: str) -> tuple[dict[str, dict[str, str]], dict[str, _ReportRenderer], dict[str, bytes], dict[str, str] | None]:
     _publication_name(archive)
     inputs: dict[str, bytes] = {}
     entries = {}
+    renderers: dict[str, _ReportRenderer] = {}
     index_name, latest_name = f"{archive}/index.json", f"{archive}/latest.json"
     index_path, latest_path = _path(root, index_name), _path(root, latest_name)
     run_root = root / archive / "runs"
@@ -66,13 +78,19 @@ def _history(root: Path, archive: str) -> tuple[dict[str, dict[str, str]], dict[
     if not index_path.exists():
         if stored:
             raise ValueError("partial retained history without an index")
-        return entries, inputs, None
+        return entries, renderers, inputs, None
     inputs[index_name] = index_path.read_bytes()
     raw = _object(_load_json(inputs[index_name], "run index"), "run index", {"schema", "runs"})
-    if raw["schema"] != _INDEX or not isinstance(raw["runs"], list) or not raw["runs"]:
+    if raw["schema"] not in (_INDEX, _LEGACY_INDEX) or not isinstance(raw["runs"], list) or not raw["runs"]:
         raise ValueError("invalid run index")
     for value in raw["runs"]:
-        entry = _parse_entry(value)
+        if raw["schema"] == _INDEX:
+            indexed = _object(value, "versioned run entry", {"id", "baseline", "current", "report_renderer"})
+            renderer = _report_renderer(indexed.pop("report_renderer"))
+            entry = _parse_entry(indexed)
+        else:
+            renderer = 1
+            entry = _parse_entry(value)
         identity = entry["id"]
         if identity in entries:
             raise ValueError("duplicate run index entry")
@@ -80,9 +98,11 @@ def _history(root: Path, archive: str) -> tuple[dict[str, dict[str, str]], dict[
         for name in targets:
             inputs[name] = _path(root, name).read_bytes()
         evidence = parse_evidence(inputs[targets[0]], inputs[targets[1]])
-        if _entry(evidence) != entry or inputs[targets[2]] != render_run(evidence):
+        report = _render_run_v1(evidence) if renderer == 1 else render_run(evidence, report_path=targets[2], payload_path=targets[0], manifest_path=targets[1])
+        if _entry(evidence) != entry or inputs[targets[2]] != report:
             raise ValueError("retained run identity, labels or report do not match the index")
         entries[identity] = entry
+        renderers[identity] = renderer
     if stored != set(entries):
         raise ValueError("retained run directories do not match the complete index")
     inputs[latest_name] = latest_path.read_bytes()
@@ -92,12 +112,12 @@ def _history(root: Path, archive: str) -> tuple[dict[str, dict[str, str]], dict[
     latest = _parse_entry(pointer["run"])
     if entries.get(latest["id"]) != latest:
         raise ValueError("latest pointer does not identify an indexed complete run")
-    return entries, inputs, latest
+    return entries, renderers, inputs, latest
 
 
 def load_latest_run(root: Path, archive: str) -> Evidence:
     """Verify the complete index, run bytes and pointer without recapturing a host."""
-    _, inputs, latest = _history(root.resolve(strict=True), archive)
+    _, _, inputs, latest = _history(root.resolve(strict=True), archive)
     if latest is None:
         raise ValueError("no retained latest run")
     payload, manifest, _ = _targets(archive, latest["id"])
@@ -121,12 +141,10 @@ def load_run_report_plan(root: Path, configuration: str, *, payload: str | None 
     if (payload is None) != (manifest is None):
         raise ValueError("promotion requires both payload and manifest")
     mutable = (current, f"{archive}/index.json", f"{archive}/latest.json", f"{archive}/README.md")
-    from research_repo_tools.files import _validate_distinct_paths
-
     _validate_distinct_paths(
         tuple(_path(root, name) for name in (*mutable, configuration, *([payload, manifest] if payload is not None and manifest is not None else [])))
     )
-    entries, history, latest = _history(root, archive)
+    entries, renderers, history, latest = _history(root, archive)
     inputs = {configuration: config_bytes, **history}
     if payload is None:
         if latest is None:
@@ -138,13 +156,22 @@ def load_run_report_plan(root: Path, configuration: str, *, payload: str | None 
     validate_run_evidence(evidence)
     entry = _entry(evidence)
     targets = _targets(archive, entry["id"])
-    if current in {*targets, f"{archive}/index.json", f"{archive}/latest.json", f"{archive}/README.md"} or current.startswith(f"{archive}/runs/"):
-        raise ValueError("current report must be outside immutable history and index paths")
+    # Reserve the whole history directory, including case/Unicode aliases on
+    # every host. A current report inside it would corrupt the next index read.
+    _validate_distinct_paths((_path(root, current), root / archive / "runs"))
     entries[entry["id"]] = entry
+    renderers.setdefault(entry["id"], 2)
     data, envelope = serialize_evidence(evidence)
-    outputs = dict(zip(targets, (data, envelope, render_run(evidence)), strict=True))
-    outputs[current] = render_run(evidence, title=title)
-    outputs[f"{archive}/index.json"] = deterministic_json({"schema": _INDEX, "runs": [entries[key] for key in sorted(entries)]})
+    # Existing report bytes remain immutable, even when the latest selection
+    # predates the provenance renderer. Only the mutable current report migrates.
+    retained_report = history.get(targets[2])
+    if retained_report is None:
+        retained_report = render_run(evidence, report_path=targets[2], payload_path=targets[0], manifest_path=targets[1])
+    outputs = dict(zip(targets, (data, envelope, retained_report), strict=True))
+    outputs[current] = render_run(evidence, title=title, report_path=current, payload_path=targets[0], manifest_path=targets[1])
+    outputs[f"{archive}/index.json"] = deterministic_json(
+        {"schema": _INDEX, "runs": [{**entries[key], "report_renderer": renderers[key]} for key in sorted(entries)]}
+    )
     outputs[f"{archive}/latest.json"] = deterministic_json({"schema": _LATEST, "run": entry})
     outputs[f"{archive}/README.md"] = (
         "# Complete performance runs\n\n"
