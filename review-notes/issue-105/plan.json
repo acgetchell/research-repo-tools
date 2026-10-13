@@ -16,6 +16,18 @@
     "paired-315.json",
     "jit-315.json"
   ],
+  "measurement_evidence_schema": {
+    "retained_format": "The three measurement files contain unversioned output from the original, pre-review harness. They remain historical records and have not been regenerated with the repaired harness.",
+    "fields_not_captured": [
+      "harness_sha256",
+      "source_hash_format",
+      "records[].native_tools",
+      "records[].interpreter.tool_paths"
+    ],
+    "source_hash_format": "Legacy SHA-256 of concatenated sorted source-relative Python filenames and their raw bytes. Current runs use relative-name-and-content-digest/v1; the two hash formats must not be compared directly.",
+    "original_harness_sha256_recovered_from_recorded_sdist": "834d3468479e8821170f04060008cf022e73e20cfa68b876190c19e2b91f1979",
+    "current_format": "New runs also record harness identity, native validator paths/versions/hashes, and interpreter tool_paths. Missing historical fields do not imply those checks ran during the original measurements."
+  },
   "measurement_limits": [
     "Synthetic 468-file inventory, actual files/native validators, Git NUL inventory modeled.",
     "Validation fixtures pass both policies; before/after differs deliberately in order, strictness and failure behavior. Timing does not establish failure-workload gains.",

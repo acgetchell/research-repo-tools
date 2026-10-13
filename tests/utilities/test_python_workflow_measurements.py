@@ -52,10 +52,14 @@ def test_python_child_streams_match_utf8_capture_under_legacy_encoding(harness, 
     environment = {**os.environ, "PYTHONUTF8": "0", "PYTHONIOENCODING": "cp1252:backslashreplace"}
     before = dict(environment)
     command = [sys.executable, "-c", "import sys; print(sys.argv[1]); print(sys.argv[1], file=sys.stderr)", str(source)]
-    # Exercise the original producer/capture mismatch on this host; this
-    # models legacy streams and does not establish native Windows evidence.
-    with pytest.raises(UnicodeDecodeError):
-        subprocess.run(command, env=environment, check=True, capture_output=True, encoding="utf-8", timeout=30)
+    # Capture bytes before decoding: Windows subprocess text readers raise
+    # decoding errors in background threads instead of the calling thread.
+    legacy = subprocess.run(command, env=environment, check=True, capture_output=True, timeout=30)
+    expected = str(source).encode("cp1252", errors="backslashreplace") + os.linesep.encode("ascii")
+    assert legacy.stdout == legacy.stderr == expected
+    for stream in (legacy.stdout, legacy.stderr):
+        with pytest.raises(UnicodeDecodeError):
+            stream.decode("utf-8")
     result = harness.execute(
         command,
         env=environment,
