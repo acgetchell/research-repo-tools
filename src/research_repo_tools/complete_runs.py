@@ -7,6 +7,7 @@ import json
 import re
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from research_repo_tools.criterion import Estimate, Statistic, Unit, _format_estimate, _markdown_text, _positive, _statistic, _unit, parse_estimate
 from research_repo_tools.evidence import Evidence, Provenance, _digest, _load_json, _object, _string, compare_provenance, deterministic_json, serialize_evidence
@@ -31,7 +32,7 @@ __all__ = [
 RUN_SCHEMA = "research-repo-tools/complete-run/v1"
 
 
-def _array(value: object, context: str) -> list:
+def _array(value: object, context: str) -> list[Any]:
     if not isinstance(value, list):
         raise ValueError(f"{context} must be an array")
     return value
@@ -89,7 +90,7 @@ class CompleteCase:
 
     def __post_init__(self) -> None:
         _publication_name(self.storage_path)
-        if any(not isinstance(value, bytes) for value in (self.benchmark, self.estimates, self.sample)):
+        if any(not isinstance(value, bytes) for value in (self.benchmark, self.estimates, self.sample)):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
             raise TypeError("Criterion files must be immutable bytes")
         _ = self.full_id
         raw = _object(_load_json(self.sample, "Criterion raw sample"), "Criterion raw sample")
@@ -122,7 +123,7 @@ class CompleteSample:
 
     def __post_init__(self) -> None:
         cases = tuple(self.cases)
-        if not isinstance(self.policy, CompletePolicy) or any(not isinstance(case, CompleteCase) for case in cases):
+        if not isinstance(self.policy, CompletePolicy) or any(not isinstance(case, CompleteCase) for case in cases):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
             raise TypeError("complete samples require a policy and complete cases")
         ids = _names((case.full_id for case in cases), "measured full IDs")
         _names((case.storage_path for case in cases), "storage paths")
@@ -201,7 +202,7 @@ class CompleteRun:
         phases = tuple((name, sample) for name, sample in self.phases)
         if len(phases) != 2 or {name for name, _ in phases} != {"baseline", "current"}:
             raise ValueError("complete run requires exactly baseline and current phases")
-        if any(not isinstance(sample, CompleteSample) for _, sample in phases):
+        if any(not isinstance(sample, CompleteSample) for _, sample in phases):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
             raise TypeError("run phases require complete samples")
         policies = [sample.policy for _, sample in phases]
         if any(
@@ -211,7 +212,7 @@ class CompleteRun:
         ):
             raise ValueError("run phases require matching measurement policies")
         series = tuple(self.series)
-        if any(not isinstance(item, RunSeries) for item in series):
+        if any(not isinstance(item, RunSeries) for item in series):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
             raise TypeError("run series must be RunSeries instances")
         _names((item.name for item in series), "series names")
         for item in series:

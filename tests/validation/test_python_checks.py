@@ -49,8 +49,8 @@ def test_empty_inventory_checks_inherited_declarations_without_requiring_executa
     assert calls == [False]
 
 
-def test_batches_preserve_names_and_first_failure_and_continue(gate, monkeypatch):
-    monkeypatch.setattr(python_checks, "argument_batches", lambda command, names: argument_batches(command, names, batch_size=2))
+def test_batches_preserve_names_and_stop_at_first_failure(gate, monkeypatch):
+    monkeypatch.setattr(python_checks, "argument_batches", lambda command, names, **kw: argument_batches(command, names, batch_size=2))
     calls = []
 
     def execute(command, args, **kwargs):
@@ -59,10 +59,53 @@ def test_batches_preserve_names_and_first_failure_and_continue(gate, monkeypatch
 
     monkeypatch.setattr(python_checks, "run_command_live", execute)
     assert main(["--root", str(gate.root), "python", "check", "--timeout", "9"]) == 7
-    assert len(calls) == 6
+    assert len(calls) == 1
     assert calls[0][1][-2:] == ("./nested/café space.py", "./-option.pyi")
-    assert calls[-1][1][-1] == "./fixture.py"
     assert all(call[2] == {"cwd": gate.root, "timeout": 9, "check": False} for call in calls)
+
+
+@pytest.mark.parametrize(
+    "action, policies",
+    [("check", [("ruff", "format"), ("ruff", "check"), ("ty", "check")]), ("fix", [("ruff", "check"), ("ruff", "format")]), ("typecheck", [("ty", "check")])],
+)
+def test_one_inventory_preflight_and_canonical_order(gate, monkeypatch, action, policies):
+    names = tuple(f"nested/file{index}.py" for index in range(468))
+    inventories = []
+    resolved = []
+    calls = []
+    monkeypatch.setattr(python_checks, "select_files", lambda *a, **kw: inventories.append(kw) or names)
+    monkeypatch.setattr(python_checks, "resolve_executable", lambda name, **kw: resolved.append(name) or Path(name))
+
+    def run(command, args, **kwargs):
+        assert resolved == list(dict.fromkeys(name for name, _ in policies))
+        calls.append((command, args))
+        return subprocess.CompletedProcess([], 0)
+
+    monkeypatch.setattr(python_checks, "run_command_live", run)
+    assert python_checks.run(gate, action) == 0
+    assert inventories == [{"include": ("*.py", "*.pyi")}]
+    assert [(name, args[0]) for name, args in calls] == policies
+    assert all(args[-468:] == tuple("./" + name for name in names) for _, args in calls)
+    if action != "fix":
+        assert "--error" in calls[-1][1] and "all" in calls[-1][1]
+
+
+@pytest.mark.parametrize("failed_batch", [1, 2, 3, 4, 5, 6])
+def test_argument_limited_batches_stop_at_any_failed_policy(gate, monkeypatch, failed_batch):
+    monkeypatch.setattr(python_checks, "argument_batches", lambda command, names, **kw: argument_batches(command, names, batch_size=2))
+    calls = []
+    monkeypatch.setattr(
+        python_checks, "run_command_live", lambda *a, **kw: calls.append(a) or subprocess.CompletedProcess([], -15 if len(calls) == failed_batch else 0)
+    )
+    assert python_checks.run(gate, "check") == 143
+    assert len(calls) == failed_batch
+
+
+def test_oversized_last_argument_fails_before_any_validator(gate, monkeypatch):
+    monkeypatch.setattr(python_checks, "select_files", lambda *a, **kw: ("short.py", "long" * 10000 + ".py"))
+    monkeypatch.setattr(python_checks, "run_command_live", lambda *a, **kw: pytest.fail("executed partial preflight"))
+    with pytest.raises(ValueError, match="argument limit"):
+        python_checks.run(gate, "check")
 
 
 @pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan")])

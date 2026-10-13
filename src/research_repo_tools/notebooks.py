@@ -13,7 +13,7 @@ from dataclasses import dataclass
 from importlib import import_module
 from importlib.metadata import version
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING, Any, Literal
 
 from research_repo_tools import files, toolchain, toolchain_config
 from research_repo_tools.config import Config
@@ -49,7 +49,7 @@ class NotebookExecution:
     source: Path
     notebook_path: Path
     report_path: Path
-    report: dict
+    report: dict[str, Any]
 
     @property
     def returncode(self) -> int:
@@ -90,7 +90,7 @@ def _check_unicode(raw: object) -> None:
             pending.extend(value)
 
 
-def read_raw(path: Path) -> tuple[bytes, dict]:
+def read_raw(path: Path) -> tuple[bytes, dict[str, Any]]:
     """Read unambiguous JSON without conversion, normalization, or ID generation."""
     original = path.read_bytes()
     try:

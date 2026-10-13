@@ -31,7 +31,7 @@ jobs:
       - uses: astral-sh/setup-uv@c18668ad3cf93ea998bef934396af7bb5c839dc7 # v10.2.0
         with:
           version-file: "pyproject.toml"
-          python-version: "3.14"
+          python-version-file: ".python-version"
       - name: Fail on workflow findings
         id: audit
         env:

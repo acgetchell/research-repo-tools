@@ -4,3 +4,4 @@ from tests.validation.public_python_tools_consumer import TestPythonTools as Tes
 from tests.validation.public_validation_consumer import TestGitDiscovery as TestGitDiscovery
 from tests.validation.public_validation_consumer import TestOfflineAudit as TestOfflineAudit
 from tests.validation.public_validation_consumer import TestPythonPolicy as TestPythonPolicy
+from tests.validation.public_validation_consumer import TestSelectionPreflight as TestSelectionPreflight

@@ -2,6 +2,7 @@
 
 import tomllib
 from email.message import Message
+from pathlib import Path
 
 import pytest
 from packaging.specifiers import SpecifierSet
@@ -10,6 +11,23 @@ from research_repo_tools import cli, config, python_baseline, toolchain_config
 from research_repo_tools import python_adoption as adoption
 from tests.toolchain.test_python_adoption import consumer as consumer
 from tests.toolchain.test_python_adoption import snapshot
+
+
+def test_owned_python_mirrors_match_installed_authority():
+    root = Path(__file__).resolve().parents[2]
+    authority = python_baseline.baseline()
+    manifest = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    lock = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))
+    policy = tomllib.loads((root / "src/research_repo_tools/templates/python-validation.toml").read_text(encoding="utf-8"))
+    assert authority.selected == "3.15"
+    assert authority.requirement == manifest["project"]["requires-python"] == lock["requires-python"] == ">=3.15"
+    assert (root / ".python-version").read_text(encoding="utf-8").strip() == authority.selected
+    assert manifest["tool"]["ruff"]["target-version"] == policy["tool"]["ruff"]["target-version"] == "py315"
+    for workflow in (root / ".github/workflows").glob("*.yml"):
+        text = workflow.read_text(encoding="utf-8")
+        if "astral-sh/setup-uv@" in text:
+            assert 'python-version-file: ".python-version"' in text
+            assert "python-version:" not in text
 
 
 @pytest.mark.parametrize("package", [True, False])
@@ -127,7 +145,7 @@ def test_baseline_reads_exact_installed_metadata_not_checkout_or_interpreter(mon
     monkeypatch.setattr(python_baseline, "version", lambda name: "0.1.8")
     authority = python_baseline.baseline()
     assert authority.minimum_requirement == ">=3.14.2"
-    assert authority.selected == "3.14" and authority.package_version == "0.1.8"
+    assert authority.selected == "3.15" and authority.package_version == "0.1.8"
     assert python_baseline.reconcile_requirement(">=3.13,<3.17,!=3.15.1", authority) == ">=3.13,<3.17,!=3.15.1,>=3.14.2"
 
 

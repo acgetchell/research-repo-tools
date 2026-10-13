@@ -1,0 +1,127 @@
+{
+  "issue": "https://github.com/acgetchell/research-repo-tools/issues/105",
+  "baseline_revision": "6847e2c07702a53d42da975307ad6c934a9e3042",
+  "implementation": {
+    "development_python": "3.15",
+    "requires_python": ">=3.15",
+    "reason": "Explicit selective lazy-import syntax requires Python 3.15; one implementation, no older-runtime fallback.",
+    "validation_contract": "One inventory; preflight all executables/batches; format, lint, ty --error all; stop on first failing batch. Fix: lint-fix then format, also fail-fast.",
+    "selection": "Per-preflight identities and unique ancestors with directory revalidation; no cross-operation cache; existing byte/snapshot checks retained.",
+    "imports": "Selective CLI/handler imports only. Parser discovery remains complete. Global lazy mode never enabled.",
+    "dependency_versions": "All 79 locked distribution versions retained; uv regenerated the universal lock for >=3.15.",
+    "larger_refactors": "frozendict snapshots, sentinel-based absent/null policies, unpacking comprehensions, parser/handler separation, and validated snapshot reuse require their own contracts and measurements; see CONTRIBUTING.md."
+  },
+  "measurement_files": [
+    "historical-314.json",
+    "paired-315.json",
+    "jit-315.json"
+  ],
+  "measurement_evidence_schema": {
+    "retained_format": "The three measurement files contain unversioned output from the original, pre-review harness. They remain historical records and have not been regenerated with the repaired harness.",
+    "fields_not_captured": [
+      "harness_sha256",
+      "source_hash_format",
+      "records[].native_tools",
+      "records[].interpreter.tool_paths"
+    ],
+    "source_hash_format": "Legacy SHA-256 of concatenated sorted source-relative Python filenames and their raw bytes. Current runs use relative-name-and-content-digest/v1; the two hash formats must not be compared directly.",
+    "original_harness_sha256_recovered_from_recorded_sdist": "834d3468479e8821170f04060008cf022e73e20cfa68b876190c19e2b91f1979",
+    "current_format": "New runs also record harness identity, native validator paths/versions/hashes, and interpreter tool_paths. Missing historical fields do not imply those checks ran during the original measurements."
+  },
+  "measurement_limits": [
+    "Synthetic 468-file inventory, actual files/native validators, Git NUL inventory modeled.",
+    "Validation fixtures pass both policies; before/after differs deliberately in order, strictness and failure behavior. Timing does not establish failure-workload gains.",
+    "Historical 3.14 timing uses original source. Only within-3.15 before/after timings support optimization claims.",
+    "Homebrew 3.14/3.15 builds lack JIT. A separately prepared uv-managed 3.15.0 build supports JIT and is evaluated with alternating on/off settings; no cross-build JIT attribution.",
+    "3.14 PyYAML includes optional LibYAML; 3.15 source build omits it. Base loader correctness checked; no C-loader gain claimed.",
+    "No live LLM, network or transport savings measured; no general consumer replay-speed claim."
+  ],
+  "reproduction": [
+    "Reconstruct the unchanged src tree at baseline_revision using read-only git archive/show, outside this checkout; do not retain historical implementations as tests.",
+    "Prepare that snapshot on Python 3.14.8 and the candidate on Python 3.15.0 with the recorded locked distribution versions and metadata.",
+    "Run just bench-python-workflows --source /path/to/before/src --python /path/to/python314 --output /path/to/historical-314.json.",
+    "Run just bench-python-workflows --source /path/to/before/src --source /path/to/candidate/src --python /path/to/python315 --output /path/to/paired-315.json.",
+    "Do not run tests/installations concurrently with timing. The harness alternates paired order and discards one warmup.",
+    "For separate JIT evaluation, prepare the same candidate with an existing capable Python, then run just bench-python-workflows --source /path/to/candidate/src --python /path/to/jit-capable-environment/bin/python --jit-pair --output /path/to/jit-315.json. Default development settings do not enable JIT."
+  ],
+  "release_adoption_plan": [
+    "Review and merge #105 after the required current-source Linux/macOS/Windows package jobs and changelog integration pass; Git operations require further authorization.",
+    "Implement the remaining v0.1.9 capabilities, including #95, #97 and #101 (the user added #101 to that milestone). #101 can proceed alongside #95/#97 after the baseline.",
+    "Reconcile #99 publication checklist/native dependencies to include #101, and update #100 applicability/adoption tracking for the heterogeneous sampling capability; no issue updates made in this task.",
+    "Prepare v0.1.9 using the existing release-update/changelog workflow after implementation commits. Keep project.version at 0.1.8 until coordinated release preparation; generated CHANGELOG remains unchanged. Explicitly disclose the raised Python floor and changed gate failure behavior in generated release notes.",
+    "Obtain authorization for commit/push/tag/publication. Run exact release-source native jobs, installed wheel/sdist and native setup checks; publish through the existing reviewed-release workflow and verify the exact unyanked PyPI artifacts and GitHub Release.",
+    "Only after publication, dotfiles #169 uses its existing shared-python-plan/shared-python-update recipes with exact 0.1.9, refreshes its lock/environment, and validates its consumer workflows; no local baseline override or unreleased pin.",
+    "#100 follows verified #99 publication for performance adoption, starting with la-stack #276 and explicit applicability dispositions for other consumers. Delaunay measurement-engine retirement additionally requires #101. Consumer scientific policy and optional LibYAML improvements remain downstream."
+  ],
+  "outstanding_native_checks": [
+    "Linux check (ubuntu-24.04)",
+    "macOS hosted check (macos-15), including native setup",
+    "Windows check (windows-2025)",
+    "changelog-integration",
+    "Current committed release source is unavailable because no Git mutation was authorized."
+  ],
+  "authorization": "No commit, push, tag, publish, branch change, issue update or dotfiles change performed.",
+  "jit_assessment": {
+    "default": "remain interpreter default; package does not enable JIT",
+    "same_build": "uv-managed CPython 3.15.0, Clang 22.1.3, macOS arm64",
+    "warmed_selection_off_on_seconds": [
+      0.058968,
+      0.055794
+    ],
+    "validation_off_on_seconds": [
+      0.1591,
+      0.163069
+    ],
+    "interpretation": "Small warmed selection gain; no representative validation or startup win. Opt-in experimentation only; do not attribute Homebrew/uv build differences to JIT.",
+    "paired_changes_percent": {
+      "selection": {
+        "median": 2.402926419397734,
+        "minimum": -14.152718161772338,
+        "maximum": 12.54750561572098
+      },
+      "selection-warm": {
+        "median": 5.277556815221856,
+        "minimum": 1.1485656032180727,
+        "maximum": 16.60217834868654
+      },
+      "validation": {
+        "median": -0.30265677439193556,
+        "minimum": -7.550547052245927,
+        "maximum": 3.367504839789283
+      },
+      "help": {
+        "median": -0.35791477760939416,
+        "minimum": -4.0542421958576815,
+        "maximum": 2.711630065312329
+      },
+      "version": {
+        "median": 1.262830274021623,
+        "minimum": -3.4689093953345633,
+        "maximum": 5.259822777536481
+      }
+    },
+    "focused_correctness": "42 import, validation, selection and file-publication tests passed with JIT enabled; no full JIT suite or native JIT platform matrix claimed."
+  },
+  "minimum_version_evidence": "unsupported-python.json: uv pip dry runs rejected both built artifacts on Python 3.14.8 without changing the temporary environment.",
+  "validation": {
+    "platform": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+    "python": "3.15.0",
+    "command": "RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS=1 just ci",
+    "result": "passed",
+    "source_tests_passed": 2618,
+    "source_tests_skipped": 37,
+    "installed_distributions": [
+      "wheel",
+      "sdist"
+    ],
+    "git_mutating_fixtures": "disabled by repository AGENTS policy in source and both consumers",
+    "jit_focused_tests_passed": 42,
+    "annotation_introspection": "changelog.generate, cli.run, performance.run and performance_workflows.run resolve Config in isolated Python",
+    "logs": "ci.log",
+    "limitations": "Local macOS result; hosted native Linux/macOS/Windows package and setup checks plus changelog integration remain required for the committed release source."
+  },
+  "artifacts": {
+    "research_repo_tools-0.1.8-py3-none-any.whl": "1e63c7bbade313a38a5017b19001ce17ed1ddb2eb38f8f1a174eb1ad717b590c",
+    "research_repo_tools-0.1.8.tar.gz": "f7293414af997132298deaefb594d4ef8b89477ebb0cecdc10d0290aa9708386"
+  }
+}

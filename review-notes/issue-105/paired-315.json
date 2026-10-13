@@ -1,0 +1,273 @@
+{
+  "host": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "files": 468,
+  "trials": 9,
+  "inventory_sha256": "1f395f597a1bb81d40bc74e250cfce4d4a57359b8d09546e1dcdf7f55d9d698a",
+  "records": [
+    {
+      "source": "/private/tmp/rrt105-before/src",
+      "source_sha256": "d2148c06f26dff27074054a62590b752143a3940e2338c805a928196faff8e00",
+      "mode": "selection",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 11:16:41) [Clang 21.0.0 (clang-2100.3.34.2)]",
+        "executable": "/Users/adam/projects/research-repo-tools/.venv/bin/python",
+        "jit_available": false,
+        "jit_enabled": false,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.12838933400053065,
+        0.12129100000311155,
+        0.11997283300297568,
+        0.12020520900114207,
+        0.12002462500095135,
+        0.121142999996664,
+        0.12063962499814807,
+        0.12059687500004657,
+        0.1194444590000785
+      ],
+      "median_seconds": 0.12059687500004657,
+      "diagnostics": {
+        "seconds": 0.1194444590000785,
+        "resolve_calls": 6085,
+        "validator_invocations": 0
+      }
+    },
+    {
+      "source": "/Users/adam/projects/research-repo-tools/src",
+      "source_sha256": "178b449d0c0c74ec265fc5d04f9bab9949a6f4cc40fd959a1a316ba00227b31c",
+      "mode": "selection",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 11:16:41) [Clang 21.0.0 (clang-2100.3.34.2)]",
+        "executable": "/Users/adam/projects/research-repo-tools/.venv/bin/python",
+        "jit_available": false,
+        "jit_enabled": false,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.06180970800051,
+        0.06219683300150791,
+        0.060348958999384195,
+        0.061500250005337875,
+        0.06237966699700337,
+        0.06321916700107977,
+        0.061691624992818106,
+        0.06108104099985212,
+        0.06166374999884283
+      ],
+      "median_seconds": 0.061691624992818106,
+      "diagnostics": {
+        "seconds": 0.06166374999884283,
+        "resolve_calls": 969,
+        "validator_invocations": 0
+      }
+    },
+    {
+      "source": "/private/tmp/rrt105-before/src",
+      "source_sha256": "d2148c06f26dff27074054a62590b752143a3940e2338c805a928196faff8e00",
+      "mode": "validation",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 11:16:41) [Clang 21.0.0 (clang-2100.3.34.2)]",
+        "executable": "/Users/adam/projects/research-repo-tools/.venv/bin/python",
+        "jit_available": false,
+        "jit_enabled": false,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.481613957999798,
+        0.45138474999839673,
+        0.45965670899749966,
+        0.44333641700359294,
+        0.4482115420032642,
+        0.45085349999862956,
+        0.45335312499810243,
+        0.454394541993679,
+        0.44890049999958137
+      ],
+      "median_seconds": 0.45138474999839673,
+      "diagnostics": {
+        "seconds": 0.44890049999958137,
+        "resolve_calls": 0,
+        "validator_invocations": 15
+      }
+    },
+    {
+      "source": "/Users/adam/projects/research-repo-tools/src",
+      "source_sha256": "178b449d0c0c74ec265fc5d04f9bab9949a6f4cc40fd959a1a316ba00227b31c",
+      "mode": "validation",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 11:16:41) [Clang 21.0.0 (clang-2100.3.34.2)]",
+        "executable": "/Users/adam/projects/research-repo-tools/.venv/bin/python",
+        "jit_available": false,
+        "jit_enabled": false,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.15793129200028488,
+        0.15924604099564021,
+        0.16633366599853616,
+        0.1644019160012249,
+        0.15600383399578277,
+        0.1629218750022119,
+        0.1677815000002738,
+        0.16339604099630378,
+        0.15790212499996414
+      ],
+      "median_seconds": 0.1629218750022119,
+      "diagnostics": {
+        "seconds": 0.15790212499996414,
+        "resolve_calls": 0,
+        "validator_invocations": 3
+      }
+    },
+    {
+      "source": "/private/tmp/rrt105-before/src",
+      "source_sha256": "d2148c06f26dff27074054a62590b752143a3940e2338c805a928196faff8e00",
+      "mode": "help",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 11:16:41) [Clang 21.0.0 (clang-2100.3.34.2)]",
+        "executable": "/Users/adam/projects/research-repo-tools/.venv/bin/python",
+        "jit_available": false,
+        "jit_enabled": false,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.16411325000080978,
+        0.16314949999650707,
+        0.16113358399888966,
+        0.16609862499899464,
+        0.1605537919967901,
+        0.16246091599896317,
+        0.1594794999982696,
+        0.1574010839976836,
+        0.15910416699625785
+      ],
+      "median_seconds": 0.16113358399888966,
+      "diagnostics": null
+    },
+    {
+      "source": "/Users/adam/projects/research-repo-tools/src",
+      "source_sha256": "178b449d0c0c74ec265fc5d04f9bab9949a6f4cc40fd959a1a316ba00227b31c",
+      "mode": "help",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 11:16:41) [Clang 21.0.0 (clang-2100.3.34.2)]",
+        "executable": "/Users/adam/projects/research-repo-tools/.venv/bin/python",
+        "jit_available": false,
+        "jit_enabled": false,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.0648952499977895,
+        0.06721808300062548,
+        0.06697262499801582,
+        0.0710806249990128,
+        0.06854316600220045,
+        0.06823912500112783,
+        0.06736429200100247,
+        0.06677316699642688,
+        0.06585691700456664
+      ],
+      "median_seconds": 0.06721808300062548,
+      "diagnostics": null
+    },
+    {
+      "source": "/private/tmp/rrt105-before/src",
+      "source_sha256": "d2148c06f26dff27074054a62590b752143a3940e2338c805a928196faff8e00",
+      "mode": "version",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 11:16:41) [Clang 21.0.0 (clang-2100.3.34.2)]",
+        "executable": "/Users/adam/projects/research-repo-tools/.venv/bin/python",
+        "jit_available": false,
+        "jit_enabled": false,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.16735441699711373,
+        0.15921458299999358,
+        0.15867708300356753,
+        0.1589079170007608,
+        0.15996458299923688,
+        0.1592042920019594,
+        0.16172695799468784,
+        0.15804616699460894,
+        0.16181795800366672
+      ],
+      "median_seconds": 0.15921458299999358,
+      "diagnostics": null
+    },
+    {
+      "source": "/Users/adam/projects/research-repo-tools/src",
+      "source_sha256": "178b449d0c0c74ec265fc5d04f9bab9949a6f4cc40fd959a1a316ba00227b31c",
+      "mode": "version",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 11:16:41) [Clang 21.0.0 (clang-2100.3.34.2)]",
+        "executable": "/Users/adam/projects/research-repo-tools/.venv/bin/python",
+        "jit_available": false,
+        "jit_enabled": false,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.08001225000043632,
+        0.06650812499719905,
+        0.06609804199979408,
+        0.06685374999506166,
+        0.06663816600485006,
+        0.07047445900388993,
+        0.06784491700091166,
+        0.0641345830008504,
+        0.06517408299987437
+      ],
+      "median_seconds": 0.06663816600485006,
+      "diagnostics": null
+    }
+  ],
+  "notes": "One warmup discarded; alternating paired order; setup/imports excluded from selection and validation timings. Help/version include process startup. Diagnostic resolve counts collected outside timing. Git NUL inventory modeled to avoid fixture mutations; all files and native validators real. No JIT comparison implied."
+}

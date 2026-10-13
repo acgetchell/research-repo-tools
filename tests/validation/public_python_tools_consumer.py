@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from importlib.metadata import requires, version
 from pathlib import Path
+from typing import override
 from unittest.mock import patch
 
 from packaging.requirements import Requirement
@@ -16,6 +17,7 @@ from research_repo_tools.cli import main
 
 
 class TestPythonTools(unittest.TestCase):
+    @override
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="Python tools café ")
         self.addCleanup(self.temporary.cleanup)
@@ -230,8 +232,8 @@ class TestPythonTools(unittest.TestCase):
         self.assertTrue((self.root / ".venv/pyvenv.cfg").is_file())
         after = {name: (self.root / name).read_bytes() for name in ("pyproject.toml", ".python-version", "uv.lock")}
         self.assertNotIn(b"ruff==0.1.0", after["pyproject.toml"])
-        self.assertIn(b'requires-python=">=3.12,>=3.14"', after["pyproject.toml"])
-        self.assertEqual(after[".python-version"], b"3.14\n")
+        self.assertIn(b'requires-python=">=3.12,>=3.15"', after["pyproject.toml"])
+        self.assertEqual(after[".python-version"], b"3.15\n")
         with patch("subprocess.run", side_effect=run), contextlib.redirect_stdout(io.StringIO()):
             self.assertEqual(main([*command, "--apply"]), 0)
         self.assertEqual(after, {name: (self.root / name).read_bytes() for name in after})

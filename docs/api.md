@@ -722,9 +722,11 @@ The typing marker is not a stability promise for every importable symbol.
 
 ## External programs and platforms
 
-Python 3.14+ is required. CI exercises Python 3.14 on Linux, macOS, and Windows,
+Python 3.15+ is required. CI exercises Python 3.15 on Linux, macOS, and Windows,
 including separate installations from the same wheel and source archive.
-Later Python versions are allowed by metadata but are not yet in the test matrix.
+The 3.15 floor is required by explicit `lazy` import syntax at selected CLI/handler
+boundaries. Global lazy imports are never enabled by the package. Later Python
+versions are allowed by metadata but are not yet in the test matrix.
 Installed-package checks cover these public imports and representative CLI use
 outside the source checkout.
 

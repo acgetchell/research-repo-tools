@@ -5,6 +5,7 @@ import tomllib
 from dataclasses import dataclass
 from importlib.metadata import metadata, version
 from pathlib import Path
+from typing import Any
 
 from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
@@ -13,7 +14,7 @@ from packaging.version import Version
 
 from research_repo_tools.config import _table
 
-DEVELOPMENT_PYTHON = "3.14"
+DEVELOPMENT_PYTHON = "3.15"
 PACKAGE = "research-repo-tools"
 
 
@@ -66,7 +67,7 @@ def reconcile_requirement(requirement: object, authority: PythonBaseline) -> str
     return ",".join(filter(None, (requirement, minimum)))
 
 
-def minimum_problems(document: dict, authority: PythonBaseline) -> tuple[str, ...]:
+def minimum_problems(document: dict[str, Any], authority: PythonBaseline) -> tuple[str, ...]:
     project = _table(document.get("project", {}), "project")
     requirement = project.get("requires-python")
     try:
@@ -78,7 +79,7 @@ def minimum_problems(document: dict, authority: PythonBaseline) -> tuple[str, ..
     return ()
 
 
-def check_minimum(root: Path, document: dict | None = None) -> None:
+def check_minimum(root: Path, document: dict[str, Any] | None = None) -> None:
     """Reject stale application metadata regardless of development opt-ins.
 
     Source-only lint directories without a project or shared dependency are not
@@ -127,11 +128,9 @@ def baseline() -> PythonBaseline:
     return PythonBaseline(requires, DEVELOPMENT_PYTHON, version(PACKAGE))
 
 
-def package_groups(document: dict) -> dict[str, list[Requirement]]:
+def package_groups(document: dict[str, Any]) -> dict[str, list[Requirement]]:
     result = {}
-    groups = document.get("dependency-groups", {})
-    if not isinstance(groups, dict):
-        raise ValueError("dependency-groups must be a table")
+    groups = _table(document.get("dependency-groups", {}), "dependency-groups")
     for group, requirements in groups.items():
         if not isinstance(requirements, list):
             raise ValueError(f"dependency-groups.{group} must be an array")
@@ -156,7 +155,7 @@ def package_groups(document: dict) -> dict[str, list[Requirement]]:
     return result
 
 
-def drift(root: Path, document: dict | None = None) -> tuple[str, ...]:
+def drift(root: Path, document: dict[str, Any] | None = None) -> tuple[str, ...]:
     """Report mirror or package drift without resolution, installation, or edits."""
     document = document if document is not None else tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     authority = baseline()
@@ -181,7 +180,7 @@ def drift(root: Path, document: dict | None = None) -> tuple[str, ...]:
     return tuple(problems)
 
 
-def target_problems(document: dict, selected: str) -> tuple[str, ...]:
+def target_problems(document: dict[str, Any], selected: str) -> tuple[str, ...]:
     """Retain deliberate lower targets; reject targets newer than the interpreter."""
     tool = _table(document.get("tool", {}), "tool")
     ruff = _table(tool.get("ruff", {}), "tool.ruff")
@@ -198,6 +197,6 @@ def target_problems(document: dict, selected: str) -> tuple[str, ...]:
     return tuple(problems)
 
 
-def check(root: Path, document: dict | None = None) -> None:
+def check(root: Path, document: dict[str, Any] | None = None) -> None:
     if problems := drift(root, document):
         raise ValueError("shared Python drift: " + "; ".join(problems) + "; run the target pinned package's toolchain adopt --dry-run, then --apply")

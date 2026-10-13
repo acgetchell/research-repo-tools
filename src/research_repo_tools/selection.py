@@ -23,7 +23,7 @@ def select_files(root: Path, *, include: Sequence[str] = (), exclude: Sequence[s
     """
     root = root.resolve(strict=True)
     for patterns in (include, exclude):
-        if isinstance(patterns, (str, bytes)) or any(not isinstance(item, str) or not item or "\0" in item for item in patterns):
+        if isinstance(patterns, (str, bytes)) or any(not isinstance(item, str) or not item or "\0" in item for item in patterns):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
             raise ValueError("file patterns must be nonempty strings without NUL")
     result = run_git_bytes(["--no-pager", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", *include], cwd=root)
     if result.stdout and not result.stdout.endswith(b"\0"):
@@ -42,11 +42,15 @@ def select_files(root: Path, *, include: Sequence[str] = (), exclude: Sequence[s
     return tuple(selected)
 
 
-def _argument_size(args: Sequence[str]) -> int:
+def _argument_sizes(args: Sequence[str]) -> tuple[int, int]:
     # Bound both Windows' UTF-16 command line (including quoting) and POSIX's
     # encoded argument bytes. Leave room for the environment and launcher.
     windows = len(subprocess.list2cmdline(args).encode("utf-16-le")) // 2 + 1
-    return max(windows, sum(len(os.fsencode(arg)) + 1 for arg in args))
+    return windows, sum(len(os.fsencode(arg)) + 1 for arg in args)
+
+
+def _argument_size(args: Sequence[str]) -> int:
+    return max(_argument_sizes(args))
 
 
 def argument_batches(command: Sequence[str], files: Iterable[str], *, batch_size: int = 100, argument_limit: int = 24000) -> tuple[tuple[str, ...], ...]:
@@ -55,25 +59,31 @@ def argument_batches(command: Sequence[str], files: Iterable[str], *, batch_size
     Validate all batches before execution. Empty input produces no invocation;
     an individual oversized argument fails instead of relying on platform limits.
     """
-    if not command or isinstance(command, (str, bytes)) or any(not isinstance(arg, str) or "\0" in arg for arg in command):
+    if not command or isinstance(command, (str, bytes)) or any(not isinstance(arg, str) or "\0" in arg for arg in command):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
         raise ValueError("command must be a nonempty argument vector without NUL")
     if type(batch_size) is not int or batch_size < 1 or type(argument_limit) is not int or argument_limit < 1:
         raise ValueError("batch size and argument limit must be positive integers")
-    if _argument_size(command) > argument_limit:
+    base_windows, base_posix = _argument_sizes(command)
+    if max(base_windows, base_posix) > argument_limit:
         raise ValueError("command exceeds the argument limit")
     batches = []
     batch: list[str] = []
+    windows, posix = base_windows, base_posix
     for name in files:
         if not isinstance(name, str) or not name or "\0" in name:
             raise ValueError("file arguments must be nonempty strings without NUL")
         # ./ prevents a leading dash from being interpreted as a tool option.
         argument = name if Path(name).is_absolute() else "./" + name
-        if _argument_size([*command, argument]) > argument_limit:
+        arg_windows, arg_posix = _argument_sizes((argument,))
+        if max(base_windows + arg_windows, base_posix + arg_posix) > argument_limit:
             raise ValueError(f"file argument exceeds the argument limit: {name!r}")
-        if batch and (len(batch) >= batch_size or _argument_size([*command, *batch, argument]) > argument_limit):
+        if batch and (len(batch) >= batch_size or max(windows + arg_windows, posix + arg_posix) > argument_limit):
             batches.append(tuple([*command, *batch]))
             batch = []
+            windows, posix = base_windows, base_posix
         batch.append(argument)
+        windows += arg_windows
+        posix += arg_posix
     if batch:
         batches.append(tuple([*command, *batch]))
     return tuple(batches)

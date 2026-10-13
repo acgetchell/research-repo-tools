@@ -20,7 +20,7 @@ Its goal is to simplify that stack around a correct, performant, orthogonal,
 and simple toolchain, keeping consuming repositories focused on Rust.
 
 **uv is required.** Install it using [Astral's instructions](https://docs.astral.sh/uv/getting-started/installation/)
-and make it available on PATH. This package uses uv to obtain Python 3.14+ and
+and make it available on PATH. This package uses uv to obtain Python 3.15+ and
 Python tooling. Git and platform build prerequisites are listed in the
 [toolchain guide][toolchain]. See [release status and publishing][publishing]
 and the [supported CLI and Python interfaces][api].
@@ -273,7 +273,8 @@ remains an independent merge gate.
 
 ### Workflow security and complete Python validation
 
-The shared Python commands target v0.1.8; adopt an exact released pin. Merge the
+The Python 3.15 and strict validation contract targets v0.1.9. Adopt that exact
+pin only after publication; v0.1.8 retains its 3.14 baseline and previous gate behavior. Merge the
 packaged `python-validation.toml` policy into your pyproject and retain the full
 existing Ruff configuration. It enables missing
 annotations (ANN001/002/003/201/202/204/205/206), TC, and UP037. The `python-check`
@@ -283,14 +284,19 @@ for intentional violations. Extend `check` with existing Rust/domain tests and
 native notebook linting; keep `semgrep-check` in the canonical local and CI gate.
 
 The commands require an already synchronized development environment. Checks
-never install or upgrade tools. `python check` runs Ruff lint, Ruff format checks,
-and ty; `python typecheck` runs ty alone. Both disable automatic source changes.
+never install or upgrade tools. `python check` runs Ruff format checks, Ruff lint,
+and strict ty (`--error all`); `python typecheck` runs strict ty alone. Both disable
+automatic source changes.
 `python fix` applies configured Ruff fixes followed by formatting; lint failures
 from the fix pass still propagate. Native settings, nested configuration, and
 precise exceptions remain active. Empty inventories require no validators;
 opted-in declaration and lock checks still apply. Missing tools fail before
-validation starts. All batches run and the first native failure
-status propagates. Use `just setup` to prepare the locked environment.
+validation starts. Discovery selects one inventory for all policies. Executables
+and argument batches
+are preflighted before validation starts. Batches fill a portable argument-size
+budget; the first failing batch stops the gate and its native status propagates.
+`python fix` stops on a failed lint-fix batch before formatting.
+Use `just setup` to prepare the locked environment.
 
 Declare one zizmor scanner pin, either `zizmor==1.30.1` in the consumer's dev
 dependency group or `zizmor = "1.30.1"` in its existing managed Cargo toolchain.
@@ -322,7 +328,7 @@ with the same pin/persona. SARIF output alone does not fail on findings; the
 plain gate does. Fork and Dependabot PRs retain audits and skip privileged upload.
 The installed
 [validation and migration guide](https://github.com/acgetchell/research-repo-tools/blob/main/src/research_repo_tools/templates/VALIDATING_WORKFLOWS.md)
-documents authentication, permissions, Python 3.14 annotations, exact negative
+documents authentication, permissions, Python 3.15 annotations, exact negative
 fixture exceptions, notebook wiring, and consumer CodeRabbit settings. Extract it
 with `templates VALIDATING_WORKFLOWS.md`; `templates python-validation.toml` and
 `templates zizmor.yml` expose the corresponding reusable examples.
@@ -415,9 +421,11 @@ summaries; both policies retain the common grouping and full breaking descriptio
 ### Shared Python adoption
 
 Every managed consumer automatically inherits the exact installed release's
-published `Requires-Python` minimum, currently Python 3.14. This mandatory
+published `Requires-Python` minimum. The pending v0.1.9 contract requires Python
+3.15; published v0.1.8 retains Python 3.14. This mandatory
 language-feature guard applies to installable applications and dependency-only
-projects. It does not raise the current baseline. No opt-in is required, and
+projects. For v0.1.9, the runtime floor and selected development minor are both 3.15.
+No opt-in is required, and
 development inheritance controls cannot disable the guard.
 
 Optionally mirror the release's selected development interpreter as well:
@@ -445,8 +453,8 @@ After the target version is published, use the packaged standalone bootstrap:
 ```sh
 research-repo-tools templates python-bootstrap.py --output python-bootstrap.py
 # Merge the matching published Justfile recipes into the consumer's Justfile.
-just shared-python-plan 0.1.8
-just shared-python-update 0.1.8
+just shared-python-plan 0.1.9
+just shared-python-update 0.1.9
 just python-check
 ```
 
@@ -499,12 +507,12 @@ inherit-python-tools = true
 ```
 
 Keep your current exact shared-package pin in `tooling` and include that group
-from `dev`. After v0.1.8 is published, the same standalone adoption recipes
+from `dev`. After v0.1.9 is published, the same standalone adoption recipes
 prepare the new extra, declarations, lock, and environment:
 
 ```sh
-just shared-python-plan 0.1.8
-just shared-python-update 0.1.8
+just shared-python-plan 0.1.9
+just shared-python-update 0.1.9
 just tools-python-check
 just python-check
 ```

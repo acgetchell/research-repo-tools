@@ -11,7 +11,7 @@ from research_repo_tools import config, toolchain, toolchain_config
 from research_repo_tools import toolchain_clean as clean
 
 
-def consumer(root, *, cargo="2.14.1", rust="1.98.0", python="3.14"):
+def consumer(root, *, cargo="2.14.1", rust="1.98.0", python="3.15"):
     root.mkdir(exist_ok=True)
     (root / "pyproject.toml").write_text(
         '[tool.uv]\nrequired-version="==0.12.19"\n'
@@ -69,7 +69,7 @@ def test_stale_plan_refuses_before_deleting_anything(owned, change):
     stale = install(runtime.cargo_root(runtime.plan.cargo[0]).with_name("2.13.0"))
     plan = clean.plan_clean(settings)
     if change == "declaration":
-        (settings.root / ".python-version").write_bytes(b"3.14.1\n")
+        (settings.root / ".python-version").write_bytes(b"3.15.1\n")
     elif change == "replacement":
         # Keep the original inode allocated so inode reuse cannot mask replacement.
         stale.rename(stale.with_name("retired"))
@@ -143,7 +143,7 @@ def python_inventory(owned, tmp_path, monkeypatch):
     system = next(value for suffix, value in host_os.items() if runtime.host.endswith(suffix))
     arch = runtime.host.split("-", 1)[0]
     entries = []
-    for version in ("3.13.7", "3.14.1", "3.15.0"):
+    for version in ("3.13.7", "3.15.1", "3.16.0"):
         key = f"cpython-{version}-{system}-{arch}-none"
         directory = install(runtime.base / "python" / key)
         entries.append(dict(key=key, version=version, path=str(directory / "sentinel"), os=system, arch=arch, implementation="cpython", variant="default"))
@@ -229,11 +229,11 @@ def test_new_python_install_default_and_explicit_override(owned, monkeypatch):
 
 def test_python_minor_retains_newest_patch_and_other_consumers_exact_pin(python_inventory, tmp_path):
     settings, runtime, entries, _, _ = python_inventory
-    latest = dict(entries[1], version="3.14.7", key=entries[1]["key"].replace("3.14.1", "3.14.7"))
+    latest = dict(entries[1], version="3.15.7", key=entries[1]["key"].replace("3.15.1", "3.15.7"))
     latest["path"] = str(install(runtime.base / "python" / latest["key"]) / "sentinel")
     entries.append(latest)
     assert {entry.path for entry in clean.plan_clean(settings).removals} == {Path(item["path"]).parent for item in entries[:2]}
-    retained = consumer(tmp_path / "retained", python="3.14.1")
+    retained = consumer(tmp_path / "retained", python="3.15.1")
     assert {entry.path for entry in clean.plan_clean(settings, keep_roots=(retained.root,)).removals} == {Path(entries[0]["path"]).parent}
 
 

@@ -283,7 +283,7 @@ def check(dist: Path) -> None:
         consumer.mkdir()
         env = isolated_environment(directory)
         (consumer / "pyproject.toml").write_text(
-            '[project]\nname="native-setup-consumer"\nversion="0.1.0"\nrequires-python=">=3.14,<3.15"\n'
+            '[project]\nname="native-setup-consumer"\nversion="0.1.0"\nrequires-python=">=3.15,<3.16"\n'
             f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}, "{dev_pin}"]\n'
             f'[tool.uv]\npackage=false\ndefault-groups=[]\nrequired-version="{uv_version}"\n'
             f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(wheel.resolve()))}}}\n"
@@ -293,7 +293,7 @@ def check(dist: Path) -> None:
             encoding="utf-8",
             newline="\n",
         )
-        (consumer / ".python-version").write_text("3.14\n", encoding="utf-8", newline="\n")
+        (consumer / ".python-version").write_text("3.15\n", encoding="utf-8", newline="\n")
         (consumer / "rust-toolchain.toml").write_text(
             '[toolchain]\nchannel="1.98.0"\nprofile="minimal"\ncomponents=["rustfmt"]\ntargets=["wasm32-unknown-unknown"]\n', encoding="utf-8", newline="\n"
         )

@@ -16,10 +16,10 @@ from research_repo_tools import toolchain_upgrade as upgrade
 def consumer(tmp_path, monkeypatch):
     manifest = tmp_path / "pyproject.toml"
     manifest.write_bytes(
-        b'[project]\r\nrequires-python = ">=3.14"\r\n[tool.uv]\r\nrequired-version = "==0.12.16"\r\n'
+        b'[project]\r\nrequires-python = ">=3.15"\r\n[tool.uv]\r\nrequired-version = "==0.12.16"\r\n'
         b"[tool.research-repo-tools.toolchain.cargo]\r\ncargo-nextest = \"0.9.100\" # retained\r\ngit-cliff = '2.14.1'\r\n"
     )
-    (tmp_path / ".python-version").write_text("3.14\n", newline="\n")
+    (tmp_path / ".python-version").write_text("3.15\n", newline="\n")
     (tmp_path / "rust-toolchain.toml").write_text('[toolchain]\nchannel="1.98.0"\n', newline="\n")
     monkeypatch.setattr(toolchain.Runtime, "uv_status", lambda self: toolchain.Status("uv", "0.12.16", "0.12.16", "uv", True))
     monkeypatch.setattr(upgrade, "latest_stable", lambda package: {"cargo-nextest": "0.9.101", "git-cliff": "2.15.0"}[package])

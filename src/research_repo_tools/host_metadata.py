@@ -134,7 +134,7 @@ def capture_host(root: Path, *, probes: tuple[tuple[str, tuple[str, ...]], ...] 
         raise ValueError("probe names must be unique")
     for name, command in probes:
         _string(name, "probe name")
-        if not command or isinstance(command, str) or any(not isinstance(part, str) or not part or "\0" in part for part in command):
+        if not command or isinstance(command, str) or any(not isinstance(part, str) or not part or "\0" in part for part in command):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
             raise ValueError("probe commands require a nonempty argument vector")
     environment = {**(os.environ if env is None else env), "LC_ALL": "C", "LANG": "C"}
     root = root.resolve(strict=True)

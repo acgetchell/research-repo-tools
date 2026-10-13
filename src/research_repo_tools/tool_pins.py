@@ -4,6 +4,7 @@ import re
 import shutil
 from collections.abc import Mapping
 from pathlib import Path
+from typing import cast
 
 from research_repo_tools.files import replace_if_unchanged
 from research_repo_tools.process import run_safe_command
@@ -58,7 +59,7 @@ def _homebrew_version(output: str, tool: str) -> str:
     match = re.match(rf"^{re.escape(tool)}[ \t]+(?P<version>{STABLE.pattern})(?=\s|$)", output.strip())
     if match is None:
         raise ValueError(f"expected {tool} version output starting with '{tool} X.Y.Z'")
-    version = match["version"]
+    version = cast(str, match["version"])
     if tool == "cargo-nextest":
         releases = [line.strip().removeprefix("release:").strip() for line in output.splitlines() if line.strip().startswith("release:")]
         if releases and releases != [version]:
@@ -101,7 +102,7 @@ def update(
     if not mapping:
         raise ValueError("deps.tools must explicitly map Just variable names to Cargo package names or uv")
     installed: dict[str, str] = {}
-    owners = owners or {}
+    owners = owners if owners is not None else dict[str, str]()
     if owners.keys() - set(mapping.values()) or any(owner not in {"cargo", "homebrew"} for owner in owners.values()):
         raise ValueError("tool ownership must select cargo or homebrew for mapped tools")
     if "uv" in mapping.values():

@@ -65,8 +65,8 @@ def test_child_environment_removes_case_insensitive_release_variables_only():
 
 
 def test_exact_config(tmp_path):
-    (tmp_path / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.14"\n[tool.uv]\nrequired-version="==0.12.19"\n')
-    (tmp_path / ".python-version").write_bytes(b"3.14\n")
+    (tmp_path / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.15"\n[tool.uv]\nrequired-version="==0.12.19"\n')
+    (tmp_path / ".python-version").write_bytes(b"3.15\n")
     for value in ("latest", "^8.30.1", "08.30.1", "8.30.1-rc.1"):
         with pytest.raises(ValueError, match="exact stable"):
             toolchain_config.load(config.parse({"toolchain": {"binaries": {"gitleaks": value}}}, root=tmp_path))
@@ -194,7 +194,7 @@ def test_formatter_archive_install_uses_upstream_checksum_and_tag(tmp_path, monk
 
 def test_binary_and_cargo_ownership_is_unambiguous(tmp_path):
     (tmp_path / "pyproject.toml").write_bytes(b'[tool.uv]\nrequired-version="==0.12.19"\n')
-    (tmp_path / ".python-version").write_bytes(b"3.14\n")
+    (tmp_path / ".python-version").write_bytes(b"3.15\n")
     (tmp_path / "rust-toolchain.toml").write_bytes(b'[toolchain]\nchannel="1.98.0"\n')
     settings = config.parse({"toolchain": {"cargo": {"dprint": "0.60.1"}, "binaries": {"dprint": "0.60.1"}}}, root=tmp_path)
     with pytest.raises(ValueError, match="ownership is ambiguous"):

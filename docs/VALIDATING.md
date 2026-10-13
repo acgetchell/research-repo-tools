@@ -18,7 +18,7 @@ history belong in the generated [CHANGELOG.md](../CHANGELOG.md). See
 | `just justfile-check` | Check maintainer and packaged recipes with the pinned Just formatter |
 | `just lock-check` | Verify the manifest and lock agree without changing dependencies |
 | `just newline-check` | Reject implicit newline translation in Python text-file writes |
-| `just python-check` | Check lint, formatting, and types for the complete Python inventory |
+| `just python-check` | Check formatting, lint, and strict types for the complete Python inventory |
 | `just test` | Run the test suite |
 
 Run the [contributor setup](../CONTRIBUTING.md#development-environment)
@@ -88,6 +88,12 @@ Both installed distributions resolve the optional `python-tools` extra and run
 its public checks with exact native versions, modeled drift, and real adoption
 candidate resolution. These checks preserve public runtime constraints and
 consumer sources. Base installs omit Ruff, ty, and pytest.
+
+Both distributions run selective-import consumers in fresh isolated 3.15 processes.
+They check complete command discovery without loading unrelated handlers, explicitly
+resolve deferred names, exercise CPython frozen-module modes, and preserve normal
+optional-dependency diagnostics. Full import smoke checks still reject network or
+consumer-file side effects. These checks do not claim third-party bundle validation.
 
 Base installations also omit pypdf. Both distributions run source-date, raw-line
 and read-only Tectonic discovery consumers without PDF dependencies, then resolve

@@ -4,6 +4,7 @@ import sys
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from research_repo_tools.evidence import _load_json, _object, _string
 from research_repo_tools.measurement import _strings
@@ -56,7 +57,7 @@ def _literals(value: object, context: str, *, allow_empty: bool = False) -> tupl
         raise ValueError(f"{context} must be an array of {'possibly empty ' if allow_empty else 'nonempty '}strings without NUL")
     for item in value:
         item.encode("utf-8")
-    return tuple(value)
+    return cast(tuple[str, ...], tuple(value))
 
 
 def _binary_example(target: dict[str, object]) -> bool:

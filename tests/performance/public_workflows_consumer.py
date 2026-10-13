@@ -110,7 +110,7 @@ class TestWorkflowConsumer(unittest.TestCase):
             root.mkdir()
             invocation.mkdir()
             (root / "pyproject.toml").write_bytes(b'[tool.uv]\nrequired-version="==0.12.18"\n')
-            (root / ".python-version").write_bytes(b"3.14\n")
+            (root / ".python-version").write_bytes(b"3.15\n")
             (root / "uv.lock").write_bytes(b"version=1\n")
             originals = {path: path.read_bytes() for path in root.iterdir()}
             selectors = {name: str(invocation) for name in ("UV_PROJECT", "UV_WORKING_DIR", "UV_WORKING_DIRECTORY", "UV_ENV_FILE")}
@@ -198,7 +198,7 @@ class TestWorkflowConsumer(unittest.TestCase):
             root.mkdir()
             invocation.mkdir()
             (root / "pyproject.toml").write_bytes(b'[tool.uv]\nrequired-version="==0.12.18"\n')
-            (root / ".python-version").write_bytes(b"3.14\n")
+            (root / ".python-version").write_bytes(b"3.15\n")
             with (
                 chdir(invocation),
                 patch.dict(os.environ, {"EXPORTED_VALUE": "café", "GITHUB_ENV": "runner-env"}),
@@ -237,7 +237,7 @@ class TestWorkflowConsumer(unittest.TestCase):
                 program.write_bytes(b"synthetic executable; native launch is intercepted")
                 program.chmod(0o700)
             (root / "pyproject.toml").write_bytes(b'[tool.uv]\nrequired-version="==0.12.18"\n')
-            (root / ".python-version").write_bytes(b"3.14\n")
+            (root / ".python-version").write_bytes(b"3.15\n")
             with (
                 chdir(invocation),
                 patch("research_repo_tools.toolchain.Runtime.inspect", return_value=[]),

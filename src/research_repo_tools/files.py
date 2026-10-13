@@ -198,20 +198,59 @@ def _path_keys(path: Path) -> frozenset[_PathKey]:
     Leaf inodes are deliberately excluded: replacing separate hard links writes
     separate directory entries and leaves the other links unchanged.
     """
-    resolved = path.resolve()
-    spelling = tuple(unicodedata.normalize("NFC", part).casefold() for part in resolved.parts)
-    parent = resolved.parent
-    suffix = [spelling[-1]]
-    while True:
-        try:
-            metadata = parent.stat()
-            break
-        except FileNotFoundError, NotADirectoryError:
+    return _PathIdentities().keys(path.resolve())
+
+
+class _PathIdentities:
+    """Reuse resolved ancestry within one preflight, never across operations.
+
+    String keys preserve spelling on Windows, where Path equality folds case.
+    Recheck directory identities before accepting the preflight. Publication's
+    later source/snapshot validation always creates a fresh inventory.
+    """
+
+    def __init__(self) -> None:
+        self.entries: dict[str, frozenset[_PathKey]] = {}
+        self.directories: dict[str, os.stat_result | None] = {}
+
+    def directory(self, path: Path) -> os.stat_result | None:
+        name = str(path)
+        if name not in self.directories:
+            try:
+                self.directories[name] = path.stat()
+            except FileNotFoundError, NotADirectoryError:
+                self.directories[name] = None
+        return self.directories[name]
+
+    def keys(self, resolved: Path) -> frozenset[_PathKey]:
+        name = str(resolved)
+        if name not in self.entries:
+            self.entries[name] = self._keys(resolved)
+        return self.entries[name]
+
+    def _keys(self, resolved: Path) -> frozenset[_PathKey]:
+        spelling = tuple(unicodedata.normalize("NFC", part).casefold() for part in resolved.parts)
+        parent = resolved.parent
+        suffix = [spelling[-1]]
+        while (metadata := self.directory(parent)) is None:
             if parent == parent.parent:
                 return frozenset((spelling,))
             suffix.append(unicodedata.normalize("NFC", parent.name).casefold())
             parent = parent.parent
-    return frozenset((spelling, (metadata.st_dev, metadata.st_ino, tuple(reversed(suffix)))))
+        return frozenset((spelling, (metadata.st_dev, metadata.st_ino, tuple(reversed(suffix)))))
+
+    def verify(self) -> None:
+        def identity(value: os.stat_result | None) -> tuple[int, int, int] | None:
+            return None if value is None else (value.st_dev, value.st_ino, value.st_mode)
+
+        for name, original in self.directories.items():
+            path = Path(name)
+            try:
+                current = path.stat()
+            except FileNotFoundError, NotADirectoryError:
+                current = None
+            if identity(current) != identity(original) or path.resolve() != path:
+                raise ValueError(f"path changed while checking directory identities: {path}")
 
 
 def _paths_alias(first: Path, second: Path) -> bool:
@@ -219,17 +258,20 @@ def _paths_alias(first: Path, second: Path) -> bool:
 
 
 def _validate_distinct_paths(targets: Sequence[Path]) -> tuple[Path, ...]:
-    if any(not isinstance(path, Path) for path in targets):
+    if any(not isinstance(path, Path) for path in targets):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
         raise TypeError("Transaction targets must be pathlib.Path instances")
     resolved = tuple(path.resolve() for path in targets)
+    identities = _PathIdentities()
     selected: set[_PathKey] = set()
     for path in resolved:
-        keys = _path_keys(path)
+        keys = identities.keys(path)
         if not selected.isdisjoint(keys):
             raise ValueError("A publication transaction cannot contain duplicate target paths (including case/Unicode aliases)")
         selected.update(keys)
-    if any(not selected.isdisjoint(_path_keys(parent)) for path in resolved for parent in path.parents):
+    parents = dict.fromkeys(str(parent) for path in resolved for parent in path.parents)
+    if any(not selected.isdisjoint(identities.keys(Path(parent))) for parent in parents):
         raise ValueError("A publication transaction cannot contain overlapping target paths")
+    identities.verify()
     return resolved
 
 
@@ -285,12 +327,12 @@ def _publish(writes: Sequence[tuple[Path, bytes]], *, expected: Mapping[Path, by
         return
 
     targets = _validate_targets([path for path, _payload in writes])
-    if any(not isinstance(payload, bytes) for _path, payload in writes):
+    if any(not isinstance(payload, bytes) for _path, payload in writes):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
         raise TypeError("Transaction payloads must be bytes")
     writes = tuple((target, payload) for target, (_path, payload) in zip(targets, writes, strict=True))
     guards = tuple(expected.items()) if expected is not None else ()
     guard_targets = _validate_targets([path for path, _payload in guards])
-    if any(not isinstance(payload, bytes) for _path, payload in guards):
+    if any(not isinstance(payload, bytes) for _path, payload in guards):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
         raise TypeError("Expected publication snapshots must be bytes")
     if expected is not None and set(targets) - set(guard_targets):
         raise ValueError("Expected publication snapshots must cover every replacement target")
@@ -458,7 +500,7 @@ def publish_directory(destination: Path) -> Iterator[Path]:
                     ) from None
             raise
     finally:
-        if retained:
+        if retained:  # ty: ignore[redundant-condition-strict]  Rollback exceptions can set this flag.
             if candidate.exists():
                 _cleanup_directory(candidate)
         else:

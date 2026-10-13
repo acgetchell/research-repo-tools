@@ -63,3 +63,41 @@ def test_live_runner_inherits_streams_and_propagates_failure(capfd: pytest.Captu
     with pytest.raises(subprocess.CalledProcessError) as caught:
         run_command_live(sys.executable, ["-c", "raise SystemExit(13)"])
     assert caught.value.returncode == 13
+
+
+def test_argument_budget_handles_native_bytes_utf16_quotes_and_trailing_backslashes() -> None:
+    names = ["café spaced.py", 'quoted"name.py', "emoji😀.py", "trailing " + chr(92), "short.py"] * 100
+    command = ["long executable path", "--check"]
+    batches = selection.argument_batches(command, names, batch_size=1000, argument_limit=180)
+    assert len(batches) > 1
+    assert [name for batch in batches for name in batch[len(command) :]] == ["./" + name for name in names]
+    for batch in batches:
+        assert len(subprocess.list2cmdline(batch).encode("utf-16-le")) // 2 + 1 <= 180
+        assert sum(len(selection.os.fsencode(arg)) + 1 for arg in batch) <= 180
+
+
+def test_inventory_rechecks_parent_aliases_on_each_call(tmp_path, monkeypatch):
+    from research_repo_tools import files
+
+    root = tmp_path.resolve()
+    directories = [root / name for name in ("first", "second")]
+    for path in directories:
+        path.mkdir()
+        (path / "data.py").write_bytes(b"")
+    monkeypatch.setattr(selection, "run_git_bytes", lambda *a, **kw: subprocess.CompletedProcess([], 0, b"first/data.py\0second/data.py\0", b""))
+    assert selection.select_files(root) == ("first/data.py", "second/data.py")
+    # A directory alias model supplements native symlink/junction tests; do
+    # not replace global OS identity or rely on Windows symlink privileges.
+    original = Path.stat
+    first = directories[0].stat()
+
+    def stat(path, *args, **kwargs):
+        return first if path == directories[1] else original(path, *args, **kwargs)
+
+    with monkeypatch.context() as patch:
+        patch.setattr(Path, "stat", stat)
+        with pytest.raises(ValueError, match="duplicate"):
+            selection.select_files(root)
+        with pytest.raises(ValueError, match="duplicate"):
+            files._validate_distinct_paths((directories[0] / "data.py", directories[1] / "data.py"))
+    assert selection.select_files(root) == ("first/data.py", "second/data.py")

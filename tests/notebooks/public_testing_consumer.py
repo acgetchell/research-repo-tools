@@ -8,6 +8,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import override
 from unittest.mock import patch
 
 from research_repo_tools.notebook_testing import isolated_project
@@ -15,6 +16,7 @@ from research_repo_tools.process import run_command
 
 
 class TestNotebookProject(unittest.TestCase):
+    @override
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="notebook integration 分析 ")
         self.addCleanup(self.temporary.cleanup)
@@ -23,14 +25,14 @@ class TestNotebookProject(unittest.TestCase):
         self.source.mkdir()
         uv = run_command("uv", ["--version"]).stdout.split()[1]
         manifest = (
-            '[project]\nname="notebook-fixture"\nversion="0.0.0"\nrequires-python=">=3.14"\n'
+            '[project]\nname="notebook-fixture"\nversion="0.0.0"\nrequires-python=">=3.15"\n'
             "[dependency-groups]\nanalysis=[]\n"
             f'[tool.uv]\nrequired-version="=={uv}"\n'
             '[tool.research-repo-tools.notebooks]\ngroup="analysis"\ntimeout=30\n'
             '[tool.research-repo-tools.toolchain.cargo]\ngit-cliff="2.14.1"\n'
             '[tool.research-repo-tools.toolchain.binaries]\ngitleaks="8.30.1"\n'
         )
-        self.metadata = {"pyproject.toml": manifest.replace("\n", "\r\n").encode(), ".python-version": b"3.14\r\n", "uv.lock": b"version=1\r\n"}
+        self.metadata = {"pyproject.toml": manifest.replace("\n", "\r\n").encode(), ".python-version": b"3.15\r\n", "uv.lock": b"version=1\r\n"}
         for name, data in self.metadata.items():
             (self.source / name).write_bytes(data)
         # Even an irrelevant/unavailable native toolchain must not enter the fixture.
@@ -102,6 +104,7 @@ class TestNotebookProject(unittest.TestCase):
     def test_failed_execution_and_exceptional_cleanup_preserve_parent(self):
         original = self.write_notebook("raise ValueError('consumer assertion failed')\n")
         before = dict(os.environ)
+        workspace = None
         with self.assertRaisesRegex(RuntimeError, "test failure"):
             with self.project() as project:
                 workspace = project.root.parent
@@ -112,6 +115,8 @@ class TestNotebookProject(unittest.TestCase):
                 self.assertEqual(json.loads(result.report_path.read_bytes()), result.report)
                 self.assertTrue(result.notebook_path.is_file())
                 raise RuntimeError("test failure")
+        self.assertIsNotNone(workspace)
+        assert workspace is not None
         self.assertFalse(workspace.exists())
         self.assertEqual(dict(os.environ), before)
         self.assertEqual((self.source / self.relative).read_bytes(), original)

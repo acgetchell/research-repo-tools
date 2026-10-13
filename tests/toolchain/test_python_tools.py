@@ -53,7 +53,7 @@ def test_tools_only_preserve_supported_selector_targets_and_enforce_runtime_mini
     path = root / "pyproject.toml"
     path.write_bytes(path.read_bytes().replace(b"inherit-python = true", b"inherit-python = false").replace(b"package = false", b"package = true"))
     path.write_bytes(path.read_bytes().replace(b">=3.14", b">=3.12"))
-    # Shared package requires >=3.14 today, independently of the test's future
+    # Model an older shared release independently of the test's new
     # interpreter baseline used in the common adoption fixture.
     from research_repo_tools import python_baseline
 
@@ -184,4 +184,4 @@ def test_update_uses_explicit_configuration_for_the_development_python_range(tmp
     monkeypatch.setattr(dependencies, "resolve_latest_pins", resolve)
     assert main(["--root", str(tmp_path), "--config", str(settings_file), "deps", "update-python"]) == 0
     assert len(observed) == 1
-    assert "3.12" not in observed[0] and "3.14" in observed[0]
+    assert "3.14" not in observed[0] and "3.15" in observed[0]

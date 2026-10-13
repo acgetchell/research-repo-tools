@@ -1,0 +1,257 @@
+uv lock --check
+Resolved 79 packages in 14ms
+just --justfile '/Users/adam/projects/research-repo-tools/justfile' --fmt --check
+just --justfile src/research_repo_tools/templates/justfile --fmt --check
+uv run --locked python scripts/check_newlines.py
+uv run --locked --no-sync --no-python-downloads research-repo-tools python check
+222 files already formatted
+warning: Support for Python 3.15 is under development and may be unstable. Enable `preview` to remove this warning.
+All checks passed!
+All checks passed!
+uv run --locked actionlint
+uv run --locked actionlint src/research_repo_tools/templates/publish-crates.yml src/research_repo_tools/templates/zizmor.yml
+uv run --locked research-repo-tools zizmor check .github src/research_repo_tools/templates/publish-crates.yml src/research_repo_tools/templates/zizmor.yml
+zizmor: online audits enabled using gh auth token; version 1.30.1; persona regular
+No findings to report. Good job! (2 ignored, 24 suppressed)
+uv run --locked pytest --cov --cov-report=term-missing --cov-report=xml:coverage/cobertura.xml
+============================= test session starts ==============================
+platform darwin -- Python 3.15.0, pytest-9.1.1, pluggy-1.6.0
+rootdir: /Users/adam/projects/research-repo-tools
+configfile: pyproject.toml
+testpaths: tests
+plugins: platformdirs-4.13.0, cov-7.1.0
+collected 2655 items
+
+tests/cargo_examples/test_discovery.py ................................. [  1%]
+..................                                                       [  1%]
+tests/cargo_examples/test_public_cargo_examples.py .............         [  2%]
+tests/changelog/test_archive.py ........................................ [  3%]
+............................................                             [  5%]
+tests/changelog/test_cliff_template.py ........................          [  6%]
+tests/changelog/test_contract.py ....................................... [  7%]
+.....ss                                                                  [  8%]
+tests/changelog/test_normalize.py ...................................... [  9%]
+........................................................................ [ 12%]
+................................................                         [ 14%]
+tests/changelog/test_notes.py ...........................                [ 15%]
+tests/changelog/test_tags.py ....................                        [ 15%]
+tests/changelog/test_workflow.py .......................                 [ 16%]
+tests/dependabot/test_workflow.py ...................................... [ 18%]
+.................................................................        [ 20%]
+tests/dependencies/test_actions.py ..................................... [ 22%]
+...........                                                              [ 22%]
+tests/dependencies/test_audit.py ..                                      [ 22%]
+tests/dependencies/test_public_actions.py ......                         [ 22%]
+tests/dependencies/test_python_pins.py ................................. [ 24%]
+..........                                                               [ 24%]
+tests/dependencies/test_python_pins_integration.py .......               [ 24%]
+tests/dependencies/test_tool_pins.py ................................... [ 25%]
+.............                                                            [ 26%]
+tests/dependencies/test_update_recipes.py .................sssss.s.sss.s [ 27%]
+.s.......s....ssss.s.ss.ss..s.                                           [ 28%]
+tests/notebooks/test_advice.py .........................                 [ 29%]
+tests/notebooks/test_contract.py ....................................... [ 31%]
+.......                                                                  [ 31%]
+tests/notebooks/test_id_pattern.py .....................                 [ 32%]
+tests/notebooks/test_install_policy.py ................................. [ 33%]
+........................................................................ [ 36%]
+........................................................................ [ 38%]
+                                                                         [ 38%]
+tests/notebooks/test_lint.py .......................................     [ 40%]
+tests/notebooks/test_review_consumer.py .........................        [ 41%]
+tests/notebooks/test_testing_consumer.py ......                          [ 41%]
+tests/notebooks/test_workflows.py ...................................... [ 42%]
+..................                                                       [ 43%]
+tests/notebooks/test_workflows_consumer.py ....sssss.                    [ 43%]
+tests/papers/test_public_native.py .....                                 [ 44%]
+tests/papers/test_public_papers.py ...........                           [ 44%]
+tests/performance/test_archives.py ..................................... [ 45%]
+........................                                                 [ 46%]
+tests/performance/test_cli.py .....                                      [ 47%]
+tests/performance/test_complete_failures.py .....                        [ 47%]
+tests/performance/test_criterion.py ..................................   [ 48%]
+tests/performance/test_evidence.py ..................                    [ 49%]
+tests/performance/test_measurement.py ...                                [ 49%]
+tests/performance/test_public_complete.py .......................        [ 50%]
+tests/performance/test_public_criterion.py ............                  [ 50%]
+tests/performance/test_public_performance.py .............               [ 51%]
+tests/performance/test_public_release_targets.py ....................... [ 52%]
+.                                                                        [ 52%]
+tests/performance/test_public_workflows.py ..............s.....          [ 52%]
+tests/performance/test_release_assets.py .....                           [ 52%]
+tests/performance/test_release_pairs.py ....                             [ 53%]
+tests/performance/test_report_promotion.py .                             [ 53%]
+tests/performance/test_worktrees.py .....                                [ 53%]
+tests/publication/test_git_policy.py ..                                  [ 53%]
+tests/publication/test_preparation.py ..                                 [ 53%]
+tests/publication/test_public_publication.py ss........                  [ 53%]
+tests/publication/test_publication.py .................................. [ 55%]
+....................................                                     [ 56%]
+tests/releases/test_contract.py ............................             [ 57%]
+tests/releases/test_distribution_inventory.py ..........                 [ 57%]
+tests/releases/test_metadata.py .........................                [ 58%]
+tests/releases/test_policy.py ..........................                 [ 59%]
+tests/releases/test_public_publishing.py ..........                      [ 60%]
+tests/releases/test_public_release_api.py ......................         [ 61%]
+tests/releases/test_publish.py .............                             [ 61%]
+tests/releases/test_publishing.py ...................................... [ 63%]
+...............                                                          [ 63%]
+tests/releases/test_registry.py .......................                  [ 64%]
+tests/releases/test_release_assets.py ................................   [ 65%]
+tests/releases/test_update.py .................                          [ 66%]
+tests/review/test_review.py ..................................           [ 67%]
+tests/security/test_public_sarif.py .............                        [ 68%]
+tests/security/test_public_security.py ........                          [ 68%]
+tests/security/test_scanners.py ................                         [ 68%]
+tests/semgrep/test_contract.py .....................                     [ 69%]
+tests/semgrep/test_documentation.py ......                               [ 69%]
+tests/semgrep/test_findings.py .......................................   [ 71%]
+tests/semgrep/test_public_scan.py ............                           [ 71%]
+tests/toolchain/test_clean.py .........................                  [ 72%]
+tests/toolchain/test_contract.py ....................................... [ 74%]
+........................................................................ [ 77%]
+.                                                                        [ 77%]
+tests/toolchain/test_native_setup_check.py ..............                [ 77%]
+tests/toolchain/test_prebuilt.py ....................................... [ 79%]
+..........                                                               [ 79%]
+tests/toolchain/test_public_owners.py ....                               [ 79%]
+tests/toolchain/test_public_toolchain.py ......                          [ 79%]
+tests/toolchain/test_python_adoption.py ...............                  [ 80%]
+tests/toolchain/test_python_bootstrap.py ........                        [ 80%]
+tests/toolchain/test_python_minimum.py ................................. [ 81%]
+........................................                                 [ 83%]
+tests/toolchain/test_python_tools.py ...................                 [ 84%]
+tests/toolchain/test_upgrade.py .................................        [ 85%]
+tests/toolchain/test_uv_update.py ..............................         [ 86%]
+tests/utilities/test_ci.py ..............                                [ 87%]
+tests/utilities/test_config.py ........................                  [ 87%]
+tests/utilities/test_coverage.py ..                                      [ 88%]
+tests/utilities/test_coverage_contract.py .......                        [ 88%]
+tests/utilities/test_files.py ......                                     [ 88%]
+tests/utilities/test_just_inspect.py ...................                 [ 89%]
+tests/utilities/test_justfile_format.py ..                               [ 89%]
+tests/utilities/test_markdown_lines.py .........                         [ 89%]
+tests/utilities/test_newlines.py ....................................... [ 91%]
+..........                                                               [ 91%]
+tests/utilities/test_process.py s..............s........................ [ 92%]
+................................................                         [ 94%]
+tests/utilities/test_public_api.py ...........................           [ 95%]
+tests/utilities/test_selection.py ............                           [ 96%]
+tests/utilities/test_version.py .                                        [ 96%]
+tests/validation/test_public_imports.py ...                              [ 96%]
+tests/validation/test_public_text.py ....s                               [ 96%]
+tests/validation/test_public_validation.py .s.........s..............    [ 97%]
+tests/validation/test_python_checks.py .....................             [ 98%]
+tests/zizmor/test_contract.py .......................................... [ 99%]
+.                                                                        [100%]
+
+================================ tests coverage ================================
+_______________ coverage: platform darwin, python 3.15.0-final-0 _______________
+
+Name                                                    Stmts   Miss Branch BrPart  Cover   Missing
+---------------------------------------------------------------------------------------------------
+scripts/audit_dependencies.py                              17      1      2      1    89%   22, 42->exit
+scripts/check_install.py                                  294    215     18      3    29%   69-138, 143-170, 196, 213->215, 240-464, 475-478
+scripts/check_newlines.py                                  88      2     52      0    99%   114-115
+scripts/check_release.py                                   24      0      4      1    96%   38->exit
+scripts/check_setup.py                                    227    138     26      5    39%   28-47, 66->73, 84-90, 98-105, 113, 160-212, 217-253, 270, 273, 312-409, 413
+scripts/measure_python_workflows.py                       118    118     40      0     0%   8-177
+scripts/release_assets.py                                 119      9     46      7    90%   33, 37, 43, 61, 67, 114, 165, 170->172, 177, 181
+src/research_repo_tools/__init__.py                         2      0      0      0   100%
+src/research_repo_tools/__main__.py                         3      0      2      1    80%   5->exit
+src/research_repo_tools/_stdout_forwarder.py               29     19     12      1    27%   22-39, 43
+src/research_repo_tools/action_updates.py                 183     22     92     16    85%   51, 55, 59, 65, 70, 74, 89, 98, 106->104, 109, 112-117, 119, 127, 130-131, 152, 154, 183
+src/research_repo_tools/archive_changelog.py              314     15    122     13    93%   156->170, 162, 231, 292, 296, 299, 361->366, 422, 434, 442, 462-464, 643-644, 651->653, 659, 663
+src/research_repo_tools/archives.py                       179     16     80     12    89%   32-33, 38-39, 82, 100, 128, 132, 157, 172, 173->177, 184, 188, 191->181, 209, 230, 236-237
+src/research_repo_tools/cargo_examples.py                 169      1     74      2    99%   108, 145->147
+src/research_repo_tools/changelog.py                      192     52     96     12    70%   47, 49, 65, 101, 119, 122, 127, 131, 134, 145, 162, 203, 208, 220-261
+src/research_repo_tools/changelog_notes.py                 98      0     52      0   100%
+src/research_repo_tools/ci.py                              28      1     14      1    95%   39
+src/research_repo_tools/cli.py                            586     60    270     31    88%   273-279, 285, 296, 313-316, 324, 344, 362, 380-381, 427, 440-451, 475-477, 487, 489, 494, 500, 507-509, 514->516, 517, 524, 575, 630, 633, 637, 644-645, 655-657, 668, 672, 699-700, 704, 709-715, 730->732, 741
+src/research_repo_tools/common_measurement.py             187     19     86     19    86%   53, 69, 72, 85, 87, 89, 95, 97, 99, 103, 106, 130, 149, 190, 195, 202, 213, 284, 293
+src/research_repo_tools/complete_runs.py                  316     25    142     22    90%   37, 43, 49, 59, 62, 94, 127, 148, 150, 155, 160, 189, 204, 206, 213, 216, 224, 264, 281-282, 300, 304, 326, 328, 336
+src/research_repo_tools/config.py                         325      8    118      8    96%   162, 164, 166, 259, 267, 355, 409, 526
+src/research_repo_tools/coverage.py                       100     10     36     10    85%   35, 90, 97, 115, 120, 168, 174->171, 196-198, 201->204, 210
+src/research_repo_tools/criterion.py                      210      6     82      5    96%   118, 135, 161, 234, 243, 284
+src/research_repo_tools/criterion_baselines.py             75      5     32      5    91%   56, 69, 71, 111, 117
+src/research_repo_tools/criterion_inventory.py            154     10     66     10    91%   67, 95, 97, 127, 153, 159, 162, 169, 193, 206
+src/research_repo_tools/dependencies.py                   300     45    116     22    84%   49-50, 71-72, 80-81, 84-86, 96-97, 138, 144, 156, 162-163, 173-175, 186-187, 192-193, 199-200, 207-208, 211-213, 222, 284-285, 288-289, 297->290, 309-310, 318-320, 346-347, 364, 421->423, 424, 442
+src/research_repo_tools/evidence.py                       181      1     82      1    99%   217
+src/research_repo_tools/files.py                          352     21    116     12    93%   53-57, 86-88, 237, 262, 336, 345, 387, 394, 396, 403, 433-434, 458-460, 468, 495->497, 504->508
+src/research_repo_tools/host_metadata.py                  161     18     72     13    87%   56, 59, 74, 112, 132, 134, 138, 144-145, 166-172, 173->190, 181->190, 220, 222, 230
+src/research_repo_tools/just_inspect.py                    73      3     32      3    94%   37, 66, 134
+src/research_repo_tools/legacy_evidence.py                135     23     62     20    77%   32, 41, 43-45, 48, 52, 55, 84, 90, 97, 101, 103, 106-107, 109, 114, 117, 120, 128, 134, 135->112, 170, 188
+src/research_repo_tools/markdown.py                        54      3     26      2    94%   56-58, 67->71
+src/research_repo_tools/markdown_lines.py                  28      0     10      0   100%
+src/research_repo_tools/measurement.py                    158     25     70     15    80%   58, 62, 84, 86-87, 91, 115, 118, 137-143, 173, 179, 208, 225, 237, 242-244, 247, 254
+src/research_repo_tools/notebook_advice.py                 53      0     24      0   100%
+src/research_repo_tools/notebook_inspect.py                75      3     46      3    95%   25, 59, 61
+src/research_repo_tools/notebook_lint.py                  129      4     56      4    96%   70, 74, 77, 98
+src/research_repo_tools/notebook_policy.py                161     11     82      7    93%   69-70, 77, 86->71, 124, 141, 168, 172, 175-176, 177->156, 195-196
+src/research_repo_tools/notebook_testing.py                71      3     32      4    93%   27->32, 33, 112, 118
+src/research_repo_tools/notebook_workflows.py             219     24    110     21    86%   50, 51->58, 57, 59, 82, 89->88, 93, 177, 187, 192, 199, 214, 216, 222-225, 237, 240, 247, 255, 257, 271, 273, 285, 303
+src/research_repo_tools/notebooks.py                      247     10     96     10    94%   117, 128, 143, 146, 204, 208, 210, 218, 313, 325
+src/research_repo_tools/paper_dates.py                     50      0     14      0   100%
+src/research_repo_tools/paper_pdf.py                      185     13     72     13    90%   26, 30, 81, 87, 105, 155->159, 161, 169, 194, 198, 211, 214, 245, 253
+src/research_repo_tools/performance.py                    156      3     52      3    97%   102, 159, 187
+src/research_repo_tools/performance_reports.py            126     19     50     13    81%   21, 24, 27-28, 34, 49-51, 65, 100, 110, 113, 120, 123-125, 141, 157, 176
+src/research_repo_tools/performance_workflows.py          170     12     78     11    90%   100, 111, 121, 124, 145-147, 158, 161, 175, 177, 207, 209->222
+src/research_repo_tools/postprocess_changelog.py          762     64    358     36    90%   157, 177, 216-219, 227-228, 238-239, 247, 254, 317, 544, 589, 602, 640-658, 687, 754, 774, 803, 871-873, 892, 918, 921->925, 923->925, 984, 997-1001, 1005-1007, 1020->995, 1034, 1047->1052, 1061, 1178, 1182-1183, 1204, 1211, 1223, 1235, 1256, 1305-1306, 1314, 1318
+src/research_repo_tools/prebuilt_tools.py                  95      6     36      6    91%   46, 59, 62, 88, 103, 124
+src/research_repo_tools/process.py                        268     23    100     15    89%   56, 94, 121, 152, 154, 177, 180, 212, 221, 235->234, 255, 468-475, 494, 499, 570, 616-617
+src/research_repo_tools/publication.py                    274     53    134     24    77%   58, 69, 192, 194, 204, 212, 231, 235, 255, 257, 260, 262, 273-301, 334, 336, 338, 347, 379, 393, 395, 398, 401, 404, 409, 461, 464-465
+src/research_repo_tools/publication_config.py             141     14     70     13    87%   39, 69, 75, 85, 96, 102, 143, 145, 147, 155, 162, 185-187, 190->196
+src/research_repo_tools/python_adoption.py                205     11     78      8    93%   85->84, 95, 98, 170, 194, 250, 259-260, 262->267, 280->312, 307-308, 315-316
+src/research_repo_tools/python_baseline.py                152     12     78     11    90%   32, 34, 60, 75-76, 96, 98, 110->119, 113, 127, 136, 149, 154
+src/research_repo_tools/python_checks.py                   34      1     20      1    96%   18
+src/research_repo_tools/python_tools.py                   126      4     70      8    94%   30, 33, 44, 49, 69->68, 74->73, 98->92, 104->90
+src/research_repo_tools/registry.py                        82      8     42      8    87%   33, 35, 37, 39, 82, 88, 91, 118
+src/research_repo_tools/release_assets.py                 314     21    140     21    91%   60, 112, 187, 203, 209, 254, 283, 381, 384, 387, 401, 424, 430, 433, 436, 473, 476, 481, 483, 486, 525
+src/research_repo_tools/release_credentials.py             12      0      2      0   100%
+src/research_repo_tools/release_discovery.py               53     10     24      9    75%   34, 38, 40, 45, 47, 50, 53, 56, 64-66
+src/research_repo_tools/release_metadata.py               388     26    130     15    92%   58-59, 73-74, 82-83, 209, 217, 223, 240, 245, 247->242, 257-258, 265-266, 274-275, 283-284, 350-351, 413-415, 594->590, 601, 644
+src/research_repo_tools/release_pairs.py                   52      6     32      6    86%   47, 49, 56, 58, 64, 66
+src/research_repo_tools/release_policy.py                  72      7     38      7    87%   58, 60, 64, 71, 98, 100, 109
+src/research_repo_tools/release_publishing.py             185     14     90     14    90%   51, 53, 70, 72, 76, 79, 85, 91, 95, 99, 105, 123, 175, 283
+src/research_repo_tools/release_tags.py                    25      0      4      0   100%
+src/research_repo_tools/releases.py                       268     16    120     14    92%   151, 153, 205, 261, 278, 332, 337, 339, 345, 374, 383, 409, 411, 417, 439-440
+src/research_repo_tools/review.py                          59      0     16      0   100%
+src/research_repo_tools/run_reports.py                    147     16     56     16    84%   38, 52, 56, 60, 62, 77, 80, 85, 96, 107, 111, 122, 137, 142, 151, 190
+src/research_repo_tools/sarif.py                          172      7     86      8    94%   26, 30, 32, 35, 48, 94, 122->exit, 184
+src/research_repo_tools/scanner_output.py                  58      2     36      4    94%   31->37, 64, 68, 70->65
+src/research_repo_tools/security.py                       192     30    102     24    80%   33-40, 45, 49, 51, 58, 65, 70, 72, 75, 78, 81, 94, 97, 103, 107, 108->91, 112, 115, 127, 147, 157->159, 181, 206, 235, 253
+src/research_repo_tools/selection.py                       73      9     36      8    84%   27, 39, 53, 65, 68, 74, 104, 108, 113
+src/research_repo_tools/semgrep.py                        127     12     54     13    86%   29, 47, 60, 64, 66, 75, 91, 98, 110, 116, 117->105, 194, 198
+src/research_repo_tools/semgrep_docs.py                    62      3     36      4    93%   27, 60->66, 70, 72
+src/research_repo_tools/semgrep_findings.py               135     12     62      7    90%   42-43, 47-48, 50-51, 53-54, 61-62, 171, 195
+src/research_repo_tools/semgrep_scan.py                   285     34    154     27    86%   33, 36, 38, 43, 49, 53, 78, 116, 124, 126, 128, 141, 160->162, 163-166, 170-172, 183, 206, 213, 220, 224, 232, 235, 241, 244, 281, 284, 307, 374-376
+src/research_repo_tools/tectonic.py                        58      3     38      4    93%   37, 51->57, 55, 75
+src/research_repo_tools/templates/python-bootstrap.py      35      1     10      1    96%   72
+src/research_repo_tools/text_lines.py                      32      1      8      1    95%   39
+src/research_repo_tools/toml_source.py                    183     17     98     15    87%   26, 33, 40->46, 86, 107, 113, 145, 151->173, 156, 166-169, 189, 194, 197->221, 200-202, 206
+src/research_repo_tools/tool_pins.py                      115      8     62      8    91%   74, 103, 107, 115, 120, 122, 126, 129
+src/research_repo_tools/toolchain.py                      305     14    106     14    93%   71, 74-75, 195->197, 217, 240, 253-254, 326, 334->336, 336->338, 341, 383, 407->exit, 419, 447, 449, 453
+src/research_repo_tools/toolchain_clean.py                200     12    118     13    92%   61, 65->63, 87->85, 97, 108, 114, 129, 132->131, 140, 204, 216, 232, 263-266
+src/research_repo_tools/toolchain_config.py               123      6     52      4    94%   105-106, 113, 116, 119, 187
+src/research_repo_tools/toolchain_setup.py                 41      2     16      2    93%   26, 59
+src/research_repo_tools/toolchain_upgrade.py               92     13     40      9    82%   29, 37, 52, 69, 76, 86-91, 96, 112, 114
+src/research_repo_tools/update_release.py                 129     19     40      7    83%   61-62, 75-76, 85-86, 103-104, 106-107, 133-134, 192-193, 197-200, 204
+src/research_repo_tools/uv_update.py                      168     18     82     17    85%   31->33, 34-35, 64, 72, 82, 86, 107, 115, 132->129, 134, 137, 145, 151, 154, 160, 163, 166, 190-191
+src/research_repo_tools/validation.py                      61     24     30      5    55%   32, 34, 43, 47, 51, 62-83
+src/research_repo_tools/workflow_allowlist.py              34      0     18      0   100%
+src/research_repo_tools/workflow_uses.py                  102      8     56      9    89%   75->81, 80, 82, 85, 92, 113->111, 125, 130, 135, 138
+src/research_repo_tools/worktrees.py                       98     18     36     12    76%   29, 31, 36, 38, 56, 62, 73, 85, 89, 90->92, 112, 119-127, 141
+src/research_repo_tools/zizmor.py                         110      2     28      1    98%   114, 120
+---------------------------------------------------------------------------------------------------
+TOTAL                                                   13825   1580   5904    811    87%
+Coverage XML written to file coverage/cobertura.xml
+================= 2618 passed, 37 skipped in 379.55s (0:06:19) =================
+uv build --no-sources --clear
+Building source distribution...
+Building wheel from source distribution...
+Successfully built dist/research_repo_tools-0.1.8.tar.gz
+Successfully built dist/research_repo_tools-0.1.8-py3-none-any.whl
+uv run --locked python scripts/check_install.py
+Git-mutating consumer tests are skipped by RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS=1 (wheel and sdist).
+PASS: installed wheel outside checkout; bundled just
+PASS: installed sdist outside checkout; bundled just

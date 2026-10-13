@@ -7,6 +7,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from typing import override
 from unittest.mock import patch
 
 from research_repo_tools.cargo_examples import discover_examples, run_examples
@@ -235,6 +236,7 @@ class TestLiveProcess(unittest.TestCase):
 
 
 class TestNativeCargo(unittest.TestCase):
+    @override
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="cargo-examples-")
         self.addCleanup(temporary.cleanup)

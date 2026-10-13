@@ -10,7 +10,7 @@ from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeGuard
+from typing import TYPE_CHECKING, TypeGuard, cast
 
 from packaging.utils import canonicalize_name
 
@@ -207,7 +207,7 @@ def workspace_member_manifests(root: Path) -> list[Path]:
         patterns = workspace.get(field, [])
         if not isinstance(patterns, list) or any(not isinstance(pattern, str) or not pattern for pattern in patterns):
             raise ReleaseCheckError(f"workspace.{field} must be an array of nonempty path patterns")
-        return patterns
+        return cast(list[str], patterns)
 
     excluded_paths = {path.resolve() for pattern in path_patterns("exclude") for path in root.glob(pattern)}
     manifests: set[Path] = set()
@@ -232,7 +232,7 @@ def cargo_lock_references(root: Path, package: PackageInfo) -> list[VersionRefer
         return []
     data = _read_toml(cargo)
     root_package = data.get("package")
-    references = [_cargo_lock_reference(root / "Cargo.lock", package)] if root_package is not None else []
+    references: list[VersionReference] = [_cargo_lock_reference(root / "Cargo.lock", package)] if root_package is not None else []
     if isinstance(root_package, dict) and root_package.get("version") != {"workspace": True}:
         return references
     workspace = _require_table(data, "workspace", cargo)

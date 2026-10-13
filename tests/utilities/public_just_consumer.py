@@ -5,12 +5,14 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import override
 
 from research_repo_tools.just_inspect import dry_run, inspect_justfile
 from research_repo_tools.process import ExecutableNotFoundError, resolve_executable
 
 
 class TestJustInspection(unittest.TestCase):
+    @override
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="Just consumer 分析 ")
         self.addCleanup(self.temporary.cleanup)

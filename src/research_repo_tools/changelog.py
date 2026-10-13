@@ -7,13 +7,13 @@ from datetime import UTC, date, datetime
 from importlib.resources import files
 from pathlib import Path
 
-from research_repo_tools import archive_changelog as archive
-from research_repo_tools import changelog_notes
-from research_repo_tools.config import Config
-from research_repo_tools.files import replace_many
-from research_repo_tools.postprocess_changelog import format_markdown, postprocess_text
 from research_repo_tools.process import run_git_command, run_git_command_with_input, run_safe_command
 from research_repo_tools.release_tags import _GITHUB_TAG_ANNOTATION_LIMIT, SEMVER_PATTERN, _heading_to_anchor, validate_semver
+lazy from research_repo_tools import archive_changelog as archive
+lazy from research_repo_tools import changelog_notes
+lazy from research_repo_tools.config import Config
+lazy from research_repo_tools.files import replace_many
+lazy from research_repo_tools.postprocess_changelog import format_markdown, postprocess_text
 
 TEMPLATES = (
     "CHANGELOG.md",

@@ -10,6 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import Any, override
 from unittest.mock import patch
 
 from research_repo_tools import cli, config, release_assets
@@ -33,7 +34,7 @@ PAYLOAD = b"inert\r\n\xff\x00baseline\n"
 
 class GitHubFixture:
     def __init__(self):
-        self.release: dict = {
+        self.release: dict[str, Any] = {
             "url": f"https://api.github.com/repos/{REPOSITORY}/releases/9",
             "id": 9,
             "tag_name": TAG,
@@ -116,6 +117,7 @@ class GitHubFixture:
 
 
 class TestReleaseTargetConsumer(unittest.TestCase):
+    @override
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="release target café ")
         self.addCleanup(temporary.cleanup)

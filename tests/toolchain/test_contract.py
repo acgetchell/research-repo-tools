@@ -23,13 +23,13 @@ def consumer(tmp_path):
     root = tmp_path / "consumer with spaces"
     root.mkdir()
     (root / "pyproject.toml").write_text(
-        '[project]\nrequires-python = ">=3.14"\n'
+        '[project]\nrequires-python = ">=3.15"\n'
         '[dependency-groups]\ntooling = ["research-repo-tools==0.1.0"]\ndev = [{include-group="tooling"}]\n'
         '[tool.uv]\nrequired-version = "==0.12.15"\n'
         '[tool.research-repo-tools.toolchain.cargo]\ngit-cliff = "2.14.1"\ncargo-nextest = "0.9.100"\n',
         newline="\n",
     )
-    (root / ".python-version").write_text("3.14\n", newline="\n")
+    (root / ".python-version").write_text("3.15\n", newline="\n")
     (root / "uv.lock").write_text("version = 1\n", newline="\n")
     (root / "rust-toolchain.toml").write_text(
         '[toolchain]\nchannel="1.98.0"\nprofile="default"\ncomponents=["llvm-tools-preview"]\ntargets=["aarch64-apple-darwin"]\n', newline="\n"
@@ -50,7 +50,7 @@ class FakeTools:
         self.add(directory / executable(Path(), "just"), f"just {toolchain.version('rust-just')}")
         self.add(directory / executable(Path(), "git"), "git version 2.50.1.windows.1")
         self.add(executable(directory, "sh"), "")
-        self.python = self.add(executable(directory.parent / "managed python", "python"), "Python 3.14.7")
+        self.python = self.add(executable(directory.parent / "managed python", "python"), "Python 3.15.7")
         self.add(executable(directory, "python"), "Python 3.13.7")
 
     def add(self, path, output):
@@ -150,7 +150,7 @@ def test_missing_python_installed_before_rust(runtime):
     fake.python_available = False
     instance.sync()
     installs = [args for _, args, _ in fake.calls if "install" in args]
-    assert installs[0] == ["python", "install", "--no-bin", "--no-registry", "==3.14.*,>=3.14"]
+    assert installs[0] == ["python", "install", "--no-bin", "--no-registry", "==3.15.*,>=3.15"]
 
 
 def test_setup_subprocesses_withhold_release_credentials_and_run_preserves_them(runtime, monkeypatch):
@@ -555,19 +555,19 @@ def test_run_python_preserves_consumer_dependencies(runtime, tmp_path, monkeypat
 @pytest.mark.parametrize(
     "pin,requires,actual,ok",
     [
-        ("3.14", ">=3.14.1", "3.14.7", True),
-        ("3.14", ">=3.14.1", "3.14.0", False),
-        ("3.14", ">=3.14.1", "3.15.0", False),
-        ("3.14", ">=3.14,<3.14.7", "3.14.7", False),
-        ("3.14", ">=3.14,!=3.14.7", "3.14.7", False),
-        ("3.14.7", ">=3.14.1", "3.14.7", True),
-        ("3.14.7", ">=3.14.1", "3.14.8", False),
+        ("3.15", ">=3.15.1", "3.15.7", True),
+        ("3.15", ">=3.15.1", "3.15.0", False),
+        ("3.15", ">=3.15.1", "3.16.0", False),
+        ("3.15", ">=3.15,<3.15.7", "3.15.7", False),
+        ("3.15", ">=3.15,!=3.15.7", "3.15.7", False),
+        ("3.15.7", ">=3.15.1", "3.15.7", True),
+        ("3.15.7", ">=3.15.1", "3.15.8", False),
     ],
 )
 def test_python_selection_enforces_resolved_patch_constraints(runtime, pin, requires, actual, ok):
     instance, fake = runtime
     manifest = instance.plan.root / "pyproject.toml"
-    manifest.write_text(manifest.read_text().replace('requires-python = ">=3.14"', f'requires-python = "{requires}"'), newline="\n")
+    manifest.write_text(manifest.read_text().replace('requires-python = ">=3.15"', f'requires-python = "{requires}"'), newline="\n")
     (instance.plan.root / ".python-version").write_text(pin, newline="\n")
     instance.plan = toolchain_config.load(config.load(root=instance.plan.root))
     fake.outputs[fake.python] = f"Python {actual}"
@@ -578,10 +578,10 @@ def test_python_selection_enforces_resolved_patch_constraints(runtime, pin, requ
     assert (actual in SpecifierSet(lookup[-1])) is ok
 
 
-@pytest.mark.parametrize("actual", ["3.13.7", "3.14.0"])
+@pytest.mark.parametrize("actual", ["3.13.7", "3.15.0"])
 def test_incompatible_consumer_python_falls_back_to_verified_managed_python(runtime, actual):
     instance, fake = runtime
-    instance.plan = replace(instance.plan, requires_python=">=3.14.1")
+    instance.plan = replace(instance.plan, requires_python=">=3.15.1")
     environment = instance.plan.root / ".venv"
     python = executable(environment / ("Scripts" if os.name == "nt" else "bin"), "python")
     fake.add(python, f"Python {actual}")
@@ -594,37 +594,37 @@ def test_incompatible_consumer_python_falls_back_to_verified_managed_python(runt
 
 def test_missing_python_install_respects_project_patch_constraints(runtime):
     instance, fake = runtime
-    instance.plan = replace(instance.plan, rust=None, cargo=(), requires_python=">=3.14.1,<3.14.9")
+    instance.plan = replace(instance.plan, rust=None, cargo=(), requires_python=">=3.15.1,<3.15.9")
     fake.python_available = False
     instance.sync()
     installs = [args for _, args, _ in fake.calls if "install" in args]
     assert len(installs) == 1
     assert installs[0][:4] == ["python", "install", "--no-bin", "--no-registry"]
-    assert SpecifierSet(installs[0][-1]) == SpecifierSet("==3.14.*,>=3.14.1,<3.14.9")
+    assert SpecifierSet(installs[0][-1]) == SpecifierSet("==3.15.*,>=3.15.1,<3.15.9")
     assert instance.python_status(instance.uv_status()).ok
 
 
 @pytest.mark.parametrize(
     "pin,requires,matching_version",
     [
-        ("3.14.0", ">=3.14.1", None),
-        ("3.14", ">=3.15", None),
-        ("3.15", "<3.15", None),
-        ("3.14", "==3.15.*", None),
-        ("3.14", "~=3.15.1", None),
-        ("3.14", ">=3.14.2,<3.14.2", None),
-        ("3.14", ">=3.14,!=3.14.*", None),
-        ("3.14", ">=3.14.1,<=3.14.1,!=3.14.1", None),
-        ("3.14", ">=3.14.1,<3.15", "3.14.1"),
-        ("3.14", ">=3.14.1,!=3.14.1,<3.14.3", "3.14.2"),
-        ("3.14", "~=3.14.5", "3.14.5"),
-        ("3.14", ">3.14.1000000", "3.14.1000001"),
-        ("3.14.7", ">=3.14.1,<3.15", "3.14.7"),
+        ("3.15.0", ">=3.15.1", None),
+        ("3.15", ">=3.16", None),
+        ("3.16", "<3.16", None),
+        ("3.15", "==3.16.*", None),
+        ("3.15", "~=3.16.1", None),
+        ("3.15", ">=3.15.2,<3.15.2", None),
+        ("3.15", ">=3.15,!=3.15.*", None),
+        ("3.15", ">=3.15.1,<=3.15.1,!=3.15.1", None),
+        ("3.15", ">=3.15.1,<3.16", "3.15.1"),
+        ("3.15", ">=3.15.1,!=3.15.1,<3.15.3", "3.15.2"),
+        ("3.15", "~=3.15.5", "3.15.5"),
+        ("3.15", ">3.15.1000000", "3.15.1000001"),
+        ("3.15.7", ">=3.15.1,<3.16", "3.15.7"),
     ],
 )
 def test_python_pin_requires_nonempty_project_constraint_intersection(consumer, pin, requires, matching_version):
     manifest = consumer / "pyproject.toml"
-    manifest.write_text(manifest.read_text().replace('requires-python = ">=3.14"', f'requires-python = "{requires}"'), newline="\n")
+    manifest.write_text(manifest.read_text().replace('requires-python = ">=3.15"', f'requires-python = "{requires}"'), newline="\n")
     (consumer / ".python-version").write_text(pin, newline="\n")
     if matching_version is None:
         with pytest.raises(ValueError, match=r"\.python-version must satisfy project\.requires-python"):
@@ -716,7 +716,7 @@ def test_setup_installs_user_just_and_tools_before_locked_project_sync(runtime, 
     setup_module.setup(instance)
     actions = [args for _, args, _ in fake.calls if "install" in args or args[0] in {"tool", "sync"}]
     assert actions[-4:] == [
-        ["tool", "install", "--no-config", "--managed-python", "--python", "==3.14.*,>=3.14", f"rust-just=={toolchain.version('rust-just')}"],
+        ["tool", "install", "--no-config", "--managed-python", "--python", "==3.15.*,>=3.15", f"rust-just=={toolchain.version('rust-just')}"],
         ["tool", "dir", "--bin", "--no-config"],
         ["tool", "update-shell", "--no-config"],
         ["sync", "--locked", "--managed-python", "--group", "dev"],
@@ -866,10 +866,10 @@ def test_independent_operations_do_not_retain_probe_results(runtime):
 def test_probe_cache_tracks_path_and_selected_executable_changes(runtime, monkeypatch, tmp_path):
     instance, fake = runtime
     with instance._operation():
-        assert instance.python_status(instance.uv_status()).actual == "3.14.7"
-        fake.outputs[fake.python] = "Python 3.14.8"
+        assert instance.python_status(instance.uv_status()).actual == "3.15.7"
+        fake.outputs[fake.python] = "Python 3.15.8"
         fake.python.write_bytes(b"a replaced interpreter with different metadata")
-        assert instance.python_status(instance.uv_status()).actual == "3.14.8"
+        assert instance.python_status(instance.uv_status()).actual == "3.15.8"
         other = tmp_path / "other bin"
         fake.add(executable(other, "uv"), "uv 0.12.14")
         monkeypatch.setenv("PATH", str(other) + os.pathsep + os.environ["PATH"])
@@ -886,13 +886,13 @@ def test_probe_cache_notices_new_project_environment_and_config_edits(runtime, m
         if override:
             monkeypatch.setenv("UV_PROJECT_ENVIRONMENT", str(environment))
         python = executable(environment / ("Scripts" if os.name == "nt" else "bin"), "python")
-        fake.add(python, "Python 3.14.6")
+        fake.add(python, "Python 3.15.6")
         configuration = environment / "pyvenv.cfg"
         configuration.write_text("synthetic virtual environment\n", newline="\n")
-        assert instance.python_status(instance.uv_status()).actual == "3.14.6"
-        fake.outputs[python] = "Python 3.14.9"
+        assert instance.python_status(instance.uv_status()).actual == "3.15.6"
+        fake.outputs[python] = "Python 3.15.9"
         configuration.write_text("changed virtual environment configuration\n", newline="\n")
-        assert instance.python_status(instance.uv_status()).actual == "3.14.9"
+        assert instance.python_status(instance.uv_status()).actual == "3.15.9"
 
 
 @pytest.mark.parametrize("failed", [False, True])
@@ -902,7 +902,7 @@ def test_installer_attempt_invalidates_cached_probes(runtime, monkeypatch, faile
 
     def install(command, args, **kwargs):
         if args == ["repair"]:
-            fake.outputs[fake.python] = "Python 3.14.8"
+            fake.outputs[fake.python] = "Python 3.15.8"
             if failed:
                 raise subprocess.CalledProcessError(1, [command, *args], stderr="partial repair")
             return subprocess.CompletedProcess([], 0, "", "")
@@ -911,13 +911,13 @@ def test_installer_attempt_invalidates_cached_probes(runtime, monkeypatch, faile
     monkeypatch.setattr(toolchain, "run_safe_command", install)
     with instance._operation():
         uv = instance.uv_status()
-        assert instance.python_status(uv).actual == "3.14.7"
+        assert instance.python_status(uv).actual == "3.15.7"
         if failed:
             with pytest.raises(RuntimeError, match="partial repair"):
                 instance._install(uv.path, ["repair"])
         else:
             instance._install(uv.path, ["repair"])
-        assert instance.python_status(instance.uv_status()).actual == "3.14.8"
+        assert instance.python_status(instance.uv_status()).actual == "3.15.8"
 
 
 def test_failed_operation_discards_cached_probes(runtime):

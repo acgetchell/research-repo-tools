@@ -130,7 +130,7 @@ def dry_run(
     """
     if not isinstance(recipe, str) or not recipe or "\0" in recipe or "=" in recipe:
         raise ValueError("select a nonempty Just recipe name, not a variable assignment")
-    if not isinstance(arguments, Sequence) or isinstance(arguments, (str, bytes)) or any(not isinstance(arg, str) or "\0" in arg for arg in arguments):
+    if not isinstance(arguments, Sequence) or isinstance(arguments, (str, bytes)) or any(not isinstance(arg, str) or "\0" in arg for arg in arguments):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
         raise TypeError("arguments must be a sequence of strings without NUL")
     binary, options, root = _command(root, justfile, executable, env, timeout)
     return run_command(binary, [*options, "--one", "--dry-run", "--", recipe, *arguments], cwd=root, env=env, timeout=timeout)

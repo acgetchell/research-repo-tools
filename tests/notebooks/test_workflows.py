@@ -287,7 +287,7 @@ def test_launch_rejects_environment_override_outside_project_before_sync(tmp_pat
 
 @pytest.mark.parametrize("result,expected", [(0, 0), (9, 9), (-15, 143), ("interrupt", 130), ("missing", None)])
 def test_launch_preserves_parent_environment_and_cleans_private_caches_on_every_exit(tmp_path, monkeypatch, result, expected):
-    managed = SimpleNamespace(plan=SimpleNamespace(python="3.14"), project_environment=lambda: dict(os.environ), uv_status=lambda: SimpleNamespace(path="uv"))
+    managed = SimpleNamespace(plan=SimpleNamespace(python="3.15"), project_environment=lambda: dict(os.environ), uv_status=lambda: SimpleNamespace(path="uv"))
     monkeypatch.setattr(workflows, "runtime", lambda *args: managed)
     for key in ("UV_NO_SYNC", "UV_FROZEN", "UV_NO_MANAGED_PYTHON", "PYTHONHOME", "PYTHONPATH", "VIRTUAL_ENV"):
         monkeypatch.setenv(key, "ambient override")

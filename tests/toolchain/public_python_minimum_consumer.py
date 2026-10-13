@@ -102,7 +102,7 @@ class TestPythonMinimumConsumer(unittest.TestCase):
             uv_version = run(["uv", "--version"]).stdout.split()[1]
             manifest = (
                 '[build-system]\nrequires=["hatchling==1.32.4"]\nbuild-backend="hatchling.build"\n'
-                '[project]\nname="minimum-consumer"\nversion="1.0.0"\nrequires-python=">=3.12,<4,!=3.14.1"\n'
+                '[project]\nname="minimum-consumer"\nversion="1.0.0"\nrequires-python=">=3.12,<4,!=3.15.1"\n'
                 f'[dependency-groups]\ntooling=["research-repo-tools=={authority.package_version}"]\n'
                 f'[tool.uv]\nrequired-version="=={uv_version}"\nfind-links=[{json.dumps(registry)}]\n'
                 '[tool.hatch.build.targets.wheel]\npackages=["minimum_consumer"]\n'
@@ -179,8 +179,9 @@ class TestPythonMinimumConsumer(unittest.TestCase):
             document = tomllib.loads((consumer / "pyproject.toml").read_bytes().decode())
             requirement = document["project"]["requires-python"]
             self.assertNotIn("3.13.99", SpecifierSet(requirement))
-            self.assertIn("3.14.2", SpecifierSet(requirement))
-            self.assertNotIn("3.14.1", SpecifierSet(requirement))
+            self.assertNotIn("3.14.99", SpecifierSet(requirement))
+            self.assertIn("3.15.2", SpecifierSet(requirement))
+            self.assertNotIn("3.15.1", SpecifierSet(requirement))
             self.assertNotIn("4.0", SpecifierSet(requirement))
             self.assertEqual(source.read_bytes(), before["minimum_consumer/__init__.py"])
             self.assertEqual(git_snapshot(), git_before)

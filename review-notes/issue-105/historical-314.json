@@ -1,0 +1,141 @@
+{
+  "host": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "files": 468,
+  "trials": 9,
+  "inventory_sha256": "1f395f597a1bb81d40bc74e250cfce4d4a57359b8d09546e1dcdf7f55d9d698a",
+  "records": [
+    {
+      "source": "/private/tmp/rrt105-before/src",
+      "source_sha256": "d2148c06f26dff27074054a62590b752143a3940e2338c805a928196faff8e00",
+      "mode": "selection",
+      "interpreter": {
+        "python": "3.14.8 (main, Sep 30 2026, 17:55:09) [Clang 21.0.0 (clang-2100.3.34.2)]",
+        "executable": "/private/tmp/rrt105-before/.venv/bin/python",
+        "jit_available": false,
+        "jit_enabled": false,
+        "libyaml": true,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.1201366249952116,
+        0.12051950000022771,
+        0.12678537499596132,
+        0.1245380420004949,
+        0.12233316699712304,
+        0.12204633399960585,
+        0.1315659579995554,
+        0.12141487500048243,
+        0.12304212500021094
+      ],
+      "median_seconds": 0.12233316699712304,
+      "diagnostics": {
+        "seconds": 0.12304212500021094,
+        "resolve_calls": 6085,
+        "validator_invocations": 0
+      }
+    },
+    {
+      "source": "/private/tmp/rrt105-before/src",
+      "source_sha256": "d2148c06f26dff27074054a62590b752143a3940e2338c805a928196faff8e00",
+      "mode": "validation",
+      "interpreter": {
+        "python": "3.14.8 (main, Sep 30 2026, 17:55:09) [Clang 21.0.0 (clang-2100.3.34.2)]",
+        "executable": "/private/tmp/rrt105-before/.venv/bin/python",
+        "jit_available": false,
+        "jit_enabled": false,
+        "libyaml": true,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.694852707994869,
+        0.6214017499951296,
+        0.7853021250048187,
+        0.6046284170006402,
+        0.6030154999971273,
+        0.6094446249990142,
+        0.6119651249973685,
+        0.6214787080025417,
+        0.7021143749952898
+      ],
+      "median_seconds": 0.6214017499951296,
+      "diagnostics": {
+        "seconds": 0.7021143749952898,
+        "resolve_calls": 0,
+        "validator_invocations": 15
+      }
+    },
+    {
+      "source": "/private/tmp/rrt105-before/src",
+      "source_sha256": "d2148c06f26dff27074054a62590b752143a3940e2338c805a928196faff8e00",
+      "mode": "help",
+      "interpreter": {
+        "python": "3.14.8 (main, Sep 30 2026, 17:55:09) [Clang 21.0.0 (clang-2100.3.34.2)]",
+        "executable": "/private/tmp/rrt105-before/.venv/bin/python",
+        "jit_available": false,
+        "jit_enabled": false,
+        "libyaml": true,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.27715770799841266,
+        0.22959933299716795,
+        0.24239591699733865,
+        0.23037912500149105,
+        0.2323467080059345,
+        0.2352250420008204,
+        0.23572274999605725,
+        0.23438433399860514,
+        0.23458429199672537
+      ],
+      "median_seconds": 0.23458429199672537,
+      "diagnostics": null
+    },
+    {
+      "source": "/private/tmp/rrt105-before/src",
+      "source_sha256": "d2148c06f26dff27074054a62590b752143a3940e2338c805a928196faff8e00",
+      "mode": "version",
+      "interpreter": {
+        "python": "3.14.8 (main, Sep 30 2026, 17:55:09) [Clang 21.0.0 (clang-2100.3.34.2)]",
+        "executable": "/private/tmp/rrt105-before/.venv/bin/python",
+        "jit_available": false,
+        "jit_enabled": false,
+        "libyaml": true,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.2349175830022432,
+        0.2334394580029766,
+        0.23514099999738391,
+        0.22787458300444996,
+        0.22948779199941782,
+        0.22485983400110854,
+        0.23350704099721042,
+        0.2354691250002361,
+        0.23205058299936354
+      ],
+      "median_seconds": 0.2334394580029766,
+      "diagnostics": null
+    }
+  ],
+  "notes": "One warmup discarded; alternating paired order; setup/imports excluded from selection and validation timings. Help/version include process startup. Diagnostic resolve counts collected outside timing. Git NUL inventory modeled to avoid fixture mutations; all files and native validators real. No JIT comparison implied."
+}

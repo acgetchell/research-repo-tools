@@ -13,6 +13,7 @@ import unittest
 import urllib.error
 from email.message import Message
 from pathlib import Path
+from typing import override
 from unittest.mock import patch
 
 from research_repo_tools import changelog, cli, config, registry, toolchain, toolchain_config
@@ -21,6 +22,7 @@ from research_repo_tools.release_publishing import RequiredCheck, check_metadata
 
 
 class TestPublishingConsumer(unittest.TestCase):
+    @override
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="published consumer café ")
         self.addCleanup(self.temporary.cleanup)

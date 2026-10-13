@@ -274,7 +274,7 @@ def _validate_adapter(root: Path, context: ReleaseContext, adapter: ReleaseAdapt
         return ()
     before = _snapshot(root)
     result = adapter.validate(root, context)
-    if isinstance(result, str) or not isinstance(result, Sequence) or any(not isinstance(item, str) for item in result):
+    if isinstance(result, str) or not isinstance(result, Sequence) or any(not isinstance(item, str) for item in result):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
         raise ValueError("release adapter validate must return a sequence of diagnostic strings")
     if _snapshot(root) != before:
         raise ValueError("release adapter validate must not mutate the candidate tree")

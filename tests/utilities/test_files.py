@@ -93,3 +93,21 @@ def test_successful_external_update_removes_backups(tmp_path: Path) -> None:
     assert set(tmp_path.iterdir()) == {first, new}
     assert first.read_bytes() == b"updated\n"
     assert new.read_bytes() == b"new lock\n"
+
+
+def test_replaced_directory_identity_rejects_preflight(tmp_path, monkeypatch):
+    root = tmp_path.resolve()
+    parent = root / "directory"
+    parent.mkdir()
+    target = parent / "file"
+    verify = files._PathIdentities.verify
+
+    def changed(identities):
+        parent.rename(root / "original-directory")
+        parent.mkdir()
+        verify(identities)
+
+    monkeypatch.setattr(files._PathIdentities, "verify", changed)
+    with pytest.raises(ValueError, match="path changed while checking"):
+        files._validate_distinct_paths((target,))
+    assert not target.exists()

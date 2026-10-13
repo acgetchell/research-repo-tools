@@ -60,6 +60,24 @@ def test_checker_operational_errors_fail_warning_mode(consumer, monkeypatch, cap
     assert "ERROR" in capsys.readouterr().err
 
 
+@pytest.mark.parametrize(
+    "status, output, extra, expected", [(0, "[]", "", 0), (0, "[]", "\nchecker problem", 1), (1, "[]", "", 1), (0, "not json", "", 1), (2, "[]", "", 1)]
+)
+def test_known_315_target_notice_is_visible_and_cannot_hide_checker_failure(consumer, monkeypatch, capsys, status, output, extra, expected):
+    monkeypatch.setattr(
+        notebook_lint, "run_safe_command", lambda *a, **kw: subprocess.CompletedProcess([], status, output, notebook_lint.RUFF_TARGET_NOTICE + extra)
+    )
+    assert cli.main([*consumer, "--strict"]) == expected
+    captured = capsys.readouterr()
+    if output == "[]":
+        assert notebook_lint.RUFF_TARGET_NOTICE in captured.err
+    else:
+        assert "invalid diagnostics" in captured.err
+    if expected == 0:
+        assert "INFO " in captured.err and "ERROR " not in captured.err
+        assert "0 advisory warning(s)" in captured.out
+
+
 def test_missing_ruff_is_actionable_and_ty_is_not_required(consumer, monkeypatch, capsys):
     def missing(name):
         assert name == "ruff", "advice tried to require ty"

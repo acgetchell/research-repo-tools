@@ -7,7 +7,7 @@ import tempfile
 import unittest
 from datetime import UTC, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, override
 from unittest.mock import patch
 
 from research_repo_tools import config, files
@@ -124,6 +124,7 @@ class TestMissingExtra(unittest.TestCase):
 
 
 class TestPdf(unittest.TestCase):
+    @override
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="paper café ")
         self.addCleanup(self.temporary.cleanup)
@@ -262,9 +263,9 @@ class TestPdf(unittest.TestCase):
                 self.assertEqual(main(["--root", str(self.root), "papers", action, "--paper", "example"]), 0)
             self.assertEqual(main(["--root", str(self.root), "papers", "check", "--paper", "example", "--require-text", "Missing"]), 1)
         self.assertIn("missing required text", error.getvalue())
-        for override in ({"min-pages": 0}, {"require-text": "text"}, {"unknown": True}, {"identity": ""}):
-            with self.subTest(override=override), self.assertRaises(ValueError):
-                config.parse({"papers": {"documents": {"example": {**declaration, **override}}}}, root=self.root)
+        for policy_override in ({"min-pages": 0}, {"require-text": "text"}, {"unknown": True}, {"identity": ""}):
+            with self.subTest(override=policy_override), self.assertRaises(ValueError):
+                config.parse({"papers": {"documents": {"example": {**declaration, **policy_override}}}}, root=self.root)
 
 
 if __name__ == "__main__":

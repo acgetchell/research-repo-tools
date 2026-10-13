@@ -72,7 +72,9 @@ def advise(settings: Config, paths: list[Path], *, strict: bool = False, timeout
         for diagnostic in information:
             print(f"INFO {diagnostic.render(notebook)}", file=sys.stderr)
         for diagnostic in diagnostics:
-            print(f"{'ERROR' if diagnostic.operational else 'WARNING'} {diagnostic.render(notebook)}", file=sys.stderr)
-        failed |= any(diagnostic.operational for diagnostic in diagnostics) or bool(diagnostics) and (strict or policy.strict)
-        print(f"Reviewed {notebook.path}: {sum(not item.operational for item in diagnostics)} advisory warning(s), {len(information)} skipped cell(s)")
+            severity = "INFO" if diagnostic.informational else "ERROR" if diagnostic.operational else "WARNING"
+            print(f"{severity} {diagnostic.render(notebook)}", file=sys.stderr)
+        warnings = [item for item in diagnostics if not item.operational and not item.informational]
+        failed |= any(diagnostic.operational for diagnostic in diagnostics) or bool(warnings) and (strict or policy.strict)
+        print(f"Reviewed {notebook.path}: {len(warnings)} advisory warning(s), {len(information)} skipped cell(s)")
     return int(failed)

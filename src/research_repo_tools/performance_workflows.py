@@ -4,14 +4,14 @@ import argparse
 import tempfile
 from pathlib import Path
 
-from research_repo_tools import criterion, evidence, release_assets
-from research_repo_tools.config import Config
-from research_repo_tools.files import _validate_distinct_paths
-from research_repo_tools.measurement import MeasurementConfig, load_measurement, measure_checkout, measure_pair, resolve_revision
-from research_repo_tools.performance_reports import render_report
-from research_repo_tools.publication import _inventory, _path
-from research_repo_tools.release_pairs import resolve_pair
-from research_repo_tools.releases import published_releases
+lazy from research_repo_tools import criterion, evidence, release_assets
+lazy from research_repo_tools.config import Config
+lazy from research_repo_tools.files import _validate_distinct_paths
+lazy from research_repo_tools.measurement import MeasurementConfig, load_measurement, measure_checkout, measure_pair, resolve_revision
+lazy from research_repo_tools.performance_reports import render_report
+lazy from research_repo_tools.publication import _inventory, _path
+lazy from research_repo_tools.release_pairs import resolve_pair
+lazy from research_repo_tools.releases import published_releases
 
 COMMANDS = {"assets", "baseline", "convert", "export", "measure", "promote", "release-draft", "release-upload"}
 

@@ -5,6 +5,7 @@ import json
 import re
 import tomllib
 from pathlib import Path
+from typing import cast
 from urllib.parse import quote
 
 import yaml
@@ -49,7 +50,7 @@ def resolve(action: str, target: str, root: Path) -> tuple[str, str]:
         if not isinstance(obj, dict) or not isinstance(sha := obj.get("sha"), str) or SHA.fullmatch(sha) is None:
             raise ValueError(f"{action}: tag must resolve to a full commit SHA")
         if obj.get("type") == "commit":
-            return sha.lower(), target
+            return cast(str, sha).lower(), cast(str, target)
         if obj.get("type") != "tag" or sha in seen:
             raise ValueError(f"{action}: unsupported or recursive tag object")
         seen.add(sha)

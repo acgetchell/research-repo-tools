@@ -4,6 +4,7 @@ import json
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
+from typing import Any
 
 from research_repo_tools.complete_runs import (
     RUN_SCHEMA,
@@ -80,7 +81,7 @@ class CommonHarnessPlan:
     series: tuple[RunSeries, ...]
 
     def __post_init__(self) -> None:
-        if not isinstance(self.measurement, MeasurementConfig) or any(not isinstance(phase, MeasurementPhase) for phase in (self.baseline, self.current)):
+        if not isinstance(self.measurement, MeasurementConfig) or any(not isinstance(phase, MeasurementPhase) for phase in (self.baseline, self.current)):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
             raise TypeError("common plan requires measurement settings and two phases")
         if "harness_sha256" not in self.measurement.compatible:
             raise ValueError("common plan must require harness_sha256 compatibility")
@@ -92,7 +93,7 @@ class CommonHarnessPlan:
         }
         if not required <= set(self.measurement.compatible):
             raise ValueError("common plan requires compatibility for all declared tools and dependencies")
-        if any(not isinstance(series, RunSeries) for series in self.series):
+        if any(not isinstance(series, RunSeries) for series in self.series):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
             raise TypeError("plan series must be RunSeries instances")
         if not self.series or len({series.name for series in self.series}) != len(self.series):
             raise ValueError("plan series must have unique names")
@@ -114,7 +115,7 @@ class CommonHarnessPlan:
         return self.measurement.harness
 
 
-def parse_plan(document: dict) -> CommonHarnessPlan:
+def parse_plan(document: dict[str, Any]) -> CommonHarnessPlan:
     raw = _table(
         document,
         "common measurement",

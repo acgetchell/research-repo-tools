@@ -7,6 +7,7 @@ import re
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 from urllib.parse import quote
 
 from research_repo_tools.criterion import Comparison, ComparisonSet, Unit, _format_estimate, _markdown_text, _unit
@@ -297,7 +298,7 @@ def verify_tagged_files(root: Path, tag: str, files: Mapping[str, bytes], *, rev
         blob = git(["cat-file", "blob", f"{commit}:{path}"], check=False)
         if blob.returncode or blob.stdout != expected:
             raise ValueError(f"tag {tag} does not contain the exact publication artifact {path}")
-    return commit
+    return cast(str, commit)
 
 
 @dataclass(frozen=True, slots=True)
@@ -331,7 +332,7 @@ def plan_outputs(root: Path, outputs: Mapping[str, bytes], *, inputs: Mapping[st
     root = root.resolve(strict=True)
     if not outputs or not inputs:
         raise ValueError("output publication requires candidates and validated inputs")
-    if any(not isinstance(data, bytes) for data in (*outputs.values(), *inputs.values())):
+    if any(not isinstance(data, bytes) for data in (*outputs.values(), *inputs.values())):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
         raise TypeError("publication inputs and outputs must be bytes")
     if set(immutable) - outputs.keys():
         raise ValueError("immutable files must be publication outputs")

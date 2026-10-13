@@ -28,7 +28,7 @@ class SarifPolicy:
         for name, prefixes in self.drivers.items():
             if not isinstance(name, str) or not name.strip() or any(char in name for char in "\0\r\n"):
                 raise ValueError("sarif driver names must be nonempty strings without NUL/CR/LF")
-            if not isinstance(prefixes, (tuple, list)) or any(not isinstance(prefix, str) or not prefix for prefix in prefixes):
+            if not isinstance(prefixes, (tuple, list)) or any(not isinstance(prefix, str) or not prefix for prefix in prefixes):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
                 raise ValueError("sarif driver namespaces must be arrays of nonempty rule-ID prefixes")
             selected[name] = tuple(prefixes)
         if not isinstance(self.category_prefix, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", self.category_prefix) is None:

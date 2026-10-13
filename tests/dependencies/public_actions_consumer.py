@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from typing import override
 from unittest.mock import patch
 
 from research_repo_tools import action_updates, cli, files
@@ -17,6 +18,7 @@ NEW = "2" * 40
 
 
 class TestActionsConsumer(unittest.TestCase):
+    @override
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory()
         self.addCleanup(self.temporary.cleanup)

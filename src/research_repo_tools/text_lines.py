@@ -3,6 +3,7 @@
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
+from typing import override
 
 from research_repo_tools.selection import select_files
 
@@ -16,6 +17,7 @@ class LineViolation:
     length: int
     limit: int
 
+    @override
     def __str__(self) -> str:
         return f"{self.path}:{self.line}: line length {self.length} exceeds {self.limit}"
 

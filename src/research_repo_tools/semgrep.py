@@ -5,6 +5,7 @@ import re
 import tempfile
 from collections import Counter
 from pathlib import Path
+from typing import Any, cast, override
 
 import yaml
 
@@ -18,6 +19,7 @@ ANNOTATION = re.compile(r"(?<![A-Za-z0-9_])(?P<kind>ruleid|ok):\s*(?P<ids>[A-Za-
 class _RuleLoader(yaml.SafeLoader):
     """Semgrep configuration mappings must not silently overwrite duplicate keys."""
 
+    @override
     def construct_mapping(self, node, deep=False):
         self.flatten_mapping(node)
         mapping = {}
@@ -32,7 +34,12 @@ class _RuleLoader(yaml.SafeLoader):
 
 
 def annotations(text: str, namespace: str = "") -> tuple[tuple[str, str], ...]:
-    return tuple((match["kind"], name.strip()) for match in ANNOTATION.finditer(text) for name in match["ids"].split(",") if name.strip().startswith(namespace))
+    return tuple(
+        (cast(str, match["kind"]), cast(str, name).strip())
+        for match in ANNOTATION.finditer(text)
+        for name in match["ids"].split(",")
+        if name.strip().startswith(namespace)
+    )
 
 
 def fixtures(path: Path) -> list[Path]:
@@ -44,14 +51,14 @@ def fixtures(path: Path) -> list[Path]:
     )
 
 
-def rules(path: Path) -> dict[str, dict]:
+def rules(path: Path) -> dict[str, dict[str, Any]]:
     try:
         parsed = yaml.load(path.read_text(encoding="utf-8"), Loader=_RuleLoader)
     except (yaml.YAMLError, UnicodeError, ValueError) as error:
         raise ValueError(f"{path}: invalid Semgrep configuration: {error}") from error
     if not isinstance(parsed, dict) or not isinstance(parsed.get("rules"), list) or not parsed["rules"]:
         raise ValueError(f"{path}: Semgrep config must contain a rules array")
-    result: dict[str, dict] = {}
+    result: dict[str, dict[str, Any]] = {}
     for rule in parsed["rules"]:
         if not isinstance(rule, dict) or not isinstance(rule.get("id"), str) or not rule["id"]:
             raise ValueError(f"{path}: every rule requires a nonempty ID")
@@ -61,7 +68,7 @@ def rules(path: Path) -> dict[str, dict]:
     return result
 
 
-def fixture_rule_ids(path: Path, source: dict[str, dict], namespace: str = "") -> list[str]:
+def fixture_rule_ids(path: Path, source: dict[str, dict[str, Any]], namespace: str = "") -> list[str]:
     annotated = annotations(path.read_text(encoding="utf-8"), namespace)
     names = list(dict.fromkeys(name for _, name in annotated))
     if not names:
@@ -75,7 +82,7 @@ def fixture_rule_ids(path: Path, source: dict[str, dict], namespace: str = "") -
 def build_fixture_config(path: Path, configuration: Path, *, namespace: str = "") -> str:
     """Build a minimal standalone config without relying on YAML indentation."""
     source = rules(configuration)
-    return yaml.safe_dump({"rules": [source[name] for name in fixture_rule_ids(path, source, namespace)]}, sort_keys=False)
+    return cast(str, yaml.safe_dump({"rules": [source[name] for name in fixture_rule_ids(path, source, namespace)]}, sort_keys=False))
 
 
 def check(config: Config) -> int:

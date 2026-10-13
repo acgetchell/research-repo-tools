@@ -23,9 +23,9 @@ def write(path, source="value = 42\n", *, cell_id="calculate", metadata=None):
 @pytest.fixture
 def consumer(tmp_path, monkeypatch):
     (tmp_path / "pyproject.toml").write_text(
-        '[project]\nrequires-python=">=3.14"\n[dependency-groups]\nnotebook=[]\ndev=[]\n[tool.uv]\nrequired-version="==0.12.16"\n', newline="\n"
+        '[project]\nrequires-python=">=3.15"\n[dependency-groups]\nnotebook=[]\ndev=[]\n[tool.uv]\nrequired-version="==0.12.16"\n', newline="\n"
     )
-    (tmp_path / ".python-version").write_text("3.14\n", newline="\n")
+    (tmp_path / ".python-version").write_text("3.15\n", newline="\n")
     (tmp_path / "uv.lock").write_text("version=1\n", newline="\n")
     # Exercise real project/runtime parsing; the test interpreter is explicitly
     # selected as the disposable consumer's environment without a package install.

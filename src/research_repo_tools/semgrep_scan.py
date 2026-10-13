@@ -10,6 +10,7 @@ import tempfile
 from collections import Counter
 from dataclasses import replace
 from pathlib import Path, PurePath
+from typing import Any
 from urllib.parse import quote, unquote
 
 from research_repo_tools import config, security, semgrep
@@ -99,7 +100,7 @@ def _invocation_index(result: dict[str, object], length: int) -> int:
     return index
 
 
-def _aggregate_sarif(documents: list[dict], category: str) -> dict:
+def _aggregate_sarif(documents: list[dict[str, Any]], category: str) -> dict[str, Any]:
     """Merge native Semgrep runs, retaining tables and rejecting conflicts."""
     merged = {key: value for key, value in documents[0].items() if key != "runs"}
     combined: dict[str, object] | None = None
@@ -191,7 +192,7 @@ def _aggregate_sarif(documents: list[dict], category: str) -> dict:
     return merged
 
 
-def _batch_reports(json_path: Path, sarif_path: Path, targets: set[Path], root: Path, inline_suppressions: bool) -> tuple[dict, dict, bool]:
+def _batch_reports(json_path: Path, sarif_path: Path, targets: set[Path], root: Path, inline_suppressions: bool) -> tuple[dict[str, Any], dict[str, Any], bool]:
     values = []
     for path in (json_path, sarif_path):
         if path.is_symlink() or not path.is_file() or path.stat().st_size > 128 * 1024 * 1024:

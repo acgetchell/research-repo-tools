@@ -9,6 +9,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
+from typing import override
 from unittest.mock import patch
 
 from research_repo_tools.cli import main
@@ -51,6 +52,7 @@ def policy() -> ReleasePolicy:
 
 
 class TestReleaseConsumer(unittest.TestCase):
+    @override
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="release-api-")
         self.addCleanup(temporary.cleanup)
@@ -404,6 +406,7 @@ class TestReleaseConsumer(unittest.TestCase):
 
 
 class TestFirstRelease(unittest.TestCase):
+    @override
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="first-release-")
         self.addCleanup(temporary.cleanup)
