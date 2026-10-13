@@ -404,8 +404,12 @@ def _recorded_command(value: str, secrets: tuple[str, ...]) -> str:
     displayed = []
     hide_next = False
     hide_rest = False
-    powershell = arguments[0].replace("\\", "/").rsplit("/", 1)[-1].casefold() in {"pwsh", "pwsh.exe", "powershell", "powershell.exe"}
+    executable = arguments[0].replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    powershell = executable in {"pwsh", "pwsh.exe", "powershell", "powershell.exe"}
+    command_shell = executable in {"cmd", "cmd.exe"}
+    posix_shell = executable.removesuffix(".exe") in {"sh", "bash", "dash", "ash", "ksh", "zsh"}
     for argument in arguments:
+        posix_command = posix_shell and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", argument) is not None
         if hide_next or hide_rest:
             displayed.append("[redacted]")
             hide_next = False
@@ -421,15 +425,21 @@ def _recorded_command(value: str, secrets: tuple[str, ...]) -> str:
                 hide_next = True
             else:
                 displayed.append("[redacted]")
-        elif argument.casefold() in {"-c", "-e", "--eval", "--command", "-command", "-encodedcommand"} or (
-            powershell
-            and argument.startswith(("-", "/"))
-            and (key := argument.lstrip("-/").casefold())
-            and ("command".startswith(key) or "encodedcommand".startswith(key) or key in {"ec", "cwa", "commandwithargs"})
+        elif (
+            argument.casefold() in {"-c", "-e", "--eval", "--command", "-command", "-encodedcommand"}
+            or (
+                powershell
+                and argument.startswith(("-", "/"))
+                and (key := argument.lstrip("-/").casefold())
+                and ("command".startswith(key) or "encodedcommand".startswith(key) or key in {"ec", "cwa", "commandwithargs"})
+            )
+            or posix_command
+            or (command_shell and argument.casefold() in {"/c", "/k"})
         ):
             displayed.append(argument)
             hide_next = True
-            hide_rest = powershell
+            # Shells may accept further options or -- before the actual body.
+            hide_rest = powershell or command_shell or posix_command
         else:
             displayed.append(argument)
     for index, argument in enumerate(displayed):

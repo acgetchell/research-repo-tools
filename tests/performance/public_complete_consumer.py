@@ -567,6 +567,35 @@ if '--list' in sys.argv:
                     self.assertIn(switch, report)
                     self.assertEqual(serialize_evidence(retained), original)
 
+    def test_shell_inline_programs_are_omitted_for_combined_and_native_switches(self):
+        evidence = retained_fixture()
+        commands = (
+            (["bash", "-lc", "printf OPAQUE BODY", "argument"], ["bash", "-lc", "[redacted]", "[redacted]"]),
+            (["/bin/sh", "-xec", "echo OPAQUE BODY"], ["/bin/sh", "-xec", "[redacted]"]),
+            (["C:\\Tools\\bash.exe", "-cl", "printf OPAQUE BODY"], ["C:\\Tools\\bash.exe", "-cl", "[redacted]"]),
+            (["bash", "-lc", "--", "printf OPAQUE BODY"], ["bash", "-lc", "[redacted]", "[redacted]"]),
+            (["/bin/sh", "-c", "-l", "--", "echo OPAQUE BODY"], ["/bin/sh", "-c", "[redacted]", "[redacted]", "[redacted]"]),
+            (["bash", "-l", "script.sh", "argument"], ["bash", "-l", "script.sh", "argument"]),
+            (["bench", "-lc", "argument"], ["bench", "-lc", "argument"]),
+            (["cmd", "/c", "echo OPAQUE BODY", "OPAQUE REST"], ["cmd", "/c", "[redacted]", "[redacted]"]),
+            (["C:\\Windows\\CMD.EXE", "/C", "echo OPAQUE BODY"], ["C:\\Windows\\CMD.EXE", "/C", "[redacted]"]),
+            (["cmd.exe", "/k", "echo OPAQUE BODY", "OPAQUE REST"], ["cmd.exe", "/k", "[redacted]", "[redacted]"]),
+            (["cmd.exe", "/d", "script.cmd", "argument"], ["cmd.exe", "/d", "script.cmd", "argument"]),
+        )
+        for argv, expected in commands:
+            with self.subTest(argv=argv):
+                sources = []
+                for phase, source in evidence.sources:
+                    context = {**dict(source.context), "command": json.dumps(argv), "gate-command": json.dumps(argv)}
+                    sources.append((phase, replace(source, context=tuple(context.items()))))
+                retained = replace(evidence, sources=tuple(sources))
+                original = serialize_evidence(retained)
+                report = unescape(render_run(retained).decode())
+                for label in ("Measurement command (argv)", "Gate command (argv)"):
+                    recorded = [line.removeprefix(f"| {label} | ").removesuffix(" |") for line in report.splitlines() if line.startswith(f"| {label} | ")]
+                    self.assertEqual([json.loads(command) for command in recorded], [expected, expected])
+                self.assertEqual(serialize_evidence(retained), original)
+
     def test_current_report_cannot_alias_reserved_history_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -106,8 +106,8 @@ Missing optional observations say `not recorded`. Required provenance and gates
 still fail validation when absent; the renderer does not invent replacements.
 
 Environment overrides show names only. Arbitrary consumer context and gate
-stdout are omitted. Credential-shaped command options/assignments, URLs, inline
-script bodies and sensitive recorded environment values are redacted from the
+stdout are omitted. Credential-shaped command options/assignments, URLs, recognized
+inline script bodies and sensitive recorded environment values are redacted from the
 summary. Keep credentials out of measurement declarations: evidence files retain
 their original values, and arbitrary positional secrets cannot be identified
 reliably. Text is escaped, multiline tool stdout stays within its table cell, and
