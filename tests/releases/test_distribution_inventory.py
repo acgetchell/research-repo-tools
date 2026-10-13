@@ -8,6 +8,7 @@ import tarfile
 import tomllib
 import zipfile
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -43,6 +44,113 @@ def test_isolated_consumers_use_utf8_transport(tmp_path: Path, install_checker, 
         "print('分析 café', file=sys.stderr)\n"
     )
     assert install_checker.run_isolated(Path(sys.executable), ["-c", child], cwd=tmp_path, env=env) == "分析 café\n"
+
+
+def test_consumer_suite_outlasting_command_budget_completes_with_live_output(tmp_path: Path, install_checker, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    """Model the healthy 328-second Windows suite without waiting five minutes."""
+    command = [str(sys.executable), "-c", "pass"]
+    suite = tmp_path / "consumer café.py"
+    env = {"PYTHONUTF8": "0"}
+    calls = []
+
+    def healthy_process(command, **kwargs):
+        calls.append((command, kwargs))
+        if kwargs["timeout"] < 328:
+            raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+        return subprocess.CompletedProcess(command, 0)
+
+    monkeypatch.setattr(install_checker.subprocess, "run", healthy_process)
+    ticks = iter((0.0, 328.0))
+    monkeypatch.setattr(install_checker, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    with pytest.raises(subprocess.TimeoutExpired) as raised:
+        install_checker.run(command, cwd=tmp_path, env=env)
+    assert raised.value.timeout == 300
+    install_checker.run_consumer_suite(Path(sys.executable), [str(suite), "TestTransport"], cwd=tmp_path, env=env)
+    actual, settings = calls[-1]
+    assert actual == [str(sys.executable), "-I", "-B", "-X", "utf8", "-u", str(suite), "TestTransport", "-v"]
+    assert settings["timeout"] == 900
+    assert settings["capture_output"] is False
+    assert settings["check"] is True
+    assert settings["cwd"] == tmp_path
+    assert settings["env"] == env
+    output = capsys.readouterr()
+    assert "consumer café.py TestTransport (timeout 900s)" in output.out
+    assert "consumer café.py TestTransport (328.00s)" in output.out
+    assert output.err == ""
+
+
+def test_consumer_suite_hang_remains_bounded_and_reports_elapsed_time(tmp_path: Path, install_checker, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    def hung_process(command, **kwargs):
+        raise subprocess.TimeoutExpired(command, kwargs["timeout"])
+
+    monkeypatch.setattr(install_checker.subprocess, "run", hung_process)
+    ticks = iter((0.0, 900.0))
+    monkeypatch.setattr(install_checker, "time", SimpleNamespace(monotonic=lambda: next(ticks)))
+    with pytest.raises(subprocess.TimeoutExpired) as raised:
+        install_checker.run_consumer_suite(Path(sys.executable), [str(tmp_path / "hung.py")], cwd=tmp_path, env={})
+    assert raised.value.timeout == 900
+    assert "hung.py (900.00s)" in capsys.readouterr().out
+
+
+def test_consumer_suite_streams_verbose_utf8_stdout_and_stderr(tmp_path: Path, install_checker, capfd) -> None:
+    suite = tmp_path / "consumer café.py"
+    suite.write_text(
+        "import sys, unittest\n"
+        "class TestTransport(unittest.TestCase):\n"
+        "    def test_utf8(self):\n"
+        "        self.assertTrue(sys.flags.isolated)\n"
+        "        self.assertTrue(sys.dont_write_bytecode)\n"
+        "        self.assertTrue(sys.stdout.write_through)\n"
+        "        self.assertEqual(sys.stdout.encoding, 'utf-8')\n"
+        "        self.assertEqual(sys.stderr.encoding, 'utf-8')\n"
+        "        print('分析 café stdout')\n"
+        "        print('分析 café stderr', file=sys.stderr)\n"
+        "unittest.main()\n",
+        encoding="utf-8",
+        newline="\n",
+    )
+    env = {**os.environ, "PYTHONUTF8": "0", "PYTHONIOENCODING": "cp1252:strict", "PYTHONDONTWRITEBYTECODE": "0"}
+    install_checker.run_consumer_suite(Path(sys.executable), [str(suite), "TestTransport"], cwd=tmp_path, env=env)
+    output = capfd.readouterr()
+    assert "RUN:" in output.out and "END:" in output.out
+    assert "分析 café stdout" in output.out
+    assert "分析 café stderr" in output.err
+    assert "test_utf8" in output.err and "Ran 1 test" in output.err and "OK" in output.err
+    assert not (tmp_path / "__pycache__").exists()
+
+
+@pytest.mark.parametrize("failure", ["timeout", "nonzero"])
+@pytest.mark.parametrize("transport", ["text", "bytes", "empty"])
+def test_install_failure_preserves_partial_output_and_original_error(
+    install_checker, monkeypatch: pytest.MonkeyPatch, capsys, failure: str, transport: str
+) -> None:
+    stdout, stderr = {
+        "text": ("suite progress café\n", "failing test café\n"),
+        "bytes": (b"suite progress caf\xc3\xa9\r\n", b"partial UTF-8 \xe5\x88"),
+        "empty": (None, None),
+    }[transport]
+    error = (
+        subprocess.TimeoutExpired(["consumer"], 900, output=stdout, stderr=stderr)
+        if failure == "timeout"
+        else subprocess.CalledProcessError(23, ["consumer"], output=stdout, stderr=stderr)
+    )
+
+    def fail(*args, **kwargs):
+        raise error
+
+    monkeypatch.setattr(install_checker, "check", fail)
+    monkeypatch.setattr(sys, "argv", ["check_install.py"])
+    with pytest.raises(type(error)) as raised:
+        install_checker.main()
+    assert raised.value is error
+    output = capsys.readouterr()
+    expected_stdout, expected_stderr = {
+        "text": ("suite progress café\n", "failing test café\n"),
+        "bytes": ("suite progress café\r\n", "partial UTF-8 �"),
+        "empty": ("", ""),
+    }[transport]
+    assert output.out == expected_stdout
+    assert output.err == expected_stderr
 
 
 @pytest.mark.parametrize("inventory", ["empty", "wheel-only", "sdist-only", "stale-wheel", "stale-sdist"])
@@ -96,7 +204,7 @@ def test_changelog_only_runs_one_installed_generation_contract_per_artifact(
     monkeypatch.setattr(install_checker.shutil, "which", lambda program: program)
     monkeypatch.setattr(install_checker, "run", lambda *args, **kwargs: "")
     calls = []
-    monkeypatch.setattr(install_checker, "run_isolated", lambda python, args, **kwargs: calls.append((python, args)))
+    monkeypatch.setattr(install_checker, "run_consumer_suite", lambda python, args, **kwargs: calls.append((python, args)))
     install_checker.check(distribution_inventory, changelog_only=True)
     assert len(calls) == 2
     assert {python.parent.parent.parent.name for python, _ in calls} == {"wheel", "sdist"}
