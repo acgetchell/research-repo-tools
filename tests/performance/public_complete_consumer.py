@@ -481,6 +481,28 @@ if '--list' in sys.argv:
                     self.assertNotIn(secret, report)
                     self.assertEqual(serialize_evidence(retained), original)
 
+    def test_access_and_private_key_values_are_redacted_from_recorded_commands(self):
+        with tempfile.TemporaryDirectory() as directory:
+            evidence = measured(Path(directory))
+            for name in ("access-key", "private-key", "ACCESS_KEY", "PRIVATE_KEY", "accesskey", "privatekey"):
+                with self.subTest(name=name):
+                    sources = []
+                    for phase, source in evidence.sources:
+                        context = {**dict(source.context), "environment": json.dumps({name.upper().replace("-", "_"): "env-value"})}
+                        context["command"] = json.dumps(["bench", f"--{name}", "option-value", f"--{name}=assignment-value", "env-value"])
+                        context["gate-command"] = json.dumps(["gate", f"--{name}", "gate-value", f"{name}=gate-assignment"])
+                        sources.append((phase, replace(source, context=tuple(context.items()))))
+                    retained = replace(evidence, sources=tuple(sources))
+                    original = serialize_evidence(retained)
+                    report = unescape(render_run(retained).decode())
+                    for label, expected in (
+                        ("Measurement command (argv)", ["bench", f"--{name}", "[redacted]", f"--{name}=[redacted]", "[redacted]"]),
+                        ("Gate command (argv)", ["gate", f"--{name}", "[redacted]", f"{name}=[redacted]"]),
+                    ):
+                        commands = [line.removeprefix(f"| {label} | ").removesuffix(" |") for line in report.splitlines() if line.startswith(f"| {label} | ")]
+                        self.assertEqual([json.loads(command) for command in commands], [expected, expected])
+                    self.assertEqual(serialize_evidence(retained), original)
+
     def test_powershell_inline_programs_are_omitted_for_native_parameter_spellings(self):
         with tempfile.TemporaryDirectory() as directory:
             evidence = measured(Path(directory))

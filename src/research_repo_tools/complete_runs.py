@@ -395,7 +395,7 @@ def _render_run_v1(evidence: Evidence, *, title: str = "Benchmark timings") -> b
     return ("\n".join(lines) + "\n").encode("utf-8")
 
 
-_CREDENTIAL = re.compile(r"token|password|passwd|secret|credential|authorization|api[-_]?key", re.IGNORECASE)
+_CREDENTIAL = re.compile(r"token|password|passwd|secret|credential|authorization|(?:api|access|private)[-_]?key", re.IGNORECASE)
 
 
 def _recorded_command(value: str, secrets: tuple[str, ...]) -> str:
