@@ -405,6 +405,8 @@ def _recorded_command(value: str, secrets: tuple[str, ...]) -> str:
     hide_next = False
     hide_rest = False
     executable = arguments[0].replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    if executable in {"env", "env.exe"} and len(arguments) > 1:
+        executable = arguments[1].replace("\\", "/").rsplit("/", 1)[-1].casefold()
     powershell = executable in {"pwsh", "pwsh.exe", "powershell", "powershell.exe"}
     command_shell = executable in {"cmd", "cmd.exe"}
     posix_shell = executable.removesuffix(".exe") in {"sh", "bash", "dash", "ash", "ksh", "zsh"}
