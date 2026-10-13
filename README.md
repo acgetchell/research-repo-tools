@@ -1479,6 +1479,22 @@ run. Same-label local comparisons can be retained. Omitting both input paths
 rerenders the validated latest run after scratch cleanup. Explicit missing or
 partial inputs fail; they never select a different run as a fallback.
 
+The standard complete report includes recorded per-phase source/harness
+fingerprints, host and toolchain observations, dependency versions, measurement
+commands and independent gate results. Current and newly retained reports link
+to their exact run payload and evidence envelope using paths relative to each
+report. Missing optional metadata is explicit; offline rerendering uses the
+measurement's recorded environment. Environment overrides show names only, and
+credential-shaped arguments are redacted from the summary. Keep credentials out
+of declarations because retained evidence preserves original values.
+
+Provenance reports target v0.1.9. Pin an exact published release containing them.
+Existing complete-run histories remain readable: promotion upgrades the mutable
+index and current report while preserving all immutable historical bytes. Old
+retained reports keep their original presentation. See the
+[renderer-version contract](https://github.com/acgetchell/research-repo-tools/blob/main/docs/complete-run-api.md#retention-and-publication)
+before upgrading a publication or restoring an older package pin.
+
 Dimension plots remain consumer renderers over the retained run API. The shared
 tables support arbitrary named series; axis semantics, workload coordinates,
 scientific interpretation and release eligibility remain consumer decisions.

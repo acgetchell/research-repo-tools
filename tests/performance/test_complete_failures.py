@@ -48,7 +48,11 @@ def test_failed_pointer_promotion_restores_every_file(tmp_path, monkeypatch):
     assert load_latest_run(tmp_path, "docs/runs") == second
     retained = tmp_path / "docs/runs/runs" / run_identity(second)
     payload, manifest = serialize_evidence(second)
-    assert {path.name: path.read_bytes() for path in retained.iterdir()} == {"run.json": payload, "evidence.json": manifest, "report.md": render_run(second)}
+    assert {path.name: path.read_bytes() for path in retained.iterdir()} == {
+        "run.json": payload,
+        "evidence.json": manifest,
+        "report.md": render_run(second, report_path="report.md", payload_path="run.json", manifest_path="evidence.json"),
+    }
     first_root = tmp_path / "docs/runs/runs" / run_identity(first)
     assert {path: path.read_bytes() for path in first_root.iterdir()} == {path: data for path, data in before.items() if path.parent == first_root}
 

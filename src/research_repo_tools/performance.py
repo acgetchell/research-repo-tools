@@ -2,6 +2,8 @@
 
 import argparse
 import sys
+from os.path import commonpath
+from pathlib import Path
 
 from research_repo_tools import archives, criterion, evidence
 from research_repo_tools.config import Config
@@ -15,6 +17,22 @@ def _write_stdout(output: bytes) -> None:
         sys.stdout.buffer.write(output)
     else:
         sys.stdout.write(output.decode("utf-8"))
+
+
+def _run_report_paths(settings: Config, payload: str, manifest: str, output: str | None) -> dict[str, str]:
+    from research_repo_tools.publication import _publication_name
+
+    if output is None:
+        return {}
+    paths = [settings.path(name).resolve() for name in (output, payload, manifest)]
+    try:
+        root = Path(commonpath([path.parent for path in paths]))
+        names = [_publication_name(path.relative_to(root).as_posix()) for path in paths]
+    except ValueError:
+        # Existing CLI paths may span Windows drives or use names outside the
+        # portable publication contract. Keep those outputs explicitly unlinked.
+        return {}
+    return dict(zip(("report_path", "payload_path", "manifest_path"), names, strict=True))
 
 
 def add_commands(groups) -> None:
@@ -168,7 +186,7 @@ def run(args: argparse.Namespace, settings: Config) -> int:
             if retained.payload_schema not in {criterion.COMPARISON_SCHEMA, RUN_SCHEMA}:
                 raise ValueError(f"render requires {criterion.COMPARISON_SCHEMA}; use the consumer adapter for {retained.payload_schema}")
             output = (
-                render_run(retained)
+                render_run(retained, **_run_report_paths(settings, args.payload, args.manifest, args.output))
                 if retained.payload_schema == RUN_SCHEMA
                 else criterion.render_comparison(criterion.parse_comparison(retained.payload)).encode("utf-8")
             )

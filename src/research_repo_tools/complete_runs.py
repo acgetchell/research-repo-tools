@@ -3,12 +3,14 @@
 import base64
 import binascii
 import hashlib
+import json
+import re
 from dataclasses import dataclass
 from pathlib import Path
 
 from research_repo_tools.criterion import Estimate, Statistic, Unit, _format_estimate, _markdown_text, _positive, _statistic, _unit, parse_estimate
 from research_repo_tools.evidence import Evidence, Provenance, _digest, _load_json, _object, _string, compare_provenance, deterministic_json, serialize_evidence
-from research_repo_tools.publication import _publication_name
+from research_repo_tools.publication import _publication_name, _relative_link
 from research_repo_tools.release_pairs import ReleasePair
 
 __all__ = [
@@ -354,8 +356,8 @@ def run_identity(evidence: Evidence) -> str:
     return digest.hexdigest()
 
 
-def render_run(evidence: Evidence, *, title: str = "Benchmark timings") -> bytes:
-    """Render configured rows only; retained cases and statistics remain complete."""
+def _render_run_v1(evidence: Evidence, *, title: str = "Benchmark timings") -> bytes:
+    """Frozen timing presentation for validating immutable renderer-1 histories."""
     run = validate_run_evidence(evidence)
     phases = dict(run.phases)
     policy = phases["baseline"].policy
@@ -391,3 +393,161 @@ def render_run(evidence: Evidence, *, title: str = "Benchmark timings") -> bytes
                 cells.append("—" if case is None else _format_estimate(case.estimate(statistic), policy.unit))
             lines.append(f"| {_markdown_text(label)} | " + " | ".join(cells) + " |")
     return ("\n".join(lines) + "\n").encode("utf-8")
+
+
+_CREDENTIAL = re.compile(r"token|password|passwd|secret|credential|authorization|(?:api|access|private)[-_]?key", re.IGNORECASE)
+
+
+def _recorded_command(value: str, secrets: tuple[str, ...]) -> str:
+    """Display recorded argv without interpreting it as shell or Markdown code."""
+    arguments = _array(_load_json(value.encode("utf-8"), "command"), "command")
+    displayed = []
+    hide_next = False
+    hide_rest = False
+    executable = arguments[0].replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    if executable in {"env", "env.exe"} and len(arguments) > 1:
+        executable = arguments[1].replace("\\", "/").rsplit("/", 1)[-1].casefold()
+    powershell = executable in {"pwsh", "pwsh.exe", "powershell", "powershell.exe"}
+    command_shell = executable in {"cmd", "cmd.exe"}
+    posix_shell = executable.removesuffix(".exe") in {"sh", "bash", "dash", "ash", "ksh", "zsh"}
+    for argument in arguments:
+        posix_command = posix_shell and re.fullmatch(r"-[A-Za-z]*c[A-Za-z]*", argument) is not None
+        if hide_next or hide_rest:
+            displayed.append("[redacted]")
+            hide_next = False
+        elif "://" in argument:
+            # URLs may contain userinfo, signed query parameters or path tokens.
+            displayed.append("[URL omitted]")
+        elif _CREDENTIAL.search(argument):
+            key, separator, _ = argument.partition("=")
+            if separator and re.fullmatch(r"[-\w]+", key):
+                displayed.append(f"{key}=[redacted]")
+            elif re.fullmatch(r"-[\w-]+", argument):
+                displayed.append(argument)
+                hide_next = True
+            else:
+                displayed.append("[redacted]")
+        elif (
+            argument.casefold() in {"-c", "-e", "--eval", "--command", "-command", "-encodedcommand"}
+            or (
+                powershell
+                and argument.startswith(("-", "/"))
+                and (key := argument.lstrip("-/").casefold())
+                and ("command".startswith(key) or "encodedcommand".startswith(key) or key in {"ec", "cwa", "commandwithargs"})
+            )
+            or posix_command
+            or (command_shell and argument.casefold() in {"/c", "/k"})
+        ):
+            displayed.append(argument)
+            hide_next = True
+            # Shells may accept further options or -- before the actual body.
+            hide_rest = powershell or command_shell or posix_command
+        else:
+            displayed.append(argument)
+    for index, argument in enumerate(displayed):
+        for secret in secrets:
+            argument = argument.replace(secret, "[redacted]")
+        displayed[index] = argument
+    return json.dumps(displayed, ensure_ascii=False)
+
+
+def _provenance_summary(evidence: Evidence) -> list[str]:
+    from research_repo_tools.host_metadata import parse_host
+
+    # Only standard recorded fields are presented. Never dump arbitrary consumer
+    # context, inherited environment, gate stdout, or this renderer's host.
+    secrets = tuple(
+        sorted(
+            {
+                value
+                for _, source in evidence.sources
+                for key, value in _object(_load_json(dict(source.context)["environment"].encode("utf-8"), "environment"), "environment").items()
+                if _CREDENTIAL.search(key) and isinstance(value, str) and value
+            },
+            key=lambda item: (-len(item), item),
+        )
+    )
+
+    def text(value: object) -> str:
+        result = "not recorded" if value is None else str(value)
+        for secret in secrets:
+            result = result.replace(secret, "[redacted]")
+        # Tool stdout may contain multiple lines or controls; keep every table
+        # cell on one physical line, with escaped text on each displayed line.
+        result = "".join(char if char.isprintable() or char in "\r\n" else f"\\u{ord(char):04x}" for char in result)
+        return "<br>".join(_markdown_text(line) for line in result.splitlines())
+
+    lines = [
+        "",
+        "## Recorded measurement provenance",
+        "",
+        "These observations belong to the measured phases. Rerendering does not recapture the publisher's environment.",
+    ]
+    for phase, source in evidence.sources:
+        context = dict(source.context)
+        host = parse_host(context["host"].encode("utf-8"))
+        environment = _object(_load_json(context["environment"].encode("utf-8"), "environment"), "environment")
+        fields = [
+            ("Release", context["release"]),
+            ("Revision", source.revision),
+            ("Measurement mode", context.get("mode")),
+            ("Original source SHA-256", context["original-source-sha256"]),
+            ("Measured source SHA-256", source.source_sha256),
+            ("Common harness SHA-256", source.harness_sha256),
+            ("Fingerprint schema", context["fingerprint-schema"]),
+            ("OS", host.os),
+            ("Architecture", host.architecture),
+            ("CPU", host.cpu),
+            ("Physical cores", host.physical_cores),
+            ("Logical threads", host.logical_threads),
+            ("Memory (bytes)", host.memory_bytes),
+        ]
+        lines.extend(["", f"### {phase.title()} phase", "", "| Field | Recorded value |", "| --- | --- |"])
+        lines.extend(f"| {label} | {text(value)} |" for label, value in fields)
+        if host.tools:
+            lines.extend(f"| Tool: {text(name)} | {text(value)} |" for name, value in host.tools)
+        else:
+            lines.append("| Tools / toolchain | not recorded |")
+        dependencies = [(key.removeprefix("dependency."), value) for key, value in source.context if key.startswith("dependency.")]
+        if dependencies:
+            lines.extend(f"| Dependency: {text(name)} | {text(value)} |" for name, value in dependencies)
+        else:
+            lines.append("| Dependency versions | not recorded |")
+        lines.extend(
+            [
+                f"| Environment overrides (names only) | {text(', '.join(sorted(environment))) if environment else 'none declared; inherited values not recorded'} |",
+                f"| Measurement command (argv) | {text(_recorded_command(context['command'], secrets))} |",
+                f"| Independent correctness gate | {text(context['gate-status'])} |",
+                f"| Gate command (argv) | {text(_recorded_command(context['gate-command'], secrets))} |",
+            ]
+        )
+    return lines
+
+
+def render_run(
+    evidence: Evidence,
+    *,
+    title: str = "Benchmark timings",
+    report_path: str | None = None,
+    payload_path: str | None = None,
+    manifest_path: str | None = None,
+) -> bytes:
+    """Render timings and recorded provenance, with optional publication paths.
+
+    Supply all three normalized root-relative paths to link the exact evidence
+    files from the report's directory. No host, tool, environment or filesystem
+    observations are captured. Missing locations are explicitly unlinked.
+    """
+    _string(title, "report title")
+    paths = (report_path, payload_path, manifest_path)
+    if any(path is not None for path in paths) and not all(path is not None for path in paths):
+        raise ValueError("report links require report, payload and manifest paths together")
+    links = "Evidence links: publication paths not supplied."
+    if report_path is not None and payload_path is not None and manifest_path is not None:
+        for path in (report_path, payload_path, manifest_path):
+            _publication_name(path)
+        payload_link, manifest_link = (_relative_link(report_path, path) for path in (payload_path, manifest_path))
+        links = f"Evidence: [run payload]({payload_link}) · [evidence envelope]({manifest_link})."
+    timings = _render_run_v1(evidence, title=title).decode("utf-8").removesuffix("\n").split("\n")
+    timings[4:4] = [links, ""]
+    return ("<!-- research-repo-tools/run-report/v2 -->\n" + "\n".join([*timings, *_provenance_summary(evidence)]) + "\n").encode("utf-8")

@@ -1,15 +1,13 @@
 """Retained comparison reports, current selection, archival and promotion."""
 
-import posixpath
 import re
 import tomllib
 from pathlib import Path
-from urllib.parse import quote
 
 from research_repo_tools.criterion import COMPARISON_SCHEMA, _markdown_text, parse_comparison, render_comparison, serialize_comparison_csv
 from research_repo_tools.evidence import Evidence, parse_evidence, serialize_evidence
 from research_repo_tools.files import _paths_alias, _validate_distinct_paths
-from research_repo_tools.publication import PublicationPlan, _path, _publication_name, plan_outputs
+from research_repo_tools.publication import PublicationPlan, _path, _publication_name, _relative_link, plan_outputs
 from research_repo_tools.publication_config import _table
 from research_repo_tools.release_pairs import ReleasePair
 
@@ -41,10 +39,6 @@ def retained_paths(archive: str, pair: ReleasePair) -> tuple[str, str, str]:
     _publication_name(archive)
     stem = f"{archive}/{pair.stem}"
     return stem + ".comparison.json", stem + ".evidence.json", stem + ".csv"
-
-
-def _link(document: str, target: str) -> str:
-    return quote(posixpath.relpath(target, posixpath.dirname(document) or "."), safe="/.")
 
 
 def render_report(evidence: Evidence, *, title: str = "Benchmark timings", prose: str = "", links: tuple[tuple[str, str], ...] = ()) -> bytes:
@@ -137,7 +131,7 @@ def load_report_plan(root: Path, configuration: str, *, payload: str | None = No
         name: data for name, data in zip(targets, (payload_bytes, manifest_bytes, serialize_comparison_csv(parse_comparison(evidence.payload))), strict=True)
     }
     outputs[current] = render_report(
-        evidence, title=title, prose=prose, links=tuple((label, _link(current, target)) for label, target in zip(labels, targets, strict=True))
+        evidence, title=title, prose=prose, links=tuple((label, _relative_link(current, target)) for label, target in zip(labels, targets, strict=True))
     )
     immutable = []
     archive_path = root / archive
@@ -164,14 +158,14 @@ def load_report_plan(root: Path, configuration: str, *, payload: str | None = No
         archived_name = f"{archive}/{prior_pair.stem}.md"
         archived_report = prior
         for name in previous_targets:
-            old, new = _link(current, name), _link(archived_name, name)
+            old, new = _relative_link(current, name), _relative_link(archived_name, name)
             archived_report = archived_report.replace(f"]({old})".encode(), f"]({new})".encode())
         outputs[archived_name] = archived_report
         immutable.append(archived_name)
         archived.append(archived_name)
     index = (
         "# Archived performance reports\n\n"
-        + "\n".join(f"- [{_markdown_text(Path(name).stem)}]({_link(f'{archive}/README.md', name)})" for name in sorted(set(archived)))
+        + "\n".join(f"- [{_markdown_text(Path(name).stem)}]({_relative_link(f'{archive}/README.md', name)})" for name in sorted(set(archived)))
         + "\n"
     )
     outputs[f"{archive}/README.md"] = index.encode("utf-8")

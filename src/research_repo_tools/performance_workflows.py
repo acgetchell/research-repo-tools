@@ -82,7 +82,16 @@ def _outputs(args: argparse.Namespace, settings: Config, retained: evidence.Evid
     root = settings.root
     targets = tuple(_path(root, name) for name in (args.payload, args.manifest, *([args.report] if args.report else [])))
     _validate_distinct_paths((*targets, *(_path(root, name) for name in inputs)))
-    reports = {_path(root, args.report): render_report(retained)} if args.report else {}
+    reports = {}
+    if args.report:
+        from research_repo_tools.complete_runs import RUN_SCHEMA, render_run
+
+        report = (
+            render_run(retained, report_path=args.report, payload_path=args.payload, manifest_path=args.manifest)
+            if retained.payload_schema == RUN_SCHEMA
+            else render_report(retained)
+        )
+        reports[_path(root, args.report)] = report
     evidence.publish_evidence(retained, targets[0], targets[1], reports=reports)
 
 

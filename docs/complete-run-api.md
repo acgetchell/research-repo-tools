@@ -1,7 +1,8 @@
 # Complete measurements and host metadata
 
-These contracts target v0.1.8. Source availability, package publication, native
-platform checks and consumer adoption are separate requirements. Consumer
+The base measurement and host contracts target v0.1.8; the provenance renderer
+and versioned report history additions target v0.1.9. Source availability,
+package publication, native platform checks and consumer adoption are separate requirements. Consumer
 commands and editable scaffolds are described in the [README](../README.md#common-harness-and-complete-runs).
 Existing comparison, baseline asset and report schema-1 contracts remain supported.
 
@@ -82,7 +83,7 @@ The supported names in `complete_runs` are:
 | `RunSeries(name, phase, rows)` | Unique display labels mapped to full IDs in one recorded phase |
 | `collect_complete_sample(criterion_dir, sample, policy)` | Reject unsafe trees, incomplete rows, duplicate semantic IDs and missing/unexpected inventory |
 | `parse_run(payload)`, `serialize_run(run)` | Versioned strict shared JSON; original Criterion bytes stored as base64 |
-| `render_run(evidence, *, title="Benchmark timings")` | Offline named-series tables for every required statistic, with originating phases |
+| `render_run(evidence, *, title="Benchmark timings", report_path=None, payload_path=None, manifest_path=None)` | Offline named-series timings and recorded per-phase provenance; supply all three root-relative publication paths for evidence links |
 | `run_identity(evidence)` | SHA-256 of exact payload and envelope with versioned framing |
 | `validate_run_evidence(evidence)` | Parse complete measurements and verify phase/source/gate/compatibility contracts |
 
@@ -95,6 +96,30 @@ Criterion fields are retained byte for byte. `estimate(statistic)` returns the
 shared validated `Estimate`. No consistency between raw samples and estimated
 bootstrap statistics, significance test, ratio interval or scientific eligibility
 is inferred. Consumers own those scientific assertions.
+
+The standard report includes original and measured source fingerprints, the
+common harness fingerprint, revision/release/mode, recorded host observations,
+named tool/toolchain probes, dependency versions, measurement argv and independent
+gate status/argv for each phase. Reference series keep their originating phase;
+displaying them beside current timings does not claim another measurement.
+Missing optional observations say `not recorded`. Required provenance and gates
+still fail validation when absent; the renderer does not invent replacements.
+
+Environment overrides show names only. Arbitrary consumer context and gate
+stdout are omitted. Credential-shaped command options/assignments, URLs, recognized
+inline script bodies and sensitive recorded environment values are redacted from the
+summary. Keep credentials out of measurement declarations: evidence files retain
+their original values, and arbitrary positional secrets cannot be identified
+reliably. Text is escaped, multiline tool stdout stays within its table cell, and
+publication-relative URLs are percent-encoded using POSIX separators on every
+platform. Without publication paths, the pure renderer explicitly reports that
+evidence links were not supplied. It never guesses the evidence location or
+captures the machine performing an offline rerender.
+
+The CLI renderer supplies evidence links when `--output` and both evidence paths
+share a portable relative-path context, including absolute paths outside the
+consumer root. Stdout, paths on different Windows drives, and filenames outside
+the portable publication contract remain explicitly unlinked.
 
 ## Retention and publication
 
@@ -122,6 +147,26 @@ All move in one publication transaction. Existing run contents cannot be
 replaced; differing bytes, partial directories, corrupt pointers and mismatching
 indexes fail. Empty directories left by a caught rollback are harmless.
 Do not share these new paths with legacy reports or schema-1 archives.
+
+New reports use `research-repo-tools/run-report/v2`. New indexes use
+`research-repo-tools/run-index/v2`, with an integer `report_renderer` (1 or 2)
+in every run entry. The latest-pointer schema and content-derived run identity
+remain version 1. Renderer versions describe presentation; they do not alter the
+run payload, evidence envelope or evidence hashes. Current and new retained
+reports link directly to that run's immutable `run.json` and `evidence.json`,
+relative to each report's own directory. Measurement CLI reports link to their
+explicit output evidence paths.
+
+Version-1 indexes remain readable and select the frozen renderer-1 presentation
+for exact-byte report validation. Promotion or offline rerender upgrades the
+mutable index to version 2 and renders the current report with provenance and
+links. Every existing immutable report, payload and envelope stays byte for byte,
+including when an old run is selected or promoted again. Old reports therefore
+retain their original presentation without new links. Mixed histories record
+renderer 1 for those entries and renderer 2 for newly retained runs; unknown
+renderer versions or report bytes inconsistent with the recorded version fail.
+Older package versions cannot read version-2 indexes; keep the upgraded package
+pin with the migrated publication configuration.
 
 `run_reports.load_latest_run(root, archive)` validates the whole indexed history,
 exact envelope hashes, content-derived IDs, phase provenance, stored reports,
