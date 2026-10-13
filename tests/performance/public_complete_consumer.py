@@ -20,6 +20,7 @@ from research_repo_tools import process
 from research_repo_tools.cli import main
 from research_repo_tools.common_measurement import CommonHarnessPlan, DiscoveryPolicy, measure_prepared_pair
 from research_repo_tools.complete_runs import (
+    RUN_SCHEMA,
     CompleteCase,
     CompletePolicy,
     CompleteRun,
@@ -33,7 +34,7 @@ from research_repo_tools.complete_runs import (
     validate_run_evidence,
 )
 from research_repo_tools.criterion_inventory import DiscoveryCommand, DiscoveryPlan, parse_inventory
-from research_repo_tools.evidence import Evidence, deterministic_json, parse_evidence, publish_evidence, serialize_evidence
+from research_repo_tools.evidence import Evidence, Provenance, deterministic_json, parse_evidence, publish_evidence, serialize_evidence
 from research_repo_tools.host_metadata import HostMetadata, capture_host, capture_profile, parse_host, serialize_host
 from research_repo_tools.measurement import load_measurement
 from research_repo_tools.publication import publish_publication
@@ -145,6 +146,55 @@ def measured(parent: Path, *, point: bytes = b"10", same_label: bool = False) ->
         return measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.1.0" if same_label else "v1.0.0"))
 
 
+def retained_fixture(*, baseline_point: float = 10) -> Evidence:
+    """Synthetic retained inputs for rendering/publication, without acquisition."""
+    phases, sources = [], []
+    for phase, point, identities, revision in (
+        ("baseline", baseline_point, ("library / 2", "reference / 2"), "a" * 40),
+        ("current", 5, ("library / 2",), "b" * 40),
+    ):
+        cases = []
+        for identity in identities:
+            estimates = {
+                stat: {"point_estimate": point, "confidence_interval": {"lower_bound": point * 0.9, "upper_bound": point * 1.1, "confidence_level": 0.95}}
+                for stat in ("mean", "median")
+            }
+            native = (
+                {"full_id": identity},
+                estimates,
+                {"iters": [1, 2, 3], "times": [point, point * 2, point * 3]},
+            )
+            cases.append(CompleteCase(identity.replace(" / ", "_"), *((json.dumps(value) + "\r\n").encode("utf-8") for value in native)))
+        phases.append((phase, CompleteSample(CompletePolicy(identities, sample_count=3), tuple(cases))))
+        context = {
+            "phase": phase,
+            "release": "v1.0.0" if phase == "baseline" else "v1.1.0",
+            "mode": "tag",
+            "command": json.dumps(["python", "bench.py"]),
+            "gate-command": json.dumps(["python", "gate.py"]),
+            "gate-status": "passed",
+            "environment": json.dumps({"PHASE": phase}),
+            "host": json.dumps(json.loads(serialize_host(HostMetadata("fixture OS", "fixture arch", None, None, None, None, (("python", "Python fixture"),))))),
+            "source-inventory": json.dumps(["src/point.txt", "Cargo.toml"]),
+            "original-source-inventory": json.dumps(["src/point.txt", "Cargo.toml"]),
+            "harness-inventory": json.dumps(["bench.py", "gate.py", "Cargo.lock", "Cargo.toml", "rust-toolchain.toml"]),
+            "original-source-sha256": "1" * 64 if phase == "baseline" else "2" * 64,
+            "fingerprint-schema": "research-repo-tools/files/v1",
+            "tool.python": "Python fixture",
+            "dependency.reference": "2.0.0",
+        }
+        sources.append((phase, Provenance(revision, "3" * 64 if phase == "baseline" else "2" * 64, "4" * 64, tuple(context.items()))))
+    series = (
+        RunSeries("Library baseline", "baseline", (("size 2", "library / 2"),)),
+        RunSeries("Library current", "current", (("size 2", "library / 2"),)),
+        RunSeries("Reference reused", "baseline", (("size 2", "reference / 2"),)),
+    )
+    run = CompleteRun(tuple(phases), series, ("harness_sha256", "context.tool.python", "context.dependency.reference"))
+    evidence = Evidence(serialize_run(run), RUN_SCHEMA, tuple(sources))
+    validate_run_evidence(evidence)
+    return evidence
+
+
 class TestCompleteConsumer(unittest.TestCase):
     def test_required_discovery_compatibility_is_checked_before_gates(self):
         for matching in (True, False, "missing"):
@@ -214,17 +264,16 @@ class TestCompleteConsumer(unittest.TestCase):
             self.assertEqual(len(dict(validate_run_evidence(evidence).phases)["current"].cases), 1)
 
     def test_retained_environments_preserve_constructor_invariants(self):
-        with tempfile.TemporaryDirectory() as directory:
-            evidence = measured(Path(directory))
-            for environment in ({"A": "1", "a": "2"}, {"INVALID=KEY": "1"}, {" KEY": "1"}, {"KEY\v": "1"}, {"KEY": "\0"}):
-                with self.subTest(environment=environment):
-                    name, source = evidence.sources[0]
-                    changed = replace(source, context=tuple({**dict(source.context), "environment": json.dumps(environment)}.items()))
-                    with self.assertRaises(ValueError):
-                        validate_run_evidence(replace(evidence, sources=((name, changed), evidence.sources[1])))
-            name, source = evidence.sources[0]
-            changed = replace(source, context=tuple({**dict(source.context), "environment": '{"EMPTY":""}'}.items()))
-            validate_run_evidence(replace(evidence, sources=((name, changed), evidence.sources[1])))
+        evidence = retained_fixture()
+        for environment in ({"A": "1", "a": "2"}, {"INVALID=KEY": "1"}, {" KEY": "1"}, {"KEY\v": "1"}, {"KEY": "\0"}):
+            with self.subTest(environment=environment):
+                name, source = evidence.sources[0]
+                changed = replace(source, context=tuple({**dict(source.context), "environment": json.dumps(environment)}.items()))
+                with self.assertRaises(ValueError):
+                    validate_run_evidence(replace(evidence, sources=((name, changed), evidence.sources[1])))
+        name, source = evidence.sources[0]
+        changed = replace(source, context=tuple({**dict(source.context), "environment": '{"EMPTY":""}'}.items()))
+        validate_run_evidence(replace(evidence, sources=((name, changed), evidence.sources[1])))
 
     def test_common_plan_native_discovery_before_gates_retains_inventory(self):
         with tempfile.TemporaryDirectory(prefix="discovered café ") as directory:
@@ -330,97 +379,97 @@ if '--list' in sys.argv:
                 validate_run_evidence(replace(evidence, payload=serialize_run(run_unknown)))
 
     def test_recorded_provenance_unknowns_escaping_redaction_and_offline_determinism(self):
-        with tempfile.TemporaryDirectory() as directory:
-            evidence = measured(Path(directory))
-            evidence = replace(evidence, payload=serialize_run(replace(validate_run_evidence(evidence), compatible=("harness_sha256",))))
-            sources = []
-            for phase, source in evidence.sources:
-                host = HostMetadata(
-                    "measured <OS>",
-                    "recorded-arch",
-                    None,
-                    None,
-                    8,
-                    4096,
-                    (("rustc", "rustc 1.90\r\nhost: <arm64>|`*\x1b"), ("missing", None)) if phase == "baseline" else (),
-                )
-                context = {**dict(source.context), "host": json.dumps(json.loads(serialize_host(host)))}
-                context.pop("mode")
-                context["private-note"] = "PRIVATE CONTEXT"
-                context["environment"] = json.dumps({"API_TOKEN": "recorded-secret", "OMP_NUM_THREADS": "77"})
-                context["command"] = json.dumps(
-                    [
-                        "cargo",
-                        "bench",
-                        "--phase",
-                        phase,
-                        "--token",
-                        "recorded-secret",
-                        "--password=another-secret",
-                        "Authorization: Bearer header-secret",
-                        "https://user:pass@example.test/signed?token=value",
-                        "<script>|`*",
-                    ]
-                )
-                context["gate-command"] = json.dumps(["python", "gate.py", "--phase", phase, "-c", "INLINE SECRET"])
-                if phase == "current":
-                    context.pop("dependency.reference")
-                sources.append((phase, replace(source, context=tuple(context.items()))))
-            evidence = replace(evidence, sources=tuple(sources))
-            original = serialize_evidence(evidence)
-            with (
-                patch("research_repo_tools.host_metadata.capture_host", side_effect=AssertionError("must not capture publisher")),
-                patch("research_repo_tools.measurement.capture_provenance", side_effect=AssertionError("must not probe")),
-                patch.dict(os.environ, {"API_TOKEN": "publisher-secret"}),
-            ):
-                report = render_run(evidence).decode()
-                self.assertEqual(render_run(evidence).decode(), report)
-            self.assertEqual(serialize_evidence(evidence), original)
-            self.assertIn("Reference reused: measured in **baseline**", report)
-            baseline, current = report.split("### Baseline phase", 1)[1].split("### Current phase", 1)
-            self.assertIn("| Dependency: reference | 2.0.0 |", baseline)
-            self.assertIn("| Dependency versions | not recorded |", current)
-            self.assertIn("| Tools / toolchain | not recorded |", current)
-            self.assertIn("| Tool: missing | not recorded |", baseline)
-            self.assertIn("| Measurement mode | not recorded |", baseline)
-            self.assertIn("| CPU | not recorded |", report)
-            self.assertIn("| Logical threads | 8 |", report)
-            self.assertIn("rustc 1.90<br>host: &lt;arm64&gt;&#124;&#96;&#42;", report)
-            self.assertIn("&lt;script&gt;&#124;&#96;&#42;", report)
-            self.assertIn('"--phase", "baseline"', baseline.replace("&quot;", '"'))
-            self.assertIn('"--phase", "current"', current.replace("&quot;", '"'))
-            self.assertEqual(report.count("| Independent correctness gate | passed |"), 2)
-            for secret in (
-                "recorded-secret",
-                "another-secret",
-                "header-secret",
-                "INLINE SECRET",
-                "user:pass",
-                "token=value",
-                "publisher-secret",
-                "PRIVATE CONTEXT",
-            ):
-                self.assertNotIn(secret, report)
-            self.assertNotIn("77", report.split("| Environment overrides", 1)[1].split("\n", 1)[0])
-            self.assertNotIn("\x1b", report)
-            self.assertIn("Evidence links: publication paths not supplied.", report)
-            for phase, source in evidence.sources:
-                section = baseline if phase == "baseline" else current
-                self.assertIn(source.source_sha256, section)
-                self.assertIn(dict(source.context)["original-source-sha256"], section)
-                self.assertIn(source.harness_sha256, section)
-            with self.assertRaisesRegex(ValueError, "paths together"):
-                render_run(evidence, report_path="report.md")
-            for path in ("../report.md", "C:/report.md", "docs\\report.md", "https://example.test/report.md"):
-                with self.subTest(path=path), self.assertRaises(ValueError):
-                    render_run(evidence, report_path=path, payload_path="run.json", manifest_path="evidence.json")
-            with self.assertRaises(ValueError):
-                render_run(evidence, title="Injected\n# heading")
+        with patch("research_repo_tools.common_measurement.capture_provenance", side_effect=AssertionError("retained setup must not probe")):
+            evidence = retained_fixture()
+        evidence = replace(evidence, payload=serialize_run(replace(validate_run_evidence(evidence), compatible=("harness_sha256",))))
+        sources = []
+        for phase, source in evidence.sources:
+            host = HostMetadata(
+                "measured <OS>",
+                "recorded-arch",
+                None,
+                None,
+                8,
+                4096,
+                (("rustc", "rustc 1.90\r\nhost: <arm64>|`*\x1b"), ("missing", None)) if phase == "baseline" else (),
+            )
+            context = {**dict(source.context), "host": json.dumps(json.loads(serialize_host(host)))}
+            context.pop("mode")
+            context["private-note"] = "PRIVATE CONTEXT"
+            context["environment"] = json.dumps({"API_TOKEN": "recorded-secret", "OMP_NUM_THREADS": "77"})
+            context["command"] = json.dumps(
+                [
+                    "cargo",
+                    "bench",
+                    "--phase",
+                    phase,
+                    "--token",
+                    "recorded-secret",
+                    "--password=another-secret",
+                    "Authorization: Bearer header-secret",
+                    "https://user:pass@example.test/signed?token=value",
+                    "<script>|`*",
+                ]
+            )
+            context["gate-command"] = json.dumps(["python", "gate.py", "--phase", phase, "-c", "INLINE SECRET"])
+            if phase == "current":
+                context.pop("dependency.reference")
+            sources.append((phase, replace(source, context=tuple(context.items()))))
+        evidence = replace(evidence, sources=tuple(sources))
+        original = serialize_evidence(evidence)
+        with (
+            patch("research_repo_tools.host_metadata.capture_host", side_effect=AssertionError("must not capture publisher")),
+            patch("research_repo_tools.measurement.capture_provenance", side_effect=AssertionError("must not probe")),
+            patch.dict(os.environ, {"API_TOKEN": "publisher-secret"}),
+        ):
+            report = render_run(evidence).decode()
+            self.assertEqual(render_run(evidence).decode(), report)
+        self.assertEqual(serialize_evidence(evidence), original)
+        self.assertIn("Reference reused: measured in **baseline**", report)
+        baseline, current = report.split("### Baseline phase", 1)[1].split("### Current phase", 1)
+        self.assertIn("| Dependency: reference | 2.0.0 |", baseline)
+        self.assertIn("| Dependency versions | not recorded |", current)
+        self.assertIn("| Tools / toolchain | not recorded |", current)
+        self.assertIn("| Tool: missing | not recorded |", baseline)
+        self.assertIn("| Measurement mode | not recorded |", baseline)
+        self.assertIn("| CPU | not recorded |", report)
+        self.assertIn("| Logical threads | 8 |", report)
+        self.assertIn("rustc 1.90<br>host: &lt;arm64&gt;&#124;&#96;&#42;", report)
+        self.assertIn("&lt;script&gt;&#124;&#96;&#42;", report)
+        self.assertIn('"--phase", "baseline"', baseline.replace("&quot;", '"'))
+        self.assertIn('"--phase", "current"', current.replace("&quot;", '"'))
+        self.assertEqual(report.count("| Independent correctness gate | passed |"), 2)
+        for secret in (
+            "recorded-secret",
+            "another-secret",
+            "header-secret",
+            "INLINE SECRET",
+            "user:pass",
+            "token=value",
+            "publisher-secret",
+            "PRIVATE CONTEXT",
+        ):
+            self.assertNotIn(secret, report)
+        self.assertNotIn("77", report.split("| Environment overrides", 1)[1].split("\n", 1)[0])
+        self.assertNotIn("\x1b", report)
+        self.assertIn("Evidence links: publication paths not supplied.", report)
+        for phase, source in evidence.sources:
+            section = baseline if phase == "baseline" else current
+            self.assertIn(source.source_sha256, section)
+            self.assertIn(dict(source.context)["original-source-sha256"], section)
+            self.assertIn(source.harness_sha256, section)
+        with self.assertRaisesRegex(ValueError, "paths together"):
+            render_run(evidence, report_path="report.md")
+        for path in ("../report.md", "C:/report.md", "docs\\report.md", "https://example.test/report.md"):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                render_run(evidence, report_path=path, payload_path="run.json", manifest_path="evidence.json")
+        with self.assertRaises(ValueError):
+            render_run(evidence, title="Injected\n# heading")
 
     def test_publication_relative_links_resolve_to_exact_retained_bytes(self):
         with tempfile.TemporaryDirectory(prefix="links café ") as directory:
             root = Path(directory).resolve()
-            evidence = measured(root / "scratch")
+            evidence = retained_fixture()
             (root / "report.toml").write_text(
                 'schema=2\ncurrent="reports/deep/café report.md"\narchive="history/café retained (#96)"\ntitle="Timing"\n', encoding="utf-8", newline="\n"
             )
@@ -437,7 +486,6 @@ if '--list' in sys.argv:
                 self.assertEqual(tuple(path.read_bytes() for path in linked), expected)
                 self.assertTrue(all("\\" not in link and " " not in link and "#" not in link for link in links))
             self.assertIn("../../history/caf%C3%A9%20retained%20%28%2396%29/", (root / "reports/deep/café report.md").read_text(encoding="utf-8"))
-            shutil.rmtree(root / "scratch")
             (root / "new.json").unlink()
             (root / "manifest.json").unlink()
             with patch("research_repo_tools.host_metadata.capture_host", side_effect=AssertionError("offline must not probe")):
@@ -463,69 +511,66 @@ if '--list' in sys.argv:
                 load_latest_run(root, "history/café retained (#96)")
 
     def test_known_credentials_are_redacted_before_argv_serialization(self):
-        with tempfile.TemporaryDirectory() as directory:
-            evidence = measured(Path(directory))
-            for secret in ('opaque"value', "opaque\\value"):
-                with self.subTest(secret=secret):
-                    sources = []
-                    for phase, source in evidence.sources:
-                        context = {**dict(source.context), "environment": json.dumps({"API_TOKEN": secret})}
-                        context["command"] = json.dumps(["bench", "--input", f"prefix:{secret}:suffix"])
-                        context["gate-command"] = json.dumps(["gate", secret])
-                        sources.append((phase, replace(source, context=tuple(context.items()))))
-                    retained = replace(evidence, sources=tuple(sources))
-                    original = serialize_evidence(retained)
-                    report = unescape(render_run(retained).decode())
-                    self.assertIn("prefix:[redacted]:suffix", report)
-                    self.assertNotIn(json.dumps(secret)[1:-1], report)
-                    self.assertNotIn(secret, report)
-                    self.assertEqual(serialize_evidence(retained), original)
+        evidence = retained_fixture()
+        for secret in ('opaque"value', "opaque\\value"):
+            with self.subTest(secret=secret):
+                sources = []
+                for phase, source in evidence.sources:
+                    context = {**dict(source.context), "environment": json.dumps({"API_TOKEN": secret})}
+                    context["command"] = json.dumps(["bench", "--input", f"prefix:{secret}:suffix"])
+                    context["gate-command"] = json.dumps(["gate", secret])
+                    sources.append((phase, replace(source, context=tuple(context.items()))))
+                retained = replace(evidence, sources=tuple(sources))
+                original = serialize_evidence(retained)
+                report = unescape(render_run(retained).decode())
+                self.assertIn("prefix:[redacted]:suffix", report)
+                self.assertNotIn(json.dumps(secret)[1:-1], report)
+                self.assertNotIn(secret, report)
+                self.assertEqual(serialize_evidence(retained), original)
 
     def test_access_and_private_key_values_are_redacted_from_recorded_commands(self):
-        with tempfile.TemporaryDirectory() as directory:
-            evidence = measured(Path(directory))
-            for name in ("access-key", "private-key", "ACCESS_KEY", "PRIVATE_KEY", "accesskey", "privatekey"):
-                with self.subTest(name=name):
+        evidence = retained_fixture()
+        for name in ("access-key", "private-key", "ACCESS_KEY", "PRIVATE_KEY", "accesskey", "privatekey"):
+            with self.subTest(name=name):
+                sources = []
+                for phase, source in evidence.sources:
+                    context = {**dict(source.context), "environment": json.dumps({name.upper().replace("-", "_"): "env-value"})}
+                    context["command"] = json.dumps(["bench", f"--{name}", "option-value", f"--{name}=assignment-value", "env-value"])
+                    context["gate-command"] = json.dumps(["gate", f"--{name}", "gate-value", f"{name}=gate-assignment"])
+                    sources.append((phase, replace(source, context=tuple(context.items()))))
+                retained = replace(evidence, sources=tuple(sources))
+                original = serialize_evidence(retained)
+                report = unescape(render_run(retained).decode())
+                for label, expected in (
+                    ("Measurement command (argv)", ["bench", f"--{name}", "[redacted]", f"--{name}=[redacted]", "[redacted]"]),
+                    ("Gate command (argv)", ["gate", f"--{name}", "[redacted]", f"{name}=[redacted]"]),
+                ):
+                    commands = [line.removeprefix(f"| {label} | ").removesuffix(" |") for line in report.splitlines() if line.startswith(f"| {label} | ")]
+                    self.assertEqual([json.loads(command) for command in commands], [expected, expected])
+                self.assertEqual(serialize_evidence(retained), original)
+
+    def test_powershell_inline_programs_are_omitted_for_native_parameter_spellings(self):
+        evidence = retained_fixture()
+        for executable in ("pwsh", "C:\\Windows\\powershell.exe"):
+            for switch in ("-command", "-COMMAND", "-Com", "-c", "-encodedcommand", "-EncodedCommand", "-enc", "-ec", "-e", "-cwa"):
+                with self.subTest(executable=executable, switch=switch):
                     sources = []
                     for phase, source in evidence.sources:
-                        context = {**dict(source.context), "environment": json.dumps({name.upper().replace("-", "_"): "env-value"})}
-                        context["command"] = json.dumps(["bench", f"--{name}", "option-value", f"--{name}=assignment-value", "env-value"])
-                        context["gate-command"] = json.dumps(["gate", f"--{name}", "gate-value", f"{name}=gate-assignment"])
+                        argv = json.dumps([executable, switch, "OPAQUE BODY", "OPAQUE REST"])
+                        context = {**dict(source.context), "command": argv, "gate-command": argv}
                         sources.append((phase, replace(source, context=tuple(context.items()))))
                     retained = replace(evidence, sources=tuple(sources))
                     original = serialize_evidence(retained)
-                    report = unescape(render_run(retained).decode())
-                    for label, expected in (
-                        ("Measurement command (argv)", ["bench", f"--{name}", "[redacted]", f"--{name}=[redacted]", "[redacted]"]),
-                        ("Gate command (argv)", ["gate", f"--{name}", "[redacted]", f"{name}=[redacted]"]),
-                    ):
-                        commands = [line.removeprefix(f"| {label} | ").removesuffix(" |") for line in report.splitlines() if line.startswith(f"| {label} | ")]
-                        self.assertEqual([json.loads(command) for command in commands], [expected, expected])
+                    report = render_run(retained).decode()
+                    self.assertNotIn("OPAQUE BODY", report)
+                    self.assertNotIn("OPAQUE REST", report)
+                    self.assertIn(switch, report)
                     self.assertEqual(serialize_evidence(retained), original)
-
-    def test_powershell_inline_programs_are_omitted_for_native_parameter_spellings(self):
-        with tempfile.TemporaryDirectory() as directory:
-            evidence = measured(Path(directory))
-            for executable in ("pwsh", "C:\\Windows\\powershell.exe"):
-                for switch in ("-command", "-COMMAND", "-Com", "-c", "-encodedcommand", "-EncodedCommand", "-enc", "-ec", "-e", "-cwa"):
-                    with self.subTest(executable=executable, switch=switch):
-                        sources = []
-                        for phase, source in evidence.sources:
-                            argv = json.dumps([executable, switch, "OPAQUE BODY", "OPAQUE REST"])
-                            context = {**dict(source.context), "command": argv, "gate-command": argv}
-                            sources.append((phase, replace(source, context=tuple(context.items()))))
-                        retained = replace(evidence, sources=tuple(sources))
-                        original = serialize_evidence(retained)
-                        report = render_run(retained).decode()
-                        self.assertNotIn("OPAQUE BODY", report)
-                        self.assertNotIn("OPAQUE REST", report)
-                        self.assertIn(switch, report)
-                        self.assertEqual(serialize_evidence(retained), original)
 
     def test_current_report_cannot_alias_reserved_history_directory(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            evidence = measured(root / "scratch")
+            evidence = retained_fixture()
             publish_evidence(evidence, root / "new.json", root / "manifest.json")
             for archive, current in (("history", "history/RUNS/current.md"), ("history", "HISTORY/runs/current.md"), ("café", "cafe\u0301/runs/current.md")):
                 with self.subTest(archive=archive, current=current):
@@ -539,7 +584,7 @@ if '--list' in sys.argv:
     def test_cli_render_file_links_external_evidence_and_stdout_is_unlinked(self):
         with tempfile.TemporaryDirectory(prefix="render café ") as directory:
             root = Path(directory).resolve()
-            evidence = measured(root / "scratch")
+            evidence = retained_fixture()
             payload, manifest = root / "evidence/run (#96).json", root / "evidence/envelope.json"
             publish_evidence(evidence, payload, manifest)
             consumer = root / "consumer"
@@ -567,7 +612,7 @@ if '--list' in sys.argv:
     def test_legacy_history_migrates_index_and_current_without_rewriting_retained_files(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            evidence = measured(root / "scratch")
+            evidence = retained_fixture()
             payload, manifest = serialize_evidence(evidence)
             # Deliberately retain a noncanonical envelope's original bytes.
             manifest = manifest.replace(b"\n", b"\r\n")
@@ -582,7 +627,6 @@ if '--list' in sys.argv:
             (root / "history/latest.json").write_bytes(deterministic_json({"schema": "research-repo-tools/latest-run/v1", "run": entry}))
             (root / "report.toml").write_bytes(b'schema=2\ncurrent="current.md"\narchive="history"\ntitle="Timing"\n')
             before = {path: path.read_bytes() for path in retained.iterdir()}
-            shutil.rmtree(root / "scratch")
             with patch("research_repo_tools.host_metadata.capture_host", side_effect=AssertionError("offline must not probe")):
                 self.assertEqual(load_latest_run(root, "history"), evidence)
                 publish_publication(load_run_report_plan(root, "report.toml"))
@@ -594,7 +638,7 @@ if '--list' in sys.argv:
             publish_evidence(evidence, root / "new.json", root / "manifest.json")
             publish_publication(load_run_report_plan(root, "report.toml", payload="new.json", manifest="manifest.json"))
             self.assertEqual({path: path.read_bytes() for path in retained.iterdir()}, before)
-            second = measured(root / "second", point=b"12")
+            second = retained_fixture(baseline_point=12)
             publish_evidence(second, root / "new.json", root / "manifest.json")
             publish_publication(load_run_report_plan(root, "report.toml", payload="new.json", manifest="manifest.json"))
             self.assertEqual(load_latest_run(root, "history"), second)
@@ -649,14 +693,13 @@ if '--list' in sys.argv:
             first_files = {path: path.read_bytes() for path in (root / "docs/runs/runs").rglob("*") if path.is_file()}
             self.assertEqual(main([*base, "promote", "report.toml", "--payload", "target/run.json", "--manifest", "target/evidence.json"]), 0)
             # Change complete measurements while preserving the release pair.
-            second = measured(root / "scratch", point=b"12")
+            second = retained_fixture(baseline_point=12)
             publish_evidence(second, root / "target/run.json", root / "target/evidence.json")
             self.assertEqual(main([*base, "promote", "report.toml", "--payload", "target/run.json", "--manifest", "target/evidence.json"]), 0)
             self.assertNotEqual(run_identity(first), run_identity(second))
             self.assertEqual(len(list((root / "docs/runs/runs").iterdir())), 2)
             self.assertEqual(first_files, {path: path.read_bytes() for path in first_files})
             shutil.rmtree(root / "target")
-            shutil.rmtree(root / "scratch")
             with patch("research_repo_tools.host_metadata.capture_host", side_effect=AssertionError("offline must not probe")):
                 self.assertEqual(main([*base, "promote", "report.toml", "--check"]), 0)
                 self.assertEqual(load_latest_run(root, "docs/runs"), second)
