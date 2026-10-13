@@ -1,13 +1,17 @@
 """Complete-run public contracts, also run against isolated wheel and sdist installs."""
 
+import csv
 import io
 import json
+import math
 import os
 import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
+import xml.etree.ElementTree as ET
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import replace
 from html import unescape
@@ -37,8 +41,19 @@ from research_repo_tools.criterion_inventory import DiscoveryCommand, DiscoveryP
 from research_repo_tools.evidence import Evidence, Provenance, deterministic_json, parse_evidence, publish_evidence, serialize_evidence
 from research_repo_tools.host_metadata import HostMetadata, capture_host, capture_profile, parse_host, serialize_host
 from research_repo_tools.measurement import load_measurement
-from research_repo_tools.publication import publish_publication
+from research_repo_tools.publication import preview_publication, publish_publication
+from research_repo_tools.publication_config import load_publication
 from research_repo_tools.release_pairs import ReleasePair
+from research_repo_tools.run_presentation import (
+    CoordinatePlot,
+    RunLayout,
+    RunRow,
+    SeriesSelection,
+    render_coordinate_svg,
+    render_run_ratios,
+    render_run_table,
+    serialize_run_csv,
+)
 from research_repo_tools.run_reports import load_latest_run, load_run_report_plan
 
 BENCHMARK = """import json, os
@@ -195,7 +210,350 @@ def retained_fixture(*, baseline_point: float = 10) -> Evidence:
     return evidence
 
 
+def presentation_layout() -> RunLayout:
+    return RunLayout(
+        (
+            SeriesSelection("Library baseline", "Library old", (("two", "library / 2"),)),
+            SeriesSelection("Library current", "Library <new> & fast", (("two", "library / 2"),)),
+            SeriesSelection("Reference reused", "Peer", (("two", "reference / 2"),)),
+        ),
+        (RunRow("two", "Size | two", 2),),
+        "median",
+        "ns",
+        comparisons=(("Library baseline", "Library current"),),
+    )
+
+
+def presentation_fixture(root: Path, *, archive: bool = False) -> str:
+    evidence = retained_fixture()
+    payload, manifest = serialize_evidence(evidence)
+    (root / "run.json").write_bytes(payload)
+    (root / "envelope.json").write_bytes(manifest)
+    (root / "README.md").write_bytes(b"\xef\xbb\xbf# Fixture\r\n<!-- BEGIN -->\r\nold\r\n<!-- END -->\r\n\xfftail\r\n")
+    (root / "Cargo.toml").write_bytes(b'version="1.1.0"\n')
+    (root / "releases.md").write_bytes(b"Previous: v1.0.0\r\nCurrent: v1.1.0\r\n")
+    if archive:
+        (root / "report.toml").write_bytes(b'schema=2\ncurrent="full.md"\narchive="history"\ntitle="Full timings"\n')
+        publish_publication(load_run_report_plan(root, "report.toml", payload="run.json", manifest="envelope.json"))
+    selection = 'archive="history"' if archive else 'payload="run.json"\nmanifest="envelope.json"'
+    config = f'''schema=2
+document="README.md"
+{selection}
+begin="<!-- BEGIN -->"
+end="<!-- END -->"
+unit="ns"
+statistic="median"
+svg="figures/ratios.svg"
+csv="exports/timings.csv"
+rows=[{{key="two", label="Size | two", coordinate=2}}]
+series=[
+  {{name="Library baseline", label="Library old", rows={{two="library / 2"}}}},
+  {{name="Library current", label="Library <new> & fast", rows={{two="library / 2"}}}},
+  {{name="Reference reused", label="Peer", rows={{two="reference / 2"}}}},
+]
+comparisons=[{{numerator="Library baseline", denominator="Library current"}}]
+plot={{path="figures/coordinates.svg", title="Timings <&>", x-label="Dimension", y-label="Timing", x-scale="log", y-scale="log"}}
+[provenance.baseline]
+revision="{"a" * 40}"
+release="v1.0.0"
+[provenance.current]
+revision="{"b" * 40}"
+release="v1.1.0"
+[[references]]
+path="Cargo.toml"
+pattern='^version="(?P<value>[^"]+)"$'
+source="version"
+[[references]]
+path="releases.md"
+pattern='^Previous: (?P<value>[^\\r\\n]+)'
+source="previous-tag"
+[[references]]
+path="releases.md"
+pattern='^Current: (?P<value>[^\\r\\n]+)'
+source="tag"
+'''
+    (root / "publication.toml").write_text(config, encoding="utf-8", newline="\n")
+    return config
+
+
 class TestCompleteConsumer(unittest.TestCase):
+    def test_presentation_template_is_available_from_installed_cli(self):
+        output = io.StringIO()
+        with redirect_stdout(output):
+            self.assertEqual(main(["templates", "complete-publication.toml"]), 0)
+        raw = tomllib.loads(output.getvalue())
+        self.assertEqual(raw["schema"], 2)
+        self.assertEqual(len(raw["series"]), 3)
+        self.assertEqual(raw["plot"]["y-scale"], "log")
+
+    def test_presentation_preserves_phases_intervals_identity_and_bytes(self):
+        evidence, layout = retained_fixture(), presentation_layout()
+        table = render_run_table(evidence, layout)
+        self.assertIn("Peer: baseline phase, v1.0.0, revision " + "a" * 40, table)
+        self.assertIn("5 ns [4.5, 5.5] (0.95 confidence)", table)
+        self.assertIn("| 2 | 50 |", table)
+        self.assertIn("1 phase cases omitted", table)
+        self.assertIn(run_identity(evidence), table)
+        csv_bytes = serialize_run_csv(evidence, layout)
+        self.assertNotIn(b"\r", csv_bytes)
+        records = list(csv.DictReader(io.StringIO(csv_bytes.decode("utf-8"))))
+        peer = records[-1]
+        self.assertEqual((peer["phase"], peer["revision"], peer["release"], peer["run_id"]), ("baseline", "a" * 40, "v1.0.0", run_identity(evidence)))
+        self.assertEqual((peer["point"], peer["lower"], peer["upper"], peer["confidence_level"]), ("10.0", "9.0", "11.0", "0.95"))
+        plot = CoordinatePlot("Timing <&>", "Size", "Timing", "log", "log")
+        svg = render_coordinate_svg(evidence, layout, plot)
+        self.assertEqual(svg, render_coordinate_svg(evidence, layout, plot))
+        self.assertEqual(csv_bytes, serialize_run_csv(evidence, layout))
+        self.assertNotIn(b"\r", svg)
+        tree = ET.fromstring(svg)
+        self.assertEqual(tree.attrib["data-run-id"], run_identity(evidence))
+        self.assertEqual(tree.findtext("{http://www.w3.org/2000/svg}title"), "Timing <&>")
+        self.assertEqual(len(tree.findall(".//{http://www.w3.org/2000/svg}circle")), 3)
+        self.assertIn("Peer: baseline phase", tree.findtext("{http://www.w3.org/2000/svg}desc") or "")
+        self.assertEqual(ET.fromstring(render_run_ratios(evidence, layout)).attrib["data-run-id"], run_identity(evidence))
+
+    def test_presentation_multiple_coordinates_order_and_missing_cells(self):
+        original = retained_fixture()
+        run = validate_run_evidence(original)
+        phases = []
+        for phase, sample in run.phases:
+            cases = list(sample.cases)
+            for case in sample.cases:
+                identity = case.full_id.replace(" / 2", " / 8")
+                cases.append(replace(case, storage_path=case.storage_path + "_8", benchmark=json.dumps({"full_id": identity}).encode()))
+            phases.append((phase, CompleteSample(replace(sample.policy, expected=tuple(case.full_id for case in cases)), tuple(cases))))
+        views = tuple(replace(view, rows=(*view.rows, ("size 8", dict(view.rows)["size 2"].replace(" / 2", " / 8")))) for view in run.series)
+        evidence = replace(original, payload=serialize_run(replace(run, phases=tuple(phases), series=views)))
+        initial = presentation_layout()
+        series = tuple(replace(item, rows=(*item.rows, ("eight", item.rows[0][1].replace(" / 2", " / 8")))) for item in initial.series)
+        layout = replace(initial, series=series, rows=(RunRow("eight", "Eight", 8), *initial.rows))
+        table = render_run_table(evidence, layout)
+        self.assertLess(table.index("| Eight |"), table.index("| Size &#124; two |"))
+        svg = render_coordinate_svg(evidence, layout, CoordinatePlot("Timing", "Size", "Timing"))
+        self.assertEqual(len(ET.fromstring(svg).findall(".//{http://www.w3.org/2000/svg}circle")), 6)
+        self.assertIn(b'cx="900.000000"', svg)
+        missing = replace(layout, missing="unavailable", series=(*series[:2], replace(series[2], rows=(series[2].rows[0],))))
+        self.assertIn("unavailable", render_run_table(evidence, missing))
+        self.assertIn("unavailable", serialize_run_csv(evidence, missing).decode())
+        self.assertEqual(
+            len(ET.fromstring(render_coordinate_svg(evidence, missing, CoordinatePlot("T", "X", "Y"))).findall(".//{http://www.w3.org/2000/svg}circle")), 5
+        )
+        with self.assertRaises(ValueError):
+            replace(missing, missing="error")
+
+    def test_presentation_invalid_coordinates_units_and_mappings_fail(self):
+        evidence, layout = retained_fixture(), presentation_layout()
+        for coordinate in (True, "2", float("nan"), float("inf"), 10**1000):
+            with self.subTest(coordinate=coordinate), self.assertRaises(ValueError):
+                RunRow("x", "X", coordinate)  # ty: ignore[invalid-argument-type]  Exercise untyped runtime callers.
+        for changed in (
+            replace(layout, unit="ms"),
+            replace(layout, series=(replace(layout.series[0], name="missing"), *layout.series[1:]), comparisons=()),
+            replace(layout, series=(replace(layout.series[0], rows=(("two", "reference / 2"),)), *layout.series[1:])),
+        ):
+            with self.assertRaises(ValueError):
+                render_run_table(evidence, changed)
+        with self.assertRaises(ValueError):
+            replace(layout, statistic="mode")
+        with self.assertRaises(ValueError):
+            SeriesSelection("X", "X", (("a", "id"), ("b", "id")))
+        with self.assertRaises(ValueError):
+            CoordinatePlot("T", "X", "Y", "sqrt")  # ty: ignore[invalid-argument-type]  Exercise untyped runtime callers.
+        for coordinate in (None, 0, -1):
+            with self.assertRaises(ValueError):
+                render_coordinate_svg(evidence, replace(layout, rows=(RunRow("two", "Two", coordinate),)), CoordinatePlot("T", "X", "Y", "log"))
+        with self.assertRaisesRegex(ValueError, "XML"):
+            render_coordinate_svg(evidence, layout, CoordinatePlot("bad\ufffe", "X", "Y"))
+
+    def test_presentation_publication_preview_and_offline_archive_selection(self):
+        for archive in (False, True):
+            with self.subTest(archive=archive), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                presentation_fixture(root, archive=archive)
+                if archive:
+                    (root / "run.json").unlink()
+                    (root / "envelope.json").unlink()
+                original = (root / "README.md").read_bytes()
+                plan = load_publication(root, "publication.toml")
+                self.assertIn("coordinates.svg", preview_publication(plan))
+                self.assertFalse((root / "figures").exists())
+                self.assertEqual(len(publish_publication(plan)), 4)
+                document = (root / "README.md").read_bytes()
+                self.assertTrue(document.startswith(b"\xef\xbb\xbf# Fixture\r\n<!-- BEGIN -->"))
+                self.assertTrue(document.endswith(b"<!-- END -->\r\n\xfftail\r\n"))
+                self.assertIn(b"Complete run evidence", document)
+                if archive:
+                    self.assertIn(b"history/runs/", document)
+                    load_latest_run(root, "history")
+                self.assertNotEqual(document, original)
+                self.assertEqual(publish_publication(load_publication(root, "publication.toml")), ())
+
+    def test_presentation_rejected_inputs_and_failed_transaction_preserve_all_files(self):
+        invalid = [
+            ('statistic="median"', 'statistic="mode"'),
+            ('unit="ns"', 'unit="ms"'),
+            ("coordinate=2", "coordinate=0"),
+            ("coordinate=2", "coordinate=true"),
+            ('name="Reference reused"', 'name="Unknown"'),
+            ('rows={two="reference / 2"}', 'rows={two="library / 2"}'),
+            ('path="figures/coordinates.svg"', 'path="figures/ratios.svg"'),
+            ('csv="exports/timings.csv"', 'csv="run.json"'),
+            ('payload="run.json"', 'payload="missing.json"'),
+            ('manifest="envelope.json"', ""),
+            ('release="v1.0.0"', 'release="v0.9.0"'),
+        ]
+        for old, new in invalid:
+            with self.subTest(new=new), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                config = presentation_fixture(root)
+                (root / "publication.toml").write_text(config.replace(old, new), encoding="utf-8", newline="\n")
+                before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+                with self.assertRaises((ValueError, FileNotFoundError)):
+                    load_publication(root, "publication.toml")
+                self.assertEqual(before, {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()})
+                self.assertFalse((root / "figures").exists())
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            presentation_fixture(root)
+            plan = load_publication(root, "publication.toml")
+            from research_repo_tools import files
+
+            real_replace = files.os.replace
+            writes = 0
+
+            def fail_second(source, destination):
+                nonlocal writes
+                writes += 1
+                if writes == 2:
+                    raise OSError("injected publication failure")
+                return real_replace(source, destination)
+
+            before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            with patch("research_repo_tools.files.os.replace", side_effect=fail_second), self.assertRaises(OSError):
+                publish_publication(plan)
+            self.assertEqual(before, {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()})
+
+    def test_presentation_retained_selection_detects_changed_pointer_and_reserves_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            config = presentation_fixture(root, archive=True)
+            plan = load_publication(root, "publication.toml")
+            pointer = root / "history/latest.json"
+            pointer.write_bytes(pointer.read_bytes() + b"\n")
+            with self.assertRaisesRegex(ValueError, "changed after planning"):
+                publish_publication(plan)
+            self.assertFalse((root / "figures").exists())
+            for old, new in [
+                ('csv="exports/timings.csv"', 'csv="history/extra.csv"'),
+                ('archive="history"', 'archive="history"\npayload="missing.json"\nmanifest="missing-envelope.json"'),
+            ]:
+                (root / "publication.toml").write_text(config.replace(old, new), encoding="utf-8", newline="\n")
+                with self.assertRaises(ValueError):
+                    load_publication(root, "publication.toml")
+
+    def test_presentation_retained_selection_rejects_new_partial_history(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            presentation_fixture(root, archive=True)
+            plan = load_publication(root, "publication.toml")
+            extra = root / "history/runs" / ("f" * 64)
+            extra.mkdir()
+            (extra / "run.json").write_bytes(b"partial")
+            with self.assertRaisesRegex(ValueError, "partial retained"):
+                publish_publication(plan)
+            self.assertFalse((root / "figures").exists())
+
+    def test_presentation_freshness_and_future_tag_checks_include_all_artifacts(self):
+        for name in ("source.rs", "harness.rs"):
+            with self.subTest(name=name), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                config = presentation_fixture(root)
+                (root / "source.rs").write_bytes(b"original source\r\n")
+                (root / "harness.rs").write_bytes(b"original source\r\n")
+                from research_repo_tools.evidence import fingerprint_files
+
+                digest = fingerprint_files(root, (Path("source.rs"),))
+                harness = fingerprint_files(root, (Path("harness.rs"),))
+                evidence = retained_fixture()
+                sources = dict(evidence.sources)
+                for phase in ("baseline", "current"):
+                    context = {
+                        **dict(sources[phase].context),
+                        "mode": "working-tree",
+                        "source-inventory": '["source.rs"]',
+                        "harness-inventory": '["harness.rs"]',
+                    }
+                    sources[phase] = replace(sources[phase], source_sha256=digest, harness_sha256=harness, context=tuple(context.items()))
+                publish_evidence(replace(evidence, sources=tuple(sources.items())), root / "run.json", root / "envelope.json")
+                config = 'repository="example/project"\ntag-policy="prepare"\ncurrent-sources=["source.rs"]\ncurrent-harness=["harness.rs"]\n' + config
+                (root / "publication.toml").write_text(config, encoding="utf-8", newline="\n")
+                with patch("research_repo_tools.publication.run_git_bytes", return_value=subprocess.CompletedProcess([], 1, b"", b"")):
+                    plan = load_publication(root, "publication.toml")
+                    self.assertEqual(plan.git_checks[-1].tag, "v1.1.0")
+                    for artifact in ("figures/coordinates.svg", "figures/ratios.svg", "exports/timings.csv", "run.json", "envelope.json"):
+                        self.assertIn(artifact, plan.git_checks[-1].paths)
+                    (root / name).write_bytes(b"changed source\n")
+                    with self.assertRaisesRegex(ValueError, "changed after planning"):
+                        publish_publication(plan)
+                    self.assertFalse((root / "figures").exists())
+                    with self.assertRaisesRegex(ValueError, "differ from"):
+                        load_publication(root, "publication.toml")
+                    (root / name).write_bytes(b"original source\r\n")
+                    plan = load_publication(root, "publication.toml")
+                with (
+                    patch("research_repo_tools.publication.run_git_bytes", return_value=subprocess.CompletedProcess([], 0, b"", b"")),
+                    patch("research_repo_tools.publication.verify_tagged_files", side_effect=ValueError("tag bytes differ")),
+                    self.assertRaisesRegex(ValueError, "tag bytes differ"),
+                ):
+                    publish_publication(plan)
+                self.assertFalse((root / "figures").exists())
+
+    def test_presentation_current_only_raw_case_is_retained_and_links_are_portable(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            config = presentation_fixture(root)
+            evidence = retained_fixture()
+            run = validate_run_evidence(evidence)
+            phases = dict(run.phases)
+            current = phases["current"]
+            case = replace(current.cases[0], storage_path="current-only", benchmark=b'{"full_id":"current-only"}\r\n')
+            phases["current"] = CompleteSample(replace(current.policy, expected=(*current.policy.expected, "current-only")), (*current.cases, case))
+            evidence = replace(evidence, payload=serialize_run(replace(run, phases=tuple(phases.items()))))
+            publish_evidence(evidence, root / "run.json", root / "envelope.json")
+            (root / "docs").mkdir()
+            (root / "README.md").rename(root / "docs/read mé.md")
+            config = config.replace('document="README.md"', 'document="docs/read mé.md"').replace('csv="exports/timings.csv"', 'csv="exports/timings mé.csv"')
+            (root / "publication.toml").write_text(config, encoding="utf-8", newline="\n")
+            original_payload, original_envelope = (root / "run.json").read_bytes(), (root / "envelope.json").read_bytes()
+            publish_publication(load_publication(root, "publication.toml"))
+            document = (root / "docs/read mé.md").read_bytes()
+            self.assertIn(b"../exports/timings%20m%C3%A9.csv", document)
+            self.assertIn(b"../run.json", document)
+            self.assertIn(b"1 phase cases omitted", document)
+            self.assertEqual((root / "run.json").read_bytes(), original_payload)
+            self.assertEqual((root / "envelope.json").read_bytes(), original_envelope)
+            self.assertIn("current-only", validate_run_evidence(parse_evidence(original_payload, original_envelope)).phases[1][1].policy.expected)
+
+    def test_presentation_axes_remain_finite_and_missing_rows_break_lines(self):
+        from research_repo_tools.run_presentation import _axis
+
+        for values in ([-1e308, 1e308], [1e308, math.nextafter(1e308, math.inf)], [5e-324, 1e-323]):
+            axis = _axis(values, "linear")
+            self.assertEqual((axis(values[0]), axis(values[-1])), (0.0, 1.0))
+        layout = replace(
+            presentation_layout(), rows=(RunRow("low", "Low", -1e308), RunRow("two", "Two", 0), RunRow("high", "High", 1e308)), missing="unavailable"
+        )
+        svg = render_coordinate_svg(retained_fixture(), layout, CoordinatePlot("Finite", "X", "Y"))
+        self.assertNotIn(b"nan", svg)
+        self.assertNotIn(b"inf", svg)
+        self.assertEqual(len(ET.fromstring(svg).findall(".//{http://www.w3.org/2000/svg}circle")), 3)
+        with self.assertRaisesRegex(ValueError, "unique coordinates"):
+            render_coordinate_svg(
+                retained_fixture(),
+                replace(layout, rows=(RunRow("low", "Low", 0), RunRow("two", "Two", 0), RunRow("high", "High", 1))),
+                CoordinatePlot("T", "X", "Y"),
+            )
+
     def test_required_discovery_compatibility_is_checked_before_gates(self):
         for matching in (True, False, "missing"):
             with self.subTest(matching=matching), tempfile.TemporaryDirectory() as directory:

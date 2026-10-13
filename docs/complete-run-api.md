@@ -129,8 +129,9 @@ Schema-2 report TOML requires `schema`, `current`, `archive`, and `title`.
 manifest=None)`. It returns the existing `PublicationPlan` for preview, check
 or transactional publication. `performance_reports.render_report` and the CLI
 renderer also recognize complete runs. The schema-1 comparison CSV exporter and
-document configuration keep their existing contracts; complete-run custom
-documents use the Python publication API over validated run data.
+document configuration keep their existing contracts. Schema-2 document
+publication selects complete runs directly; see
+[publication configuration](publication-api.md#publication-configuration-v2).
 
 Run IDs seed SHA-256 with `research-repo-tools/run-id/v1` plus NUL, followed by
 each of the exact payload and exact envelope bytes framed with an eight-byte
@@ -182,6 +183,59 @@ through `publication.plan_outputs` before `publish_publication`; render all
 candidates before that one transaction. No version-control state is changed by
 promotion. Archive downloading and extraction retain the existing bounded
 release-asset contracts.
+
+## Configured presentation
+
+Import from `research_repo_tools.run_presentation` (target v0.1.9):
+
+| API | Contract |
+| --- | --- |
+| `CoordinatePlot(title, x_label, y_label, x_scale="linear", y_scale="linear")` | Nonempty labels and `linear`/`log` scales |
+| `RunLayout(series, rows, statistic, unit, missing="error", comparisons=())` | Explicit series/row order, recorded mean/median and timing unit; comparisons are `(numerator_name, denominator_name)` tuples |
+| `RunRow(key, label, coordinate=None)` | Unique selection key and display label; optional finite numeric coordinate |
+| `SeriesSelection(name, label, rows)` | Existing retained view name, unique display label and unique `(row_key, semantic_full_id)` mappings |
+| `render_coordinate_svg(evidence, layout, plot)` | Deterministic UTF-8/LF accessible SVG with point estimates and recorded marginal timing intervals |
+| `render_run_ratios(evidence, layout)` | Exactly one configured comparison, rendered as point-ratio bars with original phase labels and run identity |
+| `render_run_table(evidence, layout)` | Markdown timings, marginal intervals, optional ratios/reductions and explicit selection coverage |
+| `serialize_run_csv(evidence, layout)` | Deterministic UTF-8/LF long-form CSV with each cell's run/series/phase/revision/release, fingerprints, row/coordinate/ID, statistic/unit, status and estimate/bounds/confidence |
+
+Every renderer validates the entire complete evidence, including phase gates and
+compatibility, before selecting presentation data. A series mapping must select
+IDs belonging to that original named view; changing a label cannot change its
+phase. Unknown views, duplicate row keys or benchmark mappings, incompatible
+units and unrecorded statistics fail. No conversion or scientific eligibility
+selection occurs. Unselected raw cases and original evidence bytes are untouched.
+
+Tables follow configured row order and columns follow series order. CSV follows
+series then row order. Plots sort rows by numeric coordinate and require a finite,
+unique coordinate for every row. Linear coordinates can be zero or negative;
+log coordinates must be strictly positive. The timing axis includes point values
+and both recorded bounds, even when a bootstrap interval does not contain its
+point. Constant domains are centered; geometry is normalized to avoid overflow.
+Lines connect adjacent available points and break at unavailable rows. Legends,
+tooltips and accessible descriptions preserve originating phase/release/revision;
+the root SVG carries the complete-run identity. XML text is escaped and invalid
+XML characters fail. No timestamps, host recapture, random IDs or plotting
+dependencies are used. Visual font metrics depend on the viewer's sans-serif font.
+
+Default `missing="error"` requires every selected series to map every row.
+Explicit `missing="unavailable"` permits unmapped cells. Tables and CSV record
+them, SVG legends count them, and ratio figures omit unavailable pairs with
+accessible coverage. A mapped ID that is outside its retained view still fails.
+Each series requires at least one selected benchmark. Coverage distinguishes
+unavailable presentation rows from omitted cases in the originating phase.
+
+Comparisons can include reused baseline-phase peers without calling them new
+current-phase measurements. The ratio is numerator time / denominator time.
+Time reduction is `100 × (numerator − denominator) / numerator`; positive means
+less denominator time, negative means more. These are point comparisons: neither
+ratio intervals, paired uncertainty, significance nor acceptance is inferred.
+All derived output remains bound to the original complete-run identity.
+
+Pure renderers do no I/O. Use `publication.plan_outputs` to transactionally
+publish standalone figures/CSV with validated payload/envelope bytes as inputs,
+or use [schema-2 document configuration](publication-api.md#publication-configuration-v2)
+to publish a document section, figures, CSV and evidence links together.
 
 ## Host and profiling metadata
 

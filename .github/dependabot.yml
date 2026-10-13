@@ -1,4 +1,8 @@
 version: 2
+# The hosted uv updater rejects requires-python >=3.15 (tool_version_not_supported).
+# Restore the uv entry when Dependabot supports this runtime. Until then use
+# just update-python-dependencies; the scheduled dependency audit stays enabled.
+# GitHub's independent automatic graph jobs still need upstream 3.15 support.
 updates:
   - package-ecosystem: github-actions
     directory: /
@@ -16,23 +20,5 @@ updates:
         applies-to: version-updates
         patterns: ["*"]
       github-actions-security:
-        applies-to: security-updates
-        patterns: ["*"]
-  - package-ecosystem: uv
-    directory: /
-    schedule:
-      interval: weekly
-      day: saturday
-      time: "05:00"
-      timezone: America/Los_Angeles
-    cooldown:
-      default-days: 7
-    open-pull-requests-limit: 1
-    labels: [dependencies, python]
-    groups:
-      python:
-        applies-to: version-updates
-        patterns: ["*"]
-      python-security:
         applies-to: security-updates
         patterns: ["*"]
