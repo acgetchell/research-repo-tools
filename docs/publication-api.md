@@ -14,10 +14,11 @@ Import from `research_repo_tools.publication`:
 | `GitCheck(tag, paths=(), revision=None, allow_missing=False)` | Local tag, ordered root-relative blob paths, optional full lowercase source commit ID; explicit future-tag allowance is rechecked before publication |
 | `GlobCheck(patterns, paths)` | Root-relative glob patterns and their complete expected regular-file inventory; every path must have validated bytes in planner inputs |
 | `MarkerPair(begin, end)` | Nonempty single-line UTF-8 delimiters, distinct and not containing one another |
-| `PublicationPlan` | Planner result with `root`, immutable `outputs` and `originals` path/byte tuples, `git_checks`, `glob_checks`, and absolute `changed_paths` |
+| `PublicationPlan` | Planner result with `root`, immutable `outputs` and `originals` path/byte tuples, `git_checks`, `glob_checks`, `run_checks`, and absolute `changed_paths` |
+| `RunSelectionCheck(archive, identity)` | Validated complete history and its selected content-derived run ID, rechecked before publication; outputs cannot enter that archive |
 | `TableLayout(rows, baseline_label, current_label, unit)` | Nonempty ordered `(benchmark, display_label)` pairs with unique benchmark IDs and an explicit recorded timing unit |
 | `plan_outputs(root, outputs, *, inputs, immutable=())` | Snapshot generic root-relative byte outputs and inputs, reject conflicting immutable files, reuse the same publication/recovery path |
-| `plan_publication(root, document, markers, content, *, inputs, figures=None, references=(), git_checks=(), glob_checks=())` | Validate exact retained inputs, document markers, all candidates, reference captures, Git identities, and glob inventories without writing |
+| `plan_publication(root, document, markers, content, *, inputs, figures=None, references=(), git_checks=(), glob_checks=(), run_checks=())` | Validate exact retained inputs, document markers, all candidates, reference captures, Git identities, glob inventories and retained run selections without writing |
 | `preview_publication(plan)` | Unified diffs for UTF-8 candidates; SHA-256 summaries for other bytes; does not publish or revalidate a saved plan |
 | `publish_publication(plan)` | Recheck snapshots and Git identities, transactionally publish changed outputs, return their absolute paths |
 | `render_svg(comparison, layout)` | Deterministic UTF-8 SVG bytes with XML-escaped labels, point-ratio bars and a reference at one; standard library only |
@@ -153,3 +154,62 @@ Default mode publishes the document and figures together. Invalid data raises
 `ValueError`, wrong Python types may raise `TypeError`, and I/O/subprocess failures
 retain the package's standard diagnostics. CLI failures use stderr without a
 traceback; a successful check is silent.
+
+## Publication configuration v2
+
+Schema 2 targets v0.1.9 and accepts `research-repo-tools/complete-run/v1`
+evidence directly, with the same independent provenance pins, source/harness
+checks, references, markers, tagged links, preview/check and transaction contracts
+as schema 1. The [README](../README.md#complete-run-document-sections-and-coordinate-plots)
+owns commands and the packaged `complete-publication.toml` provides an editable
+configuration example. Schema 1 continues to require comparison evidence.
+
+Required common fields are `schema`, `document`, `begin`, `end`, `unit`, `rows`,
+`provenance`, and `references`; schema 2 additionally requires `statistic` and
+`series`. Select exactly one input mode: `payload` plus `manifest`, or `archive`.
+An explicit incomplete or missing scratch pair fails before rendering and never
+selects an older run. Archive mode validates the complete retained history and
+latest pointer after scratch cleanup. It snapshots all history inputs and adds
+a `RunSelectionCheck`, so newly added partial or unindexed runs are also rejected
+before publication. Document and artifact outputs cannot enter the selected
+archive. Publication does not promote a new run; use the report promotion command
+first when immutable archival is required.
+
+| Field | Meaning |
+| --- | --- |
+| `archive` | Complete history directory, mutually exclusive with explicit evidence paths |
+| `comparisons` | Optional nonempty array of `{numerator, denominator}` selecting two distinct configured retained series names |
+| `csv` | Optional selected timing CSV path, linked from the document |
+| `manifest`, `payload` | Both required in explicit-input mode; original full evidence is linked automatically |
+| `missing` | `error` by default; `unavailable` explicitly permits unmapped cells |
+| `plot` | Optional coordinate figure table with `path`, `title`, `x-label`, `y-label`, optional `x-scale` and `y-scale` (`linear`/`log`) |
+| `rows` | Ordered nonempty array of `{key, label}` with optional finite numeric `coordinate`; coordinates required and unique for a plot |
+| `schema` | Integer `2` |
+| `series` | Ordered nonempty array of `{name, label, rows}`; `name` identifies an existing retained view, `rows` maps configured row keys to exact semantic benchmark IDs within that view |
+| `statistic` | Explicit recorded `mean` or `median` |
+| `svg` | Optional point-ratio figure; requires exactly one comparison |
+| `unit` | Must equal the recorded timing unit; no conversion |
+
+The remaining optional common fields are `links`, `repository`, `tag-policy`,
+`prose-file`, `current-sources`, and `current-harness`. Schema-1-only
+`baseline-label`/`current-label` fields are replaced by explicit series labels.
+Unknown fields, ambiguous mappings and duplicated/aliased output paths fail.
+Missing mappings require explicit unavailable policy; unmeasured or out-of-view
+mapped IDs always fail. Tables state selected, unavailable and omitted phase
+cases while the complete payload retains every raw case independently.
+
+Tables, CSV and figures preserve original phase, revision, release and complete
+run identity. A peer view of baseline data is never relabeled as a current-phase
+measurement. Configured paired comparisons remain presentation views of that
+same run; no derived evidence envelope or fabricated measurement is produced.
+Ratios and percentage signs follow the
+[presentation contract](complete-run-api.md#configured-presentation). Figures show
+recorded marginal timing intervals; no ratio intervals or significance claims
+are inferred. CSV includes confidence bounds and phase/source/harness identities.
+
+All outputs render before one transaction. Evidence links reference the original
+complete payload and envelope; tagged-link checks include CSV and SVG candidates
+and the complete retained history inputs. Surrounding document bytes, immutable
+history and every previous output survive rejected inputs and caught publication
+failure under the shared rollback/recovery contract. Offline preview/check
+performs the same validations without writes, measurement or network calls.

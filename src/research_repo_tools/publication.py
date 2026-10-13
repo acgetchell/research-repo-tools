@@ -21,6 +21,7 @@ __all__ = [
     "GlobCheck",
     "MarkerPair",
     "PublicationPlan",
+    "RunSelectionCheck",
     "TableLayout",
     "plan_outputs",
     "plan_publication",
@@ -136,6 +137,16 @@ def render_svg(comparison: ComparisonSet, layout: TableLayout) -> bytes:
     Labels are XML text, never markup; repeated display labels remain separate
     rows. There are no timestamps, fonts to download, or random identifiers.
     """
+    return _render_ratio_svg(
+        comparison,
+        layout,
+        description="Baseline time / current time, point estimates. Greater than one means less current time. No significance test.",
+        caption="Baseline/current point ratio; dashed line = 1",
+    )
+
+
+def _render_ratio_svg(comparison: ComparisonSet, layout: TableLayout, *, description: str, caption: str, identity: str | None = None) -> bytes:
+    """Shared geometry for comparison and complete-run point-ratio views."""
     rows = _selected(comparison, layout)
     if any("\ufffe" in text or "\uffff" in text for text in (layout.current_label, layout.baseline_label, *(label for label, _ in rows))):
         raise ValueError("SVG labels must be valid XML text")
@@ -145,10 +156,11 @@ def render_svg(comparison: ComparisonSet, layout: TableLayout) -> bytes:
     maximum = max(1.0, *(row.speedup for _, row in rows))
     reference = label_width + 360 / maximum
     title = html.escape(title_text)
+    binding = f' data-run-id="{html.escape(identity)}"' if identity is not None else ""
     lines = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-labelledby="title description">',
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}" role="img" aria-labelledby="title description"{binding}>',
         f'<title id="title">{title}</title>',
-        '<desc id="description">Baseline time / current time, point estimates. Greater than one means less current time. No significance test.</desc>',
+        f'<desc id="description">{html.escape(description)}</desc>',
         '<g font-family="sans-serif" font-size="14" fill="#222222">',
         f'<text x="16" y="25">{title}</text>',
     ]
@@ -165,7 +177,7 @@ def render_svg(comparison: ComparisonSet, layout: TableLayout) -> bytes:
     lines.extend(
         [
             f'<path d="M {reference:.6f} 40 V {height - 65}" stroke="#555555" stroke-dasharray="4 4"/>',
-            f'<text x="16" y="{height - 20}">Baseline/current point ratio; dashed line = 1</text>',
+            f'<text x="16" y="{height - 20}">{html.escape(caption)}</text>',
             "</g>",
             "</svg>",
         ]
@@ -302,6 +314,23 @@ def verify_tagged_files(root: Path, tag: str, files: Mapping[str, bytes], *, rev
 
 
 @dataclass(frozen=True, slots=True)
+class RunSelectionCheck:
+    """Complete retained history and its content-derived latest run identity.
+
+    Revalidation catches newly added or partial run directories as well as
+    changed pointer/input bytes. The archive remains read-only in this plan.
+    """
+
+    archive: str
+    identity: str
+
+    def __post_init__(self) -> None:
+        _publication_name(self.archive)
+        if re.fullmatch(r"[0-9a-f]{64}", self.identity) is None:
+            raise ValueError("run selection requires a content-derived SHA-256 identity")
+
+
+@dataclass(frozen=True, slots=True)
 class PublicationPlan:
     """Validated candidate bytes from plan_publication; retain exclusive writer control.
 
@@ -315,6 +344,7 @@ class PublicationPlan:
     originals: tuple[tuple[str, bytes | None], ...]
     git_checks: tuple[GitCheck, ...]
     glob_checks: tuple[GlobCheck, ...] = ()
+    run_checks: tuple[RunSelectionCheck, ...] = ()
 
     @property
     def changed_paths(self) -> tuple[Path, ...]:
@@ -364,6 +394,7 @@ def plan_publication(
     references: Sequence[ReleaseRule] = (),
     git_checks: Sequence[GitCheck] = (),
     glob_checks: Sequence[GlobCheck] = (),
+    run_checks: Sequence[RunSelectionCheck] = (),
 ) -> PublicationPlan:
     """Validate all candidates without writes, directories, measurement, or network.
 
@@ -381,6 +412,8 @@ def plan_publication(
         if set(check.paths) - inputs.keys():
             raise ValueError("glob checks require every selected path in validated inputs")
     writes = [(document, None), *(figures or {}).items()]
+    for check in run_checks:
+        _validate_distinct_paths((root / check.archive, *(_path(root, name) for name, _ in writes)))
     # Check sequences before making a dictionary: never collapse duplicate paths.
     names = [name for name, _ in writes] + list(inputs)
     _validate_distinct_paths(tuple(_path(root, name) for name in names))
@@ -410,7 +443,7 @@ def plan_publication(
         if any(match.group("value") != rule.value for match in rule.matches(data.decode("utf-8"))):
             raise ValueError(f"{rule.path}: publication reference does not match {rule.value!r}")
     _validate_distinct_paths(tuple(_path(root, name) for name in originals))
-    plan = PublicationPlan(root, tuple(outputs.items()), tuple(originals.items()), tuple(git_checks), tuple(glob_checks))
+    plan = PublicationPlan(root, tuple(outputs.items()), tuple(originals.items()), tuple(git_checks), tuple(glob_checks), tuple(run_checks))
     _verify_plan(plan)
     return plan
 
@@ -425,6 +458,12 @@ def _verify_plan(plan: PublicationPlan) -> None:
         actual = path.read_bytes() if path.exists() else None
         if actual != expected:
             raise ValueError(f"publication input or output changed after planning: {name}")
+    for check in plan.run_checks:
+        from research_repo_tools.complete_runs import run_identity
+        from research_repo_tools.run_reports import load_latest_run
+
+        if run_identity(load_latest_run(plan.root, check.archive)) != check.identity:
+            raise ValueError("retained run selection changed after planning")
     available = {name: data for name, data in plan.originals if data is not None} | dict(plan.outputs)
     for check in plan.git_checks:
         missing = set(check.paths) - available.keys()

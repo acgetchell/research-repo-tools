@@ -23,6 +23,7 @@ TEMPLATES = (
     "benchmark.toml",
     "cliff.toml",
     "common-benchmark.toml",
+    "complete-publication.toml",
     "complete-report.toml",
     "criterion-inventory.toml",
     "criterion-saved.toml",

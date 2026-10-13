@@ -132,9 +132,25 @@ An old run uses its original workflow revision; merely rerunning it is not a
 substitute for a new event after deployment.
 
 `research-repo-tools` checks GitHub Actions dependencies on Saturdays at 03:00
-and uv dependencies at 05:00, in `America/Los_Angeles`. Both ecosystems are
-eligible. Cooldowns, absent releases, or an updater/runtime mismatch may mean no
-PR appears. These updater constraints are independent of approval eligibility.
+in `America/Los_Angeles`. Its uv entry is paused because the hosted updater
+supports Python through 3.14 and rejects this package's `>=3.15` runtime before
+fetching dependencies. There is no interpreter override in Dependabot's
+[configuration options](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference).
+Maintain Python dependencies with `just update-python-dependencies`, review the
+manifest and lock changes, and run `just ci`. The scheduled Python vulnerability
+audit remains enabled; automatic Python update PRs are unavailable during this
+pause. Restore the weekly uv entry (Saturday 05:00, `America/Los_Angeles`, seven-day
+cooldown, one grouped PR, `dependencies`/`python` labels and separate version/security
+groups) after the hosted updater accepts 3.15. The reusable approval contract
+continues to support uv for consumers using supported Python versions.
+
+The hosted `Configured Graph Update: uv` job is a separate dependency-graph
+operation. GitHub can run [Dependabot graph jobs](https://docs.github.com/en/code-security/concepts/supply-chain-security/dependency-graph-data#dependabot-graph-jobs)
+whenever the repository's dependency graph is enabled, independently of this
+version-update entry. Pausing uv version updates does not guarantee that these
+graph jobs stop. Their Python 3.15 rejection requires upstream runtime support;
+rerunning the same updater image cannot resolve it. Keep the dependency graph
+enabled and use the package's scheduled audit while graph refreshes are blocked.
 
 Verify an actual `github-actions[bot]` approval on the current head, native
 merge only after required checks pass, and continued blocking for ineligible

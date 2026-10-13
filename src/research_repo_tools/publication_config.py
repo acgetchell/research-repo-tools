@@ -1,4 +1,4 @@
-"""Strict TOML adapter for publishing shared comparison evidence."""
+"""Strict TOML adapter for publishing shared comparison or complete-run evidence."""
 
 import posixpath
 import tomllib
@@ -14,6 +14,7 @@ from research_repo_tools.publication import (
     GlobCheck,
     MarkerPair,
     PublicationPlan,
+    RunSelectionCheck,
     TableLayout,
     _inventory,
     _path,
@@ -40,8 +41,44 @@ def _array(value: object, context: str) -> list[object]:
     return cast(list[object], value)
 
 
+def _run_layout(raw: dict[str, object]):
+    from research_repo_tools.criterion import _statistic
+    from research_repo_tools.run_presentation import RunLayout, RunRow, SeriesSelection
+
+    series = []
+    for value in _array(raw["series"], "series"):
+        item = _table(value, "series selection", {"name", "label", "rows"})
+        series.append(
+            SeriesSelection(
+                _string(item["name"], "series name"),
+                _string(item["label"], "series label"),
+                tuple((key, _string(full_id, "benchmark")) for key, full_id in _object(item["rows"], "series rows").items()),
+            )
+        )
+    rows = []
+    for value in _array(raw["rows"], "rows"):
+        item = _table(value, "run row", {"key", "label"}, {"coordinate"})
+        # RunRow validates numbers without accepting booleans or coerced strings.
+        from research_repo_tools.run_presentation import _coordinate
+
+        rows.append(
+            RunRow(_string(item["key"], "row key"), _string(item["label"], "row label"), _coordinate(item["coordinate"]) if "coordinate" in item else None)
+        )
+    pairs = []
+    if "comparisons" in raw:
+        for value in _array(raw["comparisons"], "comparisons"):
+            item = _table(value, "comparison", {"numerator", "denominator"})
+            pairs.append((_string(item["numerator"], "numerator"), _string(item["denominator"], "denominator")))
+    missing = raw.get("missing", "error")
+    if missing not in ("error", "unavailable"):
+        raise ValueError("missing must be error or unavailable")
+    return RunLayout(
+        tuple(series), tuple(rows), _statistic(raw["statistic"]), _unit(raw["unit"]), "error" if missing == "error" else "unavailable", tuple(pairs)
+    )
+
+
 def load_publication(root: Path, configuration: str) -> PublicationPlan:
-    """Load a v1 publication TOML file, validate retained evidence, and plan outputs.
+    """Load a v1 comparison or v2 complete-run publication and plan all outputs.
 
     Paths are root-relative POSIX names. No measurement or network access occurs.
     Provenance pins require independent baseline/current commit and release values.
@@ -51,23 +88,54 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
     """
     root = root.resolve(strict=True)
     config_bytes = _path(root, configuration).read_bytes()
+    parsed = tomllib.loads(config_bytes.decode("utf-8"))
+    schema = parsed.get("schema")
+    if type(schema) is not int or schema not in (1, 2):
+        raise ValueError("publication schema must be integer 1 or 2")
+    required = {"schema", "document", "begin", "end", "unit", "rows", "provenance", "references"}
+    optional = {"svg", "links", "repository", "tag-policy", "prose-file", "current-sources", "current-harness"}
+    if schema == 1:
+        required |= {"payload", "manifest"}
+        optional |= {"baseline-label", "current-label"}
+    else:
+        required |= {"statistic", "series"}
+        optional |= {"payload", "manifest", "archive", "missing", "comparisons", "plot", "csv"}
     raw = _table(
-        tomllib.loads(config_bytes.decode("utf-8")),
+        parsed,
         "publication",
-        {"schema", "document", "payload", "manifest", "begin", "end", "unit", "rows", "provenance", "references"},
-        {"baseline-label", "current-label", "svg", "links", "repository", "tag-policy", "prose-file", "current-sources", "current-harness"},
+        required,
+        optional,
     )
-    if type(raw["schema"]) is not int or raw["schema"] != 1:
-        raise ValueError("publication schema must be integer 1")
-    names = {key: _string(raw[key], key) for key in ("document", "payload", "manifest")}
+    names = {"document": _string(raw["document"], "document")}
+    inputs = {configuration: config_bytes}
+    run_checks = []
+    if schema == 2 and "archive" in raw:
+        from research_repo_tools.run_reports import _latest_selection
+
+        if "payload" in raw or "manifest" in raw:
+            raise ValueError("select either an archive or both payload and manifest; never fall back from scratch")
+        retained, names["payload"], names["manifest"], history = _latest_selection(root, _string(raw["archive"], "archive"))
+        if configuration in history:
+            raise ValueError("publication configuration must not alias retained history")
+        inputs.update(history)
+        from research_repo_tools.complete_runs import run_identity
+
+        run_checks.append(RunSelectionCheck(_string(raw["archive"], "archive"), run_identity(retained)))
+    else:
+        if not {"payload", "manifest"} <= raw.keys():
+            raise ValueError("publication requires both payload and manifest, or a complete-run archive")
+        names.update({key: _string(raw[key], key) for key in ("payload", "manifest")})
+        _validate_distinct_paths(tuple(_path(root, name) for name in (configuration, *names.values())))
+        inputs.update({name: _path(root, name).read_bytes() for name in (names["payload"], names["manifest"])})
+        retained = parse_evidence(inputs[names["payload"]], inputs[names["manifest"]])
     # Do not lose aliases before the shared planner checks the complete inventory.
     _validate_distinct_paths(tuple(_path(root, name) for name in (configuration, *names.values())))
-    inputs = {name: _path(root, name).read_bytes() for name in (names["payload"], names["manifest"])}
-    inputs[configuration] = config_bytes
-    retained = parse_evidence(inputs[names["payload"]], inputs[names["manifest"]])
-    if retained.payload_schema != COMPARISON_SCHEMA:
-        raise ValueError(f"publication requires {COMPARISON_SCHEMA}; use a consumer adapter for {retained.payload_schema}")
-    comparison = parse_comparison(retained.payload)
+    if schema == 1 and retained.payload_schema != COMPARISON_SCHEMA:
+        raise ValueError(f"publication schema 1 requires {COMPARISON_SCHEMA}; use schema 2 for complete-run evidence ({retained.payload_schema})")
+    if schema == 2:
+        from research_repo_tools.complete_runs import validate_run_evidence
+
+        validate_run_evidence(retained)
     pins = _table(raw["provenance"], "provenance", {"baseline", "current"})
     sources = dict(retained.sources)
     tag_policy = raw.get("tag-policy", "existing")
@@ -102,16 +170,6 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
             raise ValueError("provenance verify-tag must be a boolean")
         if verify:
             checks.append(GitCheck(release, revision=expected.revision))
-    rows = []
-    for item in _array(raw["rows"], "rows"):
-        row = _table(item, "publication row", {"benchmark", "label"})
-        rows.append((_string(row["benchmark"], "benchmark"), _string(row["label"], "label")))
-    layout = TableLayout(
-        tuple(rows),
-        _string(raw.get("baseline-label", releases["baseline"]), "baseline-label"),
-        _string(raw.get("current-label", releases["current"]), "current-label"),
-        _unit(raw["unit"]),
-    )
     values = {"tag": releases["current"], "previous-tag": releases["baseline"], "version": releases["current"].removeprefix("v")}
     references = []
     selected_sources: set[str] = set()
@@ -161,8 +219,57 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
             if fingerprint_files(root, tuple(map(Path, inventory))) != expected or any(_path(root, name).read_bytes() != inputs[name] for name in inventory):
                 raise ValueError(f"{field} changed while planning publication")
     figures: dict[str, bytes] = {}
-    if "svg" in raw:
-        figures[_string(raw["svg"], "svg")] = render_svg(comparison, layout)
+    images: list[tuple[str, str]] = []
+    if schema == 1:
+        comparison = parse_comparison(retained.payload)
+        rows = []
+        for item in _array(raw["rows"], "rows"):
+            row = _table(item, "publication row", {"benchmark", "label"})
+            rows.append((_string(row["benchmark"], "benchmark"), _string(row["label"], "label")))
+        layout = TableLayout(
+            tuple(rows),
+            _string(raw.get("baseline-label", releases["baseline"]), "baseline-label"),
+            _string(raw.get("current-label", releases["current"]), "current-label"),
+            _unit(raw["unit"]),
+        )
+        content = render_table(comparison, layout)
+        if "svg" in raw:
+            path = _string(raw["svg"], "svg")
+            figures[path] = render_svg(comparison, layout)
+            images.append((path, "Baseline/current timing point ratios"))
+    else:
+        from research_repo_tools.run_presentation import CoordinatePlot, render_coordinate_svg, render_run_ratios, render_run_table, serialize_run_csv
+
+        run_layout = _run_layout(raw)
+        content = render_run_table(retained, run_layout)
+
+        def artifact(path: str, data: bytes) -> None:
+            if path in figures:
+                raise ValueError("duplicate publication artifact path")
+            figures[path] = data
+
+        if "svg" in raw:
+            path = _string(raw["svg"], "svg")
+            artifact(path, render_run_ratios(retained, run_layout))
+            images.append((path, "Selected timing point ratios"))
+        if "plot" in raw:
+            plot = _table(raw["plot"], "coordinate plot", {"path", "title", "x-label", "y-label"}, {"x-scale", "y-scale"})
+            x_scale, y_scale = plot.get("x-scale", "linear"), plot.get("y-scale", "linear")
+            if x_scale not in ("linear", "log") or y_scale not in ("linear", "log"):
+                raise ValueError("axis scale must be linear or log")
+            settings = CoordinatePlot(
+                _string(plot["title"], "title"),
+                _string(plot["x-label"], "x-label"),
+                _string(plot["y-label"], "y-label"),
+                "linear" if x_scale == "linear" else "log",
+                "linear" if y_scale == "linear" else "log",
+            )
+            path = _string(plot["path"], "plot path")
+            artifact(path, render_coordinate_svg(retained, run_layout, settings))
+            images.append((path, settings.title))
+        if "csv" in raw:
+            path = _string(raw["csv"], "csv")
+            artifact(path, serialize_run_csv(retained, run_layout))
     repository = _github_repo_url(_string(raw["repository"], "repository")) if "repository" in raw else None
     link_paths: list[str] = []
 
@@ -180,13 +287,16 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
         # Relative to the document, including documents in nested directories.
         return quote(posixpath.relpath(name, posixpath.dirname(document) or "."), safe="/.")
 
-    content = render_table(comparison, layout)
+    if schema == 2:
+        content += f"\n- [Complete run evidence]({link(names['payload'])})\n- [Evidence envelope]({link(names['manifest'])})\n"
+        if "csv" in raw:
+            content += f"- [Selected timings CSV]({link(_string(raw['csv'], 'csv'))})\n"
     if "prose-file" in raw:
         prose_path = _string(raw["prose-file"], "prose-file")
         inputs[prose_path] = _path(root, prose_path).read_bytes()
         content += "\n" + inputs[prose_path].decode("utf-8").rstrip() + "\n"
-    if figures:
-        content = f"![Baseline/current timing point ratios]({link(next(iter(figures)), image=True)})\n\n" + content
+    if images:
+        content = "".join(f"![{_markdown_text(label)}]({link(path, image=True)})\n\n" for path, label in images) + content
     if "links" in raw:
         content += "\n"
         for item in _array(raw["links"], "links"):
@@ -211,4 +321,5 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
         references=references,
         git_checks=checks,
         glob_checks=inventories,
+        run_checks=run_checks,
     )

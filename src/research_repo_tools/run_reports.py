@@ -117,11 +117,17 @@ def _history(root: Path, archive: str) -> tuple[dict[str, dict[str, str]], dict[
 
 def load_latest_run(root: Path, archive: str) -> Evidence:
     """Verify the complete index, run bytes and pointer without recapturing a host."""
+    evidence, _, _, _ = _latest_selection(root, archive)
+    return evidence
+
+
+def _latest_selection(root: Path, archive: str) -> tuple[Evidence, str, str, dict[str, bytes]]:
+    """Retain every history validation input for a stale-safe publication plan."""
     _, _, inputs, latest = _history(root.resolve(strict=True), archive)
     if latest is None:
         raise ValueError("no retained latest run")
     payload, manifest, _ = _targets(archive, latest["id"])
-    return parse_evidence(inputs[payload], inputs[manifest])
+    return parse_evidence(inputs[payload], inputs[manifest]), payload, manifest, inputs
 
 
 def load_run_report_plan(root: Path, configuration: str, *, payload: str | None = None, manifest: str | None = None) -> PublicationPlan:

@@ -1503,9 +1503,51 @@ retained reports keep their original presentation. See the
 [renderer-version contract](https://github.com/acgetchell/research-repo-tools/blob/main/docs/complete-run-api.md#retention-and-publication)
 before upgrading a publication or restoring an older package pin.
 
-Dimension plots remain consumer renderers over the retained run API. The shared
-tables support arbitrary named series; axis semantics, workload coordinates,
-scientific interpretation and release eligibility remain consumer decisions.
+### Complete-run document sections and coordinate plots
+
+These additions target v0.1.9. Configure `complete-publication.toml` under
+`tooling/` using the packaged scaffold, then edit its named series, exact
+benchmark IDs, rows, coordinates, statistic, unit, release references and
+independent provenance pins to match your evidence:
+
+```sh
+just templates complete-publication.toml --output tooling/complete-publication.toml
+just performance publish tooling/complete-publication.toml --preview
+just performance publish tooling/complete-publication.toml
+just performance publish tooling/complete-publication.toml --check
+```
+
+Schema 2 selects a validated complete-run `archive`, or explicit `payload` and
+`manifest` paths. Archive selection works after scratch cleanup; explicit missing
+or partial scratch inputs fail. The document section links the original full
+payload and envelope, preserving raw cases outside the selected presentation.
+The selected history remains immutable and is revalidated before publication.
+
+Each configured series names an existing retained view, supplies a display label,
+and maps row keys to semantic benchmark IDs within that view. Row order controls
+the table and CSV; series order controls columns and the plot legend. Every row
+needs a finite, unique numeric coordinate for a coordinate plot. Plot lines follow
+numeric coordinate order. Mean or median and the timing unit must match recorded
+evidence; no unit conversion occurs. Consumer configuration owns workload
+coordinates, labels, scientific eligibility and interpretation.
+
+The optional `plot` produces a deterministic accessible SVG with point timings
+and recorded marginal confidence intervals. Both axes support `linear` or `log`;
+log coordinates must be positive. Reused peers keep their original baseline phase,
+revision and release in tables, figures and CSV, with the complete-run identity.
+Optional `comparisons` select numerator/denominator series by name. Ratios are
+point estimates; time reduction is `100 × (numerator − denominator) / numerator`,
+so positive values mean less denominator time. `svg` requires exactly one such
+comparison; `csv` exports selected timings with provenance and confidence bounds.
+
+Missing selections fail by default. Explicit `missing = "unavailable"` permits
+unmapped cells, labels them in tables and CSV, and breaks plot lines at those
+rows. Invalid or unmeasured mapped IDs always fail. Coverage states selected,
+unavailable and omitted phase cases. Document bytes outside markers survive, and
+the document, SVGs and CSV move in one transaction with the existing freshness,
+release-reference, tagged-link and rollback checks. See the
+[publication configuration](docs/publication-api.md#publication-configuration-v2)
+and [presentation API](docs/complete-run-api.md#configured-presentation).
 
 ### Criterion inventory and saved baselines
 

@@ -1,0 +1,56 @@
+# Edit named views, semantic IDs, coordinates and independent provenance pins.
+# Scientific eligibility stays consumer-owned.
+schema = 2
+document = "README.md"
+archive = "docs/performance-runs"
+# Alternatively replace archive with BOTH payload and manifest paths.
+# Explicit scratch inputs never fall back to older retained history.
+begin = "<!-- BENCHMARKS:BEGIN -->"
+end = "<!-- BENCHMARKS:END -->"
+statistic = "median"
+unit = "ns"
+missing = "error"
+csv = "docs/assets/timings.csv"
+# Optional point-ratio SVG requires exactly one comparisons entry.
+svg = "docs/assets/ratios.svg"
+rows = [
+    {key = "two", label = "Dimension 2", coordinate = 2},
+    {key = "eight", label = "Dimension 8", coordinate = 8},
+]
+series = [
+    {name = "Library baseline", label = "Library baseline", rows = {two = "library / 2", eight = "library / 8"}},
+    {name = "Library current", label = "Library current", rows = {two = "library / 2", eight = "library / 8"}},
+    {name = "Reference reused", label = "Reference", rows = {two = "reference / 2", eight = "reference / 8"}},
+]
+comparisons = [{numerator = "Library baseline", denominator = "Library current"}]
+
+[plot]
+path = "docs/assets/dimensions.svg"
+title = "Timing versus dimension"
+x-label = "Dimension"
+y-label = "Timing"
+x-scale = "linear"
+y-scale = "log"
+
+[provenance.baseline]
+revision = "0000000000000000000000000000000000000000"
+release = "v1.1.0"
+
+[provenance.current]
+revision = "0000000000000000000000000000000000000000"
+release = "v1.2.0"
+
+[[references]]
+path = "Cargo.toml"
+pattern = '^version\s*=\s*"(?P<value>[^"]+)"\r?$'
+source = "version"
+
+[[references]]
+path = "docs/releases.md"
+pattern = '^Baseline: (?P<value>[^\r\n]+)'
+source = "previous-tag"
+
+[[references]]
+path = "docs/releases.md"
+pattern = '^Current: (?P<value>[^\r\n]+)'
+source = "tag"
