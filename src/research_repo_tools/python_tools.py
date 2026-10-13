@@ -3,6 +3,7 @@
 import tomllib
 from importlib.metadata import metadata, version
 from pathlib import Path
+from typing import Any, cast
 
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
@@ -33,7 +34,7 @@ def versions() -> dict[str, str]:
     return dict(sorted(result.items()))
 
 
-def _groups(document: dict) -> dict[str, list[str]]:
+def _groups(document: dict[str, Any]) -> dict[str, list[str]]:
     from research_repo_tools.dependencies import _group_requirements
 
     groups = _table(document.get("dependency-groups", {}), "dependency-groups")
@@ -42,7 +43,7 @@ def _groups(document: dict) -> dict[str, list[str]]:
         if not isinstance(entries, list):
             raise ValueError(f"dependency-groups.{group} must be an array")
         _group_requirements(groups, group)
-        direct[group] = [raw for raw in entries if isinstance(raw, str)]
+        direct[group] = [cast(str, raw) for raw in entries if isinstance(raw, str)]
     dev = _group_requirements(groups, "dev")
     if not any(canonicalize_name(Requirement(raw).name) == PACKAGE for raw in dev):
         raise ValueError("shared Python tools require dev to include the exact shared-package dependency")
@@ -55,7 +56,7 @@ def _requirements(value: object, context: str) -> tuple[Requirement, ...]:
     return tuple(Requirement(raw) for raw in value)
 
 
-def _external_constraints(document: dict) -> None:
+def _external_constraints(document: dict[str, Any]) -> None:
     """Public dependencies and uv overrides cannot silently lose their authority."""
     project = _table(document.get("project", {}), "project")
     uv = _table(_table(document.get("tool", {}), "tool").get("uv", {}), "tool.uv")
@@ -105,7 +106,7 @@ def adopt_manifest(text: str) -> str:
     return text
 
 
-def check_declarations(document: dict) -> None:
+def check_declarations(document: dict[str, Any]) -> None:
     """Check installed release, opt-in extra, and lack of competing version pins."""
     versions()
     _external_constraints(document)
@@ -121,7 +122,7 @@ def check_declarations(document: dict) -> None:
                 raise ValueError(f"{group}: {raw} competes with the installed python-tools extra; use an unversioned requirement")
 
 
-def _locked_versions(document: dict) -> dict[str, set[str | None]]:
+def _locked_versions(document: dict[str, Any]) -> dict[str, set[str | None]]:
     entries = document.get("package", [])
     if not isinstance(entries, list):
         raise ValueError("uv.lock package must be an array of tables")

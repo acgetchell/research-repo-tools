@@ -4,6 +4,7 @@ import json
 import subprocess
 from dataclasses import replace
 from pathlib import Path
+from typing import Any
 
 import pytest
 import yaml
@@ -41,7 +42,7 @@ def test_span_scan_keeps_original_filename_and_uses_fixture_path_semantics(tmp_p
     cfg, fixture = consumer(tmp_path)
     calls = []
 
-    def scan(command: str, arguments: list[str], **kwargs) -> subprocess.CompletedProcess:
+    def scan(command: str, arguments: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
         calls.append(arguments)
         assert command == "semgrep"
         assert Path(arguments[-1]) == fixture.relative_to(tmp_path)
@@ -74,7 +75,7 @@ def test_count_contracts_preserve_production_path_filters_and_zero_findings(tmp_
     good.write_text("good()\n", newline="\n")
     cfg = replace(cfg, semgrep=replace(cfg.semgrep, cwd="tests/semgrep", counts={fixture: {"shared.rule": 1}, good: {"shared.rule": 0}}))
 
-    def scan(command: str, arguments: list[str], **kwargs) -> subprocess.CompletedProcess:
+    def scan(command: str, arguments: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
         assert kwargs["cwd"] == tmp_path / "tests/semgrep"
         generated = yaml.safe_load(Path(arguments[arguments.index("--config") + 1]).read_text())
         assert generated["rules"][0]["paths"] == {"exclude": ["tests/**"]}
@@ -107,7 +108,7 @@ def test_namespace_filter_does_not_require_foreign_findings(tmp_path: Path, monk
         {"results": [{"check_id": "shared.rule", "start": {"line": True}, "end": {"line": 2}}]},
     ],
 )
-def test_partial_or_malformed_scan_cannot_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, result: dict) -> None:
+def test_partial_or_malformed_scan_cannot_pass(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, result: dict[str, Any]) -> None:
     cfg, _fixture = consumer(tmp_path)
     monkeypatch.setattr(semgrep, "run_safe_command", lambda command, arguments, **kwargs: subprocess.CompletedProcess(arguments, 0, json.dumps(result), ""))
     with pytest.raises(ValueError, match="malformed"):

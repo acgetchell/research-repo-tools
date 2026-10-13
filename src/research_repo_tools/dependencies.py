@@ -53,7 +53,7 @@ def _required_table(data: dict[str, object], name: str) -> dict[str, object]:
 
 def _python_constraints(project: dict[str, object]) -> SpecifierSet:
     """Parse the same Python version specifiers accepted by toolchain setup."""
-    requires_python = project.get("requires-python", ">=3.14")
+    requires_python = project.get("requires-python", ">=3.15")
     if not isinstance(requires_python, str):
         msg = "project.requires-python must be a string"
         raise TypeError(msg)

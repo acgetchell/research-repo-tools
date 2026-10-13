@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from typing import Any
 
 from research_repo_tools import config, files, toolchain, toolchain_config
 from research_repo_tools.evidence import _load_json
@@ -39,7 +40,7 @@ def _binary(settings: config.Config, name: str) -> tuple[Path, dict[str, str]]:
     return runtime.binary_path(selected), runtime.environment()
 
 
-def _sarif(value: object) -> list[dict]:
+def _sarif(value: object) -> list[dict[str, Any]]:
     if not isinstance(value, dict) or value.get("version") != "2.1.0" or not isinstance(runs := value.get("runs"), list) or not runs:
         raise ValueError("invalid SARIF report")
     results = []

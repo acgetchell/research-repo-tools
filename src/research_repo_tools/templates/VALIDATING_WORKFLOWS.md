@@ -1,9 +1,10 @@
 # Validating workflows and Python
 
 This guide ships with the package alongside `justfile`, `python-validation.toml`,
-and `zizmor.yml`. The complete contract described here targets v0.1.8. Adopt
-an exact published registry version containing these capabilities. A local
-wheel can verify a candidate; it does not establish registry availability.
+and `zizmor.yml`. The Python 3.15, strict and fail-fast validation contract
+described here targets v0.1.9; v0.1.8 retains its previous Python gate. Adopt
+an exact published registry version containing these capabilities. A local wheel
+can verify a candidate; it does not establish registry availability.
 
 ## Audit contract
 
@@ -81,7 +82,8 @@ tests, and negative fixtures. Deleted and ignored untracked files are omitted.
 Supplied files override native directory exclusions and ignore files; precise
 per-file/rule exceptions remain active. No reduced rule selectors are injected.
 
-`check` runs native Ruff lint, format checks, and ty; `typecheck` runs ty alone.
+`check` runs native Ruff format checks, lint, and strict ty (`--error all`);
+`typecheck` runs strict ty alone.
 Ruff checks disable both `fix` and `fix-only`, and disable cache writes. `fix`
 explicitly applies configured Ruff fixes and formatting, reporting leftover
 violations. Notebook cells remain on the native notebook interface.
@@ -92,7 +94,7 @@ require no validators, but minimum, opted-in declaration and lock checks still
 apply. A nonempty inventory requires every selected validator on PATH before
 execution starts.
 Arguments are bounded and portable; each batch defaults to a 300-second timeout
-(configurable with `--timeout`). All batches run on ordinary validator failures,
+(configurable with `--timeout`). The first failing batch stops validation,
 and the first native nonzero status is returned (signals map to 128 + signal).
 Operational launch/timeout errors fail immediately with diagnostics. Native
 stdout and stderr pass through unchanged. No command installs or upgrades tools.
@@ -120,14 +122,14 @@ examples intentionally retain fixture validation. Extend them with
 checks. Invoke the same complete gate locally and in CI. Merely publishing this
 package does not wire a consumer's gates or annotate its scientific code.
 
-Python 3.14 defers ordinary annotations. For annotation-only imports, use
+Python 3.15 defers ordinary annotations. For annotation-only imports, use
 `TYPE_CHECKING` and unquoted annotations; do not add future-annotations imports
 just to satisfy lint. Runtime consumers such as `typing.get_type_hints`, model
 frameworks, decorators, or runtime type aliases can still need real imports.
 Keep those imports available and configure Ruff's runtime-evaluated decorators
 or base classes, or a precise documented suppression. Do not move imports that
 runtime code needs. See [Ruff's type-checking settings](https://docs.astral.sh/ruff/settings/#lint_flake8-type-checking)
-and [Python's annotation model](https://docs.python.org/3.14/reference/compound_stmts.html#annotations).
+and [Python's annotation model](https://docs.python.org/3.15/reference/compound_stmts.html#annotations).
 
 ## Consumer review and adoption
 

@@ -66,7 +66,7 @@ class PublishingSettings:
         _repository(self.repository)
         object.__setattr__(self, "required_checks", tuple(self.required_checks))
         object.__setattr__(self, "required_assets", tuple(self.required_assets))
-        if not self.required_checks or any(not isinstance(check, RequiredCheck) for check in self.required_checks):
+        if not self.required_checks or any(not isinstance(check, RequiredCheck) for check in self.required_checks):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
             raise ValueError("publishing requires explicit required-checks")
         if len(set(self.required_checks)) != len(self.required_checks):
             raise ValueError("duplicate required checks")
@@ -171,7 +171,7 @@ def require_checks(pages: object, commit: str, checks: tuple[RequiredCheck, ...]
     Pending, missing, duplicated, wrong-SHA, or unsuccessful evidence rejects.
     """
     _sha(commit)
-    if not checks or any(not isinstance(check, RequiredCheck) for check in checks):
+    if not checks or any(not isinstance(check, RequiredCheck) for check in checks):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
         raise ValueError("required checks must be explicit RequiredCheck values")
     if not isinstance(pages, list) or not pages:
         raise ValueError("missing paginated check evidence")

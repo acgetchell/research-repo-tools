@@ -45,6 +45,18 @@ def test_real_checkers_keep_cross_cell_references_and_files_unchanged(consumer, 
     assert {p: p.read_bytes() for p in consumer.root.rglob("*") if p.is_file()} == originals
 
 
+def test_native_315_target_notice_is_informational_without_preview_rules(consumer, capsys):
+    manifest = consumer.root / "pyproject.toml"
+    manifest.write_bytes(manifest.read_bytes().replace(b">=3.14", b">=3.15"))
+    path = write(consumer, [("define", "value = 1\n")])
+    original = path.read_bytes()
+    assert run(consumer, path) == 0
+    output = capsys.readouterr()
+    assert "OK linted" in output.out
+    assert "INFO " in output.err and notebook_lint.RUFF_TARGET_NOTICE in output.err
+    assert path.read_bytes() == original
+
+
 @pytest.mark.parametrize(
     "source,expected",
     [

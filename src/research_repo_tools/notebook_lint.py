@@ -19,6 +19,7 @@ __all__ = ["lint"]
 
 MINIMUM_VERSIONS = {"ruff": "0.16.8", "ty": "0.0.82"}
 RUFF_COMMON = ["--no-cache", "--no-force-exclude", "--no-respect-gitignore", "--output-format", "json"]
+RUFF_TARGET_NOTICE = "warning: Support for Python 3.15 is under development and may be unstable. Enable `preview` to remove this warning."
 TY_LOCATION = re.compile(r"^.+:cell (?P<cell>\d+):(?P<line>\d+):(?P<column>\d+): (?P<message>.+)$")
 
 
@@ -29,6 +30,7 @@ class Diagnostic:
     line: int | None = None
     column: int | None = None
     operational: bool = False
+    informational: bool = False
 
     def render(self, notebook: Notebook) -> str:
         location = str(notebook.path)
@@ -116,9 +118,15 @@ def _run(notebook: Notebook, settings: Config, module: str, args: list[str], lab
         diagnostics = ruff_diagnostics(result.stdout, notebook, label) if module == "ruff" else ty_diagnostics(result.stdout, notebook)
     except ValueError as error:
         return [Diagnostic(f"{label} returned invalid diagnostics: {error}", operational=True)]
-    if result.stderr.strip():
-        diagnostics.append(Diagnostic(f"{label}: {result.stderr.strip()}", operational=True))
-    if result.returncode and not diagnostics:
+    stderr = result.stderr.strip()
+    if module == "ruff" and RUFF_TARGET_NOTICE in stderr.splitlines():
+        # This known target-support notice is not a malformed config or a
+        # source finding. Keep it visible without enabling preview policies.
+        diagnostics.append(Diagnostic(f"{label}: {RUFF_TARGET_NOTICE}", informational=True))
+        stderr = "\n".join(line for line in stderr.splitlines() if line != RUFF_TARGET_NOTICE).strip()
+    if stderr:
+        diagnostics.append(Diagnostic(f"{label}: {stderr}", operational=True))
+    if result.returncode and not any(not item.informational for item in diagnostics):
         diagnostics.append(Diagnostic(f"{label} failed with exit code {result.returncode} without diagnostics", operational=True))
     return diagnostics
 
@@ -177,8 +185,8 @@ def lint(settings: Config, paths: list[Path], *, timeout: int = 30, id_pattern: 
         for module, args, label in checks:
             diagnostics.extend(_run(notebook, settings, module, args, label, timeout))
         for diagnostic in diagnostics:
-            print(diagnostic.render(notebook), file=sys.stderr)
-        if diagnostics:
+            print(("INFO " if diagnostic.informational else "") + diagnostic.render(notebook), file=sys.stderr)
+        if any(not item.informational for item in diagnostics):
             failed = True
         else:
             print(f"OK linted {notebook.path}")

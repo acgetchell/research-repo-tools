@@ -7,7 +7,7 @@ name = "research-repo-tools"
 version = "0.1.8"
 description = "Shared maintenance and validation for research software repositories"
 readme = "README.md"
-requires-python = ">=3.14"
+requires-python = ">=3.15"
 license = "BSD-3-Clause"
 license-files = ["LICENSE"]
 authors = [{name = "Adam Getchell", email = "adam@adamgetchell.org"}]
@@ -84,7 +84,7 @@ include_namespace_packages = true
 show_missing = true
 
 [tool.ruff]
-target-version = "py314"
+target-version = "py315"
 line-length = 160
 
 [tool.ruff.lint]

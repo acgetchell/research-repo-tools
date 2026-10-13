@@ -7,7 +7,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, cast, override
 from unittest.mock import patch
 
 from research_repo_tools import config, selection
@@ -16,6 +16,7 @@ from research_repo_tools.text_lines import check_lines, inspect_lines
 
 
 class TestRawLines(unittest.TestCase):
+    @override
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="raw text café ")
         self.addCleanup(self.temporary.cleanup)

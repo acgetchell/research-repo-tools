@@ -1,0 +1,353 @@
+{
+  "host": "macOS-27.0.1-arm64-arm-64bit-Mach-O",
+  "files": 468,
+  "trials": 9,
+  "inventory_sha256": "1f395f597a1bb81d40bc74e250cfce4d4a57359b8d09546e1dcdf7f55d9d698a",
+  "records": [
+    {
+      "source": "/Users/adam/projects/research-repo-tools/src",
+      "source_sha256": "178b449d0c0c74ec265fc5d04f9bab9949a6f4cc40fd959a1a316ba00227b31c",
+      "mode": "selection",
+      "jit_variant": "off",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 15:11:47) [Clang 22.1.3 ]",
+        "executable": "/private/tmp/rrt105-jit/bin/python",
+        "jit_available": true,
+        "jit_enabled": false,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.060746874994947575,
+        0.062717333996261,
+        0.06796745800238568,
+        0.06074316599551821,
+        0.06836716599354986,
+        0.061225375000503846,
+        0.0658138329963549,
+        0.06776541699946392,
+        0.06394408299820498
+      ],
+      "median_seconds": 0.06394408299820498,
+      "diagnostics": {
+        "seconds": 0.06394408299820498,
+        "resolve_calls": 969,
+        "validator_invocations": 0
+      }
+    },
+    {
+      "source": "/Users/adam/projects/research-repo-tools/src",
+      "source_sha256": "178b449d0c0c74ec265fc5d04f9bab9949a6f4cc40fd959a1a316ba00227b31c",
+      "mode": "selection",
+      "jit_variant": "on",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 15:11:47) [Clang 22.1.3 ]",
+        "executable": "/private/tmp/rrt105-jit/bin/python",
+        "jit_available": true,
+        "jit_enabled": true,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.06934420900506666,
+        0.06630187500559259,
+        0.0663342499974533,
+        0.06665654099924723,
+        0.05978879200119991,
+        0.06006370799877914,
+        0.05972908299736446,
+        0.0603770829984569,
+        0.06085883299965644
+      ],
+      "median_seconds": 0.06085883299965644,
+      "diagnostics": {
+        "seconds": 0.06085883299965644,
+        "resolve_calls": 969,
+        "validator_invocations": 0
+      }
+    },
+    {
+      "source": "/Users/adam/projects/research-repo-tools/src",
+      "source_sha256": "178b449d0c0c74ec265fc5d04f9bab9949a6f4cc40fd959a1a316ba00227b31c",
+      "mode": "selection-warm",
+      "jit_variant": "off",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 15:11:47) [Clang 22.1.3 ]",
+        "executable": "/private/tmp/rrt105-jit/bin/python",
+        "jit_available": true,
+        "jit_enabled": false,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.06346919999996317,
+        0.06317420835002849,
+        0.06539404374998412,
+        0.06772605205005675,
+        0.05896835415005626,
+        0.05844862710000598,
+        0.058461204199920756,
+        0.05858096670017403,
+        0.05841743544988276
+      ],
+      "median_seconds": 0.05896835415005626,
+      "diagnostics": {
+        "seconds": 0.05841743544988276,
+        "resolve_calls": 969,
+        "validator_invocations": 0
+      }
+    },
+    {
+      "source": "/Users/adam/projects/research-repo-tools/src",
+      "source_sha256": "178b449d0c0c74ec265fc5d04f9bab9949a6f4cc40fd959a1a316ba00227b31c",
+      "mode": "selection-warm",
+      "jit_variant": "on",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 15:11:47) [Clang 22.1.3 ]",
+        "executable": "/private/tmp/rrt105-jit/bin/python",
+        "jit_available": true,
+        "jit_enabled": true,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.06274021460012591,
+        0.059715033349857546,
+        0.06189153749983234,
+        0.05648205210018205,
+        0.05548955209997075,
+        0.055676527099785746,
+        0.055545737500142425,
+        0.05548932289966615,
+        0.05579446874980931
+      ],
+      "median_seconds": 0.05579446874980931,
+      "diagnostics": {
+        "seconds": 0.05579446874980931,
+        "resolve_calls": 969,
+        "validator_invocations": 0
+      }
+    },
+    {
+      "source": "/Users/adam/projects/research-repo-tools/src",
+      "source_sha256": "178b449d0c0c74ec265fc5d04f9bab9949a6f4cc40fd959a1a316ba00227b31c",
+      "mode": "validation",
+      "jit_variant": "off",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 15:11:47) [Clang 22.1.3 ]",
+        "executable": "/private/tmp/rrt105-jit/bin/python",
+        "jit_available": true,
+        "jit_enabled": false,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.15467366699886043,
+        0.16347724999650382,
+        0.16747316700639203,
+        0.16066533399862237,
+        0.15910004200122785,
+        0.15750779199879616,
+        0.1555244999981369,
+        0.15898437499708962,
+        0.16538779199618148
+      ],
+      "median_seconds": 0.15910004200122785,
+      "diagnostics": {
+        "seconds": 0.16538779199618148,
+        "resolve_calls": 0,
+        "validator_invocations": 3
+      }
+    },
+    {
+      "source": "/Users/adam/projects/research-repo-tools/src",
+      "source_sha256": "178b449d0c0c74ec265fc5d04f9bab9949a6f4cc40fd959a1a316ba00227b31c",
+      "mode": "validation",
+      "jit_variant": "on",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 15:11:47) [Clang 22.1.3 ]",
+        "executable": "/private/tmp/rrt105-jit/bin/python",
+        "jit_available": true,
+        "jit_enabled": true,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.16635237500304356,
+        0.16306941600487335,
+        0.1618335000021034,
+        0.16204162500071106,
+        0.15908716700505465,
+        0.15798450000147568,
+        0.16510583300259896,
+        0.16402537499379832,
+        0.1654820830008248
+      ],
+      "median_seconds": 0.16306941600487335,
+      "diagnostics": {
+        "seconds": 0.1654820830008248,
+        "resolve_calls": 0,
+        "validator_invocations": 3
+      }
+    },
+    {
+      "source": "/Users/adam/projects/research-repo-tools/src",
+      "source_sha256": "178b449d0c0c74ec265fc5d04f9bab9949a6f4cc40fd959a1a316ba00227b31c",
+      "mode": "help",
+      "jit_variant": "off",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 15:11:47) [Clang 22.1.3 ]",
+        "executable": "/private/tmp/rrt105-jit/bin/python",
+        "jit_available": true,
+        "jit_enabled": false,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.20868391700059874,
+        0.2113397499997518,
+        0.20792958400124917,
+        0.21226200000091922,
+        0.2126611249987036,
+        0.20583954199537402,
+        0.20732337499794085,
+        0.2105031249957392,
+        0.20446074999927077
+      ],
+      "median_seconds": 0.20868391700059874,
+      "diagnostics": null
+    },
+    {
+      "source": "/Users/adam/projects/research-repo-tools/src",
+      "source_sha256": "178b449d0c0c74ec265fc5d04f9bab9949a6f4cc40fd959a1a316ba00227b31c",
+      "mode": "help",
+      "jit_variant": "on",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 15:11:47) [Clang 22.1.3 ]",
+        "executable": "/private/tmp/rrt105-jit/bin/python",
+        "jit_available": true,
+        "jit_enabled": true,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.2115546249988256,
+        0.21056891699845437,
+        0.2137273330008611,
+        0.21014583299984224,
+        0.20689454199600732,
+        0.21167699999932665,
+        0.20806541599449702,
+        0.20583429199905368,
+        0.2127500839997083
+      ],
+      "median_seconds": 0.21056891699845437,
+      "diagnostics": null
+    },
+    {
+      "source": "/Users/adam/projects/research-repo-tools/src",
+      "source_sha256": "178b449d0c0c74ec265fc5d04f9bab9949a6f4cc40fd959a1a316ba00227b31c",
+      "mode": "version",
+      "jit_variant": "off",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 15:11:47) [Clang 22.1.3 ]",
+        "executable": "/private/tmp/rrt105-jit/bin/python",
+        "jit_available": true,
+        "jit_enabled": false,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.21679199999925913,
+        0.2102794999955222,
+        0.21151737499894807,
+        0.20996487500087824,
+        0.20440862500254298,
+        0.21067800000309944,
+        0.21000937499775318,
+        0.20482429199910257,
+        0.2099697500016191
+      ],
+      "median_seconds": 0.21000937499775318,
+      "diagnostics": null
+    },
+    {
+      "source": "/Users/adam/projects/research-repo-tools/src",
+      "source_sha256": "178b449d0c0c74ec265fc5d04f9bab9949a6f4cc40fd959a1a316ba00227b31c",
+      "mode": "version",
+      "jit_variant": "on",
+      "interpreter": {
+        "python": "3.15.0 (main, Oct  9 2026, 15:11:47) [Clang 22.1.3 ]",
+        "executable": "/private/tmp/rrt105-jit/bin/python",
+        "jit_available": true,
+        "jit_enabled": true,
+        "libyaml": false,
+        "tools": {
+          "packaging": "26.3",
+          "PyYAML": "6.0.3",
+          "ruff": "0.16.9",
+          "ty": "0.0.84"
+        }
+      },
+      "samples_seconds": [
+        0.2053891250034212,
+        0.21673504199861782,
+        0.20997774999705143,
+        0.2073133749945555,
+        0.21149937500013039,
+        0.20782554199831793,
+        0.20660683400637936,
+        0.2109634169974015,
+        0.2061400410020724
+      ],
+      "median_seconds": 0.20782554199831793,
+      "diagnostics": null
+    }
+  ],
+  "notes": "One warmup discarded; alternating paired order; setup/imports excluded from selection and validation timings. selection-warm uses five untimed selections then averages twenty calls within each fresh worker. Help/version include process startup. Diagnostic resolve counts collected outside timing. Git NUL inventory modeled to avoid fixture mutations; all files and native validators real. No JIT comparison implied."
+}

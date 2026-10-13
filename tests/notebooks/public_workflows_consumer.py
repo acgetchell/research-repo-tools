@@ -7,6 +7,7 @@ import os
 import tempfile
 import unittest
 from pathlib import Path
+from typing import override
 from unittest.mock import patch
 
 from research_repo_tools.cli import main
@@ -16,6 +17,7 @@ from research_repo_tools.process import run_command, run_git_bytes
 
 
 class Consumer(unittest.TestCase):
+    @override
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="workflow consumer 分析 ")
         self.addCleanup(self.temporary.cleanup)
@@ -72,14 +74,14 @@ class TestLaunch(Consumer):
     def test_locked_launch_uses_selected_group_browser_private_caches_and_project_interpreter(self):
         uv = run_command("uv", ["--version"]).stdout.split()[1]
         (self.root / "pyproject.toml").write_text(
-            '[project]\nname="launch-fixture"\nversion="0.0.0"\nrequires-python=">=3.14"\n'
+            '[project]\nname="launch-fixture"\nversion="0.0.0"\nrequires-python=">=3.15"\n'
             "[dependency-groups]\ndev=[]\nanalysis=[]\n[tool.uv]\npackage=false\n"
             f'required-version="=={uv}"\n[tool.research-repo-tools.notebooks]\ngroup="analysis"\n'
             '[tool.research-repo-tools.notebooks.lab]\nbrowser=true\nscratch-dir="scratch with spaces"\n',
             encoding="utf-8",
             newline="\n",
         )
-        (self.root / ".python-version").write_bytes(b"3.14\n")
+        (self.root / ".python-version").write_bytes(b"3.15\n")
         # A stand-in server records the real uv/Python argv and native environment.
         # It requires no browser, socket, JupyterLab installation, or user settings.
         (self.root / "jupyterlab.py").write_text(
@@ -120,6 +122,7 @@ class TestLaunch(Consumer):
 
 
 class TestReset(Consumer):
+    @override
     def setUp(self):
         if os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1":
             self.skipTest("Git mutations disabled by RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS=1")

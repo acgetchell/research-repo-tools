@@ -5,9 +5,9 @@ import sys
 from os.path import commonpath
 from pathlib import Path
 
-from research_repo_tools import archives, criterion, evidence
-from research_repo_tools.config import Config
-from research_repo_tools.files import _paths_alias, replace_many
+lazy from research_repo_tools import archives, criterion, evidence
+lazy from research_repo_tools.config import Config
+lazy from research_repo_tools.files import _paths_alias, replace_many
 
 
 def _write_stdout(output: bytes) -> None:

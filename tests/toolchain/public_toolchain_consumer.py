@@ -11,6 +11,7 @@ import unittest
 import urllib.error
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
+from typing import override
 from unittest.mock import patch
 
 from research_repo_tools import archives, cli, config, prebuilt_tools, process, python_adoption, python_baseline, toolchain, toolchain_clean
@@ -82,7 +83,7 @@ class TestToolchainConsumer(unittest.TestCase):
                 (path / "pyproject.toml").write_bytes(
                     (f'[tool.uv]\nrequired-version="==0.12.19"\n[tool.research-repo-tools.toolchain.cargo]\ngit-cliff="{version}"\n').encode()
                 )
-                (path / ".python-version").write_bytes(b"3.14\r\n")
+                (path / ".python-version").write_bytes(b"3.15\r\n")
                 (path / "rust-toolchain.toml").write_bytes(b'[toolchain]\nchannel="1.98.0"\n')
             with patch.dict(os.environ, {"RESEARCH_REPO_TOOLS_HOME": str(root / "managed")}):
                 settings = config.load(root=consumer)
@@ -98,7 +99,7 @@ class TestToolchainConsumer(unittest.TestCase):
         with tempfile.TemporaryDirectory(prefix="python cleanup spaces ") as directory:
             root = Path(directory).resolve()
             (root / "pyproject.toml").write_bytes(b'[tool.uv]\nrequired-version="==0.12.19"\n')
-            (root / ".python-version").write_bytes(b"3.14\r\n")
+            (root / ".python-version").write_bytes(b"3.15\r\n")
             with patch.dict(os.environ, {"RESEARCH_REPO_TOOLS_HOME": str(root / "managed"), "UV_TOOL_DIR": str(root / "tools")}):
                 settings = config.load(root=root)
                 runtime = toolchain.Runtime(load(settings))
@@ -149,7 +150,7 @@ class TestToolchainConsumer(unittest.TestCase):
                 b'[tool.research-repo-tools.toolchain.cargo]\ngit-cliff="2.14.1"\n'
                 b'[tool.research-repo-tools.toolchain.binaries]\ngitleaks="8.30.1"\n'
             )
-            (root / ".python-version").write_bytes(b"3.14\r\n")
+            (root / ".python-version").write_bytes(b"3.15\r\n")
             (root / "rust-toolchain.toml").write_bytes(b'[toolchain]\r\nchannel="1.98.0"\r\n')
             with patch.dict(os.environ, {"RESEARCH_REPO_TOOLS_HOME": str(root / "managed")}):
                 settings = config.load(root=root)
@@ -175,13 +176,14 @@ class TestToolchainConsumer(unittest.TestCase):
 class TestManagedReleaseConsumer(unittest.TestCase):
     """The supported CLI authenticates only metadata and repairs verified caches."""
 
+    @override
     def setUp(self):
         directory = self.enterContext(tempfile.TemporaryDirectory(prefix="managed release consumer "))
         self.root = Path(directory).resolve()
         (self.root / "pyproject.toml").write_bytes(
             b'[tool.uv]\nrequired-version="==0.12.19"\n[tool.research-repo-tools.toolchain.binaries]\nosv-scanner="2.6.0"\n'
         )
-        (self.root / ".python-version").write_bytes(b"3.14\n")
+        (self.root / ".python-version").write_bytes(b"3.15\n")
         self.originals = {path: path.read_bytes() for path in self.root.iterdir()}
         self.enterContext(
             patch.dict(os.environ, {"RESEARCH_REPO_TOOLS_HOME": str(self.root / "managed"), "GITHUB_TOKEN": "synthetic-github", "GH_TOKEN": "synthetic-gh"})

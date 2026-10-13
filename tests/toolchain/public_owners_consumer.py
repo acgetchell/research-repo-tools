@@ -38,7 +38,7 @@ class TestOwnersConsumer(unittest.TestCase):
             # JSON string quoting is also valid TOML for paths.
             receipt.write_bytes(
                 (
-                    '[tool]\npython="3.14"\nrequirements=[{name="uv"}]\nconstraints=[{name="uv",specifier=">=0.12"}]\n'
+                    '[tool]\npython="3.15"\nrequirements=[{name="uv"}]\nconstraints=[{name="uv",specifier=">=0.12"}]\n'
                     f'entrypoints=[{{name="uv",install-path={json.dumps(str(binary))},from="uv"}}]\n'
                 ).encode()
             )
@@ -121,7 +121,7 @@ class TestOwnersConsumer(unittest.TestCase):
     def test_managed_just_rejects_competing_authority(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
-            (root / ".python-version").write_bytes(b"3.14\n")
+            (root / ".python-version").write_bytes(b"3.15\n")
             manifest = root / "pyproject.toml"
             before = b'[tool.uv]\nrequired-version="==0.12.23"\n[tool.research-repo-tools.toolchain.binaries]\njust="1.58.0"\n'
             manifest.write_bytes(before)

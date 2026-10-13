@@ -8,9 +8,10 @@ from dataclasses import replace
 from io import TextIOWrapper
 from pathlib import Path
 
-from research_repo_tools import __version__, config
-from research_repo_tools.performance import _write_stdout
+from research_repo_tools import __version__
 from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics
+lazy import research_repo_tools.config as config
+lazy from research_repo_tools.performance import _write_stdout
 
 
 def parser() -> argparse.ArgumentParser:

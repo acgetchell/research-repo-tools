@@ -7,6 +7,7 @@ import subprocess
 import tempfile
 import unittest
 from pathlib import Path
+from typing import override
 from unittest.mock import patch
 from urllib.parse import quote, unquote
 
@@ -39,6 +40,7 @@ class TestScanConsumer(unittest.TestCase):
                 self.assertEqual(out.getvalue(), "")
                 self.assertIn("duplicate JSON field", err.getvalue())
 
+    @override
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="scan café ")
         self.addCleanup(self.temporary.cleanup)

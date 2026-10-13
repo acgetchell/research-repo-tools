@@ -12,6 +12,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from typing import cast
 from unittest.mock import patch
 
 from research_repo_tools.archives import ArchiveLimits, extract_archive
@@ -238,7 +239,7 @@ class TestPerformanceConsumer(unittest.TestCase):
         normalize = getattr(zipfile, "_sanitize_filename")
 
         def windows_name(name: str) -> str:
-            return normalize(name.replace("\\", "/"))
+            return cast(str, normalize(name.replace("\\", "/")))
 
         with tempfile.TemporaryDirectory() as temporary, patch.object(zipfile, "_sanitize_filename", windows_name):
             root = Path(temporary)

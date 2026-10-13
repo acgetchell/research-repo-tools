@@ -307,7 +307,7 @@ def _squash_heading_parts(line: str) -> tuple[str, str, str] | None:
     if match is None:
         return None
 
-    raw_prefix = match.group("prefix")
+    raw_prefix = cast(str, match.group("prefix"))
     kind = re.sub(r"\([^)]+\)", "", raw_prefix).rstrip("!").casefold()
     if kind not in _SQUASH_HEADING_KINDS:
         return None
@@ -1279,7 +1279,7 @@ def postprocess(path: Path, *, formatter: Path | None = None) -> None:
         tmp_path.chmod(stat.S_IMODE(path.stat().st_mode))
         tmp_path.replace(path)
     finally:
-        if tmp_path is not None and tmp_path.exists():
+        if tmp_path is not None and tmp_path.exists():  # ty: ignore[redundant-condition-strict]  Cleanup must remain safe on interrupted setup.
             tmp_path.unlink()
 
 

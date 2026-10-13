@@ -3,6 +3,7 @@
 import posixpath
 import tomllib
 from pathlib import Path
+from typing import cast
 from urllib.parse import quote
 
 from research_repo_tools.criterion import COMPARISON_SCHEMA, _markdown_text, _unit, parse_comparison
@@ -36,7 +37,7 @@ def _table(value: object, context: str, required: set[str], optional: set[str] |
 def _array(value: object, context: str) -> list[object]:
     if not isinstance(value, list) or not value:
         raise ValueError(f"{context} must be a nonempty array")
-    return value
+    return cast(list[object], value)
 
 
 def load_publication(root: Path, configuration: str) -> PublicationPlan:

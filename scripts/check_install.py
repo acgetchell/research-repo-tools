@@ -74,7 +74,7 @@ def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, ve
     # metadata for a same-version PyPI release or an uncached sdist build.
     shutil.copyfile(registry_wheel, wheels / registry_wheel.name)
 
-    def fixture(name: str, release: str, requires_python: str = ">=3.14") -> None:
+    def fixture(name: str, release: str, requires_python: str = ">=3.15") -> None:
         distribution = name.replace("-", "_")
         info = f"{distribution}-{release}.dist-info"
         with zipfile.ZipFile(wheels / f"{distribution}-{release}-py3-none-any.whl", "w") as archive:
@@ -87,15 +87,15 @@ def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, ve
     uv_version = run([uv, "--version"], cwd=consumer, env=env).split()[1]
     manifest = consumer / "pyproject.toml"
     manifest.write_text(
-        '[project]\nname="update-consumer"\nversion="0.1.0"\nrequires-python=">=3.14"\n'
+        '[project]\nname="update-consumer"\nversion="0.1.0"\nrequires-python=">=3.15"\n'
         f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\n'
-        'dev=[{include-group="tooling"}, "update-fixture>=1,<3", "pin-fixture==1.0.0", "marker-fixture==1.0.0; python_version >= \'3.14\'"]\n'
+        'dev=[{include-group="tooling"}, "update-fixture>=1,<3", "pin-fixture==1.0.0", "marker-fixture==1.0.0; python_version >= \'3.15\'"]\n'
         f'[tool.uv]\npackage=false\ndefault-groups=[]\nrequired-version="=={uv_version}"\nfind-links=["wheels"]\n'
         f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(artifact.resolve()))}}}\n",
         encoding="utf-8",
         newline="\n",
     )
-    (consumer / ".python-version").write_text("3.14\n", encoding="utf-8", newline="\n")
+    (consumer / ".python-version").write_text("3.15\n", encoding="utf-8", newline="\n")
     # Dependencies of this exact artifact are already cached by the other checks.
     offline = {**env, "UV_OFFLINE": "1"}
     run([uv, "sync", "--managed-python", "--group", "dev"], cwd=consumer, env=offline)
@@ -131,7 +131,7 @@ def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, ve
     snapshot = manifest.read_bytes(), (consumer / "uv.lock").read_bytes()
     # Universal resolution needs two versions across this project's Python range.
     # Refuse to replace its single exact pin with a host-dependent choice.
-    fixture("pin-fixture", "3.0.0", ">=3.15")
+    fixture("pin-fixture", "3.0.0", ">=3.16")
     result = subprocess.run([*cli, "deps", "update-python"], cwd=consumer, env=offline, capture_output=True, encoding="utf-8", timeout=TIMEOUT)
     assert result.returncode == 1, result.stdout + result.stderr
     assert "selected multiple versions for pin-fixture" in result.stderr, result.stderr
@@ -221,7 +221,7 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             consumer = temporary / name
             consumer.mkdir()
             environment = consumer / "environment"
-            run([uv, "venv", "--python", "3.14", str(environment)], cwd=consumer, env=env)
+            run([uv, "venv", "--python", "3.15", str(environment)], cwd=consumer, env=env)
             scripts = environment / ("Scripts" if os.name == "nt" else "bin")
             python = scripts / ("python.exe" if os.name == "nt" else "python")
             run([uv, "pip", "install", "--python", str(python), str(artifact)], cwd=consumer, env=env)
@@ -238,6 +238,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
                 print(f"PASS: installed {name} changelog CLI with real git-cliff")
                 continue
             run_isolated(python, ["-c", BASE_SMOKE, str(ROOT)], cwd=consumer, env=local_env)
+            import_suite = consumer / "public_import_consumer.py"
+            import_suite.write_bytes((ROOT / "tests/validation/public_import_consumer.py").read_bytes())
+            run_isolated(python, [str(import_suite)], cwd=consumer, env=local_env)
             notebook_suite = consumer / "public_notebook_consumer.py"
             notebook_suite.write_bytes((ROOT / "tests/notebooks/public_notebook_consumer.py").read_bytes())
             run_isolated(python, [str(notebook_suite), "TestInspection"], cwd=consumer, env=local_env)
@@ -321,7 +324,7 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             uv_version = run([uv, "--version"], cwd=consumer, env=local_env).split()[1]
             notebook_group = "notebook" if artifact == wheel else "analysis"
             (recipe_consumer / "pyproject.toml").write_text(
-                '[project]\nname="recipe-consumer"\nversion="0.1.0"\nrequires-python=">=3.14"\n'
+                '[project]\nname="recipe-consumer"\nversion="0.1.0"\nrequires-python=">=3.15"\n'
                 f'[dependency-groups]\ntooling=["research-repo-tools[python-tools]=={version}"]\ndev=[{{include-group="tooling"}}, {", ".join(map(json.dumps, validation_checkers))}]\n'
                 f'{notebook_group}=["research-repo-tools[notebooks]=={version}"]\n'
                 f'[tool.uv]\npackage=false\ndefault-groups=[]\nrequired-version="=={uv_version}"\n'
@@ -341,7 +344,7 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             assert run([str(just), "release-notes", "v0.1.0"], cwd=recipe_consumer, env=env).strip() == "- Recipe works."
             assert recipe_cli.is_file(), "recipe did not install its declared tooling group"
             assert (recipe_consumer / "uv.lock").read_bytes() == lock, "recipe changed the lockfile"
-            (recipe_consumer / ".python-version").write_text("3.14\n", encoding="utf-8", newline="\n")
+            (recipe_consumer / ".python-version").write_text("3.15\n", encoding="utf-8", newline="\n")
             # Install the extra from this same distribution, exercise locked sync
             # and a real project kernel without touching the user's kernels.
             run([str(just), "notebook-sync"], cwd=recipe_consumer, env=env)
@@ -433,9 +436,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             setup_consumer = consumer / "setup consumer"
             setup_consumer.mkdir()
             uv_version = run([uv, "--version"], cwd=consumer, env=local_env).split()[1]
-            (setup_consumer / ".python-version").write_text("3.14\n", encoding="utf-8", newline="\n")
+            (setup_consumer / ".python-version").write_text("3.15\n", encoding="utf-8", newline="\n")
             (setup_consumer / "pyproject.toml").write_text(
-                '[project]\nname="setup-consumer"\nversion="0.1.0"\nrequires-python=">=3.14"\n'
+                '[project]\nname="setup-consumer"\nversion="0.1.0"\nrequires-python=">=3.15"\n'
                 '[build-system]\nrequires=[]\nbuild-backend="intentionally_missing_native_backend"\n'
                 f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\ndev=[{{include-group="tooling"}}]\n'
                 f'[tool.uv]\nrequired-version="=={uv_version}"\ndefault-groups=[]\ncache-keys=[{{file="pyproject.toml"}}, {{file="Cargo.toml"}}]\n'

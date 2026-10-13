@@ -16,7 +16,7 @@ import zipfile
 import zlib
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
-from typing import IO
+from typing import IO, override
 
 from research_repo_tools.evidence import _digest, verify_sha256
 from research_repo_tools.files import replace_many
@@ -64,6 +64,7 @@ def _https(url: str) -> str:
 
 
 class _HTTPSRedirect(urllib.request.HTTPRedirectHandler):
+    @override
     def redirect_request(self, req, fp, code, msg, headers, newurl):
         return super().redirect_request(req, fp, code, msg, headers, _https(newurl))
 

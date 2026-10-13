@@ -4,6 +4,7 @@ import copy
 import json
 import subprocess
 from pathlib import Path
+from typing import Any
 from unittest.mock import Mock
 
 import pytest
@@ -13,7 +14,7 @@ from research_repo_tools.cargo_examples import discover_examples, run_examples
 
 
 @pytest.fixture
-def metadata(tmp_path: Path) -> dict:
+def metadata(tmp_path: Path) -> dict[str, Any]:
     return {
         "version": 1,
         "workspace_members": ["fixture-id"],

@@ -54,9 +54,9 @@ git-cliff = "2.14.1"
 
 Keep the consumer's other development dependencies in `dev` and its notebook
 dependencies in a separate group. `dev` must include `tooling` so full environment
-sync retains the shared package. Set `.python-version` to `3.14` (or a patch pin).
+sync retains the shared package. Set `.python-version` to `3.15` (or a patch pin).
 Its selection must satisfy `project.requires-python`.
-Minor selectors such as `3.14` resolve within that constraint, including patch
+Minor selectors such as `3.15` resolve within that constraint, including patch
 minimums, upper bounds, and exclusions. Checks verify the resolved patch version.
 
 Use the consumer's existing `rust-toolchain.toml`. Cargo includes its own version

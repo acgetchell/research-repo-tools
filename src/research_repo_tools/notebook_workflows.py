@@ -269,7 +269,7 @@ def reset(settings: Config, paths: Sequence[Path] = (), *, revision: str | None 
     """
     if type(apply) is not bool:
         raise ValueError("notebook reset apply must be a boolean")
-    if not isinstance(paths, Sequence) or isinstance(paths, (str, bytes)) or any(not isinstance(path, Path) for path in paths):
+    if not isinstance(paths, Sequence) or isinstance(paths, (str, bytes)) or any(not isinstance(path, Path) for path in paths):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
         raise TypeError("notebook reset paths must be a sequence of Path objects")
     env = _git_environment()
     plan = _plan(settings, paths, revision, env)

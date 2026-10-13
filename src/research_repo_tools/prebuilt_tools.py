@@ -6,6 +6,7 @@ import re
 import tempfile
 import urllib.request
 from pathlib import Path
+from typing import Any, cast
 
 from research_repo_tools import release_credentials
 from research_repo_tools.archives import ArchiveLimits, download_asset, extract_archive
@@ -40,7 +41,7 @@ def asset_name(tool: BinaryTool, host: str) -> str:
     return f"gitleaks_{tool.version}_{system}_{arch}.{extension}"
 
 
-def release_metadata(name: str, tag: str) -> dict:
+def release_metadata(name: str, tag: str) -> dict[str, Any]:
     if name not in REPOSITORIES or not re.fullmatch(r"latest|v[0-9]+\.[0-9]+\.[0-9]+", tag):
         raise ValueError("unsupported binary release")
     requested = tag.removeprefix("v") if name == "dprint" else tag
@@ -85,7 +86,7 @@ def version_at(path: Path, tool: BinaryTool, *, cwd: Path, env: dict[str, str]) 
     match = re.fullmatch(pattern, output)
     if not match:
         raise ValueError(f"unrecognized {tool.name} version output")
-    return match[1]
+    return cast(str, match[1])
 
 
 def install(tool: BinaryTool, host: str, destination: Path, *, cwd: Path, env: dict[str, str]) -> None:

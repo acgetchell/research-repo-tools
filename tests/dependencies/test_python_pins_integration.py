@@ -31,11 +31,11 @@ def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("UV_OFFLINE", "1")
     monkeypatch.setenv("UV_PYTHON", sys.executable)
     monkeypatch.setenv("UV_PYTHON_DOWNLOADS", "never")
-    wheel(directory, "1.0.0", ">=3.14")
+    wheel(directory, "1.0.0", ">=3.15")
     return directory
 
 
-def consumer(root: Path, requires_python: str = ">=3.14", retained: str = "") -> Path:
+def consumer(root: Path, requires_python: str = ">=3.15", retained: str = "") -> Path:
     root.mkdir()
     manifest = root / "pyproject.toml"
     manifest.write_text(
@@ -48,7 +48,7 @@ def consumer(root: Path, requires_python: str = ">=3.14", retained: str = "") ->
 
 @pytest.mark.parametrize("override", ["UV_PROJECT", "UV_WORKING_DIR", "UV_WORKING_DIRECTORY"])
 def test_cli_updates_only_selected_project(registry: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, override: str) -> None:
-    wheel(registry, "2.0.0", ">=3.14")
+    wheel(registry, "2.0.0", ">=3.15")
     selected = consumer(tmp_path / "selected")
     other = consumer(tmp_path / "other")
     other_lock = other.with_name("uv.lock")
@@ -66,13 +66,13 @@ def test_cli_updates_only_selected_project(registry: Path, tmp_path: Path, monke
 @pytest.mark.parametrize(
     "requires_python,retained",
     [
-        (">=3.14.1", ""),
-        (">=3.14,<3.15", ", \"fixture-tool<2; python_version >= '3.15'\""),
-        (">=3.14,!=3.14.1", ""),
+        (">=3.15.0", ""),
+        (">=3.15,<3.16", ", \"fixture-tool<2; python_version >= '3.16'\""),
+        (">=3.15,!=3.15.1", ""),
     ],
 )
 def test_cli_preserves_full_python_range(registry: Path, tmp_path: Path, requires_python: str, retained: str) -> None:
-    wheel(registry, "2.0.0", ">=3.14.1" if requires_python == ">=3.14.1" else ">=3.14")
+    wheel(registry, "2.0.0", ">=3.15.0" if requires_python == ">=3.15.0" else ">=3.15")
     manifest = consumer(tmp_path / "consumer", requires_python, retained)
 
     assert cli.main(["--root", str(manifest.parent), "deps", "update-python"]) == 0
@@ -83,7 +83,7 @@ def test_cli_preserves_full_python_range(registry: Path, tmp_path: Path, require
 
 
 def test_resolution_uses_consumer_uv_settings(registry: Path, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    wheel(registry, "2.0.0", ">=3.14")
+    wheel(registry, "2.0.0", ">=3.15")
     manifest = consumer(tmp_path / "consumer")
     manifest.write_text(manifest.read_text() + '[tool.uv]\nno-index=true\nfind-links=["../wheels"]\n', encoding="utf-8", newline="\n")
     monkeypatch.delenv("UV_FIND_LINKS")

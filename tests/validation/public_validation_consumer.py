@@ -10,7 +10,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import Any
+from typing import Any, cast, override
 from unittest.mock import patch
 
 from research_repo_tools.cli import main
@@ -24,6 +24,7 @@ def template(name: str) -> str:
 
 
 class TestPythonPolicy(unittest.TestCase):
+    @override
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory(prefix="python validation ")
         self.addCleanup(self.temporary.cleanup)
@@ -60,7 +61,7 @@ class TestPythonPolicy(unittest.TestCase):
             self.diagnostics.append((result.stdout + result.stderr).decode("utf-8"))
             if kwargs.get("check"):
                 result.check_returncode()
-            return result
+            return cast(subprocess.CompletedProcess[bytes], result)
 
         action = {"ruff": "check", "ty": "typecheck"}.get(tool, tool)
         with patch("subprocess.run", side_effect=inventory_or_native), contextlib.redirect_stderr(io.StringIO()):
@@ -103,7 +104,7 @@ class TestPythonPolicy(unittest.TestCase):
     def test_forced_directory_exclusions_cannot_drop_selected_fixtures(self) -> None:
         policy = self.policy.replace("[tool.ruff]\n", '[tool.ruff]\nforce-exclude=true\nexclude=["tests/semgrep/**"]\n')
         self.write("pyproject.toml", policy + '\n[tool.ty.src]\nexclude=["tests/semgrep/**"]\n')
-        self.write("tests/semgrep/added.py", 'def added(value):\n    return value\n\ncount: int = "wrong"\n')
+        self.write("tests/semgrep/added.py", 'def added(value):\n    return value\n\n\ncount: int = "wrong"\n')
         for tool, rule in (("ruff", "ANN001"), ("ty", "invalid-assignment")):
             with self.subTest(tool=tool):
                 self.assertEqual(self.check(tool), 1)
@@ -112,18 +113,18 @@ class TestPythonPolicy(unittest.TestCase):
     def test_all_requested_missing_annotation_rules_are_active(self) -> None:
         self.write(
             "annotations.py",
-            "def public(value, *args, **kwargs):\n    return value\n\n"
-            "def _private():\n    return 1\n\n"
+            "def public(value, *args, **kwargs):\n    return value\n\n\n"
+            "def _private():\n    return 1\n\n\n"
             "class Example:\n"
-            "    def __init__(self):\n        pass\n"
-            "    @staticmethod\n    def static():\n        return 1\n"
+            "    def __init__(self):\n        pass\n\n"
+            "    @staticmethod\n    def static():\n        return 1\n\n"
             "    @classmethod\n    def create(cls):\n        return cls()\n",
         )
         self.assertEqual(self.check("ruff"), 1)
         for code in ("ANN001", "ANN002", "ANN003", "ANN201", "ANN202", "ANN204", "ANN205", "ANN206"):
             self.assertIn(code, "\n".join(self.diagnostics))
 
-    def test_python314_type_checking_import_needs_no_future_import(self) -> None:
+    def test_deferred_type_checking_import_needs_no_future_import(self) -> None:
         self.write(
             "annotations.py",
             "from typing import TYPE_CHECKING\n\nif TYPE_CHECKING:\n    from pathlib import Path\n\n\ndef name(path: Path) -> str:\n    return path.name\n",
@@ -133,7 +134,7 @@ class TestPythonPolicy(unittest.TestCase):
 
     def test_native_fix_settings_cannot_modify_checked_source(self) -> None:
         self.write("ruff.toml", 'fix=true\nfix-only=true\nforce-exclude=true\nexclude=["*.py"]\n[lint]\nselect=["F401"]\n')
-        self.write("café space.py", "import os\r\nvalue=1\r\n")
+        self.write("café space.py", "import os\r\n\r\nvalue = 1\r\n")
         before = {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
         self.assertEqual(self.check("check"), 1)
         self.assertIn("F401", "\n".join(self.diagnostics))
@@ -142,6 +143,23 @@ class TestPythonPolicy(unittest.TestCase):
         self.assertFalse((self.root / ".ruff_cache").exists())
         self.assertEqual(self.check("fix"), 0)
         self.assertEqual((self.root / "café space.py").read_bytes(), b"value = 1\r\n")
+
+    def test_format_failure_stops_before_lint_and_strict_types(self) -> None:
+        self.write("bad.py", "import os\nvalue=1\n")
+        before = (self.root / "bad.py").read_bytes()
+        self.assertEqual(self.check(), 1)
+        self.assertEqual(len(self.commands), 1)
+        self.assertEqual(self.commands[0][1:3], ["format", "--check"])
+        self.assertNotIn("F401", "\n".join(self.diagnostics))
+        self.assertEqual((self.root / "bad.py").read_bytes(), before)
+
+    def test_ty_warning_is_an_error_and_cannot_be_relaxed_by_consumer(self) -> None:
+        self.write("warn.py", "import nonexistent_module\n")
+        self.write("ty.toml", '[rules]\nunresolved-import="warn"\n')
+        self.assertEqual(self.check("typecheck"), 1)
+        self.assertIn("error[unresolved-import]", "\n".join(self.diagnostics))
+        self.assertIn("--error", self.commands[-1])
+        self.assertIn("all", self.commands[-1])
 
     def test_nested_native_configuration_is_honored(self) -> None:
         self.write("nested/ruff.toml", '[lint]\nselect=["F401"]\n[format]\nquote-style="single"\n')
@@ -181,6 +199,43 @@ class TestGitDiscovery(unittest.TestCase):
             with contextlib.redirect_stdout(output):
                 self.assertEqual(main(["--root", directory, "files", "list", "--include", "*.py"]), 0)
             self.assertEqual(output.getvalue().splitlines(), ["nested/new.py", "tracked.py"])
+
+
+class TestSelectionPreflight(unittest.TestCase):
+    def test_alias_identity_changes_are_not_reused_between_public_cli_calls(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="selection café ") as directory:
+            root = Path(directory).resolve()
+            first, second = root / "first", root / "second"
+            for path in (first, second):
+                path.mkdir()
+                (path / "data.py").write_bytes(b"content\r\n")
+            before = {path: path.read_bytes() for path in root.rglob("*.py")}
+            native_run, native_stat = subprocess.run, Path.stat
+            first_identity = first.stat()
+
+            def inventory(command, **kwargs):
+                if command[1:3] == ["--no-pager", "ls-files"]:
+                    return subprocess.CompletedProcess(command, 0, b"first/data.py\0second/data.py\0", b"")
+                return native_run(command, **kwargs)
+
+            def stat(path, *args, **kwargs):
+                return first_identity if path == second else native_stat(path, *args, **kwargs)
+
+            def select():
+                output, error = io.StringIO(), io.StringIO()
+                with contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
+                    status = main(["--root", str(root), "files", "list", "--include", "*.py"])
+                return status, output.getvalue(), error.getvalue()
+
+            with patch("subprocess.run", side_effect=inventory):
+                self.assertEqual(select(), (0, "first/data.py\nsecond/data.py\n", ""))
+                with patch.object(Path, "stat", stat):
+                    status, output, error = select()
+                    self.assertEqual(status, 1)
+                    self.assertEqual(output, "")
+                    self.assertIn("duplicate target", error)
+                self.assertEqual(select(), (0, "first/data.py\nsecond/data.py\n", ""))
+            self.assertEqual(before, {path: path.read_bytes() for path in root.rglob("*.py")})
 
 
 class TestOfflineAudit(unittest.TestCase):

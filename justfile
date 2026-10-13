@@ -6,6 +6,10 @@ git_cliff_version := "2.14.2"
 audit:
     uv run --locked --group audit python scripts/audit_dependencies.py
 
+# Measure prepared source/interpreter pairs and retain raw workflow timing evidence.
+bench-python-workflows *args:
+    uv run --locked python scripts/measure_python_workflows.py "$@"
+
 # Replace stale build artifacts with the current wheel and source distribution.
 build: lock-check
     uv build --no-sources --clear

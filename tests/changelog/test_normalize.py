@@ -1115,12 +1115,12 @@ class TestPostprocess:
         f = tmp_path / "CHANGELOG.md"
         original = "# Changelog\n\n- Existing entry\n\n"
         f.write_text(original, encoding="utf-8", newline="\n")
+        rules = tmp_path / "rumdl.toml"
         failure = subprocess.CalledProcessError(1, ["rumdl"], stderr="unfixable Markdown")
         with (
             patch("research_repo_tools.postprocess_changelog.run_safe_command", side_effect=failure),
             pytest.raises(postprocess_changelog.MarkdownFormatError, match="unfixable Markdown"),
         ):
-            rules = tmp_path / "rumdl.toml"
             rules.write_text("[global]\nline-length = 160\n", newline="\n")
             postprocess(f, formatter=rules)
         assert f.read_text(encoding="utf-8") == original

@@ -88,7 +88,7 @@ def run_command_bytes(
     check=True; timeouts raise TimeoutExpired with captured bytes. OS launch
     errors propagate. Timeout cleanup covers the direct child, not its descendants.
     """
-    if not isinstance(args, Sequence) or isinstance(args, (str, bytes)) or any(not isinstance(arg, str) or "\x00" in arg for arg in args):
+    if not isinstance(args, Sequence) or isinstance(args, (str, bytes)) or any(not isinstance(arg, str) or "\x00" in arg for arg in args):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
         raise TypeError("args must be a sequence of strings without NUL")
     if input is not None and not isinstance(input, bytes):
         raise TypeError("input must be bytes or None")
@@ -148,14 +148,14 @@ def run_command_live(
     Timeout cleanup covers the direct child, as for the byte runner; callers
     must arrange separate isolation for descendant processes.
     """
-    if not isinstance(args, Sequence) or isinstance(args, (str, bytes)) or any(not isinstance(arg, str) or "\x00" in arg for arg in args):
+    if not isinstance(args, Sequence) or isinstance(args, (str, bytes)) or any(not isinstance(arg, str) or "\x00" in arg for arg in args):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
         raise TypeError("args must be a sequence of strings without NUL")
     if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
         raise ValueError("timeout must be positive and finite, or None")
     if (
         not isinstance(stdout_markers, Sequence)
         or isinstance(stdout_markers, (str, bytes))
-        or any(not isinstance(marker, bytes) or not marker for marker in stdout_markers)
+        or any(not isinstance(marker, bytes) or not marker for marker in stdout_markers)  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
     ):
         raise TypeError("stdout_markers must be a sequence of nonempty bytes")
     path = resolve_executable(command, cwd=cwd, env=env)
@@ -232,11 +232,11 @@ def _run_with_stdout_markers(
                 raise subprocess.TimeoutExpired(argv, timeout) from error
             finally:
                 for process in (child, forwarder):
-                    if process is not None:
+                    if process is not None:  # ty: ignore[redundant-condition-strict]  Interrupted process setup may leave no child.
                         if process.poll() is None:
                             process.kill()
                         process.wait()
-    return result
+    return cast(subprocess.CompletedProcess[bytes], result)
 
 
 def _diagnostic_stream(value: str | bytes | None) -> str:

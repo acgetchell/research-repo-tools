@@ -37,6 +37,15 @@ No virtual-environment activation is required. The manifest and lockfile own
 Python, Ruff, ty, pytest, and the other development dependencies; recipes invoke
 uv internally. Run `just setup` again after changing tool declarations.
 
+The installed `python_baseline.DEVELOPMENT_PYTHON` authority selects Python 3.15;
+`.python-version` mirrors it and CI reads that file. `project.requires-python`
+declares the separate runtime contract, now `>=3.15`: selected CLI/handler modules
+use explicit `lazy` import syntax. There is one implementation, with no 3.14
+fallback. The standard-library adoption bootstrap can still start on older Python.
+The Ruff target and packaged policy select `py315`. Advance these mirrors together
+and regenerate the universal lock with uv; keep distribution versions fixed unless
+the interpreter requires a dependency change.
+
 ## Maintainer commands
 
 These recipes belong to this package's root justfile. Consumer setup and daily
@@ -48,6 +57,7 @@ including changelog and release recipes.
 | Recipe | Purpose |
 | --- | --- |
 | `just audit` | Audit locked Python dependencies against online vulnerability advisories |
+| `just bench-python-workflows [ARGS...]` | Measure prepared source/interpreter pairs and write raw review evidence |
 | `just build` | Build the wheel and source distribution |
 | `just changelog-setup` | Install the declared external git-cliff version with Cargo |
 | `just changelog-test` | Require the declared git-cliff version and test generator contracts |
@@ -64,7 +74,7 @@ including changelog and release recipes.
 | `just justfile-check` | Check maintainer and packaged recipes with the pinned Just formatter |
 | `just lock-check` | Verify the manifest and lock agree without changing dependencies |
 | `just newline-check` | Reject implicit newline translation in Python text-file writes |
-| `just python-check` | Check lint, formatting, and types for the complete Python inventory |
+| `just python-check` | Check formatting, lint, and strict types for the complete Python inventory |
 | `just release-check TAG` | Check final release metadata and generated notes |
 | `just release-first TAG DATE` | Prepare a first release after checking stable published history |
 | `just release-notes TAG` | Print reviewed generated release notes |
@@ -115,7 +125,7 @@ The [release workflows](docs/RELEASING.md) attach the validated distributions
 and signed provenance to a draft GitHub Release. Publishing that release triggers
 asset verification and the approval-gated PyPI upload without rebuilding.
 
-`just check` lints, formats, and type-checks every tracked and nonignored Python
+`just check` checks formatting, then lint, then strict types for every tracked and nonignored Python
 file using shared selection, including `src`, `scripts`, and `tests`. It also runs
 the lock and Justfile checks, newline guard, and locked actionlint and zizmor workflow validators.
 Lock, recipe formatting, and Python policies run before network-backed workflow
@@ -124,8 +134,69 @@ coalesces the lock check shared by `check` and `build` within that invocation.
 The repository's `.gitattributes` keeps Justfiles at LF on every platform so
 the formatter sees the same recipe bytes on Windows checkouts.
 `just audit` performs the separate network-backed Python dependency audit.
+
+The Python gate selects one complete inventory, resolves each validator once, and
+preflights all argument batches before execution. It stops at the first failure;
+`ty --error all` promotes configured warnings to errors. Fixing runs lint fixes
+before formatting and also stops on failure. Both platforms' argument encodings
+bound each batch; files are never split or dropped to meet the limit.
+Strict ty also enables optional diagnostics that the earlier gate left disabled.
+Keep generic parameters and overrides explicit, and narrow validated dynamic data
+at its boundary. Deliberate runtime checks for untyped callers retain narrowly scoped
+`redundant-condition-strict` exceptions; do not remove those guards or suppress
+the rule across a module. Cleanup flags modified on exception paths also need
+precise exceptions when the checker cannot see that control flow.
+
 GitHub repository settings and required checks are documented in
 [GitHub setup](docs/CONFIGURING_GITHUB.md); their API payloads live in `.github/settings/`.
+
+## Measuring Python workflows
+
+Use `just bench-python-workflows --help` for prepared source/interpreter pairs.
+The harness creates identical nested Unicode/space-containing fixtures, models
+only Git's NUL inventory, and invokes native Ruff/ty. It records raw warm trials,
+alternating pair order, source hashes, interpreter/tool versions, JIT availability,
+LibYAML availability, validator invocations, and untimed resolution-call counts.
+It verifies source and harness identities around every worker, records native
+validator paths, versions and hashes, and checks the complete fixture selection.
+Invalid source directories, import-origin mismatches, input drift and failed
+workers reject the run before JSON publication; child diagnostics remain visible.
+Selection/validation timing excludes installation and imports; help/version timing
+includes process startup. Write JSON to a review-evidence location, not to a current
+guidance document. Historical 3.14 measurements use the pre-migration source only.
+Compare before/after within 3.15; cross-version timings are descriptive, not proof
+of an interpreter gain. Run timing separately from tests and installation work.
+Use `--jit-pair` with an already prepared JIT-capable interpreter to alternate
+`PYTHON_JIT=0/1` within the same build. The harness verifies both settings were
+honored and adds a warmed selection probe: five untimed calls, then twenty timed
+calls per worker. This probe models repeated use in one process; help/version
+still measure fresh CLI processes. Keep JIT evidence separate from comparisons
+between interpreter builds and from the ordinary development baseline.
+
+Explicit lazy imports are limited to CLI discovery and handler dependencies in
+`cli`, `performance`, `performance_workflows`, and `changelog`. Imports used for
+exception handling, class construction, registration, or side effects remain eager.
+The parser still builds all commands before parsing. Handler dependencies resolve
+on first use inside the existing CLI error boundary; public imports, complete
+package import smoke checks, and frozen-module modes are exercised by both installed
+distributions. No global lazy-import mode or filter is enabled. Application bundlers
+must still discover the statically declared dependencies and validate their bundle;
+CPython's frozen-module checks do not prove third-party bundler support.
+
+Further 3.15 opportunities need separate designs and measurements. `frozendict`
+could replace some copied `MappingProxyType` configuration/evidence snapshots,
+but freezing is shallow, order still matters in serialization, and public `Mapping`
+contracts must remain compatible. Built-in `sentinel` could distinguish absent
+configuration from explicit null values if a future schema needs that distinction;
+the current None policies are deliberate. Unpacking comprehensions can simplify
+flattening pipelines, but do not by themselves justify performance claims. Splitting
+parser metadata from large handlers and sharing immutable validated snapshots across
+planning phases are larger refactors: preserve annotation introspection, optional
+dependency errors, registration, snapshot freshness, and publication revalidation.
+The 3.15 sampling profiler can assess these without tracer overhead; deterministic
+call counts alone are not elapsed-time gains. JIT on/off comparisons need the same
+JIT-enabled build and warmed workloads, separate from import/batching measurements.
+An unavailable JIT yields no JIT performance evidence.
 
 Run `just update` to upgrade uv through its owner, reconcile its manifest pin,
 then advance exact development-tool pins through
@@ -277,7 +348,7 @@ checkout tests and the isolated consumers before changing package checks.
   Exercise the path-based cleanup implementation locally when diagnosing this
   difference, then verify the native Windows job.
 
-Python's [startup flags](https://docs.python.org/3.14/using/cmdline.html#cmdoption-I)
+Python's [startup flags](https://docs.python.org/3.15/using/cmdline.html#cmdoption-I)
 and Just's [Windows path rules](https://just.systems/man/en/paths-on-windows.html)
 define these behaviors. Use `just check` while iterating and `just ci` for final
 local validation. Inspect all required native package jobs for the current

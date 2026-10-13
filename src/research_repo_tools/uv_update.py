@@ -8,6 +8,7 @@ import subprocess
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from research_repo_tools.files import replace_if_unchanged
 from research_repo_tools.process import run_safe_command
@@ -89,7 +90,7 @@ def updated_manifest(text: str, new: str) -> str:
 @dataclass(frozen=True, slots=True)
 class _ToolInstallation:
     receipt: Path
-    constraints: dict
+    constraints: dict[str, Any]
     interpreter: tuple[tuple[str, str], ...]
 
 

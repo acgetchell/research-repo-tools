@@ -2,6 +2,7 @@
 
 import json
 from pathlib import Path
+from typing import Any, cast
 
 from research_repo_tools.notebooks import CELL_ID, read_raw, selected_paths
 
@@ -10,11 +11,11 @@ def _source(value: object) -> str | None:
     if isinstance(value, str):
         return value
     if isinstance(value, list) and all(isinstance(part, str) for part in value):
-        return "".join(value)
+        return "".join(cast(list[str], value))
     return None
 
 
-def _summary(path: Path, *, preview: bool) -> dict:
+def _summary(path: Path, *, preview: bool) -> dict[str, Any]:
     _, raw = read_raw(path)
     problems = []
     minor = raw.get("nbformat_minor")

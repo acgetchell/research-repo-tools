@@ -5,6 +5,13 @@ slow groups, input generation, scientific assertions, and tracked figures. The
 shared commands execute only explicit notebook selections. The opt-in reset
 workflow inventories tracked notebooks within consumer-declared source paths.
 
+Pinned Ruff may print its known Python 3.15 target-support notice. Notebook lint
+and advice display that notice as `INFO`; it is not a source finding or an
+operational error. Preview rules remain disabled unless the consumer selects them.
+Checker failures, malformed JSON, other stderr, and source diagnostics retain
+their failure behavior. A nonzero checker status without source diagnostics still
+fails even when the target-support notice is present.
+
 ## Environment
 
 Declare `research-repo-tools[notebooks]` at the same exact version as the tooling

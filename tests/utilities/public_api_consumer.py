@@ -13,6 +13,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
+from typing import override
 from unittest.mock import patch
 
 from research_repo_tools.files import RecoveryError, publish_directory, replace_many
@@ -21,6 +22,7 @@ from research_repo_tools.selection import run_selected
 
 
 class ConsumerCase(unittest.TestCase):
+    @override
     def setUp(self) -> None:
         temporary = tempfile.TemporaryDirectory(prefix="public-api-")
         self.addCleanup(temporary.cleanup)

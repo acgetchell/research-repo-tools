@@ -14,9 +14,33 @@ consumer's lower application minimum while only its development settings advance
 Every managed consumer's `project.requires-python` must enforce at least the exact
 installed release's published minimum. This guards required language features even
 when the application is installed without development dependencies. The shared
-support minimum remains Python 3.14; this feature does not increase it.
+support minimum is Python 3.15 because CLI/handler boundaries use explicit
+`lazy` imports. The standard-library bootstrap remains compatible with older
+interpreters so it can acquire the new release before importing it.
 `inherit-python = false`, an absent setting, and tool-profile opt-out cannot bypass
 ordinary validation. Development selection and minimum support remain distinct.
+
+## Python 3.15 validation contract
+
+The next published release moves runtime support and the selected development
+minor to 3.15. Existing 3.14 selectors are migration inputs, not supported runtime
+overrides. The package uses explicit selective lazy imports; it never enables a
+global lazy-import mode. Native CI reads `.python-version`; the universal lock
+records the 3.15 floor and retains the existing dependency versions.
+
+The common gate supersedes the previous lint/format/type order and continuation
+after failures. Checks now use format, lint, then `ty --error all`, stopping at the
+first failing batch. Fixes use lint fixes followed by formatting, stopping on
+failure. Every policy receives the same selected inventory, including fixtures;
+executables and all argument batches are preflighted before any validator runs.
+Consumer warning settings cannot relax the strict type gate. Consumers should
+remove copied validation runners when adopting this contract and use the packaged
+Python recipes; keep their lint rules and deliberate fixture exceptions.
+
+Publication precedes adoption. For dotfiles #169, use the exact published version
+through its existing shared-Python plan/update recipes, review the metadata,
+selector and lock diff, then run consumer CI. Do not use a local baseline override,
+an unpublished package pin, or a sibling checkout as a released dependency.
 
 After an exact release containing the implementation is published:
 

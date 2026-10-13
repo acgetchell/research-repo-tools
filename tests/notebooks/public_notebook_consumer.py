@@ -8,6 +8,7 @@ import tempfile
 import unittest
 import warnings
 from pathlib import Path
+from typing import override
 from unittest.mock import patch
 
 from research_repo_tools.cli import main
@@ -18,6 +19,7 @@ def code(source="value = 1\n", cell_id="calculate-value"):
 
 
 class Consumer(unittest.TestCase):
+    @override
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="notebook consumer ")
         self.addCleanup(self.temporary.cleanup)
@@ -36,7 +38,7 @@ class Consumer(unittest.TestCase):
 
     def configure(self, advice):
         (self.root / "pyproject.toml").write_text(
-            '[project]\nrequires-python=">=3.14"\n[tool.research-repo-tools.notebooks.advice]\n' + advice,
+            '[project]\nrequires-python=">=3.15"\n[tool.research-repo-tools.notebooks.advice]\n' + advice,
             encoding="utf-8",
             newline="\n",
         )
@@ -227,7 +229,7 @@ class TestAdvice(Consumer):
         )
         status, out, err = self.run_cli("advise")
         self.assertEqual(status, 0, err)
-        self.assertEqual(err.count("INFO"), 3)
+        self.assertEqual(sum(line.startswith("INFO ") and "ruff advice:" not in line for line in err.splitlines()), 3)
         self.assertNotIn("WARNING", err)
         self.assertFalse(sentinel.exists())
         self.assertEqual(self.path.read_bytes(), original)
@@ -323,7 +325,7 @@ class TestIdPattern(Consumer):
 
 class TestInstallPolicy(Consumer):
     def test_unicode_string_separators_preserve_installed_policy_line_numbers(self):
-        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.14"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
+        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.15"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
         for separator in ("\f", "\x85", "\u2028", "\u2029"):
             with self.subTest(separator=repr(separator)):
                 source = f'message = "before{separator}after"\nexample = "!pip install ignored"\n!pip install never-executed'
@@ -335,7 +337,7 @@ class TestInstallPolicy(Consumer):
                 self.assertEqual(self.path.read_bytes(), original)
 
     def test_positional_and_truthy_shell_arguments_are_checked_without_execution(self):
-        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.14"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
+        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.15"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
         for windows in (False, True):
             for function in ("Popen", "run"):
                 for shell in (False, True):
@@ -360,7 +362,7 @@ class TestInstallPolicy(Consumer):
                 self.assertEqual(self.path.read_bytes(), original)
 
     def test_host_shell_and_direct_string_commands_have_distinct_install_rules(self):
-        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.14"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
+        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.15"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
         for windows in (False, True):
             cases = (
                 ("!echo # harmless & pip install never-executed", windows),
@@ -380,7 +382,7 @@ class TestInstallPolicy(Consumer):
                     self.assertEqual(self.path.read_bytes(), original)
 
     def test_shell_comments_and_windows_quoted_carets_preserve_install_boundaries(self):
-        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.14"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
+        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.15"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
         cases = (
             (False, "!echo ok;# comment; pip install never-executed", False),
             (False, "import os\nos.system('echo ok # comment; pip install ignored\\npip install never-executed')", True),
@@ -398,7 +400,7 @@ class TestInstallPolicy(Consumer):
                 self.assertEqual(self.path.read_bytes(), original)
 
     def test_quoted_shell_separators_do_not_block_installed_lint(self):
-        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.14"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
+        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.15"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
         for operator in (";", "&&", "||", "|", "&"):
             with self.subTest(operator=operator):
                 original = self.write([code(f'!echo "{operator}" pip install never-executed', "quoted-operator")])
@@ -407,7 +409,7 @@ class TestInstallPolicy(Consumer):
                 self.assertEqual(self.path.read_bytes(), original)
 
     def test_installed_lint_models_shell_vectors_without_executing_them(self):
-        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.14"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
+        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.15"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
         source = 'import subprocess\n\nsubprocess.run(["echo", "&&", "pip", "install", "never-executed"], shell=True, check=True, timeout=10)'
         original = self.write([code(source, "shell-vector")])
         for windows in (False, True):
@@ -421,7 +423,7 @@ class TestInstallPolicy(Consumer):
                 self.assertEqual(self.path.read_bytes(), original)
 
     def test_installed_install_detection_ignores_parser_warning_policy(self):
-        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.14"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
+        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.15"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
         original = self.write([code('import subprocess\npattern = "\\q"\nsubprocess.run(["pip", "install", "never-executed"])', "warning-policy")])
         for action in ("always", "error"):
             with self.subTest(action=action), warnings.catch_warnings(record=True) as caught:
@@ -435,7 +437,7 @@ class TestInstallPolicy(Consumer):
             self.assertEqual(self.path.read_bytes(), original)
 
     def test_literal_subprocess_arguments_do_not_become_shell_commands(self):
-        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.14"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
+        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.15"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
         source = 'import subprocess\n\nsubprocess.run(\n    ["echo", ";", "pip", "install", "never-executed"],\n    check=True,\n    timeout=10,\n)'
         original = self.write([code(source, "literal-arguments")])
         status, _out, err = self.run_cli("lint")
@@ -443,7 +445,7 @@ class TestInstallPolicy(Consumer):
         self.assertEqual(self.path.read_bytes(), original)
 
     def test_installed_lint_checks_wrapped_windows_commands_and_python_after_magics(self):
-        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.14"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
+        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.15"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
         for source, line in (
             (r'!sudo env MODE=test "C:\Program Files\Python\Scripts\PIP.EXE" install never-executed', 1),
             ("%matplotlib inline\nimport subprocess\nsubprocess.run(args=['pip', 'install', 'never-executed'])", 3),
@@ -456,7 +458,7 @@ class TestInstallPolicy(Consumer):
                 self.assertEqual(self.path.read_bytes(), original)
 
     def test_installed_lint_blocks_install_cells_without_execution_or_rewriting(self):
-        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.14"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
+        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.15"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
         original = self.write([code("%pip install package-that-must-not-be-installed\n", "environment-policy")])
         status, _out, err = self.run_cli("lint")
         self.assertEqual(status, 1)

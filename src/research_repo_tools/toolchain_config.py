@@ -6,6 +6,7 @@ import re
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from packaging.specifiers import SpecifierSet
 
@@ -69,7 +70,7 @@ class Toolchain:
     python: str
     rust: RustToolchain | None
     cargo: tuple[CargoTool, ...]
-    requires_python: str = ">=3.14"
+    requires_python: str = ">=3.15"
     binaries: tuple[BinaryTool, ...] = ()
 
     @property
@@ -84,7 +85,7 @@ def _names(value: object, field: str) -> tuple[str, ...]:
         raise ValueError(f"{field} must be a list of component/target names")
     if len(set(value)) != len(value):
         raise ValueError(f"{field} contains duplicate names")
-    return tuple(value)
+    return cast(tuple[str, ...], tuple(value))
 
 
 def load(settings: Config) -> Toolchain:
@@ -113,7 +114,7 @@ def load(settings: Config) -> Toolchain:
     project = document.get("project", {})
     if not isinstance(project, dict):
         raise ValueError("project must be a table")
-    requires = project.get("requires-python", ">=3.14")
+    requires = project.get("requires-python", ">=3.15")
     if not isinstance(requires, str):
         raise ValueError("project.requires-python must be a version specifier string")
     constraints = SpecifierSet(requires)

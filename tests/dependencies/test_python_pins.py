@@ -3,6 +3,7 @@
 import subprocess
 import tomllib
 from pathlib import Path
+from typing import cast
 
 import pytest
 from packaging.specifiers import SpecifierSet
@@ -22,7 +23,7 @@ def resolution_metadata(args: list[str]) -> dict[str, object]:
     assert args[:2] == ["export", "--script"]
     lines = Path(args[2]).read_text(encoding="utf-8").splitlines()
     assert lines[0] == "# /// script" and lines[-1] == "# ///"
-    return tomllib.loads("\n".join(line.removeprefix("# ") for line in lines[1:-1]))
+    return cast(dict[str, object], tomllib.loads("\n".join(line.removeprefix("# ") for line in lines[1:-1])))
 
 
 def test_parse_project_selects_only_exact_simple_dev_pins() -> None:

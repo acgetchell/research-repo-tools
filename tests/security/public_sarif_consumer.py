@@ -7,6 +7,7 @@ import tempfile
 import unittest
 from contextlib import redirect_stdout
 from pathlib import Path
+from typing import Any
 from unittest.mock import patch
 
 from research_repo_tools import config, sarif
@@ -138,7 +139,7 @@ class TestSarifConsumer(unittest.TestCase):
 
     def test_empty_runs_repeated_names_and_slug_collisions_have_stable_distinct_categories(self):
         run = document()["runs"][0]
-        empty: dict = {"tool": {"driver": {"name": "Scanner"}}}
+        empty: dict[str, Any] = {"tool": {"driver": {"name": "Scanner"}}}
         collision = copy.deepcopy(run)
         collision["tool"]["driver"]["name"] = "SCANNER"
         source = {"version": "2.1.0", "runs": [empty, run, run, collision]}

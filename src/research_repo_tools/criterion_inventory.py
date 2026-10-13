@@ -149,7 +149,7 @@ class DiscoveryPlan:
 
     def __post_init__(self) -> None:
         suites = tuple(self.suites)
-        if not suites or any(not isinstance(suite, DiscoveryCommand) for suite in suites):
+        if not suites or any(not isinstance(suite, DiscoveryCommand) for suite in suites):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
             raise TypeError("discovery requires nonempty DiscoveryCommand suites")
         if len({suite.name for suite in suites}) != len(suites):
             raise ValueError("discovery suite names must be unique")

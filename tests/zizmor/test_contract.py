@@ -250,7 +250,7 @@ def test_cargo_pin_uses_the_existing_managed_location(consumer: Path, monkeypatc
         encoding="utf-8",
         newline="\n",
     )
-    (consumer / ".python-version").write_bytes(b"3.14\n")
+    (consumer / ".python-version").write_bytes(b"3.15\n")
     (consumer / "rust-toolchain.toml").write_bytes(b'[toolchain]\nchannel="1.94.0"\n')
     monkeypatch.setenv("RESEARCH_REPO_TOOLS_HOME", str(consumer / "managed"))
     calls = scanner_stub(monkeypatch)

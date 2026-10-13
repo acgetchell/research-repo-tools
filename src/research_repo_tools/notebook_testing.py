@@ -69,7 +69,7 @@ class NotebookProject:
         if env is not None and (
             not isinstance(env, Mapping)
             or any(
-                not isinstance(key, str) or not key or "=" in key or "\0" in key or (value is not None and (not isinstance(value, str) or "\0" in value))
+                not isinstance(key, str) or not key or "=" in key or "\0" in key or (value is not None and (not isinstance(value, str) or "\0" in value))  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
                 for key, value in env.items()
             )
         ):
@@ -114,7 +114,7 @@ def isolated_project(
         raise ValueError("fixture parent must be outside the source project and borrowed environment")
     if environment != Path(sys.prefix).resolve():
         raise ValueError("run notebook tests with the explicitly selected locked environment's interpreter")
-    if not isinstance(paths, Sequence) or isinstance(paths, (str, bytes)) or any(not isinstance(path, Path) for path in paths):
+    if not isinstance(paths, Sequence) or isinstance(paths, (str, bytes)) or any(not isinstance(path, Path) for path in paths):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
         raise TypeError("paths must be an explicit sequence of Path objects")
     payloads = {}
     for path in (*_PROJECT_FILES, *paths):
