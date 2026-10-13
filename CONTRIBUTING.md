@@ -336,6 +336,12 @@ checkout tests and the isolated consumers before changing package checks.
   streams and conflicting inherited Python settings in transport regressions.
   For CLI status messages in a caller-selected encoding, escape unsupported
   characters so reporting a completed write cannot turn success into failure.
+- **Consumer suite budgets and progress:** Installation commands and smoke
+  probes have a five-minute limit; complete installed unittest suites have a
+  separate fifteen-minute limit on every platform. Run suites through
+  `run_consumer_suite` so test names, stdout, stderr, and elapsed time remain
+  visible in CI, including on failure. Diagnose a timeout using native suite
+  timings and the last reported test; keep the ordinary command budget bounded.
 - **Shell paths and filesystem paths:** Just's `invocation_directory()` can
   return a Unix-style `/c/...` path on Windows. Use
   `invocation_directory_native()` when comparing its result with `Path`.

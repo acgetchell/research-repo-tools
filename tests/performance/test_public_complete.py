@@ -1,5 +1,5 @@
 """Run the installed-consumer contracts in the development environment too."""
 
-from tests.performance.public_complete_consumer import TestCompleteConsumer
+from tests.performance.public_complete_consumer import TestCompleteConsumer, TestHeterogeneousConsumer
 
-__all__ = ["TestCompleteConsumer"]
+__all__ = ["TestCompleteConsumer", "TestHeterogeneousConsumer"]

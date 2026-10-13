@@ -193,6 +193,13 @@ assertions do not substitute for the native Windows checks of ordinary paths.
 The installed performance consumer suite exercises Criterion estimates, complete
 and incomplete benchmark coverage, exact CRLF/binary bytes, provenance differences,
 immutable evidence, tar/ZIP extraction, and retained rendering using public imports.
+Both distributions also exercise schema-3 common-harness plans and complete-run
+v2 with exhaustive heterogeneous raw sample counts, phase-policy provenance,
+strict serialized-policy rejection, native synthetic measurement/discovery,
+saved-sample validation and offline retention. Historical v1 policies and
+evidence remain readable under their original contracts. Installed regressions
+also exercise unchanged uniform run and common-plan constructor calls, including
+their original v1 envelope and provenance requirements.
 Shared regressions cover unsafe paths and links, resource limits, malformed and
 non-finite estimates, stale provenance, and publication/rollback failures. HTTP
 transport failure tests use synthetic responses; release selection and access

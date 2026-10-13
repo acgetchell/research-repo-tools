@@ -1,22 +1,26 @@
 # Complete measurements and host metadata
 
-The base measurement and host contracts target v0.1.8; the provenance renderer
-and versioned report history additions target v0.1.9. Source availability,
-package publication, native platform checks and consumer adoption are separate requirements. Consumer
+The base measurement and host contracts target v0.1.8; the provenance renderer,
+versioned report history and heterogeneous sampling additions target v0.1.9.
+Source availability, package publication, native platform checks and consumer
+adoption are separate requirements. Consumer
 commands and editable scaffolds are described in the [README](../README.md#common-harness-and-complete-runs).
 Existing comparison, baseline asset and report schema-1 contracts remain supported.
 
 ## Configuration and measurement
 
 `measurement.load_measurement(root, configuration)` accepts schema-1
-`MeasurementConfig` or schema-2 `common_measurement.CommonHarnessPlan`.
+`MeasurementConfig` or schema-2/3 `common_measurement.CommonHarnessPlan`.
 The latter contains a shared `measurement` configuration, `baseline` and
 `current` `MeasurementPhase` objects, and a tuple of `RunSeries` views.
 `MeasurementPhase(command, gate, policy, environment=())` uses immutable argument
 vectors, a completeness policy and string environment pairs. The v0.1.9 additions
 also accept `DiscoveryPolicy`; see the [Criterion contracts](criterion-api.md).
+`CommonHarnessPlan(..., *, schema=2)` preserves the original uniform measurement
+contract. Pass `schema=3` explicitly for phase-owned sampling policies and v2
+evidence; loading a plan preserves its declared schema.
 
-Schema 2 requires `sources`, `harness`, `phases.baseline`, `phases.current` and
+Schemas 2 and 3 require `sources`, `harness`, `phases.baseline`, `phases.current` and
 `series`. Each phase requires `command`, `gate`, and either nonempty exact
 `expected` semantic IDs or a configured `discovery` table, with optional
 `environment`. Each series table requires `name`,
@@ -31,15 +35,25 @@ Shared options are `criterion-dir`, `sample`, `timeout`, `unit`, `probes`,
 `dependencies`, `context` and `compatible` from schema 1. Completeness options
 are `sample-count` (integer at least 2, default 100), `statistics` (unique mean
 and/or median, default both), and `confidence-level` (strictly between 0 and 1,
-default 0.95). Both phases share count, statistics, confidence and unit.
+default 0.95). Both phases share statistics, confidence and unit. Schema 2
+requires one uniform count shared by both phases and emits complete-run v1.
+Schema 3 emits complete-run v2 and also accepts each phase's `sample-counts`
+table mapping exact semantic IDs to integer counts of at least two. A phase map
+must cover every expected or discovered ID exactly once; there are no prefix,
+glob, storage-path or fallback assignments. Missing, unexpected and duplicate
+assignments fail. Phase maps exclude the top-level `sample-count`; phases
+without a map use the uniform default of 100. Counts may differ between phases
+when the consumer declares that policy. Discovery resolves and checks the full
+count map before either gate or measurement runs. Consumers retain all workload
+selection and sample-count decisions, including explicit Criterion defaults.
 The schema is strict: unknown fields, malformed scalars and duplicate TOML keys
 fail before commands run. Every source/harness glob must match regular files in
 the current checkout. Include gate programs, native toolchain declarations,
 build manifests and complete dependency resolution files in the harness.
 
-`measure_pair` uses its existing opt-in isolated worktree lifecycle for both
+`measure_pair` uses its existing opt-in isolated worktree lifecycle for all
 schemas. `common_measurement.measure_prepared_pair(baseline, current, plan,
-pair, *, working_tree=False)` exposes the same schema-2 operation for two
+pair, *, working_tree=False)` exposes the same common-harness operation for two
 distinct, nonoverlapping disposable checkouts supplied by a caller. It changes
 files in those checkouts; the caller owns cleanup. It does not create Git refs.
 The harness is captured from current, including ordinary permission bits;
@@ -48,7 +62,11 @@ installed into both sources. Library source patterns are captured independently
 before substitution and again afterward. The shared `source_sha256` identifies
 the effective measured input; `context.original-source-sha256` and its inventory
 identify the source before substitution. Both use the documented shared file
-framing, never a legacy digest relabeled as shared.
+framing, never a legacy digest relabeled as shared. Schema-3 measurement records
+the entire resolved policy in each phase's reserved `context.sampling-policy`.
+The reader requires it to match the policy in that phase's v2 payload. It is
+checked before timing when selected in `compatible`; phases with different
+inventories or policies should not select equality for that field.
 
 Each phase records revision, release, command, declared environment, gate command
 and passed status, host observations, source and harness inventories, probes
@@ -75,13 +93,17 @@ The supported names in `complete_runs` are:
 
 | API | Contract |
 | --- | --- |
-| `RUN_SCHEMA` | `research-repo-tools/complete-run/v1` |
+| `LEGACY_RUN_SCHEMA` | Alias of `RUN_SCHEMA` |
+| `RUN_SCHEMA` | `research-repo-tools/complete-run/v1`; original uniform policy and provenance rules |
+| `RUN_SCHEMAS` | Both supported schemas, in version order |
+| `RUN_SCHEMA_V2` | `research-repo-tools/complete-run/v2`; explicit phase-owned policy and provenance rules |
 | `CompleteCase(storage_path, benchmark, estimates, sample)` | Portable relative path plus original immutable bytes for Criterion's three JSON files |
-| `CompletePolicy(expected, sample_count=100, statistics=("mean", "median"), confidence_level=0.95, unit="ns")` | Exact unique semantic IDs and measurement requirements |
-| `CompleteRun(phases, series, compatible=("harness_sha256",))` | Exactly baseline/current complete samples, named views and required provenance selection |
+| `CompletePolicy(expected, sample_count=100, statistics=("mean", "median"), confidence_level=0.95, unit="ns", *, sample_counts=())` | Exact unique semantic IDs; select uniform counts or exhaustive immutable ID/count pairs with `sample_count=None` |
+| `CompleteRun(phases, series, compatible=("harness_sha256",), *, schema=RUN_SCHEMA)` | Exactly baseline/current complete samples, named views and required provenance selection; defaults to v1, with explicit `schema=RUN_SCHEMA_V2` for independent phase counts |
 | `CompleteSample(policy, cases)` | Immutable sorted cases validated against the complete policy |
 | `RunSeries(name, phase, rows)` | Unique display labels mapped to full IDs in one recorded phase |
 | `collect_complete_sample(criterion_dir, sample, policy)` | Reject unsafe trees, incomplete rows, duplicate semantic IDs and missing/unexpected inventory |
+| `parse_policy(payload)`, `serialize_policy(policy)` | Strict v2 policy JSON for manually constructed phase provenance |
 | `parse_run(payload)`, `serialize_run(run)` | Versioned strict shared JSON; original Criterion bytes stored as base64 |
 | `render_run(evidence, *, title="Benchmark timings", report_path=None, payload_path=None, manifest_path=None)` | Offline named-series timings and recorded per-phase provenance; supply all three root-relative publication paths for evidence links |
 | `run_identity(evidence)` | SHA-256 of exact payload and envelope with versioned framing |
@@ -96,6 +118,49 @@ Criterion fields are retained byte for byte. `estimate(statistic)` returns the
 shared validated `Estimate`. No consistency between raw samples and estimated
 bootstrap statistics, significance test, ratio interval or scientific eligibility
 is inferred. Consumers own those scientific assertions.
+
+For example, a consumer's exact policy can preserve 10 and 100 original samples:
+
+```python
+from research_repo_tools.complete_runs import CompletePolicy
+
+policy = CompletePolicy(
+    ("geometry / expensive", "geometry / ordinary"),
+    sample_count=None,
+    sample_counts=(("geometry / expensive", 10), ("geometry / ordinary", 100)),
+)
+assert policy.count_for("geometry / expensive") == 10
+```
+
+`count_for(full_id)` rejects IDs outside the policy. Inputs are defensively
+copied and sorted. Overlapping assignments fail even when their counts agree.
+No arrays are padded, truncated or modified to satisfy a policy.
+
+Existing uniform `CompleteRun(phases, series)` and
+`Evidence(serialize_run(run), RUN_SCHEMA, sources)` calls retain v1 behavior.
+For per-case policies or different uniform counts between phases, construct
+`CompleteRun(..., schema=RUN_SCHEMA_V2)` and use `run.schema` in the evidence
+envelope. Schema-3 measurement plans select v2 automatically.
+
+The v2 run retains the existing top-level `schema`, `compatible`, `series` and
+`phases` fields, with exactly `baseline` and `current`. Each phase still has
+`policy` and base64-encoded original `cases`. Its policy requires `expected`,
+`sample_count`, `sample_counts`, `statistics`, `confidence_level` and `unit`.
+Uniform mode requires an integer `sample_count` and an empty `sample_counts`
+object. Per-case mode requires `sample_count: null` and a nonempty
+`sample_counts` object covering `expected` exactly. Unknown fields, missing
+fields and duplicate JSON keys fail. `serialize_policy(policy).decode("utf-8")`
+is compact JSON without a trailing newline, suitable for that phase's
+`sampling-policy` provenance entry when manually constructing `Evidence`.
+Payload and envelope schema names must agree. The exact payload and envelope,
+including both policies, participate in `run_identity`; equal raw measurements
+with differently declared policies remain different evidence.
+
+The v1 parser requires its original five policy fields, a non-null uniform count
+and the same count in both phases. Parsing and serialization preserve v1;
+its historical provenance does not gain a `sampling-policy` field. Changing a
+schema label is not a migration: v2 requires its own fields and recorded policy,
+and legacy schema-3 consumer evidence remains a separate unsupported format.
 
 The standard report includes original and measured source fingerprints, the
 common harness fingerprint, revision/release/mode, recorded host observations,

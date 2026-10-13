@@ -4,7 +4,7 @@ The original workflow APIs belong to the coordinated v0.1.4 extraction.
 Availability in the working tree does not mean that release has been published. Consumer commands
 and configuration examples are in the [README](../README.md#configured-benchmark-workflows).
 The [MCMC ownership map](mcmc-extraction.md) defines the first adoption gate.
-Schema-2 common-harness measurement, complete-run retention and reusable host/
+Schema-2/3 common-harness measurement, complete-run retention and reusable host/
 profiling capture are described in the [complete-run contract](complete-run-api.md).
 
 ## Measurement and pair selection

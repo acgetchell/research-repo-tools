@@ -9,25 +9,39 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
+import time
 import tomllib
 import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 TIMEOUT = 300
+CONSUMER_TIMEOUT = 900
 
 
-def run(command: list[str], *, cwd: Path, env: dict[str, str]) -> str:
-    result = subprocess.run(command, cwd=cwd, env=env, check=True, capture_output=True, encoding="utf-8", timeout=TIMEOUT)
-    return result.stdout
+def run(command: list[str], *, cwd: Path, env: dict[str, str], timeout: int = TIMEOUT, capture_output: bool = True) -> str:
+    result = subprocess.run(command, cwd=cwd, env=env, check=True, capture_output=capture_output, encoding="utf-8", timeout=timeout)
+    return result.stdout or ""
 
 
-def run_isolated(python: Path, arguments: list[str], *, cwd: Path, env: dict[str, str]) -> str:
+def run_isolated(python: Path, arguments: list[str], *, cwd: Path, env: dict[str, str], timeout: int = TIMEOUT, capture_output: bool = True) -> str:
     # -I ignores Python environment settings; retain UTF-8 transport and the
     # no-bytecode policy used by the import side-effect checks.
-    return run([str(python), "-I", "-B", "-X", "utf8", *arguments], cwd=cwd, env=env)
+    return run([str(python), "-I", "-B", "-X", "utf8", *arguments], cwd=cwd, env=env, timeout=timeout, capture_output=capture_output)
+
+
+def run_consumer_suite(python: Path, arguments: list[str], *, cwd: Path, env: dict[str, str]) -> None:
+    """Bound an entire unittest suite separately and retain live test progress."""
+    label = " ".join((Path(arguments[0]).name, *arguments[1:]))
+    print(f"RUN: {cwd.name} {label} (timeout {CONSUMER_TIMEOUT}s)", flush=True)
+    started = time.monotonic()
+    try:
+        run_isolated(python, ["-u", *arguments, "-v"], cwd=cwd, env=env, timeout=CONSUMER_TIMEOUT, capture_output=False)
+    finally:
+        print(f"END: {cwd.name} {label} ({time.monotonic() - started:.2f}s)", flush=True)
 
 
 BASE_SMOKE = r"""
@@ -229,7 +243,7 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             publishing_suite = consumer / "public_publishing_consumer.py"
             publishing_suite.write_bytes((ROOT / "tests/releases/public_publishing_consumer.py").read_bytes())
             if changelog_only:
-                run_isolated(
+                run_consumer_suite(
                     python,
                     [str(publishing_suite), "TestPublishingConsumer.test_installed_cli_generation_with_real_external_generator"],
                     cwd=consumer,
@@ -240,77 +254,77 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             run_isolated(python, ["-c", BASE_SMOKE, str(ROOT)], cwd=consumer, env=local_env)
             import_suite = consumer / "public_import_consumer.py"
             import_suite.write_bytes((ROOT / "tests/validation/public_import_consumer.py").read_bytes())
-            run_isolated(python, [str(import_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(import_suite)], cwd=consumer, env=local_env)
             notebook_suite = consumer / "public_notebook_consumer.py"
             notebook_suite.write_bytes((ROOT / "tests/notebooks/public_notebook_consumer.py").read_bytes())
-            run_isolated(python, [str(notebook_suite), "TestInspection"], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(notebook_suite), "TestInspection"], cwd=consumer, env=local_env)
             workflows_suite = consumer / "public_workflows_consumer.py"
             workflows_suite.write_bytes((ROOT / "tests/notebooks/public_workflows_consumer.py").read_bytes())
-            run_isolated(python, [str(workflows_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(workflows_suite)], cwd=consumer, env=local_env)
             # Run the same consumer suite against each installed artifact, using
             # only documented imports and no source checkout or pytest dependency.
             public_suite = consumer / "public_api_consumer.py"
             public_suite.write_bytes((ROOT / "tests/utilities/public_api_consumer.py").read_bytes())
-            run_isolated(python, [str(public_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(public_suite)], cwd=consumer, env=local_env)
             cargo_suite = consumer / "public_cargo_examples_consumer.py"
             cargo_suite.write_bytes((ROOT / "tests/cargo_examples/public_cargo_examples_consumer.py").read_bytes())
-            run_isolated(python, [str(cargo_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(cargo_suite)], cwd=consumer, env=local_env)
             actions_suite = consumer / "public_actions_consumer.py"
             actions_suite.write_bytes((ROOT / "tests/dependencies/public_actions_consumer.py").read_bytes())
-            run_isolated(python, [str(actions_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(actions_suite)], cwd=consumer, env=local_env)
             owners_suite = consumer / "public_owners_consumer.py"
             owners_suite.write_bytes((ROOT / "tests/toolchain/public_owners_consumer.py").read_bytes())
-            run_isolated(python, [str(owners_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(owners_suite)], cwd=consumer, env=local_env)
             just_suite = consumer / "public_just_consumer.py"
             just_suite.write_bytes((ROOT / "tests/utilities/public_just_consumer.py").read_bytes())
-            run_isolated(python, [str(just_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(just_suite)], cwd=consumer, env=local_env)
             release_suite = consumer / "public_release_consumer.py"
             release_suite.write_bytes((ROOT / "tests/releases/public_release_consumer.py").read_bytes())
-            run_isolated(python, [str(release_suite)], cwd=consumer, env=local_env)
-            run_isolated(python, [str(publishing_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(release_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(publishing_suite)], cwd=consumer, env=local_env)
             performance_suite = consumer / "public_performance_consumer.py"
             performance_suite.write_bytes((ROOT / "tests/performance/public_performance_consumer.py").read_bytes())
-            run_isolated(python, [str(performance_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(performance_suite)], cwd=consumer, env=local_env)
             workflows_suite = consumer / "public_workflows_consumer.py"
             workflows_suite.write_bytes((ROOT / "tests/performance/public_workflows_consumer.py").read_bytes())
-            run_isolated(python, [str(workflows_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(workflows_suite)], cwd=consumer, env=local_env)
             release_target_suite = consumer / "public_release_target_consumer.py"
             release_target_suite.write_bytes((ROOT / "tests/performance/public_release_target_consumer.py").read_bytes())
-            run_isolated(python, [str(release_target_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(release_target_suite)], cwd=consumer, env=local_env)
             complete_suite = consumer / "public_complete_consumer.py"
             complete_suite.write_bytes((ROOT / "tests/performance/public_complete_consumer.py").read_bytes())
-            run_isolated(python, [str(complete_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(complete_suite)], cwd=consumer, env=local_env)
             criterion_suite = consumer / "public_criterion_consumer.py"
             criterion_suite.write_bytes((ROOT / "tests/performance/public_criterion_consumer.py").read_bytes())
-            run_isolated(python, [str(criterion_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(criterion_suite)], cwd=consumer, env=local_env)
             publication_suite = consumer / "public_publication_consumer.py"
             publication_suite.write_bytes((ROOT / "tests/publication/public_publication_consumer.py").read_bytes())
-            run_isolated(python, [str(publication_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(publication_suite)], cwd=consumer, env=local_env)
             security_suite = consumer / "public_security_consumer.py"
             security_suite.write_bytes((ROOT / "tests/security/public_security_consumer.py").read_bytes())
-            run_isolated(python, [str(security_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(security_suite)], cwd=consumer, env=local_env)
             sarif_suite = consumer / "public_sarif_consumer.py"
             sarif_suite.write_bytes((ROOT / "tests/security/public_sarif_consumer.py").read_bytes())
-            run_isolated(python, [str(sarif_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(sarif_suite)], cwd=consumer, env=local_env)
             scan_suite = consumer / "public_scan_consumer.py"
             scan_suite.write_bytes((ROOT / "tests/semgrep/public_scan_consumer.py").read_bytes())
-            run_isolated(python, [str(scan_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(scan_suite)], cwd=consumer, env=local_env)
             toolchain_suite = consumer / "public_toolchain_consumer.py"
             toolchain_suite.write_bytes((ROOT / "tests/toolchain/public_toolchain_consumer.py").read_bytes())
-            run_isolated(python, [str(toolchain_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(toolchain_suite)], cwd=consumer, env=local_env)
             text_suite = consumer / "public_text_consumer.py"
             text_suite.write_bytes((ROOT / "tests/validation/public_text_consumer.py").read_bytes())
-            run_isolated(python, [str(text_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(text_suite)], cwd=consumer, env=local_env)
             native_suite = consumer / "public_native_consumer.py"
             native_suite.write_bytes((ROOT / "tests/papers/public_native_consumer.py").read_bytes())
-            run_isolated(python, [str(native_suite)], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(native_suite)], cwd=consumer, env=local_env)
             # Date/discovery APIs work in base installs; PDF operations fail
             # clearly until the opt-in extra from the same distribution resolves.
             paper_suite = consumer / "public_paper_consumer.py"
             paper_suite.write_bytes((ROOT / "tests/papers/public_paper_consumer.py").read_bytes())
-            run_isolated(python, [str(paper_suite), "TestDates", "TestMissingExtra"], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(paper_suite), "TestDates", "TestMissingExtra"], cwd=consumer, env=local_env)
             run([uv, "pip", "install", "--python", str(python), f"{artifact}[papers]"], cwd=consumer, env=env)
-            run_isolated(python, [str(paper_suite), "TestDates", "TestPdf"], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(paper_suite), "TestDates", "TestPdf"], cwd=consumer, env=local_env)
             command = scripts / ("research-repo-tools.exe" if os.name == "nt" else "research-repo-tools")
             assert run([str(command), "--version"], cwd=consumer, env=local_env).strip() == version
             assert "changelog" in run([str(command), "--help"], cwd=consumer, env=local_env)
@@ -349,14 +363,14 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             # and a real project kernel without touching the user's kernels.
             run([str(just), "notebook-sync"], cwd=recipe_consumer, env=env)
             recipe_python = recipe_consumer / ".venv" / scripts.name / python.name
-            run_isolated(recipe_python, [str(notebook_suite)], cwd=recipe_consumer, env=env)
+            run_consumer_suite(recipe_python, [str(notebook_suite)], cwd=recipe_consumer, env=env)
             testing_suite = consumer / "public_testing_consumer.py"
             testing_suite.write_bytes((ROOT / "tests/notebooks/public_testing_consumer.py").read_bytes())
-            run_isolated(recipe_python, [str(testing_suite)], cwd=recipe_consumer, env=env)
+            run_consumer_suite(recipe_python, [str(testing_suite)], cwd=recipe_consumer, env=env)
             validation_suite = consumer / "public_validation_consumer.py"
             validation_suite.write_bytes((ROOT / "tests/validation/public_validation_consumer.py").read_bytes())
             validation_env = {**env, "PATH": str(recipe_python.parent) + os.pathsep + env.get("PATH", "")}
-            run_isolated(recipe_python, [str(validation_suite)], cwd=recipe_consumer, env=validation_env)
+            run_consumer_suite(recipe_python, [str(validation_suite)], cwd=recipe_consumer, env=validation_env)
             tools_suite = consumer / "public_python_tools_consumer.py"
             tools_suite.write_bytes((ROOT / "tests/validation/public_python_tools_consumer.py").read_bytes())
             registry = consumer / "registry"
@@ -374,10 +388,10 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
                 "RRT_TEST_REGISTRY": str(registry),
                 "UV_PYTHON_INSTALL_DIR": str(consumer / "profile python"),
             }
-            run_isolated(recipe_python, [str(tools_suite)], cwd=recipe_consumer, env=profile_env)
+            run_consumer_suite(recipe_python, [str(tools_suite)], cwd=recipe_consumer, env=profile_env)
             minimum_suite = consumer / "public_python_minimum_consumer.py"
             minimum_suite.write_bytes((ROOT / "tests/toolchain/public_python_minimum_consumer.py").read_bytes())
-            run_isolated(python, [str(minimum_suite)], cwd=consumer, env=profile_env)
+            run_consumer_suite(python, [str(minimum_suite)], cwd=consumer, env=profile_env)
             notebook = recipe_consumer / "notebooks" / "smoke.ipynb"
             notebook.parent.mkdir()
             notebook.write_text(
@@ -471,9 +485,11 @@ def main() -> int:
     args = parser.parse_args()
     try:
         check(args.dist.resolve(), changelog_only=args.changelog_only)
-    except subprocess.CalledProcessError as error:
-        print(error.stdout or "")
-        print(error.stderr or "")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
+        for output, stream in ((error.stdout, sys.stdout), (error.stderr, sys.stderr)):
+            if output:
+                stream.write(output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output)
+                stream.flush()
         raise
     return 0
 

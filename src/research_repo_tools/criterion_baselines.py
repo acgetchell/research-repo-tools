@@ -9,7 +9,7 @@ from pathlib import Path
 from research_repo_tools.complete_runs import CompletePolicy, CompleteSample, _integer, collect_complete_sample
 from research_repo_tools.criterion import _positive, _statistic, _unit
 from research_repo_tools.criterion_inventory import parse_inventory
-from research_repo_tools.evidence import _load_json, _string
+from research_repo_tools.evidence import _load_json, _object, _string
 from research_repo_tools.measurement import _strings
 from research_repo_tools.publication import _path, _publication_name
 from research_repo_tools.publication_config import _table
@@ -58,15 +58,17 @@ class SavedSamplePlan:
 
 
 def load_saved_sample(root: Path, configuration: str) -> SavedSamplePlan:
-    """Read strict schema-1 TOML and an explicit expected or retained inventory."""
+    """Read strict saved-sample TOML and an explicit expected or retained inventory."""
     raw = _table(
         tomllib.loads(_path(root.resolve(), configuration).read_bytes().decode("utf-8")),
         "saved sample",
         {"schema", "saved-sample"},
-        {"criterion-dir", "fresh-sample", "raw-files", "expected", "inventory", "sample-count", "statistics", "confidence-level", "unit"},
+        {"criterion-dir", "fresh-sample", "raw-files", "expected", "inventory", "sample-count", "sample-counts", "statistics", "confidence-level", "unit"},
     )
-    if type(raw["schema"]) is not int or raw["schema"] != 1:
-        raise ValueError("saved sample schema must be integer 1")
+    if type(raw["schema"]) is not int or raw["schema"] not in (1, 2):
+        raise ValueError("saved sample schema must be integer 1 or 2")
+    if "sample-counts" in raw and (raw["schema"] == 1 or "sample-count" in raw):
+        raise ValueError("sample-counts requires schema 2 and excludes sample-count")
     if ("expected" in raw) == ("inventory" in raw):
         raise ValueError("saved sample requires exactly one of expected or inventory")
     expected = (
@@ -76,10 +78,11 @@ def load_saved_sample(root: Path, configuration: str) -> SavedSamplePlan:
     )
     policy = CompletePolicy(
         expected,
-        _integer(raw.get("sample-count", 100), "sample count"),
+        None if "sample-counts" in raw else _integer(raw.get("sample-count", 100), "sample count"),
         tuple(_statistic(value) for value in _strings(raw.get("statistics", ["mean", "median"]), "statistics")),
         _positive(raw.get("confidence-level", 0.95), "confidence level"),
         _unit(raw.get("unit", "ns")),
+        sample_counts=tuple((key, _integer(value, "sample count")) for key, value in _object(raw.get("sample-counts", {}), "sample counts").items()),
     )
     return SavedSamplePlan(
         _string(raw.get("criterion-dir", "target/criterion"), "criterion-dir"),

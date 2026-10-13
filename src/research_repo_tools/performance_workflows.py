@@ -84,11 +84,11 @@ def _outputs(args: argparse.Namespace, settings: Config, retained: evidence.Evid
     _validate_distinct_paths((*targets, *(_path(root, name) for name in inputs)))
     reports = {}
     if args.report:
-        from research_repo_tools.complete_runs import RUN_SCHEMA, render_run
+        from research_repo_tools.complete_runs import RUN_SCHEMAS, render_run
 
         report = (
             render_run(retained, report_path=args.report, payload_path=args.payload, manifest_path=args.manifest)
-            if retained.payload_schema == RUN_SCHEMA
+            if retained.payload_schema in RUN_SCHEMAS
             else render_report(retained)
         )
         reports[_path(root, args.report)] = report

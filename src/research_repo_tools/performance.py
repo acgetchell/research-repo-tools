@@ -181,13 +181,13 @@ def run(args: argparse.Namespace, settings: Config) -> int:
                     raise ValueError("comparison output must be outside both Criterion input roots")
         else:
             retained = evidence.load_evidence(settings.path(args.payload), settings.path(args.manifest))
-            from research_repo_tools.complete_runs import RUN_SCHEMA, render_run
+            from research_repo_tools.complete_runs import RUN_SCHEMAS, render_run
 
-            if retained.payload_schema not in {criterion.COMPARISON_SCHEMA, RUN_SCHEMA}:
+            if retained.payload_schema not in {criterion.COMPARISON_SCHEMA, *RUN_SCHEMAS}:
                 raise ValueError(f"render requires {criterion.COMPARISON_SCHEMA}; use the consumer adapter for {retained.payload_schema}")
             output = (
                 render_run(retained, **_run_report_paths(settings, args.payload, args.manifest, args.output))
-                if retained.payload_schema == RUN_SCHEMA
+                if retained.payload_schema in RUN_SCHEMAS
                 else criterion.render_comparison(criterion.parse_comparison(retained.payload)).encode("utf-8")
             )
             if args.output and any(_paths_alias(settings.path(args.output), settings.path(path)) for path in (args.payload, args.manifest)):

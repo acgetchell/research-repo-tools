@@ -55,11 +55,17 @@ aliases before execution; failed discovery never replaces existing evidence.
 ## Common-harness phases
 
 `common_measurement.DiscoveryPolicy(discovery, sample_count=100,
-statistics=("mean", "median"), confidence_level=0.95, unit="ns")` carries validated
+statistics=("mean", "median"), confidence_level=0.95, unit="ns", *, sample_counts=())` carries validated
 sample requirements without inventing expected IDs. `MeasurementPhase.policy`
-accepts either this policy or `CompletePolicy`. A schema-2 phase requires exactly
+accepts either this policy or `CompletePolicy`. A schema-2/3 phase requires exactly
 one of `expected` or `discovery`; the latter uses the same table as standalone
 discovery, omitting `schema`. Statistical settings remain at measurement top level.
+Schema 3 also accepts an exhaustive phase `sample-counts` map. In the public API,
+set `sample_count=None` and pass immutable full-ID/count pairs as `sample_counts`.
+Assignments are validated immediately; exact discovered inventory coverage is
+checked before either gate or timing. The resolved policy is retained alongside
+the discovery inventory in v2 evidence. See [complete sampling](complete-run-api.md#complete-criterion-data)
+for the schema, historical compatibility and phase-count contract.
 
 For example, replace a phase's `expected` entry with:
 
@@ -101,10 +107,10 @@ The supported `criterion_baselines` APIs are:
 | API | Contract |
 | --- | --- |
 | `SavedSamplePlan(criterion_dir, saved_sample, policy, fresh_sample="new", raw_files=("benchmark.json", "estimates.json", "sample.json"))` | Portable root-relative tree path, safe sample names, complete policy and required raw filenames |
-| `load_saved_sample(root, configuration)` | Strict schema-1 TOML using exactly one of explicit `expected` IDs or a retained `inventory` file |
+| `load_saved_sample(root, configuration)` | Strict schema-1/2 TOML using exactly one of explicit `expected` IDs or a retained `inventory` file |
 | `validate_saved_sample(criterion_dir, saved_sample, policy, *, fresh_sample="new", raw_files=("benchmark.json", "estimates.json", "sample.json"))` | Read-only complete inventories and exact raw-file equality; returns the saved `CompleteSample` |
 
-Saved-sample TOML requires integer `schema=1`, `saved-sample` and exactly one of
+Saved-sample TOML requires integer `schema=1` or `schema=2`, `saved-sample` and exactly one of
 `expected` or `inventory`. Optional fields are `criterion-dir` (default
 `target/criterion`), `fresh-sample` (default `new`), `raw-files`, `sample-count`,
 `statistics`, `confidence-level` and `unit`. Statistical defaults match
@@ -114,6 +120,13 @@ Unicode normalization, and include all three core files.
 Additional required JSON, including `tukey.json`, must parse even when both copies
 have identical bytes. Unknown native JSON fields remain accepted and preserved;
 outlier interpretation remains consumer policy.
+
+Schema 1 retains uniform sampling. Schema 2 (target v0.1.9) additionally accepts
+`sample-counts`, an exhaustive exact full-ID/count map, mutually exclusive with
+`sample-count`. It uses the same `CompletePolicy` validation as common-harness
+measurements, including when IDs come from a retained `inventory`. The public
+saved-sample API accepts either policy. No historical files or raw arrays are
+rewritten during validation.
 
 Saved names use ASCII letters/digits followed by letters/digits/dots/underscores/
 hyphens. `new`, `base`, `change`, `report`, Windows device names, traversal,

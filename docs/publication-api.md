@@ -157,7 +157,8 @@ traceback; a successful check is silent.
 
 ## Publication configuration v2
 
-Schema 2 targets v0.1.9 and accepts `research-repo-tools/complete-run/v1`
+Schema 2 targets v0.1.9 and accepts `research-repo-tools/complete-run/v1` and
+`research-repo-tools/complete-run/v2`
 evidence directly, with the same independent provenance pins, source/harness
 checks, references, markers, tagged links, preview/check and transaction contracts
 as schema 1. The [README](../README.md#complete-run-document-sections-and-coordinate-plots)

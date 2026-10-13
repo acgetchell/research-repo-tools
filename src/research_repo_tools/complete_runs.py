@@ -5,7 +5,7 @@ import binascii
 import hashlib
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
@@ -15,21 +15,29 @@ from research_repo_tools.publication import _publication_name, _relative_link
 from research_repo_tools.release_pairs import ReleasePair
 
 __all__ = [
+    "LEGACY_RUN_SCHEMA",
     "RUN_SCHEMA",
+    "RUN_SCHEMAS",
+    "RUN_SCHEMA_V2",
     "CompleteCase",
     "CompletePolicy",
     "CompleteRun",
     "CompleteSample",
     "RunSeries",
     "collect_complete_sample",
+    "parse_policy",
     "parse_run",
     "render_run",
     "run_identity",
+    "serialize_policy",
     "serialize_run",
     "validate_run_evidence",
 ]
 
 RUN_SCHEMA = "research-repo-tools/complete-run/v1"
+LEGACY_RUN_SCHEMA = RUN_SCHEMA
+RUN_SCHEMA_V2 = "research-repo-tools/complete-run/v2"
+RUN_SCHEMAS = (RUN_SCHEMA, RUN_SCHEMA_V2)
 
 
 def _array(value: object, context: str) -> list[Any]:
@@ -53,10 +61,34 @@ def _names(values, context: str) -> tuple[str, ...]:
     return result
 
 
-def _sample_settings(sample_count: int, statistics: tuple[Statistic, ...], confidence_level: float, unit: Unit) -> tuple[tuple[Statistic, ...], float]:
-    statistics = tuple(sorted(_statistic(item) for item in _names(statistics, "statistics")))
-    if type(sample_count) is not int or sample_count < 2:
+def _sample_count(value: object) -> int:
+    if type(value) is not int or value < 2:
         raise ValueError("sample count must be an integer of at least two")
+    return value
+
+
+def _sampling_counts(sample_count: int | None, sample_counts: tuple[tuple[str, int], ...]) -> tuple[tuple[str, int], ...]:
+    counts = []
+    for item in sample_counts:
+        if not isinstance(item, (tuple, list)) or len(item) != 2:
+            raise ValueError("sample counts require full ID/count pairs")
+        counts.append((_string(item[0], "sample count full ID"), _sample_count(item[1])))
+    if len(dict(counts)) != len(counts):
+        raise ValueError("sample count assignments must be unique")
+    if sample_count is None:
+        if not counts:
+            raise ValueError("sample counts must be nonempty when sample_count is None")
+    else:
+        _sample_count(sample_count)
+        if counts:
+            raise ValueError("choose exactly one of sample_count or sample_counts")
+    return tuple(sorted(counts))
+
+
+def _sample_settings(sample_count: int | None, statistics: tuple[Statistic, ...], confidence_level: float, unit: Unit) -> tuple[tuple[Statistic, ...], float]:
+    statistics = tuple(sorted(_statistic(item) for item in _names(statistics, "statistics")))
+    if sample_count is not None:
+        _sample_count(sample_count)
     level = _positive(confidence_level, "confidence level")
     if level >= 1:
         raise ValueError("confidence level must lie strictly between zero and one")
@@ -66,17 +98,67 @@ def _sample_settings(sample_count: int, statistics: tuple[Statistic, ...], confi
 
 @dataclass(frozen=True, slots=True)
 class CompletePolicy:
+    """Exact inventory with either one count or exhaustive per-case assignments."""
+
     expected: tuple[str, ...]
-    sample_count: int = 100
+    sample_count: int | None = 100
     statistics: tuple[Statistic, ...] = ("mean", "median")
     confidence_level: float = 0.95
     unit: Unit = "ns"
+    sample_counts: tuple[tuple[str, int], ...] = field(default=(), kw_only=True)
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "expected", tuple(sorted(_names(self.expected, "expected full IDs"))))
+        counts = _sampling_counts(self.sample_count, self.sample_counts)
+        if self.sample_count is None and set(dict(counts)) != set(self.expected):
+            raise ValueError(
+                f"sample count inventory differs: missing={sorted(set(self.expected) - set(dict(counts)))}, "
+                f"unexpected={sorted(set(dict(counts)) - set(self.expected))}"
+            )
+        object.__setattr__(self, "sample_counts", counts)
         statistics, level = _sample_settings(self.sample_count, self.statistics, self.confidence_level, self.unit)
         object.__setattr__(self, "statistics", statistics)
         object.__setattr__(self, "confidence_level", level)
+
+    def count_for(self, full_id: str) -> int:
+        """Return the exact required count; reject IDs outside this policy."""
+        if full_id not in self.expected:
+            raise ValueError(f"unexpected sample count full ID: {full_id}")
+        return self.sample_count if self.sample_count is not None else dict(self.sample_counts)[full_id]
+
+
+def _policy_document(policy: CompletePolicy) -> dict[str, object]:
+    return {
+        "expected": policy.expected,
+        "sample_count": policy.sample_count,
+        "sample_counts": dict(policy.sample_counts),
+        "statistics": policy.statistics,
+        "confidence_level": policy.confidence_level,
+        "unit": policy.unit,
+    }
+
+
+def serialize_policy(policy: CompletePolicy) -> bytes:
+    """Serialize the complete v2 policy for phase provenance without raw samples."""
+    return json.dumps(_policy_document(policy), ensure_ascii=False, allow_nan=False, sort_keys=True, separators=(",", ":")).encode("utf-8")
+
+
+def parse_policy(payload: bytes) -> CompletePolicy:
+    """Parse a strict v2 policy, including exhaustive count assignments."""
+    return _parse_policy(_load_json(payload, "sampling policy"))
+
+
+def _parse_policy(value: object, *, legacy: bool = False) -> CompletePolicy:
+    keys = {"expected", "sample_count", "statistics", "confidence_level", "unit"}
+    raw = _object(value, "policy", keys if legacy else keys | {"sample_counts"})
+    return CompletePolicy(
+        tuple(_array(raw["expected"], "expected")),
+        None if not legacy and raw["sample_count"] is None else _integer(raw["sample_count"], "sample count"),
+        tuple(_statistic(item) for item in _array(raw["statistics"], "statistics")),
+        _positive(raw["confidence_level"], "confidence level"),
+        _unit(raw["unit"]),
+        sample_counts=() if legacy else tuple((key, _sample_count(value)) for key, value in _object(raw["sample_counts"], "sample counts").items()),
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -132,8 +214,9 @@ class CompleteSample:
                 f"benchmark inventory differs: missing={sorted(set(self.policy.expected) - set(ids))}, unexpected={sorted(set(ids) - set(self.policy.expected))}"
             )
         for case in cases:
-            if case.sample_count != self.policy.sample_count:
-                raise ValueError(f"{case.full_id}: expected {self.policy.sample_count} raw samples, got {case.sample_count}")
+            count = self.policy.count_for(case.full_id)
+            if case.sample_count != count:
+                raise ValueError(f"{case.full_id}: expected {count} raw samples, got {case.sample_count}")
             for statistic in self.policy.statistics:
                 estimate = case.estimate(statistic)
                 if estimate.confidence_level != self.policy.confidence_level:
@@ -197,19 +280,20 @@ class CompleteRun:
     phases: tuple[tuple[str, CompleteSample], ...]
     series: tuple[RunSeries, ...]
     compatible: tuple[str, ...] = ("harness_sha256",)
+    schema: str = field(default=RUN_SCHEMA, kw_only=True)
 
     def __post_init__(self) -> None:
+        if self.schema not in RUN_SCHEMAS:
+            raise ValueError("unsupported complete run schema")
         phases = tuple((name, sample) for name, sample in self.phases)
         if len(phases) != 2 or {name for name, _ in phases} != {"baseline", "current"}:
             raise ValueError("complete run requires exactly baseline and current phases")
         if any(not isinstance(sample, CompleteSample) for _, sample in phases):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
             raise TypeError("run phases require complete samples")
         policies = [sample.policy for _, sample in phases]
-        if any(
-            (p.sample_count, p.statistics, p.confidence_level, p.unit)
-            != (policies[0].sample_count, policies[0].statistics, policies[0].confidence_level, policies[0].unit)
-            for p in policies
-        ):
+        if self.schema == LEGACY_RUN_SCHEMA and (any(p.sample_count is None for p in policies) or policies[0].sample_count != policies[1].sample_count):
+            raise ValueError("v1 run phases require matching uniform sample counts")
+        if any((p.statistics, p.confidence_level, p.unit) != (policies[0].statistics, policies[0].confidence_level, policies[0].unit) for p in policies):
             raise ValueError("run phases require matching measurement policies")
         series = tuple(self.series)
         if any(not isinstance(item, RunSeries) for item in series):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
@@ -232,17 +316,13 @@ class CompleteRun:
 def serialize_run(run: CompleteRun) -> bytes:
     return deterministic_json(
         {
-            "schema": RUN_SCHEMA,
+            "schema": run.schema,
             "compatible": run.compatible,
             "series": [{"name": series.name, "phase": series.phase, "rows": dict(series.rows)} for series in run.series],
             "phases": {
                 name: {
                     "policy": {
-                        "expected": sample.policy.expected,
-                        "sample_count": sample.policy.sample_count,
-                        "statistics": sample.policy.statistics,
-                        "confidence_level": sample.policy.confidence_level,
-                        "unit": sample.policy.unit,
+                        key: value for key, value in _policy_document(sample.policy).items() if run.schema != LEGACY_RUN_SCHEMA or key != "sample_counts"
                     },
                     "cases": [
                         {
@@ -260,19 +340,12 @@ def serialize_run(run: CompleteRun) -> bytes:
 
 def parse_run(payload: bytes) -> CompleteRun:
     raw = _object(_load_json(payload, "complete run"), "complete run", {"schema", "compatible", "series", "phases"})
-    if raw["schema"] != RUN_SCHEMA:
+    if raw["schema"] not in RUN_SCHEMAS:
         raise ValueError("unsupported complete run schema")
     phases = []
     for name, value in _object(raw["phases"], "phases").items():
         phase = _object(value, "phase", {"policy", "cases"})
-        policy = _object(phase["policy"], "policy", {"expected", "sample_count", "statistics", "confidence_level", "unit"})
-        parsed_policy = CompletePolicy(
-            tuple(_array(policy["expected"], "expected")),
-            _integer(policy["sample_count"], "sample count"),
-            tuple(_statistic(item) for item in _array(policy["statistics"], "statistics")),
-            _positive(policy["confidence_level"], "confidence level"),
-            _unit(policy["unit"]),
-        )
+        parsed_policy = _parse_policy(phase["policy"], legacy=raw["schema"] == LEGACY_RUN_SCHEMA)
         cases = []
         for item in _array(phase["cases"], "cases"):
             case = _object(item, "case", {"storage_path", "benchmark", "estimates", "sample"})
@@ -292,18 +365,25 @@ def parse_run(payload: bytes) -> CompleteRun:
                 tuple((label, _string(full_id, "full ID")) for label, full_id in _object(row["rows"], "rows").items()),
             )
         )
-    return CompleteRun(tuple(phases), tuple(series), tuple(_array(raw["compatible"], "compatible")))
+    return CompleteRun(tuple(phases), tuple(series), tuple(_array(raw["compatible"], "compatible")), schema=_string(raw["schema"], "run schema"))
 
 
 def validate_run_evidence(evidence: Evidence) -> CompleteRun:
-    if evidence.payload_schema != RUN_SCHEMA:
+    if evidence.payload_schema not in RUN_SCHEMAS:
         raise ValueError("requires complete-run evidence")
     run = parse_run(evidence.payload)
+    if run.schema != evidence.payload_schema:
+        raise ValueError("complete run payload and envelope schemas differ")
     sources = dict(evidence.sources)
     if set(sources) != {"baseline", "current"}:
         raise ValueError("run provenance requires baseline and current sources")
     for phase, source in sources.items():
         context = dict(source.context)
+        if run.schema == RUN_SCHEMA_V2:
+            if "sampling-policy" not in context:
+                raise ValueError("run provenance missing sampling-policy")
+            if parse_policy(context["sampling-policy"].encode("utf-8")) != dict(run.phases)[phase].policy:
+                raise ValueError("retained sampling policy differs from complete policy")
         if "discovery-inventory" in context:
             from research_repo_tools.criterion_inventory import parse_inventory
 
