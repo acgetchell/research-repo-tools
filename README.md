@@ -1226,8 +1226,14 @@ See the [API contracts](docs/api.md#paper-date-pdf-and-native-discovery-api) and
 ### Performance evidence
 
 These APIs and recipes require a published release newer than `0.1.2` containing
-them. Merge the packaged `performance` recipe into the consumer justfile, then
-compare existing Criterion trees without executing benchmarks:
+them.
+The [v0.1.9 adoption matrix](docs/performance-migration.md#release-capability-adoption)
+lists the minimum version, extras, migration steps and compatibility boundaries
+for the coordinated performance extensions. Adopt `research-repo-tools==0.1.9`
+only after its GitHub and PyPI publication is verified.
+
+Merge the packaged `performance` recipe into the consumer justfile, then compare
+existing Criterion trees without executing benchmarks:
 
 ```sh
 just performance compare target/baseline/criterion target/current/criterion --output target/comparison.json
@@ -1684,10 +1690,10 @@ accepted; conflicting bytes or incomplete provider metadata fail.
 
 ### Trusted release target handoff
 
-Use an exact published package version containing the post-v0.1.8 target API.
-This working-tree capability is not available in v0.1.8; record its containing
-release when published before adopting it downstream. Install that pin in trusted
-preflight and writer jobs. With the installed console command on PATH, preflight
+The target API requires v0.1.9 or newer. Adopt an exact published pin after
+GitHub and PyPI verification; v0.1.8 does not contain this capability. Install
+that pin in trusted preflight and writer jobs. With the installed console command
+on PATH, preflight
 captures the expected workflow commit and a title-equals-tag assertion:
 
 ```sh
