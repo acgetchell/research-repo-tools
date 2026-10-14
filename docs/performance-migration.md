@@ -7,6 +7,39 @@ throughout the migration; a new common envelope does not replace old schemas
 automatically. Consumer commands and new-evidence examples are in the
 [README](../README.md#performance-evidence).
 
+## Release capability adoption
+
+The coordinated extensions below first become available in v0.1.9. Pin
+`research-repo-tools==0.1.9` only after the release workflow verifies
+the GitHub Release and the unyanked PyPI wheel and sdist. A merged implementation,
+local build or sibling checkout does not satisfy that publication gate.
+
+All listed capabilities ship in the base package; no optional extra is required.
+Native measurement still requires the consumer's Git/Rust/Cargo toolchain, and
+GitHub release operations require authenticated GitHub CLI. Notebook, paper and
+Python validator dependencies retain their separately documented extras.
+
+v0.1.9 requires Python 3.15 or newer and selects Python 3.15 for development.
+Use the existing [shared Python adoption recipes](../README.md#shared-python-adoption)
+to reconcile the exact package pin, support metadata, tool declarations and
+locked environment. Preserve consumer Ruff configuration and precise exceptions;
+the shared gate now runs format, lint and strict ty with first-failure termination.
+Refresh the packaged Just/configuration templates, then exercise the consumer's
+actual native workflow before deleting generic helpers.
+
+| Capability | Migration and supported interface | Compatibility boundary |
+| --- | --- | --- |
+| Captured release targets (#94) | Pass versioned target JSON from [trusted preflight to the writer](../README.md#trusted-release-target-handoff) | Bind uploads to the captured ID, tag commit, title and lifecycle; consumers retain trusted handoff, archive formats and publication decisions |
+| Coordinate plots (#95) | Declare series, coordinates, statistic, units and axes through [configured presentation](complete-run-api.md#configured-presentation) | Preserve original phases and recorded marginal timing intervals; coordinates and scientific interpretation stay in consumers |
+| Provenance reports (#96) | Use [retention and report rendering](complete-run-api.md#retention-and-publication) with existing current/archive paths | The mutable index can migrate to renderer version 2; old retained reports and exact evidence bytes remain immutable, with no host recapture |
+| Complete-run document publication (#97) | Select complete evidence or retained history with [publication schema 2](publication-api.md#publication-configuration-v2) | Schema 1 still accepts comparison evidence; retain original series phases, document bytes outside markers and transactional freshness checks |
+| Criterion discovery and saved baselines (#98) | Configure native discovery and exact saved-file checks through the [Criterion APIs](criterion-api.md) and packaged templates | Semantic IDs stay separate from storage paths; require complete inventories and identical configured raw JSON bytes before publication |
+| Heterogeneous sample counts (#101) | Explicitly select [measurement schema 3 and complete-run v2](complete-run-api.md#configuration-and-measurement), with exhaustive per-case counts | Uniform schema-2/v1 defaults remain supported; original samples are never padded, discarded or relabelled, and historical schemas retain their contracts |
+
+Retain consumer scientific gates, workload selection, compatibility adapters and
+legacy artifacts. Shared package validation covers generic behavior; downstream
+adoption still requires focused tests of the actual published pin and configuration.
+
 ## Preserve existing evidence
 
 MCMC retains `criterion-comparison/v1` CSV with
@@ -155,14 +188,17 @@ scientific interpretation and figures remain consumer responsibilities. See the
 
 ### Plotting disposition
 
-The optional multi-series coordinate/dimension plot is deferred. The second
-consumer's host/profiling use case does not establish a shared coordinate
-contract. Named series and selected report tables are shared now. A small
-consumer renderer reads `validate_run_evidence`, obtains each series' originating
-phase, and selects its `CompleteCase.estimate` values. It owns coordinate
-extraction, axis labels, domain-specific series styling and existing figure paths.
-Pre-render its figures and prose and compose them with retained evidence through
-`publication.plan_outputs` in one publication transaction. No consumer names,
+v0.1.9 supplies generic multi-series coordinate plots through
+[`run_presentation`](complete-run-api.md#configured-presentation) and
+[complete-run document configuration](publication-api.md#publication-configuration-v2).
+Declare named series, benchmark-to-coordinate mappings, mean or median, recorded
+units, labels, linear/log axes and explicit missing-row handling in consumer
+configuration. The shared renderer produces deterministic accessible SVG and
+optional timing CSV with original phases and recorded marginal intervals.
+
+Consumers retain coordinate meanings, scientific eligibility, interpretation and
+figure paths. Existing domain renderers can compose pre-rendered figures and prose
+with retained evidence through `publication.plan_outputs`. No consumer names,
 matrix dimensions, nalgebra or faer dispatch belong in the shared runtime.
 
 Generic sample/identity, source/harness mismatch, gate failure, immutable retention,
@@ -222,10 +258,10 @@ package evidence.
 ## Captured release target adoption
 
 [Issue #94](https://github.com/acgetchell/research-repo-tools/issues/94) supplies
-the post-v0.1.8 [release-target contract](workflow-api.md#release-assets).
-Upstream merge alone does not authorize downstream deletion. After code,
-documentation and required native validation are merged, record the exact release
-containing this capability in the issue. Consumers must pin that published package
+the v0.1.9 [release-target contract](workflow-api.md#release-assets).
+Upstream merge alone does not authorize downstream deletion. Verify v0.1.9
+publication and record its release and native validation evidence before adoption.
+Consumers must pin that published package
 and pass focused integration checks before deleting their working implementation.
 This does not reopen completed v0.1.8 capabilities or their existing adoption gates.
 

@@ -5,6 +5,134 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.1.9] - 2026-10-14
+
+### ⚠️ Breaking Changes
+
+- Python 3.15 or newer is required. The shared Python check
+  runs format, lint and ty --error all in that order and stops at the first
+  failing batch. Fix runs lint-fix before format and also stops on failure.
+
+### Added
+
+- Preserve preflight identity through publication [`40ee125`](https://github.com/acgetchell/research-repo-tools/commit/40ee125808af8e91a5b81982eabbf8b702c3e181)
+
+  Capture release targets for trusted handoff across long-running benchmark
+  jobs. Bind uploads and publication to the captured release ID, recheck
+  commit, title and lifecycle, and verify completed assets using provider
+  metadata and exact bytes. Existing upload callers capture a target within
+  their invocation.
+
+  Share target and publication-response validation with reviewed releases,
+  and document the la-stack migration and published-package adoption gates.
+
+  Require uv 0.13.0 and refresh executing, filelock, pycparser and pypdf.
+- Add Criterion discovery and baseline verification
+  [`8e85ae3`](https://github.com/acgetchell/research-repo-tools/commit/8e85ae36b6b30136345fc185b210ad911e635ae4)
+
+  - Discover semantic benchmark IDs with bounded native commands and private output.
+  - Let common-harness phases derive exact completeness policies from discovery.
+  - Verify complete fresh and saved samples against identical required JSON bytes.
+  - Document configuration, workflow ordering and consumer adoption boundaries.
+- Expose complete-run provenance and evidence links
+  [`6fc87b1`](https://github.com/acgetchell/research-repo-tools/commit/6fc87b1f21f53ccb43fdc24e11cb3d2b6be32cda)
+
+  Render recorded per-phase fingerprints, host and toolchain observations, dependencies, commands, and correctness-gate results with privacy-aware escaping.
+
+  Link published and offline file reports to their exact retained evidence. Preserve immutable legacy reports through versioned renderer entries, and reject
+  case or Unicode aliases of reserved run history.
+
+  Refresh locked maintenance dependencies.
+- Publish complete-run tables and coordinate plots
+  [`d4ca7d7`](https://github.com/acgetchell/research-repo-tools/commit/d4ca7d7ede45b4391a98a1ee9e4b6b84484fdc0d)
+
+  Add configurable mean and median coordinate plots, recorded marginal timing
+  intervals, and CSV exports while preserving original phase and run identities.
+
+  Publish document sections directly from complete-run evidence or validated
+  retained selections with freshness checks and transactional artifact updates.
+
+  Pause scheduled uv Dependabot updates until its hosted runtime supports Python
+  3.15. Keep dependency audits enabled and document the independent graph-job
+  limitation and manual update path.
+- Support heterogeneous Criterion sample counts [`41e732d`](https://github.com/acgetchell/research-repo-tools/commit/41e732d9dca504d510f2fc84f3b22b7111c0c7bf)
+
+  - Accept exhaustive per-case counts in schema-3 common-harness plans and
+    schema-2 saved-sample policies while retaining exact semantic IDs.
+  - Bind resolved phase policies to complete-run v2 evidence, provenance, and
+    run identity without changing original Criterion bytes.
+  - Preserve uniform schema-2/v1 contracts and constructor defaults; support
+    v2 evidence throughout rendering, retention, and publication.
+
+### Changed
+
+- Guard platform-specific FIFO creation [`9160db6`](https://github.com/acgetchell/research-repo-tools/commit/9160db64b7498dbf10acf97cf20c8862d2287f6c)
+- Avoid repeated measurement in report fixtures [`45d15a1`](https://github.com/acgetchell/research-repo-tools/commit/45d15a1c411d6f6c04bb59e02b4aaa45ba828c0d)
+
+  Construct deterministic retained evidence for report and history cases while preserving live measurement integration coverage. Keep isolated Windows consumers
+  within the existing per-process timeout by removing incidental host and subprocess acquisition.
+- Make legacy encoding regression portable [`bd68489`](https://github.com/acgetchell/research-repo-tools/commit/bd6848963619d6127d4f9f01ae7092208477aa53)
+
+  Capture the legacy producer's stdout and stderr as bytes, verify their
+  CP1252 representation, and decode explicitly in the calling test thread.
+  This preserves the negative control without relying on Windows subprocess
+  reader threads to propagate decoding exceptions to the caller.
+
+  Document the retained benchmark evidence's older schema and hash format
+  without regenerating or relabelling historical measurements.
+
+### Documentation
+
+- Clarify release-upload commit binding [`8c84e1b`](https://github.com/acgetchell/research-repo-tools/commit/8c84e1b7a9fb082227d6cd070ab79c8ff3be75f3)
+
+  Explain that uploads without --target capture the current remote tag
+  commit and cannot detect earlier tag movement or bind an earlier build.
+  Direct callers to asserted preflight and the trusted target handoff.
+
+  Keep each installed-consumer suite's setup and execution together.
+
+### Fixed
+
+- Reject empty release-target bindings [`03e468f`](https://github.com/acgetchell/research-repo-tools/commit/03e468fcd659ae0db3ed07b119cbe3dfd2e6c0b6)
+
+  Reject explicitly empty commit, target and output options before API access,
+  and enforce single-line title assertions for Unicode separators.
+
+  Clarify target API availability and error contracts, repair package README
+  links, and keep release-upload help options in lexical order.
+
+  Strengthen installed-consumer coverage of the v1 wire format, binary child
+  transport and annotated-tag depth boundary, and observe publication attempts
+  through the current GitHub API boundary.
+- Redact access and private key credentials [`1b10539`](https://github.com/acgetchell/research-repo-tools/commit/1b1053982861f028a5156191e8e6f4bd888f97f0)
+
+  Recognize hyphenated, underscored, and case-insensitive credential names in recorded options, assignments, and environment overrides.
+- Redact shell command tails in provenance reports
+  [`2db1c75`](https://github.com/acgetchell/research-repo-tools/commit/2db1c753e9e7b64116a993c461b6792e03e5973c)
+- Redact env-prefixed inline shell commands [`e79dd72`](https://github.com/acgetchell/research-repo-tools/commit/e79dd7231db5331236c1dcbdea28f001bc2b3df1)
+- Budget installed consumer suites separately [`dd0a422`](https://github.com/acgetchell/research-repo-tools/commit/dd0a4221dbea846a6941b3d32aae3ab607b683b0)
+
+  Give complete consumer suites a bounded fifteen-minute budget while
+  retaining the five-minute limit for installation commands and smoke probes.
+  Stream verbose UTF-8 test progress and report suite elapsed time so native
+  package failures identify the active test.
+
+  Preserve captured stdout and stderr on timeouts as well as nonzero exits.
+
+### Performance
+
+- [**breaking**] Adopt Python 3.15 and batch shared validation
+  [`83912b1`](https://github.com/acgetchell/research-repo-tools/commit/83912b151a84d74f015da615ea5c96609dfc9e4e)
+
+  - Align the development baseline, runtime floor, owned selectors, universal
+    lock, packaged policies, CI interpreter selection and migration guidance.
+  - Select one complete inventory, preflight portable argument batches, and
+    run formatting, lint and strict types with first-failure termination.
+  - Reuse path identities within each operation while rechecking directory
+    freshness, and defer selected CLI/handler imports with Python 3.15 syntax.
+  - Add reproducible source/interpreter and separate JIT comparisons with
+    verified input/tool identities, preserved diagnostics and atomic evidence.
+
 ## [0.1.8] - 2026-10-09
 
 ### ⚠️ Breaking Changes
@@ -697,6 +825,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Document supported CLI and Python interfaces, consumer just recipes, and publisher setup.
   - Generate the initial 0.1.0 changelog from committed history.
 
+[0.1.9]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.8...v0.1.9
 [0.1.8]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.7...v0.1.8
 [0.1.7]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.6...v0.1.7
 [0.1.6]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.5...v0.1.6

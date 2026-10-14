@@ -96,9 +96,9 @@ extraction and verifies the shared schema and envelope. Explicit legacy layout
 configuration is used only when neither shared entry exists. Broken shared
 archives cannot fall back to a more permissive legacy reader.
 
-The captured release-target APIs require an exact published package version
-after v0.1.8; they are not available in v0.1.8. Record the containing release when
-published before adopting the [trusted handoff](../README.md#trusted-release-target-handoff).
+The captured release-target APIs require v0.1.9 or newer; they are not available
+in v0.1.8. Pin an exact verified published package before adopting the
+[trusted handoff](../README.md#trusted-release-target-handoff).
 
 `ReleaseTarget(repository, tag, release_id, commit, expected_title=None)` is a
 frozen validated identity. Repository is a GitHub `owner/name`, ID is a positive

@@ -11,6 +11,14 @@ output directory, and [shared Python adoption](../README.md#shared-python-adopti
 enforces the installed package's Python minimum regardless of development opt-ins.
 Review both migrations before updating a consumer's exact pin.
 
+v0.1.9 adds explicit compatibility exceptions: Python 3.15 or newer is required,
+and the shared Python gate runs format, lint and `ty --error all` in that order,
+stopping at the first failing batch. Fix runs lint-fix before format and also
+stops on failure. Review [shared Python adoption](../README.md#shared-python-adoption)
+and the [validation contract](../README.md#workflow-security-and-complete-python-validation)
+before updating a consumer. The [performance adoption matrix](performance-migration.md#release-capability-adoption)
+describes the new capabilities and preserved evidence contracts.
+
 The [complete-run and host APIs](complete-run-api.md) extend the performance
 contracts with common-harness plans, raw sample retention, named phase series,
 immutable runs, host observations and profiling declarations. Consumer usage
