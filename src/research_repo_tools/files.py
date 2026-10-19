@@ -170,7 +170,16 @@ def _restore_backups(backups: Sequence[tuple[Path, Path | None]]) -> tuple[list[
                 target.unlink(missing_ok=True)
             else:
                 _replace_path(backup, target)
-        except OSError as rollback_error:
+        except BaseException as rollback_error:
+            # Recovery can also be interrupted after its rename or unlink
+            # completed. Continue restoring other targets, retaining a backup
+            # and a structured failure only while recovery is still needed.
+            try:
+                (target if backup is None else backup).lstat()
+            except FileNotFoundError:
+                continue
+            except OSError:
+                pass  # An inaccessible path does not prove recovery succeeded.
             rollback_errors.append(RecoveryError(target, backup, rollback_error))
             if backup is not None:
                 preserved_backups.add(backup)
@@ -339,7 +348,6 @@ def _publish(writes: Sequence[tuple[Path, bytes]], *, expected: Mapping[Path, by
 
     staged_writes, created_directories = _stage_writes(writes)
 
-    committed: list[_StagedWrite] = []
     try:
         if _validate_targets([path for path, _payload in guards]) != guard_targets:
             raise ValueError("file changed before publication: snapshot paths changed; refusing to overwrite them")
@@ -348,9 +356,10 @@ def _publish(writes: Sequence[tuple[Path, bytes]], *, expected: Mapping[Path, by
                 raise ValueError(f"file changed before publication: {target}; refusing to overwrite it")
         for item in staged_writes:
             _replace_path(item.staged, item.target)
-            committed.append(item)
     except BaseException as publication_error:
-        backups = [(item.target, item.backup) for item in committed]
+        # A signal can arrive after the rename succeeds but before its Python
+        # call returns. A consumed staging file identifies that replacement.
+        backups = [(item.target, item.backup) for item in staged_writes if not item.staged.exists()]
         rollback_errors, preserved_backups = _restore_backups(backups)
         _cleanup_temporary_paths(_transaction_temporary_paths(staged_writes), preserved_backups)
         _remove_created_directories(created_directories)

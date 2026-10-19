@@ -141,9 +141,7 @@ def load(path: Path) -> Notebook:
 def selected_paths(paths: list[Path]) -> list[Path]:
     if not paths:
         raise ValueError("select at least one notebook explicitly")
-    resolved = [path.resolve() for path in paths]
-    if len(set(resolved)) != len(paths):
-        raise ValueError("selected notebook paths must be distinct")
+    resolved = list(files._validate_distinct_paths(paths))
     if any(path.suffix != ".ipynb" or not path.is_file() for path in resolved):
         raise ValueError("selected notebooks must be existing .ipynb files")
     return resolved
@@ -317,12 +315,15 @@ def _execute_reports(
     reports = [target.with_suffix(".report.json") for target in targets]
     # Resolve existing symlink parents before execution; artifacts cannot alias
     # any source, even through another selected notebook's output path.
-    source_paths = {notebook.path for notebook in notebooks}
     for target in [*targets, *reports]:
-        if not target.resolve().is_relative_to(destination) or target.resolve() in source_paths or target.is_symlink():
+        if not target.resolve().is_relative_to(destination) or target.is_symlink():
             raise ValueError(f"unsafe notebook artifact path: {target}")
         if target.exists() and not target.is_file():
             raise ValueError(f"notebook artifact is not a regular file: {target}")
+        for parent in target.parents:
+            if parent.exists() and not parent.is_dir():
+                raise ValueError(f"notebook artifact parent is not a directory: {parent}")
+    files._validate_distinct_paths([*(notebook.path for notebook in notebooks), *targets, *reports])
     managed = runtime(settings)
     selected_environment = project_environment(root) if environment is None else environment.resolve()
     if Path(sys.prefix).resolve() != selected_environment:

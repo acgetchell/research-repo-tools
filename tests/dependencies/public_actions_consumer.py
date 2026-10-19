@@ -27,7 +27,11 @@ class TestActionsConsumer(unittest.TestCase):
         self.policy.write_bytes(json.dumps({"github_owned_allowed": False, "verified_allowed": False, "patterns_allowed": ["approved/action@*"]}).encode())
         self.workflow = self.root / "ci.yml"
         self.workflow.write_bytes(
-            f"name: example\r\non: push\r\npermissions: {{}}\r\njobs:\r\n  test:\r\n    steps:\r\n      - uses: 'approved/action@{OLD}' # v1.0.0 keep\r\n".encode()
+            (
+                f"name: example\r\non: push\r\npermissions: {{}}\r\njobs:\r\n  test:\r\n    steps:\r\n      - uses: 'approved/action@{OLD}' # v1.0.0 keep\r\n"
+                f"      - uses: '$/.github/actions/setup' # v1.0.0 {OLD}\r\n"
+                f"  same_repository:\r\n    uses: $/.github/workflows/check.yml # v1.0.0 {OLD}\r\n"
+            ).encode()
         )
         self.update_policy = self.root / "updates.toml"
         self.update_policy.write_bytes(b'[actions]\n"approved/action" = "latest"\n')
@@ -45,7 +49,7 @@ class TestActionsConsumer(unittest.TestCase):
         before = self.workflow.read_bytes()
         status, _, error = self.invoke("allowlist", "--policy", str(self.policy), str(self.workflow))
         self.assertEqual(status, 1)
-        self.assertIn("ci.yml:9", error)
+        self.assertIn("ci.yml:12", error)
         self.assertIn("other/repo/.github/workflows/test.yml@*", error)
         self.assertEqual(self.workflow.read_bytes(), before)
 
@@ -70,7 +74,7 @@ class TestActionsConsumer(unittest.TestCase):
             status, report, error = self.invoke(*args)
             self.assertEqual(status, 0, error)
             self.assertIn(f"{OLD} (# v1.0.0) -> {NEW} (# v2.0.0)", report)
-            expected = before.replace(OLD.encode(), NEW.encode()).replace(b"# v1.0.0", b"# v2.0.0")
+            expected = before.replace(f"approved/action@{OLD}' # v1.0.0".encode(), f"approved/action@{NEW}' # v2.0.0".encode())
             self.assertEqual(self.workflow.read_bytes(), expected)
             self.assertEqual(self.invoke(*args, "--check")[0], 0)
             self.assertEqual(self.workflow.read_bytes(), expected)

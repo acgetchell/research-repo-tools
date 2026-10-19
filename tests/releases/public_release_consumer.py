@@ -86,6 +86,26 @@ class TestReleaseConsumer(unittest.TestCase):
     def snapshot(self) -> dict[str, bytes]:
         return {path.relative_to(self.root).as_posix(): path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
 
+    def test_release_edits_preserve_unicode_strings_before_real_toml_versions(self) -> None:
+        baseline = self.snapshot()
+        for separator in ("\x85", "\u2028", "\u2029"):
+            for newline in ("\n", "\r\n"):
+                with self.subTest(separator=separator, newline=newline):
+                    for name, payload in baseline.items():
+                        (self.root / name).write_bytes(payload)
+                    originals = {}
+                    for name in ("Cargo.toml", "Cargo.lock", "pyproject.toml", "uv.lock"):
+                        prefix = f'note = """a{separator}b{separator}c{separator}d\nversion = "1.2.3"\n"""\n'
+                        original = (prefix + baseline[name].decode().replace("\r\n", "\n")).replace("\n", newline).encode()
+                        (self.root / name).write_bytes(original)
+                        originals[name] = (prefix.replace("\n", newline).encode(), original)
+                    plan = self.plan()
+                    for name, (_prefix, original) in originals.items():
+                        self.assertEqual((self.root / name).read_bytes(), original)
+                    apply_release(plan)
+                    for name, (prefix, original) in originals.items():
+                        self.assertEqual((self.root / name).read_bytes(), prefix + original[len(prefix) :].replace(b'"1.2.3"', b'"1.2.4"'))
+
     def plan(self, **kwargs):
         return plan_release(self.root, "1.2.4", previous_tag="v1.2.3", release_date="2026-09-20", policy=self.policy, **kwargs)
 

@@ -23,6 +23,22 @@ def template(name: str) -> str:
     return output.getvalue()
 
 
+class TestCoverage(unittest.TestCase):
+    def test_prefix_starting_with_dash_survives_cli_forwarding(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            report = root / "coverage.xml"
+            payload = b'<coverage><class filename="-generated/a.rs"><lines><line number="1" hits="1"/></lines></class></coverage>'
+            report.write_bytes(payload)
+            output, error = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(output), contextlib.redirect_stderr(error):
+                status = main(["--root", str(root), "coverage", "report", "--report", "coverage.xml", "--prefix=-generated"])
+            self.assertEqual(status, 0)
+            self.assertEqual(output.getvalue(), "100.00%  -generated/a.rs\n")
+            self.assertEqual(error.getvalue(), "")
+            self.assertEqual(report.read_bytes(), payload)
+
+
 class TestPythonPolicy(unittest.TestCase):
     @override
     def setUp(self) -> None:

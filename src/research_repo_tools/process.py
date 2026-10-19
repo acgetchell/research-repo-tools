@@ -26,6 +26,7 @@ type ExceptionFamily = tuple[type[BaseException], ...]
 
 DEFAULT_COMMAND_TIMEOUT_SECONDS = 300.0
 _GENERIC_CPU_NAMES = frozenset({"amd64", "arm", "arm64", "aarch64", "i386", "i686", "unavailable", "unknown", "x86_64"})
+_WINDOWS_DEFAULT_PATHEXT = ".COM;.EXE;.BAT;.CMD;.VBS;.JS;.WS;.MSC"
 
 __all__ = [
     "ExecutableNotFoundError",
@@ -43,27 +44,65 @@ class ExecutableNotFoundError(Exception):
     """Raised when a required executable is not found in PATH."""
 
 
+def _windows_environment(environment: Mapping[str, str]) -> dict[str, str]:
+    """Apply Windows environment-name rules to ordinary supplied mappings."""
+    return {key.upper(): value for key, value in environment.items()}
+
+
+def _windows_executable_names(command: str, pathext: str | None) -> tuple[str, ...]:
+    """Match Python 3.15 shutil.which's executable-mode PATHEXT ordering."""
+    extensions = tuple(extension.rstrip(".") for extension in (pathext or _WINDOWS_DEFAULT_PATHEXT).split(";") if extension)
+    names = tuple(command + extension for extension in extensions)
+    if command.upper().endswith(tuple(extension.upper() for extension in extensions)):
+        return (command, *names)
+    return names
+
+
+def _find_windows_executable(candidate: Path, pathext: str | None) -> str | None:
+    # shutil.which reads ambient PATHEXT even when given an explicit path.
+    # Use its candidate/access rules with the caller's replacement environment.
+    return next(
+        (
+            name
+            for name in _windows_executable_names(str(candidate), pathext)
+            if os.path.exists(name) and os.access(name, os.F_OK | os.X_OK) and not os.path.isdir(name)
+        ),
+        None,
+    )
+
+
 def resolve_executable(command: str | Path, *, cwd: Path | None = None, env: Mapping[str, str] | None = None) -> Path:
     """Resolve an executable to an absolute path without launching it.
 
     Explicit paths and relative PATH entries are relative to cwd (the caller's
     directory by default). env replaces the environment; a missing PATH uses
-    os.defpath. Windows extension lookup follows shutil.which/PATHEXT.
+    os.defpath. Windows environment names are case-insensitive; extension lookup
+    follows shutil.which with the selected environment's PATHEXT (or its default).
     This is discovery, not a trust or identity guarantee against concurrent edits.
     """
     name = os.fspath(command)
     if not name or "\x00" in name:
         raise ValueError("command must be a nonempty executable name or path without NUL")
     directory = Path.cwd() if cwd is None else cwd.absolute()
+    windows = sys.platform == "win32"
+    environment = os.environ if env is None else env
+    if windows:
+        environment = _windows_environment(environment)
     if isinstance(command, Path) or os.path.dirname(name):
         candidate = Path(name)
         candidates = (candidate if candidate.is_absolute() else directory / candidate,)
     else:
-        environment = os.environ if env is None else env
         candidates = tuple(directory / entry / name for entry in environment.get("PATH", os.defpath).split(os.pathsep))
     # Search explicit paths so Windows cannot implicitly prepend the parent
     # process's working directory ahead of the selected environment's PATH.
-    selected = next((found for candidate in candidates if (found := shutil.which(str(candidate))) is not None), None)
+    selected = next(
+        (
+            found
+            for candidate in candidates
+            if (found := _find_windows_executable(candidate, environment.get("PATHEXT")) if windows else shutil.which(str(candidate))) is not None
+        ),
+        None,
+    )
     if selected is None:
         raise ExecutableNotFoundError(f"Required executable {command!r} not found in PATH or at the explicit path")
     # Do not resolve symlinks: some tools (including venv Python) use argv[0].

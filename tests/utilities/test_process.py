@@ -24,6 +24,7 @@ from research_repo_tools.process import (
     get_git_commit_hash,
     get_git_remote_url,
     get_safe_executable,
+    resolve_executable,
     run_cargo_command,
     run_git_command,
     run_git_command_with_input,
@@ -110,12 +111,90 @@ class TestGetSafeExecutable:
     def test_returns_full_executable_path(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         selected = str(tmp_path / "bin" / "git")
         monkeypatch.setattr(subprocess_utils.shutil, "which", lambda _command: selected)
+        monkeypatch.setattr(subprocess_utils, "_find_windows_executable", lambda _command, _pathext: selected)
         assert get_safe_executable("git") == selected
 
     def test_raises_when_executable_is_missing(self, monkeypatch: pytest.MonkeyPatch) -> None:
         monkeypatch.setattr(subprocess_utils.shutil, "which", lambda _command: None)
+        monkeypatch.setattr(subprocess_utils, "_find_windows_executable", lambda _command, _pathext: None)
         with pytest.raises(ExecutableNotFoundError, match="Required executable 'git' not found in PATH"):
             get_safe_executable("git")
+
+
+class TestExecutableEnvironment:
+    @pytest.mark.parametrize("path_key,extension_key", [("PATH", "PATHEXT"), ("Path", "PathExt"), ("path", "pathext")])
+    def test_windows_mapping_names_are_case_insensitive(self, path_key, extension_key):
+        supplied = {path_key: "selected-tools", extension_key: ".SECOND;.FIRST"}
+        assert subprocess_utils._windows_environment(supplied) == {"PATH": "selected-tools", "PATHEXT": ".SECOND;.FIRST"}
+        assert supplied == {path_key: "selected-tools", extension_key: ".SECOND;.FIRST"}
+
+    @pytest.mark.parametrize(
+        "command,pathext,expected",
+        [
+            ("tool", ".CMD;.EXE", ("tool.CMD", "tool.EXE")),
+            ("tool.eXe", ".CMD;.EXE", ("tool.eXe", "tool.eXe.CMD", "tool.eXe.EXE")),
+            ("tool.unknown", ".CMD;.EXE", ("tool.unknown.CMD", "tool.unknown.EXE")),
+            ("tool", ".CMD.;.EXE;;", ("tool.CMD", "tool.EXE")),
+            ("tool", ";", ()),
+        ],
+    )
+    def test_windows_candidate_order_matches_native_which_rules(self, command, pathext, expected):
+        assert subprocess_utils._windows_executable_names(command, pathext) == expected
+
+    @pytest.mark.parametrize("pathext", [None, ""])
+    def test_windows_absent_or_empty_pathext_uses_standard_default(self, pathext):
+        assert subprocess_utils._windows_executable_names("tool", pathext) == (
+            "tool.COM",
+            "tool.EXE",
+            "tool.BAT",
+            "tool.CMD",
+            "tool.VBS",
+            "tool.JS",
+            "tool.WS",
+            "tool.MSC",
+        )
+
+    def test_windows_lookup_prefers_known_direct_name_then_ordered_fallbacks(self, tmp_path):
+        direct = tmp_path / "tool.EXE"
+        first, second = tmp_path / "tool.EXE.CMD", tmp_path / "tool.EXE.EXE"
+        for candidate in (direct, first, second):
+            candidate.write_bytes(b"executable fixture")
+            candidate.chmod(0o755)
+        assert subprocess_utils._find_windows_executable(direct, ".CMD;.EXE") == str(direct)
+        direct.unlink()
+        assert subprocess_utils._find_windows_executable(direct, ".CMD;.EXE") == str(first)
+        first.unlink()
+        # A directory must not hide a later accessible executable candidate.
+        first.mkdir()
+        assert subprocess_utils._find_windows_executable(direct, ".CMD;.EXE") == str(second)
+
+    def test_windows_lookup_rejects_a_direct_name_outside_supplied_pathext(self, tmp_path):
+        direct = tmp_path / "tool.EXE"
+        direct.write_bytes(b"executable fixture")
+        direct.chmod(0o755)
+        assert subprocess_utils._find_windows_executable(direct, ".CUSTOM") is None
+
+    @pytest.mark.skipif(sys.platform != "win32", reason="native Windows environment and filesystem rules")
+    @pytest.mark.parametrize("path_key,extension_key", [("PATH", "PATHEXT"), ("Path", "PathExt"), ("path", "pathext")])
+    def test_native_windows_resolution_uses_replacement_path_and_pathext(self, tmp_path, path_key, extension_key):
+        root = tmp_path / "selected cwd"
+        tools = root / "tools"
+        tools.mkdir(parents=True)
+        first, second = tools / "probe.RRTFIRST", tools / "probe.RRTSECOND"
+        first.write_bytes(b"first")
+        second.write_bytes(b"second")
+        # The parent process's cwd contains a same-named decoy.
+        (tmp_path / second.name).write_bytes(b"parent cwd decoy")
+        supplied = {path_key: "tools", extension_key: ".RRTSECOND;.RRTFIRST"}
+        assert resolve_executable("probe", cwd=root, env=supplied) == second
+        assert resolve_executable(Path("tools/probe"), cwd=root, env=supplied) == second
+        assert resolve_executable("tools/probe", cwd=root, env=supplied) == second
+        assert resolve_executable(first.name, cwd=root, env=supplied) == first
+        with pytest.raises(ExecutableNotFoundError):
+            resolve_executable(Path("probe"), cwd=root, env=supplied)
+        with pytest.raises(ExecutableNotFoundError):
+            resolve_executable("probe", cwd=root, env={path_key: "tools", extension_key: ".UNAVAILABLE"})
+        assert supplied == {path_key: "tools", extension_key: ".RRTSECOND;.RRTFIRST"}
 
 
 class TestRunGitCommand:

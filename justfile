@@ -92,8 +92,8 @@ install-check: build check-dist
 
 # Check the maintainer and packaged consumer recipes with the pinned Just formatter.
 justfile-check:
-    just --justfile {{ quote(justfile()) }} --fmt --check
-    just --justfile src/research_repo_tools/templates/justfile --fmt --check
+    uv run --locked just --justfile {{ quote(justfile()) }} --fmt --check
+    uv run --locked just --justfile src/research_repo_tools/templates/justfile --fmt --check
 
 # Verify the manifest and lock agree without changing dependencies.
 lock-check:
@@ -154,6 +154,10 @@ setup:
 # Synchronize the locked development environment.
 sync:
     uv sync --locked
+
+# Export a packaged configuration or workflow template.
+templates +args:
+    uv run --locked research-repo-tools templates "$@"
 
 # Run the Python test suite.
 test:

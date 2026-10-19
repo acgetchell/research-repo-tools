@@ -8,6 +8,7 @@ import sys
 import tempfile
 import tomllib
 from dataclasses import dataclass, replace
+from io import StringIO
 from pathlib import Path
 
 from packaging.requirements import Requirement
@@ -117,7 +118,7 @@ def _manifest(text: str, authority: python_baseline.PythonBaseline, old_selector
             value = value.get(part, {})
         if value.get(key) == old:
             line = key_line(text, table, key)
-            lines = text.splitlines(keepends=True)
+            lines = StringIO(text, newline="\n").readlines()
             del lines[line - 1]
             text = "".join(lines)
     return text
@@ -297,17 +298,23 @@ def apply_python_adoption(plan: PythonAdoptionPlan) -> None:
                     timeout=60,
                 )
         except BaseException as error:
+            # A signal can arrive after rename succeeds but before saved is set.
+            # Recover from the actual backup as well as the recorded state.
+            saved = saved or backup.exists()
             try:
                 # If rename itself failed, the original environment is intact.
-                if started:
+                if started or saved:
                     if environment.exists():
                         shutil.rmtree(environment)
                     if saved:
                         backup.rename(environment)
-            except OSError as recovery:
-                raise BaseExceptionGroup(
-                    "Python adoption failed; environment recovery required", [error, files.RecoveryError(environment, backup if saved else None, recovery)]
-                ) from None
+            except BaseException as recovery:
+                # A completed restore consumes its backup, even if an interrupt
+                # arrives before rename returns. Otherwise retain its location.
+                if not (saved and not backup.exists() and environment.is_dir()):
+                    raise BaseExceptionGroup(
+                        "Python adoption failed; environment recovery required", [error, files.RecoveryError(environment, backup if saved else None, recovery)]
+                    ) from None
             raise
     if saved:
         try:

@@ -92,18 +92,20 @@ def _declared_dates(path: Path, archives: Path) -> dict[str, str]:
 
 def _preserve_declared_dates(text: str, dates: dict[str, str]) -> str:
     """Retain authored dates, including dates missing from generated headings."""
-    lines = text.splitlines(keepends=True)
+    # Match the parser's LF boundaries without translating CRLF or final lines.
+    lines = text.split("\n")
     for heading in archive.parse_changelog(text).release_headings:
         if heading.version not in dates:
             continue
         line = lines[heading.line - 1]
         declared = dates[heading.version]
         if heading.date_span is None:
-            lines[heading.line - 1] = line.rstrip() + f" - {declared}\n"
+            end = len(line.rstrip())
+            lines[heading.line - 1] = line[:end] + f" - {declared}" + line[end:]
         else:
             start, end = heading.date_span
             lines[heading.line - 1] = line[:start] + declared + line[end:]
-    return "".join(lines)
+    return "\n".join(lines)
 
 
 def generate(config: Config, *, tag: str | None = None, released: str | None = None, dry_run: bool = False) -> str:

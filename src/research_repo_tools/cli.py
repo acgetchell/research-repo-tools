@@ -510,7 +510,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
     if args.group == "coverage":
         from research_repo_tools.coverage import main
 
-        arguments = ["--report", str(settings.path(args.report)), "--prefix", args.prefix]
+        arguments = ["--report", str(settings.path(args.report)), f"--prefix={args.prefix}"]
         if args.limit is not None:
             arguments += ["--limit", str(args.limit)]
         if args.descending:

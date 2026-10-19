@@ -17,16 +17,14 @@ Usage:
 """
 
 import argparse
-import os
 import re
-import stat
 import subprocess
 import sys
-import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
 
+from research_repo_tools.files import replace_many
 from research_repo_tools.process import ExecutableNotFoundError, run_safe_command
 
 # Markdown line-length limit used by this project.
@@ -108,7 +106,6 @@ _ENTRY_ATX_HEADING_RE = re.compile(r"^#{2,3}\s+(?P<title>.*?)(?:\s+#+\s*)?$")
 _ATX_HEADING_RE = re.compile(r"^(?P<level>#{1,6})\s+(?P<title>.*?)(?:\s+#+\s*)?$")
 
 # Markdown code spans used in generated text.
-_CODE_SPAN_RE = re.compile(r"`([^`]*)`")
 
 # Bare glob-like identifiers can be parsed as emphasis by Markdown linters.
 # Match complete slash-delimited paths and Rust paths so suffixes are never
@@ -150,11 +147,6 @@ _SQUASH_HEADING_KINDS = {
 }
 
 _TOP_LEVEL_LIST_MARKERS = ("- ", "* ", "• ")
-
-
-def _strip_code_spans(text: str) -> str:
-    """Return *text* with markdown code-span delimiters removed."""
-    return _CODE_SPAN_RE.sub(r"\1", text)
 
 
 def _backtick_span_end(text: str, start: int) -> int | None:
@@ -635,29 +627,6 @@ def _normalize_list_continuation_indent(line: str, lines: list[str], idx: int) -
     return line
 
 
-def _normalize_continuation_indent(line: str, lines: list[str], idx: int) -> str:
-    """Normalize over-indented list continuation lines for rumdl MD077."""
-    stripped = line.lstrip()
-    if not line.startswith(" ") or not stripped or stripped.startswith("- "):
-        return line
-
-    for j in range(idx - 1, -1, -1):
-        prev = lines[j]
-        if not prev.strip():
-            continue
-
-        prev_stripped = prev.lstrip()
-        if prev_stripped.startswith(("- ", "* ", "• ")):
-            parent_indent = len(prev) - len(prev_stripped)
-            expected = parent_indent + 2
-            actual = len(line) - len(stripped)
-            if actual > expected:
-                return " " * expected + stripped
-        break
-
-    return line
-
-
 def _list_item_indent(line: str) -> int | None:
     """Return the indentation of a Markdown list item, if *line* is one."""
     stripped = line.lstrip()
@@ -706,11 +675,6 @@ def _is_blank_between_peer_list_items(lines: list[str], idx: int) -> bool:
         return False
 
     return _has_previous_peer_list_item(lines, idx, next_indent)
-
-
-def _normalize_email_autolinks(line: str) -> str:
-    """Convert git-cliff's escaped email autolinks into Markdown autolinks."""
-    return _ESCAPED_EMAIL_RE.sub(r"<\g<email>>", line)
 
 
 def _needs_blank_before(line: str, result: list[str]) -> bool:
@@ -1115,14 +1079,16 @@ def _table_line_indices(lines: list[str]) -> set[int]:
     return preserved
 
 
-def _escape_prose_angles(text: str) -> str:
-    """Escape prose angles while retaining code, links, and Markdown delimiters.
+def _normalize_prose_angles(text: str) -> str:
+    """Escape prose angles and restore escaped email autolinks outside code.
 
     Fenced blocks have already been protected. Scanning the complete text also
-    keeps multiline code spans opaque and never decodes literal HTML entities.
+    keeps multiline code spans opaque. Tables retain their email entities.
     """
     result: list[str] = []
     position = 0
+    line_index = 0
+    table_lines = _table_line_indices(text.split("\n"))
     while position < len(text):
         end: int | None = None
         if position == 0 or text[position - 1] == "\n":
@@ -1144,9 +1110,14 @@ def _escape_prose_angles(text: str) -> str:
                 end = match.end()
         if end is not None:
             result.append(text[position:end])
+            line_index += text.count("\n", position, end)
             position = end
+        elif text[position] == "&" and line_index not in table_lines and (email := _ESCAPED_EMAIL_RE.match(text, position)):
+            result.append(f"<{email.group('email')}>")
+            position = email.end()
         else:
             result.append({"<": "&lt;", ">": "&gt;"}.get(text[position], text[position]))
+            line_index += text[position] == "\n"
             position += 1
     return "".join(result)
 
@@ -1156,7 +1127,7 @@ def postprocess_text(text: str) -> str:
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text, fenced_blocks = _protect_fenced_blocks(text)
     text = _strip_dependabot_metadata(text)
-    text = _escape_prose_angles(text)
+    text = _normalize_prose_angles(text)
 
     # Inject PR / breaking-change summary sections before reflow.
     text = _inject_summary_sections(text)
@@ -1191,7 +1162,6 @@ def postprocess_text(text: str) -> str:
 
         # --- MD030: normalise spaces after list marker ---
         line = _LIST_MARKER_SPACE_RE.sub(r"\1 ", line)
-        line = _normalize_email_autolinks(line)
 
         current_entry_summary = _update_entry_summary(line, current_entry_summary)
         is_isolated_body_heading = _is_isolated_body_heading(lines, idx)
@@ -1261,26 +1231,7 @@ def postprocess(path: Path, *, formatter: Path | None = None) -> None:
         text = format_markdown(text, path, formatter)
     require_preserved_releases(original, parse_changelog(text))
 
-    tmp_path: Path | None = None
-    try:
-        with tempfile.NamedTemporaryFile(
-            "w",
-            encoding="utf-8",
-            newline="\n",
-            dir=path.parent,
-            prefix=f".{path.name}.",
-            suffix=".tmp",
-            delete=False,
-        ) as handle:
-            tmp_path = Path(handle.name)
-            handle.write(text)
-            handle.flush()
-            os.fsync(handle.fileno())
-        tmp_path.chmod(stat.S_IMODE(path.stat().st_mode))
-        tmp_path.replace(path)
-    finally:
-        if tmp_path is not None and tmp_path.exists():  # ty: ignore[redundant-condition-strict]  Cleanup must remain safe on interrupted setup.
-            tmp_path.unlink()
+    replace_many({path: text.encode("utf-8")})
 
 
 def main(argv: list[str] | None = None) -> int:

@@ -70,6 +70,24 @@ def test_release_date_uses_the_current_package_heading_not_the_first_release(tmp
     assert release_check.find_release_metadata_mismatches(tmp_path) == []
 
 
+@pytest.mark.parametrize("separator", ["\x85", "\u2028", "\u2029"], ids=["nel", "line-separator", "paragraph-separator"])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_changelog_references_report_the_heading_after_unicode_separators(tmp_path: Path, separator: str, newline: str) -> None:
+    path = tmp_path / "CHANGELOG.md"
+    heading = f"## [{_VERSION}](https://example.org/v{_VERSION}) - {_RELEASE_DATE}"
+    text = f"# Changelog\n\nBefore{separator}heading.\n\n## [Unreleased]\n\n- Earlier{separator}body.\n\n{heading}\n\n- Current.\n"
+    path.write_bytes(text.replace("\n", newline).encode("utf-8"))
+    version = release_check._changelog_reference(path)
+    released = release_check._changelog_date_reference(path, _VERSION)
+    assert version.line == 9
+    assert version.text == heading
+    assert version.version == _VERSION
+    assert released is not None
+    assert released.line == 9
+    assert released.text == heading
+    assert released.value == _RELEASE_DATE
+
+
 def test_release_metadata_rejects_a_missing_citation_date(tmp_path: Path) -> None:
     _write_project(tmp_path)
     citation = tmp_path / "CITATION.cff"

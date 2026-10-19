@@ -7,6 +7,7 @@ import sys
 import tomllib
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from io import StringIO
 from pathlib import Path
 
 from research_repo_tools.archive_changelog import replace_release_date
@@ -68,7 +69,7 @@ def _read_text(path: Path) -> str:
 
 
 def _replace_scalar(text: str, line: int, pattern: re.Pattern[str], value: str, *, allowed: frozenset[str]) -> str:
-    lines = text.splitlines(keepends=True)
+    lines = StringIO(text, newline="\n").readlines()
     source = lines[line - 1]
     match = pattern.fullmatch(source.rstrip("\r\n"))
     if match is None or match.group("value") not in allowed:
