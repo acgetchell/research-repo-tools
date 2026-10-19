@@ -26,7 +26,8 @@
     ],
     "source_hash_format": "Legacy SHA-256 of concatenated sorted source-relative Python filenames and their raw bytes. Current runs use relative-name-and-content-digest/v1; the two hash formats must not be compared directly.",
     "original_harness_sha256_recovered_from_recorded_sdist": "834d3468479e8821170f04060008cf022e73e20cfa68b876190c19e2b91f1979",
-    "current_format": "New runs also record harness identity, native validator paths/versions/hashes, and interpreter tool_paths. Missing historical fields do not imply those checks ran during the original measurements."
+    "current_format": "New runs also record harness identity, native validator paths/versions/hashes, and interpreter tool_paths. Missing historical fields do not imply those checks ran during the original measurements.",
+    "historical_reproduction": "Exact reproduction of the retained measurements is unavailable: the measured candidate and original harness have digests but no retained immutable source/artifact locator. The committed harness is a later revision. The commands below describe a new experiment, not a replay of the historical records."
   },
   "measurement_limits": [
     "Synthetic 468-file inventory, actual files/native validators, Git NUL inventory modeled.",
@@ -37,8 +38,9 @@
     "No live LLM, network or transport savings measured; no general consumer replay-speed claim."
   ],
   "reproduction": [
+    "Choose and record an immutable candidate revision (plus any patch), source fingerprint and current harness digest for a new experiment. Preserve the historical measurement files; write all new results to a separate directory.",
     "Reconstruct the unchanged src tree at baseline_revision using read-only git archive/show, outside this checkout; do not retain historical implementations as tests.",
-    "Prepare that snapshot on Python 3.14.8 and the candidate on Python 3.15.0 with the recorded locked distribution versions and metadata.",
+    "Prepare the baseline snapshot on Python 3.14.8 and the explicitly chosen candidate on a compatible Python 3.15 environment. Record the exact interpreter, dependency lock and tool versions; differences from historical metadata limit comparisons.",
     "Run just bench-python-workflows --source /path/to/before/src --python /path/to/python314 --output /path/to/historical-314.json.",
     "Run just bench-python-workflows --source /path/to/before/src --source /path/to/candidate/src --python /path/to/python315 --output /path/to/paired-315.json.",
     "Do not run tests/installations concurrently with timing. The harness alternates paired order and discards one warmup.",

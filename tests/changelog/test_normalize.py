@@ -9,6 +9,7 @@ from unittest.mock import patch
 
 import pytest
 
+from research_repo_tools import files
 from research_repo_tools import postprocess_changelog as postprocess_changelog
 from research_repo_tools.postprocess_changelog import (
     _CodeFence,
@@ -16,7 +17,6 @@ from research_repo_tools.postprocess_changelog import (
     _inject_summary_sections,
     _is_isolated_body_heading,
     _max_pr_number,
-    _normalize_email_autolinks,
     _normalize_entry_heading,
     _normalize_indented_heading,
     _normalize_list_continuation_indent,
@@ -163,11 +163,11 @@ class TestStripTrailingBlanks:
             raise OSError(msg)
 
         if failure_point == "stage":
-            monkeypatch.setattr(postprocess_changelog.tempfile, "NamedTemporaryFile", fail)
+            monkeypatch.setattr(files.os, "open", fail)
         elif failure_point == "fsync":
-            monkeypatch.setattr(postprocess_changelog.os, "fsync", fail)
+            monkeypatch.setattr(files.os, "fsync", fail)
         else:
-            monkeypatch.setattr(postprocess_changelog.Path, "replace", fail)
+            monkeypatch.setattr(Path, "replace", fail)
         with pytest.raises(OSError, match=f"simulated {failure_point} failure"):
             postprocess(f)
         assert f.read_bytes() == original
@@ -224,9 +224,38 @@ class TestRumdlCompatibility:
         assert "\n\n- Item with body" not in result
 
     def test_normalizes_git_cliff_escaped_email_autolink(self) -> None:
-        line = "  Co-Authored-By: Oz &lt;oz-agent@warp.dev&gt;"
-        result = _normalize_email_autolinks(line)
-        assert result == "  Co-Authored-By: Oz <oz-agent@warp.dev>"
+        source = "Co-Authored-By: Oz &lt;oz-agent@warp.dev&gt;\n"
+        assert postprocess_text(source) == "Co-Authored-By: Oz <oz-agent@warp.dev>\n"
+
+    @pytest.mark.parametrize(
+        "literal",
+        [
+            "`&lt;code@example.com&gt;`",
+            "``&lt;code@example.com&gt; and `nested` ``",
+            "```&lt;code@example.com&gt; and ``nested`` ```",
+            "`&lt;code@example.com&gt;\nand &lt;other@example.com&gt;`",
+            "``&lt;code@example.com&gt;\nand `nested` &lt;other@example.com&gt;``",
+        ],
+        ids=["single", "double", "triple", "multiline-single", "multiline-double"],
+    )
+    def test_email_normalization_preserves_literal_code_fences_and_tables(self, literal: str) -> None:
+        source = (
+            "# Changelog\n\n## [Unreleased]\n\n### Changed\n\n"
+            "Co-Authored-By: Before &lt;before@example.com&gt;\n\n"
+            f"- Keep {literal} and `&lt;T&gt;`.\n\n"
+            "```text\nCo-Authored-By: Code &lt;fenced@example.com&gt;\n```\n\n"
+            "| Literal |\n| --- |\n| &lt;table@example.com&gt; |\n\n"
+            "Co-Authored-By: After &lt;after@example.com&gt;\n"
+        )
+        expected = source.replace("&lt;before@example.com&gt;", "<before@example.com>").replace("&lt;after@example.com&gt;", "<after@example.com>")
+        assert postprocess_text(source) == expected
+        assert postprocess_text(expected) == expected
+
+    def test_escaped_and_unmatched_backticks_do_not_hide_prose_email_autolinks(self) -> None:
+        source = "Escaped \\`&lt;escaped@example.com&gt;\\` and unmatched `` &lt;plain@example.com&gt;.\n\n`&lt;code@example.com&gt;`\n"
+        expected = "Escaped \\`<escaped@example.com>\\` and unmatched `` <plain@example.com>.\n\n`&lt;code@example.com&gt;`\n"
+        assert postprocess_text(source) == expected
+        assert postprocess_text(expected) == expected
 
     def test_removes_blank_after_mixed_body_before_top_level_peer(self) -> None:
         content = "# Changelog\n\n## [1.0.0] - 2026-01-01\n\n### Changed\n\n- First item\n\n  Body paragraph.\n\n  - Body point\n  - Body point\n\n  More body prose.\n\n- Second item\n"
@@ -1007,7 +1036,7 @@ class TestIntegration:
         if operation == "read":
             monkeypatch.setattr(Path, "read_text", fail_path_operation)
         elif operation == "temporary-file":
-            monkeypatch.setattr(postprocess_changelog.tempfile, "NamedTemporaryFile", fail_path_operation)
+            monkeypatch.setattr(files.os, "open", fail_path_operation)
         elif operation == "chmod":
             monkeypatch.setattr(Path, "chmod", fail_path_operation)
         else:
@@ -1083,15 +1112,15 @@ class TestPostprocess:
     def test_output_uses_lf_even_with_windows_text_file_defaults(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, newline: str) -> None:
         changelog = tmp_path / "CHANGELOG.md"
         changelog.write_bytes(f"# Changelog{newline}{newline}- Item  {newline}  {newline}".encode())
-        original_temporary_file = postprocess_changelog.tempfile.NamedTemporaryFile
+        original_fdopen = os.fdopen
 
-        def windows_temporary_file(*args: Any, **kwargs: Any) -> Any:
-            mode = args[0] if args else kwargs.get("mode", "w+b")
+        def windows_fdopen(*args: Any, **kwargs: Any) -> Any:
+            mode = args[1] if len(args) > 1 else kwargs.get("mode", "r")
             if "b" not in mode and kwargs.get("newline") is None:
                 kwargs["newline"] = "\r\n"
-            return original_temporary_file(*args, **kwargs)
+            return original_fdopen(*args, **kwargs)
 
-        monkeypatch.setattr(postprocess_changelog.tempfile, "NamedTemporaryFile", windows_temporary_file)
+        monkeypatch.setattr(os, "fdopen", windows_fdopen)
         postprocess(changelog)
         assert changelog.read_bytes() == b"# Changelog\n\n- Item\n"
         assert tuple(tmp_path.iterdir()) == (changelog,)

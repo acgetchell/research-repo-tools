@@ -201,6 +201,39 @@ def test_generation_retains_declared_dates_in_root_and_archives(consumer, monkey
         assert snapshot(consumer.root) == once
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+@pytest.mark.parametrize("final_newline", [False, True], ids=["unterminated", "terminated"])
+def test_declared_date_insertion_preserves_unicode_prose_and_line_endings(newline, final_newline):
+    text = (
+        "# Changelog\n\nPreserve pre\u2028amble.\n\n## [1.2.1] - 2000-01-01\n\n"
+        "- Earlier body\x85text\u2029continues.\n\n## [1.2.0](https://example.org/v1.2.0) \t" + ("\n" if final_newline else "")
+    ).replace("\n", newline)
+    expected = text.replace(" - 2000-01-01", " - 2026-09-07").replace("/v1.2.0) \t", "/v1.2.0) - 2026-09-06 \t")
+    dates = {"1.2.1": "2026-09-07", "1.2.0": "2026-09-06"}
+    assert changelog._preserve_declared_dates(text, dates) == expected
+    assert changelog._preserve_declared_dates(expected, dates) == expected
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_generation_keeps_unicode_prose_when_applying_prospective_and_declared_dates(tmp_path, monkeypatch, newline):
+    path = tmp_path / "CHANGELOG.md"
+    original = "# Changelog\n\n## [1.2.1] - 2026-09-06\n\n- Previous.\n\n## [1.2.0] - 2026-09-05\n\n- First.\n"
+    path.write_bytes(original.encode("utf-8"))
+    generated = (
+        "# Changelog\n\nPreserve pre\u2028amble.\n\n## [1.2.2] - 2000-01-01\n\n"
+        "- Latest body\x85text\u2029continues.\n\n## [1.2.1] - 2000-01-02\n\n- Previous.\n\n## [1.2.0]"
+    )
+    monkeypatch.setattr(changelog, "run_safe_command", lambda *args, **kwargs: subprocess.CompletedProcess([], 0, generated.replace("\n", newline), ""))
+    settings = config.parse({"changelog": {"owner": "example", "repository": "consumer"}}, root=tmp_path)
+    expected = generated.replace(" - 2000-01-01", " - 2026-09-07").replace(" - 2000-01-02", " - 2026-09-06") + " - 2026-09-05\n"
+    assert changelog.generate(settings, tag="v1.2.2", released="2026-09-07", dry_run=True) == expected
+    assert path.read_bytes() == original.encode("utf-8")
+    assert changelog.generate(settings, tag="v1.2.2", released="2026-09-07") == expected
+    assert path.read_bytes() == expected.encode("utf-8")
+    assert changelog.generate(settings) == expected
+    assert path.read_bytes() == expected.encode("utf-8")
+
+
 def test_regenerated_declared_date_still_passes_release_metadata_check(tmp_path, monkeypatch):
     from research_repo_tools import release_metadata
     from tests.releases.test_metadata import _write_project

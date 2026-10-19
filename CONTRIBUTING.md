@@ -87,6 +87,7 @@ including changelog and release recipes.
 | `just review-uncommitted` | Run opt-in CodeRabbit review of local changes only |
 | `just setup` | Install user Just and synchronize the declared development environment |
 | `just sync` | Synchronize the locked development environment |
+| `just templates ARGS...` | Export a packaged configuration or workflow template |
 | `just test` | Run the Python test suite |
 | `just update` | Upgrade tools, then Python dependencies and the development environment |
 | `just update-dependencies` | Run the Python dependency workflow |
@@ -96,6 +97,10 @@ including changelog and release recipes.
 | `just workflow-check` | Run actionlint and shared zizmor audits with reported authentication policy |
 
 The maintainer justfile also exposes the [shared changelog recipes](README.md#just-recipes).
+
+When reviewing GitHub Actions pin updates, reconcile the distributed
+`src/research_repo_tools/templates/publish-crates.yml` and `zizmor.yml` templates
+with the maintained workflows. `just workflow-check` checks both template workflows.
 Root and consumer `just release-check TAG` use the same final metadata/notes contract.
 
 Use `just check` while iterating, with targeted regressions when

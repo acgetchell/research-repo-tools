@@ -16,7 +16,7 @@ from pathlib import Path
 from typing import override
 from unittest.mock import patch
 
-from research_repo_tools import changelog, cli, config, registry, toolchain, toolchain_config
+from research_repo_tools import changelog, cli, config, registry, release_metadata, toolchain, toolchain_config, update_release
 from research_repo_tools.release_assets import GitHubRelease
 from research_repo_tools.release_publishing import RequiredCheck, check_metadata, publish_reviewed_release, require_checks, validate_event, verify_publication
 
@@ -40,6 +40,100 @@ class TestPublishingConsumer(unittest.TestCase):
             },
             root=self.root,
         )
+
+    def test_normalize_interrupt_restores_original_changelog(self):
+        path = self.root.resolve() / "CHANGELOG.md"
+        original = b"# Changelog\r\n\r\n- Existing entry\r\n\r\n"
+        path.write_bytes(original)
+        replace = Path.replace
+        interrupt = KeyboardInterrupt("after changelog replacement")
+
+        def interrupted_replace(source, destination):
+            result = replace(source, destination)
+            if source.suffix == ".tmp" and Path(destination) == path:
+                raise interrupt
+            return result
+
+        with patch.object(Path, "replace", interrupted_replace), self.assertRaises(KeyboardInterrupt) as caught:
+            cli.main(["--root", str(self.root), "changelog", "normalize"])
+        self.assertIs(caught.exception, interrupt)
+        self.assertEqual(path.read_bytes(), original)
+        self.assertEqual(set(self.root.iterdir()), {self.root / path.name})
+
+    def test_installed_sync_changelog_date_preserves_unicode_prose_and_exact_bytes(self):
+        (self.root / "pyproject.toml").write_text('[project]\nname="sample"\nversion="1.2.3"\n', encoding="utf-8", newline="\n")
+        (self.root / "CITATION.cff").write_text("version: 1.2.3\ndate-released: 2026-09-07\n", encoding="utf-8", newline="\n")
+        path = self.root / "CHANGELOG.md"
+        source = (
+            "# Changelog\n\nPreserve pre\u2028amble.\n\n## [Unreleased]\n\n- Earlier body\x85text\u2029continues.\n\n"
+            "## [1.2.3](https://example.org/v1.2.3) - 2000-01-01\n\n- Target notes."
+        )
+        for newline in ("\n", "\r\n"):
+            for final_newline in (False, True):
+                with self.subTest(newline=newline, final_newline=final_newline):
+                    text = (source + ("\n" if final_newline else "")).replace("\n", newline)
+                    path.write_bytes(text.encode("utf-8"))
+                    before = {item: item.read_bytes() for item in self.root.iterdir()}
+                    before[path] = text.replace(" - 2000-01-01", " - 2026-09-07").encode("utf-8")
+                    args = ["v1.2.3", "--repo-root", str(self.root), "--sync-changelog-date"]
+                    self.assertEqual(update_release.main(args), 0)
+                    self.assertEqual({item: item.read_bytes() for item in self.root.iterdir()}, before)
+                    self.assertEqual(update_release.main(args), 0)
+                    self.assertEqual({item: item.read_bytes() for item in self.root.iterdir()}, before)
+
+    def test_installed_generation_applies_dates_after_unicode_separators(self):
+        policy = self.root / "research.toml"
+        policy.write_text('[changelog]\nowner="example"\nrepository="project"\n', encoding="utf-8", newline="\n")
+        path = self.root / "CHANGELOG.md"
+        original = "# Changelog\n\n## [1.2.2] - 2026-09-06\n\n- Previous.\n\n## [1.2.1] - 2026-09-05\n\n- First.\n"
+        generated = (
+            "# Changelog\n\nPreserve pre\u2028amble.\n\n## [1.2.3] - 2000-01-01\n\n"
+            "- Latest body\x85text\u2029continues.\n\n## [1.2.2] - 2000-01-02\n\n- Previous.\n\n## [1.2.1]"
+        )
+        expected = generated.replace(" - 2000-01-01", " - 2026-09-07").replace(" - 2000-01-02", " - 2026-09-06") + " - 2026-09-05\n"
+        args = ["--config", str(policy), "changelog", "generate", "--tag", "v1.2.3", "--date", "2026-09-07"]
+        for newline in ("\n", "\r\n"):
+            with self.subTest(newline=newline):
+                path.write_bytes(original.encode("utf-8"))
+                with patch(
+                    "research_repo_tools.changelog.run_safe_command", return_value=subprocess.CompletedProcess([], 0, generated.replace("\n", newline), "")
+                ):
+                    self.assertEqual(changelog.generate(config.load(policy), tag="v1.2.3", released="2026-09-07", dry_run=True), expected)
+                    self.assertEqual(path.read_bytes(), original.encode("utf-8"))
+                    self.assertEqual(cli.main(args), 0)
+                    self.assertEqual(path.read_bytes(), expected.encode("utf-8"))
+                    self.assertEqual(cli.main(["--config", str(policy), "changelog", "generate"]), 0)
+                    self.assertEqual(path.read_bytes(), expected.encode("utf-8"))
+
+    def test_installed_version_diagnostic_keeps_heading_text_after_unicode_separators(self):
+        (self.root / "pyproject.toml").write_text('[project]\nname="sample"\nversion="1.2.3"\n', encoding="utf-8", newline="\n")
+        path = self.root / "CHANGELOG.md"
+        heading = "## [1.2.2] - 2026-09-06"
+        source = f"# Changelog\n\nBefore\u2028heading.\n\n## [Unreleased]\n\n- Earlier\x85body\u2029text.\n\n{heading}\n"
+        path.write_bytes(source.replace("\n", "\r\n").encode("utf-8"))
+        mismatches = release_metadata.find_version_mismatches(self.root)
+        self.assertEqual(len(mismatches), 1)
+        reference = mismatches[0].reference
+        self.assertEqual(reference.kind, release_metadata.ReferenceKind.CHANGELOG)
+        self.assertEqual(reference.line, 9)
+        self.assertEqual(reference.text, heading)
+
+    def test_installed_normalization_preserves_literal_email_entities(self):
+        path = self.root / "CHANGELOG.md"
+        source = (
+            "# Changelog\n\n## [Unreleased]\n\n### Changed\n\n"
+            "- Keep `&lt;single@example.com&gt;` and ``&lt;multi@example.com&gt;\nand `nested` &lt;other@example.com&gt;``.\n\n"
+            "```text\nCo-Authored-By: Code &lt;fenced@example.com&gt;\n```\n\n"
+            "| Literal |\n| --- |\n| &lt;table@example.com&gt; |\n\n"
+            "Co-Authored-By: Dev &lt;author@example.com&gt;\n"
+        )
+        path.write_bytes(source.replace("\n", "\r\n").encode("utf-8"))
+        expected = source.replace("&lt;author@example.com&gt;", "<author@example.com>").encode("utf-8")
+        args = ["--root", str(self.root), "changelog", "normalize"]
+        self.assertEqual(cli.main(args), 0)
+        self.assertEqual(path.read_bytes(), expected)
+        self.assertEqual(cli.main(args), 0)
+        self.assertEqual(path.read_bytes(), expected)
 
     def test_python_and_rust_final_metadata_and_cli_contract(self):
         for registry_name in ["pypi", "crates-io"]:

@@ -44,6 +44,98 @@ class Consumer(unittest.TestCase):
         )
 
 
+class TestExecutionPreflight(Consumer):
+    @override
+    def setUp(self):
+        super().setUp()
+        self.path = self.root / "notebooks" / "analysis with spaces.ipynb"
+        self.path.parent.mkdir()
+        self.write([code("raise AssertionError('must not execute')\n")])
+        (self.root / "pyproject.toml").write_bytes(b'[project]\r\nrequires-python=">=3.15"\r\n')
+
+    def assert_execution_rejected(self, paths, *, output_dir, message):
+        entries = set(self.root.rglob("*"))
+        originals = {path: path.read_bytes() for path in entries if path.is_file()}
+        out, err = io.StringIO(), io.StringIO()
+        with (
+            patch("research_repo_tools.notebooks.runtime", side_effect=AssertionError("runtime inspected before preflight")) as runtime,
+            patch("research_repo_tools.notebooks._execute", side_effect=AssertionError("kernel started before preflight")) as execute,
+            patch("research_repo_tools.files.replace_many", side_effect=AssertionError("files published before preflight")) as publish,
+            contextlib.redirect_stdout(out),
+            contextlib.redirect_stderr(err),
+        ):
+            status = main(["--root", str(self.root), "notebooks", "execute", *map(str, paths), "--output-dir", output_dir])
+        self.assertEqual(status, 1)
+        self.assertEqual(out.getvalue(), "")
+        self.assertIn(message, err.getvalue())
+        runtime.assert_not_called()
+        execute.assert_not_called()
+        publish.assert_not_called()
+        self.assertEqual(set(self.root.rglob("*")), entries)
+        self.assertEqual({path: path.read_bytes() for path in originals}, originals)
+
+    def test_output_root_and_all_ancestors_are_checked_before_any_kernel(self):
+        second = self.path.parent / "blocked" / "second.ipynb"
+        second.parent.mkdir()
+        second.write_bytes(self.path.read_bytes())
+        cases = (
+            ("pyproject.toml", self.root / "pyproject.toml"),
+            ("file-output/missing/output", self.root / "file-output"),
+            ("nested-output", self.root / "nested-output/notebooks/blocked"),
+        )
+        for output_dir, blocker in cases:
+            with self.subTest(output_dir=output_dir):
+                if not blocker.exists():
+                    blocker.parent.mkdir(parents=True, exist_ok=True)
+                    blocker.write_bytes(b"preserve blocker\r\n\x00\xff")
+                self.assertTrue(blocker.is_file())
+                if output_dir == "nested-output":
+                    prior = blocker.parent / self.path.name
+                    prior.write_bytes(b"previous notebook artifact\r\n")
+                    prior.with_suffix(".report.json").write_bytes(b"previous report\r\n")
+                self.assert_execution_rejected([self.path, second], output_dir=output_dir, message="notebook artifact parent is not a directory")
+
+    def test_portable_case_and_unicode_selections_fail_on_every_filesystem(self):
+        for names in (("Analysis.ipynb", "analysis.ipynb"), ("caf\u00e9.ipynb", "cafe\u0301.ipynb")):
+            with self.subTest(names=names):
+                first, alias = (self.path.parent / name for name in names)
+                first.write_bytes(self.path.read_bytes())
+                if alias.exists():
+                    # Native case/normalization-insensitive volumes expose the
+                    # same source through both spellings; do not rewrite it.
+                    self.assertTrue(first.samefile(alias))
+                else:
+                    # Distinct entries still collide under the portable policy.
+                    alias.write_bytes(first.read_bytes())
+                    self.assertFalse(first.samefile(alias))
+                self.assert_execution_rejected([first, alias], output_dir="artifacts", message="duplicate target paths")
+
+    def test_portable_artifact_alias_of_another_source_fails_before_execution(self):
+        other = self.root / "ARTIFACTS" / "notebooks" / self.path.name
+        other.parent.mkdir(parents=True)
+        other.write_bytes(self.path.read_bytes())
+        self.assert_execution_rejected([self.path, other], output_dir="artifacts", message="duplicate target paths")
+
+    def test_all_notebook_and_report_targets_are_checked_together(self):
+        other = self.root / "other" / self.path.name
+        other.parent.mkdir()
+        other.write_bytes(self.path.read_bytes())
+        destination = self.root / "artifacts"
+        real_parent = destination / "other"
+        real_parent.mkdir(parents=True)
+        linked_parent = destination / "notebooks"
+        try:
+            linked_parent.symlink_to(real_parent, target_is_directory=True)
+        except OSError as error:
+            self.skipTest(f"native symlink privilege unavailable: {error}")
+        self.assertTrue(linked_parent.is_symlink())
+        self.assertEqual(linked_parent.resolve(), real_parent)
+        prior = real_parent / self.path.name
+        prior.write_bytes(b"previous notebook artifact\r\n")
+        prior.with_suffix(".report.json").write_bytes(b"previous report\r\n")
+        self.assert_execution_rejected([self.path, other], output_dir="artifacts", message="duplicate target paths")
+
+
 class TestInspection(Consumer):
     def test_repair_inventory_preserves_positions_existing_ids_bytes_and_privacy(self):
         missing = code(["secret source\n", "second line\n"])

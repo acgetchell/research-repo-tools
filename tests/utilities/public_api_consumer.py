@@ -60,6 +60,45 @@ class TestProcess(ConsumerCase):
         self.assertEqual(result.stdout.splitlines(), [str(self.root), "a b; $(literal)", "é"])
         self.assertEqual(result.stderr, "")
 
+    @unittest.skipUnless(sys.platform == "win32", "native Windows environment and filesystem rules")
+    def test_windows_replacement_environment_controls_path_and_extension_order(self) -> None:
+        tools = self.root / "tools"
+        tools.mkdir()
+        first, second = tools / "probe.RRTFIRST", tools / "probe.RRTSECOND"
+        first.write_bytes(b"first")
+        second.write_bytes(b"second")
+        fallback = tools / "probe.RRTFIRST.RRTSECOND"
+        fallback.write_bytes(b"fallback")
+        for path_key, extension_key in (("PATH", "PATHEXT"), ("Path", "PathExt"), ("path", "pathext")):
+            with self.subTest(path_key=path_key, extension_key=extension_key):
+                supplied = {path_key: "tools", extension_key: ".RRTSECOND;.RRTFIRST"}
+                self.assertEqual(resolve_executable("probe", cwd=self.root, env=supplied), second)
+                self.assertEqual(resolve_executable("tools/probe", cwd=self.root, env=supplied), second)
+                self.assertEqual(resolve_executable(Path("tools/probe"), cwd=self.root, env=supplied), second)
+                # A recognized extension wins before appended fallback suffixes,
+                # even when it appears later in PATHEXT or differs in case.
+                self.assertEqual(resolve_executable("probe.rrtfirst", cwd=self.root, env=supplied), first)
+                self.assertEqual(supplied, {path_key: "tools", extension_key: ".RRTSECOND;.RRTFIRST"})
+                with self.assertRaises(ExecutableNotFoundError):
+                    resolve_executable(Path("probe"), cwd=self.root, env=supplied)
+                with self.assertRaises(ExecutableNotFoundError):
+                    resolve_executable("probe", cwd=self.root, env={path_key: "tools", extension_key: ".UNAVAILABLE"})
+        first.unlink()
+        supplied = {"Path": "tools", "PathExt": ".RRTSECOND;.RRTFIRST"}
+        self.assertEqual(resolve_executable(first.name, cwd=self.root, env=supplied), fallback)
+
+    @unittest.skipUnless(sys.platform == "win32", "native Windows PATHEXT defaults")
+    def test_windows_missing_or_empty_pathext_uses_default_without_ambient_fallback(self) -> None:
+        executable = self.root / "probe.EXE"
+        executable.write_bytes(b"discovery fixture")
+        for supplied in ({}, {"pathext": ""}):
+            with self.subTest(env=supplied):
+                self.assertEqual(resolve_executable(Path("probe"), cwd=self.root, env=supplied), executable)
+                self.assertEqual(resolve_executable(executable, env=supplied), executable)
+        for extension in (".CUSTOM", ";"):
+            with self.subTest(pathext=extension), self.assertRaises(ExecutableNotFoundError):
+                resolve_executable(executable, env={"pathext": extension})
+
     def test_bytes_and_explicit_text_encoding(self) -> None:
         echo = ["-c", "import sys; sys.stdout.buffer.write(sys.stdin.buffer.read())"]
         for payload in (b"line\n", b"line\r\n", b"mixed\r\n\x00\xff"):
@@ -288,6 +327,73 @@ class TestPublication(ConsumerCase):
         self.assertIs(raised.exception, failure)
         self.assertEqual(first.read_bytes(), b"original\r\n\xff")
         self.assertEqual(list(self.root.iterdir()), [first])
+
+    def test_interrupt_after_replacement_restores_original_files(self) -> None:
+        for existing in (False, True):
+            for interrupted_target in ("first", "second"):
+                with self.subTest(existing=existing, interrupted_target=interrupted_target), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory).resolve()
+                    first, second = root / "first", root / "second"
+                    first.write_bytes(b"original first\r\n\xff")
+                    if existing:
+                        second.write_bytes(b"original second\x00")
+                    expected = {path.name: path.read_bytes() for path in root.iterdir()}
+                    original = Path.replace
+                    failure = KeyboardInterrupt("interrupted after replacement")
+
+                    def replace(source: Path, target: Path) -> Path:
+                        result = original(source, target)
+                        if source.suffix == ".tmp" and target.name == interrupted_target:
+                            raise failure
+                        return result
+
+                    with patch.object(Path, "replace", replace), self.assertRaises(KeyboardInterrupt) as raised:
+                        replace_many({first: b"new first", second: b"new second"})
+                    self.assertIs(raised.exception, failure)
+                    self.assertEqual({path.name: path.read_bytes() for path in root.iterdir()}, expected)
+
+    def test_interrupted_file_recovery_restores_other_targets_and_retains_backups(self) -> None:
+        for completed in (False, True):
+            with self.subTest(completed=completed), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                first, second = root / "first", root / "second"
+                first.write_bytes(b"original first")
+                second.write_bytes(b"original second\r\n\xff")
+                original = Path.replace
+                failure = OSError("publication failed after replacement")
+                interruption = KeyboardInterrupt("recovery interrupted")
+
+                def replace(source: Path, target: Path) -> Path:
+                    if target == second and source.suffix == ".bak":
+                        if completed:
+                            original(source, target)
+                        raise interruption
+                    result = original(source, target)
+                    if target == second and source.suffix == ".tmp":
+                        raise failure
+                    return result
+
+                # Capture interrupts too, then assert the exact error and state
+                # so a regression fails the test instead of stopping the suite.
+                with patch.object(Path, "replace", replace), self.assertRaises(BaseException) as raised:
+                    replace_many({first: b"new first", second: b"new second"})
+                self.assertEqual(first.read_bytes(), b"original first")
+                if completed:
+                    self.assertIs(raised.exception, failure)
+                    self.assertEqual(second.read_bytes(), b"original second\r\n\xff")
+                    self.assertEqual(set(root.iterdir()), {first, second})
+                else:
+                    self.assertIsInstance(raised.exception, BaseExceptionGroup)
+                    assert isinstance(raised.exception, BaseExceptionGroup)
+                    self.assertIs(raised.exception.exceptions[0], failure)
+                    detail = raised.exception.exceptions[1]
+                    self.assertIsInstance(detail, RecoveryError)
+                    assert isinstance(detail, RecoveryError) and detail.backup is not None
+                    self.assertEqual(detail.target, second)
+                    self.assertIs(detail.__cause__, interruption)
+                    self.assertEqual(detail.backup.read_bytes(), b"original second\r\n\xff")
+                    self.assertEqual(second.read_bytes(), b"new second")
+                    self.assertEqual(set(root.iterdir()), {first, second, detail.backup})
 
     def test_incomplete_rollback_has_structured_recovery(self) -> None:
         first, last = self.root / "first", self.root / "last"

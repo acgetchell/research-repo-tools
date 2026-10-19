@@ -3,6 +3,7 @@
 import re
 import tomllib
 from collections.abc import Iterator
+from io import StringIO
 
 KEY_PATTERN = r"""(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')(?:\s*\.\s*(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*'))*"""
 _KEY = re.compile(rf"(?P<key>{KEY_PATTERN})\s*=")
@@ -100,7 +101,7 @@ def replace_string(text: str, table: str, key: str, value: str) -> str:
     import json
 
     line = key_line(text, table, key)
-    lines = text.splitlines(keepends=True)
+    lines = StringIO(text, newline="\n").readlines()
     offset = sum(map(len, lines[: line - 1]))
     declaration = _KEY.match(text, offset + len(lines[line - 1]) - len(lines[line - 1].lstrip()))
     if declaration is None:
@@ -125,7 +126,7 @@ def set_value(text: str, table: str, key: str, value: str) -> str:
     tomllib.loads("value = " + value)
     encoded_key = key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else json.dumps(key)
     newline = "\r\n" if "\r\n" in text else "\n"
-    lines = text.splitlines(keepends=True)
+    lines = StringIO(text, newline="\n").readlines()
     try:
         line = key_line(text, table, key)
     except ValueError:
@@ -182,7 +183,7 @@ def replace_array_strings(text: str, table: str, key: str, replacements: dict[st
     import json
 
     line = key_line(text, table, key)
-    lines = text.splitlines(keepends=True)
+    lines = StringIO(text, newline="\n").readlines()
     offset = sum(map(len, lines[: line - 1]))
     match = _KEY.match(text, offset + len(lines[line - 1]) - len(lines[line - 1].lstrip()))
     if match is None:

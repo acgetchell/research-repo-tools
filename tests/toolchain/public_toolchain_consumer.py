@@ -7,6 +7,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 import urllib.error
 from contextlib import redirect_stderr, redirect_stdout
@@ -14,12 +15,120 @@ from pathlib import Path
 from typing import override
 from unittest.mock import patch
 
-from research_repo_tools import archives, cli, config, prebuilt_tools, process, python_adoption, python_baseline, toolchain, toolchain_clean
+from research_repo_tools import archives, cli, config, files, prebuilt_tools, process, python_adoption, python_baseline, toolchain, toolchain_clean
 from research_repo_tools.toolchain_clean import apply_clean, plan_clean
-from research_repo_tools.toolchain_config import load
+from research_repo_tools.toolchain_config import Toolchain, load
 
 
 class TestToolchainConsumer(unittest.TestCase):
+    def test_adoption_preserves_unicode_prose_and_removes_only_real_target_mirrors(self):
+        authority = python_baseline.baseline()
+        for separator in ("\x85", "\u2028", "\u2029"):
+            for newline in ("\n", "\r\n"):
+                with self.subTest(separator=separator, newline=newline), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory).resolve()
+                    prose = f'a{separator}b{separator}c{separator}d\ntarget-version = "py313"\npython-version = "3.13"\n'
+                    prefix = f'note = """{prose}"""\n'
+                    source = (
+                        prefix
+                        + '[project]\nname="consumer"\nversion="1.0.0"\nrequires-python=">=3.13"\n'
+                        + '[tool.uv]\npackage=false\nrequired-version="==0.12.19"\n'
+                        + '[dependency-groups]\ntooling=["research-repo-tools==0.1.6"]\n'
+                        + "[tool.research-repo-tools.toolchain]\ninherit-python=true\n"
+                        + '[tool.ruff]\ntarget-version = "py313"\nline-length=100\n'
+                        + '[tool.ty.environment]\npython-version = "3.13"\n'
+                    ).replace("\n", newline)
+                    (root / "pyproject.toml").write_bytes(source.encode())
+                    (root / ".python-version").write_bytes(b"3.13\n")
+                    before = {path.name: path.read_bytes() for path in root.iterdir()}
+
+                    def execute(_command, args, *, cwd, **_kwargs):
+                        if args[0] == "lock":
+                            (cwd / "uv.lock").write_bytes(b"candidate lock\n")
+                        return subprocess.CompletedProcess([], 0, "", "")
+
+                    with (
+                        patch.object(python_adoption, "select_files", return_value=tuple(before)),
+                        patch.object(python_adoption, "get_safe_executable", return_value="mock-uv"),
+                        patch.object(toolchain.Runtime, "uv_status", return_value=toolchain.Status("uv", "0.12.19", "0.12.19", "mock-uv", True)),
+                        patch.object(python_adoption, "run_safe_command", side_effect=execute),
+                    ):
+                        plan = python_adoption.plan_python_adoption(config.load(root=root))
+                    self.assertEqual({path.name: path.read_bytes() for path in root.iterdir()}, before)
+                    candidate = dict(plan.replacements)["pyproject.toml"].decode()
+                    self.assertTrue(candidate.startswith(prefix.replace("\n", newline)))
+                    document = tomllib.loads(candidate)
+                    self.assertEqual(document["note"], prose)
+                    self.assertEqual(document["tool"]["ruff"], {"line-length": 100})
+                    self.assertEqual(document["tool"]["ty"]["environment"], {})
+                    self.assertEqual(document["dependency-groups"]["tooling"], [f"research-repo-tools=={authority.package_version}"])
+
+    def test_adoption_interrupts_preserve_original_environment_or_report_recovery(self):
+        for phase in ("backup", "restore-before", "restore-after"):
+            with self.subTest(phase=phase), tempfile.TemporaryDirectory(prefix="adoption interrupt ") as directory:
+                root = Path(directory).resolve()
+                manifest = root / "pyproject.toml"
+                manifest.write_bytes(b"original declarations\r\n")
+                environment = root / ".venv"
+                environment.mkdir()
+                original = b"previous interpreter\r\n\xff"
+                (environment / "pyvenv.cfg").write_bytes(original)
+                plan = python_adoption.PythonAdoptionPlan(
+                    root,
+                    python_baseline.baseline(),
+                    ((manifest.name, manifest.read_bytes()),),
+                    (manifest.name,),
+                    ((manifest.name, b"candidate declarations\n"),),
+                    Toolchain(root, "0.13.0", "3.15", None, ()),
+                    (),
+                    None,
+                )
+                interrupt = KeyboardInterrupt("environment rename interrupted")
+                failure = OSError("environment synchronization failed")
+                rename = Path.rename
+
+                def interrupted_rename(path, target):
+                    restoring = path.name.startswith(".venv.rrt-backup-")
+                    if restoring and phase == "restore-before":
+                        raise interrupt
+                    result = rename(path, target)
+                    if (path == environment and phase == "backup") or (restoring and phase == "restore-after"):
+                        raise interrupt
+                    return result
+
+                def failed_sync(*_args, **_kwargs):
+                    environment.mkdir()
+                    (environment / "partial").write_bytes(b"failed candidate")
+                    raise failure
+
+                with (
+                    patch.object(python_adoption, "select_files", return_value=plan.inventory),
+                    patch.object(python_adoption, "get_safe_executable", return_value="mock-uv"),
+                    patch.object(toolchain.Runtime, "sync"),
+                    patch.object(toolchain.Runtime, "environment", return_value={}),
+                    patch.object(python_adoption, "_sync", side_effect=failed_sync),
+                    patch.object(Path, "rename", interrupted_rename),
+                    self.assertRaises(BaseException) as caught,
+                ):
+                    python_adoption.apply_python_adoption(plan)
+                self.assertEqual(manifest.read_bytes(), b"original declarations\r\n")
+                backups = list(root.glob(".venv.rrt-backup-*"))
+                if phase == "restore-before":
+                    assert isinstance(caught.exception, BaseExceptionGroup)
+                    self.assertIs(caught.exception.exceptions[0], failure)
+                    recovery = caught.exception.exceptions[1]
+                    assert isinstance(recovery, files.RecoveryError)
+                    assert recovery.backup is not None
+                    self.assertIs(recovery.__cause__, interrupt)
+                    self.assertEqual(backups, [recovery.backup])
+                    self.assertEqual((recovery.backup / "pyvenv.cfg").read_bytes(), original)
+                    self.assertFalse(environment.exists())
+                else:
+                    self.assertIs(caught.exception, interrupt if phase == "backup" else failure)
+                    self.assertEqual((environment / "pyvenv.cfg").read_bytes(), original)
+                    self.assertEqual(backups, [])
+                self.assertEqual(sorted(path.name for path in root.iterdir()), [".venv" if not backups else backups[0].name, manifest.name])
+
     def test_adoption_keeps_helper_permissions_and_refuses_linked_environment(self):
         with tempfile.TemporaryDirectory(prefix="adoption consumer ") as directory:
             root = Path(directory).resolve()

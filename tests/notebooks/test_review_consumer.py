@@ -1,6 +1,7 @@
 """Run public notebook consumer contracts locally as well as after installation."""
 
 from tests.notebooks.public_notebook_consumer import TestAdvice as TestAdvice
+from tests.notebooks.public_notebook_consumer import TestExecutionPreflight as TestExecutionPreflight
 from tests.notebooks.public_notebook_consumer import TestIdPattern as TestIdPattern
 from tests.notebooks.public_notebook_consumer import TestInspection as TestInspection
 from tests.notebooks.public_notebook_consumer import TestInstallPolicy as TestInstallPolicy

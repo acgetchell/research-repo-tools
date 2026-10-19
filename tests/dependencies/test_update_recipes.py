@@ -29,11 +29,13 @@ def recipes(tmp_path, monkeypatch, request):
     python.symlink_to(sys.executable)
     recorder = tmp_path / "record calls.py"
     recorder.write_text(
-        "import json, os, pathlib, sys\n"
+        "import json, os, pathlib, subprocess, sys\n"
         "args = sys.argv[1:]\n"
         "log = pathlib.Path('calls.jsonl')\n"
         "with log.open('a', newline='\\n') as stream: stream.write(json.dumps(args) + '\\n')\n"
-        "sys.exit(23 if len(log.read_text().splitlines()) == int(os.environ.get('FAIL_STEP', '0')) else 0)\n",
+        "if len(log.read_text().splitlines()) == int(os.environ.get('FAIL_STEP', '0')): sys.exit(23)\n"
+        "if args[:3] == ['run', '--locked', 'just']:\n"
+        f"    sys.exit(subprocess.run([{process.get_safe_executable('just')!r}, *args[3:]], check=False).returncode)\n",
         newline="\n",
     )
     uv = tmp_path / "uv"
@@ -174,9 +176,11 @@ def test_opted_in_actions_stage_checks_final_dependency_pins(recipes):
     ]
 
 
-def maintainer_checks():
+def maintainer_checks(justfile):
     return [
         ["lock", "--check"],
+        ["run", "--locked", "just", "--justfile", str(justfile), "--fmt", "--check"],
+        ["run", "--locked", "just", "--justfile", "src/research_repo_tools/templates/justfile", "--fmt", "--check"],
         ["run", "--locked", "python", "scripts/check_newlines.py"],
         ["run", "--locked", "--no-sync", "--no-python-downloads", "research-repo-tools", "python", "check"],
         ["run", "--locked", "actionlint"],
@@ -200,14 +204,14 @@ def test_maintainer_ci_checks_early_and_coalesces_lock_validation(recipes):
         pytest.skip("maintainer validation tiers")
     result, calls = invoke(justfile, "ci")
     assert result.returncode == 0, result.stderr
-    assert calls == maintainer_checks() + [
+    assert calls == maintainer_checks(justfile) + [
         ["run", "--locked", "pytest", "--cov", "--cov-report=term-missing", "--cov-report=xml:coverage/cobertura.xml"],
         ["build", "--no-sources", "--clear"],
         ["run", "--locked", "python", "scripts/check_install.py"],
     ]
 
 
-@pytest.mark.parametrize("failure_step", [1, 3])
+@pytest.mark.parametrize("failure_step", [1, 2, 3, 5])
 def test_maintainer_static_failure_prevents_workflow_audits_tests_and_builds(recipes, monkeypatch, failure_step):
     justfile, consumer = recipes
     if consumer:
@@ -215,7 +219,7 @@ def test_maintainer_static_failure_prevents_workflow_audits_tests_and_builds(rec
     monkeypatch.setenv("FAIL_STEP", str(failure_step))
     result, calls = invoke(justfile, "ci")
     assert result.returncode == 23, result.stderr
-    assert calls == maintainer_checks()[:failure_step]
+    assert calls == maintainer_checks(justfile)[:failure_step]
 
 
 def test_maintainer_format_failure_stops_before_python_and_workflow_checks(recipes):
@@ -230,4 +234,14 @@ def test_maintainer_format_failure_stops_before_python_and_workflow_checks(recip
     result, calls = invoke(justfile, "ci")
     assert result.returncode != 0
     assert "formatted justfile differs" in result.stderr
-    assert calls == [["lock", "--check"]]
+    assert calls == maintainer_checks(justfile)[:3]
+
+
+def test_template_recipe_preserves_arguments_without_shell_expansion(recipes):
+    justfile, consumer = recipes
+    arguments = ["complete-publication.toml", "--output", "folder with spaces/$(touch SHOULD_NOT_EXIST).toml"]
+    result = process.run_safe_command("just", ["--justfile", str(justfile), "templates", *arguments], cwd=justfile.parent)
+    assert result.stdout == ""
+    calls = [json.loads(line) for line in justfile.with_name("calls.jsonl").read_text().splitlines()]
+    assert calls == [["run", "--locked", *(["--group", "dev"] if consumer else []), "research-repo-tools", "templates", *arguments]]
+    assert not justfile.with_name("SHOULD_NOT_EXIST").exists()

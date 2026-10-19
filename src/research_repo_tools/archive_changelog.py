@@ -297,11 +297,12 @@ def replace_release_date(text: str, version: str, released: str, *, required: bo
         return text
     if heading.date_span is None:
         raise ValueError(f"current-version heading at line {heading.line} must contain exactly one ISO release date")
-    lines = text.splitlines(keepends=True)
+    # Heading locations use LF boundaries; other Unicode separators are prose.
+    lines = text.split("\n")
     start, end = heading.date_span
     line = lines[heading.line - 1]
     lines[heading.line - 1] = line[:start] + released + line[end:]
-    return "".join(lines)
+    return "\n".join(lines)
 
 
 def group_by_minor(

@@ -260,7 +260,7 @@ def _toml_table_key_line(path: Path, table_name: str, key: str) -> int:
 
 def _version_reference(path: Path, line: int, version: str, kind: ReferenceKind) -> VersionReference:
     """Build a version reference and include the source line text."""
-    lines = path.read_text(encoding="utf-8").splitlines()
+    lines = path.read_text(encoding="utf-8").split("\n")
     if not 1 <= line <= len(lines):
         msg = f"{path} has no line {line} for {kind}"
         raise ReleaseCheckError(msg)
@@ -338,7 +338,7 @@ _CITATION_VERSION_RE = re.compile(r"^version:\s*(?P<quote>['\"]?)(?P<version>[0-
 def _citation_reference(path: Path) -> VersionReference:
     """Return the single top-level CITATION.cff version reference."""
     references: list[VersionReference] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
         if not line.startswith("version:"):
             continue
         match = _CITATION_VERSION_RE.fullmatch(line)
@@ -365,7 +365,8 @@ def _changelog_reference(path: Path) -> VersionReference:
     parsed = _parsed_changelog(path)
     if parsed.release_headings:
         heading = parsed.release_headings[0]
-        return _version_reference(path, heading.line, heading.version, ReferenceKind.CHANGELOG)
+        line = path.read_text(encoding="utf-8").split("\n")[heading.line - 1]
+        return VersionReference(path=path, line=heading.line, version=heading.version, kind=ReferenceKind.CHANGELOG, text=line.strip())
     msg = f"{path} has no generated release heading"
     raise ReleaseCheckError(msg)
 
@@ -389,7 +390,7 @@ def _citation_metadata_reference(path: Path, field: str, value_pattern: str, kin
     """Return one non-empty top-level scalar from CITATION.cff."""
     pattern = re.compile(f"^{re.escape(field)}:\\s*(?P<quote>['\\\"]?)(?P<value>{value_pattern})(?P=quote)\\s*(?:#.*)?$")
     references: list[MetadataReference] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
         if not line.startswith(f"{field}:"):
             continue
         match = pattern.fullmatch(line)
@@ -423,7 +424,7 @@ def _changelog_date_reference(path: Path, version: str) -> MetadataReference | N
             continue
         if heading.date is None:
             raise ReleaseCheckError(f"{path}:{heading.line}: current-version heading must contain exactly one ISO release date")
-        line = path.read_text(encoding="utf-8").splitlines()[heading.line - 1]
+        line = path.read_text(encoding="utf-8").split("\n")[heading.line - 1]
         return _metadata_reference(path, heading.line, heading.date, MetadataKind.CHANGELOG_DATE, line)
     return None
 
@@ -434,7 +435,7 @@ _README_DOI_RE = re.compile(r"\[!\[DOI\]\([^)]*\)\]\(https://doi\.org/(?P<doi>10
 def _readme_doi_reference(path: Path) -> MetadataReference | None:
     """Return the DOI targeted by the README badge."""
     references: list[MetadataReference] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
         matches = list(_README_DOI_RE.finditer(line))
         if line.count("[![DOI]") != len(matches):
             raise ReleaseCheckError(f"{path}:{line_number}: malformed DOI badge target")
@@ -449,7 +450,7 @@ _REFERENCES_DOI_RE = re.compile(r"^- DOI: <https://doi\.org/(?P<doi>10\.\d{4,9}/
 def _references_doi_reference(path: Path) -> MetadataReference | None:
     """Return the concept DOI entry from REFERENCES.md."""
     dois: list[MetadataReference] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
         match = _REFERENCES_DOI_RE.fullmatch(line)
         if match is None:
             if line.startswith("- DOI:"):
@@ -463,7 +464,7 @@ def _changelog_comparison_references(path: Path, version: str) -> list[VersionRe
     """Return comparison targets whose link label is the current version."""
     comparison_re = re.compile(rf"^\[{re.escape(version)}\]:\s+\S+/compare/v{SEMVER_PATTERN}\.\.\.v(?P<version>{SEMVER_PATTERN})(?:\s|$)")
     references: list[VersionReference] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
         match = comparison_re.match(line)
         if match is not None:
             references.append(_version_reference(path, line_number, match.group("version"), ReferenceKind.CHANGELOG_COMPARISON))
@@ -497,7 +498,7 @@ def _dependency_references(path: Path, package_name: str) -> list[VersionReferen
     """Return dependency snippet references in a Markdown file."""
     dependency_re = _dependency_regex(package_name)
     references: list[VersionReference] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
         for match in dependency_re.finditer(line):
             references.append(
                 VersionReference(
@@ -521,7 +522,7 @@ def _cargo_add_references(path: Path, package_name: str) -> list[VersionReferenc
     """Return versioned cargo-add command references in a Markdown file."""
     cargo_add_re = _cargo_add_regex(package_name)
     references: list[VersionReference] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").splitlines(), start=1):
+    for line_number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
         references.extend(
             VersionReference(path, line_number, match.group("version"), ReferenceKind.CARGO_ADD, line.strip()) for match in cargo_add_re.finditer(line)
         )

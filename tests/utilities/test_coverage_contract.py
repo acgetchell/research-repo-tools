@@ -44,3 +44,13 @@ def test_cli_uses_consumer_root_and_deterministic_ties(tmp_path: Path, capsys) -
     assert cli.main(["--root", str(tmp_path), "coverage", "report", "--prefix", "src", "--limit", "1"]) == 0
     assert capsys.readouterr().out == "100.00%  src/a.rs\n"
     assert cli.main(["--root", str(tmp_path), "coverage", "report", "--limit", "-1"]) == 1
+
+
+def test_cli_preserves_a_prefix_starting_with_a_dash(tmp_path: Path, capsys) -> None:
+    report = tmp_path / "coverage/cobertura.xml"
+    report.parent.mkdir()
+    report.write_bytes(b'<coverage><class filename="-generated/a.rs"><lines><line number="1" hits="1"/></lines></class></coverage>')
+    assert cli.main(["--root", str(tmp_path), "coverage", "report", "--prefix=-generated"]) == 0
+    output = capsys.readouterr()
+    assert output.out == "100.00%  -generated/a.rs\n"
+    assert output.err == ""

@@ -1,11 +1,12 @@
-"""Configuration parsing retains typed values without mutable aliases."""
+"""Configuration parsing and source editing preserve values and unrelated text."""
 
 import operator
+import tomllib
 from dataclasses import FrozenInstanceError, replace
 
 import pytest
 
-from research_repo_tools import config
+from research_repo_tools import config, toml_source
 
 
 def test_parsed_settings_detach_nested_inputs_and_reject_mutation(tmp_path):
@@ -82,3 +83,29 @@ def test_loaded_settings_preserve_defaults_and_explicit_values(tmp_path):
 def test_invalid_values_are_rejected_by_the_config_parser(tmp_path, raw, diagnostic):
     with pytest.raises(ValueError, match=diagnostic):
         config.parse(raw, root=tmp_path)
+
+
+@pytest.mark.parametrize("separator", ["\x85", "\u2028", "\u2029"])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize("final_newline", [False, True])
+@pytest.mark.parametrize("operation", ["string", "value", "array", "insert"])
+def test_edits_use_physical_lines_and_leave_decoy_declarations_unchanged(separator, newline, final_newline, operation):
+    declaration = 'version = "1.2.3"' if operation != "array" else 'versions = ["1.2.3", "keep"]'
+    preamble = f'description = """a{separator}b{separator}c{separator}d\n{declaration}\n"""\n'
+    original = (preamble + "[project]\n" + declaration + ("\n" if final_newline else "")).replace("\n", newline)
+    assert toml_source.key_line(original, "project", "versions" if operation == "array" else "version") == 5
+    if operation == "string":
+        result = toml_source.replace_string(original, "project", "version", "2.0.0")
+        changed = 'version = "2.0.0"'
+    elif operation == "value":
+        result = toml_source.set_value(original, "project", "version", '"2.0.0"')
+        changed = 'version = "2.0.0"'
+    elif operation == "array":
+        result = toml_source.replace_array_strings(original, "project", "versions", {"1.2.3": "2.0.0"})
+        changed = 'versions = ["2.0.0", "keep"]'
+    else:
+        result = toml_source.set_value(original, "project", "extra", "42")
+        changed = "extra = 42\n" + declaration
+    expected = (preamble + "[project]\n" + changed + ("\n" if final_newline else "")).replace("\n", newline)
+    assert result == expected
+    assert tomllib.loads(result)["description"] == tomllib.loads(original)["description"]

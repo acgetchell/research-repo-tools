@@ -68,7 +68,8 @@ def references(path: Path, text: str) -> tuple[Use, ...]:
     """Reject ambiguous YAML; inspect job calls and every named/unnamed step.
 
     Aliases retain the anchor's source location. This is reference inspection,
-    not an actionlint replacement. Local actions and containers are out of scope.
+    not an actionlint replacement. Local and same-repository references and
+    containers are out of scope.
     """
     try:
         document = yaml.compose(text, Loader=yaml.SafeLoader)
@@ -91,7 +92,7 @@ def references(path: Path, text: str) -> tuple[Use, ...]:
         if node.start_mark is None or node.end_mark is None:
             raise ValueError(f"{path}: uses scalar has no YAML source location")
         value = node.value.strip()
-        if value.startswith(("./", "docker://")):
+        if value.startswith(("./", "$/", "docker://")):
             action = ref = None
         else:
             raw_action, separator, ref = value.partition("@")

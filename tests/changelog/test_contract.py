@@ -9,13 +9,37 @@ from pathlib import Path
 
 import pytest
 
-from research_repo_tools import archive_changelog, changelog, cli, config, postprocess_changelog
+from research_repo_tools import archive_changelog, changelog, cli, config, postprocess_changelog, update_release
 from research_repo_tools.markdown import relocate_links
 from research_repo_tools.process import run_git_command
 
 
 def settings(root: Path, **changes: object) -> config.Config:
     return config.parse({"changelog": {"owner": "example", "repository": "research", **changes}}, root=root)
+
+
+@pytest.mark.parametrize("separator", ["\x85", "\u2028", "\u2029"], ids=["nel", "line-separator", "paragraph-separator"])
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+@pytest.mark.parametrize("final_newline", [False, True], ids=["unterminated", "terminated"])
+def test_sync_changelog_date_preserves_unicode_prose_and_exact_bytes(tmp_path, separator, newline, final_newline):
+    manifest = tmp_path / "pyproject.toml"
+    manifest.write_text('[project]\nname="consumer"\nversion="1.2.0"\n', encoding="utf-8", newline="\n")
+    citation = tmp_path / "CITATION.cff"
+    citation.write_text("cff-version: 1.2.0\nversion: 1.2.0\ndate-released: 2026-09-07\n", encoding="utf-8", newline="\n")
+    path = tmp_path / "CHANGELOG.md"
+    text = (
+        f"# Changelog\n\nPreserve pre{separator}amble.\n\n## [Unreleased]\n\n- Earlier body{separator}text.\n\n"
+        "## [1.2.0](https://example.org/v1.2.0) - 2000-01-01\n\n- Target notes." + ("\n" if final_newline else "")
+    ).replace("\n", newline)
+    path.write_bytes(text.encode("utf-8"))
+    expected = text.replace(" - 2000-01-01", " - 2026-09-07").encode("utf-8")
+    authorities = {authority: authority.read_bytes() for authority in (manifest, citation)}
+    args = ["v1.2.0", "--repo-root", str(tmp_path), "--sync-changelog-date"]
+    assert update_release.main(args) == 0
+    assert path.read_bytes() == expected
+    assert update_release.main(args) == 0
+    assert path.read_bytes() == expected
+    assert {authority: authority.read_bytes() for authority in authorities} == authorities
 
 
 @pytest.mark.parametrize("candidate", ["# Changelog\n", "## [9.0.0] - 2026-09-07\n", "## [1.2.3] - 2025-09-07\n"])

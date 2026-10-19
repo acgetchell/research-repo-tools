@@ -26,6 +26,12 @@ def test_aliases_retain_anchor_location():
     assert "example.yml:4" in uses[1].location
 
 
+def test_same_repository_steps_and_workflow_calls_are_non_external():
+    text = "jobs:\n  call:\n    uses: $/.github/workflows/check.yml\n  check:\n    steps:\n      - uses: '$/.github/actions/setup'\n"
+    uses = references(Path("example.yml"), text)
+    assert [(use.context, use.action, use.ref) for use in uses] == [("jobs.call.uses", None, None), ("jobs.check.steps[0].uses", None, None)]
+
+
 @pytest.mark.parametrize(
     "fragment",
     [
@@ -70,7 +76,11 @@ def test_policy_authority_exact_nested_paths_and_local_scope(tmp_path):
     value = {"github_owned_allowed": False, "verified_allowed": False, "patterns_allowed": ["APPROVED/Repo/.github/workflows/test.yml@*"]}
     policy.write_bytes(json.dumps(value).encode())
     workflow.write_bytes(
-        f"jobs:\n  reusable:\n    uses: approved/repo/.github/workflows/test.yml@{OLD}\n  local:\n    steps:\n      - uses: ./local\n      - uses: docker://image:latest\n".encode()
+        (
+            f"jobs:\n  reusable:\n    uses: approved/repo/.github/workflows/test.yml@{OLD}\n"
+            "  same_repository:\n    uses: $/.github/workflows/check.yml\n"
+            "  local:\n    steps:\n      - uses: ./local\n      - uses: '$/.github/actions/setup'\n      - uses: docker://image:latest\n"
+        ).encode()
     )
     assert workflow_allowlist.check(tmp_path, policy, [str(workflow)]) == 0
     value["patterns_allowed"] = ["approved/repo@*"]
@@ -122,11 +132,21 @@ def test_invalid_later_workflow_preserves_every_file(tmp_path, monkeypatch):
     assert {path: path.read_bytes() for path in before} == before
 
 
-def test_scope_selection_subpaths_and_unrelated_comment_bytes(tmp_path, monkeypatch):
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+def test_scope_selection_subpaths_and_unrelated_comment_bytes(tmp_path, monkeypatch, newline):
     policy = tmp_path / "update.toml"
     policy.write_bytes(b'[actions]\n"a/b/path"="v2.1.0"\n')
     workflow = tmp_path / "workflow.yml"
-    before = f"# keep\njobs:\n  call:\n    uses: a/b/path@{OLD} # v1.0.0 reason\n  step:\n    steps:\n      - uses: a/b@{OLD} # v1\n".encode()
+    before = (
+        (
+            f"# keep\njobs:\n  call:\n    uses: a/b/path@{OLD} # v1.0.0 reason\n"
+            f"  same_repository:\n    uses: $/.github/workflows/check.yml # v1.0.0 {OLD}\n"
+            f"  step:\n    steps:\n      - uses: a/b@{OLD} # v1\n"
+            f"      - uses: '$/.github/actions/setup' # v1.0.0 {OLD}\n"
+        )
+        .replace("\n", newline)
+        .encode()
+    )
     workflow.write_bytes(before)
     monkeypatch.setattr(action_updates, "resolve", lambda *_: (NEW, "v2.1.0"))
     assert action_updates.update(config.parse({}, root=tmp_path), policy, [str(workflow)]) == 0

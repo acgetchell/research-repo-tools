@@ -184,6 +184,7 @@ arguments in lexicographic order.
 | `just shared-python-plan VERSION` | Preview mandatory Python-minimum and optional tool-profile adoption outside the old environment |
 | `just shared-python-update VERSION` | Apply the migration and recreate the locked environment and notebook kernel |
 | `just tectonic COMMAND...` | Discover or export existing native dependency environments |
+| `just templates ARGS...` | Export a packaged configuration or workflow template |
 | `just tools-check` | Check installed tools and versions without installing them |
 | `just tools-export` | Verify tools and append their environment to `GITHUB_ENV` |
 | `just tools-python-check` | Check inherited Python tool declarations, lock, and executable versions without changes |
@@ -391,7 +392,7 @@ The underlying CLI remains available for integrations and custom recipes; see
 
 ### Reviewed registry publication
 
-Use the shared [release procedure](docs/RELEASING.md) and packaged `RELEASING.md`
+Use the shared [release procedure](https://github.com/acgetchell/research-repo-tools/blob/main/docs/RELEASING.md) and packaged `RELEASING.md`
 template for the same ordered commands in Python and Rust repositories.
 `just release-publish TAG` approves a validated draft GitHub Release; the consumer's
 reviewed workflow performs the registry upload after environment approval.
@@ -403,8 +404,9 @@ The packaged `publishing.toml` and `publish-crates.yml` templates define the sha
 policy and official crates.io Trusted Publishing/OIDC action wiring. Consumers
 declare required exact-commit checks and assets and retain native Cargo selection,
 features, MSRV, dependency order and deployment settings. See the
-[release checklist](docs/RELEASING.md), [API](docs/api.md#reviewed-registry-publication-api),
-and [migration](docs/release-policy-migration.md#shared-release-commands). Adopt the exact published v0.1.8
+[release checklist](https://github.com/acgetchell/research-repo-tools/blob/main/docs/RELEASING.md),
+[API](https://github.com/acgetchell/research-repo-tools/blob/main/docs/api.md#reviewed-registry-publication-api),
+and [migration](https://github.com/acgetchell/research-repo-tools/blob/main/docs/release-policy-migration.md#shared-release-commands). Adopt the exact published v0.1.8
 package before consumer deployment. Publisher registration and live uploads are
 separate adoption steps recorded in the maintainer's private setup task.
 
@@ -886,8 +888,8 @@ just workflow-allowlist-check
 The checker reads explicit files or YAML directories and inspects both
 `jobs.<id>.uses` calls and every step's `uses`. Quoted/folded scalars and aliases
 are supported; alias findings point to the anchor. Duplicate/merge mappings and
-recursive aliases fail with file/line diagnostics. Local `./` actions and
-`docker://` containers are outside this external policy. Keep actionlint for
+recursive aliases fail with file/line diagnostics. Local `./` actions,
+same-repository `$/` references, and `docker://` containers are outside this external policy. Keep actionlint for
 workflow schema and zizmor for full-SHA pinning/security; no repository settings
 are changed. Consumers can delete their generic YAML allowlist checker after
 pinning a published version with this capability and validating their own policy.
@@ -1040,7 +1042,7 @@ Git tree. The index and other working files are preserved. Cleanup deletes only
 the declared scratch files/directories and explicitly named checkpoint directories;
 it never discovers checkpoint directories recursively. Unsafe paths, source aliases,
 tracked cleanup targets, links, and junctions are rejected before restoration.
-See [the workflow contract](docs/RUNNING_NOTEBOOKS.md#interactive-launch-and-explicit-reset)
+See [the workflow contract](https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_NOTEBOOKS.md#interactive-launch-and-explicit-reset)
 for failure behavior, supported paths, and the consumer deletion map.
 
 Read-only review commands are available from `0.1.5`. Merge their recipes from
@@ -1220,14 +1222,14 @@ $native.PSObject.Properties | ForEach-Object { Set-Item "Env:$($_.Name)" $_.Valu
 `tectonic export` appends validated UTF-8 LF assignments to the explicit file or
 `GITHUB_ENV`. Missing prerequisites and probe errors return nonzero and publish
 no assignments. Provision hosts explicitly in consumer setup/CI before discovery.
-See the [API contracts](docs/api.md#paper-date-pdf-and-native-discovery-api) and
-[consumer deletion maps](docs/shared-capability-migration.md#paper-and-raw-line-adoption).
+See the [API contracts](https://github.com/acgetchell/research-repo-tools/blob/main/docs/api.md#paper-date-pdf-and-native-discovery-api) and
+[consumer deletion maps](https://github.com/acgetchell/research-repo-tools/blob/main/docs/shared-capability-migration.md#paper-and-raw-line-adoption).
 
 ### Performance evidence
 
 These APIs and recipes require a published release newer than `0.1.2` containing
 them.
-The [v0.1.9 adoption matrix](docs/performance-migration.md#release-capability-adoption)
+The [v0.1.9 adoption matrix](https://github.com/acgetchell/research-repo-tools/blob/main/docs/performance-migration.md#release-capability-adoption)
 lists the minimum version, extras, migration steps and compatibility boundaries
 for the coordinated performance extensions. Adopt `research-repo-tools==0.1.9`
 only after its GitHub and PyPI publication is verified.
@@ -1611,8 +1613,8 @@ rows. Invalid or unmeasured mapped IDs always fail. Coverage states selected,
 unavailable and omitted phase cases. Document bytes outside markers survive, and
 the document, SVGs and CSV move in one transaction with the existing freshness,
 release-reference, tagged-link and rollback checks. See the
-[publication configuration](docs/publication-api.md#publication-configuration-v2)
-and [presentation API](docs/complete-run-api.md#configured-presentation).
+[publication configuration](https://github.com/acgetchell/research-repo-tools/blob/main/docs/publication-api.md#publication-configuration-v2)
+and [presentation API](https://github.com/acgetchell/research-repo-tools/blob/main/docs/complete-run-api.md#configured-presentation).
 
 ### Criterion inventory and saved baselines
 
