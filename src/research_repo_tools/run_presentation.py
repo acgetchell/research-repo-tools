@@ -5,6 +5,7 @@ import html
 import io
 import math
 from dataclasses import dataclass
+from decimal import Decimal
 from typing import Literal
 
 from research_repo_tools.complete_runs import CompleteRun, run_identity, validate_run_evidence
@@ -12,7 +13,17 @@ from research_repo_tools.criterion import Comparison, ComparisonSet, Estimate, S
 from research_repo_tools.evidence import Evidence, _string
 from research_repo_tools.publication import TableLayout, _render_ratio_svg
 
-__all__ = ["CoordinatePlot", "RunLayout", "RunRow", "SeriesSelection", "render_coordinate_svg", "render_run_ratios", "render_run_table", "serialize_run_csv"]
+__all__ = [
+    "CoordinatePlot",
+    "RunLayout",
+    "RunRow",
+    "RunTableStyle",
+    "SeriesSelection",
+    "render_coordinate_svg",
+    "render_run_ratios",
+    "render_run_table",
+    "serialize_run_csv",
+]
 
 
 def _unique(values: tuple[str, ...], context: str) -> None:
@@ -134,40 +145,118 @@ def _attribution(evidence: Evidence, run: CompleteRun, name: str) -> str:
     return f"{phase} phase, {dict(source.context)['release']}, revision {source.revision}"
 
 
-def render_run_table(evidence: Evidence, layout: RunLayout) -> str:
-    """Render configured timings, omissions and optional point comparisons."""
+@dataclass(frozen=True, slots=True, kw_only=True)
+class RunTableStyle:
+    """Markdown presentation only; selection and arithmetic belong to RunLayout.
+
+    Headings follow the order of ``layout.comparisons`` and must name every
+    comparison when supplied. Empty heading tuples use the series labels.
+    ``timing_legend`` moves timing units and the recorded confidence level into
+    the caption. Complete-run validation rejects differing confidence levels.
+    """
+
+    row_heading: str = "Case"
+    intervals: Literal["inline", "below"] = "inline"
+    timing_legend: bool = False
+    comparison_columns: tuple[Literal["ratio", "reduction"], ...] = ("ratio", "reduction")
+    ratio_headings: tuple[str, ...] = ()
+    reduction_headings: tuple[str, ...] = ()
+    ratio_suffix: str = ""
+
+    def __post_init__(self) -> None:
+        _string(self.row_heading, "row heading")
+        if self.intervals not in ("inline", "below"):
+            raise ValueError("intervals must be inline or below")
+        if type(self.timing_legend) is not bool:
+            raise ValueError("timing_legend must be a boolean")
+        columns = tuple(self.comparison_columns)
+        if any(column not in ("ratio", "reduction") for column in columns) or len(set(columns)) != len(columns):
+            raise ValueError("comparison columns must be unique ratio/reduction selections")
+        object.__setattr__(self, "comparison_columns", columns)
+        for field in ("ratio_headings", "reduction_headings"):
+            if isinstance(getattr(self, field), str):
+                raise ValueError(f"{field} must be a sequence of headings")
+            object.__setattr__(self, field, tuple(_string(value, field) for value in getattr(self, field)))
+        # Empty suffixes are deliberate; validate the rest as ordinary labels.
+        if self.ratio_suffix != "":
+            _string(self.ratio_suffix, "ratio suffix")
+
+
+def render_run_table(evidence: Evidence, layout: RunLayout, *, style: RunTableStyle | None = None) -> str:
+    """Render timings and selected point comparisons, preserving default output.
+
+    Style controls only Markdown. Recorded estimates, CSV, plots and retained
+    evidence are unchanged. Custom comparison headings retain explicit series
+    numerator/denominator attribution below the table.
+    """
+    if style is None:
+        style = RunTableStyle()
+    if not isinstance(style, RunTableStyle):
+        raise TypeError("style must be a RunTableStyle")
+    for headings in (style.ratio_headings, style.reduction_headings):
+        if headings and len(headings) != len(layout.comparisons):
+            raise ValueError("comparison headings must match the number of layout comparisons")
     run, selected = _select(evidence, layout)
     labels = {item.name: item.label for item in layout.series}
-    lines = [f"Run: `{run_identity(evidence)}`. Statistic: {layout.statistic}. Unit: {layout.unit}.", ""]
+    caption = f"Run: `{run_identity(evidence)}`. Statistic: {layout.statistic}. Unit: {layout.unit}."
+    if style.timing_legend:
+        # Whole-run validation above guarantees matching, complete intervals.
+        estimate = next(iter(next(iter(selected.values())).values()))
+        assert estimate.confidence_level is not None
+        # Shift the exact decimal digits without using the caller's precision,
+        # exponent limits or traps. Only fractional trailing zeros are removable.
+        sign, digits, exponent = Decimal(str(estimate.confidence_level)).as_tuple()
+        assert isinstance(exponent, int)  # Complete evidence guarantees a finite level.
+        percentage = format(Decimal((sign, digits, exponent + 2)), "f")
+        if "." in percentage:
+            percentage = percentage.rstrip("0").rstrip(".")
+        caption += f" Confidence level: {percentage}%."
+    lines = [caption, ""]
     lines.extend(f"- {_markdown_text(item.label)}: {_markdown_text(_attribution(evidence, run, item.name))}." for item in layout.series)
-    headers = ["Case", *(_markdown_text(item.label) for item in layout.series)]
-    for a, b in layout.comparisons:
-        headers.extend(
-            [f"{_markdown_text(labels[a])} / {_markdown_text(labels[b])}", f"{_markdown_text(labels[a])} → {_markdown_text(labels[b])} time reduction (%)"]
-        )
+    headers = [_markdown_text(style.row_heading), *(_markdown_text(item.label) for item in layout.series)]
+    meanings = []
+    for index, (a, b) in enumerate(layout.comparisons):
+        for column in style.comparison_columns:
+            headings = style.ratio_headings if column == "ratio" else style.reduction_headings
+            default = f"{labels[a]} / {labels[b]}" if column == "ratio" else f"{labels[a]} → {labels[b]} time reduction (%)"
+            heading = headings[index] if headings else default
+            headers.append(_markdown_text(heading))
+            if headings:
+                meanings.append(f"- {_markdown_text(heading)}: {column}; numerator = {_markdown_text(labels[a])}; denominator = {_markdown_text(labels[b])}.")
     lines.extend(["", "| " + " | ".join(headers) + " |", "| " + " | ".join("---" for _ in headers) + " |"])
     for row in layout.rows:
         cells = [_markdown_text(row.label)]
         for item in layout.series:
             estimate = selected[item.name].get(row.key)
-            cells.append(_format_estimate(estimate, layout.unit) if estimate is not None else "unavailable")
+            cells.append(
+                _format_estimate(
+                    estimate,
+                    layout.unit,
+                    interval_separator="<br>" if style.intervals == "below" else " ",
+                    include_unit=not style.timing_legend,
+                    include_confidence=not style.timing_legend,
+                )
+                if estimate is not None
+                else "unavailable"
+            )
         for a, b in layout.comparisons:
             first, second = selected[a].get(row.key), selected[b].get(row.key)
             if first is None or second is None:
-                cells.extend(["unavailable", "unavailable"])
+                cells.extend("unavailable" for _ in style.comparison_columns)
             else:
                 pair = Comparison(row.key, first, second)
-                cells.extend([f"{pair.speedup:.6g}", f"{pair.percent_reduction:.6g}"])
+                cells.extend(
+                    f"{pair.speedup:.6g}{_markdown_text(style.ratio_suffix)}" if column == "ratio" else f"{pair.percent_reduction:.6g}"
+                    for column in style.comparison_columns
+                )
         lines.append("| " + " | ".join(cells) + " |")
-    lines.extend(
-        [
-            "",
-            "Intervals are recorded marginal timing intervals; ratios are point estimates, with no ratio intervals or significance claims.",
-            "Time reduction is 100 × (numerator − denominator) / numerator; positive means less denominator time.",
-            "",
-            "Selection coverage:",
-        ]
-    )
+    lines.extend(["", "Intervals are recorded marginal timing intervals; ratios are point estimates, with no ratio intervals or significance claims."])
+    if style.ratio_headings and "ratio" in style.comparison_columns:
+        lines.append("Ratio is numerator time / denominator time; greater than one means less denominator time.")
+    if "reduction" in style.comparison_columns:
+        lines.append("Time reduction is 100 × (numerator − denominator) / numerator; positive means less denominator time.")
+    lines.extend(meanings)
+    lines.extend(["", "Selection coverage:"])
     for item in layout.series:
         view = next(view for view in run.series if view.name == item.name)
         count = len(selected[item.name])

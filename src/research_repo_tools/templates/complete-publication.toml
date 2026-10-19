@@ -24,6 +24,15 @@ series = [
 ]
 comparisons = [{numerator = "Library baseline", denominator = "Library current"}]
 
+# Optional compact Markdown style; omit to preserve inline intervals and both columns.
+# [table]
+# comparison-columns = ["ratio"]
+# intervals = "below"
+# ratio-headings = ["Baseline / current"]
+# ratio-suffix = "×"
+# row-heading = "Dimension"
+# timing-legend = true
+
 [plot]
 path = "docs/assets/dimensions.svg"
 title = "Timing versus dimension"

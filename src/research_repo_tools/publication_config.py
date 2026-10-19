@@ -77,6 +77,44 @@ def _run_layout(raw: dict[str, object]):
     )
 
 
+def _run_table_style(value: object):
+    from research_repo_tools.run_presentation import RunTableStyle
+
+    raw = _table(
+        value,
+        "run table style",
+        set(),
+        {"row-heading", "intervals", "timing-legend", "comparison-columns", "ratio-headings", "reduction-headings", "ratio-suffix"},
+    )
+    intervals = raw.get("intervals", "inline")
+    if intervals not in ("inline", "below"):
+        raise ValueError("intervals must be inline or below")
+    legend = raw.get("timing-legend", False)
+    if type(legend) is not bool:
+        raise ValueError("timing-legend must be a boolean")
+
+    def strings(field: str, default: tuple[str, ...]) -> tuple[str, ...]:
+        if field not in raw:
+            return default
+        values = raw[field]
+        if not isinstance(values, list):
+            raise ValueError(f"{field} must be an array")
+        return tuple(_string(item, field) for item in cast(list[object], values))
+
+    columns = strings("comparison-columns", ("ratio", "reduction"))
+    if any(column not in ("ratio", "reduction") for column in columns):
+        raise ValueError("comparison columns must be unique ratio/reduction selections")
+    return RunTableStyle(
+        row_heading=_string(raw.get("row-heading", "Case"), "row heading"),
+        intervals="inline" if intervals == "inline" else "below",
+        timing_legend=legend,
+        comparison_columns=tuple("ratio" if column == "ratio" else "reduction" for column in columns),
+        ratio_headings=strings("ratio-headings", ()),
+        reduction_headings=strings("reduction-headings", ()),
+        ratio_suffix="" if raw.get("ratio-suffix", "") == "" else _string(raw["ratio-suffix"], "ratio suffix"),
+    )
+
+
 def load_publication(root: Path, configuration: str) -> PublicationPlan:
     """Load a v1 comparison or v2 complete-run publication and plan all outputs.
 
@@ -99,7 +137,7 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
         optional |= {"baseline-label", "current-label"}
     else:
         required |= {"statistic", "series"}
-        optional |= {"payload", "manifest", "archive", "missing", "comparisons", "plot", "csv"}
+        optional |= {"payload", "manifest", "archive", "missing", "comparisons", "plot", "csv", "table"}
     raw = _table(
         parsed,
         "publication",
@@ -241,7 +279,7 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
         from research_repo_tools.run_presentation import CoordinatePlot, render_coordinate_svg, render_run_ratios, render_run_table, serialize_run_csv
 
         run_layout = _run_layout(raw)
-        content = render_run_table(retained, run_layout)
+        content = render_run_table(retained, run_layout, style=_run_table_style(raw.get("table", {})))
 
         def artifact(path: str, data: bytes) -> None:
             if path in figures:

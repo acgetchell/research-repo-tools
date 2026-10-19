@@ -189,12 +189,17 @@ first when immutable archival is required.
 | `series` | Ordered nonempty array of `{name, label, rows}`; `name` identifies an existing retained view, `rows` maps configured row keys to exact semantic benchmark IDs within that view |
 | `statistic` | Explicit recorded `mean` or `median` |
 | `svg` | Optional point-ratio figure; requires exactly one comparison |
+| `table` | Optional Markdown style table; controls headings, interval placement, shared timing legend and independently selected comparison columns; see [style fields](complete-run-api.md#configured-presentation) |
 | `unit` | Must equal the recorded timing unit; no conversion |
 
 The remaining optional common fields are `links`, `repository`, `tag-policy`,
 `prose-file`, `current-sources`, and `current-harness`. Schema-1-only
 `baseline-label`/`current-label` fields are replaced by explicit series labels.
 Unknown fields, ambiguous mappings and duplicated/aliased output paths fail.
+The optional `table` controls are an unreleased additive extension; omitting
+them preserves the published default output. Table options never change CSV,
+figures, source estimates or comparison arithmetic. Nested unknown keys, invalid
+types and mismatched comparison heading counts fail before any output writes.
 Missing mappings require explicit unavailable policy; unmeasured or out-of-view
 mapped IDs always fail. Tables state selected, unavailable and omitted phase
 cases while the complete payload retains every raw case independently.

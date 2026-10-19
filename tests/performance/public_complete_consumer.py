@@ -14,6 +14,7 @@ import unittest
 import xml.etree.ElementTree as ET
 from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import replace
+from decimal import Inexact, Rounded, localcontext
 from html import unescape
 from pathlib import Path
 from types import SimpleNamespace
@@ -53,6 +54,7 @@ from research_repo_tools.run_presentation import (
     CoordinatePlot,
     RunLayout,
     RunRow,
+    RunTableStyle,
     SeriesSelection,
     render_coordinate_svg,
     render_run_ratios,
@@ -166,7 +168,7 @@ def measured(parent: Path, *, point: bytes = b"10", same_label: bool = False) ->
         return measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.1.0" if same_label else "v1.0.0"))
 
 
-def retained_fixture(*, baseline_point: float = 10) -> Evidence:
+def retained_fixture(*, baseline_point: float = 10, mean_offset: float = 0, confidence_level: float = 0.95) -> Evidence:
     """Synthetic retained inputs for rendering/publication, without acquisition."""
     phases, sources = [], []
     for phase, point, identities, revision in (
@@ -175,17 +177,20 @@ def retained_fixture(*, baseline_point: float = 10) -> Evidence:
     ):
         cases = []
         for identity in identities:
-            estimates = {
-                stat: {"point_estimate": point, "confidence_interval": {"lower_bound": point * 0.9, "upper_bound": point * 1.1, "confidence_level": 0.95}}
-                for stat in ("mean", "median")
-            }
+            estimates = {}
+            for stat in ("mean", "median"):
+                stat_point = point + mean_offset if stat == "mean" else point
+                estimates[stat] = {
+                    "point_estimate": stat_point,
+                    "confidence_interval": {"lower_bound": stat_point * 0.9, "upper_bound": stat_point * 1.1, "confidence_level": confidence_level},
+                }
             native = (
                 {"full_id": identity},
                 estimates,
                 {"iters": [1, 2, 3], "times": [point, point * 2, point * 3]},
             )
             cases.append(CompleteCase(identity.replace(" / ", "_"), *((json.dumps(value) + "\r\n").encode("utf-8") for value in native)))
-        phases.append((phase, CompleteSample(CompletePolicy(identities, sample_count=3), tuple(cases))))
+        phases.append((phase, CompleteSample(CompletePolicy(identities, sample_count=3, confidence_level=confidence_level), tuple(cases))))
         context = {
             "phase": phase,
             "release": "v1.0.0" if phase == "baseline" else "v1.1.0",
@@ -316,6 +321,221 @@ class TestCompleteConsumer(unittest.TestCase):
         self.assertEqual(len(tree.findall(".//{http://www.w3.org/2000/svg}circle")), 3)
         self.assertIn("Peer: baseline phase", tree.findtext("{http://www.w3.org/2000/svg}desc") or "")
         self.assertEqual(ET.fromstring(render_run_ratios(evidence, layout)).attrib["data-run-id"], run_identity(evidence))
+
+    def test_table_default_output_is_preserved(self):
+        evidence, layout = retained_fixture(), presentation_layout()
+        expected = f"""Run: `{run_identity(evidence)}`. Statistic: median. Unit: ns.
+
+- Library old: baseline phase, v1.0.0, revision {"a" * 40}.
+- Library &lt;new&gt; &amp; fast: current phase, v1.1.0, revision {"b" * 40}.
+- Peer: baseline phase, v1.0.0, revision {"a" * 40}.
+
+| Case | Library old | Library &lt;new&gt; &amp; fast | Peer | Library old / Library &lt;new&gt; &amp; fast | Library old → Library &lt;new&gt; &amp; fast time reduction (%) |
+| --- | --- | --- | --- | --- | --- |
+| Size &#124; two | 10 ns [9, 11] (0.95 confidence) | 5 ns [4.5, 5.5] (0.95 confidence) | 10 ns [9, 11] (0.95 confidence) | 2 | 50 |
+
+Intervals are recorded marginal timing intervals; ratios are point estimates, with no ratio intervals or significance claims.
+Time reduction is 100 × (numerator − denominator) / numerator; positive means less denominator time.
+
+Selection coverage:
+- Library old: 1 selected; 0 unavailable rows; 1 phase cases omitted. Complete evidence is retained independently.
+- Library &lt;new&gt; &amp; fast: 1 selected; 0 unavailable rows; 0 phase cases omitted. Complete evidence is retained independently.
+- Peer: 1 selected; 0 unavailable rows; 1 phase cases omitted. Complete evidence is retained independently.
+"""
+        self.assertEqual(render_run_table(evidence, layout), expected)
+        self.assertEqual(render_run_table(evidence, layout, style=RunTableStyle()), expected)
+
+    def test_table_compact_ratio_only_headings_and_unchanged_evidence(self):
+        evidence, initial = retained_fixture(), presentation_layout()
+        layout = replace(initial, comparisons=(*initial.comparisons, ("Reference reused", "Library current")))
+        style = RunTableStyle(
+            row_heading="Dimension | <n>",
+            intervals="below",
+            timing_legend=True,
+            comparison_columns=("ratio",),
+            ratio_headings=("Old / new", "Peer <&> | speedup"),
+            ratio_suffix="×",
+        )
+        before, csv_before = serialize_evidence(evidence), serialize_run_csv(evidence, layout)
+        table = render_run_table(evidence, layout, style=style)
+        self.assertIn(
+            "| Dimension &#124; &lt;n&gt; | Library old | Library &lt;new&gt; &amp; fast | Peer | Old / new | Peer &lt;&amp;&gt; &#124; speedup |", table
+        )
+        self.assertIn("| Size &#124; two | 10<br>[9, 11] | 5<br>[4.5, 5.5] | 10<br>[9, 11] | 2× | 2× |", table)
+        self.assertEqual(table.count("95%"), 1)
+        self.assertEqual(table.count(" ns"), 1)
+        self.assertNotIn("time reduction", table.lower())
+        self.assertIn("numerator time / denominator time", table)
+        self.assertIn("Peer &lt;&amp;&gt; &#124; speedup: ratio; numerator = Peer; denominator = Library &lt;new&gt; &amp; fast.", table)
+        self.assertIn("Peer: baseline phase", table)
+        self.assertIn("recorded marginal timing intervals; ratios are point estimates", table)
+        self.assertIn(run_identity(evidence), table)
+        self.assertEqual(table, render_run_table(evidence, layout, style=style))
+        self.assertEqual(serialize_evidence(evidence), before)
+        self.assertEqual(serialize_run_csv(evidence, layout), csv_before)
+
+    def test_table_statistic_confidence_and_interval_placement(self):
+        evidence, initial = retained_fixture(mean_offset=2, confidence_level=0.9), presentation_layout()
+        for statistic, timing, ratio, reduction in (("median", "10", "2", "50"), ("mean", "12", "1.71429", "41.6667")):
+            for intervals in ("inline", "below"):
+                for legend in (False, True):
+                    with self.subTest(statistic=statistic, intervals=intervals, legend=legend):
+                        layout = replace(initial, statistic=statistic)
+                        style = RunTableStyle(intervals=intervals, timing_legend=legend)
+                        table = render_run_table(evidence, layout, style=style)
+                        separator = "<br>" if intervals == "below" else " "
+                        self.assertIn(f"| {timing}{'' if legend else ' ns'}{separator}[", table)
+                        self.assertIn(f"Statistic: {statistic}.", table)
+                        self.assertIn("Confidence level: 90%." if legend else "(0.9 confidence)", table)
+                        self.assertNotIn("95%", table)
+                        self.assertNotIn("0.95 confidence", table)
+                        self.assertIn(f"| {ratio} | {reduction} |", table)
+        for level, label in ((0.9555, "95.55%"), (0.9999999, "99.99999%")):
+            with self.subTest(level=level):
+                table = render_run_table(retained_fixture(confidence_level=level), initial, style=RunTableStyle(timing_legend=True))
+                self.assertIn(f"Confidence level: {label}.", table)
+
+    def test_table_confidence_is_independent_of_decimal_context(self):
+        layout, style = presentation_layout(), RunTableStyle(timing_legend=True)
+        for level, label in (
+            (0.9, "90"),
+            (0.95, "95"),
+            (0.9555, "95.55"),
+            (0.9999999, "99.99999"),
+            (0.9999999999999999, "99.99999999999999"),
+            (1e-8, "0.000001"),
+        ):
+            evidence = retained_fixture(confidence_level=level)
+            expected = render_run_table(evidence, layout, style=style)
+            self.assertIn(f"Confidence level: {label}%.", expected)
+            for precision in (2, 6):
+                with self.subTest(level=level, precision=precision), localcontext(prec=precision, Emin=-1, Emax=1) as context:
+                    context.traps[Inexact] = True
+                    context.traps[Rounded] = True
+                    context.clear_flags()
+                    self.assertEqual(render_run_table(evidence, layout, style=style), expected)
+                    self.assertFalse(any(context.flags.values()))
+
+    def test_table_independent_comparison_columns_and_unavailable_rows(self):
+        evidence, initial = retained_fixture(), presentation_layout()
+        layout = replace(
+            initial,
+            rows=(*initial.rows, RunRow("eight", "Eight")),
+            missing="unavailable",
+            comparisons=(("Library current", "Library baseline"),),
+        )
+        for columns, expected in (
+            (("ratio",), "| 0.5&#124;&lt;x&gt; |"),
+            (("reduction",), "| -100 |"),
+            (("reduction", "ratio"), "| -100 | 0.5&#124;&lt;x&gt; |"),
+            ((), "(0.95 confidence) |"),
+        ):
+            with self.subTest(columns=columns):
+                style = RunTableStyle(comparison_columns=columns, ratio_suffix="|<x>", reduction_headings=("Reduction <&>",))
+                table = render_run_table(evidence, layout, style=style)
+                self.assertIn(expected, table)
+                self.assertIn("| Eight | " + " | ".join(["unavailable"] * (3 + len(columns))) + " |", table)
+                self.assertIn("1 unavailable rows", table)
+                if "reduction" in columns:
+                    self.assertIn("Reduction &lt;&amp;&gt;: reduction; numerator = Library &lt;new&gt; &amp; fast; denominator = Library old.", table)
+                    self.assertIn("100 × (numerator − denominator) / numerator", table)
+                else:
+                    self.assertNotIn("Reduction &lt;&amp;&gt;", table)
+
+    def test_table_style_rejects_invalid_fields_and_heading_counts(self):
+        invalid = (
+            {"row_heading": ""},
+            {"row_heading": "line\nbreak"},
+            {"intervals": "hidden"},
+            {"timing_legend": 1},
+            {"comparison_columns": ("speedup",)},
+            {"comparison_columns": ("ratio", "ratio")},
+            {"ratio_headings": ("",)},
+            {"ratio_headings": "Gain"},
+            {"reduction_headings": ("bad\nheading",)},
+            {"ratio_suffix": "\n"},
+            {"ratio_suffix": None},
+        )
+        for fields in invalid:
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                RunTableStyle(**fields)  # ty: ignore[invalid-argument-type]  Exercise untyped runtime callers.
+        evidence, layout = retained_fixture(), presentation_layout()
+        for style in (RunTableStyle(ratio_headings=("A", "B")), RunTableStyle(reduction_headings=("A", "B"))):
+            with self.assertRaisesRegex(ValueError, "headings must match"):
+                render_run_table(evidence, layout, style=style)
+        with self.assertRaises(TypeError):
+            render_run_table(evidence, layout, style={})  # ty: ignore[invalid-argument-type]  Exercise untyped runtime callers.
+
+    def test_table_mixed_confidence_evidence_is_rejected_before_rendering(self):
+        original, other = retained_fixture(), retained_fixture(confidence_level=0.9)
+        raw, changed = json.loads(original.payload), json.loads(other.payload)
+        raw["phases"]["current"] = changed["phases"]["current"]
+        evidence = replace(original, payload=deterministic_json(raw))
+        for intervals in ("inline", "below"):
+            for legend in (False, True):
+                with self.subTest(intervals=intervals, legend=legend), self.assertRaisesRegex(ValueError, "matching measurement policies"):
+                    render_run_table(evidence, presentation_layout(), style=RunTableStyle(intervals=intervals, timing_legend=legend))
+
+    def test_table_style_publication_configuration(self):
+        for archive in (False, True):
+            with self.subTest(archive=archive), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                config = presentation_fixture(root, archive=archive).replace('svg="figures/ratios.svg"\n', "")
+                config = config.replace(
+                    'comparisons=[{numerator="Library baseline", denominator="Library current"}]',
+                    'comparisons=[{numerator="Library baseline", denominator="Library current"}, {numerator="Reference reused", denominator="Library current"}]',
+                )
+                config += """
+[table]
+row-heading="Dimension"
+intervals="below"
+timing-legend=true
+comparison-columns=["ratio"]
+ratio-headings=["Old speedup", "Peer speedup"]
+ratio-suffix="×"
+"""
+                (root / "publication.toml").write_text(config, encoding="utf-8", newline="\n")
+                if archive:
+                    (root / "run.json").unlink()
+                    (root / "envelope.json").unlink()
+                before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+                plan = load_publication(root, "publication.toml")
+                self.assertIn("README.md: SHA-256", preview_publication(plan))
+                self.assertEqual(before, {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()})
+                self.assertEqual(len(publish_publication(plan)), 3)
+                document = (root / "README.md").read_bytes()
+                self.assertIn(b"| Dimension |", document)
+                self.assertIn(b"| Size &#124; two | 10<br>[9, 11] | 5<br>[4.5, 5.5] | 10<br>[9, 11] | 2\xc3\x97 | 2\xc3\x97 |", document)
+                self.assertEqual(document.count(b"Confidence level: 95%."), 1)
+                self.assertEqual(publish_publication(load_publication(root, "publication.toml")), ())
+
+    def test_table_style_configuration_rejection_preserves_inputs(self):
+        invalid = (
+            'row-heading=""',
+            'intervals="none"',
+            "timing-legend=1",
+            'timing-legend="true"',
+            'comparison-columns=["ratio", "ratio"]',
+            'comparison-columns=["speedup"]',
+            'comparison-columns="ratio"',
+            "comparison-columns=[true]",
+            'ratio-headings=["A", "B"]',
+            'ratio-headings="Gain"',
+            'reduction-headings=[""]',
+            'reduction-headings=["A", "B"]',
+            "ratio-suffix=3",
+            'unknown="value"',
+        )
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            config = presentation_fixture(root)
+            for field in invalid:
+                with self.subTest(field=field):
+                    (root / "publication.toml").write_text(config + "\n[table]\n" + field + "\n", encoding="utf-8", newline="\n")
+                    before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+                    with self.assertRaises(ValueError):
+                        load_publication(root, "publication.toml")
+                    self.assertEqual(before, {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()})
 
     def test_presentation_multiple_coordinates_order_and_missing_cells(self):
         original = retained_fixture()

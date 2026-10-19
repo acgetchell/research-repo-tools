@@ -336,13 +336,15 @@ def _markdown_text(value: str) -> str:
     return escaped
 
 
-def _format_estimate(estimate: Estimate | None, unit: Unit) -> str:
+def _format_estimate(
+    estimate: Estimate | None, unit: Unit, *, interval_separator: str = " ", include_unit: bool = True, include_confidence: bool = True
+) -> str:
     if estimate is None:
         return "—"
-    point = f"{estimate.point:g} {unit}"
+    point = f"{estimate.point:g}" + (f" {unit}" if include_unit else "")
     if estimate.lower is not None and estimate.upper is not None:
-        point += f" [{estimate.lower:g}, {estimate.upper:g}]"
-        if estimate.confidence_level is not None:
+        point += f"{interval_separator}[{estimate.lower:g}, {estimate.upper:g}]"
+        if include_confidence and estimate.confidence_level is not None:
             point += f" ({estimate.confidence_level:g} confidence)"
     return point
 

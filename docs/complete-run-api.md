@@ -258,10 +258,11 @@ Import from `research_repo_tools.run_presentation` (target v0.1.9):
 | `CoordinatePlot(title, x_label, y_label, x_scale="linear", y_scale="linear")` | Nonempty labels and `linear`/`log` scales |
 | `RunLayout(series, rows, statistic, unit, missing="error", comparisons=())` | Explicit series/row order, recorded mean/median and timing unit; comparisons are `(numerator_name, denominator_name)` tuples |
 | `RunRow(key, label, coordinate=None)` | Unique selection key and display label; optional finite numeric coordinate |
+| `RunTableStyle(*, row_heading="Case", intervals="inline", timing_legend=False, comparison_columns=("ratio", "reduction"), ratio_headings=(), reduction_headings=(), ratio_suffix="")` | Frozen Markdown-only style; additive, unreleased API |
 | `SeriesSelection(name, label, rows)` | Existing retained view name, unique display label and unique `(row_key, semantic_full_id)` mappings |
 | `render_coordinate_svg(evidence, layout, plot)` | Deterministic UTF-8/LF accessible SVG with point estimates and recorded marginal timing intervals |
 | `render_run_ratios(evidence, layout)` | Exactly one configured comparison, rendered as point-ratio bars with original phase labels and run identity |
-| `render_run_table(evidence, layout)` | Markdown timings, marginal intervals, optional ratios/reductions and explicit selection coverage |
+| `render_run_table(evidence, layout, *, style=None)` | Markdown timings, marginal intervals, selected ratios/reductions and explicit selection coverage; omitted style preserves existing output |
 | `serialize_run_csv(evidence, layout)` | Deterministic UTF-8/LF long-form CSV with each cell's run/series/phase/revision/release, fingerprints, row/coordinate/ID, statistic/unit, status and estimate/bounds/confidence |
 
 Every renderer validates the entire complete evidence, including phase gates and
@@ -296,6 +297,39 @@ Time reduction is `100 × (numerator − denominator) / numerator`; positive mea
 less denominator time, negative means more. These are point comparisons: neither
 ratio intervals, paired uncertainty, significance nor acceptance is inferred.
 All derived output remains bound to the original complete-run identity.
+
+`RunTableStyle` controls Markdown without changing the layout's selection,
+estimates, arithmetic, CSV or figures. Existing positional and keyword calls to
+`render_run_table(evidence, layout)` retain their exact default output. Style
+controls and their matching schema-2 `table` keys are:
+
+| Style field / TOML key | Contract |
+| --- | --- |
+| `comparison_columns` / `comparison-columns` | Ordered unique selection of `ratio` and/or `reduction`, emitted for each comparison; empty means timing columns only |
+| `intervals` / `intervals` | `inline` (default) or `below`, which inserts `<br>` between the point and both recorded bounds |
+| `ratio_headings` / `ratio-headings` | Empty uses numerator/denominator series labels; otherwise one nonempty heading per comparison, in layout order |
+| `ratio_suffix` / `ratio-suffix` | Empty by default; `×` appends the multiplication sign to each available point ratio |
+| `reduction_headings` / `reduction-headings` | Empty uses existing time-reduction headings; otherwise one heading per comparison |
+| `row_heading` / `row-heading` | Nonempty first-column heading, default `Case`; timing headings still come from `SeriesSelection.label` |
+| `timing_legend` / `timing-legend` | Boolean, default false; true omits cell units/confidence labels and states the recorded unit and confidence percentage in the caption with the selected statistic |
+
+Custom comparison headings also render a key identifying each numerator and
+denominator series. Labels and suffixes are escaped as Markdown text; only the
+renderer inserts the interval line break. Unavailable cells have no fabricated
+intervals or suffixes. Heading arrays, when nonempty, must match the number of
+comparisons even if their column type is currently hidden. Unsupported style
+values or heading counts raise `ValueError`; a non-style object raises `TypeError`.
+
+Confidence text comes from recorded estimates, including levels other than
+95%. Complete-run validation requires a complete interval at the recorded policy
+level for every selected statistic and case, and matching levels across phases.
+Differing levels are rejected before any table is produced, in every style;
+presentation never weakens that evidence contract or substitutes 95%. Compact
+tables retain both marginal bounds and the explanation that ratios are point
+estimates without ratio intervals or significance claims. These controls are
+unreleased; published v0.1.9 consumers need a compatible release containing them.
+See the [README](../README.md#complete-run-document-sections-and-coordinate-plots)
+for the six-column ratio-only configuration and Python usage.
 
 Pure renderers do no I/O. Use `publication.plan_outputs` to transactionally
 publish standalone figures/CSV with validated payload/envelope bytes as inputs,
