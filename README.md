@@ -1552,6 +1552,59 @@ point estimates; time reduction is `100 × (numerator − denominator) / numerat
 so positive values mean less denominator time. `svg` requires exactly one such
 comparison; `csv` exports selected timings with provenance and confidence bounds.
 
+For compact tables, schema 2 also accepts a `table` style. This example selects
+one row column, three configured timing series and two ratio-only comparisons.
+Keep the existing three `series` entries; replace `comparisons` and omit `svg`
+(the ratio figure requires exactly one comparison):
+
+```toml
+comparisons = [
+    {numerator = "Library baseline", denominator = "Library current"},
+    {numerator = "Reference reused", denominator = "Library current"},
+]
+
+[table]
+comparison-columns = ["ratio"]
+intervals = "below"
+ratio-headings = ["Baseline / current", "Reference / current"]
+ratio-suffix = "×"
+row-heading = "Dimension"
+timing-legend = true
+```
+
+Cells become `5<br>[4.5, 5.5]`; the caption states the selected statistic,
+recorded unit and common confidence level once. Ratios such as `2×` retain
+explicit numerator/denominator labels below the table. Use `["reduction"]`
+for percentage reductions, `["ratio", "reduction"]` for both, or `[]` for
+timings alone. `reduction-headings` customizes the percentage headings. Heading
+arrays follow comparison order and must cover every comparison when supplied.
+Omitting `table` preserves the existing inline intervals, `Case` heading and
+both comparison columns. Differing confidence levels fail complete-run
+validation; they cannot be presented as one shared level.
+
+The same controls are available through the public Python API:
+
+```python
+from research_repo_tools.run_presentation import RunTableStyle, render_run_table
+
+table = render_run_table(
+    evidence,
+    layout,
+    style=RunTableStyle(
+        row_heading="Dimension",
+        intervals="below",
+        timing_legend=True,
+        comparison_columns=("ratio",),
+        ratio_headings=("Baseline / current", "Reference / current"),
+        ratio_suffix="×",
+    ),
+)
+```
+
+Here `layout.comparisons` selects the same two pairs as the TOML example.
+These table style controls are unreleased. Consumers pinned to v0.1.9 need a
+published compatible release containing them before adopting this configuration.
+
 Missing selections fail by default. Explicit `missing = "unavailable"` permits
 unmapped cells, labels them in tables and CSV, and breaks plot lines at those
 rows. Invalid or unmeasured mapped IDs always fail. Coverage states selected,
