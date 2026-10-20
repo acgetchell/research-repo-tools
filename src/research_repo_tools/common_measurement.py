@@ -272,6 +272,11 @@ def validate_run_policy(evidence: Evidence, plan: MeasurementConfig | CommonHarn
     if set(run.compatible) != set(plan.measurement.compatible):
         raise ValueError("retained compatibility fields differ from measurement policy")
     sources = dict(evidence.sources)
+    if (
+        dict(sources["current"].context)["release"] == dict(sources["baseline"].context)["release"]
+        and sources["current"].source_sha256 == sources["baseline"].source_sha256
+    ):
+        raise ValueError("same-release comparisons require distinct source identities")
     if release and dict(sources["baseline"].context)["release"] == dict(sources["current"].context)["release"]:
         raise ValueError("same-release local comparisons cannot be promoted as release comparisons")
     policies = {}

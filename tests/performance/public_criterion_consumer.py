@@ -93,6 +93,23 @@ sample-count=3
             with self.assertRaisesRegex(ValueError, "omits required"):
                 load_saved_sample(root, "saved.toml", saved_sample="v1.2.3")
 
+    def test_storage_paths_reject_name_aliases_and_component_overlaps_without_resolving(self):
+        policy = CompletePolicy(IDS, sample_count=3)
+        for left, right in (
+            ("same", "same"),
+            ("same", "SAME"),
+            ("caf\u00e9/case", "cafe\u0301/CASE"),
+            ("group", "group/case"),
+            ("CAF\u00c9/case", "cafe\u0301"),
+        ):
+            with self.subTest(left=left, right=right), self.assertRaisesRegex(ValueError, "duplicate|overlapping"):
+                SavedSamplePlan("criterion", "v1.2.3", policy, storage_paths=((IDS[0], left), (IDS[1], right)))
+        for left, right in (("group", "group-extra"), ("CAF\u00c9/first", "cafe\u0301/second")):
+            paths = ((IDS[1], right), (IDS[0], left))
+            with self.subTest(left=left, right=right), patch.object(Path, "resolve", side_effect=AssertionError("storage names must not resolve")):
+                plan = SavedSamplePlan("criterion", "v1.2.3", policy, storage_paths=paths)
+            self.assertEqual(plan.storage_paths, tuple(sorted(paths)))
+
     def test_native_record_boundaries_preserve_unicode_and_reject_controls(self):
         identities = ("group\u0085case", "group\u2028case", "group\u2029case")
         for newline in ("\n", "\r\n"):

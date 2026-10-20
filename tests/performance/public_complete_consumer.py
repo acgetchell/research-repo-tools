@@ -511,11 +511,36 @@ raw-files=["benchmark.json", "estimates.json", "sample.json", "tukey.json"]
                 source_sha256=same_source["baseline"].source_sha256,
                 context=tuple((key, "v1.0.0" if key == "release" else value) for key, value in same_source["current"].context),
             )
-            with self.assertRaisesRegex(ValueError, "distinct source"):
-                validate_run_evidence(replace(evidence, sources=tuple(same_source.items())))
+            identical = replace(evidence, sources=tuple(same_source.items()))
+            self.assertEqual(validate_run_evidence(identical), run)
+            for release in (False, True):
+                with self.subTest(release=release), self.assertRaisesRegex(ValueError, "distinct source"):
+                    validate_run_policy(identical, plan, release=release)
             same_source["current"] = replace(same_source["current"], source_sha256="7" * 64)
             with self.assertRaisesRegex(ValueError, "cannot be promoted"):
                 validate_run_policy(replace(evidence, sources=tuple(same_source.items())), plan, release=True)
+
+    def test_historical_same_release_identical_source_run_remains_readable(self):
+        evidence = retained_fixture()
+        sources = dict(evidence.sources)
+        sources["current"] = replace(
+            sources["current"],
+            source_sha256=sources["baseline"].source_sha256,
+            context=tuple((key, "v1.0.0" if key == "release" else value) for key, value in sources["current"].context),
+        )
+        evidence = replace(evidence, sources=tuple(sources.items()))
+        self.assertTrue(all("measurement-declaration" not in dict(source.context) for _, source in evidence.sources))
+        identity = run_identity(evidence)
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            publish_evidence(evidence, root / "run.json", root / "manifest.json")
+            (root / "report.toml").write_bytes(b'schema=2\ncurrent="current.md"\narchive="history"\ntitle="Timing"\n')
+            publish_publication(load_run_report_plan(root, "report.toml", payload="run.json", manifest="manifest.json"))
+            before = {path: path.read_bytes() for path in (root / "history").rglob("*") if path.is_file()}
+            self.assertEqual(load_latest_run(root, "history"), evidence)
+            self.assertEqual(json.loads((root / "history/latest.json").read_bytes())["run"]["id"], identity)
+            self.assertFalse(load_run_report_plan(root, "report.toml").changed_paths)
+            self.assertEqual({path: path.read_bytes() for path in before}, before)
 
     def test_discovered_selectors_retain_diagnostics_and_independent_required_ids(self):
         with tempfile.TemporaryDirectory() as directory:

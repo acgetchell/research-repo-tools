@@ -59,9 +59,11 @@ class SavedSamplePlan:
         paths = tuple((_string(identity, "storage ID"), _publication_name(path)) for identity, path in self.storage_paths)
         if len(dict(paths)) != len(paths) or not dict(paths).keys() <= set(self.policy.expected):
             raise ValueError("storage paths must name unique expected IDs")
-        from research_repo_tools.files import _validate_distinct_paths
-
-        _validate_distinct_paths(tuple(Path(path) for _, path in paths))
+        keys = {tuple(unicodedata.normalize("NFC", part).casefold() for part in path.split("/")) for _, path in paths}
+        if len(keys) != len(paths):
+            raise ValueError("storage paths must not contain duplicate paths (including case/Unicode aliases)")
+        if any(key[:end] in keys for key in keys for end in range(1, len(key))):
+            raise ValueError("storage paths must not contain overlapping paths")
         object.__setattr__(self, "storage_paths", tuple(sorted(paths)))
 
 

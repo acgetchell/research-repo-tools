@@ -421,11 +421,6 @@ def validate_run_evidence(evidence: Evidence) -> CompleteRun:
 
         _environment(environment.items())
     ReleasePair(dict(sources["current"].context)["release"], dict(sources["baseline"].context)["release"])
-    if (
-        dict(sources["current"].context)["release"] == dict(sources["baseline"].context)["release"]
-        and sources["current"].source_sha256 == sources["baseline"].source_sha256
-    ):
-        raise ValueError("same-release comparisons require distinct source identities")
     compatibility = compare_provenance(sources["baseline"], sources["current"], fields=run.compatible)
     if not compatibility.compatible:
         raise ValueError(f"required run provenance differs or is unknown: {compatibility.differences}")
