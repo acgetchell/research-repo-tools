@@ -2,12 +2,14 @@
 
 import posixpath
 import tomllib
+from collections.abc import Mapping
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 from urllib.parse import quote
 
 from research_repo_tools.criterion import COMPARISON_SCHEMA, _markdown_text, _unit, parse_comparison
-from research_repo_tools.evidence import Provenance, _object, _string, compare_provenance, fingerprint_files, parse_evidence
+from research_repo_tools.evidence import Evidence, Provenance, _object, _string, compare_provenance, fingerprint_files, parse_evidence
 from research_repo_tools.files import _validate_distinct_paths
 from research_repo_tools.publication import (
     GitCheck,
@@ -18,6 +20,7 @@ from research_repo_tools.publication import (
     TableLayout,
     _inventory,
     _path,
+    plan_outputs,
     plan_publication,
     render_svg,
     render_table,
@@ -41,17 +44,30 @@ def _array(value: object, context: str) -> list[object]:
     return cast(list[object], value)
 
 
-def _run_layout(raw: dict[str, object]):
+def _run_layout(raw: dict[str, object], retained: Evidence):
+    from research_repo_tools.complete_runs import validate_run_evidence
     from research_repo_tools.criterion import _statistic
     from research_repo_tools.run_presentation import RunLayout, RunRow, SeriesSelection
 
+    recorded_series = {series.name: series for series in validate_run_evidence(retained).series}
+    recorded_sources = {phase: dict(source.context) for phase, source in retained.sources}
     series = []
     for value in _array(raw["series"], "series"):
-        item = _table(value, "series selection", {"name", "label", "rows"})
+        item = _table(value, "series selection", {"name", "label", "rows"}, {"label-version"})
+        label = _string(item["label"], "series label")
+        if "label-version" in item:
+            version_key = _string(item["label-version"], "label-version")
+            if version_key != "release" and not version_key.startswith("dependency."):
+                raise ValueError("label-version must be release or dependency.NAME")
+            selected = recorded_series.get(_string(item["name"], "series name"))
+            if selected is None:
+                raise ValueError("version label requires a retained series")
+            version = recorded_sources[selected.phase].get(version_key)
+            label += " " + _string(version, f"{selected.phase} recorded {version_key}")
         series.append(
             SeriesSelection(
                 _string(item["name"], "series name"),
-                _string(item["label"], "series label"),
+                label,
                 tuple((key, _string(full_id, "benchmark")) for key, full_id in _object(item["rows"], "series rows").items()),
             )
         )
@@ -115,7 +131,13 @@ def _run_table_style(value: object):
     )
 
 
-def load_publication(root: Path, configuration: str) -> PublicationPlan:
+def load_publication(
+    root: Path,
+    configuration: str,
+    *,
+    identities: Mapping[str, tuple[str, str]] | None = None,
+    artifacts_only: bool = False,
+) -> PublicationPlan:
     """Load a v1 comparison or v2 complete-run publication and plan all outputs.
 
     Paths are root-relative POSIX names. No measurement or network access occurs.
@@ -125,26 +147,37 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
     Use plan_publication for historical schemas or consumer-specific rendering.
     """
     root = root.resolve(strict=True)
+    identities = dict[str, tuple[str, str]]() if identities is None else dict(identities)
+    if identities.keys() - {"baseline", "current"}:
+        raise ValueError("publication identities must name baseline/current phases")
+    for identity in identities.values():
+        if not isinstance(identity, tuple) or len(identity) != 2:
+            raise ValueError("publication identity requires a (release, revision) tuple")
     config_bytes = _path(root, configuration).read_bytes()
     parsed = tomllib.loads(config_bytes.decode("utf-8"))
     schema = parsed.get("schema")
     if type(schema) is not int or schema not in (1, 2):
         raise ValueError("publication schema must be integer 1 or 2")
     required = {"schema", "document", "begin", "end", "unit", "rows", "provenance", "references"}
-    optional = {"svg", "links", "repository", "tag-policy", "prose-file", "current-sources", "current-harness"}
+    optional = {"svg", "links", "repository", "tag-policy", "prose-file", "current-sources", "current-harness", "formatter"}
     if schema == 1:
         required |= {"payload", "manifest"}
         optional |= {"baseline-label", "current-label"}
     else:
         required |= {"statistic", "series"}
-        optional |= {"payload", "manifest", "archive", "missing", "comparisons", "plot", "csv", "table"}
+        optional |= {"payload", "manifest", "archive", "missing", "comparisons", "plot", "csv", "table", "measurement"}
+    if artifacts_only:
+        if schema != 2:
+            raise ValueError("artifacts-only requires complete-run publication schema 2")
+        required -= {"document", "begin", "end", "references"}
+        optional |= {"document", "begin", "end", "references"}
     raw = _table(
         parsed,
         "publication",
         required,
         optional,
     )
-    names = {"document": _string(raw["document"], "document")}
+    names = {} if artifacts_only else {"document": _string(raw["document"], "document")}
     inputs = {configuration: config_bytes}
     run_checks = []
     if schema == 2 and "archive" in raw:
@@ -174,6 +207,22 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
         from research_repo_tools.complete_runs import validate_run_evidence
 
         validate_run_evidence(retained)
+        if "measurement" in raw:
+            from research_repo_tools.common_measurement import validate_run_policy
+            from research_repo_tools.measurement import load_measurement
+
+            policy_name = _string(raw["measurement"], "measurement")
+            _validate_distinct_paths(tuple(_path(root, name) for name in (policy_name, configuration, *names.values())))
+            inputs[policy_name] = _path(root, policy_name).read_bytes()
+            measurement = load_measurement(root, policy_name)
+            validate_run_policy(retained, measurement, release=not artifacts_only)
+            if not artifacts_only:
+                if "archive" not in raw:
+                    raise ValueError("policy-checked document publication requires retained immutable archive evidence")
+                raw.setdefault("current-sources", list(measurement.sources))
+                raw.setdefault("current-harness", list(measurement.harness))
+        if not artifacts_only and dict(dict(retained.sources)["current"].context)["release"] == dict(dict(retained.sources)["baseline"].context)["release"]:
+            raise ValueError("same-release local comparisons cannot be published as release documentation")
     pins = _table(raw["provenance"], "provenance", {"baseline", "current"})
     sources = dict(retained.sources)
     tag_policy = raw.get("tag-policy", "existing")
@@ -182,7 +231,14 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
     releases: dict[str, str] = {}
     checks = []
     for name in ("baseline", "current"):
-        pin = _table(pins[name], f"provenance.{name}", {"revision", "release"}, {"source-sha256", "harness-sha256", "context", "verify-tag"})
+        pin = _table(pins[name], f"provenance.{name}", set(), {"revision", "release", "source-sha256", "harness-sha256", "context", "verify-tag"})
+        if name in identities:
+            for key, supplied in zip(("release", "revision"), identities[name], strict=True):
+                if key in pin and pin[key] != supplied:
+                    raise ValueError(f"{name} {key} conflicts with configured identity")
+                pin[key] = supplied
+        if not {"revision", "release"} <= pin.keys():
+            raise ValueError(f"{name} requires independent release and revision assertions in configuration or CLI")
         release = _string(pin["release"], f"{name} release")
         validate_semver(release)
         releases[name] = release
@@ -211,7 +267,7 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
     values = {"tag": releases["current"], "previous-tag": releases["baseline"], "version": releases["current"].removeprefix("v")}
     references = []
     selected_sources: set[str] = set()
-    for item in _array(raw["references"], "references"):
+    for item in _array(raw["references"], "references") if not artifacts_only else []:
         rule = _table(item, "publication reference", {"path", "pattern", "source"}, {"count", "exclude"})
         source = _string(rule["source"], "reference source")
         if source not in values:
@@ -229,9 +285,9 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
                 exclude=_string(rule["exclude"], "reference exclude") if "exclude" in rule else None,
             )
         )
-    if selected_sources != set(values):
+    if not artifacts_only and selected_sources != set(values):
         raise ValueError("publication references must check the current version and both report tags (version, tag, previous-tag)")
-    document = names["document"]
+    document = names.get("document", "README.md")
     if tag_policy == "prepare":
         from research_repo_tools.release_discovery import _tag_version
 
@@ -246,6 +302,11 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
         if field in raw:
             patterns = tuple(_string(item, field) for item in _array(raw[field], field))
             inventory = _inventory(root, patterns)
+            import json
+
+            recorded_key = "source-inventory" if field == "current-sources" else "harness-inventory"
+            if schema == 2 and sorted(json.loads(dict(sources["current"].context)[recorded_key])) != list(inventory):
+                raise ValueError(f"{field} membership differs from the measured source")
             inventories.append(GlobCheck(patterns, inventory))
             if dict(sources["current"].context).get("fingerprint-schema") != "research-repo-tools/files/v1":
                 raise ValueError("current input checks require the shared fingerprint framing")
@@ -278,7 +339,7 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
     else:
         from research_repo_tools.run_presentation import CoordinatePlot, render_coordinate_svg, render_run_ratios, render_run_table, serialize_run_csv
 
-        run_layout = _run_layout(raw)
+        run_layout = _run_layout(raw, retained)
         content = render_run_table(retained, run_layout, style=_run_table_style(raw.get("table", {})))
 
         def artifact(path: str, data: bytes) -> None:
@@ -308,6 +369,19 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
         if "csv" in raw:
             path = _string(raw["csv"], "csv")
             artifact(path, serialize_run_csv(retained, run_layout))
+    if artifacts_only:
+        if not figures:
+            raise ValueError("artifacts-only requires at least one plot, svg or csv output")
+        if "document" in raw:
+            _validate_distinct_paths(tuple(_path(root, name) for name in (_string(raw["document"], "document"), *figures)))
+        for selection in run_checks:
+            _validate_distinct_paths((root / selection.archive, *(_path(root, name) for name in figures)))
+        plan = plan_outputs(root, figures, inputs=inputs)
+        plan = replace(plan, git_checks=tuple(checks), glob_checks=tuple(inventories), run_checks=tuple(run_checks))
+        from research_repo_tools.publication import _verify_plan
+
+        _verify_plan(plan)
+        return plan
     repository = _github_repo_url(_string(raw["repository"], "repository")) if "repository" in raw else None
     link_paths: list[str] = []
 
@@ -349,6 +423,10 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
         # linked directly or used to establish a link's release identity.
         paths = tuple(dict.fromkeys([*(name for name in inputs if name != configuration), *(rule.path for rule in references), *link_paths]))
         checks.append(GitCheck(releases["current"], paths, allow_missing=tag_policy == "prepare"))
+    formatter = _string(raw["formatter"], "formatter") if "formatter" in raw else None
+    if formatter is not None:
+        _validate_distinct_paths(tuple(_path(root, name) for name in (formatter, document, *figures)))
+        inputs[formatter] = _path(root, formatter).read_bytes()
     return plan_publication(
         root,
         document,
@@ -360,4 +438,5 @@ def load_publication(root: Path, configuration: str) -> PublicationPlan:
         git_checks=checks,
         glob_checks=inventories,
         run_checks=run_checks,
+        formatter=formatter,
     )

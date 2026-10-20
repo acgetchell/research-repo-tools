@@ -106,14 +106,17 @@ The supported `criterion_baselines` APIs are:
 
 | API | Contract |
 | --- | --- |
-| `SavedSamplePlan(criterion_dir, saved_sample, policy, fresh_sample="new", raw_files=("benchmark.json", "estimates.json", "sample.json"))` | Portable root-relative tree path, safe sample names, complete policy and required raw filenames |
-| `load_saved_sample(root, configuration)` | Strict schema-1/2 TOML using exactly one of explicit `expected` IDs or a retained `inventory` file |
-| `validate_saved_sample(criterion_dir, saved_sample, policy, *, fresh_sample="new", raw_files=("benchmark.json", "estimates.json", "sample.json"))` | Read-only complete inventories and exact raw-file equality; returns the saved `CompleteSample` |
+| `SavedSamplePlan(criterion_dir, saved_sample, policy, fresh_sample="new", raw_files=("benchmark.json", "estimates.json", "sample.json"), *, storage_paths=())` | Portable root-relative tree path, safe sample names, complete policy, required raw filenames and independent storage assertions |
+| `load_saved_sample(root, configuration, *, saved_sample=None, criterion_dir=None)` | Strict schema-1/2 TOML using exactly one of explicit `expected` IDs or a retained `inventory` file, with validated runtime overrides |
+| `validate_saved_sample(criterion_dir, saved_sample, policy, *, fresh_sample="new", raw_files=("benchmark.json", "estimates.json", "sample.json"), storage_paths=())` | Read-only complete inventories, declared storage and exact raw-file equality; returns the saved `CompleteSample` |
 
-Saved-sample TOML requires integer `schema=1` or `schema=2`, `saved-sample` and exactly one of
+Saved-sample TOML requires integer `schema=1` or `schema=2`, `saved-sample`
+(unless supplied at runtime) and exactly one of
 `expected` or `inventory`. Optional fields are `criterion-dir` (default
 `target/criterion`), `fresh-sample` (default `new`), `raw-files`, `sample-count`,
-`statistics`, `confidence-level` and `unit`. Statistical defaults match
+`statistics`, `confidence-level`, `unit`, `required` and `storage-paths`.
+See the [runtime selection and storage contract](DECLARING_PERFORMANCE.md#saved-sample-verification).
+Statistical defaults match
 `CompletePolicy`. The inventory path is relative to the consumer root. Raw files
 must be unique portable single JSON filenames, including under case folding and
 Unicode normalization, and include all three core files.

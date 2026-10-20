@@ -23,7 +23,7 @@ from urllib.parse import unquote
 
 from research_repo_tools import process
 from research_repo_tools.cli import main
-from research_repo_tools.common_measurement import CommonHarnessPlan, DiscoveryPolicy, measure_prepared_pair
+from research_repo_tools.common_measurement import CommonHarnessPlan, DiscoveredSeries, DiscoveryPolicy, measure_prepared_pair, validate_run_policy
 from research_repo_tools.complete_runs import (
     LEGACY_RUN_SCHEMA,
     RUN_SCHEMA,
@@ -287,6 +287,336 @@ source="tag"
 
 
 class TestCompleteConsumer(unittest.TestCase):
+    @unittest.skipIf(os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1", "Git mutations disabled by local policy")
+    def test_installed_cli_declarative_measure_save_retain_render_publish(self):
+        self._declarative_workflow(native=True)
+
+    def test_prepared_sources_then_installed_cli_save_retain_render_publish(self):
+        self._declarative_workflow(native=False)
+
+    def _declarative_workflow(self, *, native):
+        with tempfile.TemporaryDirectory(prefix="consumer café ") as directory:
+            root = Path(directory).resolve() / "consumer"
+            fixture(root)
+            script = (
+                """import os, sys
+if '--list' in sys.argv:
+    for identity in ['library / 2'] + (['reference / 2'] if os.environ['PHASE'] == 'baseline' else []):
+        print(identity + ': benchmark')
+    sys.exit()
+"""
+                + BENCHMARK
+                + """
+if len(sys.argv) == 2:
+    import shutil
+    for fresh in Path('target/criterion').glob('*/new'):
+        (fresh / 'tukey.json').write_bytes(b'[1, 2, 3, 4]\\r\\n')
+        shutil.copytree(fresh, fresh.parent / sys.argv[1])
+"""
+            )
+            (root / "bench.py").write_text(script, encoding="utf-8", newline="\n")
+            config = (root / "benchmark.toml").read_text(encoding="utf-8")
+            command = json.dumps([sys.executable, "-X", "utf8", "bench.py", "--list"])
+            for expected in ('["library / 2", "reference / 2"]', '["library / 2"]'):
+                config = config.replace(
+                    f"expected={expected}",
+                    f'discovery={{required={expected}, suites=[{{name="native", command={command}}}]}}',
+                )
+            (root / "benchmark.toml").write_text(config, encoding="utf-8", newline="\n")
+            (root / ".gitignore").write_bytes(b"target/\nscratch/\n")
+            (root / ".gitattributes").write_bytes(b"* -text\n")
+            (root / "report.toml").write_bytes(b'schema=2\ncurrent="full.md"\narchive="history"\ntitle="Timings"\nmeasurement="benchmark.toml"\nrelease=true\n')
+            (root / "README.md").write_bytes(b"# Fixture\n<!-- BEGIN -->\nold\n<!-- END -->\n")
+            (root / "publish.toml").write_bytes(b"""schema=2
+archive="history"
+measurement="benchmark.toml"
+document="README.md"
+begin="<!-- BEGIN -->"
+end="<!-- END -->"
+statistic="median"
+unit="ns"
+csv="figures/timings.csv"
+rows=[{key="two", label="Dimension 2", coordinate=2}]
+series=[
+  {name="Library current", label="Library", label-version="release", rows={two="library / 2"}},
+  {name="Reference reused", label="Peer", label-version="dependency.reference", rows={two="reference / 2"}},
+]
+plot={path="figures/timings.svg", title="Timings", x-label="Dimension", y-label="ns", y-scale="log"}
+[provenance.baseline]
+[provenance.current]
+[[references]]
+path="Cargo.toml"
+pattern='^version="(?P<value>[^"]+)"$'
+source="version"
+[[references]]
+path="full.md"
+pattern='^- Library baseline: measured in \\*\\*baseline\\*\\* phase \\((?P<value>[^)]+)\\)'
+source="previous-tag"
+[[references]]
+path="full.md"
+pattern='^- Library current: measured in \\*\\*current\\*\\* phase \\((?P<value>[^)]+)\\)'
+source="tag"
+""")
+
+            def git(*args):
+                return (
+                    subprocess.run(
+                        ["git", "--no-pager", "-c", "commit.gpgsign=false", *args],
+                        cwd=root,
+                        check=True,
+                        capture_output=True,
+                        timeout=30,
+                    )
+                    .stdout.decode("utf-8")
+                    .strip()
+                )
+
+            def cli(*args, status=0):
+                result = subprocess.run(
+                    [sys.executable, "-X", "utf8", "-m", "research_repo_tools", "--root", str(root), "performance", *args],
+                    cwd=root,
+                    capture_output=True,
+                    timeout=120,
+                )
+                self.assertEqual(result.returncode, status, result.stdout.decode("utf-8") + result.stderr.decode("utf-8"))
+                return result
+
+            if native:
+                git("init")
+                git("config", "user.name", "Fixture")
+                git("config", "user.email", "fixture@example.invalid")
+                (root / "src/point.txt").write_bytes(b"10")
+                (root / "Cargo.toml").write_bytes(b'[package]\nname="fixture"\nversion="1.0.0"\n')
+                git("add", ".")
+                git("commit", "-m", "baseline")
+                baseline = git("rev-parse", "HEAD")
+                git("tag", "v1.0.0")
+                (root / "src/point.txt").write_bytes(b"5")
+                (root / "Cargo.toml").write_bytes(b'[package]\nname="fixture"\nversion="1.1.0"\n')
+                git("add", ".")
+                git("commit", "-m", "current")
+                current = git("rev-parse", "HEAD")
+                git("tag", "v1.1.0")
+                cli(
+                    "measure",
+                    "benchmark.toml",
+                    "v1.1.0",
+                    "v1.0.0",
+                    "--allow-git-mutations",
+                    "--payload",
+                    "scratch/run.json",
+                    "--manifest",
+                    "scratch/evidence.json",
+                )
+            else:
+                baseline, current = "a" * 40, "b" * 40
+                old, new = root.parent / "baseline", root.parent / "current"
+                shutil.copytree(root, old)
+                shutil.copytree(root, new)
+                (old / "src/point.txt").write_bytes(b"10")
+                plan = load_measurement(root, "benchmark.toml")
+                assert isinstance(plan, CommonHarnessPlan)
+                with patch("research_repo_tools.measurement.resolve_revision", side_effect=lambda path, _: baseline if path == old else current):
+                    retained = measure_prepared_pair(old, new, plan, ReleasePair("v1.1.0", "v1.0.0"))
+                publish_evidence(retained, root / "scratch/run.json", root / "scratch/evidence.json")
+            cli("verify", "scratch/run.json", "scratch/evidence.json", "--measurement", "benchmark.toml")
+            cli("promote", "report.toml", "--payload", "scratch/run.json", "--manifest", "scratch/evidence.json")
+            shutil.rmtree(root / "scratch")
+            cli("promote", "report.toml")
+            identities = ("--baseline-release", "v1.0.0", "--baseline-revision", baseline, "--current-release", "v1.1.0", "--current-revision", current)
+            cli("publish", "publish.toml", *identities, "--artifacts-only")
+            self.assertIn(b"\nold\n", (root / "README.md").read_bytes())
+            cli("publish", "publish.toml", *identities)
+            self.assertIn(b"history/runs/", (root / "README.md").read_bytes())
+            self.assertIn(b"Peer 2.0.0", (root / "figures/timings.svg").read_bytes())
+            cli("publish", "publish.toml", *identities, "--check")
+            expected_identities = {"baseline": ("v1.0.0", baseline), "current": ("v1.1.0", current)}
+            # Every source/harness membership edit invalidates a planned publication.
+            for target in ("src/point.txt", "gate.py"):
+                path = root / target
+                original = path.read_bytes()
+                for operation in ("edit", "remove"):
+                    pending = load_publication(root, "publish.toml", identities=expected_identities)
+                    if operation == "edit":
+                        path.write_bytes(original + b"\n")
+                    else:
+                        path.unlink()
+                    with self.assertRaises((ValueError, FileNotFoundError)):
+                        publish_publication(pending)
+                    path.write_bytes(original)
+            pending = load_publication(root, "publish.toml", identities=expected_identities)
+            policy_bytes = (root / "benchmark.toml").read_bytes()
+            (root / "benchmark.toml").write_bytes(policy_bytes + b"\n")
+            with self.assertRaisesRegex(ValueError, "changed"):
+                publish_publication(pending)
+            (root / "benchmark.toml").write_bytes(policy_bytes)
+            # Exercise discovery and saved verification separately from isolated measurement.
+            (root / "discovery.toml").write_text(
+                f'schema=1\nrequired=["library / 2"]\n[[suites]]\nname="native"\ncommand={command}\nenvironment={{PHASE="current"}}\n',
+                encoding="utf-8",
+                newline="\n",
+            )
+            cli("discover", "discovery.toml", "--output", "target/inventory.json")
+            subprocess.run([sys.executable, "-X", "utf8", "bench.py", "v1.1.0"], cwd=root, env=os.environ | {"PHASE": "current"}, check=True, timeout=30)
+            (root / "saved.toml").write_bytes(b"""schema=2
+inventory="target/inventory.json"
+required=["library / 2"]
+sample-count=3
+raw-files=["benchmark.json", "estimates.json", "sample.json", "tukey.json"]
+[storage-paths]
+"library / 2"="library_2"
+""")
+            cli("verify-saved", "saved.toml", "--saved-sample", "v1.1.0", "--criterion-dir", "target/criterion")
+            before = (root / "README.md").read_bytes()
+            (root / "src/added.txt").write_bytes(b"new source")
+            cli("publish", "publish.toml", *identities, status=1)
+            self.assertEqual((root / "README.md").read_bytes(), before)
+            cli("promote", "report.toml", "--payload", "scratch/run.json", "--manifest", "scratch/evidence.json", status=1)
+
+    def test_independent_measurement_policy_rejects_self_consistent_but_ineligible_runs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            evidence = measured(root)
+            plan = load_measurement(root / "current", "benchmark.toml")
+            assert isinstance(plan, CommonHarnessPlan)
+            self.assertEqual(validate_run_policy(evidence, plan), validate_run_evidence(evidence))
+            run = validate_run_evidence(evidence)
+            alternatives = [
+                replace(
+                    plan,
+                    baseline=replace(plan.baseline, policy=CompletePolicy(("library / 2", "reference / 2"), sample_count=4)),
+                    current=replace(plan.current, policy=CompletePolicy(("library / 2",), sample_count=4)),
+                ),
+                replace(plan, baseline=replace(plan.baseline, command=("other",))),
+                replace(plan, baseline=replace(plan.baseline, gate=("other",))),
+                replace(plan, baseline=replace(plan.baseline, environment=())),
+                replace(plan, measurement=replace(plan.measurement, context=(("suite", "full"),))),
+                replace(plan, measurement=replace(plan.measurement, compatible=(*plan.measurement.compatible, "context.os"))),
+                replace(plan, series=(run.series[0], replace(run.series[1], phase="baseline"), run.series[2])),
+            ]
+            for field, value in (("statistics", ("mean",)), ("confidence_level", 0.9), ("unit", "us")):
+                alternatives.append(
+                    replace(
+                        plan,
+                        baseline=replace(plan.baseline, policy=replace(plan.baseline.policy, **{field: value})),
+                        current=replace(plan.current, policy=replace(plan.current.policy, **{field: value})),
+                    )
+                )
+            for candidate in alternatives:
+                with self.subTest(candidate=candidate), self.assertRaises(ValueError):
+                    validate_run_policy(evidence, candidate)
+            same_source = dict(evidence.sources)
+            same_source["current"] = replace(
+                same_source["current"],
+                source_sha256=same_source["baseline"].source_sha256,
+                context=tuple((key, "v1.0.0" if key == "release" else value) for key, value in same_source["current"].context),
+            )
+            with self.assertRaisesRegex(ValueError, "distinct source"):
+                validate_run_evidence(replace(evidence, sources=tuple(same_source.items())))
+            same_source["current"] = replace(same_source["current"], source_sha256="7" * 64)
+            with self.assertRaisesRegex(ValueError, "cannot be promoted"):
+                validate_run_policy(replace(evidence, sources=tuple(same_source.items())), plan, release=True)
+
+    def test_discovered_selectors_retain_diagnostics_and_independent_required_ids(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            current, baseline = root / "current", root / "baseline"
+            plan = fixture(current)
+            shutil.copytree(current, baseline)
+            phases = {}
+            for phase in ("baseline", "current"):
+                selected = getattr(plan, phase)
+                assert isinstance(selected.policy, CompletePolicy)
+                listing = "\n".join(f"{identity}: benchmark" for identity in selected.policy.expected)
+                discovery = DiscoveryPlan(
+                    (DiscoveryCommand("native", (sys.executable, "-X", "utf8", "-c", f"print({listing!r})")),),
+                    required=selected.policy.expected,
+                )
+                phases[phase] = replace(selected, policy=DiscoveryPolicy(discovery, sample_count=3))
+            plan = replace(plan, **phases, series=(*plan.series, DiscoveredSeries("all library", "current", ("*",), ("reference*",))))
+            with patch("research_repo_tools.measurement.resolve_revision", return_value="a" * 40):
+                evidence = measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.0.0"))
+            run = validate_run_policy(evidence, plan)
+            self.assertEqual(run.series[-1].rows, (("library / 2", "library / 2"),))
+            changed = json.loads(evidence.payload)
+            changed["phases"]["baseline"]["cases"] = changed["phases"]["baseline"]["cases"][:1]
+            changed["phases"]["baseline"]["policy"]["expected"] = ["library / 2"]
+            changed["series"] = [item for item in changed["series"] if item["name"] != "Reference reused"]
+            sources = dict(evidence.sources)
+            context = dict(sources["baseline"].context)
+            inventory = json.loads(context["discovery-inventory"])
+            inventory["suites"]["native"] = ["library / 2"]
+            context["discovery-inventory"] = json.dumps(inventory)
+            sources["baseline"] = replace(sources["baseline"], context=tuple(context.items()))
+            shortened = replace(evidence, payload=deterministic_json(changed), sources=tuple(sources.items()))
+            validate_run_evidence(shortened)  # The payload's own policy is self-consistent.
+            with self.assertRaisesRegex(ValueError, "required IDs"):
+                validate_run_policy(shortened, plan)
+            with self.assertRaises(ValueError):
+                DiscoveredSeries("empty", "current", ("absent*",)).resolve(("library / 2",))
+
+    def test_reusable_publication_identities_recorded_labels_and_render_only(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = presentation_fixture(root, archive=True)
+            config = config.replace(f'revision="{"a" * 40}"\nrelease="v1.0.0"', "")
+            config = config.replace(f'revision="{"b" * 40}"\nrelease="v1.1.0"', "")
+            config = config.replace('label="Peer"', 'label="Peer", label-version="dependency.reference"')
+            config = config.replace('label="Library old"', 'label="Library", label-version="release"')
+            (root / "publication.toml").write_text(config, encoding="utf-8", newline="\n")
+            identities = {"baseline": ("v1.0.0", "a" * 40), "current": ("v1.1.0", "b" * 40)}
+            # Today's dependency file is deliberately unrelated to retained peer labels.
+            (root / "Cargo.lock").write_bytes(b'[[package]]\nname="reference"\nversion="99.0.0"\n')
+            with self.assertRaisesRegex(ValueError, "independent"):
+                load_publication(root, "publication.toml")
+            original = (root / "README.md").read_bytes()
+            for name in ("run.json", "envelope.json"):
+                (root / name).unlink()
+            plan = load_publication(root, "publication.toml", identities=identities, artifacts_only=True)
+            publish_publication(plan)
+            self.assertEqual((root / "README.md").read_bytes(), original)
+            self.assertIn(b"Peer 2.0.0", (root / "figures/coordinates.svg").read_bytes())
+            self.assertIn(b"Library v1.0.0", (root / "figures/coordinates.svg").read_bytes())
+            (root / "publication.toml").write_text(config.replace('csv="exports/timings.csv"', 'csv="readme.md"'), encoding="utf-8", newline="\n")
+            with self.assertRaisesRegex(ValueError, "alias|duplicate"):
+                load_publication(root, "publication.toml", identities=identities, artifacts_only=True)
+            self.assertEqual((root / "README.md").read_bytes(), original)
+            (root / "publication.toml").write_text(config, encoding="utf-8", newline="\n")
+            for candidate in (
+                identities | {"baseline": ("v9.0.0", "a" * 40)},
+                identities | {"current": ("v1.1.0", "c" * 40)},
+            ):
+                with self.assertRaisesRegex(ValueError, "provenance differs"):
+                    load_publication(root, "publication.toml", identities=candidate)
+            (root / "README.md").unlink()
+            publish_publication(load_publication(root, "publication.toml", identities=identities, artifacts_only=True))
+            self.assertFalse((root / "README.md").exists())
+            pending = load_publication(root, "publication.toml", identities=identities, artifacts_only=True)
+            (root / "history/latest.json").write_bytes((root / "history/latest.json").read_bytes() + b"\n")
+            with self.assertRaisesRegex(ValueError, "changed"):
+                publish_publication(pending)
+
+    def test_formatter_failure_and_changed_configuration_preserve_publication(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            config = presentation_fixture(root)
+            (root / "README.md").write_bytes(b"# Fixture\r\n<!-- BEGIN -->\r\nold\r\n<!-- END -->\r\n")
+            (root / "format.toml").write_bytes(b"[global]\n")
+            (root / "publication.toml").write_text(config.replace("schema=2", 'schema=2\nformatter="format.toml"'), encoding="utf-8", newline="\n")
+            before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            with patch("research_repo_tools.postprocess_changelog.format_markdown", side_effect=RuntimeError("formatter failed")):
+                with self.assertRaisesRegex(RuntimeError, "formatter failed"):
+                    load_publication(root, "publication.toml")
+            self.assertEqual({path: path.read_bytes() for path in root.rglob("*") if path.is_file()}, before)
+            with patch("research_repo_tools.postprocess_changelog.format_markdown", side_effect=lambda text, *_: text.replace("\r\n", "\n")) as formatter:
+                plan = load_publication(root, "publication.toml")
+            formatter.assert_called_once()
+            self.assertNotIn(b"\r", dict(plan.outputs)["README.md"])
+            (root / "format.toml").write_bytes(b"[global]\nline-length=80\n")
+            with self.assertRaisesRegex(ValueError, "changed"):
+                publish_publication(plan)
+            self.assertEqual((root / "README.md").read_bytes(), before[root / "README.md"])
+
     def test_presentation_template_is_available_from_installed_cli(self):
         output = io.StringIO()
         with redirect_stdout(output):
@@ -1825,13 +2155,17 @@ class TestHeterogeneousConsumer(unittest.TestCase):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
             plan = heterogeneous_plan(root)
+            series = []
+            for item in plan.series:
+                assert isinstance(item, RunSeries)
+                series.append(item)
             retained = sampling_evidence(
                 CompleteRun(
                     tuple(
                         (phase, CompleteSample(getattr(plan, phase).policy, tuple(mixed_case(identity, count) for identity, count in COUNTS)))
                         for phase in ("baseline", "current")
                     ),
-                    plan.series,
+                    tuple(series),
                     schema=RUN_SCHEMA_V2,
                 ),
                 retained_fixture().sources,

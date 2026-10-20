@@ -2,7 +2,8 @@
 
 import json
 import os
-from dataclasses import dataclass, field, replace
+from dataclasses import asdict, dataclass, field, replace
+from fnmatch import fnmatchcase
 from pathlib import Path
 from typing import Any
 
@@ -29,6 +30,7 @@ from research_repo_tools.criterion_inventory import (
     _overlay_environment,
     _parse_discovery,
     discover_inventory,
+    parse_inventory,
     serialize_inventory,
 )
 from research_repo_tools.evidence import Evidence, Provenance, _object, _string, compare_provenance, fingerprint_files
@@ -38,7 +40,32 @@ from research_repo_tools.publication import _inventory, _path
 from research_repo_tools.publication_config import _table
 from research_repo_tools.release_pairs import ReleasePair
 
-__all__ = ["CommonHarnessPlan", "DiscoveryPolicy", "MeasurementPhase", "measure_prepared_pair"]
+__all__ = ["CommonHarnessPlan", "DiscoveredSeries", "DiscoveryPolicy", "MeasurementPhase", "measure_prepared_pair", "validate_run_policy"]
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveredSeries:
+    """Select semantic IDs with case-sensitive shell globs; row keys are the IDs."""
+
+    name: str
+    phase: str
+    include: tuple[str, ...]
+    exclude: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        _string(self.name, "series name")
+        if self.phase not in {"baseline", "current"}:
+            raise ValueError("series phase must be baseline or current")
+        object.__setattr__(self, "include", _strings(self.include, "include"))
+        object.__setattr__(self, "exclude", _strings(self.exclude, "exclude", nonempty=False))
+
+    def resolve(self, expected: tuple[str, ...]) -> RunSeries:
+        rows = tuple(
+            (identity, identity)
+            for identity in expected
+            if any(fnmatchcase(identity, pattern) for pattern in self.include) and not any(fnmatchcase(identity, pattern) for pattern in self.exclude)
+        )
+        return RunSeries(self.name, self.phase, rows)
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,7 +110,7 @@ class CommonHarnessPlan:
     measurement: MeasurementConfig
     baseline: MeasurementPhase
     current: MeasurementPhase
-    series: tuple[RunSeries, ...]
+    series: tuple[RunSeries | DiscoveredSeries, ...]
     schema: int = field(default=2, kw_only=True)
 
     def __post_init__(self) -> None:
@@ -101,13 +128,13 @@ class CommonHarnessPlan:
         }
         if not required <= set(self.measurement.compatible):
             raise ValueError("common plan requires compatibility for all declared tools and dependencies")
-        if any(not isinstance(series, RunSeries) for series in self.series):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
-            raise TypeError("plan series must be RunSeries instances")
+        if any(not isinstance(series, RunSeries | DiscoveredSeries) for series in self.series):
+            raise TypeError("plan series must be RunSeries or DiscoveredSeries instances")
         if not self.series or len({series.name for series in self.series}) != len(self.series):
             raise ValueError("plan series must have unique names")
         for series in self.series:
             policy = getattr(self, series.phase).policy
-            if isinstance(policy, CompletePolicy) and any(full_id not in policy.expected for _, full_id in series.rows):
+            if isinstance(policy, CompletePolicy) and isinstance(series, RunSeries) and any(full_id not in policy.expected for _, full_id in series.rows):
                 raise ValueError("series refers to an unexpected benchmark")
         left, right = self.baseline.policy, self.current.policy
         if self.schema == 2 and (left.sample_count is None or right.sample_count is None or left.sample_count != right.sample_count):
@@ -163,9 +190,22 @@ def parse_plan(document: dict[str, Any]) -> CommonHarnessPlan:
         )
     if not isinstance(raw["series"], list):
         raise ValueError("series must be an array of tables")
-    series = []
+    series: list[RunSeries | DiscoveredSeries] = []
     for value in raw["series"]:
-        item = _table(value, "series", {"name", "phase", "rows"}, set())
+        item = _table(value, "series", {"name", "phase"}, {"rows", "select"})
+        if ("rows" in item) == ("select" in item):
+            raise ValueError("series requires exactly one of rows or select")
+        if "select" in item:
+            selection = _table(item["select"], "series selection", {"include"}, {"exclude"})
+            series.append(
+                DiscoveredSeries(
+                    _string(item["name"], "name"),
+                    _string(item["phase"], "phase"),
+                    _strings(selection["include"], "include"),
+                    _strings(selection.get("exclude", []), "exclude", nonempty=False),
+                )
+            )
+            continue
         series.append(
             RunSeries(
                 _string(item["name"], "name"),
@@ -190,6 +230,78 @@ def parse_plan(document: dict[str, Any]) -> CommonHarnessPlan:
         compatible=compatible,
     )
     return CommonHarnessPlan(config, parsed["baseline"], parsed["current"], tuple(series), schema=schema)
+
+
+def _declaration(plan: CommonHarnessPlan) -> str:
+    """Bind acquisition settings absent from older provenance to the measured run."""
+    config = plan.measurement
+    return json.dumps(
+        {
+            "schema": "research-repo-tools/measurement-declaration/v1",
+            "sources": config.sources,
+            "harness": config.harness,
+            "probes": config.probes,
+            "dependencies": config.dependencies,
+            "criterion-dir": config.criterion_dir,
+            "sample": config.sample,
+            "discovery": {
+                phase: asdict(selected.policy.discovery)
+                for phase in ("baseline", "current")
+                if isinstance((selected := getattr(plan, phase)).policy, DiscoveryPolicy)
+            },
+        },
+        sort_keys=True,
+        ensure_ascii=False,
+    )
+
+
+def _series(plan: CommonHarnessPlan, policies: dict[str, CompletePolicy]) -> tuple[RunSeries, ...]:
+    return tuple(item.resolve(policies[item.phase].expected) if isinstance(item, DiscoveredSeries) else item for item in plan.series)
+
+
+def validate_run_policy(evidence: Evidence, plan: MeasurementConfig | CommonHarnessPlan, *, release: bool = False) -> CompleteRun:
+    """Check retained evidence against independently supplied measurement declarations.
+
+    Runs without the acquisition declaration remain readable through the ordinary
+    evidence/rendering APIs, but cannot prove eligibility under this stricter gate.
+    Diagnostic cases discovered outside required selections are retained and checked.
+    """
+    if not isinstance(plan, CommonHarnessPlan):
+        raise ValueError("run eligibility requires a schema-2/3 common measurement policy")
+    run = validate_run_evidence(evidence)
+    if set(run.compatible) != set(plan.measurement.compatible):
+        raise ValueError("retained compatibility fields differ from measurement policy")
+    sources = dict(evidence.sources)
+    if release and dict(sources["baseline"].context)["release"] == dict(sources["current"].context)["release"]:
+        raise ValueError("same-release local comparisons cannot be promoted as release comparisons")
+    policies = {}
+    for phase, sample in run.phases:
+        selected = getattr(plan, phase)
+        policy = selected.policy
+        context = dict(sources[phase].context)
+        if context.get("measurement-declaration") != _declaration(plan):
+            raise ValueError(f"{phase} acquisition declaration differs from measurement policy or is missing")
+        expected = policy.expected if isinstance(policy, CompletePolicy) else sample.policy.expected
+        if isinstance(policy, DiscoveryPolicy):
+            inventory = parse_inventory(context.get("discovery-inventory", "").encode("utf-8"))
+            if set(dict(inventory.suites)) != {suite.name for suite in policy.discovery.suites} or inventory.excluded != policy.discovery.excluded:
+                raise ValueError(f"{phase} discovery suites/exclusions differ from measurement policy")
+            if not set(policy.discovery.required) <= set(inventory.expected):
+                raise ValueError(f"{phase} retained discovery omits required IDs")
+            expected = inventory.expected
+        policies[phase] = CompletePolicy(
+            expected, policy.sample_count, policy.statistics, policy.confidence_level, policy.unit, sample_counts=policy.sample_counts
+        )
+        if sample.policy != policies[phase]:
+            raise ValueError(f"{phase} sampling policy differs from measurement policy")
+        for key, value in (("command", list(selected.command)), ("gate-command", list(selected.gate)), ("environment", dict(selected.environment))):
+            if json.loads(context[key]) != value:
+                raise ValueError(f"{phase} {key} differs from measurement policy")
+        if any(context.get(key) != value for key, value in plan.measurement.context):
+            raise ValueError(f"{phase} context differs from measurement policy")
+    if run.series != _series(plan, policies):
+        raise ValueError("retained series selections or phases differ from measurement policy")
+    return run
 
 
 def measure_prepared_pair(baseline: Path, current: Path, plan: CommonHarnessPlan, pair: ReleasePair, *, working_tree: bool = False) -> Evidence:
@@ -253,6 +365,7 @@ def measure_prepared_pair(baseline: Path, current: Path, plan: CommonHarnessPlan
                     "gate-command": json.dumps(selected.gate),
                     "original-source-sha256": originals[phase][0],
                     "original-source-inventory": json.dumps(originals[phase][1]),
+                    "measurement-declaration": _declaration(plan),
                 }.items()
             ),
         )
@@ -274,7 +387,7 @@ def measure_prepared_pair(baseline: Path, current: Path, plan: CommonHarnessPlan
             policies[phase] = CompletePolicy(
                 inventory.expected, policy.sample_count, policy.statistics, policy.confidence_level, policy.unit, sample_counts=policy.sample_counts
             )
-            rows = {full_id for series in plan.series if series.phase == phase for _, full_id in series.rows}
+            rows = {full_id for series in plan.series if isinstance(series, RunSeries) and series.phase == phase for _, full_id in series.rows}
             if not rows <= set(inventory.expected):
                 raise ValueError(f"{phase} discovered inventory omits series IDs: {sorted(rows - set(inventory.expected))}")
             source = declared[phase]
@@ -294,6 +407,9 @@ def measure_prepared_pair(baseline: Path, current: Path, plan: CommonHarnessPlan
     compatibility = compare_provenance(declared["baseline"], declared["current"], fields=plan.measurement.compatible)
     if not compatibility.compatible:
         raise ValueError(f"required benchmark provenance differs or is unknown before timing: {compatibility.differences}")
+    series = _series(plan, policies)
+    if pair.current == pair.baseline and before["baseline"].source_sha256 == before["current"].source_sha256:
+        raise ValueError("same-release comparisons require distinct source identities")
 
     for phase, root in roots.items():
         gate = getattr(plan, phase).gate
@@ -319,7 +435,7 @@ def measure_prepared_pair(baseline: Path, current: Path, plan: CommonHarnessPlan
         sources.append((phase, Provenance(source.revision, source.source_sha256, source.harness_sha256, tuple(context.items()))))
     for phase in roots:
         unchanged(phase)
-    run = CompleteRun(tuple(samples), plan.series, plan.measurement.compatible, schema=RUN_SCHEMA_V2 if plan.schema == 3 else RUN_SCHEMA)
+    run = CompleteRun(tuple(samples), series, plan.measurement.compatible, schema=RUN_SCHEMA_V2 if plan.schema == 3 else RUN_SCHEMA)
     retained = Evidence(serialize_run(run), run.schema, tuple(sources))
-    validate_run_evidence(retained)
+    validate_run_policy(retained, plan)
     return retained

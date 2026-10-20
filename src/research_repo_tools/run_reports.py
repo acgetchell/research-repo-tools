@@ -138,7 +138,7 @@ def load_run_report_plan(root: Path, configuration: str, *, payload: str | None 
     """
     root = root.resolve(strict=True)
     config_bytes = _path(root, configuration).read_bytes()
-    raw = _table(tomllib.loads(config_bytes.decode("utf-8")), "complete report", {"schema", "current", "archive", "title"}, set())
+    raw = _table(tomllib.loads(config_bytes.decode("utf-8")), "complete report", {"schema", "current", "archive", "title"}, {"measurement", "release"})
     if type(raw["schema"]) is not int or raw["schema"] != 2:
         raise ValueError("complete report schema must be integer 2")
     current, archive, title = (_string(raw[key], key) for key in ("current", "archive", "title"))
@@ -160,6 +160,19 @@ def load_run_report_plan(root: Path, configuration: str, *, payload: str | None 
     inputs[payload], inputs[manifest] = _path(root, payload).read_bytes(), _path(root, manifest).read_bytes()
     evidence = parse_evidence(inputs[payload], inputs[manifest])
     validate_run_evidence(evidence)
+    release = raw.get("release", False)
+    if type(release) is not bool:
+        raise ValueError("report release must be a boolean")
+    if release and "measurement" not in raw:
+        raise ValueError("release promotion requires an independent measurement policy")
+    if "measurement" in raw:
+        from research_repo_tools.common_measurement import validate_run_policy
+        from research_repo_tools.measurement import load_measurement
+
+        policy_name = _string(raw["measurement"], "measurement")
+        _validate_distinct_paths(tuple(_path(root, name) for name in (policy_name, configuration, payload, manifest)))
+        inputs[policy_name] = _path(root, policy_name).read_bytes()
+        validate_run_policy(evidence, load_measurement(root, policy_name), release=release)
     entry = _entry(evidence)
     targets = _targets(archive, entry["id"])
     # Reserve the whole history directory, including case/Unicode aliases on

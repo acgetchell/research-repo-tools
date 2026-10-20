@@ -26,6 +26,9 @@ and release availability are described in the [README](../README.md#common-harne
 The [Criterion discovery and saved-sample APIs](criterion-api.md) add configured
 native inventories, common-harness discovery policies and exact saved-file
 verification, targeting v0.1.9.
+The v0.2.1 [declarative workflow contract](DECLARING_PERFORMANCE.md) adds
+independent retained-run eligibility, saved-name/storage assertions and reusable
+publication identities without consumer Python orchestration.
 
 ## Consumer just recipes
 

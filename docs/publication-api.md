@@ -18,7 +18,7 @@ Import from `research_repo_tools.publication`:
 | `RunSelectionCheck(archive, identity)` | Validated complete history and its selected content-derived run ID, rechecked before publication; outputs cannot enter that archive |
 | `TableLayout(rows, baseline_label, current_label, unit)` | Nonempty ordered `(benchmark, display_label)` pairs with unique benchmark IDs and an explicit recorded timing unit |
 | `plan_outputs(root, outputs, *, inputs, immutable=())` | Snapshot generic root-relative byte outputs and inputs, reject conflicting immutable files, reuse the same publication/recovery path |
-| `plan_publication(root, document, markers, content, *, inputs, figures=None, references=(), git_checks=(), glob_checks=(), run_checks=())` | Validate exact retained inputs, document markers, all candidates, reference captures, Git identities, glob inventories and retained run selections without writing |
+| `plan_publication(root, document, markers, content, *, inputs, figures=None, references=(), git_checks=(), glob_checks=(), run_checks=(), formatter=None)` | Validate exact retained inputs, document markers, optionally formatted candidates, reference captures, Git identities, glob inventories and retained run selections without writing |
 | `preview_publication(plan)` | Unified diffs for UTF-8 candidates; SHA-256 summaries for other bytes; does not publish or revalidate a saved plan |
 | `publish_publication(plan)` | Recheck snapshots and Git identities, transactionally publish changed outputs, return their absolute paths |
 | `render_svg(comparison, layout)` | Deterministic UTF-8 SVG bytes with XML-escaped labels, point-ratio bars and a reference at one; standard library only |
@@ -26,9 +26,12 @@ Import from `research_repo_tools.publication`:
 | `replace_section(document, markers, content)` | Require exactly one ordered pair and replace only its interior; document is bytes, content is text |
 | `verify_tagged_files(root, tag, files, *, revision=None)` | Compare raw regular-file blobs at a required local tag with supplied bytes; optionally require its commit ID; return the resolved commit |
 
-Import `load_publication(root, configuration)` from
+Import `load_publication(root, configuration, *, identities=None, artifacts_only=False)` from
 `research_repo_tools.publication_config` to parse a publication TOML file,
 validate shared comparison evidence, and return a `PublicationPlan`.
+The [v0.2.1 declarative contract](DECLARING_PERFORMANCE.md#reusable-publication)
+defines runtime identity assertions, recorded phase version labels, optional
+measurement eligibility, artifact-only rendering and candidate formatting.
 `root` is a `Path`; configuration, document, figure, input, link, and reference
 names are normalized root-relative POSIX strings. Paths cannot traverse, alias,
 overlap, contain symlinks or Windows directory junctions, enter `.git`, or use

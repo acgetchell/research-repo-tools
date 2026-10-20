@@ -53,6 +53,46 @@ def samples(root: Path) -> CompletePolicy:
 
 
 class TestCriterionConsumer(unittest.TestCase):
+    def test_saved_runtime_names_required_inventory_and_declared_storage(self):
+        with tempfile.TemporaryDirectory(prefix="saved café ") as directory:
+            root = Path(directory)
+            policy = samples(root / "release output")
+            inventory = CriterionInventory((("native", IDS),))
+            (root / "inventory.json").write_bytes(serialize_inventory(inventory))
+            configuration = """schema=2
+inventory="inventory.json"
+required=["flat café", "group / size 2"]
+raw-files=["benchmark.json", "estimates.json", "sample.json", "tukey.json"]
+sample-count=3
+[storage-paths]
+"flat café"="sanitized_0"
+"group / size 2"="sanitized_1"
+"""
+            (root / "saved.toml").write_text(configuration, encoding="utf-8", newline="\n")
+            argv = ["--root", str(root), "performance", "verify-saved", "saved.toml", "--saved-sample", "v1.2.3", "--criterion-dir", "release output"]
+            with redirect_stdout(io.StringIO()):
+                self.assertEqual(main(argv), 0)
+            plan = load_saved_sample(root, "saved.toml", saved_sample="v1.2.3", criterion_dir="release output")
+            self.assertEqual(plan.policy, policy)
+            for value in ("NEW", "../v1", "bad name", "v1;echo"):
+                with self.subTest(value=value), self.assertRaises(ValueError):
+                    load_saved_sample(root, "saved.toml", saved_sample=value)
+            for paths in (
+                ((IDS[0], "wrong"),),
+                ((IDS[0], "sanitized_1"), (IDS[1], "sanitized_0")),
+                ((IDS[0], "same"), (IDS[1], "SAME")),
+            ):
+                with self.subTest(paths=paths), self.assertRaises(ValueError):
+                    validate_saved_sample(root / "release output", "v1.2.3", policy, storage_paths=paths)
+            # Fresh and saved agree with each other after the whole directory moves.
+            (root / "release output/sanitized_0").rename(root / "release output/misplaced")
+            with redirect_stderr(io.StringIO()) as errors:
+                self.assertEqual(main(argv), 1)
+            self.assertIn("required storage path", errors.getvalue())
+            (root / "inventory.json").write_bytes(serialize_inventory(CriterionInventory((("native", (IDS[0],)),))))
+            with self.assertRaisesRegex(ValueError, "omits required"):
+                load_saved_sample(root, "saved.toml", saved_sample="v1.2.3")
+
     def test_native_record_boundaries_preserve_unicode_and_reject_controls(self):
         identities = ("group\u0085case", "group\u2028case", "group\u2029case")
         for newline in ("\n", "\r\n"):

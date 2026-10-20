@@ -1455,6 +1455,13 @@ see [migration](https://github.com/acgetchell/research-repo-tools/blob/main/docs
 
 ### Common harness and complete runs
 
+For installed measurement, independent eligibility, saved-sample verification and
+publication through static consumer declarations, see
+[Declaring complete performance workflows](docs/DECLARING_PERFORMANCE.md).
+The v0.2.1 additions include `complete-measurement.toml`, runtime saved names,
+required storage layouts, reusable publication identities and recorded version
+labels. Named configurations preserve consumer scientific selections.
+
 The schema-2 measurement/report contracts and host capture are intended for
 v0.1.8; adopt an exact published release containing them before deleting working
 consumer tooling. Use the packaged `common-benchmark.toml`,

@@ -3,9 +3,16 @@ schema = 1
 criterion-dir = "target/criterion"
 fresh-sample = "new"
 saved-sample = "v1.2.0"
+# Or omit saved-sample and pass --saved-sample TAG at runtime.
+# --criterion-dir PATH overrides criterion-dir with a root-relative directory.
 inventory = "target/criterion-inventory.json"
 raw-files = ["benchmark.json", "estimates.json", "sample.json", "tukey.json"]
 sample-count = 100
 statistics = ["mean", "median"]
 confidence-level = 0.95
 unit = "ns"
+# Assert an independent required subset of the retained discovery:
+# required = ["library / 2"]
+# Assert storage only for IDs whose layout is part of the consumer contract:
+# [storage-paths]
+# "library / 2" = "library_2"

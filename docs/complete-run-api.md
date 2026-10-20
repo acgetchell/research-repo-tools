@@ -6,6 +6,8 @@ Source availability, package publication, native platform checks and consumer
 adoption are separate requirements. Consumer
 commands and editable scaffolds are described in the [README](../README.md#common-harness-and-complete-runs).
 Existing comparison, baseline asset and report schema-1 contracts remain supported.
+For v0.2.1 selectors, independent eligibility and installed workflow examples,
+see [Declaring complete performance workflows](DECLARING_PERFORMANCE.md).
 
 ## Configuration and measurement
 
@@ -24,7 +26,8 @@ Schemas 2 and 3 require `sources`, `harness`, `phases.baseline`, `phases.current
 `series`. Each phase requires `command`, `gate`, and either nonempty exact
 `expected` semantic IDs or a configured `discovery` table, with optional
 `environment`. Each series table requires `name`,
-`phase` and `rows` mapping display labels to semantic IDs from that phase.
+`phase` and either `rows` mapping display labels to semantic IDs from that phase,
+or the [bounded `select` declaration](DECLARING_PERFORMANCE.md#measurement-and-eligibility).
 Series order controls table column order; labels are sorted. Unselected cases
 remain part of the run. A reused reference is a view of its original phase,
 never an invented second measurement. At least one toolchain version probe is
