@@ -14,7 +14,8 @@ see [Declaring complete performance workflows](DECLARING_PERFORMANCE.md).
 `measurement.load_measurement(root, configuration)` accepts schema-1
 `MeasurementConfig` or schema-2/3 `common_measurement.CommonHarnessPlan`.
 The latter contains a shared `measurement` configuration, `baseline` and
-`current` `MeasurementPhase` objects, and a tuple of `RunSeries` views.
+`current` `MeasurementPhase` objects, and a tuple of `RunSeries` views or
+`DiscoveredSeries` selectors.
 `MeasurementPhase(command, gate, policy, environment=())` uses immutable argument
 vectors, a completeness policy and string environment pairs. The v0.1.9 additions
 also accept `DiscoveryPolicy`; see the [Criterion contracts](criterion-api.md).

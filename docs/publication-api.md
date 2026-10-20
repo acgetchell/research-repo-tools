@@ -57,9 +57,11 @@ and active-link checks without rewriting historical references.
 
 Marker replacement searches literal UTF-8 delimiter bytes and rejects missing,
 duplicate, reversed, or overlapping markers. Content cannot introduce a delimiter.
-Only content newlines are normalized to LF; two LF bytes separate each delimiter
-from the body. Every byte outside the delimiters' interior survives unchanged,
+Without a formatter, only content newlines are normalized to LF; two LF bytes
+separate each delimiter from the body. Every byte outside the delimiters' interior survives unchanged,
 including a BOM, mixed line endings, historical links, and non-UTF-8 bytes.
+The optional [formatter](DECLARING_PERFORMANCE.md#reusable-publication) requires
+UTF-8 and formats the whole candidate document, including content outside markers.
 References require their selected files to decode as UTF-8.
 
 Renderers require every selected benchmark in both retained samples and require

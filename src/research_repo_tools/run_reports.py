@@ -170,7 +170,7 @@ def load_run_report_plan(root: Path, configuration: str, *, payload: str | None 
         from research_repo_tools.measurement import load_measurement
 
         policy_name = _string(raw["measurement"], "measurement")
-        _validate_distinct_paths(tuple(_path(root, name) for name in (policy_name, configuration, payload, manifest)))
+        _validate_distinct_paths(tuple(_path(root, name) for name in (policy_name, configuration, payload, manifest, *mutable)))
         inputs[policy_name] = _path(root, policy_name).read_bytes()
         validate_run_policy(evidence, load_measurement(root, policy_name), release=release)
     entry = _entry(evidence)
