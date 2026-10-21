@@ -70,6 +70,22 @@ and links; do not backfill declarations that were never recorded.
 
 ## Source selection
 
+Measurement schemas 1, 2 and 3 accept an optional stable release floor:
+
+```toml
+minimum-release = "v1.0.0"
+```
+
+Both selected labels must meet the numeric major/minor/patch boundary. The
+package rejects an older current or baseline label before resolving checkouts,
+creating worktrees, discovering benchmarks, running gates or collecting samples.
+The boundary is inclusive; an omitted floor preserves unrestricted stable-label
+selection. The Python API exposes the keyword-only
+`MeasurementConfig.minimum_release` and `validate_release(tag)` with the same
+contract. This is a new-measurement policy: it does not change retained evidence
+or bypass its independent eligibility checks. Install a published release
+containing this setting before adding it to a consumer configuration.
+
 `measure --mode current-vs-latest` compares the current working tree with a
 published baseline, including when their release labels match. Equal-label runs
 require different effective source fingerprints and cannot become release

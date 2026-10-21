@@ -6,7 +6,7 @@ import shutil
 import tempfile
 import tomllib
 from collections.abc import Mapping
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import TYPE_CHECKING
 
@@ -16,6 +16,7 @@ from research_repo_tools.host_metadata import capture_host, serialize_host
 from research_repo_tools.process import run_command_live, run_git_bytes
 from research_repo_tools.publication import _inventory, _path, _publication_name
 from research_repo_tools.publication_config import _table
+from research_repo_tools.release_discovery import _tag_version, normalize_tag
 from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.worktrees import apply_snapshot, capture_snapshot, temporary_worktree
 
@@ -45,8 +46,11 @@ class MeasurementConfig:
     dependencies: tuple[tuple[str, str], ...] = ()
     context: tuple[tuple[str, str], ...] = ()
     compatible: tuple[str, ...] = ()
+    minimum_release: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
+        if self.minimum_release is not None:
+            object.__setattr__(self, "minimum_release", normalize_tag(_string(self.minimum_release, "minimum-release")))
         object.__setattr__(self, "probes", tuple((key, _strings(value, f"probe {key}")) for key, value in self.probes))
         object.__setattr__(self, "dependencies", tuple(tuple(item) for item in self.dependencies))
         object.__setattr__(self, "context", tuple(tuple(item) for item in self.context))
@@ -99,6 +103,11 @@ class MeasurementConfig:
             unknown = Provenance("0" * 40)
             compare_provenance(unknown, unknown, fields=self.compatible)
 
+    def validate_release(self, tag: str) -> None:
+        """Reject a label below the configured floor before acquiring new samples."""
+        if self.minimum_release is not None and _tag_version(normalize_tag(tag)) < _tag_version(self.minimum_release):
+            raise ValueError(f"unsupported measurement release {tag}; requires {self.minimum_release} or newer")
+
 
 def load_measurement(root: Path, configuration: str) -> MeasurementConfig | CommonHarnessPlan:
     """Read strict measurement TOML; commands are trusted consumer configuration."""
@@ -111,7 +120,7 @@ def load_measurement(root: Path, configuration: str) -> MeasurementConfig | Comm
         document,
         "measurement",
         {"schema", "command", "sources", "harness"},
-        {"criterion-dir", "sample", "statistic", "unit", "timeout", "probes", "dependencies", "context", "compatible"},
+        {"criterion-dir", "sample", "statistic", "unit", "timeout", "probes", "dependencies", "context", "compatible", "minimum-release"},
     )
     if type(raw["schema"]) is not int or raw["schema"] != 1:
         raise ValueError("measurement schema must be integer 1")
@@ -131,6 +140,7 @@ def load_measurement(root: Path, configuration: str) -> MeasurementConfig | Comm
         tuple((key, _string(value, f"dependency {key}")) for key, value in _object(raw.get("dependencies", {}), "dependencies").items()),
         tuple((key, _string(value, f"context {key}")) for key, value in _object(raw.get("context", {}), "context").items()),
         _strings(raw.get("compatible", []), "compatible", nonempty=False),
+        minimum_release=_string(raw["minimum-release"], "minimum-release") if "minimum-release" in raw else None,
     )
 
 
@@ -195,6 +205,7 @@ def measure_checkout(root: Path, configuration: MeasurementConfig, tag: str, *, 
     preventing stale Criterion rows from being mixed with this measurement.
     This operation executes trusted consumer code and needs no write credentials.
     """
+    configuration.validate_release(tag)
     root = root.resolve(strict=True)
     criterion = root / configuration.criterion_dir
     for ancestor in (criterion, *criterion.parents):
@@ -225,6 +236,9 @@ def measure_pair(
     """
     if not allow_git_mutations:
         raise ValueError("measure requires --allow-git-mutations for isolated worktree lifecycle")
+    settings = configuration if isinstance(configuration, MeasurementConfig) else configuration.measurement
+    settings.validate_release(pair.baseline)
+    settings.validate_release(pair.current)
     root = root.resolve(strict=True)
     baseline_revision = resolve_revision(root, pair.baseline)
     snapshot = capture_snapshot(root) if working_tree else None

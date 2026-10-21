@@ -46,7 +46,7 @@ from research_repo_tools.criterion_baselines import load_saved_sample, validate_
 from research_repo_tools.criterion_inventory import DiscoveryCommand, DiscoveryPlan, parse_inventory
 from research_repo_tools.evidence import Evidence, Provenance, deterministic_json, parse_evidence, publish_evidence, serialize_evidence
 from research_repo_tools.host_metadata import HostMetadata, capture_host, capture_profile, parse_host, serialize_host
-from research_repo_tools.measurement import load_measurement
+from research_repo_tools.measurement import MeasurementConfig, load_measurement, measure_checkout, measure_pair
 from research_repo_tools.publication import preview_publication, publish_publication
 from research_repo_tools.publication_config import load_publication
 from research_repo_tools.release_pairs import ReleasePair
@@ -287,6 +287,93 @@ source="tag"
 
 
 class TestCompleteConsumer(unittest.TestCase):
+    def test_minimum_release_configuration_and_numeric_boundary(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture(root)
+            original = (root / "benchmark.toml").read_text(encoding="utf-8")
+            for schema in (1, 2, 3):
+                source = (
+                    'schema=1\ncommand=["unused"]\nsources=["src/*.txt"]\nharness=["bench.py"]\n'
+                    if schema == 1
+                    else original.replace("schema=2", f"schema={schema}")
+                )
+                for spelling in ("1.2.3", "v1.2.3"):
+                    with self.subTest(schema=schema, spelling=spelling):
+                        (root / "benchmark.toml").write_text(f'minimum-release="{spelling}"\n' + source, encoding="utf-8", newline="\n")
+                        loaded = load_measurement(root, "benchmark.toml")
+                        settings = loaded if isinstance(loaded, MeasurementConfig) else loaded.measurement
+                        self.assertEqual(settings.minimum_release, "v1.2.3")
+                        for tag in ("v1.2.3", "1.2.4", "v1.10.0", "v2.0.0"):
+                            settings.validate_release(tag)
+                        for tag in ("v0.99.99", "v1.2.2"):
+                            with self.assertRaisesRegex(ValueError, "requires v1.2.3 or newer"):
+                                settings.validate_release(tag)
+                for invalid in ('"v1.2"', '"v1.2.3-rc.1"', '"v01.2.3"', "true", "[1, 2, 3]"):
+                    with self.subTest(schema=schema, invalid=invalid):
+                        (root / "benchmark.toml").write_text(f"minimum-release={invalid}\n" + source, encoding="utf-8", newline="\n")
+                        with self.assertRaises(ValueError):
+                            load_measurement(root, "benchmark.toml")
+
+    def test_minimum_release_rejects_acquisition_before_side_effects(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan = fixture(root)
+            plan = replace(plan, measurement=replace(plan.measurement, minimum_release="v1.0.0"))
+            before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            # Missing paths prove rejection precedes checkout resolution, snapshots,
+            # worktrees, captured-harness writes, discovery, gates and timing.
+            absent = root / "absent"
+            for pair in (ReleasePair("v1.1.0", "v0.9.9"), ReleasePair("v0.9.9", "v1.0.0")):
+                with self.subTest(pair=pair):
+                    for configuration in (plan, plan.measurement):
+                        with self.assertRaisesRegex(ValueError, "requires v1.0.0 or newer"):
+                            measure_pair(absent, configuration, pair, allow_git_mutations=True)
+                    with self.assertRaisesRegex(ValueError, "requires v1.0.0 or newer"):
+                        measure_prepared_pair(absent / "baseline", absent / "current", plan, pair)
+            with self.assertRaisesRegex(ValueError, "requires v1.0.0 or newer"):
+                measure_checkout(absent, plan.measurement, "v0.9.9", mode="tag")
+            self.assertEqual({path: path.read_bytes() for path in root.rglob("*") if path.is_file()}, before)
+
+    def test_installed_cli_minimum_release_leaves_outputs_and_git_untouched(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            fixture(root)
+            configuration = root / "benchmark.toml"
+            configuration.write_bytes(b'minimum-release="v1.0.0"\n' + configuration.read_bytes())
+            before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            for current, baseline in (("v1.1.0", "v0.9.9"), ("v0.9.9", "v1.0.0")):
+                with self.subTest(current=current, baseline=baseline):
+                    result = subprocess.run(
+                        [
+                            sys.executable,
+                            "-X",
+                            "utf8",
+                            "-m",
+                            "research_repo_tools",
+                            "--root",
+                            str(root),
+                            "performance",
+                            "measure",
+                            "benchmark.toml",
+                            current,
+                            baseline,
+                            "--allow-git-mutations",
+                            "--payload",
+                            "output/run.json",
+                            "--manifest",
+                            "output/evidence.json",
+                        ],
+                        cwd=root,
+                        capture_output=True,
+                        timeout=30,
+                    )
+                    self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+                    self.assertIn(b"requires v1.0.0 or newer", result.stderr)
+                    self.assertFalse((root / ".git").exists())
+                    self.assertFalse((root / "output").exists())
+                    self.assertEqual({path: path.read_bytes() for path in root.rglob("*") if path.is_file()}, before)
+
     def test_report_policy_cannot_alias_mutable_outputs(self):
         with tempfile.TemporaryDirectory() as directory:
             parent = Path(directory)
@@ -345,6 +432,7 @@ if len(sys.argv) == 2:
             )
             (root / "bench.py").write_text(script, encoding="utf-8", newline="\n")
             config = (root / "benchmark.toml").read_text(encoding="utf-8")
+            config = 'minimum-release="v1.0.0"\n' + config
             command = json.dumps([sys.executable, "-X", "utf8", "bench.py", "--list"])
             for expected in ('["library / 2", "reference / 2"]', '["library / 2"]'):
                 config = config.replace(
@@ -509,6 +597,10 @@ raw-files=["benchmark.json", "estimates.json", "sample.json", "tukey.json"]
             plan = load_measurement(root / "current", "benchmark.toml")
             assert isinstance(plan, CommonHarnessPlan)
             self.assertEqual(validate_run_policy(evidence, plan), validate_run_evidence(evidence))
+            # A later acquisition floor does not rewrite or invalidate retained
+            # provenance that satisfies the independently declared run policy.
+            raised_floor = replace(plan, measurement=replace(plan.measurement, minimum_release="v2.0.0"))
+            self.assertEqual(validate_run_policy(evidence, raised_floor), validate_run_evidence(evidence))
             run = validate_run_evidence(evidence)
             alternatives = [
                 replace(
