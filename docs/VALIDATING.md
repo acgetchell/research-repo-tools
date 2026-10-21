@@ -155,7 +155,8 @@ Linux retains its Cobertura report as a seven-day Actions artifact. A
 reusable `codecov.yml` workflow uploads the report using OIDC; forks
 and Dependabot use public-repository tokenless uploads. No additional test run is
 scheduled for coverage. macOS and Windows run ordinary tests and the same
-installation checks. Release-tag validation retains reports without uploading.
+installation checks. Release preparation reuses the exact main-push distributions
+and validation; it does not run another package matrix or upload another report.
 Codecov project and patch statuses are initially advisory while a baseline is
 established; test failures still fail the required platform checks. Setup and
 account activation are documented in [GitHub configuration](CONFIGURING_GITHUB.md#codecov).
@@ -236,6 +237,16 @@ prerequisites or prove compatibility with every supported shell or Cargo tool.
 Consumer adoption, native Semgrep rule execution, and published-package
 verification require their own checks. Follow the [publishing guide](RELEASING.md)
 for a clean PyPI installation and setup check before closing the release issue.
+
+Successful main-push package runs additionally sign a manifest binding the full
+source commit, workflow/run/attempt, producer and required validation job IDs,
+immutable distribution artifact identity and digest, exact version, and file
+hashes. Producer and validation jobs must all succeed in one complete attempt;
+each validator independently verifies the retrieved ZIP digest and distribution
+metadata before installing it. Only main pushes may create release-eligible
+signed evidence. Distribution and evidence artifacts are retained for 30 days;
+the [release guide](RELEASING.md#artifact-retention-and-recovery-window) describes
+bounded selection, partial-rerun rejection and missing/expired evidence recovery.
 
 ## Validation under the agent Git policy
 

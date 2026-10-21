@@ -336,6 +336,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             release_suite = consumer / "public_release_consumer.py"
             release_suite.write_bytes((ROOT / "tests/releases/public_release_consumer.py").read_bytes())
             run_consumer_suite(python, [str(release_suite)], cwd=consumer, env=local_env)
+            validation_release_suite = consumer / "public_validation_release_consumer.py"
+            validation_release_suite.write_bytes((ROOT / "tests/releases/public_validation_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(validation_release_suite)], cwd=consumer, env=local_env)
             run_consumer_suite(python, [str(publishing_suite)], cwd=consumer, env=local_env)
             performance_suite = consumer / "public_performance_consumer.py"
             performance_suite.write_bytes((ROOT / "tests/performance/public_performance_consumer.py").read_bytes())

@@ -126,9 +126,12 @@ recipe with pinned cargo-edit, verifies that a tiny crate's requirements and loc
 resolution advance, and compiles the result with managed Rust and `--locked`.
 The native check also installs both Clippy SARIF helpers and checks conversion and failure propagation.
 This check is excluded from local `just ci`.
-The [release workflows](docs/RELEASING.md) attach the validated distributions
-and signed provenance to a draft GitHub Release. Publishing that release triggers
-asset verification and the approval-gated PyPI upload without rebuilding.
+Successful main-push runs retain immutable distributions and signed
+producer/validation evidence for 30 days. The [release workflows](docs/RELEASING.md)
+select that exact commit's complete main-push attempt and attach the same bytes
+with original validation and promotion provenance to a draft GitHub Release.
+Publishing that release triggers both provenance checks and the approval-gated
+PyPI upload without rebuilding or rerunning the native test matrix.
 
 `just check` checks formatting, then lint, then strict types for every tracked and nonignored Python
 file using shared selection, including `src`, `scripts`, and `tests`. It also runs
