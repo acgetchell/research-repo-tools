@@ -7,6 +7,7 @@ import subprocess
 import sys
 import tempfile
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -239,7 +240,9 @@ def _resolution_requirements(text: str, pins: list[DevPin]) -> list[str]:
     return requirements
 
 
-def resolve_latest_pins(pins: list[DevPin], requires_python: SpecifierSet, project_root: Path, *, uv: str = "uv") -> list[DevPin]:
+def resolve_latest_pins(
+    pins: list[DevPin], requires_python: SpecifierSet, project_root: Path, *, uv: str = "uv", env: Mapping[str, str] | None = None
+) -> list[DevPin]:
     """Resolve a universal set without changing the consumer's files."""
     manifest = project_root / "pyproject.toml"
     requirements = _resolution_requirements(manifest.read_text(encoding="utf-8"), pins)
@@ -270,6 +273,7 @@ def resolve_latest_pins(pins: list[DevPin], requires_python: SpecifierSet, proje
                 str(project_root),
             ],
             cwd=project_root,
+            env=env,
             timeout=UV_RESOLVE_TIMEOUT_SECONDS,
         )
     return parse_resolution(result.stdout, pins)
@@ -352,7 +356,9 @@ def _require_applied_pins(pyproject: Path, expected: list[DevPin], original: byt
         raise ValueError(msg)
 
 
-def update_dev_pins(pyproject: Path, *, uv: str = "uv", toolchain: config.ToolchainSettings | None = None) -> dict[str, tuple[str, str]]:
+def update_dev_pins(
+    pyproject: Path, *, uv: str = "uv", toolchain: config.ToolchainSettings | None = None, env: Mapping[str, str] | None = None
+) -> dict[str, tuple[str, str]]:
     """Resolve and apply all changed exact direct pins in one uv transaction."""
     manifest = _conventional_manifest(pyproject)
     uv_lock = manifest.parent / "uv.lock"
@@ -362,7 +368,7 @@ def update_dev_pins(pyproject: Path, *, uv: str = "uv", toolchain: config.Toolch
     requires_python, current = parse_project(manifest.read_text(encoding="utf-8"), toolchain=toolchain)
     if not current:
         return {}
-    latest = resolve_latest_pins(current, requires_python, manifest.parent, uv=uv)
+    latest = resolve_latest_pins(current, requires_python, manifest.parent, uv=uv, env=env)
     changes = {old.name: (old.version, new.version) for old, new in zip(current, latest, strict=True) if old.version != new.version}
     if not changes:
         return changes
@@ -381,6 +387,7 @@ def update_dev_pins(pyproject: Path, *, uv: str = "uv", toolchain: config.Toolch
                 str(manifest.parent),
             ],
             cwd=manifest.parent,
+            env=env,
             timeout=UV_ADD_TIMEOUT_SECONDS,
         )
         _require_applied_pins(manifest, latest, snapshots[manifest] or b"", toolchain=toolchain)
@@ -407,7 +414,7 @@ def _subprocess_detail(error: subprocess.CalledProcessError) -> str:
     return cast("str", stderr or stdout or str(error))
 
 
-def main(argv: list[str] | None = None, *, toolchain: config.ToolchainSettings | None = None) -> int:
+def main(argv: list[str] | None = None, *, toolchain: config.ToolchainSettings | None = None, env: Mapping[str, str] | None = None) -> int:
     """Advance exact development-tool pins without touching other requirements."""
     args = parse_args(argv)
     try:
@@ -415,7 +422,7 @@ def main(argv: list[str] | None = None, *, toolchain: config.ToolchainSettings |
         if not pins:
             print("No exact direct Python development-tool pins to update.")
             return 0
-        changes = update_dev_pins(args.pyproject, uv=args.uv_executable, toolchain=toolchain)
+        changes = update_dev_pins(args.pyproject, uv=args.uv_executable, toolchain=toolchain, env=env)
     except ExceptionGroup as error:
         expected, unexpected = error.split((ExecutableNotFoundError, OSError, RuntimeError, subprocess.SubprocessError, TypeError, ValueError))
         if expected is not None:

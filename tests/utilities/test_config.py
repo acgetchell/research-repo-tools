@@ -13,13 +13,16 @@ def test_parsed_settings_detach_nested_inputs_and_reject_mutation(tmp_path):
     tools = {"uv_version": "uv"}
     cargo = {"git-cliff": "2.14.1"}
     counts = {"shared.rule": 0}
-    raw = {"deps": {"tools": tools}, "toolchain": {"cargo": cargo}, "semgrep": {"counts": {"fixture.py": counts}}}
+    projects = ["tooling/scanner"]
+    raw = {"deps": {"tools": tools, "python-projects": projects}, "toolchain": {"cargo": cargo}, "semgrep": {"counts": {"fixture.py": counts}}}
     settings = config.parse(raw, root=tmp_path)
     fixture = (tmp_path / "fixture.py").resolve()
     tools.clear()
+    projects.clear()
     cargo["git-cliff"] = "invalid"
     counts["shared.rule"] = -1
     assert settings.deps.tools == {"uv_version": "uv"}
+    assert settings.deps.python_projects == ("tooling/scanner",)
     assert settings.toolchain.cargo == {"git-cliff": "2.14.1"}
     assert settings.semgrep.counts == {fixture: {"shared.rule": 0}}
     for mapping, key, value in (
@@ -62,6 +65,8 @@ def test_loaded_settings_preserve_defaults_and_explicit_values(tmp_path):
         ({"semgrep": []}, "semgrep"),
         ({"deps": {"unknown": "value"}}, "unknown fields"),
         ({"deps": {"uv": 42}}, "deps.uv"),
+        ({"deps": {"python-projects": "tooling/scanner"}}, "deps.python-projects"),
+        ({"deps": {"python-projects": [42]}}, "deps.python-projects"),
         ({"deps": {"tools": {"uv": False}}}, "deps.tools"),
         ({"deps": {"tools": {"format_pin": "dprint"}}, "toolchain": {"binaries": {"dprint": "0.60.1"}}}, "ownership is ambiguous"),
         ({"deps": {"tools": {"format_pin": "dprint"}, "tool-owners": {"dprint": "path"}}}, "supports cargo and homebrew"),

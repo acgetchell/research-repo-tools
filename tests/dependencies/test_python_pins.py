@@ -134,12 +134,12 @@ def test_update_dev_pins_resolves_then_applies_one_exact_transaction(tmp_path: P
             "--project",
             str(tmp_path),
         ],
-        {"cwd": tmp_path, "timeout": update_python_dev_pins.UV_RESOLVE_TIMEOUT_SECONDS},
+        {"cwd": tmp_path, "env": None, "timeout": update_python_dev_pins.UV_RESOLVE_TIMEOUT_SECONDS},
     )
     assert calls[1] == (
         "uv",
         ["add", "--dev", "--no-sync", "ruff==0.16.4", "semgrep==1.174.0", "--directory", str(tmp_path), "--project", str(tmp_path)],
-        {"cwd": tmp_path, "timeout": update_python_dev_pins.UV_ADD_TIMEOUT_SECONDS},
+        {"cwd": tmp_path, "env": None, "timeout": update_python_dev_pins.UV_ADD_TIMEOUT_SECONDS},
     )
     assert uv_lock.read_text(encoding="utf-8") == "version = 1\nruff = 0.16.4\nsemgrep = 1.174.0\n"
 
@@ -415,7 +415,7 @@ def test_resolve_latest_pins_keeps_ranged_constraints(tmp_path: Path, monkeypatc
     resolved = update_python_dev_pins.resolve_latest_pins([update_python_dev_pins.DevPin("ruff", "0.16.2")], SpecifierSet(">=3.14"), tmp_path)
     assert resolved == [update_python_dev_pins.DevPin("ruff", "0.16.4")]
     assert len(calls) == 1
-    assert calls[0][2] == {"cwd": tmp_path, "timeout": update_python_dev_pins.UV_RESOLVE_TIMEOUT_SECONDS}
+    assert calls[0][2] == {"cwd": tmp_path, "env": None, "timeout": update_python_dev_pins.UV_RESOLVE_TIMEOUT_SECONDS}
     assert not Path(calls[0][1][2]).exists()
 
 
@@ -562,11 +562,11 @@ def test_exact_pin_transaction_without_build_metadata_or_lock(tmp_path: Path, mo
     monkeypatch.setattr(update_python_dev_pins, "run_safe_command", fake_run)
     changes = update_python_dev_pins.update_dev_pins(pyproject)
     assert changes == {"ruff": ("0.16.2", "0.16.4"), "semgrep": ("1.172.0", "1.174.0")}
-    assert calls[0][2] == {"cwd": tmp_path, "timeout": 300}
+    assert calls[0][2] == {"cwd": tmp_path, "env": None, "timeout": 300}
     assert calls[1] == (
         "uv",
         ["add", "--dev", "--no-sync", "ruff==0.16.4", "semgrep==1.174.0", "--directory", str(tmp_path), "--project", str(tmp_path)],
-        {"cwd": tmp_path, "timeout": 300},
+        {"cwd": tmp_path, "env": None, "timeout": 300},
     )
 
 

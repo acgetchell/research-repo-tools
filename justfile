@@ -169,11 +169,9 @@ update: update-tools update-dependencies
 # Update Python dependencies without upgrading uv.
 update-dependencies: update-python-dependencies
 
-# Update direct dev pins, upgrade the full Python lock, and synchronize dev.
+# Update main dev pins, then upgrade and sync all declared Python projects.
 update-python-dependencies:
-    uv run --locked research-repo-tools deps update-python
-    uv lock --upgrade
-    uv sync --locked --group dev
+    uv run --locked research-repo-tools deps update-python --all-projects
 
 # Upgrade uv without repeating shell/bootstrap configuration.
 update-tools: update-uv

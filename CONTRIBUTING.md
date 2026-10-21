@@ -205,14 +205,17 @@ An unavailable JIT yields no JIT performance evidence.
 
 Run `just update` to upgrade uv through its owner, reconcile its manifest pin,
 then advance exact development-tool pins through
-this package's `deps update-python` command, refresh `uv.lock` within the resulting manifest
+this package's `deps update-python --all-projects` command, refresh `uv.lock` within the resulting manifest
 constraints, and sync the development environment. Review the manifest and lockfile
 changes, then validate them with `just ci`. Exact runtime, build,
 and audit pins remain unchanged by this recipe. Ruff, ty, and pytest are pinned
 once in the published `python-tools` extra; the maintainer dev group selects that
 extra through a self dependency. Advance those three pins deliberately together
 for a tested shared release, refresh the lock, and validate with `just ci`.
-The generic dev-pin updater retains this release-owned profile.
+The generic dev-pin updater retains this release-owned profile. Consumers can
+declare extra independent uv projects in `deps.python-projects`; the same command
+upgrades their locks and syncs their separate environments without changing their
+manifest requirements.
 
 ## Local package evaluation
 

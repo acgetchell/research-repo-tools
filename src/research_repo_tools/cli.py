@@ -63,7 +63,9 @@ def parser() -> argparse.ArgumentParser:
     uv = deps.add_parser("check-uv")
     uv.add_argument("--uv-executable")
     uv.add_argument("--output", help="validate captured output without running an executable")
-    deps.add_parser("update-python")
+    deps.add_parser("update-python").add_argument(
+        "--all-projects", action="store_true", help="also upgrade locks and sync the main and declared independent Python projects"
+    )
     tools = deps.add_parser("update-tools")
     tools.add_argument("--dry-run", action="store_true")
     deps.add_parser("update-uv", help="upgrade uv through its owner and reconcile its project pin").add_argument("--dry-run", action="store_true")
@@ -586,6 +588,10 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         if args.action == "update-python":
             from research_repo_tools.dependencies import main
 
+            if args.all_projects:
+                from research_repo_tools.python_updates import update
+
+                return update(settings)
             if settings.toolchain.inherit_python_tools:
                 from research_repo_tools.python_tools import check
 

@@ -725,6 +725,23 @@ checked managed tools so native Python builds can find Rust. Included groups,
 including the pinned shared package in `tooling`, retain their declared constraints.
 The older `update-python-deps` spelling is an alias for this complete workflow.
 
+Declare additional independent uv projects when a tool needs its own environment:
+
+```toml
+[tool.research-repo-tools.deps]
+python-projects = ["tooling/scanner"]
+```
+
+The shared `deps update-python --all-projects` command upgrades each declared
+project's lock and synchronizes its own `.venv` after updating the main project.
+Additional projects keep their manifest requirements, including exact tool pins,
+and use their own Python version and default dependency groups. Give each one a
+compatible `.python-version`; uv workspace members share their workspace lock
+and must not be listed as independent projects. No directories are discovered
+automatically. To adopt this workflow in an existing repository, upgrade its
+shared-package pin, merge the packaged `update-python-dependencies` recipe, and
+declare its extra projects. Installing the package does not rewrite copied recipes.
+
 For Rust projects, pin `cargo-edit` to an exact version in the managed Cargo tool
 table (for example, `cargo-edit = "0.13.13"`) and keep the compiler pinned in
 `rust-toolchain.toml`, then run `just setup` to install and verify the declared tool.
@@ -778,11 +795,9 @@ update-cargo-tools:
     cargo install-update --all --locked
     uv run --locked --only-group tooling --inexact research-repo-tools deps update-tools
 
-# Advance direct dev pins, then refresh the entire lock and synchronize dev.
+# Advance main dev pins, then upgrade and sync all declared Python projects.
 update-python-dependencies:
-    uv run --locked --only-group tooling --inexact research-repo-tools deps update-python
-    uv lock --upgrade
-    uv sync --locked --group dev
+    uv run --locked --only-group tooling --inexact research-repo-tools deps update-python --all-projects
 ```
 
 `cargo install-update` requires the separately installed `cargo-update` package.
@@ -2032,9 +2047,11 @@ Cargo pins accept canonical prereleases and build metadata, such as
 before replacement. Comments, line endings, permissions, and symlink targets
 are preserved. `deps update-python` updates exact development requirements
 while retaining ranges, markers, extras, and other unmanaged constraints.
-Before uv changes the manifest and lockfile, the updater saves both originals.
-A failed update restores them; if restoration also fails, the command reports
-the retained backup paths for recovery.
+Before uv applies new direct pins to the manifest and lockfile, the updater saves
+both originals. A failed pin transaction restores them; if restoration also
+fails, the command reports the retained backup paths for recovery. The subsequent
+lock upgrades and environment syncs selected by `--all-projects` stop on failure
+and retain earlier successful updates for review and retry.
 
 See [changelog behavior][changelog], [release behavior][release], and
 [scope and adoption][migration] for detailed contracts and migration guidance.

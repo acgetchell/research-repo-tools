@@ -21,7 +21,7 @@ FIELDS = {
     "text": {"line-limit", "include", "exclude"},
     "notebooks": {"advice", "group", "cwd", "id-pattern", "lab", "output-dir", "timeout", "outputs", "prohibit-installs", "reset"},
     "toolchain": {"binaries", "cargo", "inherit-python", "inherit-python-tools"},
-    "deps": {"pyproject", "justfile", "tools", "tool-owners", "uv"},
+    "deps": {"pyproject", "python-projects", "justfile", "tools", "tool-owners", "uv"},
     "sarif": {"category-prefix", "drivers"},
     "semgrep": {
         "batch-size",
@@ -128,10 +128,12 @@ class DependencySettings:
     tools: Mapping[str, str] = field(default_factory=dict)
     uv: str = "uv"
     tool_owners: Mapping[str, str] = field(default_factory=dict)
+    python_projects: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "tools", MappingProxyType(dict(self.tools)))
         object.__setattr__(self, "tool_owners", MappingProxyType(dict(self.tool_owners)))
+        object.__setattr__(self, "python_projects", tuple(self.python_projects))
         if any(owner not in {"cargo", "homebrew"} for owner in self.tool_owners.values()):
             raise ValueError("deps.tool-owners supports cargo and homebrew; migrate prebuilt tools to toolchain.binaries")
         if self.tool_owners.keys() - set(self.tools.values()) or "uv" in self.tool_owners:
@@ -469,6 +471,7 @@ def parse(value: object, *, root: Path) -> Config:
             tools=mapped,
             uv=_string(deps.get("uv", "uv"), "deps.uv"),
             tool_owners=_strings(deps.get("tool-owners", {}), "deps.tool-owners"),
+            python_projects=_release_paths(deps.get("python-projects", []), "deps.python-projects"),
         ),
         semgrep=SemgrepSettings(
             config=_optional_string(semgrep, "config", "semgrep"),
