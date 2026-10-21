@@ -157,7 +157,20 @@ def parse_plan(document: dict[str, Any]) -> CommonHarnessPlan:
         document,
         "common measurement",
         {"schema", "sources", "harness", "phases", "series"},
-        {"criterion-dir", "sample", "sample-count", "statistics", "confidence-level", "unit", "timeout", "probes", "dependencies", "context", "compatible"},
+        {
+            "criterion-dir",
+            "sample",
+            "sample-count",
+            "statistics",
+            "confidence-level",
+            "unit",
+            "timeout",
+            "probes",
+            "dependencies",
+            "context",
+            "compatible",
+            "minimum-release",
+        },
     )
     phases = _object(raw["phases"], "phases", {"baseline", "current"})
     schema = _integer(raw["schema"], "common measurement schema")
@@ -228,6 +241,7 @@ def parse_plan(document: dict[str, Any]) -> CommonHarnessPlan:
         dependencies=dependencies,
         context=tuple((key, _string(value, "context")) for key, value in _object(raw.get("context", {}), "context").items()),
         compatible=compatible,
+        minimum_release=_string(raw["minimum-release"], "minimum-release") if "minimum-release" in raw else None,
     )
     return CommonHarnessPlan(config, parsed["baseline"], parsed["current"], tuple(series), schema=schema)
 
@@ -314,6 +328,8 @@ def measure_prepared_pair(baseline: Path, current: Path, plan: CommonHarnessPlan
     timing. Retained raw files survive checkout cleanup. No Git state is mutated by
     this function; measure_pair owns optional worktree lifecycle.
     """
+    plan.measurement.validate_release(pair.baseline)
+    plan.measurement.validate_release(pair.current)
     roots = {"baseline": baseline.resolve(strict=True), "current": current.resolve(strict=True)}
     if roots["baseline"] == roots["current"] or any(
         left in right.parents for left, right in ((roots["baseline"], roots["current"]), (roots["current"], roots["baseline"]))
