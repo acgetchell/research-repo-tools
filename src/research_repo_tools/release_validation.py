@@ -36,7 +36,11 @@ VALIDATION_BUNDLE = "validation.sigstore.json"
 SCHEMA = "research-repo-tools/validated-distributions/v1"
 PROMOTION = "https://github.com/acgetchell/research-repo-tools/attestations/release-promotion/v1"
 MAX_BYTES = 32 * 1024 * 1024
-RECOVERY = "Rerun ALL jobs of the original main-push Package checks run for this exact commit, then retry preparation. Do not dispatch, rebuild locally, or use PR artifacts."
+RECOVERY = (
+    "Rerun ALL jobs of the original main-push Package checks run for this exact commit within GitHub's 30-day rerun window, then retry preparation. "
+    "After that window, land a new reviewed commit on main and follow the explicitly authorized unpublished-candidate correction procedure; preserve published releases. "
+    "Do not dispatch, rebuild locally, or substitute PR artifacts or another commit silently."
+)
 
 
 def _object(value: Any, context: str) -> dict[str, Any]:
@@ -78,6 +82,12 @@ def _commit(value: str) -> str:
     return value
 
 
+def _repository(value: str) -> str:
+    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value) is None or any(part in {".", ".."} for part in value.split("/")):
+        raise ValueError("repository must be owner/name")
+    return value
+
+
 def distribution_names(tag: str) -> tuple[str, str]:
     if re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag) is None:
         raise ValueError("release assets require a canonical stable vX.Y.Z tag")
@@ -94,8 +104,7 @@ class ValidationPolicy:
     required_steps: tuple[tuple[str, tuple[str, ...]], ...]
 
     def __post_init__(self) -> None:
-        if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", self.repository) is None:
-            raise ValueError("repository must be owner/name")
+        _repository(self.repository)
         if re.fullmatch(r"\.github/workflows/[A-Za-z0-9_-]+\.yml", self.workflow) is None:
             raise ValueError("workflow must be an explicit .github/workflows/*.yml path")
         names = [name for name, _ in self.required_steps]
@@ -132,8 +141,8 @@ def gh(*args: str) -> str:
     return subprocess.run(["gh", *args], check=True, capture_output=True, text=True, encoding="utf-8", timeout=120).stdout
 
 
-def api(endpoint: str) -> Any:
-    return _json(gh("api", f"repos/{REPOSITORY}/{endpoint}"))
+def api(endpoint: str, *, repository: str = REPOSITORY) -> Any:
+    return _json(gh("api", f"repos/{_repository(repository)}/{endpoint}"))
 
 
 def _pages(read: Callable[[str], Any], endpoint: str, field: str) -> list[dict[str, Any]]:
@@ -276,8 +285,7 @@ def download_artifact(repository: str, artifact: dict[str, Any], destination: Pa
     Refuse links, directory entries, duplicates, aliases, extras and resource
     excesses before creating the destination. Never call extractall on input.
     """
-    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", repository) is None:
-        raise ValueError("repository must be owner/name")
+    _repository(repository)
     if (
         not names
         or len({name.casefold() for name in names}) != len(names)
@@ -462,13 +470,16 @@ def seal(run_id: int, attempt: int, artifact_id: int, output: Path) -> None:
 
 def consume(artifact_id: int, dist: Path) -> None:
     """Give each normal PR/main validator the exact producer's verified bytes."""
-    run = api(f"actions/runs/{_integer(int(os.environ.get('GITHUB_RUN_ID', '0')), 'run ID')}")
+    repository = _repository(os.environ.get("GITHUB_REPOSITORY", ""))
+    run = api(f"actions/runs/{_integer(int(os.environ.get('GITHUB_RUN_ID', '0')), 'run ID')}", repository=repository)
+    if _object(run.get("repository"), "executing repository").get("full_name") != repository:
+        raise ValueError("artifact validation run differs from the executing repository")
     attempt = _integer(int(os.environ.get("GITHUB_RUN_ATTEMPT", "0")), "attempt")
     if run.get("run_attempt") != attempt:
         raise ValueError("validation attempt changed before artifact retrieval")
-    artifact = _artifact(_available_artifact(artifact_id), run, f"distributions-{attempt}")
+    artifact = _artifact(api(f"actions/artifacts/{_integer(artifact_id, 'artifact ID')}", repository=repository), run, f"distributions-{attempt}")
     version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
-    download_artifact(REPOSITORY, artifact, dist, distribution_names(f"v{version}"))
+    download_artifact(repository, artifact, dist, distribution_names(f"v{version}"))
     verify_distributions(dist, f"v{version}")
 
 

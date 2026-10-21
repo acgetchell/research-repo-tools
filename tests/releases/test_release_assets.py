@@ -6,6 +6,7 @@ import io
 import json
 import stat
 import subprocess
+import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -125,8 +126,9 @@ def remote(monkeypatch, tmp_path):
         "uploaded": None,
     }
 
-    def api(endpoint):
+    def api(endpoint, *, repository=release.REPOSITORY):
         state["calls"].append(endpoint)
+        state["calls"].append(("api-repository", repository))
         if endpoint == "actions/workflows/ci.yml":
             return copy.deepcopy(WORKFLOW)
         if endpoint.startswith("actions/workflows/12/runs?"):
@@ -201,6 +203,7 @@ def remote(monkeypatch, tmp_path):
     monkeypatch.setattr(release.subprocess, "run", execute)
     monkeypatch.setenv("GITHUB_RUN_ID", "456")
     monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "1")
+    monkeypatch.setenv("GITHUB_REPOSITORY", release.REPOSITORY)
     return state
 
 
@@ -419,9 +422,14 @@ def test_both_distribution_metadata_contracts(tmp_path, version, package):
         release.verify_distributions(dist, TAG)
 
 
-def test_standard_library_entry_point_loads_without_installed_package():
-    result = subprocess.run(["python3", str(ROOT / "scripts/release_assets.py"), "--help"], check=True, capture_output=True, text=True, timeout=10)
+def test_standard_library_entry_point_loads_without_installed_package(tmp_path, monkeypatch):
+    (tmp_path / "sitecustomize.py").write_bytes(b'print("UNTRUSTED-SITE-STARTUP")\n')
+    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+    result = subprocess.run(
+        [sys.executable, "-I", "-S", str(ROOT / "scripts/release_assets.py"), "--help"], check=True, capture_output=True, text=True, timeout=10
+    )
     assert "promote" in result.stdout and "seal" in result.stdout
+    assert "UNTRUSTED-SITE-STARTUP" not in result.stdout
 
 
 def test_workflows_preserve_native_gates_and_promote_without_rebuilding():
@@ -517,10 +525,15 @@ def test_seal_records_original_producer_and_every_required_validator(remote, tmp
     assert manifest["files"] == {name: hashlib.sha256(payload).hexdigest() for name, payload in remote["contents"].items()}
 
 
-def test_validator_retrieves_same_immutable_artifact_without_release_side_effects(remote, tmp_path, monkeypatch):
+@pytest.mark.parametrize("repository", [release.REPOSITORY, "fork-owner/research-repo-tools"])
+def test_validator_retrieves_same_immutable_artifact_without_release_side_effects(remote, tmp_path, monkeypatch, repository):
     monkeypatch.chdir(tmp_path)
     monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    monkeypatch.setenv("GITHUB_REPOSITORY", repository)
+    remote["run"]["repository"]["full_name"] = repository
     (tmp_path / "pyproject.toml").write_bytes(b'[project]\nversion = "0.2.3"\n')
     release.consume(31, tmp_path / "dist")
     assert {path.name: path.read_bytes() for path in (tmp_path / "dist").iterdir()} == remote["contents"]
     assert not any(isinstance(call, tuple) and call[0] == "release" for call in remote["calls"])
+    assert ("api-repository", repository) in remote["calls"]
+    assert ("gh", "api", f"repos/{repository}/actions/artifacts/31/zip") in remote["calls"]

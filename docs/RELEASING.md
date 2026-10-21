@@ -263,9 +263,10 @@ The original manifest and signature are preserved inside the release's
 and promoted file hashes remain independently verifiable after Actions retention
 expires. Expiration does not justify substituting a new local build.
 
-If either artifact is missing or expired, first inspect retention and access.
-With access restored, rerun **all** jobs of the original **push to main** run
-for the exact tagged commit:
+Tag well before the retention deadline. If either artifact is missing or expired,
+first inspect retention and access. GitHub permits workflow reruns only within
+30 days of the original run. Within that window and with access restored,
+rerun **all** jobs of the original **push to main** run for the exact tagged commit:
 
 ```sh
 MAIN_RUN_ID=REPLACE_WITH_THE_RECORDED_MAIN_PUSH_RUN_ID
@@ -276,8 +277,14 @@ gh run watch "$MAIN_RUN_ID" --exit-status
 Do not use `--failed`, `--job`, or `gh workflow run`: those cannot establish a
 complete main-push production/validation attempt. Wait for `release-evidence`
 and inspect the new artifact IDs before retrying preparation. If the original
-main-push run itself is unavailable, stop and investigate; the workflow cannot
-manufacture equivalent evidence from an unrelated run. For a staging failure,
+main-push run itself is unavailable or is older than the 30-day rerun window,
+stop: rerunning it cannot recover the evidence. Land a new reviewed commit on
+`main` through normal native CI, regenerate notes with the owning workflow, and
+follow the explicitly authorized unpublished-candidate correction procedure
+below. This creates a new candidate with its own complete main-push validation;
+it never silently substitutes another commit for the existing tag. Preserve any
+published release and use a new version if correcting published contents.
+The workflow cannot manufacture equivalent evidence from an unrelated run. For a staging failure,
 follow the draft recovery procedure below before rerunning the recorded
 preparation run with `gh run rerun PREPARATION_RUN_ID`.
 
