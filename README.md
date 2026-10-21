@@ -1455,6 +1455,13 @@ see [migration](https://github.com/acgetchell/research-repo-tools/blob/main/docs
 
 ### Common harness and complete runs
 
+For installed measurement, independent eligibility, saved-sample verification and
+publication through static consumer declarations, see
+[Declaring complete performance workflows](https://github.com/acgetchell/research-repo-tools/blob/main/docs/DECLARING_PERFORMANCE.md).
+The v0.2.1 additions include `complete-measurement.toml`, runtime saved names,
+required storage layouts, reusable publication identities and recorded version
+labels. Named configurations preserve consumer scientific selections.
+
 The schema-2 measurement/report contracts and host capture are intended for
 v0.1.8; adopt an exact published release containing them before deleting working
 consumer tooling. Use the packaged `common-benchmark.toml`,
@@ -1610,7 +1617,8 @@ published compatible release containing them before adopting this configuration.
 Missing selections fail by default. Explicit `missing = "unavailable"` permits
 unmapped cells, labels them in tables and CSV, and breaks plot lines at those
 rows. Invalid or unmeasured mapped IDs always fail. Coverage states selected,
-unavailable and omitted phase cases. Document bytes outside markers survive, and
+unavailable and omitted phase cases. Without an optional formatter, document bytes
+outside markers survive, and
 the document, SVGs and CSV move in one transaction with the existing freshness,
 release-reference, tagged-link and rollback checks. See the
 [publication configuration](https://github.com/acgetchell/research-repo-tools/blob/main/docs/publication-api.md#publication-configuration-v2)

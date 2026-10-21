@@ -72,6 +72,10 @@ def add_commands(groups) -> None:
     add_command(commands, "promote")
     publish = commands.add_parser("publish", help="publish a marked document section and figures from verified retained evidence")
     publish.add_argument("configuration", help="publication TOML path relative to the consumer root")
+    publish.add_argument("--artifacts-only", action="store_true", help="render only configured figures and CSV without editing a document")
+    for phase in ("baseline", "current"):
+        publish.add_argument(f"--{phase}-release", help=f"independent {phase} release assertion")
+        publish.add_argument(f"--{phase}-revision", help=f"independent full {phase} commit assertion")
     mode = publish.add_mutually_exclusive_group()
     mode.add_argument("--check", action="store_true", help="validate and return 1 when outputs differ; write nothing")
     mode.add_argument("--preview", action="store_true", help="validate and print candidate diffs; write nothing")
@@ -84,8 +88,11 @@ def add_commands(groups) -> None:
     verify = commands.add_parser("verify", help="verify an evidence envelope and its exact payload digest")
     verify.add_argument("payload")
     verify.add_argument("manifest")
+    verify.add_argument("--measurement", help="independent common measurement policy for complete-run eligibility")
     saved = commands.add_parser("verify-saved", help="validate complete fresh and saved Criterion samples and exact raw bytes")
     saved.add_argument("configuration")
+    saved.add_argument("--criterion-dir", help="root-relative Criterion output directory (for example the release CRITERION_HOME)")
+    saved.add_argument("--saved-sample", help="actual safe saved sample name for this release")
 
 
 def run(args: argparse.Namespace, settings: Config) -> int:
@@ -108,9 +115,14 @@ def run(args: argparse.Namespace, settings: Config) -> int:
         from research_repo_tools.criterion_baselines import load_saved_sample, validate_saved_sample
         from research_repo_tools.criterion_inventory import _directory
 
-        plan = load_saved_sample(settings.root, args.configuration)
+        plan = load_saved_sample(settings.root, args.configuration, saved_sample=args.saved_sample, criterion_dir=args.criterion_dir)
         result = validate_saved_sample(
-            _directory(settings.root, plan.criterion_dir), plan.saved_sample, plan.policy, fresh_sample=plan.fresh_sample, raw_files=plan.raw_files
+            _directory(settings.root, plan.criterion_dir),
+            plan.saved_sample,
+            plan.policy,
+            fresh_sample=plan.fresh_sample,
+            raw_files=plan.raw_files,
+            storage_paths=plan.storage_paths,
         )
         print(f"Verified {len(result.cases)} complete saved Criterion benchmarks")
     elif args.action in {"host", "profile"}:
@@ -140,7 +152,14 @@ def run(args: argparse.Namespace, settings: Config) -> int:
         from research_repo_tools.publication import preview_publication, publish_publication
         from research_repo_tools.publication_config import load_publication
 
-        plan = load_publication(settings.root, args.configuration)
+        identities = {}
+        for phase in ("baseline", "current"):
+            release, revision = getattr(args, f"{phase}_release"), getattr(args, f"{phase}_revision")
+            if (release is None) != (revision is None):
+                raise ValueError(f"--{phase}-release and --{phase}-revision must be supplied together")
+            if release is not None:
+                identities[phase] = (release, revision)
+        plan = load_publication(settings.root, args.configuration, identities=identities, artifacts_only=args.artifacts_only)
         if args.preview:
             _write_stdout(preview_publication(plan).encode("utf-8"))
         elif args.check:
@@ -159,6 +178,11 @@ def run(args: argparse.Namespace, settings: Config) -> int:
         archives.download_asset(args.url, settings.path(args.destination), expected_sha256=args.sha256)
     elif args.action == "verify":
         result = evidence.load_evidence(settings.path(args.payload), settings.path(args.manifest))
+        if args.measurement:
+            from research_repo_tools.common_measurement import validate_run_policy
+            from research_repo_tools.measurement import load_measurement
+
+            validate_run_policy(result, load_measurement(settings.root, args.measurement))
         print(f"Verified envelope and payload SHA-256: {result.payload_schema}")
     else:
         if args.action == "compare":

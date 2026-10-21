@@ -2,3 +2,6 @@ schema = 2
 current = "docs/complete-performance.md"
 archive = "docs/performance-runs"
 title = "Benchmark timings"
+# Enable the independent consumer policy before release promotion:
+# measurement = "tooling/measurement-full.toml"
+# release = true

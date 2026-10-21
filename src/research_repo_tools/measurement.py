@@ -79,6 +79,7 @@ class MeasurementConfig:
             "original-source-inventory",
             "discovery-inventory",
             "sampling-policy",
+            "measurement-declaration",
         }
         context = dict(self.context)
         if len(context) != len(self.context) or context.keys() & reserved or any(key.startswith(("tool.", "dependency.", "host.")) for key in context):
@@ -239,6 +240,8 @@ def measure_pair(
             if isinstance(configuration, MeasurementConfig):
                 baseline_sample, baseline_source = measure_checkout(baseline, configuration, pair.baseline, mode="tag")
                 current_sample, current_source = measure_checkout(current, configuration, pair.current, mode="working-tree" if snapshot else "tag")
+                if pair.current == pair.baseline and baseline_source.source_sha256 == current_source.source_sha256:
+                    raise ValueError("same-release comparisons require distinct source identities")
                 if configuration.compatible:
                     compatibility = compare_provenance(baseline_source, current_source, fields=configuration.compatible)
                     if not compatibility.compatible:

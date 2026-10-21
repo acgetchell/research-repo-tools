@@ -1,0 +1,50 @@
+# Consumer-owned IDs, sampling and native commands. No package-specific adapter.
+# Include every recipe entrypoint and scientific gate input used by the commands.
+schema = 2
+sources = ["src/**/*.rs"]
+harness = ["benches/**/*.rs", "Cargo.toml", "Cargo.lock", "justfile", "rust-toolchain.toml", "tests/benchmark_inputs.rs", "tooling/*.just"]
+sample-count = 100
+statistics = ["mean", "median"]
+confidence-level = 0.95
+unit = "ns"
+compatible = ["context.architecture", "context.os"]
+
+[context]
+suite = "full"
+
+[probes]
+rustc = ["rustc", "--version"]
+
+[dependencies]
+reference = "Cargo.lock"
+
+[phases.baseline]
+command = ["just", "benchmark-baseline"]
+gate = ["just", "benchmark-gate"]
+environment = { CRITERION_HOME = "target/criterion", CARGO_TARGET_DIR = "target" }
+discovery = { required = ["library / 2", "reference / 2"], suites = [{ name = "native", command = ["just", "benchmark-baseline-list"] }] }
+
+[phases.current]
+command = ["just", "benchmark-current"]
+gate = ["just", "benchmark-gate"]
+environment = { CRITERION_HOME = "target/criterion", CARGO_TARGET_DIR = "target" }
+discovery = { required = ["library / 2"], suites = [{ name = "native", command = ["just", "benchmark-current-list"] }] }
+
+[[series]]
+name = "Library baseline"
+phase = "baseline"
+rows = { "size 2" = "library / 2" }
+
+[[series]]
+name = "Library current"
+phase = "current"
+rows = { "size 2" = "library / 2" }
+
+[[series]]
+name = "Reference reused"
+phase = "baseline"
+rows = { "size 2" = "reference / 2" }
+
+# For a named all-benchmarks view, replace rows with, for example:
+# select = { include = ["library*"], exclude = ["*/diagnostic_*"] }
+# Selection never reduces the inventory required for complete sampling.

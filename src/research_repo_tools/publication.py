@@ -395,6 +395,7 @@ def plan_publication(
     git_checks: Sequence[GitCheck] = (),
     glob_checks: Sequence[GlobCheck] = (),
     run_checks: Sequence[RunSelectionCheck] = (),
+    formatter: str | None = None,
 ) -> PublicationPlan:
     """Validate all candidates without writes, directories, measurement, or network.
 
@@ -430,6 +431,14 @@ def plan_publication(
     if original is None:
         raise FileNotFoundError(f"publication document is missing: {document}")
     outputs = {document: replace_section(original, markers, content), **(figures or {})}
+    if formatter is not None:
+        from research_repo_tools.postprocess_changelog import format_markdown
+
+        if formatter not in inputs:
+            raise ValueError("formatter configuration must be a snapshotted publication input")
+        outputs[document] = format_markdown(outputs[document].decode("utf-8"), _path(root, document), _path(root, formatter)).encode("utf-8")
+        # Formatting must retain exactly one valid pair of document markers.
+        replace_section(outputs[document], markers, content)
     if any(not isinstance(data, bytes) for data in outputs.values()):
         raise TypeError("publication outputs must be bytes")
     for rule in references:

@@ -1,5 +1,14 @@
 # Edit named views, semantic IDs, coordinates and independent provenance pins.
 # Scientific eligibility stays consumer-owned.
+# Set measurement = "tooling/measurement-full.toml" to enforce that policy,
+# including live source/harness membership and hashes for document publication.
+# Set formatter = ".rumdl.toml" to format and check before replacing any output.
+# For reusable identities, omit release/revision from the provenance tables and
+# pass paired --baseline-release/--baseline-revision and --current-release/
+# --current-revision assertions. Static assertions cannot be overridden.
+# Add label-version = "release" or "dependency.reference" to a series to append
+# the version captured in that series' original phase.
+# --artifacts-only renders the configured figures/CSV without editing a document.
 schema = 2
 document = "README.md"
 archive = "docs/performance-runs"
