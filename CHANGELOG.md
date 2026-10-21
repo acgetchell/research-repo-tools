@@ -33,6 +33,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Preserve main-project diagnostics while naming invalid independent projects before any updates. Cover malformed TOML, missing project metadata, invalid Python
   constraints and unchanged root diagnostics; exercise the public path context from wheel and sdist installs. Link consumer setup guidance from its README
   owner.
+- Promote validated main artifacts without rebuilding
+  [`6af125d`](https://github.com/acgetchell/research-repo-tools/commit/6af125d7c6401b22f8694746bacdf475a22d1936)
+
+  Bind immutable distribution IDs, ZIP digests, native and installed validation job results, source commit and exact main-push attempt in signed evidence.
+  Verify original validation and tag-promotion signatures before staging and approval-gated publication. Reject mismatched, expired, ambiguous or partial
+  evidence with bounded waiting and recovery instructions.
+
+  Retain PR/main native gates and dependency audit, extend release artifacts to a 30-day promotion window, and update the manual v0.2.3 procedure. Add source
+  and installed public regressions. Related to #122; consumer adoption tracking remains open.
 
 ## [0.2.2] - 2026-10-21
 

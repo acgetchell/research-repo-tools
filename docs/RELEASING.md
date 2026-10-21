@@ -394,6 +394,15 @@ git push origin --delete "release/$TAG"
   and verify the remote tag resolves to the corrected commit before preparation.
   Never reuse superseded assets, validation, or signed evidence. Do not move a
   published tag, release, or registry artifact.
+
+  An existing local candidate tag already delimits git-cliff history. While
+  regenerating notes for an explicitly authorized unpublished correction,
+  record its tag object ID, temporarily remove only that local ref with
+  `git update-ref -d "refs/tags/$TAG" "$OLD_TAG_OBJECT"`, and restore that exact
+  object with an exit trap. Run the ordinary `changelog-preview` and
+  `changelog-release` commands during that interval. Keep the remote ref
+  unchanged until the corrected reviewed commit passes main validation. This
+  avoids duplicate prospective headings without hand-editing generated notes.
 - **Publication is blocked:** check the reported checkout, tag, CI, or asset
   mismatch. If the workflow is waiting for approval, approve the `pypi`
   deployment in GitHub. Provenance failures require investigation of the original

@@ -502,3 +502,25 @@ def test_cli_retains_transport_diagnostics_but_redacts_signed_urls(monkeypatch, 
     detail = capsys.readouterr().err
     assert "Forbidden" in detail and "storage.example/blob?<redacted>" in detail
     assert "secret" not in detail and "private" not in detail
+
+
+def test_seal_records_original_producer_and_every_required_validator(remote, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GITHUB_SHA", COMMIT)
+    (tmp_path / "pyproject.toml").write_bytes(b'[project]\nversion = "0.2.3"\n')
+    output = tmp_path / "validation.json"
+    release.seal(123, 1, 31, output)
+    manifest = json.loads(output.read_bytes())
+    assert manifest["run"]["head_sha"] == COMMIT and manifest["run"]["run_attempt"] == 1
+    assert manifest["artifact"]["id"] == 31
+    assert manifest["jobs"] == {job["name"]: job["id"] for job in jobs()}
+    assert manifest["files"] == {name: hashlib.sha256(payload).hexdigest() for name, payload in remote["contents"].items()}
+
+
+def test_validator_retrieves_same_immutable_artifact_without_release_side_effects(remote, tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    monkeypatch.setenv("GITHUB_RUN_ID", "123")
+    (tmp_path / "pyproject.toml").write_bytes(b'[project]\nversion = "0.2.3"\n')
+    release.consume(31, tmp_path / "dist")
+    assert {path.name: path.read_bytes() for path in (tmp_path / "dist").iterdir()} == remote["contents"]
+    assert not any(isinstance(call, tuple) and call[0] == "release" for call in remote["calls"])
