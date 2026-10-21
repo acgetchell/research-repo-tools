@@ -57,25 +57,7 @@ def commands(consumer, cargo):
     uv = [["run", "--no-config", "--no-sync", "--no-python-downloads", "research-repo-tools", "deps", "update-uv"]]
     tools = [[*prefix, "toolchain", "upgrade"]] if consumer else []
     rust = [[*prefix, "toolchain", "run", "--", "cargo", *args] for args in (["upgrade", "--incompatible", "allow"], ["update"])] if cargo else []
-    sync = ["sync", "--locked", "--group", "dev"]
-    if consumer:
-        sync = [
-            "run",
-            "--locked",
-            "--no-sync",
-            "--no-python-downloads",
-            "research-repo-tools",
-            "toolchain",
-            "run",
-            "--",
-            "uv",
-            "sync",
-            "--locked",
-            "--managed-python",
-            "--group",
-            "dev",
-        ]
-    python = [[*prefix, "deps", "update-python"], ["lock", "--upgrade"], sync]
+    python = [[*prefix, "deps", "update-python", "--all-projects"]]
     return {
         "update": uv + tools + rust + python,
         "update-cargo-dependencies": rust,

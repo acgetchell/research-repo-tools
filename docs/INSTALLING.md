@@ -165,7 +165,7 @@ The consumer template provides:
 - `just update-cargo-dependencies`: upgrade root Cargo requirements and lock resolution, if present.
 - `just update-cargo-tools`: upgrade declared Cargo tools and publish verified TOML pins.
 - `just update-dependencies`: run the Cargo and Python dependency workflows.
-- `just update-python-dependencies`: update direct dev pins, upgrade the full Python lock, and synchronize dev.
+- `just update-python-dependencies`: update main dev pins, then upgrade locks and sync the main and declared independent Python projects.
 - `just update-python-deps`: alias for `update-python-dependencies`.
 - `just update-tools`: upgrade uv and declared tools without shell/bootstrap setup.
 - `just update-uv`: upgrade uv through its installation owner and reconcile its pin.
@@ -375,7 +375,8 @@ writing the project pin fails. Fix the reported cause and rerun `just update`.
 The remaining tools steps upgrade and synchronize declared tools, retaining
 the Rust compiler and shared package pins. Changing those pins remains a manual,
 reviewed operation. The dependency steps then update Cargo requirements and
-resolution, update Python pins, refresh the full Python lock, and sync dev.
+resolution, update main Python pins, refresh the full main lock, sync dev, and
+refresh and sync any declared independent Python projects.
 See the [consumer update recipes](../README.md#dependency-and-tool-updates) for
 Cargo exclusions, extra manifests, and Python-only behavior.
 The Python pin updater preserves included tooling-group pins as resolver

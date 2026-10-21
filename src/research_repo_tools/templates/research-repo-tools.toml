@@ -33,6 +33,8 @@ repository = "__REPOSITORY__"
 [deps]
 pyproject = "pyproject.toml"
 justfile = "justfile"
+# Additional independent uv project directories; the main project is included.
+# python-projects = ["tooling/scanner"]
 # [deps.tools]
 # User-installed tools only; do not map tools also in toolchain.cargo/binaries.
 # git_cliff_version = "git-cliff"

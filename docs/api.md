@@ -79,6 +79,21 @@ inventories are checked before any workflow replacement. Caught publication
 failures use the shared rollback/recovery contract. The YAML/update modules are
 implementation details; use the CLI or `cli.main`.
 
+`deps update-python` advances only exact direct main-project `dev` pins.
+Adding `--all-projects` first checks the full project inventory, then advances
+those pins, upgrades the main lock, and synchronizes `dev` using checked managed
+tools. It next upgrades and syncs each `deps.python-projects` directory in order.
+These additional projects retain all manifest requirements and select their own
+Python version and default groups. Each project uses its own `.venv`; caller
+project, interpreter, configuration-file, and environment overrides do not redirect
+the workflow. Registry, cache, and offline settings remain available.
+Directories must be distinct portable paths relative to the repository, without
+symlinks or junctions in the project path or manifest, lock, version file, and
+environment targets. Declare independent uv projects, not workspace members;
+the main `deps.pyproject` project is already included. A later resolver or sync
+failure returns nonzero, stops subsequent work, and retains earlier updates.
+Use the CLI or `cli.main`; the orchestration module is an implementation detail.
+
 `deps update-uv --dry-run` inspects standalone, Homebrew, or `uv tool` ownership
 and reports the native operation and intended project-pin reconciliation. Applying
 verifies the resulting stable version before preserving/replacing the project

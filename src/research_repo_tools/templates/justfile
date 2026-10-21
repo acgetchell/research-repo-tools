@@ -213,11 +213,9 @@ update-cargo-tools:
 # Update Cargo and Python dependencies without upgrading uv or Cargo tools.
 update-dependencies: update-cargo-dependencies update-python-dependencies
 
-# Update direct dev pins, upgrade the full Python lock, and sync dev with managed tools.
+# Update main dev pins, then upgrade and sync all declared Python projects.
 update-python-dependencies:
-    uv run --locked --only-group tooling --inexact research-repo-tools deps update-python
-    uv lock --upgrade
-    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain run -- uv sync --locked --managed-python --group dev
+    uv run --locked --only-group tooling --inexact research-repo-tools deps update-python --all-projects
 
 alias update-python-deps := update-python-dependencies
 

@@ -145,6 +145,13 @@ as a unit. Retain consumer exclusions and extra Cargo resolution roots in
 no Rust declarations or root Cargo manifest. The former `update-python-deps`
 name now aliases the full Python update and sync workflow.
 
+The Python recipe calls `deps update-python --all-projects`. Declare any extra
+independent uv project directories in `deps.python-projects`, keeping each
+project's Python selector and dependency requirements. Package upgrades do not
+rewrite copied Justfiles: merge the updated recipe once when adopting this
+capability. Additional project locks and environments then participate in every
+Python dependency update without duplicated consumer update commands.
+
 The shared contract deliberately supersedes these historical policies:
 
 - uv is upgraded through its installation owner and its resulting stable pin is

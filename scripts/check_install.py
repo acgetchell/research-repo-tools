@@ -88,11 +88,12 @@ def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, ve
     # metadata for a same-version PyPI release or an uncached sdist build.
     shutil.copyfile(registry_wheel, wheels / registry_wheel.name)
 
-    def fixture(name: str, release: str, requires_python: str = ">=3.15") -> None:
+    def fixture(name: str, release: str, requires_python: str = ">=3.15", *, dependencies: tuple[str, ...] = ()) -> None:
         distribution = name.replace("-", "_")
         info = f"{distribution}-{release}.dist-info"
         with zipfile.ZipFile(wheels / f"{distribution}-{release}-py3-none-any.whl", "w") as archive:
-            archive.writestr(f"{info}/METADATA", f"Metadata-Version: 2.3\nName: {name}\nVersion: {release}\nRequires-Python: {requires_python}\n")
+            metadata = f"Metadata-Version: 2.3\nName: {name}\nVersion: {release}\nRequires-Python: {requires_python}\n"
+            archive.writestr(f"{info}/METADATA", metadata + "".join(f"Requires-Dist: {dependency}\n" for dependency in dependencies))
             archive.writestr(f"{info}/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
             archive.writestr(f"{info}/RECORD", "")
 
@@ -105,13 +106,28 @@ def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, ve
         f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\n'
         'dev=[{include-group="tooling"}, "update-fixture>=1,<3", "pin-fixture==1.0.0", "marker-fixture==1.0.0; python_version >= \'3.15\'"]\n'
         f'[tool.uv]\npackage=false\ndefault-groups=[]\nrequired-version="=={uv_version}"\nfind-links=["wheels"]\n'
-        f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(artifact.resolve()))}}}\n",
+        f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(artifact.resolve()))}}}\n"
+        '[tool.research-repo-tools.deps]\npython-projects=["tooling/scanner project"]\n',
         encoding="utf-8",
         newline="\n",
     )
     (consumer / ".python-version").write_text("3.15\n", encoding="utf-8", newline="\n")
+    # The independent scanner deliberately runs an older Python than the CLI.
+    run([uv, "python", "install", "--no-bin", "--no-registry", "3.14"], cwd=consumer, env=env)
     # Dependencies of this exact artifact are already cached by the other checks.
     offline = {**env, "UV_OFFLINE": "1"}
+    scanner = consumer / "tooling/scanner project"
+    scanner.mkdir(parents=True)
+    scanner_manifest = (
+        '[project]\nname="scanner-consumer"\nversion="0.0.0"\nrequires-python=">=3.14,<3.15"\n'
+        'dependencies=["scanner-fixture==1.0.0"]\n'
+        '[tool.uv]\npackage=false\nfind-links=["../../wheels"]\noverride-dependencies=["scanner-transitive>=1,<3"]\n'
+    ).encode()
+    (scanner / "pyproject.toml").write_bytes(scanner_manifest)
+    (scanner / ".python-version").write_text("3.14\n", encoding="utf-8", newline="\n")
+    fixture("scanner-fixture", "1.0.0", ">=3.14,<3.15", dependencies=("scanner-transitive==1.0.0",))
+    fixture("scanner-transitive", "1.0.0", ">=3.14")
+    run([uv, "sync", "--managed-python"], cwd=scanner, env=offline)
     run([uv, "sync", "--managed-python", "--group", "dev"], cwd=consumer, env=offline)
     cli = [uv, "run", "--locked", "--no-sync", "research-repo-tools"]
     run([*cli, "templates", "justfile", "--output", "justfile"], cwd=consumer, env=offline)
@@ -128,7 +144,28 @@ def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, ve
     original = tomllib.loads(manifest.read_text(encoding="utf-8"))
     fixture("pin-fixture", "2.0.0")
     fixture("marker-fixture", "2.0.0")
-    run([str(just), "update-python-dependencies"], cwd=consumer, env=offline)
+    fixture("scanner-fixture", "2.0.0", ">=3.14,<3.15", dependencies=("scanner-transitive>=3",))
+    fixture("scanner-transitive", "2.0.0", ">=3.14")
+    # A missing declared project must fail before advancing the available root pin.
+    source = manifest.read_bytes()
+    manifest.write_bytes(source.replace(b"tooling/scanner project", b"tooling/missing project"))
+    snapshot = manifest.read_bytes(), (consumer / "uv.lock").read_bytes()
+    result = subprocess.run(
+        [*cli, "deps", "update-python", "--all-projects"], cwd=consumer, env=offline, capture_output=True, encoding="utf-8", timeout=TIMEOUT
+    )
+    assert result.returncode == 1 and "existing file" in result.stderr, result.stdout + result.stderr
+    assert "tooling/missing project:" in result.stderr, result.stderr
+    assert (manifest.read_bytes(), (consumer / "uv.lock").read_bytes()) == snapshot
+    manifest.write_bytes(source)
+    scripts = consumer / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+    python = scripts / ("python.exe" if os.name == "nt" else "python")
+    redirected = offline | {
+        "UV_CONFIG_FILE": str(consumer / "missing-config.toml"),
+        "UV_PROJECT_ENVIRONMENT": str(consumer / ".venv"),
+        "UV_PYTHON": str(python),
+        "VIRTUAL_ENV": str(consumer / ".venv"),
+    }
+    run_isolated(python, ["-m", "research_repo_tools", "deps", "update-python", "--all-projects"], cwd=consumer, env=redirected)
     expected = {"update-fixture": "1.0.0", "pin-fixture": "2.0.0", "marker-fixture": "1.0.0"}
     assert json.loads(run(probe, cwd=consumer, env=offline)) == expected
     original["dependency-groups"]["dev"][2] = "pin-fixture==2.0.0"
@@ -142,6 +179,24 @@ def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, ve
     assert json.loads(run(probe, cwd=consumer, env=offline)) == expected, "updated lock was not synchronized into dev"
     locked = tomllib.loads((consumer / "uv.lock").read_text(encoding="utf-8"))
     assert next(package["version"] for package in locked["package"] if package["name"] == "update-fixture") == "2.0.0"
+    assert (scanner / "pyproject.toml").read_bytes() == scanner_manifest, "update changed the independent project's exact scanner pin"
+    scanner_versions = run(
+        [
+            uv,
+            "run",
+            "--locked",
+            "--no-sync",
+            "python",
+            "-c",
+            'import sys; from importlib.metadata import version; print(sys.version_info[:2], version("scanner-fixture"), version("scanner-transitive"))',
+        ],
+        cwd=scanner,
+        env=offline,
+    )
+    assert scanner_versions.strip() == "(3, 14) 1.0.0 2.0.0", scanner_versions
+    assert run_isolated(python, ["-c", "import sys; print(sys.version_info[:2])"], cwd=consumer, env=offline).strip() == "(3, 15)"
+    scanner_lock = tomllib.loads((scanner / "uv.lock").read_text(encoding="utf-8"))
+    assert next(package["version"] for package in scanner_lock["package"] if package["name"] == "scanner-transitive") == "2.0.0"
     snapshot = manifest.read_bytes(), (consumer / "uv.lock").read_bytes()
     # Universal resolution needs two versions across this project's Python range.
     # Refuse to replace its single exact pin with a host-dependent choice.
@@ -180,7 +235,7 @@ def check_update_bootstrap(consumer: Path, uv: str, just: Path, env: dict[str, s
     # The intentionally missing backend must be reached only by the final sync,
     # after both Cargo commands and the Python pin/lock updates have completed.
     assert result.returncode != 0, "the unavailable native backend unexpectedly built"
-    assert "toolchain run -- uv sync --locked --managed-python --group dev" in result.stderr, result.stderr
+    assert "deps update-python --all-projects" in result.stderr, result.stderr
     assert "intentionally_missing_native_backend" in result.stderr, result.stderr
 
 
