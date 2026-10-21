@@ -113,7 +113,7 @@ def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, ve
     )
     (consumer / ".python-version").write_text("3.15\n", encoding="utf-8", newline="\n")
     # The independent scanner deliberately runs an older Python than the CLI.
-    run([uv, "python", "install", "3.14"], cwd=consumer, env=env)
+    run([uv, "python", "install", "--no-bin", "--no-registry", "3.14"], cwd=consumer, env=env)
     # Dependencies of this exact artifact are already cached by the other checks.
     offline = {**env, "UV_OFFLINE": "1"}
     scanner = consumer / "tooling/scanner project"
