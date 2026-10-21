@@ -5,6 +5,35 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.3] - 2026-10-21
+
+### Changed
+
+- Verify independent Python versions and overrides
+  [`5e78500`](https://github.com/acgetchell/research-repo-tools/commit/5e7850095373359e656b8adc79033aac26bea7f5)
+
+  Exercise the installed updater with Python 3.15 and 3.14 projects, retained scanner pins, transitive dependency overrides, and conflicting caller environment
+  settings.
+- Avoid user interpreter registration in install checks
+  [`3b018e4`](https://github.com/acgetchell/research-repo-tools/commit/3b018e45ef375247ccc80faeb2dfda09a51c4c85)
+
+  Use the existing managed-installer no-bin and no-registry policy when acquiring Python 3.14 for the mixed-interpreter update fixture. This keeps installation
+  checks from publishing user commands or Windows registry entries.
+
+### Fixed
+
+- Update declared independent Python projects [`bde1041`](https://github.com/acgetchell/research-repo-tools/commit/bde104133a5a1cb4bb4a674e46f8032a93ca6559)
+
+  - Add an opt-in complete Python update workflow with explicit project declarations.
+  - Refresh and sync each project in its own environment while retaining tool pins and Python constraints.
+  - Route shared update recipes through the package and document consumer adoption.
+  - Refresh the development lock to Tornado 6.6.
+- Identify invalid independent project manifests [`44754a6`](https://github.com/acgetchell/research-repo-tools/commit/44754a60d37bfcfb112f2e23a0b8308d778a4952)
+
+  Preserve main-project diagnostics while naming invalid independent projects before any updates. Cover malformed TOML, missing project metadata, invalid Python
+  constraints and unchanged root diagnostics; exercise the public path context from wheel and sdist installs. Link consumer setup guidance from its README
+  owner.
+
 ## [0.2.2] - 2026-10-21
 
 ### Fixed
@@ -123,6 +152,7 @@ Older releases are archived by minor series:
 
 - [0.1.x](docs/archives/changelog/0.1.md)
 
+[0.2.3]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.1...v0.2.2
 [0.2.1]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.9...v0.2.0
