@@ -61,6 +61,7 @@ required-checks = [
     {name = "check (macos-15)", app-id = 15368},
     {name = "check (windows-2025)", app-id = 15368},
     {name = "changelog-integration", app-id = 15368},
+    {name = "release-evidence", app-id = 15368},
 ]
 required-assets = ["research_repo_tools-{version}-py3-none-any.whl", "research_repo_tools-{version}.tar.gz", "release-attestation.json"]
 

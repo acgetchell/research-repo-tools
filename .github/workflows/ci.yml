@@ -13,6 +13,7 @@ on:
 
 permissions:
   contents: read
+  actions: read
 
 concurrency:
   group: ci-${{ github.workflow }}-${{ github.ref }}
@@ -35,6 +36,7 @@ jobs:
       - name: Build release distributions once
         run: uv run --locked just build
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        name: Upload immutable distributions
         id: distributions
         with:
           name: distributions-${{ github.run_attempt }}
@@ -42,7 +44,7 @@ jobs:
             dist/*.whl
             dist/*.tar.gz
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 30
 
   check:
     needs: build
@@ -87,11 +89,12 @@ jobs:
           else
             brew install pkgconf
           fi
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          artifact-ids: ${{ needs.build.outputs.artifact-id }}
-          path: dist
-          merge-multiple: true
+      - name: Retrieve distributions by immutable ID
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISTRIBUTION_ARTIFACT: ${{ needs.build.outputs.artifact-id }}
+        run: uv run --locked --no-sync python scripts/release_assets.py consume --artifact "$DISTRIBUTION_ARTIFACT"
+        shell: bash
       - name: Validate, test, and install the shared distributions
         run: uv run --locked just check ${{ matrix.test-recipe }} check-dist
       - name: Retain coverage even when later checks fail
@@ -135,10 +138,49 @@ jobs:
         with:
           version-file: "pyproject.toml"
           python-version-file: ".python-version"
-      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        with:
-          artifact-ids: ${{ needs.build.outputs.artifact-id }}
-          path: dist
-          merge-multiple: true
+      - name: Retrieve distributions by immutable ID
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISTRIBUTION_ARTIFACT: ${{ needs.build.outputs.artifact-id }}
+        run: uv run --locked python scripts/release_assets.py consume --artifact "$DISTRIBUTION_ARTIFACT"
       - name: Validate, install the pinned generator, and exercise source and installed contracts
         run: uv run --locked just check changelog-setup changelog-test check-dist-changelog
+
+  release-evidence:
+    needs: [build, check, changelog-integration]
+    # Only protected main pushes may produce release-eligible validation evidence.
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'acgetchell/research-repo-tools'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      contents: read
+      actions: read
+      attestations: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Capture successful producer and native validation identities
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISTRIBUTION_ARTIFACT: ${{ needs.build.outputs.artifact-id }}
+        run: python3 scripts/release_assets.py seal --artifact "$DISTRIBUTION_ARTIFACT"
+      - name: Sign original main validation evidence
+        id: validation
+        uses: actions/attest@1e69f48acb82d1966a394da916b4c1698aa569d6 # v4.2.2
+        with:
+          subject-path: validation.json
+          create-storage-record: false
+      - name: Retain original signed evidence for release promotion
+        env:
+          VALIDATION_BUNDLE: ${{ steps.validation.outputs.bundle-path }}
+        run: cp "$VALIDATION_BUNDLE" validation.sigstore.json
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: validated-evidence-${{ github.run_attempt }}
+          path: |
+            validation.json
+            validation.sigstore.json
+          if-no-files-found: error
+          retention-days: 30
