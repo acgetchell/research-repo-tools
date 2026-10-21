@@ -5,6 +5,38 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.1] - 2026-10-21
+
+### Added
+
+- Complete declarative benchmark workflows [`6d7039f`](https://github.com/acgetchell/research-repo-tools/commit/6d7039f3a987c7b9fdbc55c95d27f8a7c8c50fb5)
+
+  - Validate retained runs against independent measurement declarations and
+    resolve bounded series selectors from discovered phase inventories.
+  - Support runtime saved-sample names, output directories, required IDs, and
+    declared storage paths without consumer Python adapters.
+  - Reuse publication declarations with independent release identities,
+    recorded version labels, artifact-only rendering, and transactional
+    Markdown formatting.
+  - Document static CLI workflows, shared snapshot semantics, stricter
+    eligibility requirements, and the downstream release handoff.
+  - Refresh the uv pin and dependency lock from the tooling update.
+
+### Fixed
+
+- Preserve historical evidence readability [`984a18e`](https://github.com/acgetchell/research-repo-tools/commit/984a18ecce7fac98c559825f7992dd7d6a7afd52)
+
+  Enforce distinct source identities for equal release labels during policy
+  validation so existing retained runs remain readable and renderable.
+
+  Validate declared Criterion storage paths by normalized component names,
+  preserving alias and overlap rejection without consulting the filesystem.
+- Preserve policy inputs and release eligibility [`82494a3`](https://github.com/acgetchell/research-repo-tools/commit/82494a3e5e1b3e671dc14119de28178c683ff1a0)
+
+  Reject report outputs that alias the independent measurement policy and
+  compare canonical release tags before policy promotion. Preserve retained
+  evidence readability and clarify selector and formatter documentation.
+
 ## [0.2.0] - 2026-10-19
 
 ### Merged Pull Requests
@@ -85,4 +117,5 @@ Older releases are archived by minor series:
 
 - [0.1.x](docs/archives/changelog/0.1.md)
 
+[0.2.1]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.0...v0.2.1
 [0.2.0]: https://github.com/acgetchell/research-repo-tools/compare/v0.1.9...v0.2.0
