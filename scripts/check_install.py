@@ -154,6 +154,7 @@ def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, ve
         [*cli, "deps", "update-python", "--all-projects"], cwd=consumer, env=offline, capture_output=True, encoding="utf-8", timeout=TIMEOUT
     )
     assert result.returncode == 1 and "existing file" in result.stderr, result.stdout + result.stderr
+    assert "tooling/missing project:" in result.stderr, result.stderr
     assert (manifest.read_bytes(), (consumer / "uv.lock").read_bytes()) == snapshot
     manifest.write_bytes(source)
     scripts = consumer / ".venv" / ("Scripts" if os.name == "nt" else "bin")

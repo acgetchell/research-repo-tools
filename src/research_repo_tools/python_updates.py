@@ -40,9 +40,14 @@ def _projects(settings: config.Config) -> tuple[Path, ...]:
             path = project / name
             if path.is_symlink() or path.is_junction():
                 raise ValueError(f"Python update target must not be a link: {path}")
-        manifest = dependencies._conventional_manifest(project / "pyproject.toml")
-        data = tomllib.loads(manifest.read_text(encoding="utf-8"))
-        dependencies._python_constraints(dependencies._required_table(data, "project"))
+        try:
+            manifest = dependencies._conventional_manifest(project / "pyproject.toml")
+            data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+            dependencies._python_constraints(dependencies._required_table(data, "project"))
+        except (TypeError, ValueError) as error:
+            if project == main.parent:
+                raise
+            raise ValueError(f"{project.relative_to(root).as_posix()}: {error}") from error
     # Preserve the existing main-manifest and development-group contracts.
     dependencies._conventional_manifest(main)
     dependencies.parse_project(main.read_text(encoding="utf-8"), toolchain=settings.toolchain)
