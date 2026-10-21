@@ -112,19 +112,21 @@ def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, ve
         newline="\n",
     )
     (consumer / ".python-version").write_text("3.15\n", encoding="utf-8", newline="\n")
+    # The independent scanner deliberately runs an older Python than the CLI.
+    run([uv, "python", "install", "3.14"], cwd=consumer, env=env)
     # Dependencies of this exact artifact are already cached by the other checks.
     offline = {**env, "UV_OFFLINE": "1"}
     scanner = consumer / "tooling/scanner project"
     scanner.mkdir(parents=True)
     scanner_manifest = (
-        '[project]\nname="scanner-consumer"\nversion="0.0.0"\nrequires-python=">=3.15,<3.16"\n'
+        '[project]\nname="scanner-consumer"\nversion="0.0.0"\nrequires-python=">=3.14,<3.15"\n'
         'dependencies=["scanner-fixture==1.0.0"]\n'
-        '[tool.uv]\npackage=false\nfind-links=["../../wheels"]\n'
+        '[tool.uv]\npackage=false\nfind-links=["../../wheels"]\noverride-dependencies=["scanner-transitive>=1,<3"]\n'
     ).encode()
     (scanner / "pyproject.toml").write_bytes(scanner_manifest)
-    (scanner / ".python-version").write_text("3.15\n", encoding="utf-8", newline="\n")
-    fixture("scanner-fixture", "1.0.0", dependencies=("scanner-transitive>=1,<3",))
-    fixture("scanner-transitive", "1.0.0")
+    (scanner / ".python-version").write_text("3.14\n", encoding="utf-8", newline="\n")
+    fixture("scanner-fixture", "1.0.0", ">=3.14,<3.15", dependencies=("scanner-transitive==1.0.0",))
+    fixture("scanner-transitive", "1.0.0", ">=3.14")
     run([uv, "sync", "--managed-python"], cwd=scanner, env=offline)
     run([uv, "sync", "--managed-python", "--group", "dev"], cwd=consumer, env=offline)
     cli = [uv, "run", "--locked", "--no-sync", "research-repo-tools"]
@@ -142,8 +144,8 @@ def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, ve
     original = tomllib.loads(manifest.read_text(encoding="utf-8"))
     fixture("pin-fixture", "2.0.0")
     fixture("marker-fixture", "2.0.0")
-    fixture("scanner-fixture", "2.0.0", dependencies=("scanner-transitive>=3",))
-    fixture("scanner-transitive", "2.0.0")
+    fixture("scanner-fixture", "2.0.0", ">=3.14,<3.15", dependencies=("scanner-transitive>=3",))
+    fixture("scanner-transitive", "2.0.0", ">=3.14")
     # A missing declared project must fail before advancing the available root pin.
     source = manifest.read_bytes()
     manifest.write_bytes(source.replace(b"tooling/scanner project", b"tooling/missing project"))
@@ -154,7 +156,15 @@ def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, ve
     assert result.returncode == 1 and "existing file" in result.stderr, result.stdout + result.stderr
     assert (manifest.read_bytes(), (consumer / "uv.lock").read_bytes()) == snapshot
     manifest.write_bytes(source)
-    run([str(just), "update-python-dependencies"], cwd=consumer, env=offline)
+    scripts = consumer / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+    python = scripts / ("python.exe" if os.name == "nt" else "python")
+    redirected = offline | {
+        "UV_CONFIG_FILE": str(consumer / "missing-config.toml"),
+        "UV_PROJECT_ENVIRONMENT": str(consumer / ".venv"),
+        "UV_PYTHON": str(python),
+        "VIRTUAL_ENV": str(consumer / ".venv"),
+    }
+    run_isolated(python, ["-m", "research_repo_tools", "deps", "update-python", "--all-projects"], cwd=consumer, env=redirected)
     expected = {"update-fixture": "1.0.0", "pin-fixture": "2.0.0", "marker-fixture": "1.0.0"}
     assert json.loads(run(probe, cwd=consumer, env=offline)) == expected
     original["dependency-groups"]["dev"][2] = "pin-fixture==2.0.0"
@@ -177,12 +187,13 @@ def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, ve
             "--no-sync",
             "python",
             "-c",
-            'from importlib.metadata import version; print(version("scanner-fixture"), version("scanner-transitive"))',
+            'import sys; from importlib.metadata import version; print(sys.version_info[:2], version("scanner-fixture"), version("scanner-transitive"))',
         ],
         cwd=scanner,
         env=offline,
     )
-    assert scanner_versions.strip() == "1.0.0 2.0.0", scanner_versions
+    assert scanner_versions.strip() == "(3, 14) 1.0.0 2.0.0", scanner_versions
+    assert run_isolated(python, ["-c", "import sys; print(sys.version_info[:2])"], cwd=consumer, env=offline).strip() == "(3, 15)"
     scanner_lock = tomllib.loads((scanner / "uv.lock").read_text(encoding="utf-8"))
     assert next(package["version"] for package in scanner_lock["package"] if package["name"] == "scanner-transitive") == "2.0.0"
     snapshot = manifest.read_bytes(), (consumer / "uv.lock").read_bytes()
