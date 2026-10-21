@@ -19,6 +19,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Use the existing managed-installer no-bin and no-registry policy when acquiring Python 3.14 for the mixed-interpreter update fixture. This keeps installation
   checks from publishing user commands or Windows registry entries.
+- Cover sealing and retain generated v0.2.3 notes [`f00a2a8`](https://github.com/acgetchell/research-repo-tools/commit/f00a2a85cdf9ffebb1a2e8283deb88cc1135755c)
+
+  Exercise original main evidence production and immutable validator retrieval. Generate the v0.2.3 changelog with its owning workflow while temporarily
+  excluding only the unpublished local candidate tag, then restore the original tag object. Document that recovery procedure.
 
 ### Fixed
 
@@ -42,6 +46,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Retain PR/main native gates and dependency audit, extend release artifacts to a 30-day promotion window, and update the manual v0.2.3 procedure. Add source
   and installed public regressions. Related to #122; consumer adoption tracking remains open.
+- Preserve fork CI and bounded recovery [`56d9d96`](https://github.com/acgetchell/research-repo-tools/commit/56d9d96db18b183e77f3f584ea33f67d59d927a0)
+
+  Scope ordinary artifact consumption to the executing repository while keeping promotion restricted to the owning main-push workflow. Cover fork retrieval and
+  reject external site startup in the active interpreter under isolated standard-library mode. Explain the 30-day rerun limit and explicit reviewed
+  unpublished-candidate recovery after expiration.
 
 ## [0.2.2] - 2026-10-21
 
