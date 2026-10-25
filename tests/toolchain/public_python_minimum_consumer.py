@@ -225,8 +225,11 @@ class TestPythonMinimumConsumer(unittest.TestCase):
                     self.assertIn("current Python version", rejected.stderr)
                     self.assertIn("minimum-consumer", rejected.stderr)
                     independent = root / ("independent " + artifact.suffix)
-                    run(["uv", "venv", "--managed-python", "--python", authority.selected, str(independent)])
+                    request = str(SpecifierSet(f"=={authority.selected}.*") & SpecifierSet(requirement))
+                    run(["uv", "venv", "--managed-python", "--python", request, str(independent)])
                     python = independent / scripts / executable
+                    actual = run([str(python), "-I", "-X", "utf8", "-c", "import platform; print(platform.python_version())"]).stdout.strip()
+                    self.assertIn(actual, SpecifierSet(requirement))
                     run(["uv", "pip", "install", "--python", str(python), "--no-deps", str(artifact)])
                     result = run(
                         [

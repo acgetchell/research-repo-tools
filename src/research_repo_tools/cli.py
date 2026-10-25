@@ -138,9 +138,17 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("tag", nargs="?", help="canonical stable tag; requires final metadata and release notes")
     command.add_argument("--final-release", action="store_true")
     command.add_argument("--previous-release")
-    command = release.add_parser("gate", help="require reviewed exact-commit evidence for a published release event")
+    command = release.add_parser(
+        "gate",
+        help="require reviewed exact-commit evidence for a published release event",
+        description="Require exact-commit checks; report all pending, missing, unsuccessful or ambiguous results. Pending CI requires a manual retry after success.",
+    )
     command.add_argument("tag")
-    command = release.add_parser("publish", help="approve a validated draft GitHub Release and trigger its publication workflow")
+    command = release.add_parser(
+        "publish",
+        help="approve a validated draft GitHub Release and trigger its publication workflow",
+        description="Approve a validated draft. Unmet checks block publication; wait for running CI to succeed, then manually retry.",
+    )
     command.add_argument("tag")
     command.add_argument("--approve", action="store_true", required=True, help="explicit approval of the reviewed draft")
     command = release.add_parser("registry", help="require an absent or present exact registry version; never uploads")

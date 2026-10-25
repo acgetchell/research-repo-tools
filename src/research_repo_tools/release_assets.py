@@ -27,7 +27,7 @@ from research_repo_tools.evidence import (
     verify_sha256,
 )
 from research_repo_tools.files import replace_many
-from research_repo_tools.process import resolve_executable, run_command_bytes
+from research_repo_tools.process import resolve_executable, run_command_bytes, run_git_bytes, run_git_command
 from research_repo_tools.release_discovery import normalize_tag
 
 __all__ = [
@@ -42,6 +42,7 @@ __all__ = [
     "publish_release_asset",
     "read_baseline",
     "require_draft",
+    "require_release_checkout",
     "revalidate_release_target",
     "serialize_release_target",
 ]
@@ -256,7 +257,36 @@ def _require_identity(release: GitHubRelease, target: ReleaseTarget) -> None:
         raise ValueError("release title differs from captured assertion")
 
 
-def preflight_release_target(root: Path, repository: str, tag: str, commit: str, *, expected_title: str | None = None) -> ReleaseTarget:
+def require_release_checkout(checkout: Path, commit: str) -> None:
+    """Observe a clean checkout at the asserted commit without executing its code.
+
+    Keep this source directory separate from the trusted installed runtime used
+    for publication. This does not authenticate the checkout's repository remote.
+    """
+    commit = _sha(commit)
+    head = run_git_command(["--no-pager", "rev-parse", "HEAD"], cwd=checkout, timeout=30).stdout.strip()
+    for arguments in (
+        ["ls-files", "-v", "-z"],
+        ["submodule", "foreach", "--quiet", "--recursive", "git --no-pager --no-optional-locks ls-files -v -z"],
+    ):
+        # A recursive ls-files alone omits inactive submodules and flags on
+        # gitlinks. Inspect both the parent index and every checked-out child.
+        entries = run_git_bytes(["--no-pager", "--no-optional-locks", *arguments], cwd=checkout, timeout=30).stdout.split(b"\0")
+        if any(entry[:1].islower() or entry[:1] == b"S" for entry in entries):
+            raise ValueError("observed release checkout has assume-unchanged or skip-worktree index entries")
+    dirty = run_git_command(
+        ["--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"],
+        cwd=checkout,
+        timeout=30,
+    ).stdout.strip()
+    current = run_git_command(["--no-pager", "rev-parse", "HEAD"], cwd=checkout, timeout=30).stdout.strip()
+    if head != commit or current != commit or dirty:
+        raise ValueError("observed release checkout is dirty or differs from the captured commit")
+
+
+def preflight_release_target(
+    root: Path, repository: str, tag: str, commit: str, *, expected_title: str | None = None, checkout: Path | None = None
+) -> ReleaseTarget:
     """Read-only preflight for a mutable stable draft on the expected tag commit."""
     # Validate caller assertions before any API access.
     repository, tag, commit = _repository(repository), _stable_tag(tag), _sha(commit)
@@ -273,19 +303,23 @@ def preflight_release_target(root: Path, repository: str, tag: str, commit: str,
     release = _parse_release(matches[0], repository, tag, target.release_id)
     _require_identity(release, target)
     require_draft(release)
-    revalidate_release_target(root, target)
+    revalidate_release_target(root, target, checkout=checkout)
     return target
 
 
-def revalidate_release_target(root: Path, target: ReleaseTarget) -> GitHubRelease:
+def revalidate_release_target(root: Path, target: ReleaseTarget, *, checkout: Path | None = None) -> GitHubRelease:
     """Read captured ID directly; require identity, title, lifecycle and tag SHA."""
     if not isinstance(target, ReleaseTarget):
         raise TypeError("release target must be a ReleaseTarget")
+    if checkout is not None:
+        require_release_checkout(checkout, target.commit)
     release = _release_by_id(root, target.repository, target.tag, target.release_id)
     _require_identity(release, target)
     require_draft(release)
     if _remote_commit(root, target.repository, target.tag) != target.commit:
         raise ValueError("remote release tag commit differs from captured target")
+    if checkout is not None:
+        require_release_checkout(checkout, target.commit)
     return release
 
 
@@ -458,6 +492,7 @@ def publish_release_asset(
     asset: Path,
     *,
     target: ReleaseTarget | None = None,
+    checkout: Path | None = None,
     publish: bool = False,
     limits: ArchiveLimits = ArchiveLimits(),
 ) -> None:
@@ -489,7 +524,7 @@ def publish_release_asset(
     with tempfile.TemporaryDirectory(prefix="research-release-upload-") as directory:
         staged = Path(directory) / name
         staged.write_bytes(original)
-        release = revalidate_release_target(root, target)
+        release = revalidate_release_target(root, target, checkout=checkout)
         existing = any(entry[0] == name for entry in release.assets)
         if existing:
             _verified_asset(release, name, original)
@@ -508,14 +543,14 @@ def publish_release_asset(
                     str(staged),
                 ],
             )
-        current = revalidate_release_target(root, target)
+        current = revalidate_release_target(root, target, checkout=checkout)
         attached = _verified_asset(current, name, original)
         downloaded = _download(root, target.repository, attached[1], limits.archive_bytes)
         if downloaded != original:
             raise ValueError("downloaded release asset differs; refusing to publish")
         # Recheck after the potentially slow byte verification, immediately before
         # publication. Require the same completed asset ID as the verified bytes.
-        final = revalidate_release_target(root, target)
+        final = revalidate_release_target(root, target, checkout=checkout)
         if _verified_asset(final, name, original) != attached:
             raise ValueError("release asset identity changed after byte verification")
         if publish:

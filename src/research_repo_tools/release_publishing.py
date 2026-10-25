@@ -3,7 +3,7 @@
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from research_repo_tools.evidence import _load_json
 from research_repo_tools.process import run_git_command, run_safe_command
@@ -194,10 +194,40 @@ def require_checks(pages: object, commit: str, checks: tuple[RequiredCheck, ...]
             runs.append(run)
     if totals != {len(runs)}:
         raise ValueError("incomplete or changing check-run pagination")
+    unmet = []
+    pending = False
     for check in checks:
         matches = [run for run in runs if run.get("name") == check.name and isinstance(run.get("app"), dict) and run["app"].get("id") == check.app_id]
-        if len(matches) != 1 or matches[0].get("status") != "completed" or matches[0].get("conclusion") != "success":
-            raise ValueError(f"required check {check.name!r} lacks one unambiguous successful result on {commit}")
+        label = f"required check {check.name!r} (app ID {check.app_id})"
+        if not matches:
+            same_name = [run for run in runs if run.get("name") == check.name]
+            providers = sorted({run["app"]["id"] for run in same_name})
+            detail = f"; same name observed from app IDs {providers}; " + "; ".join(_check_observation(run) for run in same_name) if same_name else ""
+            unmet.append(f"{label}: missing{detail}")
+        elif len(matches) > 1:
+            unmet.append(f"{label}: ambiguous ({len(matches)} results); " + "; ".join(_check_observation(run) for run in matches))
+        elif matches[0].get("status") != "completed" or matches[0].get("conclusion") != "success":
+            running = matches[0].get("status") in ("queued", "in_progress", "waiting", "pending", "requested")
+            pending |= running
+            unmet.append(f"{label}: {'pending/running' if running else 'unsuccessful'}; {_check_observation(matches[0])}")
+    if unmet:
+        advice = "\nCI is still running. Wait for the existing run to succeed, then manually retry publication." if pending else ""
+        raise ValueError(f"Unmet release checks on exact commit {commit}:\n" + "\n".join(unmet) + advice)
+
+
+def _check_observation(run: dict[str, object]) -> str:
+    detail = f"check ID {run['id']}, status={run.get('status')!r}, conclusion={run.get('conclusion')!r}"
+    # Provider URLs are diagnostics, never authority; omit credentials and signed queries.
+    for field in ("html_url", "details_url"):
+        value = run.get(field)
+        if isinstance(value, str):
+            try:
+                url = urlsplit(value)
+                if url.scheme == "https" and url.hostname == "github.com" and not url.username and not url.password:
+                    return detail + f", https://github.com{url.path}"
+            except ValueError:
+                pass
+    return detail
 
 
 def _assets(release: GitHubRelease, settings: PublishingSettings, version: str) -> None:
