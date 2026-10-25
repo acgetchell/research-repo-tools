@@ -144,6 +144,7 @@ def parser() -> argparse.ArgumentParser:
         description="Require exact-commit checks; report all pending, missing, unsuccessful or ambiguous results. Pending CI requires a manual retry after success.",
     )
     command.add_argument("tag")
+    command.add_argument("--reuse-evidence", type=Path, help="revalidate a saved CI reuse approval under the configured opt-in policy")
     command = release.add_parser(
         "publish",
         help="approve a validated draft GitHub Release and trigger its publication workflow",
@@ -151,9 +152,16 @@ def parser() -> argparse.ArgumentParser:
     )
     command.add_argument("tag")
     command.add_argument("--approve", action="store_true", required=True, help="explicit approval of the reviewed draft")
+    command.add_argument("--reuse-evidence", type=Path, help="revalidate a saved CI reuse approval under the configured opt-in policy")
     command = release.add_parser("registry", help="require an absent or present exact registry version; never uploads")
     command.add_argument("tag")
     command.add_argument("--expect", choices=("absent", "present"), required=True)
+    command = release.add_parser("reuse", help="verify a selected PR run for a squash release commit and save source-check approval evidence")
+    command.add_argument("commit", help="full release commit SHA")
+    command.add_argument("--attempt", type=int, required=True)
+    command.add_argument("--output", type=Path, required=True, help="new approval file; never overwrite an existing selection")
+    command.add_argument("--pull-request", type=int, required=True)
+    command.add_argument("--run-id", type=int, required=True)
     command = release.add_parser("update")
     command.add_argument("version")
     command.add_argument("--date")
@@ -637,6 +645,31 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
     if args.group == "release":
         from research_repo_tools import release_publishing
 
+        reuse_options = {}
+        if getattr(args, "reuse_evidence", None) is not None:
+            with args.reuse_evidence.open("rb") as stream:
+                reuse_payload = stream.read(1024 * 1024 + 1)
+            if len(reuse_payload) > 1024 * 1024:
+                raise ValueError("CI reuse approval exceeds the byte limit")
+            reuse_options["reuse_evidence"] = reuse_payload
+        if args.action == "reuse":
+            from research_repo_tools.release_reuse import verify_ci_reuse
+
+            publishing = release_publishing._settings(settings)
+            if publishing.reuse is None:
+                raise ValueError("configure publishing.reuse before selecting CI evidence")
+            payload = verify_ci_reuse(
+                publishing.reuse,
+                args.commit,
+                lambda endpoint: release_publishing._api(settings.root, publishing.repository, endpoint),
+                pull_request=args.pull_request,
+                run_id=args.run_id,
+                attempt=args.attempt,
+            )
+            with args.output.open("xb") as stream:
+                stream.write(payload)
+            print("Saved verified CI reuse selection; revalidate it with --reuse-evidence at the release gate.")
+            return 0
         if args.action == "gate":
             from research_repo_tools.evidence import _load_json
 
@@ -652,10 +685,10 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             event = release_publishing.validate_event(
                 _load_json(payload, "GitHub release event"), os.environ["GITHUB_REPOSITORY"], os.environ.get("GITHUB_SHA", ""), os.environ.get("GITHUB_REF", "")
             )
-            release_publishing.check_reviewed_release(settings, args.tag, event=event)
+            release_publishing.check_reviewed_release(settings, args.tag, event=event, **reuse_options)
             return 0
         if args.action == "publish":
-            release_publishing.publish_reviewed_release(settings, args.tag)
+            release_publishing.publish_reviewed_release(settings, args.tag, **reuse_options)
             return 0
         if args.action == "registry":
             from research_repo_tools.registry import lookup_version

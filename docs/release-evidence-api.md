@@ -8,6 +8,10 @@ the later interface reconciliation in [#140](https://github.com/acgetchell/resea
 Working consumer adapters must remain until a published replacement is pinned
 and its integration is verified.
 
+[Verified CI reuse](REUSING_CI.md) is a separate, opt-in source-check contract.
+The APIs on this page continue to require the exact release commit and preserve
+the distinction between source validation and package/archive identity.
+
 ## Policy and guarantees
 
 `EvidencePolicy(validation, package, artifact_prefix, guarantee,
