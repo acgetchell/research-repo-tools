@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import io
 import json
+import math
 import os
 import re
 import stat
@@ -26,8 +27,22 @@ from dataclasses import dataclass
 from email.parser import BytesParser
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote, urlsplit
 
-__all__ = ["ValidationPolicy", "download_artifact", "select_main_run", "validate_jobs", "validate_run", "verify_distributions"]
+__all__ = [
+    "ValidationPolicy",
+    "api",
+    "artifact_identity",
+    "download_artifact",
+    "parse_release_json",
+    "read_pages",
+    "redact_release_diagnostic",
+    "select_main_run",
+    "validate_jobs",
+    "validate_run",
+    "verify_attestation",
+    "verify_distributions",
+]
 
 REPOSITORY = "acgetchell/research-repo-tools"
 BUNDLE = "release-attestation.json"
@@ -58,8 +73,40 @@ def _pairs(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-def _json(payload: str | bytes) -> Any:
-    return json.loads(payload, object_pairs_hook=_pairs)
+def parse_release_json(payload: str | bytes) -> Any:
+    """Parse bounded UTF-8 evidence, rejecting duplicate/nonfinite/deep JSON."""
+
+    def finite(value: str) -> float:
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("nonfinite JSON number")
+        return number
+
+    try:
+        if len(payload) > MAX_BYTES:
+            raise ValueError("release JSON exceeds the byte bound")
+        source = payload.decode("utf-8") if isinstance(payload, bytes) else payload
+        if len(source.encode("utf-8")) > MAX_BYTES:
+            raise ValueError("release JSON exceeds the byte bound")
+        value = json.loads(source, object_pairs_hook=_pairs, parse_constant=finite, parse_float=finite)
+        pending = [(value, 0)]
+        while pending:
+            item, depth = pending.pop()
+            if depth > 128:
+                raise ValueError("release JSON exceeds 128 levels of nesting")
+            if isinstance(item, str):
+                item.encode("utf-8")
+            elif isinstance(item, dict):
+                pending.extend((key, depth + 1) for key in item)
+                pending.extend((child, depth + 1) for child in item.values())
+            elif isinstance(item, list):
+                pending.extend((child, depth + 1) for child in item)
+        return value
+    except (UnicodeError, RecursionError) as error:
+        raise ValueError("release JSON must be bounded, shallow UTF-8") from error
+
+
+_json = parse_release_json
 
 
 def _bytes(value: Any) -> bytes:
@@ -102,14 +149,38 @@ class ValidationPolicy:
     workflow: str
     workflow_name: str
     required_steps: tuple[tuple[str, tuple[str, ...]], ...]
+    branch: str = "main"
+    runner_labels: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     def __post_init__(self) -> None:
         _repository(self.repository)
+        object.__setattr__(self, "required_steps", tuple((name, tuple(steps)) for name, steps in self.required_steps))
+        object.__setattr__(self, "runner_labels", tuple((name, tuple(labels)) for name, labels in self.runner_labels))
         if re.fullmatch(r"\.github/workflows/[A-Za-z0-9_-]+\.yml", self.workflow) is None:
             raise ValueError("workflow must be an explicit .github/workflows/*.yml path")
+        if not isinstance(self.branch, str) or re.fullmatch(r"[A-Za-z0-9_/-]+", self.branch) is None or any(not part for part in self.branch.split("/")):
+            raise ValueError("branch must be an explicit portable branch name")
         names = [name for name, _ in self.required_steps]
-        if not self.workflow_name or not names or len(set(names)) != len(names) or any(not name or not steps for name, steps in self.required_steps):
+        if (
+            not self.workflow_name
+            or not names
+            or len(set(names)) != len(names)
+            or any(
+                not isinstance(name, str)  # ty: ignore[redundant-condition-strict]  Validate untyped policy callers.
+                or not name
+                or not steps
+                or len(set(steps)) != len(steps)
+                or any(not isinstance(step, str) or not step for step in steps)  # ty: ignore[redundant-condition-strict]  Validate untyped policy callers.
+                for name, steps in self.required_steps
+            )
+        ):
             raise ValueError("validation policy requires unique named jobs and nonempty step requirements")
+        hosts = [name for name, _ in self.runner_labels]
+        if len(set(hosts)) != len(hosts) or any(
+            name not in names or not labels or any(not isinstance(label, str) or not label for label in labels)  # ty: ignore[redundant-condition-strict]  Validate untyped policy callers.
+            for name, labels in self.runner_labels
+        ):
+            raise ValueError("runner labels require unique required-job names and nonempty labels")
 
 
 POLICY = ValidationPolicy(
@@ -145,18 +216,34 @@ def api(endpoint: str, *, repository: str = REPOSITORY) -> Any:
     return _json(gh("api", f"repos/{_repository(repository)}/{endpoint}"))
 
 
-def _pages(read: Callable[[str], Any], endpoint: str, field: str) -> list[dict[str, Any]]:
+def read_pages(read: Callable[[str], Any], endpoint: str, field: str) -> list[dict[str, Any]]:
+    """Read at most 100 pages through repository-scoped authenticated transport.
+
+    Reject changing/incomplete total counts when supplied by the provider.
+    Consumers still validate collection-specific identities and duplicates.
+    """
     result = []
+    totals = set()
     separator = "&" if "?" in endpoint else "?"
     for page in range(1, 101):
         data = _object(read(f"{endpoint}{separator}per_page=100&page={page}"), endpoint)
         entries = data.get(field)
         if not isinstance(entries, list) or any(not isinstance(entry, dict) for entry in entries):
             raise ValueError(f"invalid {field} listing")
+        if "total_count" in data:
+            count = data["total_count"]
+            if type(count) is not int or count < 0:
+                raise ValueError(f"invalid {field} total count")
+            totals.add(count)
         result.extend(entries)
         if len(entries) < 100:
+            if totals and totals != {len(result)}:
+                raise ValueError(f"incomplete or changing {field} pagination")
             return result
     raise ValueError(f"{field} listing exceeds the bounded page limit; inspect repository evidence")
+
+
+_pages = read_pages
 
 
 def validate_run(policy: ValidationPolicy, run: dict[str, Any], commit: str, workflow: dict[str, Any], *, completed: bool = True) -> None:
@@ -164,18 +251,22 @@ def validate_run(policy: ValidationPolicy, run: dict[str, Any], commit: str, wor
     _commit(commit)
     repository, head = _object(run.get("repository"), "run.repository"), _object(run.get("head_repository"), "run.head_repository")
     repo_id = _integer(repository.get("id"), "repository ID")
-    if repository.get("full_name") != policy.repository or head.get("full_name") != policy.repository or head.get("id") != repo_id:
+    if (
+        repository.get("full_name") != policy.repository
+        or head.get("full_name") != policy.repository
+        or _integer(head.get("id"), "head repository ID") != repo_id
+    ):
         raise ValueError("validation run repository or head repository differs")
     _integer(run.get("id"), "run ID")
     _integer(run.get("run_attempt"), "run attempt")
     if workflow.get("path") != policy.workflow or workflow.get("name") != policy.workflow_name or workflow.get("state") != "active":
         raise ValueError("expected active Package checks workflow identity")
     if (
-        run.get("workflow_id") != _integer(workflow.get("id"), "workflow ID")
+        _integer(run.get("workflow_id"), "run workflow ID") != _integer(workflow.get("id"), "workflow ID")
         or run.get("path") != policy.workflow
         or run.get("name") != policy.workflow_name
         or run.get("event") != "push"
-        or run.get("head_branch") != "main"
+        or run.get("head_branch") != policy.branch
         or run.get("head_sha") != commit
         or run.get("pull_requests")
     ):
@@ -197,7 +288,7 @@ def select_main_run(
         raise ValueError("wait requires 1..120 attempts and an interval of 0..30 seconds")
     workflow = _object(read(f"actions/workflows/{Path(policy.workflow).name}"), "workflow")
     for index in range(attempts):
-        runs = _pages(read, f"actions/workflows/{workflow['id']}/runs?event=push&branch=main&head_sha={commit}", "workflow_runs")
+        runs = read_pages(read, f"actions/workflows/{workflow['id']}/runs?event=push&branch={quote(policy.branch, safe='')}&head_sha={commit}", "workflow_runs")
         for run in runs:
             validate_run(policy, run, commit, workflow, completed=False)
         pending = [run for run in runs if run.get("status") != "completed"]
@@ -226,10 +317,18 @@ def validate_jobs(policy: ValidationPolicy, run: dict[str, Any], jobs: list[dict
         if len(matches) != 1:
             raise ValueError(f"missing or ambiguous {name} in attempt {run['run_attempt']}; {RECOVERY}")
         job = matches[0]
-        if any(job.get(key) != run[key] for key in ("run_attempt", "head_sha", "head_branch")) or job.get("run_id") != run["id"]:
+        if any(job.get(key) != run[key] for key in ("head_sha", "head_branch")) or (
+            _integer(job.get("run_id"), "job run ID"),
+            _integer(job.get("run_attempt"), "job attempt"),
+        ) != (run["id"], run["run_attempt"]):
             raise ValueError(f"{name} belongs to another run, attempt, ref or commit")
         if job.get("status") != "completed" or job.get("conclusion") != "success":
             raise ValueError(f"{name} did not succeed; {RECOVERY}")
+        labels = dict(policy.runner_labels).get(name)
+        if labels is not None and (not isinstance(job.get("labels"), list) or not set(labels).issubset(job["labels"]) or "self-hosted" in job["labels"]):
+            raise ValueError(f"{name} did not run on the required hosted platform")
+        if not isinstance(job.get("steps"), list) or any(not isinstance(step, dict) for step in job["steps"]):
+            raise ValueError(f"{name} has malformed step evidence")
         for required in steps:
             found = [step for step in job.get("steps", []) if step.get("name") == required]
             if len(found) != 1 or found[0].get("status") != "completed" or found[0].get("conclusion") != "success":
@@ -240,7 +339,12 @@ def validate_jobs(policy: ValidationPolicy, run: dict[str, Any], jobs: list[dict
     return result
 
 
-def _artifact(data: dict[str, Any], run: dict[str, Any], name: str) -> dict[str, Any]:
+def artifact_identity(data: dict[str, Any], run: dict[str, Any], name: str) -> dict[str, Any]:
+    """Bind an immutable artifact ID/digest to its exact repository/run/ref/SHA.
+
+    GitHub does not report an artifact's attempt. Callers must use an
+    attempt-specific name and verify the attempt inside its retained manifest.
+    """
     identity = _object(data.get("workflow_run"), "artifact.workflow_run")
     if data.get("name") != name or data.get("expired") is not False:
         raise ValueError(f"missing, expired or mismatched {name}; {RECOVERY}")
@@ -251,6 +355,8 @@ def _artifact(data: dict[str, Any], run: dict[str, Any], name: str) -> dict[str,
         "repository_id": run["repository"]["id"],
         "head_repository_id": run["head_repository"]["id"],
     }
+    for key in ("id", "repository_id", "head_repository_id"):
+        _integer(identity.get(key), f"artifact {key}")
     if any(identity.get(key) != value for key, value in expected.items()):
         raise ValueError("artifact is associated with another repository, ref, run or commit")
     identifier = _integer(data.get("id"), "artifact ID")
@@ -260,6 +366,9 @@ def _artifact(data: dict[str, Any], run: dict[str, Any], name: str) -> dict[str,
     if type(data.get("size_in_bytes")) is not int or not 0 < data["size_in_bytes"] <= MAX_BYTES:
         raise ValueError("artifact size exceeds the release bound")
     return {"id": identifier, "name": name, "digest": digest, "size_in_bytes": data["size_in_bytes"]}
+
+
+_artifact = artifact_identity
 
 
 def _find_artifact(run: dict[str, Any], name: str) -> dict[str, Any]:
@@ -399,9 +508,28 @@ def _remote_tag(tag: str, commit: str) -> None:
     raise ValueError("remote tag does not resolve to a bounded commit identity")
 
 
-def _signature(
-    subject: Path, bundle: Path, commit: str, workflow: str, ref: str, run_id: int, attempt: int, *, predicate: dict[str, Any] | None = None
+def verify_attestation(
+    subject: Path,
+    bundle: Path,
+    commit: str,
+    workflow: str,
+    ref: str,
+    run_id: int,
+    attempt: int,
+    *,
+    repository: str,
+    predicate: dict[str, Any] | None = None,
+    predicate_type: str = "https://slsa.dev/provenance/v1",
 ) -> None:
+    """Use gh's cryptographic verification, then bind the signed invocation/event.
+
+    The caller supplies trusted policy, not values learned from an unverified
+    bundle. No source or build scripts execute in this operation.
+    """
+    _repository(repository)
+    _commit(commit)
+    if re.fullmatch(r"\.github/workflows/[A-Za-z0-9_-]+\.yml", workflow) is None or not ref.startswith(("refs/heads/", "refs/tags/")):
+        raise ValueError("attestation requires an explicit workflow and source ref")
     _integer(run_id, "signed run ID")
     _integer(attempt, "signed run attempt")
     result = _json(
@@ -412,9 +540,9 @@ def _signature(
             "--bundle",
             str(bundle),
             "--repo",
-            REPOSITORY,
+            repository,
             "--signer-workflow",
-            f"{REPOSITORY}/{workflow}",
+            f"{repository}/{workflow}",
             "--signer-digest",
             commit,
             "--source-digest",
@@ -423,7 +551,7 @@ def _signature(
             ref,
             "--deny-self-hosted-runners",
             "--predicate-type",
-            PROMOTION if predicate is not None else "https://slsa.dev/provenance/v1",
+            predicate_type,
             "--format",
             "json",
         )
@@ -432,11 +560,28 @@ def _signature(
         raise ValueError("expected exactly one verified attestation")
     verified = _object(_object(result[0], "verified attestation").get("verificationResult"), "verification result")
     certificate = _object(_object(verified.get("signature"), "verified signature").get("certificate"), "verified certificate")
-    invocation = f"https://github.com/{REPOSITORY}/actions/runs/{run_id}/attempts/{attempt}"
+    invocation = f"https://github.com/{repository}/actions/runs/{run_id}/attempts/{attempt}"
     if certificate.get("runInvocationURI") != invocation or certificate.get("buildTrigger") != "push":
         raise ValueError("attestation certificate run, attempt or push event differs")
     if predicate is not None and _object(verified.get("statement"), "verified statement").get("predicate") != predicate:
         raise ValueError("signed promotion predicate differs from the retained evidence")
+
+
+def _signature(
+    subject: Path, bundle: Path, commit: str, workflow: str, ref: str, run_id: int, attempt: int, *, predicate: dict[str, Any] | None = None
+) -> None:
+    verify_attestation(
+        subject,
+        bundle,
+        commit,
+        workflow,
+        ref,
+        run_id,
+        attempt,
+        repository=REPOSITORY,
+        predicate=predicate,
+        predicate_type=PROMOTION if predicate is not None else "https://slsa.dev/provenance/v1",
+    )
 
 
 def seal(run_id: int, attempt: int, artifact_id: int, output: Path) -> None:
@@ -659,11 +804,30 @@ def verify(event: dict[str, Any], commit: str, output: Path) -> None:
     print(f"Verified main-validation and promotion provenance for {tag} at {commit}; ready for the approval-gated upload.")
 
 
-def _diagnostic(value: str | bytes) -> str:
-    """Keep transport context without logging redirected signed URL credentials."""
+def redact_release_diagnostic(value: str | bytes) -> str:
+    """Remove URL credentials, queries/fragments and recognizable GitHub tokens.
+
+    Apply to rendered subprocess diagnostics before logging them. This cannot
+    identify arbitrary secrets in free text; never include tokens in commands.
+    """
     if isinstance(value, bytes):
         value = value.decode("utf-8", errors="replace")
-    return re.sub(r"(https?://[^\s?\"<>]+)\?[^\s\"<>]+", r"\1?<redacted>", value).strip()
+
+    def url(match: re.Match[str]) -> str:
+        try:
+            parsed = urlsplit(match[0])
+            if not parsed.hostname:
+                return "<redacted-url>"
+            suffix = "?<redacted>" if parsed.query or parsed.fragment or parsed.username or parsed.password else ""
+            return f"{parsed.scheme}://{parsed.hostname}{parsed.path}{suffix}"
+        except ValueError:
+            return "<redacted-url>"
+
+    value = re.sub(r"https?://[^\s\"<>]+", url, value)
+    return re.sub(r"\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b", "<redacted-token>", value).strip()
+
+
+_diagnostic = redact_release_diagnostic
 
 
 def main() -> int:

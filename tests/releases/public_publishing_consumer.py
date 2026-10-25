@@ -22,6 +22,48 @@ from research_repo_tools.release_publishing import RequiredCheck, check_metadata
 
 
 class TestPublishingConsumer(unittest.TestCase):
+    def test_all_unmet_checks_have_actionable_exact_commit_diagnostics(self):
+        sha = "a" * 40
+        checks = tuple(RequiredCheck(name, 15368) for name in ("running", "queued", "failed", "cancelled", "missing", "ambiguous", "wrong-provider", "passed"))
+        runs = []
+        for name, status, conclusion, provider in (
+            ("running", "in_progress", None, 15368),
+            ("queued", "queued", None, 15368),
+            ("failed", "completed", "failure", 15368),
+            ("cancelled", "completed", "cancelled", 15368),
+            ("ambiguous", "completed", "success", 15368),
+            ("ambiguous", "completed", "success", 15368),
+            ("wrong-provider", "completed", "success", 27),
+            ("passed", "completed", "success", 15368),
+        ):
+            identifier = len(runs) + 1
+            runs.append(
+                {
+                    "id": identifier,
+                    "name": name,
+                    "app": {"id": provider},
+                    "head_sha": sha,
+                    "status": status,
+                    "conclusion": conclusion,
+                    "html_url": f"https://github.com/example/project/runs/{identifier}?token=secret",
+                }
+            )
+        with self.assertRaises(ValueError) as caught:
+            require_checks([{"total_count": len(runs), "check_runs": runs}], sha, checks)
+        message = str(caught.exception)
+        self.assertIn(sha, message)
+        for name in ("running", "queued", "failed", "cancelled", "missing", "ambiguous", "wrong-provider"):
+            self.assertIn(f"required check '{name}' (app ID 15368)", message)
+        self.assertIn("pending/running", message)
+        self.assertIn("status='in_progress', conclusion=None", message)
+        self.assertIn("conclusion='cancelled'", message)
+        self.assertIn("missing; same name observed from app IDs [27]", message)
+        self.assertIn("ambiguous (2 results)", message)
+        self.assertIn("https://github.com/example/project/runs/1", message)
+        self.assertIn("Wait for the existing run to succeed, then manually retry", message)
+        self.assertNotIn("secret", message)
+        self.assertNotIn("required check 'passed'", message)
+
     @override
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="published consumer café ")
