@@ -200,8 +200,9 @@ def require_checks(pages: object, commit: str, checks: tuple[RequiredCheck, ...]
         matches = [run for run in runs if run.get("name") == check.name and isinstance(run.get("app"), dict) and run["app"].get("id") == check.app_id]
         label = f"required check {check.name!r} (app ID {check.app_id})"
         if not matches:
-            providers = sorted({run["app"]["id"] for run in runs if run.get("name") == check.name})
-            detail = f"; same name observed from app IDs {providers}" if providers else ""
+            same_name = [run for run in runs if run.get("name") == check.name]
+            providers = sorted({run["app"]["id"] for run in same_name})
+            detail = f"; same name observed from app IDs {providers}; " + "; ".join(_check_observation(run) for run in same_name) if same_name else ""
             unmet.append(f"{label}: missing{detail}")
         elif len(matches) > 1:
             unmet.append(f"{label}: ambiguous ({len(matches)} results); " + "; ".join(_check_observation(run) for run in matches))

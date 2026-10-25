@@ -34,6 +34,7 @@ class TestPublishingConsumer(unittest.TestCase):
             ("ambiguous", "completed", "success", 15368),
             ("ambiguous", "completed", "success", 15368),
             ("wrong-provider", "completed", "success", 27),
+            ("wrong-provider", "queued", None, 28),
             ("passed", "completed", "success", 15368),
         ):
             identifier = len(runs) + 1
@@ -57,7 +58,10 @@ class TestPublishingConsumer(unittest.TestCase):
         self.assertIn("pending/running", message)
         self.assertIn("status='in_progress', conclusion=None", message)
         self.assertIn("conclusion='cancelled'", message)
-        self.assertIn("missing; same name observed from app IDs [27]", message)
+        wrong_provider = next(line for line in message.splitlines() if "required check 'wrong-provider'" in line)
+        self.assertIn("missing; same name observed from app IDs [27, 28]", wrong_provider)
+        self.assertIn("check ID 7, status='completed', conclusion='success', https://github.com/example/project/runs/7", wrong_provider)
+        self.assertIn("check ID 8, status='queued', conclusion=None, https://github.com/example/project/runs/8", wrong_provider)
         self.assertIn("ambiguous (2 results)", message)
         self.assertIn("https://github.com/example/project/runs/1", message)
         self.assertIn("Wait for the existing run to succeed, then manually retry", message)
