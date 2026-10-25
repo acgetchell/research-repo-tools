@@ -10,6 +10,7 @@ import tarfile
 import tempfile
 import unittest
 import zipfile
+import zlib
 from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
@@ -386,6 +387,32 @@ class TestEvidenceConsumer(unittest.TestCase):
             with patch("research_repo_tools.release_evidence.MAX_CRATE_BYTES", 4096):
                 with self.assertRaisesRegex(ValueError, "expanded size"):
                     verify_cargo_archive(path, "sample", "1.2.3", COMMIT)
+
+    def test_cargo_archive_read_errors_preserve_the_cause(self):
+        cases = (
+            ("not-gzip", b"not a gzip archive", gzip.BadGzipFile),
+            ("truncated-gzip", crate()[:-1], EOFError),
+            ("invalid-deflate", bytes.fromhex("1f8b08000000000002ff07"), zlib.error),
+            ("not-tar", gzip.compress(b"not a tar archive", mtime=0), tarfile.ReadError),
+        )
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "sample.crate"
+            for name, payload, error_type in cases:
+                with self.subTest(name=name):
+                    # Verify the serialized corruption reaches the expected reader.
+                    with self.assertRaises(error_type):
+                        expanded = gzip.decompress(payload)
+                        with tarfile.open(fileobj=io.BytesIO(expanded), mode="r:"):
+                            pass
+                    path.write_bytes(payload)
+                    with self.assertRaisesRegex(ValueError, "not a readable gzip/tar package") as caught:
+                        verify_cargo_archive(path, "sample", "1.2.3", COMMIT)
+                    self.assertIsInstance(caught.exception.__cause__, error_type)
+                    self.assertEqual(path.read_bytes(), payload)
+            path.write_bytes(b"")
+            with self.assertRaisesRegex(ValueError, "nonempty byte bound") as caught:
+                verify_cargo_archive(path, "sample", "1.2.3", COMMIT)
+            self.assertIsNone(caught.exception.__cause__)
 
     def test_json_and_pagination_fail_closed(self):
         for payload in (b'{"id":1,"id":2}', b'{"id":NaN}', b'{"id":1e999}', b"\xff", b"[" * 2000 + b"]" * 2000):

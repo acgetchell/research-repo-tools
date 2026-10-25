@@ -12,6 +12,7 @@ import re
 import tarfile
 import tempfile
 import tomllib
+import zlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePosixPath
@@ -230,7 +231,11 @@ def verify_cargo_archive(archive: Path, package: str, version: str, commit: str,
     Return the original archive's SHA-256. This is an integrity/identity check;
     it does not prove native tests, feature checks, signatures or registry upload.
     """
-    return _crate(_bounded_file(archive, MAX_CRATE_BYTES), package, version, commit, path_in_vcs)
+    payload = _bounded_file(archive, MAX_CRATE_BYTES)
+    try:
+        return _crate(payload, package, version, commit, path_in_vcs)
+    except (OSError, EOFError, zlib.error, tarfile.TarError) as error:
+        raise ValueError("Cargo archive is not a readable gzip/tar package") from error
 
 
 def _manifest(policy: EvidencePolicy, version: str, run: dict[str, Any]) -> dict[str, Any]:
