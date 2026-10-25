@@ -39,7 +39,7 @@ attempt because GitHub's artifact association does not expose an attempt field.
 
 ## Creation and verification
 
-`create_evidence_manifest(policy, version, commit, run_id, attempt, read,
+`create_evidence_manifest(policy, version, commit, run_id, attempt, read, *,
 archive=None, tools=None)` returns deterministic UTF-8 JSON bytes. It observes the
 executing push through authenticated provider reads and checks its identity again
 before returning. Signed-source creation requires completed validation jobs;
@@ -53,7 +53,7 @@ manifest. Retain it as `validation.json`, together with `validation.sigstore.jso
 when signing is required and `PACKAGE-VERSION.crate` for archive evidence. The
 producer signs the exact manifest bytes. Creation does not write or sign files.
 
-`verify_release_evidence(policy, version, commit, read, expected=None,
+`verify_release_evidence(policy, version, commit, read, *, expected=None,
 reproduced_archive=None, reproduced_tools=None)` returns deterministic JSON
 selection bytes only after all verification succeeds. It performs one selection
 attempt; pending CI rejects with a manual-retry diagnostic. Missing, expired,
@@ -99,7 +99,7 @@ are not offline authorization tokens or substitutes for a live release/tag gate.
 For Cargo reproduction, pass both `reproduced_archive` and `reproduced_tools`.
 The consumer creates that archive without publishing credentials. Verification
 requires identical original archive SHA-256 and exact tool identity strings.
-`verify_cargo_archive(path, package, version, commit, path_in_vcs="")` is also
+`verify_cargo_archive(path, package, version, commit, *, path_in_vcs="")` is also
 available as a separate integrity check; it makes no CI or signature claim.
 It reads bounded bytes without extracting or executing files: at most 64 MiB
 compressed/expanded, 4,096 members and 1 MiB per metadata member. It rejects
@@ -124,6 +124,9 @@ revalidation and asset publication functions accept `checkout=Path(...)` to
 observe a clean source checkout at the captured commit. The source path may be
 separate from the trusted installed runtime's working directory. The exported
 `require_release_checkout(checkout, commit)` performs the same read-only check.
+It rejects assume-unchanged and skip-worktree index entries, including those in
+checked-out submodules, and checks submodule changes regardless of ignore settings.
+It leaves index flags and checkout contents unchanged.
 Run trusted installed tooling outside consumer source; these helpers execute no
 consumer build commands, but cannot secure an interpreter already importing
 untrusted code. Checkout observation also requires trusted Git configuration

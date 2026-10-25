@@ -5,6 +5,7 @@ import gzip
 import hashlib
 import io
 import json
+import os
 import subprocess
 import tarfile
 import tempfile
@@ -13,8 +14,10 @@ import zipfile
 import zlib
 from dataclasses import replace
 from pathlib import Path
+from typing import override
 from unittest.mock import patch
 
+from research_repo_tools.process import run_git_bytes
 from research_repo_tools.release_assets import require_release_checkout
 from research_repo_tools.release_evidence import EvidencePolicy, create_evidence_manifest, verify_cargo_archive, verify_release_evidence
 from research_repo_tools.release_validation import ValidationPolicy, parse_release_json, read_pages, redact_release_diagnostic, verify_attestation
@@ -434,19 +437,151 @@ class TestEvidenceConsumer(unittest.TestCase):
 
         def execute(args, **kwargs):
             commands.append(args)
+            if "ls-files" in args or "submodule" in args:
+                return subprocess.CompletedProcess(args, 0, b"H tracked\0", b"")
             return subprocess.CompletedProcess(args, 0, "" if "status" in args else COMMIT, "")
 
-        with patch("research_repo_tools.release_assets.run_git_command", execute):
+        with patch("research_repo_tools.release_assets.run_git_command", execute), patch("research_repo_tools.release_assets.run_git_bytes", execute):
             require_release_checkout(Path("source"), COMMIT)
         self.assertEqual(
             commands,
-            [["--no-pager", "rev-parse", "HEAD"], ["--no-pager", "status", "--porcelain", "--untracked-files=all"], ["--no-pager", "rev-parse", "HEAD"]],
+            [
+                ["--no-pager", "rev-parse", "HEAD"],
+                ["--no-pager", "--no-optional-locks", "ls-files", "-v", "-z"],
+                ["--no-pager", "--no-optional-locks", "submodule", "foreach", "--quiet", "--recursive", "git --no-pager --no-optional-locks ls-files -v -z"],
+                [
+                    "--no-pager",
+                    "--no-optional-locks",
+                    "-c",
+                    "core.fsmonitor=false",
+                    "status",
+                    "--porcelain",
+                    "--untracked-files=all",
+                    "--ignore-submodules=none",
+                ],
+                ["--no-pager", "rev-parse", "HEAD"],
+            ],
         )
         for outputs in ((COMMIT, "?? dirty", COMMIT), (COMMIT, "", "b" * 40)):
             responses = [subprocess.CompletedProcess([], 0, value, "") for value in outputs]
-            with patch("research_repo_tools.release_assets.run_git_command", side_effect=responses):
+            with (
+                patch("research_repo_tools.release_assets.run_git_command", side_effect=responses),
+                patch("research_repo_tools.release_assets.run_git_bytes", return_value=subprocess.CompletedProcess([], 0, b"", b"")),
+            ):
                 with self.assertRaisesRegex(ValueError, "observed release checkout"):
                     require_release_checkout(Path("source"), COMMIT)
+
+
+class TestReleaseCheckoutConsumer(unittest.TestCase):
+    @override
+    def setUp(self):
+        if os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1":
+            self.skipTest("Git mutations disabled by local policy")
+        temporary = tempfile.TemporaryDirectory(prefix="release checkout café ")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        env = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
+        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+        self.enterContext(patch.dict(os.environ, env, clear=True))
+        self.git("init", "--template=")
+        self.path = self.root / "tracked café.txt"
+        self.path.write_bytes(b"original\n")
+        self.git("add", "--", self.path.name)
+        self.git("commit", "-m", "fixture")
+        self.commit = self.git("rev-parse", "HEAD").stdout.decode("ascii").strip()
+
+    def git(self, *args, cwd=None):
+        return run_git_bytes(
+            [
+                "--no-pager",
+                "--no-optional-locks",
+                "-c",
+                "core.autocrlf=false",
+                "-c",
+                f"core.hooksPath={self.root / 'disabled-hooks'}",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Release fixture",
+                "-c",
+                "user.email=release@example.invalid",
+                *args,
+            ],
+            cwd=self.root if cwd is None else cwd,
+            timeout=30,
+        )
+
+    def observe(self, commit=None):
+        before = (self.root / ".git/index").read_bytes()
+        try:
+            require_release_checkout(self.root, self.commit if commit is None else commit)
+        finally:
+            self.assertEqual((self.root / ".git/index").read_bytes(), before)
+
+    def test_real_checkout_accepts_clean_and_rejects_dirty_and_changed_head(self):
+        self.observe()
+        self.path.write_bytes(b"changed content\n")
+        with self.assertRaisesRegex(ValueError, "observed release checkout"):
+            self.observe()
+        self.path.write_bytes(b"original\n")
+        untracked = self.root / "untracked.txt"
+        untracked.write_bytes(b"new\n")
+        with self.assertRaisesRegex(ValueError, "observed release checkout"):
+            self.observe()
+        untracked.unlink()
+        self.git("commit", "--allow-empty", "-m", "next commit")
+        with self.assertRaisesRegex(ValueError, "observed release checkout"):
+            self.observe()
+        self.observe(self.git("rev-parse", "HEAD").stdout.decode("ascii").strip())
+
+    def hidden_change(self, flag, tag):
+        self.git("update-index", flag, "--", self.path.name)
+        self.assertTrue(self.git("ls-files", "-v", "-z").stdout.startswith(tag + b" "))
+        self.path.write_bytes(b"hidden change\n")
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all").stdout, b"")
+        with self.assertRaisesRegex(ValueError, "observed release checkout.*index"):
+            self.observe()
+        self.assertEqual(self.path.read_bytes(), b"hidden change\n")
+
+    def test_assume_unchanged_cannot_hide_modified_source(self):
+        self.hidden_change("--assume-unchanged", b"h")
+
+    def test_skip_worktree_cannot_hide_modified_source(self):
+        self.hidden_change("--skip-worktree", b"S")
+
+    def submodule(self):
+        child = self.root / "child module"
+        child.mkdir()
+        self.git("init", "--template=", cwd=child)
+        (child / "source.txt").write_bytes(b"submodule source\n")
+        self.git("add", "source.txt", cwd=child)
+        self.git("commit", "-m", "child fixture", cwd=child)
+        (self.root / ".gitmodules").write_bytes(b'[submodule "child"]\npath = child module\nurl = ../child\nignore = all\n')
+        self.git("add", ".gitmodules", "child module")
+        self.git("commit", "-m", "submodule fixture")
+        self.commit = self.git("rev-parse", "HEAD").stdout.decode("ascii").strip()
+        self.observe()
+        return child
+
+    def test_submodule_ignore_configuration_cannot_hide_modified_source(self):
+        child = self.submodule()
+        (child / "source.txt").write_bytes(b"modified submodule\n")
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all").stdout, b"")
+        with self.assertRaisesRegex(ValueError, "observed release checkout"):
+            self.observe()
+        self.assertEqual((child / "source.txt").read_bytes(), b"modified submodule\n")
+
+    def test_inactive_submodule_index_flags_cannot_hide_modified_source(self):
+        child = self.submodule()
+        self.git("config", "submodule.child.active", "false")
+        self.git("update-index", "--assume-unchanged", "source.txt", cwd=child)
+        (child / "source.txt").write_bytes(b"hidden submodule\n")
+        self.assertEqual(self.git("status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none").stdout, b"")
+        before = (child / ".git/index").read_bytes()
+        with self.assertRaisesRegex(ValueError, "observed release checkout.*index"):
+            self.observe()
+        self.assertEqual((child / ".git/index").read_bytes(), before)
+        self.assertEqual((child / "source.txt").read_bytes(), b"hidden submodule\n")
 
 
 if __name__ == "__main__":

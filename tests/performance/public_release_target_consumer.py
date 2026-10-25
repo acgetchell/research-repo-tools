@@ -152,7 +152,10 @@ class TestReleaseTargetConsumer(unittest.TestCase):
                     state["commit"] = "b" * 40
 
                 self.server.on_download = changed
-                with patch("research_repo_tools.release_assets.run_git_command", observe):
+                with (
+                    patch("research_repo_tools.release_assets.run_git_command", observe),
+                    patch("research_repo_tools.release_assets.run_git_bytes", return_value=subprocess.CompletedProcess([], 0, b"H tracked\0", b"")),
+                ):
                     with self.assertRaisesRegex(ValueError, "observed release checkout"):
                         publish_release_asset(self.root, REPOSITORY, TAG, self.asset, target=target, checkout=self.root / "source", publish=True)
                 self.assertEqual(self.server.published, 0)

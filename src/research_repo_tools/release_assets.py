@@ -27,7 +27,7 @@ from research_repo_tools.evidence import (
     verify_sha256,
 )
 from research_repo_tools.files import replace_many
-from research_repo_tools.process import resolve_executable, run_command_bytes, run_git_command
+from research_repo_tools.process import resolve_executable, run_command_bytes, run_git_bytes, run_git_command
 from research_repo_tools.release_discovery import normalize_tag
 
 __all__ = [
@@ -265,7 +265,20 @@ def require_release_checkout(checkout: Path, commit: str) -> None:
     """
     commit = _sha(commit)
     head = run_git_command(["--no-pager", "rev-parse", "HEAD"], cwd=checkout, timeout=30).stdout.strip()
-    dirty = run_git_command(["--no-pager", "status", "--porcelain", "--untracked-files=all"], cwd=checkout, timeout=30).stdout.strip()
+    for arguments in (
+        ["ls-files", "-v", "-z"],
+        ["submodule", "foreach", "--quiet", "--recursive", "git --no-pager --no-optional-locks ls-files -v -z"],
+    ):
+        # A recursive ls-files alone omits inactive submodules and flags on
+        # gitlinks. Inspect both the parent index and every checked-out child.
+        entries = run_git_bytes(["--no-pager", "--no-optional-locks", *arguments], cwd=checkout, timeout=30).stdout.split(b"\0")
+        if any(entry[:1].islower() or entry[:1] == b"S" for entry in entries):
+            raise ValueError("observed release checkout has assume-unchanged or skip-worktree index entries")
+    dirty = run_git_command(
+        ["--no-pager", "--no-optional-locks", "-c", "core.fsmonitor=false", "status", "--porcelain", "--untracked-files=all", "--ignore-submodules=none"],
+        cwd=checkout,
+        timeout=30,
+    ).stdout.strip()
     current = run_git_command(["--no-pager", "rev-parse", "HEAD"], cwd=checkout, timeout=30).stdout.strip()
     if head != commit or current != commit or dirty:
         raise ValueError("observed release checkout is dirty or differs from the captured commit")
