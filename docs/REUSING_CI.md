@@ -156,8 +156,10 @@ just release-publish TAG --reuse-evidence /path/outside/checkout/ci-approval.jso
 ```
 
 The first command is read-only on GitHub and writes a new selection file only
-after successful verification. It refuses to overwrite an existing file. Keep
-the file outside the release checkout so it does not make that checkout dirty.
+after successful verification. It refuses to overwrite an existing file and
+rejects destinations inside the resolved checkout before querying evidence,
+including paths through directory aliases. Save the file outside the release
+checkout so it does not make that checkout dirty.
 The second command retains the usual explicit approval of the reviewed draft.
 It verifies the saved selection again on both preflight passes before publishing
 the GitHub Release. It does not itself upload registry packages.

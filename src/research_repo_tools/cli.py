@@ -159,7 +159,7 @@ def parser() -> argparse.ArgumentParser:
     command = release.add_parser("reuse", help="verify a selected PR run for a squash release commit and save source-check approval evidence")
     command.add_argument("commit", help="full release commit SHA")
     command.add_argument("--attempt", type=int, required=True)
-    command.add_argument("--output", type=Path, required=True, help="new approval file; never overwrite an existing selection")
+    command.add_argument("--output", type=Path, required=True, help="new approval file outside the reviewed checkout; never overwrite an existing selection")
     command.add_argument("--pull-request", type=int, required=True)
     command.add_argument("--run-id", type=int, required=True)
     command = release.add_parser("update")
@@ -658,6 +658,10 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             publishing = release_publishing._settings(settings)
             if publishing.reuse is None:
                 raise ValueError("configure publishing.reuse before selecting CI evidence")
+            output, root = args.output.resolve(), settings.root.resolve()
+            # Filesystem identity also covers case aliases on macOS volumes.
+            if output.is_relative_to(root) or any(parent.exists() and parent.samefile(root) for parent in output.parents):
+                raise ValueError("save CI reuse approval outside the reviewed checkout; publication requires a clean checkout")
             payload = verify_ci_reuse(
                 publishing.reuse,
                 args.commit,
@@ -666,7 +670,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
                 run_id=args.run_id,
                 attempt=args.attempt,
             )
-            with args.output.open("xb") as stream:
+            with output.open("xb") as stream:
                 stream.write(payload)
             print("Saved verified CI reuse selection; revalidate it with --reuse-evidence at the release gate.")
             return 0

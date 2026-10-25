@@ -526,7 +526,9 @@ class TestReuseConsumer(unittest.TestCase):
         provider = self.provider()
         saved = self.verify(provider)
         with tempfile.TemporaryDirectory(prefix="reuse CLI café ") as temporary:
-            settings = self.settings(Path(temporary))
+            checkout = Path(temporary) / "checkout"
+            checkout.mkdir()
+            settings = self.settings(checkout)
             output = Path(temporary) / "approval.json"
             args = ["release", "reuse", RELEASE, "--attempt", "2", "--output", str(output), "--pull-request", "9", "--run-id", "123"]
             with (
@@ -547,6 +549,50 @@ class TestReuseConsumer(unittest.TestCase):
                 verify.side_effect = ValueError("evidence rejected")
                 self.assertEqual(cli.main(args), 1)
                 self.assertFalse(output.exists())
+
+    def test_cli_rejects_approval_inside_checkout_before_verification(self):
+        with tempfile.TemporaryDirectory(prefix="reuse destination café ") as temporary:
+            root = Path(temporary).resolve() / "checkout"
+            root.mkdir()
+            settings = self.settings(root)
+            alias = root.parent / "checkout-alias"
+            if os.name == "nt":
+                subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(alias), str(root)], check=True, capture_output=True, timeout=30)
+                self.assertTrue(alias.is_junction())
+            else:
+                alias.symlink_to(root, target_is_directory=True)
+                self.assertTrue(alias.is_symlink())
+            self.assertTrue(alias.samefile(root))
+            before = {path.name: path.read_bytes() for path in root.iterdir()}
+            outputs = [
+                Path("approval.json"),
+                root / "approval.json",
+                root / "missing" / "approval.json",
+                root / ".." / "checkout" / "approval.json",
+                alias / "approval.json",
+                root,
+            ]
+            case_alias = root.with_name("CHECKOUT")
+            if case_alias.exists():
+                self.assertTrue(case_alias.samefile(root))
+                outputs.append(case_alias / "approval.json")
+            for output in outputs:
+                with (
+                    self.subTest(output=output),
+                    contextlib.chdir(root),
+                    patch("research_repo_tools.cli.config.load", return_value=settings),
+                    patch("research_repo_tools.release_reuse.verify_ci_reuse", return_value=b"approval") as verify,
+                    contextlib.redirect_stdout(io.StringIO()) as stdout,
+                    contextlib.redirect_stderr(io.StringIO()) as stderr,
+                ):
+                    self.assertEqual(
+                        cli.main(["release", "reuse", RELEASE, "--attempt", "2", "--output", str(output), "--pull-request", "9", "--run-id", "123"]), 1
+                    )
+                    self.assertIn("outside the reviewed checkout", stderr.getvalue())
+                    self.assertEqual(stdout.getvalue(), "")
+                    verify.assert_not_called()
+                    self.assertEqual({path.name: path.read_bytes() for path in root.iterdir()}, before)
+            self.assertTrue(alias.samefile(root))
 
     @unittest.skipIf(os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1", "disposable Git mutations explicitly disabled")
     def test_manifest_observes_real_clean_merge_checkout_without_changing_index(self):
