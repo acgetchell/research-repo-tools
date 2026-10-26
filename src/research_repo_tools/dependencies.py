@@ -1,7 +1,6 @@
 """Advance exact Python development-tool pins with uv's resolver."""
 
 import argparse
-import json
 import re
 import subprocess
 import sys
@@ -16,7 +15,7 @@ from packaging.requirements import InvalidRequirement, Requirement
 from packaging.specifiers import SpecifierSet
 from packaging.version import InvalidVersion, Version
 
-from research_repo_tools import config
+from research_repo_tools import config, python_locks, python_resolution
 from research_repo_tools.files import preserve_files
 from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics, run_safe_command
 
@@ -101,7 +100,9 @@ def _dev_pins(groups: dict[str, object]) -> list[DevPin]:
     return pins
 
 
-def _group_requirements(groups: dict[str, object], name: str, ancestors: tuple[str, ...] = ()) -> list[str]:
+def _group_requirements(
+    groups: dict[str, object], name: str, ancestors: tuple[str, ...] = (), *, python_constraints: Mapping[str, str] | None = None
+) -> list[str]:
     """Expand PEP 735 includes without granting ownership of their version pins."""
     if name in ancestors:
         raise ValueError(f"dependency group cycle: {' -> '.join((*ancestors, name))}")
@@ -114,10 +115,11 @@ def _group_requirements(groups: dict[str, object], name: str, ancestors: tuple[s
             Requirement(entry)
             result.append(entry)
         elif isinstance(entry, dict) and set(entry) == {"include-group"} and isinstance(entry["include-group"], str):
-            result.extend(_group_requirements(groups, entry["include-group"], (*ancestors, name)))
+            result.extend(_group_requirements(groups, entry["include-group"], (*ancestors, name), python_constraints=python_constraints))
         else:
             raise TypeError(f"dependency-groups.{name} entries must be requirements or include-group tables")
-    return result
+    constraint = (python_constraints or {}).get(name, "")
+    return [python_resolution.constrain_group(raw, constraint) for raw in result]
 
 
 def parse_project(text: str, *, toolchain: config.ToolchainSettings | None = None) -> tuple[SpecifierSet, list[DevPin]]:
@@ -127,6 +129,8 @@ def parse_project(text: str, *, toolchain: config.ToolchainSettings | None = Non
 
     project = _required_table(data, "project")
     pins = _dev_pins(_required_table(data, "dependency-groups"))
+    fixed_artifacts = python_resolution.artifact_source_names(text)
+    pins = [pin for pin in pins if canonicalize_name(pin.name) not in fixed_artifacts]
     if toolchain is None:
         tool = config._table(data.get("tool", {}), "tool")
         settings = config._table(tool.get("research-repo-tools", {}), "tool.research-repo-tools")
@@ -174,12 +178,15 @@ def parse_resolution(output: str, pins: list[DevPin]) -> list[DevPin]:
             rendered = ", ".join(sorted(versions))
             msg = f"uv resolver selected multiple versions for {pin.name}: {rendered}"
             raise ValueError(msg)
-        latest.append(DevPin(pin.name, next(iter(versions))))
+        selected = next(iter(versions))
+        if Version(selected) < Version(pin.version):
+            raise ValueError(f"refusing development-tool downgrade: {pin.name} {pin.version} -> {selected}; review intentional downgrades separately")
+        latest.append(DevPin(pin.name, selected))
     return latest
 
 
 def _resolution_requirements(text: str, pins: list[DevPin]) -> list[str]:
-    """Return project and retained dev constraints with managed pins unpinned."""
+    """Return project/retained constraints with current pins as upgrade floors."""
     data = tomllib.loads(text)
     project = _required_table(data, "project")
     dependencies = project.get("dependencies", [])
@@ -195,6 +202,8 @@ def _resolution_requirements(text: str, pins: list[DevPin]) -> list[str]:
         requirements.append(dependency)
 
     groups = _required_table(data, "dependency-groups")
+    python_constraints = python_resolution.group_constraints(text)
+    runtime_count = len(requirements)
     dev = groups.get("dev")
     if not isinstance(dev, list):
         msg = "dependency-groups.dev must be an array"
@@ -202,7 +211,7 @@ def _resolution_requirements(text: str, pins: list[DevPin]) -> list[str]:
     managed = {canonicalize_name(pin.name): pin for pin in pins}
     for raw_requirement in dev:
         if isinstance(raw_requirement, dict):
-            requirements.extend(_group_requirements(groups, raw_requirement["include-group"], ("dev",)))
+            requirements.extend(_group_requirements(groups, raw_requirement["include-group"], ("dev",), python_constraints=python_constraints))
             continue
         if not isinstance(raw_requirement, str):
             msg = "dependency-groups.dev entries must be strings"
@@ -234,9 +243,10 @@ def _resolution_requirements(text: str, pins: list[DevPin]) -> list[str]:
             and "*" not in specifiers[0].version
             and specifiers[0].version == pin.version
         ):
-            requirements.append(pin.name)
+            requirements.append(f"{pin.name}>={pin.version}")
         else:
             requirements.append(raw_requirement)
+    requirements[runtime_count:] = [python_resolution.constrain_group(raw, python_constraints.get("dev", "")) for raw in requirements[runtime_count:]]
     return requirements
 
 
@@ -245,14 +255,16 @@ def resolve_latest_pins(
 ) -> list[DevPin]:
     """Resolve a universal set without changing the consumer's files."""
     manifest = project_root / "pyproject.toml"
-    requirements = _resolution_requirements(manifest.read_text(encoding="utf-8"), pins)
+    text = manifest.read_text(encoding="utf-8")
+    requirements = _resolution_requirements(text, pins)
+    metadata = python_resolution.script_metadata(text, project_root, str(requires_python), requirements)
     # pip compile only conveys a Python lower bound. Exporting a temporary
     # script lock preserves the full range without changing the consumer lock.
     # uv reads this metadata; the script is never executed.
     with tempfile.TemporaryDirectory(prefix="research-repo-tools-resolve-") as directory:
         source = Path(directory) / "requirements.py"
         source.write_text(
-            f"# /// script\n# requires-python = {json.dumps(str(requires_python))}\n# dependencies = {json.dumps(requirements)}\n# ///\n",
+            metadata,
             encoding="utf-8",
             newline="\n",
         )
@@ -366,9 +378,14 @@ def update_dev_pins(
         msg = f"uv.lock must not be a symbolic link: {uv_lock}"
         raise ValueError(msg)
     requires_python, current = parse_project(manifest.read_text(encoding="utf-8"), toolchain=toolchain)
+    python_resolution.policy(manifest.read_text(encoding="utf-8"), manifest.parent)
+    python_locks.versions(uv_lock.read_bytes() if uv_lock.exists() else None)
     if not current:
         return {}
     latest = resolve_latest_pins(current, requires_python, manifest.parent, uv=uv, env=env)
+    for old, new in zip(current, latest, strict=True):
+        if canonicalize_name(old.name) != canonicalize_name(new.name) or Version(new.version) < Version(old.version):
+            raise ValueError(f"refusing invalid upgrade selection for {old.name}: {old.version} -> {new.version}")
     changes = {old.name: (old.version, new.version) for old, new in zip(current, latest, strict=True) if old.version != new.version}
     if not changes:
         return changes
@@ -391,6 +408,7 @@ def update_dev_pins(
             timeout=UV_ADD_TIMEOUT_SECONDS,
         )
         _require_applied_pins(manifest, latest, snapshots[manifest] or b"", toolchain=toolchain)
+        python_locks.require_no_downgrades(snapshots[uv_lock], uv_lock)
     return changes
 
 

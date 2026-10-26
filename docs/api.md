@@ -80,18 +80,30 @@ failures use the shared rollback/recovery contract. The YAML/update modules are
 implementation details; use the CLI or `cli.main`.
 
 `deps update-python` advances only exact direct main-project `dev` pins.
+Candidates preserve supported uv source/index, override, constraint and build
+policy, with each current managed version as a minimum. Unsupported source or
+policy forms fail before mutation; see the [supported resolution policy](../README.md#dependency-and-tool-updates).
 Adding `--all-projects` first checks the full project inventory, then advances
-those pins, upgrades the main lock, and synchronizes `dev` using checked managed
-tools. It next upgrades and syncs each `deps.python-projects` directory in order.
+those pins and upgrades every selected lock. All retained direct/transitive
+versions and platform branches must pass downgrade checks before any project
+is synchronized. Synchronization uses checked managed tools and selects `dev`
+for the main project, then each `deps.python-projects` directory in order.
 These additional projects retain all manifest requirements and select their own
 Python version and default groups. Each project uses its own `.venv`; caller
-project, interpreter, configuration-file, and environment overrides do not redirect
-the workflow. Registry, cache, and offline settings remain available.
+project, interpreter, configuration-file, and active-environment overrides do not
+redirect the workflow. Project uv configuration, registry/authentication, cache,
+and offline settings remain available.
 Directories must be distinct portable paths relative to the repository, without
 symlinks or junctions in the project path or manifest, lock, version file, and
 environment targets. Declare independent uv projects, not workspace members;
 the main `deps.pyproject` project is already included. A later resolver or sync
-failure returns nonzero, stops subsequent work, and retains earlier updates.
+failure returns nonzero, stops subsequent work, and restores every selected
+manifest and lock. If sync began, existing environments are resynchronized from
+the original locks and newly created environments are removed. An existing
+environment must have a lock for recovery. Recovery failures report the affected
+environment or retained file backups; no crash-atomicity or concurrent-writer
+guarantee is made. Post-update auditing is separate consumer recipe composition:
+its failures retain the final updated files for inspection and repair.
 Use the CLI or `cli.main`; the orchestration module is an implementation detail.
 
 `deps update-uv --dry-run` inspects standalone, Homebrew, or `uv tool` ownership

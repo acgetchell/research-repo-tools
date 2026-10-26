@@ -152,6 +152,15 @@ rewrite copied Justfiles: merge the updated recipe once when adopting this
 capability. Additional project locks and environments then participate in every
 Python dependency update without duplicated consumer update commands.
 
+For v0.2.4, retain consumer source-index workarounds and local audit composition
+until that exact release is published and passes consumer integration. Then
+merge the packaged `audit`/`security` recipes, select all maintained Python and
+Cargo locks, and retain the final audit stage in `update-dependencies`. Source
+policy remains consumer-owned. Verify a normal upgrade with named indexes and
+overrides, downgrade rejection, all-project rollback, and nonzero post-update
+audit findings before removing temporary local wiring. Separate scanner/wrapper
+projects must use the explicit environment selection shown in the README.
+
 The shared contract deliberately supersedes these historical policies:
 
 - uv is upgraded through its installation owner and its resulting stable pin is
@@ -165,8 +174,10 @@ The shared contract deliberately supersedes these historical policies:
 - Cargo upgrades publish verified exact TOML declarations and retain old managed
   installations. They do not feed the legacy Just-variable pin reconciler.
 - Dependency updates stop on failure but do not roll back earlier package-manager
-  steps. Cargo exclusions constrain requirement upgrades, not independent policy
-  for lockfile resolution.
+  steps. Within the Python workflow, all selected manifests and locks roll back
+  together, with environment recovery after sync failures. Post-update audit
+  failures retain the updated files for repair. Cargo exclusions constrain
+  requirement upgrades, not independent policy for lockfile resolution.
 
 The catalog includes cargo-machete, cargo-audit, samply, tectonic, and tex-fmt.
 Their native build prerequisites and profiling/typesetting runtime configuration

@@ -41,7 +41,7 @@ def test_invalid_inventory_fails_before_any_update(tmp_path, monkeypatch, capsys
     path = manifest(tmp_path, projects=projects)
     manifest(tmp_path / "scanner")
     original = path.read_bytes()
-    monkeypatch.setattr(python_updates.dependencies, "main", lambda *args, **kwargs: pytest.fail("updated before preflight"))
+    monkeypatch.setattr(python_updates.dependencies, "update_dev_pins", lambda *args, **kwargs: pytest.fail("updated before preflight"))
     assert cli.main(["--root", str(tmp_path), "deps", "update-python", "--all-projects"]) == 1
     assert diagnostic in capsys.readouterr().err
     assert path.read_bytes() == original
@@ -55,7 +55,7 @@ def test_workspace_member_is_not_updated_as_an_independent_project(tmp_path, cap
         stream.write('[tool.uv.workspace]\nmembers=["scanner"]\n')
     manifest(tmp_path / "scanner")
     assert cli.main(["--root", str(tmp_path), "deps", "update-python", "--all-projects"]) == 1
-    assert "workspace member" in capsys.readouterr().err
+    assert "workspace" in capsys.readouterr().err
     assert not (tmp_path / "uv.lock").exists()
 
 
@@ -73,7 +73,7 @@ def test_invalid_independent_manifest_identifies_project_before_update(tmp_path,
     scanner = manifest(tmp_path / "tooling/scanner")
     scanner.write_text(source, encoding="utf-8", newline="\n")
     original = main.read_bytes()
-    monkeypatch.setattr(python_updates.dependencies, "main", lambda *args, **kwargs: pytest.fail("updated before preflight"))
+    monkeypatch.setattr(python_updates.dependencies, "update_dev_pins", lambda *args, **kwargs: pytest.fail("updated before preflight"))
     assert cli.main(["--root", str(tmp_path), "deps", "update-python", "--all-projects"]) == 1
     error = capsys.readouterr().err
     assert "tooling/scanner:" in error
@@ -113,7 +113,9 @@ def test_update_isolates_environments_and_stops_on_failure(tmp_path, monkeypatch
     def pins(*args, **kwargs):
         assert kwargs["env"] == {"UV_OFFLINE": "1", "PATH": "managed-tools"}
         calls.append("pins")
-        return 1 if failure == "pins" else 0
+        if failure == "pins":
+            raise ValueError("injected candidate failure")
+        return {}
 
     def run(command, args, *, cwd, env, timeout):
         relative = cwd.relative_to(tmp_path).as_posix()
@@ -121,14 +123,56 @@ def test_update_isolates_environments_and_stops_on_failure(tmp_path, monkeypatch
         calls.append(label)
         assert command == "uv"
         assert args[-4:] == ["--directory", str(cwd), "--project", str(cwd)]
-        assert env == {"UV_OFFLINE": "1", "PATH": "managed-tools", "UV_PROJECT_ENVIRONMENT": str(cwd / ".venv")}
+        assert env == {
+            "UV_OFFLINE": "1",
+            "PATH": "managed-tools",
+            "UV_PROJECT_ENVIRONMENT": str(cwd / ".venv"),
+        }
         assert ("--group" in args) == (relative == "." and args[0] == "sync")
         assert timeout > 0
+        if args[0] == "lock":
+            (cwd / "uv.lock").write_text("version=1\npackage=[]\n", encoding="utf-8", newline="\n")
         if label == failure:
             raise subprocess.CalledProcessError(23, [command, *args])
 
-    monkeypatch.setattr(python_updates.dependencies, "main", pins)
+    monkeypatch.setattr(python_updates.dependencies, "update_dev_pins", pins)
     monkeypatch.setattr(python_updates, "run_command_live", run)
     assert cli.main(["--root", str(tmp_path), "deps", "update-python", "--all-projects"]) == (0 if failure is None else 1)
-    expected = ["pins", "root-lock", "root-sync", "scanner-lock", "scanner-sync", "later-lock", "later-sync"]
+    expected = ["pins", "root-lock", "scanner-lock", "later-lock", "root-sync", "scanner-sync", "later-sync"]
     assert calls == (expected if failure is None else expected[: expected.index(failure) + 1])
+
+
+@pytest.mark.parametrize("existing_environment", [False, True])
+def test_sync_failure_cleans_new_environment_or_reports_failed_recovery(tmp_path, monkeypatch, capsys, existing_environment):
+    path = manifest(tmp_path)
+    lock = tmp_path / "uv.lock"
+    lock.write_bytes(b"version=1\npackage=[]\n")
+    original = path.read_bytes(), lock.read_bytes()
+    environment = tmp_path / ".venv"
+    if existing_environment:
+        environment.mkdir()
+        (environment / "pyvenv.cfg").write_bytes(b"original environment\n")
+    monkeypatch.setattr(python_updates.toolchain.Runtime, "inspect", lambda self: [])
+    monkeypatch.setattr(python_updates.toolchain.Runtime, "project_environment", lambda self: {})
+    monkeypatch.setattr(python_updates.dependencies, "update_dev_pins", lambda *args, **kwargs: {})
+    syncs = []
+
+    def run(command, args, **kwargs):
+        if args[0] == "lock":
+            lock.write_bytes(b"version=1\npackage=[]\n# candidate\n")
+        else:
+            syncs.append(args)
+            environment.mkdir(exist_ok=True)
+            (environment / "partial.txt").write_bytes(b"partial installation\n")
+            raise subprocess.CalledProcessError(23, [command, *args], stderr="injected sync failure")
+
+    monkeypatch.setattr(python_updates, "run_command_live", run)
+    assert cli.main(["--root", str(tmp_path), "deps", "update-python", "--all-projects"]) == 1
+    assert (path.read_bytes(), lock.read_bytes()) == original
+    assert len(syncs) == (2 if existing_environment else 1)
+    assert environment.exists() == existing_environment
+    errors = capsys.readouterr().err
+    assert "injected sync failure" in errors
+    if existing_environment:
+        assert "failed to restore Python environment" in errors
+        assert str(environment) in errors

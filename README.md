@@ -141,6 +141,7 @@ arguments in lexicographic order.
 
 | Consumer recipe | Purpose |
 | --- | --- |
+| `just audit` | Audit every maintained lockfile explicitly selected by the consumer |
 | `just changelog` | Generate, normalize, and archive completed minor series |
 | `just changelog-archive` | Archive existing notes without regenerating history |
 | `just changelog-check` | Validate the whole root changelog and all archives without writing |
@@ -178,6 +179,7 @@ arguments in lexicographic order.
 | `just release-verify TAG [ARGS...]` | Verify the exact stable registry version and GitHub Release/assets |
 | `just review [base]` | Review branch and local changes; default to verified `origin/main` |
 | `just review-uncommitted` | Review staged, unstaged, and non-ignored untracked changes |
+| `just security` | Audit selected lockfiles, then scan for secrets |
 | `just security-osv LOCKFILE...` | Audit explicitly selected uv.lock/Cargo.lock files |
 | `just security-secrets [ARGS...]` | Scan full reachable history and current tracked/nonignored files |
 | `just semgrep-check` | Validate the consumer's Semgrep rules and fixtures |
@@ -190,11 +192,11 @@ arguments in lexicographic order.
 | `just tools-export` | Verify tools and append their environment to `GITHUB_ENV` |
 | `just tools-python-check` | Check inherited Python tool declarations, lock, and executable versions without changes |
 | `just tools-sync-binaries` | Install and verify pinned release binaries without package synchronization or dependency builds |
-| `just update` | Upgrade tools, then Cargo and Python dependencies and the development environment |
+| `just update` | Upgrade tools, then dependencies and environments, and audit the final locks |
 | `just update-actions [ARGS...]` | Opt-in Actions pin update; use `--dry-run` or `--check` to preview the selected scope |
 | `just update-cargo-dependencies` | Upgrade root Cargo requirements (including incompatible releases) and lock resolution; skip projects without a root Cargo.toml |
 | `just update-cargo-tools` | Upgrade declared Cargo tools and release binaries; publish verified TOML pins |
-| `just update-dependencies` | Run the Cargo and Python dependency workflows |
+| `just update-dependencies` | Run Cargo and Python dependency updates, then audit the final selected locks |
 | `just update-python-dependencies` | Update direct dev pins, upgrade the full Python lock, and synchronize dev |
 | `just update-python-deps` | Alias for `update-python-dependencies` |
 | `just update-tools` | Upgrade uv and managed tools without repeating shell configuration |
@@ -573,12 +575,29 @@ osv-scanner = "2.6.0"
 ```sh
 just setup
 just tools-check
-just security-osv uv.lock Cargo.lock
-just security-secrets
+just audit
+just security
 ```
 
 Supply only the lockfiles the consumer actually owns. Use `just files` to inspect
 tracked and nonignored inputs for repositories containing several packages.
+The v0.2.4 template's `audit` recipe selects root `uv.lock` by default. Replace
+that selection with every maintained resolution, for example:
+
+```just
+audit: (security-osv "uv.lock" "tooling/semgrep/uv.lock" "Cargo.lock" "fixtures/extra root/Cargo.lock")
+
+security: audit security-secrets
+```
+
+`update-dependencies` runs `audit` after both package managers finish writing
+their locks; `update` composes tool updates before this dependency workflow.
+Findings or audit errors make either aggregate fail, leaving the updated files
+available for review and repair. Direct Python/Cargo update recipes remain
+available for deliberately narrower work. `check` and `ci` keep their existing
+local/offline policy; auditing is an explicit network-backed command. Consumers
+own advisory exceptions, additional gates, and report publication.
+
 OSV checks each explicit supported lockfile with Go and Rust call analysis
 disabled; it does not execute dependency build scripts. Advisory queries need
 network access. Missing inputs, uncovered sources, scanner failures, malformed
@@ -605,7 +624,7 @@ separately for history and the working tree. Semgrep prints the rule and source
 location. Each scan prints a finding count and published report paths, with
 findings listed once across JSON and SARIF. Terminal output omits descriptions
 that could interpolate source values, snippets, adjacent matches and commit
-messages. Keep the aggregate `just security` recipe and scan policy local.
+messages. Extend the aggregate `just security` recipe with consumer-owned policy.
 The first nonzero scanner status is returned; invalid successful reports return
 1, and timeouts return 124. Checks never install or select an ambient scanner.
 
@@ -732,6 +751,34 @@ checked managed tools so native Python builds can find Rust. Included groups,
 including the pinned shared package in `tooling`, retain their declared constraints.
 The older `update-python-deps` spelling is an alias for this complete workflow.
 
+Starting with v0.2.4, candidate resolution retains named uv indexes, marker-split
+package source mappings, explicit-index isolation, overrides, constraints, build
+constraints and supported native resolver/build/authentication settings. Current
+managed versions are lower bounds, including when an override selects a version.
+Runtime pins and included-group pins remain consumer-owned. Named-index
+credentials continue to use uv's environment/keyring configuration; they are not
+converted into requirements or printed by the updater. Relative local index
+URLs and `find-links` remain relative to the consumer project.
+
+Pin discovery supports registry requirements and named-index sources with
+optional platform markers. Absolute local wheel/sdist source files are also
+retained for isolated artifact evaluation; their fixed pins are not upgrade
+targets. Relative paths, source directories, workspace, Git, direct URL, group/extra-scoped
+sources, scoped override tables, dynamic dependencies, legacy uv dev dependencies
+and conflicting-group policies are rejected before writes. Use explicit uv
+maintenance for those forms; the updater never falls back to PyPI to bypass them.
+
+Every retained lock package, including transitive dependencies and inactive
+platform branches, is checked for decreases before synchronization. Changed
+marker partitions reject when an upgrade cannot be proved; intentional downgrades
+or branch restructuring need separate maintainer review through uv. All selected
+Python manifests and locks roll back on candidate, apply, lock or sync failure.
+If synchronization had started, the updater restores existing environments from
+their original locks and removes newly created environments. Recovery failures
+remain failures with actionable diagnostics and retained file backups where
+needed. This is caught-failure recovery, not crash atomicity or concurrent-writer
+coordination; avoid simultaneous edits or environment use during updates.
+
 Declare additional independent uv projects when a tool needs its own environment:
 
 ```toml
@@ -740,7 +787,7 @@ python-projects = ["tooling/scanner"]
 ```
 
 The shared `deps update-python --all-projects` command upgrades each declared
-project's lock and synchronizes its own `.venv` after updating the main project.
+project's lock, validates all locks, then synchronizes each project's own `.venv`.
 Additional projects keep their manifest requirements, including exact tool pins,
 and use their own Python version and default dependency groups. Give each one a
 compatible `.python-version`; uv workspace members share their workspace lock
@@ -748,6 +795,28 @@ and must not be listed as independent projects. No directories are discovered
 automatically. To adopt this workflow in an existing repository, upgrade its
 shared-package pin, merge the packaged `update-python-dependencies` recipe, and
 declare its extra projects. Installing the package does not rewrite copied recipes.
+
+When a scanner needs Python 3.14 while the wrapper needs Python 3.15, keep their
+separate project requirements and locks. Explicitly ignore inherited active
+environments at both project-selecting launches:
+
+```just
+semgrep-check:
+    uv run --locked --no-active --managed-python --project tooling/semgrep uv run --locked --no-active --project . --group dev research-repo-tools semgrep check-fixtures --rust-docs
+
+semgrep-scan:
+    uv run --locked --no-active --managed-python --project tooling/semgrep uv run --locked --no-active --project . --group dev research-repo-tools semgrep scan --rust-docs
+
+validate-native configuration *names:
+    uv run --locked --no-active --managed-python --project . --group dev research-repo-tools toolchain run -- research-repo-tools validation run "$@"
+```
+
+The wrapper runs in the root environment while PATH retains the scanner project's
+executable. Do not use `--active`, which would select the inherited environment.
+After **v0.2.4 is published and verified**, adopt its exact registry pin, reconcile
+copied recipes and audit lock selection, and run focused consumer integration
+checks before removing local source-index or audit workarounds. These changes in
+the repository do not establish that the release is already available on PyPI.
 
 For Rust projects, pin `cargo-edit` to an exact version in the managed Cargo tool
 table (for example, `cargo-edit = "0.13.13"`) and keep the compiler pinned in
