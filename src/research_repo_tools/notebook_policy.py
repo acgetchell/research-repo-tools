@@ -202,10 +202,9 @@ def _python_module(arguments: list[str], *, launcher: bool) -> list[str]:
     index = 0
     while index < len(arguments):
         argument = arguments[index]
-        if argument == "-m":
-            return arguments[index + 1 :]
-        if argument.startswith("-m"):
-            return [argument[2:], *arguments[index + 1 :]]
+        if module := re.fullmatch(r"-[bBdEiIOqRsSuUx]*m(.*)", argument):
+            remaining = arguments[index + 1 :]
+            return [module[1], *remaining] if module[1] else remaining
         if argument in {"-W", "-X"}:
             index += 2
         elif argument.startswith(("-W", "-X")) or re.fullmatch(r"-[bBdEiIOqRsSuUx]+", argument):

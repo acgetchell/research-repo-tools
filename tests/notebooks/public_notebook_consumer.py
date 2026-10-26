@@ -423,6 +423,8 @@ class TestInstallPolicy(Consumer):
             "!python -m uv pip install never-executed",
             "!uv run pip install never-executed",
             "!python -I -m pip install never-executed",
+            "!python -Im pip install never-executed",
+            "!python -Impip install never-executed",
             "%pip --log info install never-executed",
             "!python3.15 -W ignore -X utf8 -m uv run --python 3.15 python -m pip install never-executed",
             r'!"C:\Program Files\Python\python.exe" -I -m uv pip install never-executed',
@@ -441,6 +443,8 @@ class TestInstallPolicy(Consumer):
         readonly = [
             "!pip list",
             "!python -m uv pip list",
+            "!python -Im pip list",
+            "!python -Impip show install",
             "%pip --log install list",
             "%pip --log info show install",
             "!uv --directory install pip list",
