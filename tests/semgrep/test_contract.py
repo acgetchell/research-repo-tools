@@ -12,6 +12,11 @@ import yaml
 from research_repo_tools import cli, config, semgrep
 
 
+@pytest.fixture(autouse=True)
+def managed_scanner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(semgrep.semgrep_tool, "setup", lambda root: tmp_path / "managed-semgrep")
+
+
 def consumer(tmp_path: Path, content: str = "# ruleid: shared.rule\nbad()\n") -> tuple[config.Config, Path]:
     rule = {"id": "shared.rule", "languages": ["python"], "message": "bad", "severity": "WARNING", "pattern": "bad()", "paths": {"exclude": ["tests/**"]}}
     (tmp_path / "semgrep.yaml").write_text(yaml.safe_dump({"rules": [rule]}), newline="\n")
@@ -44,7 +49,7 @@ def test_span_scan_keeps_original_filename_and_uses_fixture_path_semantics(tmp_p
 
     def scan(command: str, arguments: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
         calls.append(arguments)
-        assert command == "semgrep"
+        assert command == str(tmp_path / "managed-semgrep")
         assert Path(arguments[-1]) == fixture.relative_to(tmp_path)
         assert kwargs["cwd"] == tmp_path
         assert kwargs["env"]["OTEL_SDK_DISABLED"] == "true"

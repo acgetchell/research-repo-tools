@@ -9,8 +9,17 @@ FENCE = re.compile(r"^\s*(`{3,}|~{3,})(.*)$")
 ATTRIBUTE = re.compile(r"(?:no_run|ignore(?:-.+)?|should_panic|compile_fail|test_harness|standalone_crate|edition(?:2015|2018|2021|2024)|E[0-9]{4})")
 
 
+def _source_lines(path: Path) -> list[str]:
+    """Use native LF line boundaries, normalizing CRLF without splitting prose."""
+    text = path.read_text(encoding="utf-8", newline="").replace("\r\n", "\n")
+    if not text:
+        return []
+    lines = text.split("\n")
+    return lines[:-1] if text.endswith("\n") else lines
+
+
 def _documentation(path: Path, *, preserve_source: bool = False) -> list[str]:
-    lines = path.read_text(encoding="utf-8").splitlines()
+    lines = _source_lines(path)
     if path.suffix != ".rs":
         return lines
     result = []
@@ -73,7 +82,7 @@ def documentation_blocks(path: Path) -> tuple[RustBlock, ...]:
     start_line = 0
     delimiter = ""
     columns = []
-    original = path.read_text(encoding="utf-8").splitlines()
+    original = _source_lines(path)
     for number, line in enumerate(_documentation(path)):
         fence = FENCE.match(line)
         if fence:

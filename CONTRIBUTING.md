@@ -85,6 +85,7 @@ including changelog and release recipes.
 | `just release-verify TAG [ARGS...]` | Verify the exact registry version and GitHub Release/assets |
 | `just review [base]` | Run opt-in CodeRabbit review of branch and local changes |
 | `just review-uncommitted` | Run opt-in CodeRabbit review of local changes only |
+| `just semgrep-setup` | Prepare the package-pinned Semgrep environment for native tests |
 | `just setup` | Install user Just and synchronize the declared development environment |
 | `just sync` | Synchronize the locked development environment |
 | `just templates ARGS...` | Export a packaged configuration or workflow template |
@@ -114,11 +115,15 @@ Installed public suites also cover complete-directory rollback/recovery, SARIF
 selection/indexing, and batched Semgrep policy and paired-report coverage.
 The source suite and both installed distributions also run real Semgrep scans
 for anchored path filters, mixed Rustdoc/Markdown inputs, fixture assertions and
-paired reports. `tests/semgrep/public_native_semgrep_consumer.py` owns the exact
-scanner pin and provisions it through uv in an isolated Python 3.14 tool
-environment, separate from the package's Python 3.15 interpreter. These tests
+paired reports. `src/research_repo_tools/semgrep_tool.py` owns the exact scanner
+pin and its isolated Python minor. The native suite uses the same provisioning
+and version checks as consumers, separate from the wrapper interpreter. These tests
 require network access on a cold uv cache and fail if provisioning fails; they
 do not substitute a mocked scanner or skip unsupported native execution.
+Change the scanner pin only in that module and validate the source and installed
+wheel/sdist suites on Linux, macOS and Windows before releasing it. Consumer
+manifests do not need another Semgrep pin. The tool environment cache belongs to
+uv; project-interpreter cleanup leaves the separate scanner Python store intact.
 See [Validation](docs/VALIDATING.md) for check coverage and agent restrictions.
 New Git-mutating pytest fixtures must depend on `git_mutations_allowed`.
 Standalone unittest consumer suites must skip those fixtures before setup when

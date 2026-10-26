@@ -30,6 +30,21 @@ def test_other_languages_excluded_and_unclosed_rust_blocks(tmp_path):
         rust_blocks(path)
 
 
+@pytest.mark.parametrize("separator", ["\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029", "\r"])
+@pytest.mark.parametrize("suffix,prefix", [(".md", ""), (".rs", "//! ")])
+def test_only_lf_separates_native_source_lines(tmp_path, separator, suffix, prefix):
+    from research_repo_tools.semgrep_docs import _documentation, documentation_blocks
+
+    path = tmp_path / ("source" + suffix)
+    original = f'{prefix}before{separator}after\r\n{prefix}```rust\r\n{prefix}println!("example");\r\n{prefix}```\r\n'.encode("utf-8")
+    path.write_bytes(original)
+    block = documentation_blocks(path)[0]
+    assert (block.start_line, block.end_line) == (3, 3)
+    assert block.text == '\n\nprintln!("example");\n'
+    assert len(_documentation(path)) == 4
+    assert path.read_bytes() == original
+
+
 def test_windows_snippet_paths_map_native_json_and_both_sarif_uri_forms():
     from pathlib import PureWindowsPath
 

@@ -726,6 +726,36 @@ def test_setup_installs_user_just_and_tools_before_locked_project_sync(runtime, 
     assert {path: path.read_bytes() for path in instance.plan.root.iterdir()} == originals
 
 
+@pytest.mark.parametrize("failure", [False, True])
+def test_setup_prepares_declared_semgrep_after_sync_and_reports_failure(runtime, monkeypatch, capsys, failure):
+    from research_repo_tools import semgrep_tool
+
+    instance, fake = runtime
+    setup_fake(runtime, monkeypatch)
+    manifest = instance.plan.root / "pyproject.toml"
+    manifest.write_text(manifest.read_text() + '\n[tool.research-repo-tools.semgrep]\nconfig = "rules.yml"\n', newline="\n")
+    monkeypatch.setattr(toolchain, "Runtime", lambda plan: instance)
+    calls = []
+
+    def provision(root):
+        calls.append(root)
+        assert fake.calls[-1][1] == ["sync", "--locked", "--managed-python", "--group", "dev"]
+        if failure:
+            raise RuntimeError("scanner provisioning unavailable")
+        return root / "managed-semgrep"
+
+    monkeypatch.setattr(semgrep_tool, "setup", provision)
+    assert cli.main(["--root", str(instance.plan.root), "setup"]) == int(failure)
+    assert calls == [instance.plan.root]
+    captured = capsys.readouterr()
+    if failure:
+        assert "scanner provisioning unavailable" in captured.err
+        assert "Setup complete" not in captured.out
+    else:
+        assert f"Semgrep {semgrep_tool.VERSION}" in captured.out
+        assert "Setup complete" in captured.out
+
+
 @pytest.mark.parametrize("failure", [["tool", "install"], ["tool", "update-shell"], ["sync", "--locked"]])
 def test_setup_failure_is_reported_without_success(runtime, monkeypatch, capsys, failure):
     instance, fake = runtime

@@ -2,7 +2,6 @@
 
 import copy
 import json
-import os
 import subprocess
 import sys
 import tempfile
@@ -14,10 +13,9 @@ from urllib.parse import quote, unquote
 
 import yaml
 
-from research_repo_tools import config, security, semgrep
+from research_repo_tools import config, security, semgrep, semgrep_tool
 from research_repo_tools.evidence import _load_json, _object, deterministic_json
 from research_repo_tools.files import _path_keys, publish_directory
-from research_repo_tools.process import resolve_executable
 from research_repo_tools.sarif import _metadata_references, _objects, _reindex_reference, _rule_id, _rule_relationships, _run
 from research_repo_tools.scanner_output import FindingOutput
 from research_repo_tools.security import security_inventory
@@ -128,7 +126,7 @@ def _project_positions(data, sarif, inputs, root):
         if item.block is None:
             continue
         if item.source not in source_lines:
-            source_lines[item.source] = item.source.read_bytes().splitlines(keepends=True)
+            source_lines[item.source] = item.source.read_bytes().split(b"\n")
         lines = source_lines[item.source]
         positions = [result["start"], result["end"]]
         for value in _object(result.get("extra", {}).get("metavars", {}), "Semgrep metavariables").values():
@@ -148,7 +146,7 @@ def _project_positions(data, sarif, inputs, root):
                     raise ValueError("Semgrep position requires a positive column")
                 position["col"] = item.block.source_column(line + item.block.start_line - 1, column)
                 if "offset" in position:
-                    position["offset"] = sum(map(len, lines[: line + item.block.start_line - 2])) + position["col"] - 1
+                    position["offset"] = sum(len(raw) + 1 for raw in lines[: line + item.block.start_line - 2]) + position["col"] - 1
     for run in sarif["runs"]:
         for result in run["results"]:
             physical = result["locations"][0]["physicalLocation"]
@@ -438,12 +436,12 @@ def scan(
         source = (settings.root / name).resolve()
         if any(not destination_keys.isdisjoint(_path_keys(parent)) for parent in (source, *source.parents)):
             raise ValueError("Semgrep output directory must not contain selected inputs")
-    binary = resolve_executable("semgrep", cwd=settings.root)
     with publish_directory(destination) as candidate, tempfile.TemporaryDirectory(prefix="research-semgrep-scan-") as directory:
         temporary = Path(directory)
         groups = _scan_groups(settings.root, names, temporary, settings.path(policy.config), rust_docs)
+        binary = semgrep_tool.setup(settings.root)
         env = {
-            **os.environ,
+            **semgrep_tool._environment(),
             "SEMGREP_SEND_METRICS": "off",
             "OTEL_SDK_DISABLED": "true",
             "SEMGREP_SETTINGS_FILE": str(temporary / "settings.yml"),

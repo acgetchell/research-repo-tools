@@ -10,7 +10,7 @@ from research_repo_tools.toolchain import INSTALL_TIMEOUT, Runtime, _probe, repo
 from research_repo_tools.toolchain_config import executable
 
 
-def setup(runtime: Runtime) -> None:
+def setup(runtime: Runtime, *, semgrep: bool = False) -> None:
     """Install user Just and declared tools before building project dependencies.
 
     uv owns the persistent Just environment and shell PATH configuration. Python,
@@ -61,4 +61,10 @@ def setup(runtime: Runtime) -> None:
     if include_dev:
         sync += ["--group", "dev"]
     run_safe_command(uv.path, sync, cwd=root, env=runtime.project_environment(), timeout=INSTALL_TIMEOUT, capture_output=False)
+    if semgrep:
+        from research_repo_tools import semgrep_tool
+        from research_repo_tools.scanner_output import _print
+
+        binary = semgrep_tool.setup(root)
+        _print(f"Semgrep {semgrep_tool.VERSION}: {binary}")
     print("Setup complete. Open a new terminal if PATH changed, then run just help.")

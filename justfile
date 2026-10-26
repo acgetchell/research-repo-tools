@@ -151,6 +151,10 @@ review base="origin/main":
 review-uncommitted:
     uv run --locked research-repo-tools review uncommitted
 
+# Prepare the package-pinned Semgrep environment before offline scans or tests.
+semgrep-setup:
+    uv run --locked research-repo-tools semgrep setup
+
 # Install user Just and synchronize the declared development environment.
 setup:
     uv run --locked research-repo-tools setup

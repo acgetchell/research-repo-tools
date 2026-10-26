@@ -910,6 +910,21 @@ redacted in addition to native detected-secret redaction. Report directories are
 caller-owned outputs. These commands are not an assurance that unknown secrets,
 ignored inputs or unsupported binary formats are detected.
 
+`semgrep_tool.setup(root)` provisions the package's exact `semgrep_tool.VERSION`
+in a cached, isolated uv tool environment and returns the verified executable
+`Path`. It verifies package/interpreter metadata and the executable's version.
+Consumer manifests, locks, and `.venv` are unchanged. Active environments,
+project uv configuration, and ambient Semgrep executables cannot replace the pin;
+uv cache, interpreter-store and network settings remain available. Provisioning
+or version failures raise `RuntimeError` with diagnostics. The CLI entry point
+is `semgrep setup`, exposed as `just semgrep-setup`. Normal setup also provisions
+the scanner for consumers declaring `semgrep.config`.
+
+Both `semgrep.check` and `semgrep_scan.scan` use this managed executable. A cold
+cache can require network access; prepare it before an offline gate. The package
+owns the scanner pin and Python minor, while consumers own their rule policy.
+Pin updates require a new shared-package release and native matrix validation.
+
 `semgrep_docs.rust_blocks(path)` returns line-padded Rust fence source strings
 from UTF-8 Markdown or line/block rustdoc comments. It does not execute code or
 change the source. Hidden Rust lines remain code; unclosed selected fences raise

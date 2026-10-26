@@ -5,8 +5,6 @@ import contextlib
 import io
 import json
 import os
-import shutil
-import subprocess
 import tempfile
 import unittest
 from pathlib import Path
@@ -14,29 +12,14 @@ from typing import override
 from unittest.mock import patch
 from urllib.parse import unquote
 
-from research_repo_tools import config, security, semgrep_scan
-
-SEMGREP_REQUIREMENT = "semgrep==1.182.0"
+from research_repo_tools import config, security, semgrep_scan, semgrep_tool
 
 
 class TestNativeSemgrepConsumer(unittest.TestCase):
     @classmethod
     @override
     def setUpClass(cls):
-        uv = shutil.which("uv")
-        if uv is None:
-            raise AssertionError("native Semgrep tests require uv to provision the pinned scanner")
-        result = subprocess.run(
-            [uv, "tool", "run", "--python", "3.14", "--from", SEMGREP_REQUIREMENT, "python", "-c", "import shutil; print(shutil.which('semgrep'))"],
-            capture_output=True,
-            encoding="utf-8",
-            timeout=300,
-        )
-        if result.returncode:
-            raise AssertionError(f"could not provision {SEMGREP_REQUIREMENT}: {result.stderr}")
-        cls.binary = Path(result.stdout.strip())
-        if not cls.binary.is_file():
-            raise AssertionError(f"missing native Semgrep executable: {cls.binary}")
+        cls.binary = semgrep_tool.setup(Path.cwd())
 
     @override
     def setUp(self):
@@ -44,7 +27,31 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
         self.addCleanup(patch.stopall)
-        patch.dict(os.environ, {"PATH": str(self.binary.parent) + os.pathsep + os.environ.get("PATH", "")}).start()
+
+    def test_managed_setup_reuses_cache_and_ignores_ambient_scanner_and_project_redirects(self):
+        ambient = self.root / "ambient tools"
+        ambient.mkdir()
+        fake = ambient / ("semgrep.cmd" if os.name == "nt" else "semgrep")
+        fake.write_bytes(b"@echo ambient scanner invoked\r\n@exit /b 92\r\n" if os.name == "nt" else b"#!/bin/sh\necho ambient scanner invoked\nexit 92\n")
+        fake.chmod(0o755)
+        self.write("uv.toml", "invalid = [\n")
+        self.write(".python-version", "0.0.0\n")
+        with patch.dict(
+            os.environ,
+            {
+                "PATH": str(ambient) + os.pathsep + os.environ.get("PATH", ""),
+                "UV_OFFLINE": "1",
+                "UV_CONFIG_FILE": str(self.root / "missing.toml"),
+                "UV_PROJECT": str(self.root / "missing-project"),
+                "UV_PYTHON": "0.0.0",
+                "UV_OVERRIDE": str(self.root / "missing-overrides.txt"),
+                "VIRTUAL_ENV": str(self.root / "missing-environment"),
+                "PYTHONPATH": str(self.root),
+            },
+        ):
+            self.assertEqual(semgrep_tool.setup(self.root), self.binary)
+        self.assertFalse((self.root / "uv.lock").exists())
+        self.assertFalse((self.root / ".venv").exists())
 
     def write(self, name, text):
         path = self.root / name
@@ -184,6 +191,29 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
             self.assertEqual(semgrep_scan.scan(settings, include=("*.md",), rust_docs=True), 1)
         report = json.loads((self.root / "target/security/semgrep/semgrep.json").read_bytes())
         self.assertEqual([(item["check_id"], Path(item["path"]), item["start"]["line"]) for item in report["results"]], [("prose.bad", source, 1)])
+
+    def test_unicode_and_control_separators_do_not_shift_native_source_lines(self):
+        settings = self.settings(
+            [
+                {"id": "rust.print", "languages": ["rust"], "pattern": "println!(...)", "message": "print", "severity": "WARNING"},
+                {"id": "prose.coverage", "languages": ["generic"], "pattern-regex": "UNREACHABLE", "message": "coverage", "severity": "WARNING"},
+            ]
+        )
+        source = self.write("docs/guide.md", 'before\v\f\x1c\x1d\x1e\x85\u2028\u2029\rafter\r\n```rust\r\nprintln!("example");\r\n```\r\n')
+        original = source.read_bytes()
+        with patch.object(semgrep_scan, "security_inventory", return_value=("docs/guide.md",)):
+            self.assertEqual(semgrep_scan.scan(settings, include=("*.md",), rust_docs=True), 1)
+        output = self.root / "target/security/semgrep"
+        data = json.loads((output / "semgrep.json").read_bytes())
+        self.assertEqual(len(data["results"]), 1)
+        finding = data["results"][0]
+        self.assertEqual(finding["start"], {"line": 3, "col": 1, "offset": original.index(b"println!")})
+        self.assertTrue(original[finding["start"]["offset"] : finding["end"]["offset"]].startswith(b"println!"))
+        sarif = json.loads((output / "semgrep.sarif").read_bytes())
+        self.assertEqual(len(sarif["runs"][0]["results"]), 1)
+        region = sarif["runs"][0]["results"][0]["locations"][0]["physicalLocation"]["region"]
+        self.assertEqual((region["startLine"], region["startColumn"]), (3, 1))
+        self.assertEqual(source.read_bytes(), original)
 
     def test_overlapping_regex_findings_keep_distinct_spans_and_source_byte_positions(self):
         rules = [{"id": "rust.regex", "languages": ["rust"], "pattern-regex": "println!", "message": "print", "severity": "WARNING"}]

@@ -68,7 +68,7 @@ class TestScanConsumer(unittest.TestCase):
         self.invocation_index = 0
         self.addCleanup(patch.stopall)
         self.inventory = patch.object(semgrep_scan, "security_inventory", return_value=self.names).start()
-        patch.object(semgrep_scan, "resolve_executable", return_value=self.root / "semgrep").start()
+        patch.object(semgrep_scan.semgrep_tool, "setup", return_value=self.root / "semgrep").start()
         patch.object(security, "run_command_bytes", side_effect=self.native).start()
 
     def native(self, binary, args, **kwargs):
