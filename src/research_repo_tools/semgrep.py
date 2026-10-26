@@ -126,6 +126,10 @@ def _documentation_cases(path: Path, source: dict[str, dict[str, Any]], namespac
     for block in blocks:
         if block.index not in cases:
             raise ValueError(f"{path} (Rust block {block.index + 1}): fixture block requires Rust-rule annotations")
+    if path.suffix == ".rs" and blocks:
+        names = list(dict.fromkeys(name for case in cases.values() if case.block is not None for name in case.names))
+        native = cases.setdefault(None, FixtureCase(path, [], expected=Counter()))
+        native.names.extend(name for name in names if name not in native.names)
     return list(cases.values())
 
 

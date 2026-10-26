@@ -19,7 +19,7 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
     @classmethod
     @override
     def setUpClass(cls):
-        cls.binary = semgrep_tool.setup(Path.cwd())
+        semgrep_tool.setup(Path.cwd())
 
     @override
     def setUp(self):
@@ -28,7 +28,7 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
         self.root = Path(self.temporary.name).resolve()
         self.addCleanup(patch.stopall)
 
-    def test_managed_setup_reuses_cache_and_ignores_ambient_scanner_and_project_redirects(self):
+    def test_managed_scanner_runs_offline_and_ignores_ambient_scanner_and_project_redirects(self):
         ambient = self.root / "ambient tools"
         ambient.mkdir()
         fake = ambient / ("semgrep.cmd" if os.name == "nt" else "semgrep")
@@ -36,6 +36,8 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
         fake.chmod(0o755)
         self.write("uv.toml", "invalid = [\n")
         self.write(".python-version", "0.0.0\n")
+        source = self.write("example.py", 'print("native")\n')
+        settings = self.settings([{"id": "python.print", "languages": ["python"], "pattern": "print(...)", "message": "print", "severity": "WARNING"}])
         with patch.dict(
             os.environ,
             {
@@ -49,7 +51,13 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
                 "PYTHONPATH": str(self.root),
             },
         ):
-            self.assertEqual(semgrep_tool.setup(self.root), self.binary)
+            # uv's disposable tool environments can change paths, including on
+            # Windows. Offline native execution proves warm-cache reuse without
+            # depending on the cache's internal environment identity.
+            with patch.object(semgrep_scan, "security_inventory", return_value=("example.py",)):
+                self.assertEqual(semgrep_scan.scan(settings, include=("*.py",)), 1)
+        report = json.loads((self.root / "target/security/semgrep/semgrep.json").read_bytes())
+        self.assertEqual([(item["check_id"], Path(item["path"]), item["start"]["line"]) for item in report["results"]], [("python.print", source, 1)])
         self.assertFalse((self.root / "uv.lock").exists())
         self.assertFalse((self.root / ".venv").exists())
 
@@ -284,6 +292,28 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
             region = item["locations"][0]["physicalLocation"]["region"]
             self.assertEqual((region["startLine"], region["startColumn"]), (3, 5))
         self.assertEqual(source.read_bytes(), original)
+
+    def test_rustdoc_only_annotations_still_reject_unannotated_native_matches(self):
+        rules = [
+            {"id": "rust.println", "languages": ["rust"], "pattern": "println!(...)", "message": "print", "severity": "WARNING"},
+            {"id": "rust.regex", "languages": ["rust"], "pattern-regex": "println!", "message": "print", "severity": "WARNING"},
+        ]
+        self.settings(rules)
+        settings = config.parse({"semgrep": {"config": "rules.json", "fixtures": "fixtures"}}, root=self.root)
+        for native in ("", "// ok: rust.regex\nfn clean() {}\n"):
+            with self.subTest(native=native):
+                source = self.write(
+                    "fixtures/example.rs",
+                    native + '//! ```rust\n//! // ruleid: rust.println, rust.regex\n//! println!("doc");\n//! ```\nfn main() {}\n',
+                )
+                original = source.read_bytes()
+                self.assertEqual(semgrep_scan.check_documentation_fixtures(settings), 0)
+                self.assertEqual(source.read_bytes(), original)
+                changed = original.replace(b"fn main() {}", b'fn main() { println!("unexpected"); }')
+                source.write_bytes(changed)
+                with self.assertRaisesRegex(ValueError, r"example.rs: .*rust.println.*unexpected finding.*rust.regex.*unexpected finding"):
+                    semgrep_scan.check_documentation_fixtures(settings)
+                self.assertEqual(source.read_bytes(), changed)
 
     def test_mixed_fixture_annotations_belong_to_native_prose_or_one_rust_block(self):
         rules = [
