@@ -1,10 +1,12 @@
 """Update the main Python project and explicitly declared independent uv projects."""
 
+import shutil
 import sys
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 
-from research_repo_tools import config, dependencies, python_tools, toolchain, toolchain_config
+from research_repo_tools import config, dependencies, files, python_locks, python_resolution, python_tools, toolchain, toolchain_config
 from research_repo_tools.process import run_command_live
 from research_repo_tools.release_policy import relative_path
 
@@ -44,6 +46,11 @@ def _projects(settings: config.Config) -> tuple[Path, ...]:
             manifest = dependencies._conventional_manifest(project / "pyproject.toml")
             data = tomllib.loads(manifest.read_text(encoding="utf-8"))
             dependencies._python_constraints(dependencies._required_table(data, "project"))
+            python_resolution.policy(manifest.read_text(encoding="utf-8"), project)
+            lock = project / "uv.lock"
+            python_locks.versions(lock.read_bytes() if lock.exists() else None)
+            if (project / ".venv").exists() and not lock.exists():
+                raise ValueError("an existing .venv requires uv.lock for recoverable updates")
         except (TypeError, ValueError) as error:
             if project == main.parent:
                 raise
@@ -55,7 +62,7 @@ def _projects(settings: config.Config) -> tuple[Path, ...]:
 
 
 def update(settings: config.Config) -> int:
-    """Advance main dev pins, then upgrade and sync each independent lock."""
+    """Validate all new locks, then sync; restore original declarations on failure."""
     projects = _projects(settings)
     if settings.toolchain.inherit_python_tools:
         python_tools.check(settings.root, executables=False)
@@ -68,14 +75,46 @@ def update(settings: config.Config) -> int:
     for name in ("UV_CONFIG_FILE", "UV_PROJECT_ENVIRONMENT", "UV_PYTHON", "VIRTUAL_ENV"):
         env.pop(name, None)
     uv = settings.executable(settings.deps.uv)
-    result = dependencies.main(["--pyproject", str(settings.path(settings.deps.pyproject)), "--uv-executable", uv], toolchain=settings.toolchain, env=env)
-    if result:
-        return result
-    for index, project in enumerate(projects):
-        print(f"Updating Python project: {project}", flush=True)
+    targets = tuple(project / name for project in projects for name in ("pyproject.toml", "uv.lock"))
+    had_environment = {project: (project / ".venv").exists() for project in projects}
+    attempted_sync: list[Path] = []
+    originals: Mapping[Path, bytes | None] = dict[Path, bytes | None]()
+
+    def sync(project: Path) -> None:
         project_env = env | {"UV_PROJECT_ENVIRONMENT": str(project / ".venv")}
         target = ["--directory", str(project), "--project", str(project)]
-        run_command_live(uv, ["lock", "--upgrade", *target], cwd=project, env=project_env, timeout=300)
-        groups = ["--group", "dev"] if index == 0 else []
-        run_command_live(uv, ["sync", "--locked", "--managed-python", *groups, *target], cwd=project, env=project_env, timeout=600)
+        groups = ["--group", "dev"] if project == projects[0] else []
+        run_command_live(uv, ["sync", "--locked", "--no-active", "--managed-python", *groups, *target], cwd=project, env=project_env, timeout=600)
+
+    try:
+        with files.preserve_files(targets) as originals:
+            changes = dependencies.update_dev_pins(settings.path(settings.deps.pyproject), uv=uv, toolchain=settings.toolchain, env=env)
+            for project in projects:
+                print(f"Updating Python project: {project}", flush=True)
+                project_env = env | {"UV_PROJECT_ENVIRONMENT": str(project / ".venv")}
+                target = ["--directory", str(project), "--project", str(project)]
+                run_command_live(uv, ["lock", "--upgrade", *target], cwd=project, env=project_env, timeout=300)
+                python_locks.require_no_downgrades(originals[project / "uv.lock"], project / "uv.lock")
+            for project in projects:
+                attempted_sync.append(project)
+                sync(project)
+    except BaseException as error:
+        # Restore environments only after preserve_files has restored the exact
+        # original manifests/locks. A failed file rollback retains its backups.
+        recovery_errors: list[BaseException] = []
+        for project in reversed(attempted_sync):
+            try:
+                if any((path.read_bytes() if path.exists() else None) != originals[path] for path in targets):
+                    raise RuntimeError("original declarations could not be restored; recover retained backups before synchronizing environments")
+                if had_environment[project]:
+                    sync(project)
+                elif (project / ".venv").exists():
+                    shutil.rmtree(project / ".venv")
+            except BaseException as recovery:
+                recovery_errors.append(RuntimeError(f"failed to restore Python environment {project / '.venv'}: {recovery}"))
+        if recovery_errors:
+            raise BaseExceptionGroup("Python update failed; environment recovery also failed", [error, *recovery_errors]) from None
+        raise
+    for name, (old, new) in changes.items():
+        print(f"Updated {name}: {old} -> {new}")
     return 0

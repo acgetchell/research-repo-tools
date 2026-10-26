@@ -83,9 +83,8 @@ def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, ve
     consumer.mkdir()
     wheels = consumer / "wheels"
     wheels.mkdir()
-    # The script resolver uses this local registry, not project source overrides.
-    # Use this artifact's wheel so offline resolution never needs registry
-    # metadata for a same-version PyPI release or an uncached sdist build.
+    # Retain the tested artifact source mapping; the local registry also supplies
+    # its wheel for offline resolution without same-version PyPI metadata.
     shutil.copyfile(registry_wheel, wheels / registry_wheel.name)
 
     def fixture(name: str, release: str, requires_python: str = ">=3.15", *, dependencies: tuple[str, ...] = ()) -> None:
@@ -327,6 +326,12 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             actions_suite = consumer / "public_actions_consumer.py"
             actions_suite.write_bytes((ROOT / "tests/dependencies/public_actions_consumer.py").read_bytes())
             run_consumer_suite(python, [str(actions_suite)], cwd=consumer, env=local_env)
+            updates_suite = consumer / "public_python_updates_consumer.py"
+            updates_suite.write_bytes((ROOT / "tests/dependencies/public_python_updates_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(updates_suite)], cwd=consumer, env=local_env)
+            recipes_suite = consumer / "public_dependency_recipes_consumer.py"
+            recipes_suite.write_bytes((ROOT / "tests/dependencies/public_dependency_recipes_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(recipes_suite)], cwd=consumer, env=local_env)
             owners_suite = consumer / "public_owners_consumer.py"
             owners_suite.write_bytes((ROOT / "tests/toolchain/public_owners_consumer.py").read_bytes())
             run_consumer_suite(python, [str(owners_suite)], cwd=consumer, env=local_env)

@@ -119,8 +119,11 @@ def test_ordinary_updates_preserve_extra_and_only_advance_unrelated_tools(tools_
     _, pins = dependencies.parse_project(text)
     assert pins == [dependencies.DevPin("unrelated", "1.0")]
     requirements = dependencies._resolution_requirements(text, pins)
-    assert "research-repo-tools[python-tools]==0.1.7" in requirements
-    assert "ruff" in requirements and "unrelated" in requirements
+    assert requirements == [
+        'research-repo-tools[python-tools]==0.1.7; python_full_version >= "3.15"',
+        "ruff",
+        "unrelated>=1.0",
+    ]
 
 
 def test_stale_direct_tool_pin_blocks_ordinary_update(tools_consumer):
@@ -141,7 +144,7 @@ python-tools=["pytest==9.1.1", "ruff==0.16.9", "ty==0.0.84"]
 dev=["research-repo-tools[python-tools]", "unrelated==1.0"]
 """
     _, pins = dependencies.parse_project(text)
-    assert dependencies._resolution_requirements(text, pins) == ["pytest==9.1.1", "ruff==0.16.9", "ty==0.0.84", "unrelated"]
+    assert dependencies._resolution_requirements(text, pins) == ["pytest==9.1.1", "ruff==0.16.9", "ty==0.0.84", "unrelated>=1.0"]
 
 
 @pytest.mark.parametrize("value", [1, "true", None])

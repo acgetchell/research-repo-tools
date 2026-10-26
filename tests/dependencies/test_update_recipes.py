@@ -58,11 +58,12 @@ def commands(consumer, cargo):
     tools = [[*prefix, "toolchain", "upgrade"]] if consumer else []
     rust = [[*prefix, "toolchain", "run", "--", "cargo", *args] for args in (["upgrade", "--incompatible", "allow"], ["update"])] if cargo else []
     python = [[*prefix, "deps", "update-python", "--all-projects"]]
+    audit = [["run", "--locked", "--group", "dev", "research-repo-tools", "security", "osv", "uv.lock"]] if consumer else []
     return {
-        "update": uv + tools + rust + python,
+        "update": uv + tools + rust + python + audit,
         "update-cargo-dependencies": rust,
         "update-cargo-tools": tools,
-        "update-dependencies": rust + python,
+        "update-dependencies": rust + python + audit,
         "update-python-dependencies": python,
         "update-python-deps": python,
         "update-tools": uv + tools,

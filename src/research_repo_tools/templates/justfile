@@ -3,6 +3,9 @@
 # Select dev explicitly, including when the consumer disables default groups.
 set positional-arguments
 
+# Audit the maintained lockfiles selected here; add independent Python/Cargo roots.
+audit: (security-osv "uv.lock")
+
 # Generate, normalize, and rotate completed minor series into docs/archives/changelog.
 changelog:
     uv run --locked --group dev research-repo-tools toolchain run -- research-repo-tools changelog generate
@@ -150,6 +153,9 @@ review base="origin/main":
 review-uncommitted:
     uv run --locked --group dev research-repo-tools review uncommitted
 
+# Audit selected dependencies and then scan for secrets; add consumer policy here.
+security: audit security-secrets
+
 # Audit explicitly selected uv.lock/Cargo.lock files with the managed OSV scanner.
 security-osv +lockfiles:
     uv run --locked --group dev research-repo-tools security osv "$@"
@@ -214,8 +220,8 @@ update-cargo-dependencies:
 update-cargo-tools:
     uv run --locked --only-group tooling --inexact research-repo-tools toolchain upgrade
 
-# Update Cargo and Python dependencies without upgrading uv or Cargo tools.
-update-dependencies: update-cargo-dependencies update-python-dependencies
+# Update dependencies without upgrading tools, then audit every selected final lock.
+update-dependencies: update-cargo-dependencies update-python-dependencies audit
 
 # Update main dev pins, then upgrade and sync all declared Python projects.
 update-python-dependencies:
