@@ -1,5 +1,18 @@
 # Working in this repository
 
+## Correctness and regression tests
+
+- **Correctness is the acceptance criterion.** Passing tests alone do not
+  establish behavioral or scientific validity. When a legitimate regression
+  test fails, agents MUST correct the implementation while preserving the
+  original input and intended behavior. Never weaken assertions, substitute
+  easier fixtures, reduce coverage, skip the test, or replace expected success
+  with accepted failure merely to obtain a green run. Change a test's contract
+  only when independent evidence demonstrates that its mathematics, fixture,
+  or expectation is wrong; explain that evidence and preserve meaningful
+  regression coverage. Error handling and rollback are required safeguards,
+  not substitutes for supported successful behavior.
+
 ## Shared-tooling scope
 
 - Maintain one implementation and one consistent contract per common capability.
@@ -20,8 +33,9 @@
 
 - Keep consumer installation, commands, and usage examples in README.md;
   keep coding and package-development guidance in CONTRIBUTING.md.
-- Document uv as a prerequisite and setup that installs a user-level Just command, then
-  use `just ...` for routine commands without environment activation. Keep uv invocation details inside recipes.
+- Document uv as a prerequisite and setup that installs a user-level Just
+  command, then use `just ...` for routine commands without environment
+  activation. Keep uv invocation details inside recipes.
 - Name documents containing operational commands with UPPERCASE gerunds,
   such as `INSTALLING.md` and `VALIDATING.md`. Use lowercase filenames for
   informational documents, such as `api.md` and `migration.md`.

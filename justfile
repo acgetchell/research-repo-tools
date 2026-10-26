@@ -120,8 +120,12 @@ release-notes tag:
     uv run --locked research-repo-tools changelog notes "$1"
 
 # Approve the reviewed draft GitHub Release and trigger registry publication.
-release-publish tag:
-    uv run --locked research-repo-tools release publish "$1" --approve
+release-publish tag *args:
+    uv run --locked research-repo-tools release publish "$@" --approve
+
+# Save verified PR source-check evidence for an explicit squash release commit.
+release-reuse commit +args:
+    uv run --locked research-repo-tools release reuse "$@"
 
 # Create a local annotated release tag from validated notes (maintainer only).
 release-tag tag:

@@ -117,6 +117,32 @@ def test_installable_package_inherits_minimum_with_tooling_constraints(consumer,
     }
 
 
+@pytest.mark.parametrize("requirement,accepts_zero", [(">=3.14,!=3.15.1,<4", True), (">=3.15.2,<3.16", False)])
+def test_resolution_and_sync_honor_project_patch_constraints(consumer, requirement, accepts_zero):
+    root, calls = consumer
+    manifest = root / "pyproject.toml"
+    manifest.write_bytes(manifest.read_bytes().replace(b">=3.14", requirement.encode()))
+    plan = adoption.plan_python_adoption(config.load(root=root))
+    adoption.apply_python_adoption(plan)
+    repeat = adoption.plan_python_adoption(config.load(root=root))
+    adoption.apply_python_adoption(repeat)
+    requests = [args for _, args, _, _ in calls if args[0] in {"lock", "sync"}]
+    assert any(args[0] == "lock" for args in requests)
+    assert any(args[0] == "sync" and "--check" not in args for args in requests)
+    assert any("--check" in args for args in requests)
+    for args in requests:
+        request = args[args.index("--python") + 1]
+        if request[0].isdigit():
+            request = f"=={request}{'.*' if request.count('.') == 1 else ''}"
+        constraint = SpecifierSet(request)
+        assert ("3.15.0" in constraint) is accepts_zero
+        assert "3.15.2" in constraint
+        assert "3.15.1" not in constraint
+        assert "3.14.9" not in constraint
+        assert "3.16.0" not in constraint
+    assert (root / ".python-version").read_bytes() == b"3.15\r\n"
+
+
 @pytest.mark.parametrize("existing_environment", [False, True])
 def test_failed_sync_restores_old_declarations_and_environment(consumer, monkeypatch, existing_environment):
     root, _ = consumer

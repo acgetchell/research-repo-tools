@@ -282,6 +282,14 @@ repositories for Git behavior.
 The optional Python tool profile is exercised by installed wheel/sdist consumer
 checks, including exact native versions and real adoption candidate resolution.
 
+Offline dependency-update fixtures use Python 3.15.0 so their original
+`>=3.15,!=3.15.1` regression also succeeds when the test runner uses 3.15.1.
+They locate and verify an existing interpreter, or provision one in a disposable
+directory before the offline phase. Provisioning may require a download; the
+dependency update itself still uses only the local wheel registry with network
+access and interpreter downloads disabled. User Python aliases and the Windows
+registry are not changed.
+
 Notebook tests use synthetic files and real fresh kernels for interpreter,
 working-directory, cell-error, and timeout behavior. They require local socket
 access for Jupyter. Optional notebook dependencies are pinned in the development

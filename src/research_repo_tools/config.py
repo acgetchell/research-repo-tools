@@ -39,7 +39,7 @@ FIELDS = {
     },
     "release": {"date-policy", "final-changelog", "required-files", "exclude", "rules", "tag-policy"},
     "changelog": {"formatter", "cliff-config", "owner", "repository", "dependency-bodies"},
-    "publishing": {"registry", "package", "repository", "required-checks", "required-assets"},
+    "publishing": {"registry", "package", "repository", "required-checks", "required-assets", "reuse"},
     "zizmor": {"persona", "timeout"},
 }
 

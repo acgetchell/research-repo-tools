@@ -108,7 +108,8 @@ single-line assertion; title-equals-tag is expressed with `expected_title=tag`.
 No repository name selects policy. Existing `GitHubRelease` positional fields
 remain compatible, with trailing `title` and `(asset_id, state)` pairs added.
 
-`preflight_release_target(root, repository, tag, commit, *, expected_title=None)`
+`preflight_release_target(root, repository, tag, commit, *, expected_title=None,
+checkout=None)`
 is read-only. It requires exactly one matching release across authenticated
 paginated release listings, a mutable stable draft, and the expected tag commit.
 Fully qualified `git/ref/tags/...` lookup excludes same-named branches; annotated
@@ -136,18 +137,30 @@ nesting. All six fields are required, including nullable `expected_title`:
 Parsing proves structural validity, not authenticity, freshness or approval.
 Consumers own a trusted job-output/artifact handoff and must prevent benchmark
 code from replacing the captured target. See the [trusted-job example](../README.md#trusted-release-target-handoff).
-`revalidate_release_target(root, target)` reads the captured ID directly and
+`revalidate_release_target(root, target, *, checkout=None)` reads the captured ID directly and
 returns `GitHubRelease` after checking identity, title assertion, mutable stable
 draft state and resolved tag SHA. A missing/deleted ID fails; it never substitutes
 a replacement draft selected by tag.
 
-`publish_release_asset(root, repository, tag, asset, *, target=None,
+`publish_release_asset(root, repository, tag, asset, *, target=None, checkout=None,
 publish=False, limits=ArchiveLimits())` snapshots nonempty regular-file bytes to
 private staging. Repository/tag must agree with the target. Without `target`,
 existing callers capture and verify a fresh target inside this invocation; bare
 stable tags still normalize to `vX.Y.Z`. That mode cannot protect an earlier build.
 Long-running jobs must supply their preflight target. The old call signature and
 `None` return remain compatible, with stronger validation for all uploads.
+
+The optional `checkout` path adds an independently observed clean-source
+assertion at the target commit, before and after remote revalidation. It can be
+separate from `root`, the trusted runtime's transport working directory.
+`require_release_checkout(checkout, commit)` exposes that read-only observation.
+When supplied to publication, checkout drift blocks upload or subsequent
+publication; already attached bytes are left available for inspection. Keep the
+checkout stable and the installed runtime outside consumer source. Compose this
+with [release evidence revalidation](release-evidence-api.md) before credentials
+are acquired; neither a saved target nor a saved evidence record grants approval.
+Git configuration, including filters and filesystem-monitor settings, must also
+come from the trusted workflow and remain stable during publication.
 
 Immediately before upload, after upload, and after byte verification it rechecks
 the captured identity, tag commit, optional title and lifecycle. Upload addresses

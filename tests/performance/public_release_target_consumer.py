@@ -136,6 +136,31 @@ class TestReleaseTargetConsumer(unittest.TestCase):
     def upload(self, target=None, *, publish=True):
         publish_release_asset(self.root, REPOSITORY, TAG, self.asset, target=target or self.target(), publish=publish)
 
+    def test_observed_checkout_drift_prevents_upload_or_publication(self):
+        target = self.target()
+        for phase in ("before-upload", "after-download"):
+            with self.subTest(phase=phase):
+                self.server.release["assets"] = []
+                self.server.uploaded = []
+                state = {"commit": "b" * 40 if phase == "before-upload" else SHA}
+
+                def observe(args, **kwargs):
+                    self.assertEqual(kwargs["cwd"], self.root / "source")
+                    return subprocess.CompletedProcess(args, 0, "" if "status" in args else state["commit"], "")
+
+                def changed():
+                    state["commit"] = "b" * 40
+
+                self.server.on_download = changed
+                with (
+                    patch("research_repo_tools.release_assets.run_git_command", observe),
+                    patch("research_repo_tools.release_assets.run_git_bytes", return_value=subprocess.CompletedProcess([], 0, b"H tracked\0", b"")),
+                ):
+                    with self.assertRaisesRegex(ValueError, "observed release checkout"):
+                        publish_release_asset(self.root, REPOSITORY, TAG, self.asset, target=target, checkout=self.root / "source", publish=True)
+                self.assertEqual(self.server.published, 0)
+                self.assertEqual(len(self.server.uploaded), 0 if phase == "before-upload" else 1)
+
     def test_preflight_lightweight_and_annotated_tags_roundtrip(self):
         for annotated in (False, True):
             with self.subTest(annotated=annotated):

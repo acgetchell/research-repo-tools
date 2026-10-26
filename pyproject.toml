@@ -29,7 +29,7 @@ Issues = "https://github.com/acgetchell/research-repo-tools/issues"
 [dependency-groups]
 dev = [
     "actionlint-py==1.7.12.25",
-    "coverage==7.16.2",
+    "coverage==7.17.0",
     "ipykernel==7.4.0",
     "nbclient==0.11.0",
     "nbformat==5.11.1",
@@ -46,7 +46,7 @@ packages = ["src/research_repo_tools"]
 include = ["src", "tests", "docs", "scripts", "pyproject.toml", "uv.lock", "README.md", "CONTRIBUTING.md", "AGENTS.md", "CHANGELOG.md", "LICENSE", "justfile", ".gitattributes", ".python-version"]
 
 [tool.uv]
-required-version = "==0.13.4"
+required-version = "==0.13.5"
 
 [tool.research-repo-tools.changelog]
 owner = "acgetchell"

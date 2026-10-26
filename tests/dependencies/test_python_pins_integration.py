@@ -1,6 +1,6 @@
 """Exercise dependency updates with real uv and an offline wheel registry."""
 
-import sys
+import os
 import tomllib
 import zipfile
 from pathlib import Path
@@ -8,6 +8,30 @@ from pathlib import Path
 import pytest
 
 from research_repo_tools import cli
+from research_repo_tools.process import run_command
+
+FIXTURE_PYTHON = "3.15.0"
+
+
+@pytest.fixture(scope="module")
+def compatible_python(tmp_path_factory: pytest.TempPathFactory) -> Path:
+    """Prepare a real interpreter accepted by every range before going offline."""
+    root = tmp_path_factory.mktemp("dependency Python")
+    env = {name: value for name, value in os.environ.items() if not name.startswith("UV_") and name != "VIRTUAL_ENV"}
+    env["UV_CACHE_DIR"] = str(root / "cache")
+    find = ["python", "find", "--no-config", "--no-project", "--system", "--offline", FIXTURE_PYTHON]
+    result = run_command("uv", find, cwd=root, env=env, check=False, timeout=30)
+    if result.returncode:
+        # Provision only inside the disposable fixture; never alter user Python
+        # aliases or the Windows registry. The package-resolution phase below
+        # still disables downloads, indexes and all network access.
+        env["UV_PYTHON_INSTALL_DIR"] = str(root / "python")
+        run_command("uv", ["python", "install", "--no-config", "--no-bin", "--no-registry", FIXTURE_PYTHON], cwd=root, env=env, timeout=300)
+        result = run_command("uv", find, cwd=root, env=env, timeout=30)
+    python = Path(result.stdout.strip())
+    version = run_command(str(python), ["-I", "-X", "utf8", "-c", "import platform; print(platform.python_version())"], cwd=root, env=env, timeout=30)
+    assert version.stdout.strip() == FIXTURE_PYTHON
+    return python
 
 
 def wheel(directory: Path, version: str, requires_python: str) -> None:
@@ -20,7 +44,7 @@ def wheel(directory: Path, version: str, requires_python: str) -> None:
 
 
 @pytest.fixture
-def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, compatible_python: Path) -> Path:
     directory = tmp_path / "wheels"
     directory.mkdir()
     for name in ("UV_PROJECT", "UV_WORKING_DIR", "UV_WORKING_DIRECTORY", "UV_CONFIG_FILE"):
@@ -29,7 +53,7 @@ def registry(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setenv("UV_FIND_LINKS", str(directory))
     monkeypatch.setenv("UV_NO_INDEX", "1")
     monkeypatch.setenv("UV_OFFLINE", "1")
-    monkeypatch.setenv("UV_PYTHON", sys.executable)
+    monkeypatch.setenv("UV_PYTHON", str(compatible_python))
     monkeypatch.setenv("UV_PYTHON_DOWNLOADS", "never")
     wheel(directory, "1.0.0", ">=3.15")
     return directory

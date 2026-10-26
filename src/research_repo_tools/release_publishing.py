@@ -3,7 +3,7 @@
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
-from urllib.parse import quote
+from urllib.parse import quote, urlsplit
 
 from research_repo_tools.evidence import _load_json
 from research_repo_tools.process import run_git_command, run_safe_command
@@ -23,6 +23,7 @@ from research_repo_tools.release_assets import (
     require_draft,
     revalidate_release_target,
 )
+from research_repo_tools.release_reuse import ReusePolicy, parse_reuse_policy, verify_ci_reuse
 
 if TYPE_CHECKING:
     from research_repo_tools.config import Config
@@ -60,6 +61,7 @@ class PublishingSettings:
     repository: str
     required_checks: tuple[RequiredCheck, ...]
     required_assets: tuple[str, ...] = ()
+    reuse: ReusePolicy | None = None
 
     def __post_init__(self) -> None:
         identity(self.registry, self.package, "0.0.0")
@@ -77,11 +79,15 @@ class PublishingSettings:
             _asset_name(asset.replace("{version}", "0.0.0"))
         if len(set(self.required_assets)) != len(self.required_assets):
             raise ValueError("duplicate required assets")
+        if self.reuse is not None:
+            reused = {RequiredCheck(name, self.reuse.app_id) for name, _ in self.reuse.validation.required_steps}
+            if self.reuse.validation.repository != self.repository or not reused < set(self.required_checks):
+                raise ValueError("reuse must cover a strict subset of required checks in this repository; retain exact-commit package checks")
 
 
 def parse_publishing(data: dict[str, object]) -> PublishingSettings:
     """Parse one explicit registry/repository policy; never select shell commands."""
-    if data.keys() - {"registry", "package", "repository", "required-checks", "required-assets"}:
+    if data.keys() - {"registry", "package", "repository", "required-checks", "required-assets", "reuse"}:
         raise ValueError("unknown publishing field")
     values = [data.get(name) for name in ("registry", "package", "repository")]
     if any(not isinstance(value, str) or not value for value in values):
@@ -97,7 +103,9 @@ def parse_publishing(data: dict[str, object]) -> PublishingSettings:
     assets = data.get("required-assets", [])
     if not isinstance(assets, list) or any(not isinstance(asset, str) for asset in assets):
         raise ValueError("publishing.required-assets must be an array of filenames")
-    return PublishingSettings(cast(Literal["pypi", "crates-io"], values[0]), cast(str, values[1]), cast(str, values[2]), tuple(parsed), tuple(assets))
+    repository = cast(str, values[2])
+    reuse = parse_reuse_policy(cast(dict[str, object], data["reuse"]), repository) if "reuse" in data else None
+    return PublishingSettings(cast(Literal["pypi", "crates-io"], values[0]), cast(str, values[1]), repository, tuple(parsed), tuple(assets), reuse)
 
 
 def _settings(config: Config) -> PublishingSettings:
@@ -194,10 +202,40 @@ def require_checks(pages: object, commit: str, checks: tuple[RequiredCheck, ...]
             runs.append(run)
     if totals != {len(runs)}:
         raise ValueError("incomplete or changing check-run pagination")
+    unmet = []
+    pending = False
     for check in checks:
         matches = [run for run in runs if run.get("name") == check.name and isinstance(run.get("app"), dict) and run["app"].get("id") == check.app_id]
-        if len(matches) != 1 or matches[0].get("status") != "completed" or matches[0].get("conclusion") != "success":
-            raise ValueError(f"required check {check.name!r} lacks one unambiguous successful result on {commit}")
+        label = f"required check {check.name!r} (app ID {check.app_id})"
+        if not matches:
+            same_name = [run for run in runs if run.get("name") == check.name]
+            providers = sorted({run["app"]["id"] for run in same_name})
+            detail = f"; same name observed from app IDs {providers}; " + "; ".join(_check_observation(run) for run in same_name) if same_name else ""
+            unmet.append(f"{label}: missing{detail}")
+        elif len(matches) > 1:
+            unmet.append(f"{label}: ambiguous ({len(matches)} results); " + "; ".join(_check_observation(run) for run in matches))
+        elif matches[0].get("status") != "completed" or matches[0].get("conclusion") != "success":
+            running = matches[0].get("status") in ("queued", "in_progress", "waiting", "pending", "requested")
+            pending |= running
+            unmet.append(f"{label}: {'pending/running' if running else 'unsuccessful'}; {_check_observation(matches[0])}")
+    if unmet:
+        advice = "\nCI is still running. Wait for the existing run to succeed, then manually retry publication." if pending else ""
+        raise ValueError(f"Unmet release checks on exact commit {commit}:\n" + "\n".join(unmet) + advice)
+
+
+def _check_observation(run: dict[str, object]) -> str:
+    detail = f"check ID {run['id']}, status={run.get('status')!r}, conclusion={run.get('conclusion')!r}"
+    # Provider URLs are diagnostics, never authority; omit credentials and signed queries.
+    for field in ("html_url", "details_url"):
+        value = run.get(field)
+        if isinstance(value, str):
+            try:
+                url = urlsplit(value)
+                if url.scheme == "https" and url.hostname == "github.com" and not url.username and not url.password:
+                    return detail + f", https://github.com{url.path}"
+            except ValueError:
+                pass
+    return detail
 
 
 def _assets(release: GitHubRelease, settings: PublishingSettings, version: str) -> None:
@@ -208,7 +246,9 @@ def _assets(release: GitHubRelease, settings: PublishingSettings, version: str) 
             raise ValueError(f"required release asset {name!r} is missing or empty")
 
 
-def check_reviewed_release(config: Config, tag: str, *, event: ReviewedRelease | None = None, draft: bool = False) -> GitHubRelease:
+def check_reviewed_release(
+    config: Config, tag: str, *, event: ReviewedRelease | None = None, draft: bool = False, reuse_evidence: bytes | None = None
+) -> GitHubRelease:
     """Read-only final gate: clean checkout, tag, ancestry, checks, lifecycle/assets.
 
     Fetch evidence through authenticated gh. No fetch, checkout, ref mutation,
@@ -239,7 +279,20 @@ def check_reviewed_release(config: Config, tag: str, *, event: ReviewedRelease |
     if not isinstance(ancestry, dict) or not isinstance(ancestry.get("status"), str) or ancestry["status"] not in {"ahead", "identical"}:
         raise ValueError("release commit is not an ancestor of the protected default branch")
     evidence = _api(config.root, settings.repository, f"commits/{head}/check-runs?filter=latest&per_page=100", paginate=True)
-    require_checks(evidence, head, settings.required_checks)
+    required = settings.required_checks
+    if reuse_evidence is not None:
+        if settings.reuse is None:
+            raise ValueError("CI reuse requires an explicit publishing.reuse policy")
+        verify_ci_reuse(settings.reuse, head, lambda endpoint: _api(config.root, settings.repository, endpoint), expected=reuse_evidence)
+        reused = {RequiredCheck(name, settings.reuse.app_id) for name, _ in settings.reuse.validation.required_steps}
+        # Never hide an attempted exact-commit check's failure/cancellation.
+        observed = (
+            {run.get("name") for page in evidence if isinstance(page, dict) for run in page.get("check_runs", []) if isinstance(run, dict)}
+            if isinstance(evidence, list)
+            else set()
+        )
+        required = tuple(check for check in required if check not in reused or check.name in observed)
+    require_checks(evidence, head, required)
     release = lookup_release(config.root, settings.repository, tag)
     if release.prerelease or release.draft != draft or (event is not None and release.identifier != event.release_id):
         raise ValueError("GitHub release lifecycle or identity differs from the reviewed release")
@@ -248,17 +301,18 @@ def check_reviewed_release(config: Config, tag: str, *, event: ReviewedRelease |
     return release
 
 
-def publish_reviewed_release(config: Config, tag: str) -> None:
+def publish_reviewed_release(config: Config, tag: str, *, reuse_evidence: bytes | None = None) -> None:
     """Publish a validated draft as the invoking maintainer, triggering its workflow.
 
     Invocation is approval of the draft. This never uploads registry packages,
     creates tags, replaces assets, or configures a trusted publisher.
     """
     head = _sha(run_git_command(["--no-pager", "rev-parse", "HEAD"], cwd=config.root).stdout.strip())
-    release = check_reviewed_release(config, tag, draft=True)
+    reuse_options = {"reuse_evidence": reuse_evidence} if reuse_evidence is not None else {}
+    release = check_reviewed_release(config, tag, draft=True, **reuse_options)
     require_draft(release)
     # Recheck immediately before the one lifecycle mutation, including tag/checks.
-    current = check_reviewed_release(config, tag, draft=True)
+    current = check_reviewed_release(config, tag, draft=True, **reuse_options)
     require_draft(current)
     if current.identifier != release.identifier:
         raise ValueError("draft release identity changed before publication")

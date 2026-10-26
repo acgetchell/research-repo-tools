@@ -556,8 +556,23 @@ check evidence and configured assets. These operations are read-only.
 pages: one exact-SHA successful latest result is required for each name/app ID.
 It rejects incomplete/changing pagination, duplicate IDs and ambiguous matches.
 Provider IDs must be positive integers; booleans and floating-point IDs reject.
+All unmet requirements are reported together as pending/running, missing,
+unsuccessful or ambiguous, with observed status/conclusion, provider ID and
+GitHub check URL when available. Pending checks advise waiting for the existing
+run to succeed before manually retrying; the gate never accepts them or
+automatically resumes publication. Invalid pagination or identity still rejects
+before interpreting individual check outcomes.
 Release events, GitHub evidence and registry responses use strict UTF-8 JSON
 parsing that rejects duplicate fields, non-finite numbers and excessive nesting.
+
+The [release evidence core](release-evidence-api.md) provides configurable signed
+source validation, retained Cargo archive verification, approval handoffs and
+shared provider/signature primitives. These guarantees remain distinct from
+registry publication. The separate [verified CI reuse contract](REUSING_CI.md)
+provides opt-in source-check equivalence for PR merge and squash release trees.
+`PublishingSettings.reuse` is optional; `check_reviewed_release` and
+`publish_reviewed_release` accept keyword-only `reuse_evidence=None`. Omitting it
+retains exact-commit checks. `require_checks` always retains exact-SHA semantics.
 
 `publish_reviewed_release(config, tag)` validates a stable draft twice and publishes
 that GitHub Release as the invoking maintainer. Calling it constitutes approval;

@@ -61,8 +61,8 @@ def _environment(root: Path, source: dict[str, str] | None = None) -> dict[str, 
     return env
 
 
-def _sync(uv: str, root: Path, selected: str, groups: tuple[str, ...], *, check: bool = False, environment: dict[str, str] | None = None):
-    arguments = ["sync", "--locked", "--managed-python", "--python", selected]
+def _sync(uv: str, root: Path, request: str, groups: tuple[str, ...], *, check: bool = False, environment: dict[str, str] | None = None):
+    arguments = ["sync", "--locked", "--managed-python", "--python", request]
     for group in groups:
         arguments += ["--group", group]
     if check:
@@ -193,9 +193,9 @@ def plan_python_adoption(settings: config.Config) -> PythonAdoptionPlan:
         status = toolchain.Runtime(tools).uv_status()
         if not status.ok:
             raise ValueError(f"adoption requires uv {tools.uv}; found {status.actual}")
-        run_safe_command(uv, ["lock", "--managed-python", "--python", tools.python], cwd=candidate, env=_environment(candidate), timeout=600)
+        run_safe_command(uv, ["lock", "--managed-python", "--python", tools.python_request], cwd=candidate, env=_environment(candidate), timeout=600)
         replacements["uv.lock"] = (candidate / "uv.lock").read_bytes()
-        _sync(uv, candidate, tools.python, groups, environment=toolchain.Runtime(tools).environment())
+        _sync(uv, candidate, tools.python_request, groups, environment=toolchain.Runtime(tools).environment())
         _check_tools(candidate, settings.toolchain.inherit_python_tools)
         if notebook_group:
             python = toolchain_config.executable(candidate / ".venv" / ("Scripts" if os.name == "nt" else "bin"), "python")
@@ -260,7 +260,7 @@ def apply_python_adoption(plan: PythonAdoptionPlan) -> None:
         except OSError, ValueError, TypeError, AttributeError:
             kernel_current = False
     if not plan.changed_paths and environment.exists() and kernel_current:
-        if _sync(uv, root, plan.tools.python, plan.groups, check=True).returncode == 0:
+        if _sync(uv, root, plan.tools.python_request, plan.groups, check=True).returncode == 0:
             _check_tools(root, plan.inherit_tools)
             return
     # Versioned tool installations occur before declaration publication. Old
@@ -276,7 +276,7 @@ def apply_python_adoption(plan: PythonAdoptionPlan) -> None:
                 saved = True
             started = True
             files.replace_many({root / name: payload for name, payload in plan.replacements})
-            _sync(uv, root, plan.tools.python, plan.groups, environment=toolchain.Runtime(plan.tools).environment())
+            _sync(uv, root, plan.tools.python_request, plan.groups, environment=toolchain.Runtime(plan.tools).environment())
             _check_tools(root, plan.inherit_tools)
             if plan.notebook_group:
                 python = toolchain_config.executable(environment / ("Scripts" if os.name == "nt" else "bin"), "python")
