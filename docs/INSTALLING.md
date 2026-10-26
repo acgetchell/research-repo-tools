@@ -169,7 +169,7 @@ The consumer template provides:
 - `just update-python-deps`: alias for `update-python-dependencies`.
 - `just update-tools`: upgrade uv and declared tools without shell/bootstrap setup.
 - `just update-uv`: upgrade uv through its installation owner and reconcile its pin.
-- `just workflow-allowlist-check`: check external step/job references against strict consumer selected-actions policy.
+- `just workflow-allowlist-check`: check external workflow/composite references against strict consumer selected-actions policy.
 
 Bare `just` shows help. When merging the template, reconcile its default recipe
 with the consuming repository's existing default.

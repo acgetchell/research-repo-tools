@@ -250,8 +250,9 @@ handling in the consumer.
 
 ## Portable update and Actions policy adoption
 
-Pin a published package containing these capabilities before downstream adoption;
-the intended release is 0.1.8. Release publication and consumer PRs are separate
+Pin a published package containing the required capabilities before downstream
+adoption; exact-commit policy and composite support target 0.2.4. Release
+publication and consumer PRs are separate
 operations. Follow the [Actions policy wiring](../README.md#actions-allowlists-and-opt-in-pin-updates)
 and [mixed installation ownership](../README.md#mixed-installation-owners-on-linux-and-macos).
 
@@ -259,7 +260,17 @@ Move generic YAML allowlist checks upstream while retaining the consumer's exist
 strict selected-actions JSON and focused integration tests. Remove duplicate
 Semgrep allowlist regex lists after the shared gate is exercised; retain scanner
 coverage and pin/security checks. No policy or GitHub settings change is implicit.
-Actions updates remain explicit opt-in by exact identity, workflow scope, and
+For strict policy adoption, explicitly enumerate each approved action subpath
+and reusable workflow path, set both broad approval flags to false, and retain
+every existing exact 40-hex-SHA restriction. Do not replace restricted commits
+with `@*`, and do not assume a repository-level entry approves its children.
+Repository names and SHA hex ignore case; nested paths retain case-sensitive
+matching. A changed authentication-action commit must fail its exact approval.
+Add existing composite metadata files/directories to both commands' explicit
+inputs after adopting the published capability. Quoted/folded references and
+aliases work in the allowlist; pin updates retain single-line, unaliased scalar
+requirements and validate all candidates before replacing any file.
+Actions updates remain explicit opt-in by exact identity, workflow/composite scope, and
 target; scheduled Dependabot review remains consumer policy.
 
 The update aggregate no longer invokes shell/bootstrap setup. Run explicit setup

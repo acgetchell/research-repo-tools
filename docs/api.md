@@ -63,21 +63,32 @@ Explicit `ci export --file` and `toolchain export --file` paths follow this rule
 The `GITHUB_ENV` fallback keeps the path supplied by the invoking environment.
 
 `actions allowlist --policy PATH INPUT...` checks consumer-owned selected-actions
-JSON against structured workflow job/step references. Only the strict false/false
-owner-mode payload with exact `owner/repo[/path]@*` patterns is supported. Local
-actions and containers are outside this policy. YAML aliases are supported with
+JSON against structured workflow job/step and composite `runs.steps[*].uses`
+references. Only the strict false/false owner-mode payload with exact
+`owner/repo[/path]@*` or `owner/repo[/path]@<40-hex-SHA>` patterns is supported.
+Repository identities and SHA hex ignore case; nested paths match exactly.
+Rules are alternatives for each exact identity; repository entries do not
+approve subpaths. Exact refs retain their constraints during matching and
+diagnostics. Local `./`, same-repository `$/` references, and containers are
+outside this policy. YAML aliases are supported with
 anchor locations; duplicate/merge keys and recursive aliases fail. Explicit
 directories expand to regular `.yml`/`.yaml` files; repeated paths are deduplicated.
-Leaf symlinks are rejected and parent paths are resolved. Inputs and
+Leaf symlinks are rejected and parent paths are resolved. Composite metadata
+requires `runs.using: composite` and a `runs.steps` sequence; other action kinds
+and documents mixing workflow `jobs` with action `runs` fail. Inputs and
 repository settings remain unchanged. See [consumer wiring](../README.md#actions-allowlists-and-opt-in-pin-updates).
 
 `actions update --policy PATH INPUT... [--check | --dry-run]` resolves explicit
-Actions targets from consumer TOML through GitHub CLI and preserves workflow
-source bytes outside scalar SHAs/version comments. `--check` returns 1 for drift;
+Actions targets from consumer TOML through GitHub CLI. It uses the same workflow
+and composite reference discovery as the allowlist and preserves source bytes
+outside scalar SHAs/version comments. Selected scalars must be single-line,
+unaliased, and already pinned to full SHAs with version comments; allowlist
+inspection also supports folded scalars and aliases. `--check` returns 1 for drift;
 `--dry-run` previews without drift failure. All candidates and compatibility
-inventories are checked before any workflow replacement. Caught publication
+inventories are checked before any source replacement. Caught publication
 failures use the shared rollback/recovery contract. The YAML/update modules are
-implementation details; use the CLI or `cli.main`.
+implementation details; use the CLI or `cli.main`. Updating pins does not change
+the selected-actions policy; exact-SHA approvals require deliberate review.
 
 `deps update-python` advances only exact direct main-project `dev` pins.
 Candidates preserve supported uv source/index, override, constraint and build
