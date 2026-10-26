@@ -67,17 +67,18 @@ class TestPythonUpdates(unittest.TestCase):
         self.project.mkdir()
         self.wheels = self.root / "wheels"
         wheel(self.wheels, "fixture-tool", "1.0")
+        self.env = self.interpreter_environment.copy()
+        self.env.update(UV_CACHE_DIR=str(self.root / "cache"), UV_OFFLINE="1", UV_PYTHON_DOWNLOADS="never", UV_PYTHON=self.wrapper_python)
+        uv_version = self.uv("--version").stdout.split()[1]
         self.manifest = self.project / "pyproject.toml"
         self.manifest.write_text(
             '[project]\nname="consumer"\nversion="0.1"\nrequires-python=">=3.15"\n'
             '[dependency-groups]\ndev=["fixture-tool==1.0", {include-group="tooling"}]\ntooling=["fixture-tool<3"]\n'
-            '[tool.uv]\nrequired-version="==0.13.5"\nno-index=true\nfind-links=["../wheels"]\n',
+            f'[tool.uv]\nrequired-version="=={uv_version}"\nno-index=true\nfind-links=["../wheels"]\n',
             encoding="utf-8",
             newline="\n",
         )
         (self.project / ".python-version").write_text("3.15\n", encoding="utf-8", newline="\n")
-        self.env = self.interpreter_environment.copy()
-        self.env.update(UV_CACHE_DIR=str(self.root / "cache"), UV_OFFLINE="1", UV_PYTHON_DOWNLOADS="never", UV_PYTHON=self.wrapper_python)
         self.environment = patch.dict(os.environ, self.env, clear=True)
         self.environment.start()
         self.addCleanup(self.environment.stop)
