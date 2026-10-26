@@ -204,6 +204,7 @@ def parser() -> argparse.ArgumentParser:
     scan.add_argument("--report-layout", choices=("aggregate", "numbered"))
     scan.add_argument("--rust-docs", action="store_true")
     scan.add_argument("--target-timeout", type=int)
+    semgrep.add_parser("setup", help="provision and verify the package-pinned Semgrep environment")
     groups.add_parser("setup", help="install Just and declared tools, configure PATH, and sync the locked environment")
     from research_repo_tools.changelog import TEMPLATES
 
@@ -429,7 +430,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
     if args.group == "setup":
         from research_repo_tools import toolchain, toolchain_config, toolchain_setup
 
-        toolchain_setup.setup(toolchain.Runtime(toolchain_config.load(settings)))
+        toolchain_setup.setup(toolchain.Runtime(toolchain_config.load(settings)), semgrep=settings.semgrep.config is not None)
         return 0
     if args.group == "toolchain":
         from research_repo_tools import toolchain, toolchain_config
@@ -573,6 +574,13 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             return scan_osv(settings, tuple(args.lockfiles), output=args.output, configuration=args.scanner_config)
         return scan_secrets(settings, output=args.output, configuration=args.scanner_config, exclude=tuple(args.exclude))
     if args.group == "semgrep":
+        if args.action == "setup":
+            from research_repo_tools import semgrep_tool
+            from research_repo_tools.scanner_output import _print
+
+            binary = semgrep_tool.setup(settings.root)
+            _print(f"Semgrep {semgrep_tool.VERSION}: {binary}")
+            return 0
         from research_repo_tools.semgrep_scan import check_documentation_fixtures, scan
 
         if args.action == "scan":

@@ -140,7 +140,7 @@ class TestSharedCapabilities(unittest.TestCase):
                         patch.object(security, "security_inventory", return_value=("uv.lock", "source café.py")),
                         patch.object(semgrep_scan, "security_inventory", return_value=("source café.py",)),
                         patch.object(security, "_binary", return_value=(root / "scanner", {})),
-                        patch.object(semgrep_scan, "resolve_executable", return_value=root / "scanner"),
+                        patch.object(semgrep_scan.semgrep_tool, "setup", return_value=root / "scanner"),
                         patch.object(security, "run_git_bytes", return_value=subprocess.CompletedProcess([], 0, b"false\n", b"")),
                         patch.object(security, "run_command_bytes", side_effect=native),
                         redirect_stdout(stdout),
@@ -216,7 +216,7 @@ class TestSharedCapabilities(unittest.TestCase):
                             patch.object(security, "security_inventory", return_value=("uv.lock",)),
                             patch.object(security, "_binary", return_value=(root / "osv-scanner", {})),
                             patch.object(semgrep_scan, "security_inventory", return_value=("source.py",)),
-                            patch.object(semgrep_scan, "resolve_executable", return_value=root / "semgrep"),
+                            patch.object(semgrep_scan.semgrep_tool, "setup", return_value=root / "semgrep"),
                             patch.object(security, "run_command_bytes", return_value=subprocess.CompletedProcess([], 0, b"", b"")) as run,
                         ):
                             with self.assertRaisesRegex(ValueError, "report directory.*(?:symlink|junction)"):
@@ -280,7 +280,7 @@ class TestSharedCapabilities(unittest.TestCase):
                         patch.object(security, "security_inventory", return_value=("uv.lock",)),
                         patch.object(security, "_binary", return_value=(root / "osv-scanner", {})),
                         patch.object(semgrep_scan, "security_inventory", return_value=("source.py",)),
-                        patch.object(semgrep_scan, "resolve_executable", return_value=root / "semgrep"),
+                        patch.object(semgrep_scan.semgrep_tool, "setup", return_value=root / "semgrep"),
                         patch.object(security, "run_command_bytes", side_effect=native) as run,
                     ):
                         status = (

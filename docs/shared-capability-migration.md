@@ -1,7 +1,8 @@
 # Shared capability migration
 
-The baseline capabilities below shipped in v0.1.7. Consumers adopt
-an exact registry pin after publication and run their complete native gate;
+Shared capabilities began shipping in v0.1.7. The table describes current
+replacements, including changes awaiting publication. Consumers adopt an exact
+registry pin after publication and run their complete native gate;
 they do not depend on sibling checkouts. Release history belongs in
 [CHANGELOG.md](../CHANGELOG.md).
 
@@ -14,6 +15,7 @@ they do not depend on sibling checkouts. Release history belongs in
 | `tooling/security_tools.py`, `tooling/security-tools.toml` | Exact `toolchain.binaries`, verified release installation | Selected versions and consumer setup/cache wrappers |
 | `tooling/security_scan.py` | `security osv`, `security secrets`, shared portable inventory | Lockfile selection, allowlists, schedules, workflow permissions and report upload |
 | Generic inventory/report and Rust-doc parts of `tooling/semgrep.py` | `semgrep scan --rust-docs`, `semgrep check-fixtures --rust-docs` | Rules, scientific/model-loading restrictions, annotated fixtures and selected paths |
+| Consumer Semgrep version pins and isolated scanner-project launchers | Package-owned pin and environment through `semgrep setup`, also used automatically by scans and fixture checks | Rule configuration, fixtures, scope, suppression policy and report upload |
 | Old package-managed tool installation cleanup | `toolchain clean` through the packaged `just clean` recipe | Retention roots for other consumers sharing the store |
 
 Move representative shared contracts upstream: checksum/asset/version failures,

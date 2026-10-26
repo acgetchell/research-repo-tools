@@ -2,56 +2,80 @@
 
 import copy
 import json
-import os
-import shutil
 import subprocess
 import sys
 import tempfile
 from collections import Counter
-from dataclasses import replace
-from pathlib import Path, PurePath
+from dataclasses import dataclass, replace
+from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any
 from urllib.parse import quote, unquote
 
-from research_repo_tools import config, security, semgrep
+import yaml
+
+from research_repo_tools import config, security, semgrep, semgrep_tool
 from research_repo_tools.evidence import _load_json, _object, deterministic_json
 from research_repo_tools.files import _path_keys, publish_directory
-from research_repo_tools.process import resolve_executable
 from research_repo_tools.sarif import _metadata_references, _objects, _reindex_reference, _rule_id, _rule_relationships, _run
 from research_repo_tools.scanner_output import FindingOutput
 from research_repo_tools.security import security_inventory
 from research_repo_tools.selection import argument_batches
-from research_repo_tools.semgrep_docs import rust_blocks
+from research_repo_tools.semgrep_docs import RustBlock, documentation_blocks
 from research_repo_tools.semgrep_findings import parse_results
 
 __all__ = ["check_documentation_fixtures", "scan"]
 
 
 def check_documentation_fixtures(settings: config.Config) -> int:
-    """Adapt Markdown fences, delegating assertions to the shared fixture checker."""
-    if settings.semgrep.fixtures is None:
-        raise ValueError("semgrep.fixtures must be explicit")
-    source = settings.path(settings.semgrep.fixtures)
-    if not source.is_dir():
-        raise ValueError("documentation fixtures require a directory")
+    """Check native/prose and Rust-block assertions through one fixture checker."""
     if settings.semgrep.counts:
         raise ValueError("documentation fixtures use source annotations; keep count-based fixtures in a separate fixture gate")
-    with tempfile.TemporaryDirectory(prefix="research-semgrep-fixtures-") as directory:
-        root = Path(directory)
-        for path in semgrep.fixtures(source):
-            if path.is_symlink():
-                raise ValueError("fixture symlinks are unsupported")
-            destination = root / path.relative_to(source)
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            if path.suffix == ".md":
-                blocks = rust_blocks(path)
-                if not blocks:
-                    raise ValueError(f"Markdown fixture contains no Rust fences: {path}")
-                for index, block in enumerate(blocks):
-                    destination.with_name(f"{path.name}.block-{index}.rs").write_text(block, encoding="utf-8", newline="\n")
-            else:
-                shutil.copyfile(path, destination)
-        return semgrep.check(replace(settings, semgrep=replace(settings.semgrep, fixtures=str(root))))
+    return semgrep.check(settings, rust_docs=True)
+
+
+@dataclass(frozen=True, slots=True)
+class ScanInput:
+    physical: Path
+    source: Path
+    logical: str
+    block: RustBlock | None = None
+
+    @property
+    def label(self) -> str:
+        if self.block is None:
+            return self.logical
+        return f"{self.logical} (Rust block {self.block.index + 1}, lines {self.block.start_line}-{self.block.end_line})"
+
+    def coverage(self) -> dict[str, object]:
+        result: dict[str, object] = {"path": self.logical, "representation": "source" if self.block is None else "rust-block"}
+        if self.block is not None:
+            result.update(block=self.block.index + 1, start_line=self.block.start_line, end_line=self.block.end_line)
+        return result
+
+
+def _scan_groups(root: Path, names: tuple[str, ...], temporary: Path, configuration: Path, rust_docs: bool):
+    """Give each block its source-relative name, without rewriting path filters."""
+    originals = [ScanInput(root / name, root / name, name) for name in names]
+    groups = [(root, configuration, originals, False)]
+    layers: dict[int, list[ScanInput]] = {}
+    if rust_docs:
+        for original in originals:
+            if original.source.suffix not in {".md", ".rs"}:
+                continue
+            for block in documentation_blocks(original.source):
+                scan_root = temporary / "blocks" / str(block.index)
+                physical = scan_root / original.logical
+                physical.parent.mkdir(parents=True, exist_ok=True)
+                physical.write_text(block.code, encoding="utf-8", newline="\n")
+                layers.setdefault(block.index, []).append(ScanInput(physical, original.source, original.logical, block))
+    if layers:
+        selected = [{**rule, "languages": ["rust"]} for rule in semgrep.rules(configuration).values() if "rust" in rule.get("languages", [])]
+        if not selected:
+            raise ValueError("Rust documentation blocks require Rust rules; include their logical source paths in the rule scopes")
+        rust_configuration = temporary / "rust-rules.yaml"
+        rust_configuration.write_text(yaml.safe_dump({"rules": selected}, sort_keys=False), encoding="utf-8", newline="\n")
+        groups.extend((temporary / "blocks" / str(index), rust_configuration, inputs, True) for index, inputs in sorted(layers.items()))
+    return groups
 
 
 def _locations(value, mapping):
@@ -62,13 +86,125 @@ def _locations(value, mapping):
     return mapping.get(value, value) if isinstance(value, str) else value
 
 
+def _file_uri(path: PurePath) -> str:
+    if isinstance(path, PureWindowsPath):
+        # PureWindowsPath also models cross-drive native reports on POSIX hosts.
+        prefix = "file:" if path.drive.startswith("\\\\") else "file:///"
+        return prefix + quote(path.as_posix(), safe="/:")
+    return Path(path).as_uri()
+
+
 def _source_mapping(snippet: PurePath, source: PurePath) -> dict[str, str]:
     """Preserve native JSON paths and forward-slash/encoded SARIF URIs."""
-    return {
+    mapping = {
         str(snippet): str(source),
         snippet.as_posix(): source.as_posix(),
         quote(snippet.as_posix(), safe="/"): quote(source.as_posix(), safe="/"),
     }
+    if snippet.is_absolute():
+        mapping[_file_uri(snippet)] = _file_uri(source)
+    return mapping
+
+
+def _report_path(value: str, root: Path, *, uri: bool = False) -> Path:
+    if uri and value.startswith("file:"):
+        return Path.from_uri(value).resolve()
+    return (root / (unquote(value) if uri else value)).resolve()
+
+
+def _coverage_description(paths: set[Path], inputs: dict[Path, ScanInput]) -> str:
+    labels = sorted(inputs[path].label if path in inputs else str(path) for path in paths)
+    shown = ", ".join(repr(label[:240]) for label in labels[:8])
+    return shown + (f", ... ({len(labels)} total)" if len(labels) > 8 else "")
+
+
+def _project_positions(data, sarif, inputs, root):
+    """Restore source columns/byte offsets before comparing overlapping spans."""
+    source_lines = {}
+    for result in data["results"]:
+        item = inputs[_report_path(result["path"], root)]
+        if item.block is None:
+            continue
+        if item.source not in source_lines:
+            source_lines[item.source] = item.source.read_bytes().split(b"\n")
+        lines = source_lines[item.source]
+        positions = [result["start"], result["end"]]
+        for value in _object(result.get("extra", {}).get("metavars", {}), "Semgrep metavariables").values():
+            metavariable = _object(value, "Semgrep metavariable")
+            positions.extend(metavariable[field] for field in ("start", "end") if field in metavariable)
+        for value in positions:
+            if not isinstance(value, dict):
+                raise ValueError("Semgrep position must be an object")
+            position = value
+            line = position.get("line")
+            if type(line) is not int or line < 1:
+                raise ValueError("Semgrep position requires a positive line")
+            position["line"] = line + item.block.start_line - 1
+            if "col" in position:
+                column = position["col"]
+                if type(column) is not int or column < 1:
+                    raise ValueError("Semgrep position requires a positive column")
+                position["col"] = item.block.source_column(line + item.block.start_line - 1, column)
+                if "offset" in position:
+                    position["offset"] = sum(len(raw) + 1 for raw in lines[: line + item.block.start_line - 2]) + position["col"] - 1
+    for run in sarif["runs"]:
+        for result in run["results"]:
+            physical = result["locations"][0]["physicalLocation"]
+            item = inputs[_report_path(physical["artifactLocation"]["uri"], root, uri=True)]
+            if item.block is None:
+                continue
+            region = physical["region"]
+            region["startLine"] += item.block.start_line - 1
+            if "endLine" in region:
+                region["endLine"] += item.block.start_line - 1
+            for field in ("start", "end"):
+                if field + "Column" in region:
+                    region[field + "Column"] = item.block.source_column(region.get(field + "Line", region["startLine"]), region[field + "Column"])
+
+
+def _deduplicate_overlaps(data, sarif, source_counts, root, *, original):
+    """Keep multiplicity within each representation; remove exact cross-input repeats."""
+
+    def keep(key, counts):
+        if original:
+            counts[key] += 1
+        elif counts[key]:
+            counts[key] -= 1
+            return False
+        return True
+
+    retained = []
+    for result in data["results"]:
+        start, end = result["start"], result["end"]
+        key = (
+            result["check_id"],
+            result["path"],
+            start["line"],
+            start.get("col"),
+            end["line"],
+            end.get("col"),
+            result.get("extra", {}).get("is_ignored", False),
+        )
+        if "col" not in start or "col" not in end or keep(key, source_counts[0]):
+            retained.append(result)
+    data["results"] = retained
+    for run in sarif["runs"]:
+        retained = []
+        for result in run["results"]:
+            physical = result["locations"][0]["physicalLocation"]
+            region = physical["region"]
+            key = (
+                _rule_id(result, run["tool"]["driver"].get("rules", [])),
+                _report_path(physical["artifactLocation"]["uri"], root, uri=True),
+                region["startLine"],
+                region.get("startColumn"),
+                region.get("endLine", region["startLine"]),
+                region.get("endColumn"),
+                any(item.get("status", "accepted") == "accepted" for item in result.get("suppressions", [])),
+            )
+            if "startColumn" not in region or "endColumn" not in region or keep(key, source_counts[1]):
+                retained.append(result)
+        run["results"] = retained
 
 
 def _offset_artifact_location(value, offset, length):
@@ -192,20 +328,32 @@ def _aggregate_sarif(documents: list[dict[str, Any]], category: str) -> dict[str
     return merged
 
 
-def _batch_reports(json_path: Path, sarif_path: Path, targets: set[Path], root: Path, inline_suppressions: bool) -> tuple[dict[str, Any], dict[str, Any], bool]:
+def _batch_reports(
+    json_path: Path, sarif_path: Path, targets: set[Path], root: Path, inline_suppressions: bool, inputs: dict[Path, ScanInput] | None = None
+) -> tuple[dict[str, Any], dict[str, Any], bool]:
     values = []
     for path in (json_path, sarif_path):
         if path.is_symlink() or not path.is_file() or path.stat().st_size > 128 * 1024 * 1024:
             raise ValueError("missing or oversized native report")
         values.append(_object(_load_json(path.read_bytes(), "Semgrep report"), "Semgrep report"))
     data, sarif = values
+    return _validate_pair(data, sarif, targets, root, inline_suppressions, inputs)
+
+
+def _validate_pair(data, sarif, targets, root, inline_suppressions, inputs=None):
+    if isinstance(data.get("errors"), list) and data["errors"]:
+        kinds = [str(error.get("type", "unknown"))[:100] if isinstance(error, dict) else "malformed error" for error in data["errors"][:8]]
+        raise ValueError(f"native Semgrep errors ({len(data['errors'])}): {', '.join(kinds)}; inputs: {_coverage_description(targets, inputs or {})}")
     parsed = parse_results(json.dumps(data))
     paths = _object(data.get("paths"), "Semgrep paths")
     scanned = paths.get("scanned")
     if not isinstance(data.get("errors"), list) or not isinstance(scanned, list) or any(not isinstance(path, str) for path in scanned):
         raise ValueError("Semgrep report is missing errors or scanned-path inventory")
-    if {(root / path).resolve() for path in scanned} != targets:
-        raise ValueError("Semgrep skipped a required input or scanned an unselected input")
+    observed = {_report_path(path, root) for path in scanned}
+    if observed != targets:
+        missing = _coverage_description(targets - observed, inputs or {}) or "none"
+        unexpected = _coverage_description(observed - targets, inputs or {}) or "none"
+        raise ValueError(f"Semgrep skipped a required input or scanned an unselected input; missing: {missing}; unexpected: {unexpected}")
     actual = Counter()
     for finding, raw in zip(parsed.results, _objects(data["results"], "Semgrep results"), strict=True):
         path = (root / finding.path).resolve()
@@ -239,7 +387,7 @@ def _batch_reports(json_path: Path, sarif_path: Path, targets: set[Path], root: 
             line = _object(physical.get("region"), "region").get("startLine")
             if not isinstance(uri, str) or type(line) is not int or line <= 0:
                 raise ValueError("invalid Semgrep SARIF location")
-            path = (root / unquote(uri)).resolve()
+            path = _report_path(uri, root, uri=True)
             if path not in targets:
                 raise ValueError("SARIF finding identifies an unselected input")
             if not suppressed:
@@ -288,25 +436,12 @@ def scan(
         source = (settings.root / name).resolve()
         if any(not destination_keys.isdisjoint(_path_keys(parent)) for parent in (source, *source.parents)):
             raise ValueError("Semgrep output directory must not contain selected inputs")
-    binary = resolve_executable("semgrep", cwd=settings.root)
     with publish_directory(destination) as candidate, tempfile.TemporaryDirectory(prefix="research-semgrep-scan-") as directory:
         temporary = Path(directory)
-        targets, mapping = [], {}
-        for name in names:
-            path = settings.root / name
-            if path.suffix != ".md" or not rust_docs:
-                targets.append(path)
-            if rust_docs and path.suffix in {".md", ".rs"}:
-                for index, block in enumerate(rust_blocks(path)):
-                    snippet = temporary / "inputs" / name / f"block-{index}.rs"
-                    snippet.parent.mkdir(parents=True, exist_ok=True)
-                    snippet.write_text(block, encoding="utf-8", newline="\n")
-                    targets.append(snippet)
-                    mapping.update(_source_mapping(snippet, path))
-        if not targets:
-            raise ValueError("selected documentation contains no Rust snippets")
+        groups = _scan_groups(settings.root, names, temporary, settings.path(policy.config), rust_docs)
+        binary = semgrep_tool.setup(settings.root)
         env = {
-            **os.environ,
+            **semgrep_tool._environment(),
             "SEMGREP_SEND_METRICS": "off",
             "OTEL_SDK_DISABLED": "true",
             "SEMGREP_SETTINGS_FILE": str(temporary / "settings.yml"),
@@ -339,40 +474,68 @@ def scan(
             "--sarif-output",
             str(sarif_path),
         ]
-        # Absolute snippet paths also work when Windows temp and repository
-        # directories live on different drives. Native paths remain whole args.
-        arguments = [str(path) for path in targets]
-        batches = argument_batches(command, arguments, batch_size=policy.batch_size)
+        plans = []
+        for scan_root, configuration, inputs, is_rust in groups:
+            invocation = command.copy()
+            invocation[invocation.index("--config") + 1] = str(configuration)
+            # Native rule path filters see the same source-relative names in
+            # every block layer. Force only extracted content through Rust's
+            # analyzer even when its logical filename ends in .md.
+            position = invocation.index("--sarif-output")
+            invocation[position:position] = ["--project-root", str(scan_root), *(["--scan-unknown-extensions"] if is_rust else [])]
+            inventory = {item.physical.resolve(): item for item in inputs}
+            for batch in argument_batches(invocation, [str(item.physical) for item in inputs], batch_size=policy.batch_size):
+                selected = {Path(path).resolve(): inventory[Path(path).resolve()] for path in batch[len(invocation) :]}
+                plans.append((batch, scan_root, selected))
         reports, code = [], 0
-        for batch in batches:
+        source_counts = (Counter(), Counter())
+        for batch, scan_root, selected in plans:
             json_path.unlink(missing_ok=True)
             sarif_path.unlink(missing_ok=True)
             try:
-                result = security.run_command_bytes(batch[0], batch[1:], cwd=settings.root, env=env, input=b"", timeout=policy.timeout, check=False)
+                result = security.run_command_bytes(batch[0], batch[1:], cwd=scan_root, env=env, input=b"", timeout=policy.timeout, check=False)
             except subprocess.TimeoutExpired:
                 print("Semgrep: scan timed out; no report published", file=sys.stderr)
                 return 124
             status = result.returncode if result.returncode >= 0 else 128 - result.returncode
             try:
-                selected = {(settings.root / path).resolve() for path in batch[len(command) :]}
-                data, sarif, found = _batch_reports(json_path, sarif_path, selected, settings.root, policy.inline_suppressions)
-            except OSError, ValueError, TypeError, KeyError:
-                print(f"Semgrep: missing, malformed, or incomplete paired reports (exit {status}); no report published", file=sys.stderr)
+                data, sarif, found = _batch_reports(json_path, sarif_path, set(selected), scan_root, policy.inline_suppressions, selected)
+                _project_positions(data, sarif, selected, scan_root)
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                reason = str(error)[:1600]
+                print(f"Semgrep: missing, malformed, or incomplete paired reports (exit {status}): {reason}; no report published", file=sys.stderr)
                 return code or status or 1
             code = code or status or int(found)
-            reports.append((_locations(data, mapping), _locations(sarif, mapping), found))
+            mapping = {}
+            json_mapping = {}
+            for item in selected.values():
+                mapping.update(_source_mapping(item.physical, item.source))
+                mapping.update(_source_mapping(item.physical.relative_to(scan_root), item.source))
+                for physical in (item.physical, item.physical.relative_to(scan_root)):
+                    json_mapping.update({str(physical): str(item.source), physical.as_posix(): str(item.source)})
+            data = _locations(data, json_mapping)
+            sarif = _locations(sarif, mapping)
+            try:
+                _deduplicate_overlaps(data, sarif, source_counts, settings.root, original=all(item.block is None for item in selected.values()))
+                _validate_pair(data, sarif, {item.source.resolve() for item in selected.values()}, settings.root, policy.inline_suppressions)
+            except (OSError, ValueError, TypeError, KeyError) as error:
+                print(f"Semgrep: inconsistent source-mapped reports: {str(error)[:1600]}; no report published", file=sys.stderr)
+                return code or 1
+            data["input_coverage"] = [item.coverage() for item in selected.values()]
+            reports.append((data, sarif, found))
         payloads = {}
         if policy.report_layout == "aggregate":
             data = {
                 "results": [result for data, _, _ in reports for result in data["results"]],
                 "errors": [],
                 "paths": {"scanned": sorted({path for data, _, _ in reports for path in data["paths"]["scanned"]})},
+                "input_coverage": [item for data, _, _ in reports for item in data["input_coverage"]],
                 "batches": [data for data, _, _ in reports],
             }
             try:
                 sarif = _aggregate_sarif([sarif for _, sarif, _ in reports], policy.report_category)
-            except ValueError:
-                print("Semgrep: incompatible batch SARIF metadata; no report published", file=sys.stderr)
+            except ValueError as error:
+                print(f"Semgrep: incompatible batch SARIF metadata: {str(error)[:800]}; no report published", file=sys.stderr)
                 return code or 1
             payloads = {"semgrep.json": data, "semgrep.sarif": sarif}
         else:

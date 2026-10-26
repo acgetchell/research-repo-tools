@@ -183,6 +183,7 @@ arguments in lexicographic order.
 | `just security-osv LOCKFILE...` | Audit explicitly selected uv.lock/Cargo.lock files |
 | `just security-secrets [ARGS...]` | Scan full reachable history and current tracked/nonignored files |
 | `just semgrep-check` | Validate the consumer's Semgrep rules and fixtures |
+| `just semgrep-setup` | Provision and verify the package-pinned Semgrep environment |
 | `just setup` | Install and verify declared tools, then synchronize the Python environment |
 | `just shared-python-plan VERSION` | Preview mandatory Python-minimum and optional tool-profile adoption outside the old environment |
 | `just shared-python-update VERSION` | Apply the migration and recreate the locked environment and notebook kernel |
@@ -585,7 +586,7 @@ The v0.2.4 template's `audit` recipe selects root `uv.lock` by default. Replace
 that selection with every maintained resolution, for example:
 
 ```just
-audit: (security-osv "uv.lock" "tooling/semgrep/uv.lock" "Cargo.lock" "fixtures/extra root/Cargo.lock")
+audit: (security-osv "uv.lock" "tooling/scanner/uv.lock" "Cargo.lock" "fixtures/extra root/Cargo.lock")
 
 security: audit security-secrets
 ```
@@ -648,6 +649,21 @@ requires a dated release heading. No synthetic `v0.0.0` predecessor is inserted.
 
 Consumers can wrap `semgrep scan --include '*.rs' --include '*.py' --include '*.md'
 --rust-docs` in their own `just semgrep-scan` recipe. Keep rules and scope local.
+The installed shared package owns the Semgrep version and compatible scanner
+Python version. Both scans and fixture checks provision and verify that pin
+through uv in an isolated tool environment; ambient Semgrep executables and
+consumer dependency pins do not select the scanner. The wrapper continues to
+use the project's Python environment.
+
+Run `just semgrep-setup` to prepare the scanner before an offline gate. `just setup`
+also prepares it when `semgrep.config` is declared. A cold cache needs network
+access; provisioning failures stop the command without falling back to PATH.
+uv shares its tool cache across repos, and scanner Python defaults to
+`~/.cache/research-repo-tools/semgrep/python`, separate from project-interpreter
+cleanup. Existing `UV_CACHE_DIR` and `UV_PYTHON_INSTALL_DIR` settings are honored.
+Upgrade the shared-package pin to adopt a new scanner version. Rules, fixtures,
+selected paths and suppression policy remain consumer-owned.
+
 The shared scan checks native errors, exact coverage and agreement of active
 JSON/SARIF findings from the same native invocation. It scans batches of at most
 100 files, also bounded by portable command length. Defaults are one job,
@@ -683,12 +699,36 @@ findings. Explicit file arguments include Python/Rust tests normally ignored by
 Semgrep; deliberately excluded fixtures remain consumer policy. Rule path filters
 remain active, and skipped required inputs fail the coverage gate.
 
-Rust fences in
-Markdown and line/block rustdoc comments preserve source line numbers and hidden
-`# ` lines. Macro-generated docs and `#[doc = ...]` attributes are outside this
-adapter's scope. `semgrep check-fixtures --rust-docs` adapts annotated Markdown
-fixtures to the existing shared assertion checker; count-based expectations use
-a separate fixture gate. Findings and fixture mismatches remain blocking.
+`--rust-docs` scans every selected original file, including prose-only Markdown,
+then scans Rust fences in Markdown and line/block rustdoc comments using the
+configured Rust rules. Generic/regex prose rules still scan the originals. Each
+block gets a separate temporary input at its original repository-relative path:
+`src/lib.rs` remains `src/lib.rs`, and `docs/guide.md` remains `docs/guide.md`.
+Native rule includes and excludes apply unchanged to those logical paths. Rust
+rules intended for Markdown examples must therefore include the relevant `.md`
+paths as well as production `.rs` paths. Every original and every block must be
+covered by at least one applicable rule; excluded blocks fail with their source
+path, block number and line range. Restrict the selected inventory when a source
+is intentionally outside the scan policy.
+
+Source lines, columns and byte offsets are restored in findings; lines hidden by
+a `#` followed by a space remain code. Identical rule/span/suppression findings
+from an original and its block are reported once, while distinct spans and
+per-block coverage remain.
+JSON `input_coverage` records source paths and representations, plus one-based
+block numbers and source line ranges. Macro-generated docs and `#[doc = ...]`
+attributes are outside the adapter's scope.
+
+`semgrep check-fixtures --rust-docs` accepts mixed native, prose-only and Rust
+fence fixtures. An annotation targets the next nonblank, non-fence line. A Rust
+rule annotation targeting a Rust block belongs to that block; other assertions
+belong to the original file. Put `ruleid:` or `ok:` directly before the code or
+its opening fence, and give every Rust block at least one Rust-rule annotation.
+Each representation checks its owned positive counts and rejects unexpected
+findings, including violations of negative assertions. As in ordinary annotated
+fixtures, production path filters are ignored for assertions; production scans
+retain them. Keep configured count-based fixtures in a separate fixture gate.
+Findings and fixture mismatches remain blocking.
 
 ### SARIF selection and complete figure publication
 
@@ -796,23 +836,24 @@ automatically. To adopt this workflow in an existing repository, upgrade its
 shared-package pin, merge the packaged `update-python-dependencies` recipe, and
 declare its extra projects. Installing the package does not rewrite copied recipes.
 
-When a scanner needs Python 3.14 while the wrapper needs Python 3.15, keep their
-separate project requirements and locks. Explicitly ignore inherited active
-environments at both project-selecting launches:
+Semgrep's separate Python runtime is provisioned by the shared package. When
+adopting this release, replace nested `tooling/semgrep` launches with direct
+wrapper calls, remove the redundant Semgrep dependency/project declarations
+and lock only if that project has no other consumers, and update lockfile audit
+lists accordingly. Consumer recipes can remain thin:
 
 ```just
 semgrep-check:
-    uv run --locked --no-active --managed-python --project tooling/semgrep uv run --locked --no-active --project . --group dev research-repo-tools semgrep check-fixtures --rust-docs
+    uv run --locked --group dev research-repo-tools semgrep check-fixtures --rust-docs
 
 semgrep-scan:
-    uv run --locked --no-active --managed-python --project tooling/semgrep uv run --locked --no-active --project . --group dev research-repo-tools semgrep scan --rust-docs
+    uv run --locked --group dev research-repo-tools semgrep scan --include '*.rs' --include '*.md' --rust-docs
 
 validate-native configuration *names:
     uv run --locked --no-active --managed-python --project . --group dev research-repo-tools toolchain run -- research-repo-tools validation run "$@"
 ```
 
-The wrapper runs in the root environment while PATH retains the scanner project's
-executable. Do not use `--active`, which would select the inherited environment.
+Other independent tools can continue to use explicitly declared Python projects.
 After **v0.2.4 is published and verified**, adopt its exact registry pin, reconcile
 copied recipes and audit lock selection, and run focused consumer integration
 checks before removing local source-index or audit workarounds. These changes in

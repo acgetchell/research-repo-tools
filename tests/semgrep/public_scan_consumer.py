@@ -68,13 +68,16 @@ class TestScanConsumer(unittest.TestCase):
         self.invocation_index = 0
         self.addCleanup(patch.stopall)
         self.inventory = patch.object(semgrep_scan, "security_inventory", return_value=self.names).start()
-        patch.object(semgrep_scan, "resolve_executable", return_value=self.root / "semgrep").start()
+        patch.object(semgrep_scan.semgrep_tool, "setup", return_value=self.root / "semgrep").start()
         patch.object(security, "run_command_bytes", side_effect=self.native).start()
 
     def native(self, binary, args, **kwargs):
         self.calls.append(args)
         paths = args[args.index("--sarif-output") + 2 :]
-        self.assertEqual(kwargs["cwd"], self.root)
+        scan_root = Path(args[args.index("--project-root") + 1])
+        self.assertEqual(kwargs["cwd"], scan_root)
+        if "--scan-unknown-extensions" not in args:
+            self.assertEqual(scan_root, self.root)
         self.assertIn("--strict", args)
         self.assertIn("--error", args)
         self.assertIn("--no-rewrite-rule-ids", args)
@@ -88,7 +91,9 @@ class TestScanConsumer(unittest.TestCase):
             suppressed = self.behavior == "suppressed"
             line = 1
             uri = Path(path).as_posix()
-            if self.behavior == "documentation":
+            if self.behavior in {"documentation", "skipped-block"}:
+                if "--scan-unknown-extensions" not in args:
+                    continue
                 line = next(index for index, text in enumerate(Path(path).read_text(encoding="utf-8").splitlines(), start=1) if text == "bad()")
                 if len(self.calls) == 2:
                     uri = quote(uri, safe="/")
@@ -140,6 +145,8 @@ class TestScanConsumer(unittest.TestCase):
                 finding["analysisTarget"] = {"index": index}
         if self.behavior == "late-incomplete" and len(self.calls) == 2:
             data["paths"]["scanned"] = []
+        if self.behavior == "skipped-block" and len(self.calls) == 3:
+            data["paths"]["scanned"] = []
         if self.behavior == "malformed-paths":
             data["paths"] = []
         if self.behavior == "mismatch":
@@ -185,13 +192,17 @@ class TestScanConsumer(unittest.TestCase):
         source.parent.mkdir()
         original = b"# Guide\r\n\r\n```rust\r\n# bad()\r\n```\r\n\r\n```rust\r\nbad()\r\n```\r\n"
         source.write_bytes(original)
+        (self.root / "rules.yml").write_bytes(
+            b"rules:\n  - id: project.rule\n    pattern: bad()\n    message: example\n    languages: [rust]\n    severity: ERROR\n"
+        )
         self.inventory.return_value = ("docs/guide café.md",)
         self.behavior = "documentation"
 
         self.assertEqual(semgrep_scan.scan(self.settings, include=("*.md",), rust_docs=True, batch_size=1), 1)
 
-        self.assertEqual(len(self.calls), 2)
-        self.assertTrue(all(args[-1] != str(source) for args in self.calls))
+        self.assertEqual(len(self.calls), 3)
+        self.assertEqual(self.calls[0][-1], str(source))
+        self.assertTrue(all(args[-1] != str(source) for args in self.calls[1:]))
         output = self.root / "target/security/semgrep"
         data = json.loads((output / "semgrep.json").read_bytes())
         sarif = json.loads((output / "semgrep.sarif").read_bytes())
@@ -204,6 +215,17 @@ class TestScanConsumer(unittest.TestCase):
         self.assertEqual([location["region"]["startLine"] for location in locations], [4, 8])
         for report in (data, sarif):
             self.assertNotIn("research-semgrep-scan-", json.dumps(report))
+        self.assertEqual(source.read_bytes(), original)
+
+        self.calls.clear()
+        self.behavior = "skipped-block"
+        error = io.StringIO()
+        with contextlib.redirect_stderr(error):
+            self.assertEqual(semgrep_scan.scan(self.settings, include=("*.md",), rust_docs=True, batch_size=1), 1)
+        self.assertIn("missing: 'docs/guide café.md (Rust block 2, lines 8-8)'", error.getvalue())
+        self.assertNotIn("research-semgrep-scan-", error.getvalue())
+        self.assertLess(len(error.getvalue()), 2000)
+        self.assertEqual(list(output.iterdir()), [])
         self.assertEqual(source.read_bytes(), original)
 
     def test_invalid_coverage_or_report_agreement_and_timeouts_publish_empty_generation(self):

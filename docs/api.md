@@ -910,6 +910,21 @@ redacted in addition to native detected-secret redaction. Report directories are
 caller-owned outputs. These commands are not an assurance that unknown secrets,
 ignored inputs or unsupported binary formats are detected.
 
+`semgrep_tool.setup(root)` provisions the package's exact `semgrep_tool.VERSION`
+in a cached, isolated uv tool environment and returns the verified executable
+`Path`. It verifies package/interpreter metadata and the executable's version.
+Consumer manifests, locks, and `.venv` are unchanged. Active environments,
+project uv configuration, and ambient Semgrep executables cannot replace the pin;
+uv cache, interpreter-store and network settings remain available. Provisioning
+or version failures raise `RuntimeError` with diagnostics. The CLI entry point
+is `semgrep setup`, exposed as `just semgrep-setup`. Normal setup also provisions
+the scanner for consumers declaring `semgrep.config`.
+
+Both `semgrep.check` and `semgrep_scan.scan` use this managed executable. A cold
+cache can require network access; prepare it before an offline gate. The package
+owns the scanner pin and Python minor, while consumers own their rule policy.
+Pin updates require a new shared-package release and native matrix validation.
+
 `semgrep_docs.rust_blocks(path)` returns line-padded Rust fence source strings
 from UTF-8 Markdown or line/block rustdoc comments. It does not execute code or
 change the source. Hidden Rust lines remain code; unclosed selected fences raise
@@ -930,6 +945,15 @@ Both report formats must be fresh finite JSON and agree on active rule/path/line
 findings. JSON must declare exactly the selected scanned inputs and no errors.
 Explicit source files include tests normally ignored by Semgrep, while native
 rule path filters remain active. Excluded fixtures are never selected.
+With `rust_docs=True`, originals (including all Markdown) are scanned first and
+each Rust fence is independently scanned with Rust rules at the same logical
+repository-relative path. Root-anchored includes/excludes retain native Semgrep
+semantics. Markdown examples require Rust rule scopes covering their `.md`
+paths; generic/regex prose rules run on originals. Coverage is checked against
+each physical input before projection, so one scanned block cannot mask another
+skipped block. Failures include a bounded reason and missing/unexpected source
+and block identities. Original line/column/byte positions are restored, and
+identical overlapping rule/span/suppression findings are retained once.
 Accepted SARIF suppressions and JSON `extra.is_ignored` findings are inactive
 only when inline suppressions are enabled. Invalid pairs or process timeouts
 commit an empty generation, removing stale members. Precondition, generation
@@ -937,7 +961,11 @@ and publication exceptions preserve/restore the previous generation. Valid
 reports remain available when findings or native status make the gate fail.
 
 Aggregate layout publishes `semgrep.json` and `semgrep.sarif`. JSON contains
-combined `results`, `errors`, `paths.scanned` and full native JSON in `batches`.
+combined `results`, `errors`, `paths.scanned`, `input_coverage` and per-batch JSON
+with native metadata in `batches`. Each coverage record has a logical `path` and
+`representation` (`source` or `rust-block`); blocks also have a one-based `block`
+number and inclusive `start_line`/`end_line`. Per-block coverage survives finding
+deduplication. Numbered JSON reports carry the same coverage records per batch.
 SARIF merges one run with deduplicated rule descriptors and reindexed rule,
 artifact and invocation references; conflicting metadata/descriptors reject
 aggregation. Unrelated run metadata must agree across batches. The declared
@@ -947,9 +975,15 @@ empty so GitHub recognizes the category. Numbered layout publishes `N.json` /
 categories. Both layouts replace the whole owned output directory, superseding
 0.1.7's per-file double launches and partial numbered-file cleanup.
 
-`check_documentation_fixtures(settings)` adapts
-annotated Markdown fixtures to the existing shared fixture checker, including
-blocking mismatches; count-based expectations remain in a separate fixture gate.
+`check_documentation_fixtures(settings)` (also `semgrep.check(settings,
+rust_docs=True)`) validates mixed native, Markdown prose and Rust-fence fixtures.
+An annotation targets the next nonblank, non-fence line; a Rust-rule assertion
+targeting a Rust block belongs to that block, and other assertions belong to the
+original input. Every block needs Rust-rule annotations. Positive counts and
+negative assertions are checked per representation, without double-counting
+matches owned by a block. Mismatches identify the original source and block.
+Annotated fixtures ignore production path filters, as ordinary fixture checking
+does. Count-based expectations remain in a separate fixture gate.
 
 ## SARIF API
 
