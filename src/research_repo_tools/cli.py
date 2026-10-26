@@ -26,7 +26,7 @@ def parser() -> argparse.ArgumentParser:
     for name in ("allowlist", "update"):
         command = actions.add_parser(name)
         command.add_argument("--policy", type=Path, required=True, help="consumer selected-actions JSON or Actions update TOML")
-        command.add_argument("paths", nargs="+", help="explicit workflow files or directories")
+        command.add_argument("paths", nargs="+", help="explicit workflow/composite action files or YAML directories")
         if name == "update":
             mode = command.add_mutually_exclusive_group()
             mode.add_argument("--check", action="store_true", help="preview and return nonzero when selected pins differ")

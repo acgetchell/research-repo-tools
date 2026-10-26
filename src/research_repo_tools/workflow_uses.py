@@ -1,4 +1,4 @@
-"""Read workflow references from YAML structure, retaining scalar source spans."""
+"""Read workflow/composite references from YAML, retaining scalar source spans."""
 
 import re
 from dataclasses import dataclass
@@ -65,7 +65,7 @@ def _validate(node: Node, path: Path, active: set[int], visited: set[int]) -> No
 
 
 def references(path: Path, text: str) -> tuple[Use, ...]:
-    """Reject ambiguous YAML; inspect job calls and every named/unnamed step.
+    """Reject ambiguous YAML; inspect workflow calls and workflow/composite steps.
 
     Aliases retain the anchor's source location. This is reference inspection,
     not an actionlint replacement. Local and same-repository references and
@@ -76,14 +76,12 @@ def references(path: Path, text: str) -> tuple[Use, ...]:
         if document is not None:
             _validate(document, path, set(), set())
     except RecursionError as error:
-        raise ValueError(f"{path}: workflow YAML nesting exceeds supported depth") from error
+        raise ValueError(f"{path}: Actions YAML nesting exceeds supported depth") from error
     except yaml.YAMLError as error:
-        raise ValueError(f"{path}: invalid workflow YAML: {error}") from error
+        raise ValueError(f"{path}: invalid Actions YAML: {error}") from error
     if document is None:
-        raise ValueError(f"{path}: empty workflow")
+        raise ValueError(f"{path}: empty Actions YAML")
     top = _mapping(document, path)
-    if "jobs" not in top:
-        raise ValueError(f"{path}: workflow requires jobs")
     uses: list[Use] = []
 
     def collect(node: Node, context: str) -> None:
@@ -101,23 +99,38 @@ def references(path: Path, text: str) -> tuple[Use, ...]:
             action = identity(raw_action)
         uses.append(Use(path, node, context, action, ref, node.start_mark.line + 1, node.start_mark.column + 1, node.start_mark.index, node.end_mark.index))
 
-    for name, job in _mapping(top["jobs"], path).items():
-        fields = _mapping(job, path)
-        if "uses" in fields:
-            collect(fields["uses"], f"jobs.{name}.uses")
-        if "steps" in fields:
-            steps = fields["steps"]
-            if not isinstance(steps, SequenceNode):
-                raise ValueError(f"{path}:{steps.start_mark.line + 1}: steps must be a sequence")
-            for index, step in enumerate(steps.value):
-                fields = _mapping(step, path)
-                if "uses" in fields:
-                    collect(fields["uses"], f"jobs.{name}.steps[{index}].uses")
+    def collect_steps(steps: Node, context: str) -> None:
+        if not isinstance(steps, SequenceNode):
+            raise ValueError(f"{path}:{steps.start_mark.line + 1}: steps must be a sequence")
+        for index, step in enumerate(steps.value):
+            fields = _mapping(step, path)
+            if "uses" in fields:
+                collect(fields["uses"], f"{context}[{index}].uses")
+
+    if "jobs" in top and "runs" in top:
+        raise ValueError(f"{path}: cannot mix workflow jobs and action runs")
+    if "jobs" in top:
+        for name, job in _mapping(top["jobs"], path).items():
+            fields = _mapping(job, path)
+            if "uses" in fields:
+                collect(fields["uses"], f"jobs.{name}.uses")
+            if "steps" in fields:
+                collect_steps(fields["steps"], f"jobs.{name}.steps")
+    elif "runs" in top:
+        runs = _mapping(top["runs"], path)
+        using = runs.get("using")
+        if not isinstance(using, ScalarNode) or using.tag != "tag:yaml.org,2002:str" or using.value != "composite":
+            raise ValueError(f"{path}:{top['runs'].start_mark.line + 1}: action requires runs.using: composite")
+        if "steps" not in runs:
+            raise ValueError(f"{path}:{top['runs'].start_mark.line + 1}: composite action requires runs.steps")
+        collect_steps(runs["steps"], "runs.steps")
+    else:
+        raise ValueError(f"{path}: expected workflow jobs or composite action runs")
     return tuple(uses)
 
 
 def workflow_paths(root: Path, inputs: list[str]) -> tuple[Path, ...]:
-    """Expand explicit directories to YAML files, without following symlinks."""
+    """Expand explicit workflow/composite directories to YAML, rejecting leaf symlinks."""
     paths: set[Path] = set()
     for value in inputs:
         path = Path(value)

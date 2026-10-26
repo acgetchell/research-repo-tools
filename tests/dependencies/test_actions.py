@@ -26,6 +26,32 @@ def test_aliases_retain_anchor_location():
     assert "example.yml:4" in uses[1].location
 
 
+@pytest.mark.parametrize("scalar", [f"approved/action@{OLD}", f"'approved/action@{OLD}'", f'"approved/action@{OLD}"', f">-\n        approved/action@{OLD}"])
+@pytest.mark.parametrize("named", [False, True])
+def test_composite_step_styles_and_locations(scalar, named):
+    prefix = "    - name: named\n      " if named else "    - "
+    text = f"name: example\nruns:\n  using: composite\n  steps:\n{prefix}uses: {scalar}\n"
+    (use,) = references(Path("action.yml"), text)
+    assert (use.action, use.ref, use.context) == ("approved/action", OLD, "runs.steps[0].uses")
+    assert use.line == (6 if named else 5)
+    assert text[use.start : use.end].strip() == scalar
+
+
+def test_composite_aliases_and_non_reference_metadata():
+    text = (
+        f"description: uses other/action@{OLD}\n"
+        f"example: {{uses: unapproved/example@{OLD}}}\n"
+        "runs:\n  using: composite\n  steps:\n"
+        f"    - &step {{uses: &action approved/action@{OLD}}}\n"
+        "    - *step\n    - uses: *action\n"
+        "    - uses: ./local\n    - uses: '$/.github/actions/setup'\n    - uses: docker://image:latest\n"
+    )
+    uses = references(Path("action.yml"), text)
+    assert [use.action for use in uses] == ["approved/action"] * 3 + [None] * 3
+    assert [use.context for use in uses] == [f"runs.steps[{index}].uses" for index in range(6)]
+    assert all(use.node is uses[0].node and use.line == 6 for use in uses[:3])
+
+
 def test_same_repository_steps_and_workflow_calls_are_non_external():
     text = "jobs:\n  call:\n    uses: $/.github/workflows/check.yml\n  check:\n    steps:\n      - uses: '$/.github/actions/setup'\n"
     uses = references(Path("example.yml"), text)
@@ -43,6 +69,19 @@ def test_same_repository_steps_and_workflow_calls_are_non_external():
         "jobs: {check: {uses: 'a/b@${{ x }}'}}",
         "jobs: [check]",
         "jobs: {check: {steps: {uses: x}}}",
+        "jobs: {}\nruns: {using: composite, steps: []}",
+        "runs: []",
+        "runs: {using: composite}",
+        "runs: {using: composite, steps: {uses: a/b@v1}}",
+        "runs: {using: composite, steps: [42]}",
+        "runs: {using: composite, steps: [{uses: 42}]}",
+        "runs: {using: composite, steps: [{uses: a/b@v1, uses: other/action@v2}]}",
+        "runs: {using: composite, steps: [{<<: {uses: a/b@v1}}]}",
+        "runs: &cycle {using: composite, steps: [*cycle]}",
+        "runs: {using: [composite], steps: []}",
+        "runs: {using: node24, main: index.js}",
+        "runs: {steps: []}",
+        "name: no workflow or action",
     ],
 )
 def test_ambiguous_or_invalid_yaml_fails(fragment):
@@ -57,6 +96,20 @@ def test_ambiguous_or_invalid_yaml_fails(fragment):
         {"github_owned_allowed": True},
         {"patterns_allowed": ["actions/*@*"]},
         {"patterns_allowed": ["a/b@v1"]},
+        {"patterns_allowed": ["a/b@main"]},
+        {"patterns_allowed": [f"a/b@{OLD[:-1]}"]},
+        {"patterns_allowed": [f"a/b@{OLD}0"]},
+        {"patterns_allowed": [f"a/b@{'g' * 40}"]},
+        {"patterns_allowed": [f"a/b@{OLD}@*"]},
+        {"patterns_allowed": [f"a/b@{OLD} "]},
+        {"patterns_allowed": ["a/b@v*"]},
+        {"patterns_allowed": [f"a/*@{OLD}"]},
+        {"patterns_allowed": [f"a/b/*@{OLD}"]},
+        {"patterns_allowed": [f"a/b/../c@{OLD}"]},
+        {"patterns_allowed": [f"a/b//c@{OLD}"]},
+        {"patterns_allowed": [f"./local@{OLD}"]},
+        {"patterns_allowed": [False]},
+        {"patterns_allowed": [None]},
         {"patterns_allowed": ["a/b/../c@*"]},
         {"extra": False},
         {"patterns_allowed": "a/b@*"},
@@ -87,6 +140,59 @@ def test_policy_authority_exact_nested_paths_and_local_scope(tmp_path):
     policy.write_bytes(json.dumps(value).encode())
     with pytest.raises(ValueError, match="unapproved"):
         workflow_allowlist.check(tmp_path, policy, [str(workflow)])
+
+
+@pytest.mark.parametrize("allowed", [[OLD], [NEW, OLD], ["*", OLD]])
+@pytest.mark.parametrize("ref", [OLD, OLD.upper()])
+def test_policy_exact_commit_normalizes_hex_and_accepts_any_matching_rule(tmp_path, allowed, ref):
+    policy = tmp_path / "policy.json"
+    policy.write_bytes(
+        json.dumps(
+            {"github_owned_allowed": False, "verified_allowed": False, "patterns_allowed": [f"APPROVED/Repo/Path@{sha.upper()}" for sha in allowed]}
+        ).encode()
+    )
+    workflow = tmp_path / "workflow.yml"
+    workflow.write_bytes(f"jobs: {{call: {{uses: approved/repo/Path@{ref}}}}}\n".encode())
+    assert workflow_allowlist.check(tmp_path, policy, [str(workflow)]) == 0
+
+
+@pytest.mark.parametrize("ref", [OLD, OLD[:7], "main", "v1", "release/v1"])
+def test_policy_wildcard_keeps_supported_refs_for_the_exact_identity(tmp_path, ref):
+    policy = tmp_path / "policy.json"
+    policy.write_bytes(b'{"github_owned_allowed":false,"verified_allowed":false,"patterns_allowed":["approved/action@*"]}')
+    workflow = tmp_path / "workflow.yml"
+    workflow.write_bytes(f"jobs: {{call: {{uses: approved/action@{ref}}}}}\n".encode())
+    assert workflow_allowlist.check(tmp_path, policy, [str(workflow)]) == 0
+
+
+@pytest.mark.parametrize(
+    "action,ref",
+    [
+        ("approved/repo/Path", NEW),
+        ("approved/repo/Path", OLD[:-1]),
+        ("approved/repo/Path", "main"),
+        ("approved/repo/Path", "v1"),
+        ("approved/repo/path", OLD),
+        ("approved/repo/Other", OLD),
+    ],
+)
+def test_policy_exact_commit_rejects_other_refs_and_paths_without_weakening_advice(tmp_path, action, ref):
+    policy = tmp_path / "policy.json"
+    policy.write_bytes(
+        json.dumps({"github_owned_allowed": False, "verified_allowed": False, "patterns_allowed": [f"approved/repo/Path@{OLD}", "approved/repo@*"]}).encode()
+    )
+    workflow = tmp_path / "workflow.yml"
+    workflow.write_bytes(f"jobs: {{call: {{uses: {action}@{ref}}}}}\n".encode())
+    with pytest.raises(ValueError) as caught:
+        workflow_allowlist.check(tmp_path, policy, [str(workflow)])
+    diagnostic = str(caught.value)
+    assert "workflow.yml:1" in diagnostic and "jobs.call.uses" in diagnostic
+    assert f"{action}@{ref}" in diagnostic and str(policy) in diagnostic
+    assert "@*" not in diagnostic
+    if action == "approved/repo/Path":
+        assert f"permitted references: approved/repo/Path@{OLD}" in diagnostic
+    else:
+        assert "no approved identity" in diagnostic
 
 
 def test_annotated_tag_peeling_and_exact_tag_guard(tmp_path, monkeypatch):
@@ -230,14 +336,15 @@ def test_deep_workflow_reports_invalid_yaml(tmp_path, capsys):
     assert "deep.yml" in capsys.readouterr().err
 
 
-def test_failed_second_publication_rolls_back_and_has_no_completion_report(tmp_path, monkeypatch, capsys):
+@pytest.mark.parametrize("second", ["jobs:\n  call:\n    uses:", "runs:\n  using: composite\n  steps:\n    - uses:"])
+def test_failed_second_publication_rolls_back_and_has_no_completion_report(tmp_path, monkeypatch, capsys, second):
     from research_repo_tools import files
 
     policy = tmp_path / "updates.toml"
     policy.write_bytes(b'[actions]\n"a/b"="v2"\n')
     workflows = [tmp_path / "a.yml", tmp_path / "b.yml"]
-    for workflow in workflows:
-        workflow.write_bytes(f"jobs:\n  call:\n    uses: a/b@{OLD} # v1\n".encode())
+    workflows[0].write_bytes(f"jobs:\n  call:\n    uses: a/b@{OLD} # v1\n".encode())
+    workflows[1].write_bytes(f"{second} a/b@{OLD} # v1\n".encode())
     before = {workflow: workflow.read_bytes() for workflow in workflows}
     replace = files._replace_path
     publications = []

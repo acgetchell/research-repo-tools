@@ -202,7 +202,7 @@ arguments in lexicographic order.
 | `just update-tools` | Upgrade uv and managed tools without repeating shell configuration |
 | `just update-uv` | Upgrade uv through its installation owner and reconcile its pin |
 | `just validate CONFIGURATION [NAME...]` | Check configured example outputs |
-| `just workflow-allowlist-check` | Check steps and reusable workflows against strict consumer selected-actions settings |
+| `just workflow-allowlist-check` | Check workflow and composite action references against strict consumer selected-actions settings |
 | `just zizmor-check [ARGS...]` | Run local workflow audits; accept `--offline`, `--require-online`, and `--format sarif` |
 
 To preview a prospective release, run
@@ -959,10 +959,29 @@ and retry. There is no transaction across managers.
 
 The consumer's committed GitHub selected-actions payload is the sole allowlist.
 Use the strict payload with `github_owned_allowed: false`, `verified_allowed:
-false`, and `patterns_allowed` containing exact `owner/repo[/path]@*` identities.
+false`, and `patterns_allowed` containing exact identities with either `@*` or
+`@<40-hex-SHA>` ref constraints. For example:
+
+```json
+{
+  "github_owned_allowed": false,
+  "verified_allowed": false,
+  "patterns_allowed": [
+    "actions/checkout@*",
+    "example/publish-auth@0123456789abcdef0123456789abcdef01234567"
+  ]
+}
+```
+
 Wildcards in identities, owner-wide exemptions, duplicate JSON fields, and other
-policy shapes fail. Repository identity matching ignores case; nested paths match
-exactly. A repository entry does not also approve its subpaths.
+policy shapes fail. Tags, branches, short SHAs, and other ref patterns are not
+supported as policy constraints. Repository identity matching ignores case;
+nested paths match exactly, including case. A repository entry does not also
+approve its subpaths or reusable workflow paths. Full SHA hex is compared without
+case distinctions. Exact-SHA entries reject any other commit, branch, or tag;
+`@*` entries keep accepting any supported ref for their exact identity. Entries
+are alternatives: an `@*` entry for the same identity also permits refs beyond
+an exact-SHA entry. Retain only the reviewed commits for a restricted identity.
 
 Merge the packaged `workflow-allowlist-check` recipe, pointing it at that existing
 policy, then add it to the consumer's check/CI gate:
@@ -976,8 +995,13 @@ workflow-allowlist-check:
 just workflow-allowlist-check
 ```
 
-The checker reads explicit files or YAML directories and inspects both
-`jobs.<id>.uses` calls and every step's `uses`. Quoted/folded scalars and aliases
+The checker reads explicit files or YAML directories and inspects
+`jobs.<id>.uses` calls, workflow steps, and `runs.steps[*].uses` in composite
+action metadata (`runs.using: composite`). To include a consumer's composite
+actions, append the existing `.github/actions` directory (or explicit metadata
+files) to the inputs in both the allowlist and update recipes. Inputs must be
+workflows or composite metadata; JavaScript/Docker action metadata and documents
+mixing workflow `jobs` with action `runs` fail. Quoted/folded scalars and aliases
 are supported; alias findings point to the anchor. Duplicate/merge mappings and
 recursive aliases fail with file/line diagnostics. Local `./` actions,
 same-repository `$/` references, and `docker://` containers are outside this external policy. Keep actionlint for
@@ -999,10 +1023,17 @@ An explicit stable version tag restricts the target. GitHub CLI (`gh`) is requir
 for read-only release/tag lookup, including private repositories. Annotated tags
 are peeled to full commit SHAs. Existing selected references must already use
 full SHAs and ordinary version comments, such as `# v1.2.3`; the updater retains
-subpaths, quote style, trailing comment text, other workflow bytes, and line endings.
-Unsupported scalar forms, aliases when rewriting workflows, missing targets, or lookup
+subpaths, quote style, trailing comment text, other source bytes, and line endings
+in both workflows and composites. Selected references must be ordinary single-line
+scalars; folded references remain supported for allowlist checks only.
+Unsupported scalar forms, aliases when rewriting files, missing targets, or lookup
 failures abort before publication. References outside the selected identities
 remain unchanged and appear as skipped in the report.
+
+Pin updates do not modify the selected-actions JSON. When an identity has an
+exact-SHA approval, review and update that approval deliberately alongside an
+authorized pin change, then run the allowlist gate. A mismatch reports the
+permitted commits without suggesting a wildcard exemption.
 
 Merge the packaged `update-actions` recipe and review the report before applying:
 

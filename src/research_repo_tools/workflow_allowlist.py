@@ -1,12 +1,29 @@
 """Check external action references against consumer-owned selected-actions JSON."""
 
 import json
+from dataclasses import dataclass
 from pathlib import Path
 
-from research_repo_tools.workflow_uses import identity, references, workflow_paths
+from research_repo_tools.workflow_uses import SHA, identity, references, workflow_paths
 
 
-def load_policy(path: Path) -> frozenset[str]:
+@dataclass(frozen=True, slots=True)
+class ActionRule:
+    action: str
+    ref: str
+
+    @classmethod
+    def parse(cls, pattern: str) -> ActionRule:
+        action, separator, ref = pattern.partition("@")
+        if not separator or ref != "*" and SHA.fullmatch(ref) is None:
+            raise ValueError(f"expected exact owner/repo[/path]@* or owner/repo[/path]@<40-hex-SHA> entry: {pattern!r}")
+        return cls(identity(action), ref.lower())
+
+    def allows(self, ref: str) -> bool:
+        return self.ref == "*" or self.ref == ref.lower()
+
+
+def load_policy(path: Path) -> frozenset[ActionRule]:
     def unique(pairs):
         result = {}
         for key, value in pairs:
@@ -24,9 +41,12 @@ def load_policy(path: Path) -> frozenset[str]:
     if value["github_owned_allowed"] is not False or value["verified_allowed"] is not False:
         raise ValueError(f"{path}: github_owned_allowed and verified_allowed must both be false")
     patterns = value["patterns_allowed"]
-    if not isinstance(patterns, list) or any(not isinstance(pattern, str) or not pattern.endswith("@*") for pattern in patterns):
-        raise ValueError(f"{path}: patterns_allowed must contain exact owner/repo[/path]@* entries")
-    return frozenset(identity(pattern[:-2]) for pattern in patterns)
+    if not isinstance(patterns, list) or any(not isinstance(pattern, str) for pattern in patterns):
+        raise ValueError(f"{path}: patterns_allowed must be a list of exact identity/ref strings")
+    try:
+        return frozenset(ActionRule.parse(pattern) for pattern in patterns)
+    except ValueError as error:
+        raise ValueError(f"{path}: {error}") from error
 
 
 def check(root: Path, policy: Path, inputs: list[str]) -> int:
@@ -34,8 +54,13 @@ def check(root: Path, policy: Path, inputs: list[str]) -> int:
     diagnostics = []
     for path in workflow_paths(root, inputs):
         for use in references(path, path.read_bytes().decode("utf-8-sig")):
-            if use.action is not None and use.action not in allowed:
-                diagnostics.append(f"{use.location}: unapproved reference {use.node.value!r}; add {use.action}@* to {policy} after review")
+            if use.action is None or use.ref is None:
+                continue
+            rules = [rule for rule in allowed if rule.action == use.action]
+            if not any(rule.allows(use.ref) for rule in rules):
+                constraint = ", ".join(f"{rule.action}@{rule.ref}" for rule in sorted(rules, key=lambda rule: rule.ref))
+                reason = f"permitted references: {constraint}" if rules else f"no approved identity {use.action!r}"
+                diagnostics.append(f"{use.location}: unapproved reference {use.node.value!r}; {reason} in {policy}")
     if diagnostics:
         raise ValueError("\n".join(diagnostics))
     print(f"External Actions allowlist passed using {policy}; local actions and containers are outside this policy.")
