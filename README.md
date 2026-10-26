@@ -85,7 +85,7 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | Papers | `papers check`, `normalize`, `source-date` | Explicit UTC dates, optional PDF text/geometry checks and validated metadata normalization |
 | Performance | `performance assets`, `baseline`, `compare`, `convert`, `discover`, `export`, `extract`, `fetch`, `host`, `measure`, `profile`, `promote`, `publish`, `release-draft`, `release-upload`, `render`, `verify`, `verify-saved` | Complete configured measurement, retained evidence, release assets and publication |
 | Python | `python check`, `fix`, `typecheck` | Complete tracked/nonignored inventory; native Ruff/ty policy; explicit fixes only |
-| Releases | `release check`, `gate`, `publish`, `registry`, `update`, `verify` | Metadata preparation, reviewed publication gates and exact registry/GitHub verification |
+| Releases | `release check`, `gate`, `publish`, `registry`, `reuse`, `update`, `verify` | Metadata preparation, reviewed publication gates and exact registry/GitHub verification |
 | Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
 | SARIF | `sarif split` | Consumer-selected drivers/namespaces, corrected rule indices and complete output generations |
 | Security | `security osv`, `secrets` | Managed OSV/Gitleaks, explicit inputs, full history, redacted native reports |
@@ -170,7 +170,8 @@ arguments in lexicographic order.
 | `just release-check TAG` | Check final release metadata and generated notes |
 | `just release-first TAG DATE` | Prepare a first release after checking published stable history |
 | `just release-notes TAG` | Print release notes from the root changelog or an archive |
-| `just release-publish TAG` | Approve a validated draft GitHub Release and trigger its registry workflow |
+| `just release-publish TAG [ARGS...]` | Approve a validated draft GitHub Release and trigger its registry workflow |
+| `just release-reuse COMMIT ARGS...` | Save explicitly selected, verified PR source-check evidence for a squash release |
 | `just release-tag TAG` | Create a local annotated tag from validated release notes |
 | `just release-tag-preview TAG` | Inspect the release annotation without changing Git state |
 | `just release-update TAG PREVIOUS DATE` | Prepare metadata with an explicit predecessor and date |
@@ -409,6 +410,12 @@ features, MSRV, dependency order and deployment settings. See the
 and [migration](https://github.com/acgetchell/research-repo-tools/blob/main/docs/release-policy-migration.md#shared-release-commands). Adopt the exact published v0.1.8
 package before consumer deployment. Publisher registration and live uploads are
 separate adoption steps recorded in the maintainer's private setup task.
+
+[Verified CI reuse](docs/REUSING_CI.md) is an explicit option for consumers with
+reviewed, signed, context-independent source checks. It retains exact-commit
+defaults and package/artifact validation. `just release-reuse` saves a selected
+PR run for review; `just release-publish TAG --reuse-evidence FILE` revalidates
+that selection. Consumer adoption requires the published v0.2.4 package.
 
 `toolchain run` uses a managed `CARGO_HOME`; an ordinary local `cargo login` may
 configure a different home. The OIDC workflow supplies its temporary token through

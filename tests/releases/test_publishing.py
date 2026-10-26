@@ -315,6 +315,8 @@ def test_common_release_recipes_and_guides_share_argument_contracts(tmp_path):
         ("release-first", ["v1.2.3", "2026-09-01"], "--first-release"),
         ("release-notes", ["v1.2.3"], "changelog notes"),
         ("release-publish", ["v1.2.3"], "--approve"),
+        ("release-publish", ["v1.2.3", "--reuse-evidence", "saved approval.json"], 'release publish "$@" --approve'),
+        ("release-reuse", [SHA, "--pull-request", "9", "--run-id", "123", "--attempt", "2", "--output", "saved approval.json"], "release reuse"),
         ("release-tag", ["v1.2.3"], "changelog tag"),
         ("release-tag-preview", ["v1.2.3"], "--dry-run"),
         ("release-update", ["v1.2.3", "v1.2.2", "2026-09-01"], "--previous-release"),

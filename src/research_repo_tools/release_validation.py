@@ -520,6 +520,7 @@ def verify_attestation(
     repository: str,
     predicate: dict[str, Any] | None = None,
     predicate_type: str = "https://slsa.dev/provenance/v1",
+    event: str = "push",
 ) -> None:
     """Use gh's cryptographic verification, then bind the signed invocation/event.
 
@@ -528,7 +529,10 @@ def verify_attestation(
     """
     _repository(repository)
     _commit(commit)
-    if re.fullmatch(r"\.github/workflows/[A-Za-z0-9_-]+\.yml", workflow) is None or not ref.startswith(("refs/heads/", "refs/tags/")):
+    valid_ref = (
+        ref.startswith(("refs/heads/", "refs/tags/")) if event == "push" else event == "pull_request" and re.fullmatch(r"refs/pull/[1-9][0-9]*/merge", ref)
+    )
+    if re.fullmatch(r"\.github/workflows/[A-Za-z0-9_-]+\.yml", workflow) is None or not valid_ref:
         raise ValueError("attestation requires an explicit workflow and source ref")
     _integer(run_id, "signed run ID")
     _integer(attempt, "signed run attempt")
@@ -561,8 +565,8 @@ def verify_attestation(
     verified = _object(_object(result[0], "verified attestation").get("verificationResult"), "verification result")
     certificate = _object(_object(verified.get("signature"), "verified signature").get("certificate"), "verified certificate")
     invocation = f"https://github.com/{repository}/actions/runs/{run_id}/attempts/{attempt}"
-    if certificate.get("runInvocationURI") != invocation or certificate.get("buildTrigger") != "push":
-        raise ValueError("attestation certificate run, attempt or push event differs")
+    if certificate.get("runInvocationURI") != invocation or certificate.get("buildTrigger") != event:
+        raise ValueError("attestation certificate run, attempt or expected event differs")
     if predicate is not None and _object(verified.get("statement"), "verified statement").get("predicate") != predicate:
         raise ValueError("signed promotion predicate differs from the retained evidence")
 

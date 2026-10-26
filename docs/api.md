@@ -568,7 +568,11 @@ parsing that rejects duplicate fields, non-finite numbers and excessive nesting.
 The [release evidence core](release-evidence-api.md) provides configurable signed
 source validation, retained Cargo archive verification, approval handoffs and
 shared provider/signature primitives. These guarantees remain distinct from
-registry publication and from cross-commit CI reuse.
+registry publication. The separate [verified CI reuse contract](REUSING_CI.md)
+provides opt-in source-check equivalence for PR merge and squash release trees.
+`PublishingSettings.reuse` is optional; `check_reviewed_release` and
+`publish_reviewed_release` accept keyword-only `reuse_evidence=None`. Omitting it
+retains exact-commit checks. `require_checks` always retains exact-SHA semantics.
 
 `publish_reviewed_release(config, tag)` validates a stable draft twice and publishes
 that GitHub Release as the invoking maintainer. Calling it constitutes approval;
