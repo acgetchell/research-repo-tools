@@ -159,7 +159,7 @@ arguments in lexicographic order.
 | `just notebook-clear FILE...` | Deliberately clear generated notebook state |
 | `just notebook-execute FILE...` | Execute selected notebooks and write results and reports |
 | `just notebook-inspect FILE... [--json] [--no-preview]` | Inventory cells and repair problems without generating IDs or loading Jupyter |
-| `just notebook-launch [--browser \| --no-browser] [--scratch-dir PATH]` | Launch locked JupyterLab with private session caches |
+| `just notebook-launch [NOTEBOOK] [--browser \| --no-browser] [--scratch-dir PATH]` | Launch locked JupyterLab, optionally opening one notebook, with private session caches |
 | `just notebook-lint FILE...` | Check structure, output policy, Python syntax, Ruff rules/formatting, and ty types |
 | `just notebook-reset [PATH...] [--revision REF] [--apply]` | Preview source restoration and declared cleanup; explicitly apply with `--apply` |
 | `just notebook-sync` | Synchronize locked notebook dependencies and the project kernel |
@@ -1188,6 +1188,7 @@ checkpoints = ["notebooks/.ipynb_checkpoints"]
 
 ```sh
 just notebook-launch --browser
+just notebook-launch "notebooks/analysis with spaces.ipynb" --browser
 just notebook-reset
 just notebook-reset --apply
 ```
@@ -1196,6 +1197,19 @@ Launch selects the locked managed Python, `dev`, and configured notebook group.
 Its private Jupyter, IPython, and Matplotlib session state lives beneath the
 selected scratch directory and is removed when the server exits. Browser opening
 defaults to false; `--browser` and `--no-browser` override configuration.
+Starting with v0.2.4, an optional literal `.ipynb` argument opens that notebook
+in JupyterLab. Relative paths start at the consumer root and must also be inside
+`notebooks.cwd`; absolute paths inside that directory work too. Missing files,
+traversal, symlinks, junctions, hard-link aliases, and option-shaped arguments are rejected before
+launch. Spaces, Unicode, and URL punctuation are preserved through an encoded
+JupyterLab tree URL. With no selection, launch keeps the ordinary Lab landing
+page. There is no configured default notebook; consumers choose one in a thin
+recipe, for example:
+
+```just
+notebook-quickstart:
+    @just notebook-launch notebooks/00_quickstart.ipynb
+```
 
 Reset previews the exact restore and deletion map. `--apply` explicitly approves
 both working-tree restoration and declared cleanup. Source entries are literal
@@ -1269,6 +1283,15 @@ Diagnostics retain notebook paths,
 cell IDs, and original source line numbers. The policy never runs cells or
 changes their source. Python strings and comments containing installation
 examples are not commands.
+
+The v0.2.4 policy follows literal `python -m pip`, `python -m uv`, and `uv run`
+installer commands, including versioned/path-qualified executables and Windows
+`py -3.15` launchers. It consumes Python flags such as `-I`, `-W`, and `-X` and
+known installer options with values: `%pip --log info install numpy` is rejected,
+while `%pip --log install list` and `!python -m uv pip list` are accepted.
+Nested literal installers are checked without treating package names or option
+values as commands. Unknown options and dynamically selected commands are outside
+this bounded static check; it does not execute wrappers to discover their behavior.
 
 This is a source convention, not a sandbox: dynamically assembled commands,
 aliases, wrapper functions, arbitrary cell magics, and shell heredoc semantics

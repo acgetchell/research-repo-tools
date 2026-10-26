@@ -1,5 +1,6 @@
 """Public notebook integration helpers, also exercised after wheel/sdist install."""
 
+import asyncio
 import hashlib
 import json
 import os
@@ -7,9 +8,12 @@ import subprocess
 import sys
 import tempfile
 import unittest
+import warnings
 from pathlib import Path
 from typing import override
 from unittest.mock import patch
+
+import psutil
 
 from research_repo_tools.notebook_testing import isolated_project
 from research_repo_tools.process import run_command
@@ -18,6 +22,8 @@ from research_repo_tools.process import run_command
 class TestNotebookProject(unittest.TestCase):
     @override
     def setUp(self):
+        self.enterContext(warnings.catch_warnings())
+        warnings.filterwarnings("error", message="Proactor event loop does not implement add_reader", category=RuntimeWarning)
         self.temporary = tempfile.TemporaryDirectory(prefix="notebook integration 分析 ")
         self.addCleanup(self.temporary.cleanup)
         self.parent = Path(self.temporary.name).resolve()
@@ -60,6 +66,7 @@ class TestNotebookProject(unittest.TestCase):
             "assert 'prior_run' not in globals()\nprior_run = True\n"
             "assert 'RRT_TEST_REMOVE' not in os.environ\n"
             "print(json.dumps({'python': sys.executable, 'cwd': str(Path.cwd()), 'input': Path('input.bin').read_bytes().hex(), "
+            "'pid': os.getpid(), "
             "'value': os.environ['RRT_TEST_VALUE'], 'backend': os.environ['MPLBACKEND'], "
             "'history': str(get_ipython().history_manager.hist_file), "
             "'history_files': [p.name for p in Path(os.environ['IPYTHONDIR']).rglob('history.sqlite*')]}))\n"
@@ -91,6 +98,7 @@ class TestNotebookProject(unittest.TestCase):
                     self.assertEqual((observed["value"], observed["backend"]), ("分析 value", "Agg"))
                     self.assertEqual(observed["history"], ":memory:")
                     self.assertEqual(observed["history_files"], [])
+                    self.assertFalse(psutil.pid_exists(observed["pid"]), "kernel process survived successful execution")
                     self.assertEqual(list(project.artifacts.glob("research-notebook-*")), [])
                     self.assertEqual(result.source.read_bytes(), original)
                 self.assertEqual(dict(os.environ), before)
@@ -102,7 +110,10 @@ class TestNotebookProject(unittest.TestCase):
         self.assertEqual({name: (self.source / name).read_bytes() for name in self.metadata}, self.metadata)
 
     def test_failed_execution_and_exceptional_cleanup_preserve_parent(self):
-        original = self.write_notebook("raise ValueError('consumer assertion failed')\n")
+        original = self.write_notebook(
+            "import os\nfrom pathlib import Path\nPath('kernel.pid').write_bytes(str(os.getpid()).encode('ascii'))\n"
+            "raise ValueError('consumer assertion failed')\n"
+        )
         before = dict(os.environ)
         workspace = None
         with self.assertRaisesRegex(RuntimeError, "test failure"):
@@ -114,6 +125,8 @@ class TestNotebookProject(unittest.TestCase):
                 self.assertIn("consumer assertion failed", result.report["error"]["message"])
                 self.assertEqual(json.loads(result.report_path.read_bytes()), result.report)
                 self.assertTrue(result.notebook_path.is_file())
+                self.assertFalse(psutil.pid_exists(int((project.root / "kernel.pid").read_bytes())), "kernel process survived cell error")
+                self.assertEqual(list(project.artifacts.glob("research-notebook-*")), [])
                 raise RuntimeError("test failure")
         self.assertIsNotNone(workspace)
         assert workspace is not None
@@ -123,12 +136,67 @@ class TestNotebookProject(unittest.TestCase):
         self.assertTrue(Path(sys.executable).is_file())
 
     def test_timeout_returns_failed_report(self):
-        self.write_notebook("import time\ntime.sleep(10)\n")
+        original = self.write_notebook(
+            "import os, time\nfrom pathlib import Path\nPath('kernel.pid').write_bytes(str(os.getpid()).encode('ascii'))\ntime.sleep(10)\n"
+        )
         with self.project() as project:
             result = project.execute(self.relative, timeout=1)
             self.assertEqual(result.returncode, 1)
             self.assertEqual(result.report["error"]["type"], "CellTimeoutError")
             self.assertEqual(result.report["timeout"], 1)
+            self.assertEqual(list(project.artifacts.glob("research-notebook-*")), [])
+            self.assertEqual(result.source.read_bytes(), original)
+            self.assertFalse(psutil.pid_exists(int((project.root / "kernel.pid").read_bytes())), "kernel process survived timeout")
+
+    def test_sync_execution_inside_running_loop_preserves_caller_subprocess_support(self):
+        original = self.write_notebook("print('fresh kernel inside caller loop')\n")
+
+        async def caller():
+            loop = asyncio.get_running_loop()
+            with self.project() as project:
+                result = project.execute(self.relative)
+                self.assertEqual(result.returncode, 0, result.report)
+                self.assertEqual(result.source.read_bytes(), original)
+                self.assertEqual(list(project.artifacts.glob("research-notebook-*")), [])
+            self.assertIs(asyncio.get_running_loop(), loop)
+            # Windows' default Proactor loop must retain subprocess support;
+            # the selector used for Jupyter belongs only to the execution scope.
+            process = await asyncio.create_subprocess_exec(sys.executable, "-c", "print('caller loop intact')", stdout=asyncio.subprocess.PIPE)
+            stdout, _stderr = await asyncio.wait_for(process.communicate(), timeout=30)
+            self.assertEqual(process.returncode, 0)
+            self.assertEqual(stdout.strip(), b"caller loop intact")
+
+        with asyncio.Runner(loop_factory=asyncio.EventLoop) as runner:
+            runner.run(caller())
+
+    def test_partial_kernel_startup_is_cleaned_before_returning_a_failed_report(self):
+        from jupyter_client import AsyncKernelManager
+        from jupyter_client.provisioning.local_provisioner import LocalProvisioner
+
+        original = self.write_notebook("print('successful retry')\n")
+        processes = []
+
+        class FailedStartup(AsyncKernelManager):
+            @override
+            async def start_kernel(self, **kwargs):
+                await super().start_kernel(**kwargs)
+                assert isinstance(self.provisioner, LocalProvisioner) and self.provisioner.process is not None
+                processes.append(self.provisioner.process)
+                raise RuntimeError("failure after native kernel launch")
+
+        with self.project() as project:
+            with patch("jupyter_client.manager.AsyncKernelManager", FailedStartup):
+                result = project.execute(self.relative)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.report["error"]["message"], "failure after native kernel launch")
+            self.assertIsNone(result.report["failed_cell"])
+            self.assertEqual(len(processes), 1)
+            self.assertIsNotNone(processes[0].poll(), "kernel survived partial startup")
+            self.assertFalse(psutil.pid_exists(processes[0].pid))
+            self.assertEqual(list(project.artifacts.glob("research-notebook-*")), [])
+            self.assertEqual(result.source.read_bytes(), original)
+            result = project.execute(self.relative)
+            self.assertEqual(result.returncode, 0, result.report)
 
     def test_bad_selection_and_environment_fail_before_creating_a_workspace(self):
         self.write_notebook("pass\n")

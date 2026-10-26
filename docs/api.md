@@ -333,8 +333,15 @@ construct settings for these public interfaces:
   consumer's locked Ruff/ty environment are required. It returns zero for a
   clean selection and one for findings. Configuration/structure failures raise
   `ValueError`; missing notebook dependencies raise `RuntimeError`.
-- `research_repo_tools.notebook_workflows.launch(settings, *, browser=None,
-  scratch_dir=None) -> int`: `None` selects configuration. It requires uv and
+- `research_repo_tools.notebook_workflows.launch(settings, *, notebook=None,
+  browser=None, scratch_dir=None) -> int`: `None` selects configuration for browser
+  and scratch; omitted notebook retains the Lab landing page. The optional
+  v0.2.4 `notebook` argument is a literal `str` or `Path`, relative to the consumer
+  root or absolute within it, naming an existing `.ipynb` inside `notebooks.cwd`.
+  Traversal, symlinks/junctions, hard-link aliases, outside paths, and option-shaped arguments raise
+  `ValueError` before synchronization. Selection is encoded as a JupyterLab tree
+  URL; there is no default-notebook configuration or arbitrary argv forwarding.
+  It requires uv and
   the consumer's declared, locked notebook environment with JupyterLab and
   project kernel. Exit status propagates; interruption returns 130. Caches
   are private beneath scratch and the caller's environment remains unchanged.
@@ -408,6 +415,15 @@ uses the existing notebook engine and a fresh kernel for each call:
   the existing notebook/file exception contracts. Interrupts propagate.
 - Context exit removes only the newly created workspace, including on an
   exception. Artifact paths then expire and further execution raises `ValueError`.
+
+Starting with v0.2.4, execution owns a selector event loop in a temporary worker,
+including its shutdown. This supports PyZMQ socket readers on Windows without
+deprecated asyncio policy changes. The local Jupyter provisioner starts kernels
+through `subprocess.Popen`; it does not require selector-loop asyncio subprocess
+support. Synchronous calls from a running caller loop are supported and preserve
+that loop and its subprocess capabilities. Kernel cleanup completes on success,
+cell errors, and timeouts; caller interruptions cancel execution and wait for
+cleanup before propagating. No warnings are suppressed.
 
 Notebook code is trusted executable code, not sandboxed. Consumer tests own any
 files that code writes, its domain environment variables, scientific assertions,

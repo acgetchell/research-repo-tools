@@ -285,6 +285,43 @@ def test_launch_rejects_environment_override_outside_project_before_sync(tmp_pat
     assert not (tmp_path / "target").exists()
 
 
+@pytest.mark.parametrize("selection", ["", "missing.ipynb", "../outside.ipynb", "notes/../selected.ipynb", "--ServerApp.port=9999", "notes", "notes/plain.txt"])
+def test_invalid_launch_selection_fails_before_runtime_or_scratch(tmp_path, monkeypatch, selection):
+    (tmp_path / "notes").mkdir()
+    (tmp_path / "notes/plain.txt").write_bytes(b"not a notebook")
+    monkeypatch.setattr(workflows, "runtime", lambda *args: pytest.fail("inspected runtime before notebook validation"))
+    with pytest.raises(ValueError):
+        workflows.launch(config.parse({}, root=tmp_path), notebook=selection)
+    assert not (tmp_path / "target").exists()
+
+
+def test_launch_selection_is_root_relative_and_encoded_for_the_working_directory(tmp_path, monkeypatch):
+    working = tmp_path / "notes"
+    working.mkdir()
+    selected = working / "analysis 分析 #%.ipynb"
+    selected.write_bytes(b"unchanged notebook\r\n")
+    managed = SimpleNamespace(plan=SimpleNamespace(python="3.15"), project_environment=lambda: dict(os.environ), uv_status=lambda: SimpleNamespace(path="uv"))
+    monkeypatch.setattr(workflows, "runtime", lambda *args: managed)
+    observed = []
+
+    def child(command, args, **kwargs):
+        observed.append(args)
+        assert kwargs["cwd"] == working
+        return subprocess.CompletedProcess(args, 0)
+
+    monkeypatch.setattr(workflows, "run_command_live", child)
+    settings = config.parse({"notebooks": {"cwd": "notes"}}, root=tmp_path)
+    for path in ("notes/analysis 分析 #%.ipynb", selected):
+        assert workflows.launch(settings, notebook=path) == 0
+        assert "--ServerApp.default_url=/lab/tree/analysis%20%E5%88%86%E6%9E%90%20%23%25.ipynb" in observed[-1]
+    assert selected.read_bytes() == b"unchanged notebook\r\n"
+    outside = tmp_path / "outside.ipynb"
+    outside.write_bytes(b"outside working directory")
+    with pytest.raises(ValueError, match="working directory"):
+        workflows.launch(settings, notebook=outside)
+    assert len(observed) == 2
+
+
 @pytest.mark.parametrize("result,expected", [(0, 0), (9, 9), (-15, 143), ("interrupt", 130), ("missing", None)])
 def test_launch_preserves_parent_environment_and_cleans_private_caches_on_every_exit(tmp_path, monkeypatch, result, expected):
     managed = SimpleNamespace(plan=SimpleNamespace(python="3.15"), project_environment=lambda: dict(os.environ), uv_status=lambda: SimpleNamespace(path="uv"))

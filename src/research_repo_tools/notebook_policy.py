@@ -18,7 +18,121 @@ from research_repo_tools.notebook_lint import Diagnostic
 from research_repo_tools.notebooks import Notebook
 
 MUTATIONS = {"install", "uninstall", "add", "remove", "sync", "update", "upgrade", "create"}
-READ_COMMANDS = {"list", "show", "freeze", "check", "search", "info", "help", "download", "lock", "export", "run", "exec", "--version"}
+# Parse command boundaries, not occurrences of verbs anywhere in argv. In
+# particular, a log filename named "info" or "install" is not a subcommand.
+OPTION_VALUES = {
+    "pip": {
+        "--log",
+        "--proxy",
+        "--retries",
+        "--timeout",
+        "--exists-action",
+        "--trusted-host",
+        "--cert",
+        "--client-cert",
+        "--cache-dir",
+        "--python",
+        "--keyring-provider",
+        "--use-feature",
+        "--use-deprecated",
+        "--resume-retries",
+    },
+    "uv": {
+        "--cache-dir",
+        "--color",
+        "--directory",
+        "--project",
+        "--config-file",
+        "--python",
+        "-p",
+        "--index",
+        "--default-index",
+        "--index-url",
+        "-i",
+        "--extra-index-url",
+        "--find-links",
+        "-f",
+        "--index-strategy",
+        "--keyring-provider",
+        "--allow-insecure-host",
+        "--with",
+        "--with-editable",
+        "--with-requirements",
+        "--extra",
+        "--no-extra",
+        "--group",
+        "--no-group",
+        "--only-group",
+        "--package",
+        "--env-file",
+        "--resolution",
+        "--prerelease",
+        "--fork-strategy",
+        "--exclude-newer",
+        "--link-mode",
+        "--config-setting",
+        "-C",
+        "--config-settings-package",
+        "--upgrade-package",
+        "-P",
+        "--refresh-package",
+        "--python-platform",
+    },
+    "conda": {"--name", "-n", "--prefix", "-p", "--root-prefix", "-r", "--rc-file", "--cwd"},
+}
+OPTION_FLAGS = {
+    "pip": {
+        "--debug",
+        "--isolated",
+        "--require-virtualenv",
+        "--verbose",
+        "-v",
+        "--quiet",
+        "-q",
+        "--no-input",
+        "--no-cache-dir",
+        "--disable-pip-version-check",
+        "--no-color",
+        "--no-python-version-warning",
+    },
+    "uv": {
+        "--verbose",
+        "-v",
+        "--quiet",
+        "-q",
+        "--offline",
+        "--no-cache",
+        "-n",
+        "--native-tls",
+        "--system-certs",
+        "--no-progress",
+        "--no-config",
+        "--managed-python",
+        "--no-managed-python",
+        "--no-python-downloads",
+        "--locked",
+        "--frozen",
+        "--no-sync",
+        "--no-project",
+        "--active",
+        "--isolated",
+        "--no-env-file",
+        "--all-extras",
+        "--all-groups",
+        "--no-default-groups",
+        "--all-packages",
+        "--no-dev",
+        "--only-dev",
+        "--no-build",
+        "--no-build-isolation",
+        "--no-sources",
+        "--no-index",
+        "--upgrade",
+        "-U",
+        "--refresh",
+    },
+    "conda": {"--verbose", "-v", "--quiet", "-q", "--json", "--offline", "--no-plugins", "--yes", "-y", "--no-capture-output", "--live-stream"},
+}
 SHELL_CELL = re.compile(r"^%%(?:bash|sh|script\s+(?:bash|sh))\b")
 PYTHON_CELL_MAGICS = {"capture", "debug", "prun", "time", "timeit"}
 COMMAND_START = re.compile(r"^\s*(?:[A-Za-z_]\w*\s*=\s*)?(?:!|%(?:pip|conda|mamba)\b)|^\s*(?:python[\d.]*|pip[\d.]*|uv|conda|mamba|micromamba)\s")
@@ -63,32 +177,76 @@ def _shell_segments(command: str, *, windows: bool) -> list[list[str]]:
     return [_arguments(part, windows=windows) for part in parts]
 
 
+def _command_arguments(arguments: list[str], kind: str) -> list[str]:
+    """Drop known leading options with their values; leave one literal command."""
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "--":
+            return arguments[index + 1 :]
+        if not argument.startswith("-"):
+            return arguments[index:]
+        option, equals, _value = argument.partition("=")
+        if option in OPTION_VALUES[kind]:
+            index += 1 if equals else 2
+        elif argument in OPTION_FLAGS[kind] or re.fullmatch(r"-[qv]+", argument):
+            index += 1
+        elif any(argument.startswith(short) and len(argument) > 2 for short in OPTION_VALUES[kind] if len(short) == 2):
+            index += 1  # Attached short-option value, such as uv -p3.15.
+        else:
+            return []  # Help/version, unknown options, and dynamic syntax are not commands.
+    return []
+
+
+def _python_module(arguments: list[str], *, launcher: bool) -> list[str]:
+    index = 0
+    while index < len(arguments):
+        argument = arguments[index]
+        if argument == "-m":
+            return arguments[index + 1 :]
+        if argument.startswith("-m"):
+            return [argument[2:], *arguments[index + 1 :]]
+        if argument in {"-W", "-X"}:
+            index += 2
+        elif argument.startswith(("-W", "-X")) or re.fullmatch(r"-[bBdEiIOqRsSuUx]+", argument):
+            index += 1
+        elif launcher and re.fullmatch(r"-(?:[23](?:\.\d+)*(?:-\d+)?|V:.+)", argument):
+            index += 1
+        else:
+            return []  # Script, -c, stdin, help, or an unsupported option.
+    return []
+
+
+def _installer_mutates(segment: list[str]) -> bool:
+    while segment:
+        name = PureWindowsPath(segment[0]).name.lower().removesuffix(".exe")
+        remaining = segment[1:]
+        if name in {"sudo", "env"} or re.fullmatch(r"[A-Za-z_]\w*=.*", segment[0]):
+            segment = remaining
+        elif name in {"py", "pyw"} or re.fullmatch(r"(?:pythonw?|pypy)(?:\d+(?:\.\d+)*)?t?", name):
+            segment = _python_module(remaining, launcher=name in {"py", "pyw"})
+        else:
+            kind = "pip" if re.fullmatch(r"pip(?:\d+(?:\.\d+)*)?", name) else "conda" if name in {"conda", "mamba", "micromamba"} else name
+            if kind not in OPTION_VALUES:
+                return False
+            remaining = _command_arguments(remaining, kind)
+            if remaining and (kind == "uv" and remaining[0] in {"pip", "tool", "python"} or kind == "conda" and remaining[0] == "env"):
+                remaining = _command_arguments(remaining[1:], kind)
+            if not remaining:
+                return False
+            if remaining[0] == "run" and kind in {"uv", "conda"}:
+                segment = _command_arguments(remaining[1:], kind)
+                continue
+            return remaining[0] in MUTATIONS
+    return False
+
+
 def _mutates(command: str | list[str], *, windows: bool = False) -> bool:
     try:
         segments = _shell_segments(command, windows=windows) if isinstance(command, str) else [command]
     except ValueError:
         return False  # Native syntax checks own malformed commands.
-    for segment in segments:
-        if not segment:
-            continue
-        while segment and (segment[0] in {"sudo", "env"} or re.fullmatch(r"[A-Za-z_]\w*=.*", segment[0])):
-            segment = segment[1:]
-        if not segment:
-            continue
-        name = PureWindowsPath(segment[0]).name.lower().removesuffix(".exe")
-        remaining = segment[1:]
-        if re.fullmatch(r"python(?:\d+(?:\.\d+)*)?", name) and remaining[:2] == ["-m", "pip"]:
-            name, remaining = "pip", remaining[2:]
-        if name == "uv" and remaining[:1] == ["pip"]:
-            remaining = remaining[1:]
-        if name not in {"uv", "conda", "mamba", "micromamba"} and not re.fullmatch(r"pip(?:\d+(?:\.\d+)*)?", name):
-            continue
-        for argument in remaining:
-            if argument in READ_COMMANDS:
-                break
-            if argument in MUTATIONS:
-                return True
-    return False
+    return any(_installer_mutates(segment) for segment in segments)
 
 
 def _masked(source: str) -> str:

@@ -87,6 +87,15 @@ the CLI returns nonzero and prints the notebook and cell diagnostic. A failure
 to publish artifacts is also an error. Files written by notebook code remain the
 consumer's responsibility. Interrupted runs are not successful reports.
 
+The v0.2.4 execution boundary uses an owned selector loop in a temporary worker
+for PyZMQ socket readers, with explicit kernel and loop cleanup. It preserves
+the caller's current event loop and does not change deprecated global asyncio
+policies. Synchronous calls from a running loop remain supported. Kernel startup
+uses Jupyter's local `subprocess.Popen` provisioner, so Windows selector loops'
+lack of asyncio subprocess support does not prevent startup. See Python's
+[loop-factory guidance](https://docs.python.org/3.15/library/asyncio-runner.html)
+and [Windows loop limitations](https://docs.python.org/3.15/library/asyncio-platforms.html#windows).
+
 Output cleanup validates every selected notebook before publishing any change.
 It uses rollback-capable file replacement; incomplete recovery reports backup
 paths. Structure validation never generates or repairs cell IDs. Missing optional
@@ -183,6 +192,15 @@ environment to its existing lock, as for other locked consumer commands.
 `UV_PROJECT_ENVIRONMENT` may select a different directory strictly beneath the
 consumer root; outside environments and symlink/junction aliases are rejected
 before synchronization.
+
+In v0.2.4, `notebooks launch [NOTEBOOK]` accepts one optional literal `.ipynb`
+file. Resolve relative selections from the consumer root, including when
+`notebooks.cwd` names a subdirectory. The selected file must exist inside that
+working directory without traversal, symlink/junction components, or hard-link aliases. Selection
+uses an encoded Lab tree URL, preserving spaces, Unicode, and URL punctuation
+without forwarding arbitrary Jupyter arguments. No selection preserves the Lab
+landing page; consumer recipes choose any preferred starting notebook. See the
+[README launch examples](../README.md#notebooks).
 
 `notebooks.lab.browser` defaults to false. CLI `--browser`/`--no-browser` override
 it. `notebooks.lab.scratch-dir` defaults to `target/jupyter`; `--scratch-dir PATH`
