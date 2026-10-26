@@ -4,7 +4,6 @@ import io
 import json
 import os
 import subprocess
-import sys
 import tempfile
 import tomllib
 import unittest
@@ -34,6 +33,31 @@ def wheel(directory: Path, name: str, version: str, requires: tuple[str, ...] = 
 
 
 class TestPythonUpdates(unittest.TestCase):
+    @classmethod
+    @override
+    def setUpClass(cls):
+        # CI may run the suite on system Python even when setup-uv has selected
+        # a managed installation directory. Establish the offline prerequisite.
+        cls.interpreter_environment = {
+            key: value for key, value in os.environ.items() if (not key.startswith("UV_") or key == "UV_PYTHON_INSTALL_DIR") and key != "VIRTUAL_ENV"
+        }
+        find = ["uv", "python", "find", "--no-config", "--no-project", "--system", "--managed-python", "--offline", "3.15"]
+        found = subprocess.run(find, env=cls.interpreter_environment, capture_output=True, text=True, check=False, timeout=30)
+        if found.returncode:
+            temporary = tempfile.TemporaryDirectory(prefix="update managed Python ")
+            cls.addClassCleanup(temporary.cleanup)
+            cls.interpreter_environment["UV_PYTHON_INSTALL_DIR"] = str(Path(temporary.name).resolve() / "python")
+            subprocess.run(
+                ["uv", "python", "install", "--no-config", "--no-bin", "--no-registry", "3.15"],
+                env=cls.interpreter_environment,
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=300,
+            )
+            found = subprocess.run(find, env=cls.interpreter_environment, capture_output=True, text=True, check=True, timeout=30)
+        cls.wrapper_python = found.stdout.strip()
+
     @override
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="python update café ")
@@ -52,10 +76,8 @@ class TestPythonUpdates(unittest.TestCase):
             newline="\n",
         )
         (self.project / ".python-version").write_text("3.15\n", encoding="utf-8", newline="\n")
-        # setup-uv provisions CI interpreters outside uv's default directory.
-        # Keep that location while isolating resolution and active-environment settings.
-        self.env = {key: value for key, value in os.environ.items() if (not key.startswith("UV_") or key == "UV_PYTHON_INSTALL_DIR") and key != "VIRTUAL_ENV"}
-        self.env.update(UV_CACHE_DIR=str(self.root / "cache"), UV_OFFLINE="1", UV_PYTHON_DOWNLOADS="never", UV_PYTHON=sys.executable)
+        self.env = self.interpreter_environment.copy()
+        self.env.update(UV_CACHE_DIR=str(self.root / "cache"), UV_OFFLINE="1", UV_PYTHON_DOWNLOADS="never", UV_PYTHON=self.wrapper_python)
         self.environment = patch.dict(os.environ, self.env, clear=True)
         self.environment.start()
         self.addCleanup(self.environment.stop)
