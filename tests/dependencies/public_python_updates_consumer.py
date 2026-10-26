@@ -52,7 +52,9 @@ class TestPythonUpdates(unittest.TestCase):
             newline="\n",
         )
         (self.project / ".python-version").write_text("3.15\n", encoding="utf-8", newline="\n")
-        self.env = {key: value for key, value in os.environ.items() if not key.startswith("UV_") and key != "VIRTUAL_ENV"}
+        # setup-uv provisions CI interpreters outside uv's default directory.
+        # Keep that location while isolating resolution and active-environment settings.
+        self.env = {key: value for key, value in os.environ.items() if (not key.startswith("UV_") or key == "UV_PYTHON_INSTALL_DIR") and key != "VIRTUAL_ENV"}
         self.env.update(UV_CACHE_DIR=str(self.root / "cache"), UV_OFFLINE="1", UV_PYTHON_DOWNLOADS="never", UV_PYTHON=sys.executable)
         self.environment = patch.dict(os.environ, self.env, clear=True)
         self.environment.start()
@@ -255,12 +257,14 @@ class TestPythonUpdates(unittest.TestCase):
         scanner = self.project / "tooling/scanner"
         scanner.mkdir(parents=True)
         environment = {key: value for key, value in self.env.items() if key not in {"UV_PYTHON", "UV_PYTHON_DOWNLOADS", "UV_OFFLINE"}}
-        find = ["uv", "python", "find", "--no-config", "--no-project", "--system", "--offline", "3.14"]
+        find = ["uv", "python", "find", "--no-config", "--no-project", "--system", "--managed-python", "--offline", "3.14"]
         found = subprocess.run(find, env=environment, capture_output=True, text=True, check=False, timeout=30)
         if found.returncode:
+            # Switching to a disposable managed store must retain both interpreters
+            # required by the nested scanner and outer native-validation launches.
             environment["UV_PYTHON_INSTALL_DIR"] = str(self.root / "python")
             installed = subprocess.run(
-                ["uv", "python", "install", "--no-config", "--no-bin", "--no-registry", "3.14"],
+                ["uv", "python", "install", "--no-config", "--no-bin", "--no-registry", "3.14", "3.15"],
                 env=environment,
                 capture_output=True,
                 text=True,
