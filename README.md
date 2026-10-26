@@ -683,12 +683,35 @@ findings. Explicit file arguments include Python/Rust tests normally ignored by
 Semgrep; deliberately excluded fixtures remain consumer policy. Rule path filters
 remain active, and skipped required inputs fail the coverage gate.
 
-Rust fences in
-Markdown and line/block rustdoc comments preserve source line numbers and hidden
-`# ` lines. Macro-generated docs and `#[doc = ...]` attributes are outside this
-adapter's scope. `semgrep check-fixtures --rust-docs` adapts annotated Markdown
-fixtures to the existing shared assertion checker; count-based expectations use
-a separate fixture gate. Findings and fixture mismatches remain blocking.
+`--rust-docs` scans every selected original file, including prose-only Markdown,
+then scans Rust fences in Markdown and line/block rustdoc comments using the
+configured Rust rules. Generic/regex prose rules still scan the originals. Each
+block gets a separate temporary input at its original repository-relative path:
+`src/lib.rs` remains `src/lib.rs`, and `docs/guide.md` remains `docs/guide.md`.
+Native rule includes and excludes apply unchanged to those logical paths. Rust
+rules intended for Markdown examples must therefore include the relevant `.md`
+paths as well as production `.rs` paths. Every original and every block must be
+covered by at least one applicable rule; excluded blocks fail with their source
+path, block number and line range. Restrict the selected inventory when a source
+is intentionally outside the scan policy.
+
+Source lines, columns and byte offsets are restored in findings; hidden `# `
+lines remain code. Identical rule/span/suppression findings from an original and
+its block are reported once, while distinct spans and per-block coverage remain.
+JSON `input_coverage` records source paths and representations, plus one-based
+block numbers and source line ranges. Macro-generated docs and `#[doc = ...]`
+attributes are outside the adapter's scope.
+
+`semgrep check-fixtures --rust-docs` accepts mixed native, prose-only and Rust
+fence fixtures. An annotation targets the next nonblank, non-fence line. A Rust
+rule annotation targeting a Rust block belongs to that block; other assertions
+belong to the original file. Put `ruleid:` or `ok:` directly before the code or
+its opening fence, and give every Rust block at least one Rust-rule annotation.
+Each representation checks its owned positive counts and rejects unexpected
+findings, including violations of negative assertions. As in ordinary annotated
+fixtures, production path filters are ignored for assertions; production scans
+retain them. Keep configured count-based fixtures in a separate fixture gate.
+Findings and fixture mismatches remain blocking.
 
 ### SARIF selection and complete figure publication
 

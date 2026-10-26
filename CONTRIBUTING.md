@@ -112,6 +112,13 @@ point, public process/file-publication/release-plan/performance/document-publica
 imports, packaged templates, runtime dependencies, and the bundled `just` executable.
 Installed public suites also cover complete-directory rollback/recovery, SARIF
 selection/indexing, and batched Semgrep policy and paired-report coverage.
+The source suite and both installed distributions also run real Semgrep scans
+for anchored path filters, mixed Rustdoc/Markdown inputs, fixture assertions and
+paired reports. `tests/semgrep/public_native_semgrep_consumer.py` owns the exact
+scanner pin and provisions it through uv in an isolated Python 3.14 tool
+environment, separate from the package's Python 3.15 interpreter. These tests
+require network access on a cold uv cache and fail if provisioning fails; they
+do not substitute a mocked scanner or skip unsupported native execution.
 See [Validation](docs/VALIDATING.md) for check coverage and agent restrictions.
 New Git-mutating pytest fixtures must depend on `git_mutations_allowed`.
 Standalone unittest consumer suites must skip those fixtures before setup when

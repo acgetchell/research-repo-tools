@@ -378,6 +378,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             scan_suite = consumer / "public_scan_consumer.py"
             scan_suite.write_bytes((ROOT / "tests/semgrep/public_scan_consumer.py").read_bytes())
             run_consumer_suite(python, [str(scan_suite)], cwd=consumer, env=local_env)
+            native_semgrep_suite = consumer / "public_native_semgrep_consumer.py"
+            native_semgrep_suite.write_bytes((ROOT / "tests/semgrep/public_native_semgrep_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(native_semgrep_suite)], cwd=consumer, env=local_env)
             toolchain_suite = consumer / "public_toolchain_consumer.py"
             toolchain_suite.write_bytes((ROOT / "tests/toolchain/public_toolchain_consumer.py").read_bytes())
             run_consumer_suite(python, [str(toolchain_suite)], cwd=consumer, env=local_env)
