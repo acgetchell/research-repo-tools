@@ -323,6 +323,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             cargo_suite = consumer / "public_cargo_examples_consumer.py"
             cargo_suite.write_bytes((ROOT / "tests/cargo_examples/public_cargo_examples_consumer.py").read_bytes())
             run_consumer_suite(python, [str(cargo_suite)], cwd=consumer, env=local_env)
+            timing_suite = consumer / "public_command_timing_consumer.py"
+            timing_suite.write_bytes((ROOT / "tests/performance/public_command_timing_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(timing_suite)], cwd=consumer, env=local_env)
             actions_suite = consumer / "public_actions_consumer.py"
             actions_suite.write_bytes((ROOT / "tests/dependencies/public_actions_consumer.py").read_bytes())
             run_consumer_suite(python, [str(actions_suite)], cwd=consumer, env=local_env)

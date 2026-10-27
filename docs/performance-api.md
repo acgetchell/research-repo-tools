@@ -6,6 +6,12 @@ APIs. The [README](../README.md#performance-evidence) contains consumer commands
 and examples. All paths are `Path` objects; relative paths use the calling process's
 directory in Python and the selected consumer root in the CLI.
 
+## Exploratory command timings
+
+The separate [command timing API](command-timing-api.md) acquires finite literal
+command cases with retained wall-time observations. Its exploratory schema is
+not accepted as Criterion or complete-run release/comparability evidence.
+
 ## Criterion timings
 
 Import from `research_repo_tools.criterion`:

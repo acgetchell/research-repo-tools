@@ -146,7 +146,10 @@ explicit targets, one default-feature build, separate feature overrides, require
 features, custom target directories, literal arguments and CLI failures. Real
 child-process handshakes prove stdout arrives before completion with and without
 assertions; exact-byte, marker-boundary, nonzero-exit and timeout-cleanup cases
-cover the shared live runner. Cargo and a native toolchain are required on PATH.
+cover the shared live runner. Separate stderr assertions also exercise exact
+bytes, liveness, blocked sinks, descendant handles and a real stderr-only Cargo
+logger with wrong-stream, missing-marker, exit and timeout failures.
+Cargo and a native toolchain are required on PATH.
 These generic fixtures do not replace consumer coverage or scientific assertions.
 
 The Linux test pass collects coverage of package code and repository scripts,
@@ -209,7 +212,11 @@ Read-only Git transport models supplement native disposable repository checks;
 the native fixtures honor the Git-mutation opt-out before setup. Source export
 fixtures cover edits/deletions/new bytes, unsafe paths, capture races, blob identity
 verification and cleanup recovery. Synthetic timings establish workflow behavior,
-not performance or scientific validity.
+not performance or scientific validity. The separate exploratory command-timing
+consumer runs harmless native commands from source and both installed formats,
+covering literal spaces/Unicode, complete raw observations, statuses/deadlines,
+source and executable drift, stale outputs, deterministic summaries, public CLI/API
+consumption and staged publication failures. It does not run consumer benchmarks.
 
 Shared regressions cover unsafe paths and links, resource limits, malformed and
 non-finite estimates, stale provenance, and publication/rollback failures. HTTP

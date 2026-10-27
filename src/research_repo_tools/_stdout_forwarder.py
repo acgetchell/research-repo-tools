@@ -1,4 +1,4 @@
-"""Private isolated stdout forwarder; its parent owns deadlines and cleanup.
+"""Private isolated stream forwarder; its parent owns deadlines and cleanup.
 
 Executed by filename with -I -S so both installed distributions work without
 import-path or optional-dependency assumptions. No package imports belong here.
@@ -17,9 +17,9 @@ def open_spool(spool: Path) -> BinaryIO:
     return os.fdopen(os.open(spool, flags), "rb", buffering=0)
 
 
-def forward(spool: Path, done: Path) -> None:
+def forward(spool: Path, done: Path, descriptor: int = 1) -> None:
     """Forward exact spool bytes, stopping at the parent's published endpoint."""
-    with open_spool(spool) as reader, os.fdopen(os.dup(1), "wb", buffering=0) as output:
+    with open_spool(spool) as reader, os.fdopen(os.dup(descriptor), "wb", buffering=0) as output:
         endpoint = None
         while True:
             if endpoint is None and done.exists():
@@ -35,9 +35,9 @@ def forward(spool: Path, done: Path) -> None:
             while pending:
                 written = output.write(pending)
                 if not written:
-                    raise OSError("stdout accepted no bytes")
+                    raise OSError("output stream accepted no bytes")
                 pending = pending[written:]
 
 
 if __name__ == "__main__":
-    forward(Path(sys.argv[1]), Path(sys.argv[2]))
+    forward(Path(sys.argv[1]), Path(sys.argv[2]), int(sys.argv[3]))

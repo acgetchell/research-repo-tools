@@ -1,0 +1,19 @@
+# Exploratory timing only. Replace commands/sources with consumer-owned policy.
+# This example includes Cargo launcher overhead in every observed duration.
+schema = 1
+sources = ["Cargo.toml", "Cargo.lock", "src/**/*.rs"]
+preflight = [["cargo", "build", "--locked", "--release"]]
+warmups = 1
+repeats = 5
+timeout = 300
+
+[environment]
+RUST_BACKTRACE = "1"
+
+[probes]
+cargo = ["cargo", "--version"]
+rustc = ["rustc", "-vV"]
+
+[[cases]]
+id = "help"
+command = ["cargo", "run", "--locked", "--release", "--", "--help"]

@@ -83,7 +83,7 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | File selection | `files check-lines`, `list`, `run` | Configurable raw line gate, tracked/nonignored inputs, exclusions and portable argument batching |
 | Notebooks | `notebooks advise`, `check`, `clear`, `execute`, `group`, `inspect`, `launch`, `lint`, `reset`, `sync` | Read-only review, locked JupyterLab, native Ruff/ty checks, execution reports, and explicit restoration |
 | Papers | `papers check`, `normalize`, `source-date` | Explicit UTC dates, optional PDF text/geometry checks and validated metadata normalization |
-| Performance | `performance assets`, `baseline`, `compare`, `convert`, `discover`, `export`, `extract`, `fetch`, `host`, `measure`, `profile`, `promote`, `publish`, `release-draft`, `release-upload`, `render`, `verify`, `verify-saved` | Complete configured measurement, retained evidence, release assets and publication |
+| Performance | `performance assets`, `baseline`, `command-time`, `compare`, `convert`, `discover`, `export`, `extract`, `fetch`, `host`, `measure`, `profile`, `promote`, `publish`, `release-draft`, `release-upload`, `render`, `verify`, `verify-saved` | Complete configured measurement, retained evidence, release assets and publication |
 | Python | `python check`, `fix`, `typecheck` | Complete tracked/nonignored inventory; native Ruff/ty policy; explicit fixes only |
 | Releases | `release check`, `gate`, `publish`, `registry`, `reuse`, `update`, `verify` | Metadata preparation, reviewed publication gates and exact registry/GitHub verification |
 | Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
@@ -113,11 +113,15 @@ build-timeout = 1800
 [examples.diagnostics]
 features = ["diagnostics"]
 expect = ["consumer-defined success marker"]
+expect-stderr = ["consumer-defined logger marker"]
 ```
 
 Omit `include` to run every discovered binary example. Ordinary examples build
 once with default features; feature overrides build and run separately. Copy
-your existing scientific markers into per-example `expect` arrays unchanged.
+your existing scientific stdout markers into per-example `expect` arrays unchanged.
+Preserve logger/stderr markers in `expect-stderr` after pinning the release
+containing #132; stdout and stderr assertions remain independent.
+The packaged `cargo-examples.toml` provides a scaffold.
 Add a thin consumer recipe and run `just examples`:
 
 ```just
@@ -126,8 +130,9 @@ examples:
 ```
 
 Output is inherited by default. `expect` opts stdout into live byte forwarding
-and literal matching; the child's buffering may change and temporary disk use
-scales with output. Stdin and stderr remain inherited. See the
+and literal matching; `expect-stderr` does the same for stderr. The child's
+buffering may change and temporary disk use scales with selected output.
+Stdin and unasserted streams remain inherited. See the
 [CLI/configuration/Python contract][cargo-examples-api] and
 [migration from static validation plans][cargo-examples-migration].
 
@@ -151,6 +156,7 @@ arguments in lexicographic order.
 | `just check` | Run Python, Semgrep fixture, and zizmor validation; extend with consumer domain gates |
 | `just ci` | Run the same canonical consumer gate as local validation |
 | `just clean [ARGS...]` | Preview obsolete package-owned installs; `--apply` removes them; repeat `--keep-root PATH` to retain other consumers' pins |
+| `just command-time CONFIG OUTPUT` | Acquire exploratory external-command timings into a new JSON report and print a summary |
 | `just files COMMAND...` | Check raw line limits, list selected files or run a command over them |
 | `just help` | List recipes and arguments in lexicographic order, with aliases inline |
 | `just help-workflows` | Alias for `help` |
@@ -1410,6 +1416,53 @@ $native.PSObject.Properties | ForEach-Object { Set-Item "Env:$($_.Name)" $_.Valu
 no assignments. Provision hosts explicitly in consumer setup/CI before discovery.
 See the [API contracts](https://github.com/acgetchell/research-repo-tools/blob/main/docs/api.md#paper-date-pdf-and-native-discovery-api) and
 [consumer deletion maps](https://github.com/acgetchell/research-repo-tools/blob/main/docs/shared-capability-migration.md#paper-and-raw-line-adoption).
+
+### Exploratory command timing
+
+After verified publication of the release containing #134, pin that version and
+replace generic command-timing loops with a declaration. Keep workload arguments,
+source selection and interpretation in the consumer. This harmless example
+measures a native tool's version command, including process startup:
+
+```toml
+schema = 1
+sources = ["Cargo.toml", "Cargo.lock"]
+preflight = [["cargo", "--version"]]
+warmups = 1
+repeats = 5
+timeout = 30
+
+[probes]
+cargo = ["cargo", "--version"]
+
+[[cases]]
+id = "cargo-version"
+command = ["cargo", "--version"]
+```
+
+Save it as `tooling/command-timing.toml`. The packaged `command-timing.toml`
+also illustrates an explicit build preflight. Merge this thin recipe from the
+packaged justfile:
+
+```just
+command-time configuration output:
+    uv run --locked --group dev research-repo-tools performance command-time "$1" --output "$2"
+```
+
+```sh
+just command-time tooling/command-timing.toml target/timing-first.json
+```
+
+Commands run with literal argv and per-command deadlines. The new JSON report
+retains every preflight, warmup and sample, units, statuses, command/source/host/tool
+identity and execution policy; the summary shows sample counts and minimum,
+median and maximum wall seconds. Existing outputs are rejected before execution.
+See the [timing contract](docs/command-timing-api.md) for failure, freshness,
+source-selection and measurement limits. These exploratory timings stay separate
+from Criterion and scientific release/comparability evidence. [CDT #303](https://github.com/acgetchell/causal-triangulations/issues/303) timing
+adoption and [CDT #301](https://github.com/acgetchell/causal-triangulations/issues/301)
+stderr adoption remain consumer work after verified v0.2.4 publication under
+[research-repo-tools #146](https://github.com/acgetchell/research-repo-tools/issues/146).
 
 ### Performance evidence
 

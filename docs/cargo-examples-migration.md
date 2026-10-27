@@ -19,6 +19,7 @@ passing an old plan to the new action is an error, not implicit conversion.
 | Per-check execution timeout | Preserve it as root `timeout` or a per-example override |
 | Build timeout | Preserve it as `build-timeout`, applied to each build |
 | Scientific stdout expectations | Copy unchanged into the corresponding target's `expect`; upstream does not choose or rewrite them |
+| Logger/stderr expectations and shell `2>&1` | Pin the release containing #132 and copy stderr markers unchanged into `expect-stderr`; remove shell redirection and guessed executable paths |
 | Arguments or intentional omissions | Preserve literal `args` and explicit consumer `include`/`exclude` policy |
 
 Use the [README example](../README.md#cargo-examples) to wire a thin Just recipe.
@@ -29,8 +30,9 @@ carries across.
 
 Previously, `validation run` captured each command and printed output when it
 completed. The example runner inherits output immediately when there are no
-markers. Per-target `expect` enables live stdout forwarding with exact matching;
-stdin/stderr stay inherited. Read the documented buffering, temporary-disk,
+markers. Per-target `expect` and `expect-stderr` independently enable live
+forwarding and exact matching on stdout and stderr; stdin stays inherited. Read the
+documented buffering, temporary-disk,
 newline and direct-child timeout limits before adopting it. Wrapping the complete
 runner in an outer captured `validation run` check buffers that outer command and
 therefore hides its live output until completion; place per-example markers in
@@ -41,4 +43,6 @@ behavior, real feature-specific execution, budgets, and scientific expectations.
 Shared discovery, process failures, malformed configuration and distribution
 regressions live upstream. Delaunay's current static plan informed this contract;
 its scientific content and separate adoption issue `acgetchell/delaunay#626`
-remain consumer work. Cross-repository rollout is tracked separately in #69.
+remain consumer work. CDT stderr adoption belongs to causal-triangulations #301,
+blocked by verified v0.2.4 publication under #146. Cross-repository rollout is
+tracked separately in #69.

@@ -49,6 +49,7 @@ The root table requires integer `schema = 1`. Unknown fields are errors.
 | --- | --- |
 | `args` | Literal argument array, including empty strings and spaces; empty; no shell expansion |
 | `expect` | Nonempty literal UTF-8 stdout marker strings; empty array means inherited stdout |
+| `expect-stderr` | Nonempty literal UTF-8 stderr marker strings; empty array means inherited stderr; opt-in additive contract |
 | `features` | Unique feature names, each in its own string; empty; names cannot contain commas or whitespace |
 | `no-default-features` | Boolean; false |
 | `timeout` | Positive integer execution budget, overriding root `timeout` |
@@ -90,23 +91,24 @@ separately to metadata, each build and each execution, not to the complete run.
 
 ## Live streams and assertions
 
-Without `expect`, binaries inherit stdin, stdout and stderr directly, retaining
-terminal detection and native output. With `expect`, stdin and stderr remain
-inherited; stdout is spooled to a private temporary file and its exact bytes are
-echoed to the caller's stdout while the binary runs. A disposable forwarding
-process keeps a blocked stdout sink from blocking the parent's deadline. After
-completion, incremental literal matching uses bounded memory and handles markers
-split across chunks. Stderr cannot satisfy
-a stdout assertion. Progress messages go to stderr.
+Without `expect` or `expect-stderr`, binaries inherit stdin, stdout and stderr
+directly, retaining terminal detection and native output. Each nonempty marker
+array opts only its selected stream into a private spool and exact live byte
+forwarding to the same caller stream. Stdin and unasserted streams stay inherited.
+One disposable helper per asserted stream keeps either blocked output sink from
+blocking the parent's deadline. Incremental literal matching uses bounded memory
+and handles markers split across chunks. Both arrays may be supplied together.
+A marker on stderr cannot satisfy `expect`; a marker on stdout cannot satisfy
+`expect-stderr`. Markers do not span streams. Progress messages go to stderr.
 
-Assertion mode changes the child's stdout from a terminal to a regular file, so
+Assertion mode changes each selected stream from a terminal to a regular file, so
 programs may buffer differently. Programs needing immediate progress must flush
-stdout themselves. The spool uses disk proportional to stdout volume until the
-command ends, then is removed. On Windows, a descendant that retains inherited
-stdout can delay deletion until its last spool handle closes; this does not delay
+the stream themselves. Spools use disk proportional to selected output until the
+command ends, then are removed. On Windows, a descendant retaining a spool handle
+can delay deletion until its last handle closes; this does not delay
 the direct child's result or replace its failure. Consumers own output volume and budgets. There is
-no guarantee of relative ordering between the separately inherited stderr and
-forwarded stdout. Matching performs no Unicode or newline normalization and
+no guarantee of relative ordering between stdout and stderr, whether inherited
+or separately forwarded. Matching performs no Unicode or newline normalization and
 makes no scientific judgment: marker choice and validity remain consumer policy.
 The runner does not flush output already buffered by its caller; callers own that
 buffering, as with inherited streams.
@@ -140,8 +142,9 @@ Both functions raise `ValueError` for malformed configuration/discovery/artifact
 `ExecutableNotFoundError` for missing commands, and standard process or OS errors
 for execution failures. The existing
 [`run_command_live`](api.md#python-process-api) also accepts
-`stdout_markers: Sequence[bytes] = ()`. Nonempty markers enable the same streaming
-assertion mode, with exact binary matching and no captured output in its result
+`stdout_markers: Sequence[bytes] = ()` and
+`stderr_markers: Sequence[bytes] = ()`. Nonempty markers enable the same
+streaming assertion mode on each selected stream, with exact binary matching and no captured output in its result
 or exceptions. Invalid marker arguments raise `TypeError` before launch; absent
 markers raise `ValueError` only after a successful command, including when
 `check=False`. An unchecked nonzero exit is returned without asserting markers.
