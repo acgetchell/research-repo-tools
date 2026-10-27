@@ -292,12 +292,12 @@ def tag(config: Config, version: str, *, force: bool = False, dry_run: bool = Fa
         raise ValueError("tagging requires a dated changelog release heading")
     if policy.date_policy == "today" and released != datetime.now(UTC).date().isoformat():
         raise ValueError("release heading date must equal the current UTC date before tagging")
-    citation = config.root / "CITATION.cff"
+    citation = config.root / config.changelog.citation
     if citation.exists():
         from research_repo_tools.release_metadata import _citation_date_reference
 
         if _citation_date_reference(citation).value != released:
-            raise ValueError("CITATION.cff date and changelog release date differ")
+            raise ValueError(f"{config.changelog.citation} date and changelog release date differ")
     if len(body.encode("utf-8")) > _GITHUB_TAG_ANNOTATION_LIMIT:
         from research_repo_tools.release_tags import _github_repo_url
 

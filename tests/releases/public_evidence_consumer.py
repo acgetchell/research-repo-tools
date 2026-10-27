@@ -22,6 +22,7 @@ from unittest.mock import patch
 
 from research_repo_tools import cli
 from research_repo_tools.changelog import template
+from research_repo_tools.files import RecoveryError
 from research_repo_tools.process import run_git_bytes
 from research_repo_tools.release_assets import require_release_checkout
 from research_repo_tools.release_evidence import EvidencePolicy, create_evidence_manifest, verify_cargo_archive, verify_release_evidence
@@ -617,7 +618,27 @@ class TestEvidenceInterfaces(unittest.TestCase):
                 self.assertEqual(cli.main(["--root", str(self.root), *args]), 0)
             self.assertEqual(self.output.read_bytes(), create_evidence_manifest(SOURCE, "1.2.3", COMMIT, 123, 2, provider.read))
             (self.checkout / "Cargo.toml").write_bytes(b'[package]\nname="wrong"\nversion="1.2.3"\n')
+            with contextlib.redirect_stderr(io.StringIO()) as diagnostics:
+                self.assertEqual(cli.main(["--root", str(self.root), *self.args]), 1)
+            self.assertIn("observed checkout package/version differs from release assertions", diagnostics.getvalue())
+
+    def test_cli_preserves_nested_recovery_diagnostics_and_redacts_secrets(self):
+        failure = ExceptionGroup(
+            "File update failed and rollback was incomplete",
+            [
+                OSError("publication denied ghp_test_secret"),
+                RecoveryError(self.output, None, PermissionError("rollback denied")),
+            ],
+        )
+        with (
+            patch("research_repo_tools.release_interfaces.run_evidence", side_effect=failure),
+            contextlib.redirect_stderr(io.StringIO()) as diagnostics,
+        ):
             self.assertEqual(cli.main(["--root", str(self.root), *self.args]), 1)
+        message = diagnostics.getvalue()
+        self.assertIn("publication denied <redacted-token>", message)
+        self.assertIn(f"failed to restore {self.output}: rollback denied", message)
+        self.assertNotIn("ghp_test_secret", message)
 
     def test_missing_unwritable_and_failed_output_transactions_preserve_records(self):
         from research_repo_tools.files import _replace_path

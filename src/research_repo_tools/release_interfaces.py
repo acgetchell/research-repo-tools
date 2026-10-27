@@ -15,6 +15,7 @@ from functools import partial
 from pathlib import Path
 from typing import Literal, cast
 
+from research_repo_tools.process import format_exception_diagnostics
 lazy from research_repo_tools.ci import export_environment
 lazy from research_repo_tools.config import Config
 lazy from research_repo_tools.evidence import _string
@@ -288,5 +289,5 @@ def run(args: argparse.Namespace, settings: Config) -> int:
     try:
         (run_evidence if args.action == "evidence" else run_assets)(args, settings)
     except Exception as error:
-        raise ValueError(redact_release_diagnostic(str(error))) from error
+        raise ValueError(redact_release_diagnostic(format_exception_diagnostics(error))) from error
     return 0

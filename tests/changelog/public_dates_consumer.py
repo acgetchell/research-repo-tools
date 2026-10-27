@@ -12,6 +12,25 @@ from research_repo_tools import changelog, cli, config
 
 
 class TestCitationDates(unittest.TestCase):
+    def test_tag_uses_configured_citation_for_date_comparison(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            settings = config.parse({"changelog": {"citation": "prepared.cff"}, "release": {"date-policy": "declared"}}, root=root)
+            (root / "pyproject.toml").write_bytes(b'[project]\nname="fixture"\nversion="1.2.3"\n')
+            (root / "CHANGELOG.md").write_bytes(b"# Changelog\n\n## [1.2.3] - 2024-02-29\n\n- Prepared release.\n")
+            (root / "CITATION.cff").write_bytes(b"version: 1.2.3\ndate-released: 2024-03-01\n")
+            citation = root / "prepared.cff"
+            citation.write_bytes(b"version: 1.2.3\ndate-released: 2024-02-29\n")
+            with patch("research_repo_tools.changelog.run_git_command", return_value=subprocess.CompletedProcess([], 1, "")):
+                self.assertIn("Prepared release.", changelog.tag(settings, "v1.2.3", dry_run=True))
+            (root / "CITATION.cff").write_bytes(citation.read_bytes())
+            citation.write_bytes(b"version: 1.2.3\ndate-released: 2024-03-01\n")
+            with (
+                patch("research_repo_tools.changelog.run_git_command", side_effect=AssertionError("invalid citation reached Git")),
+                self.assertRaisesRegex(ValueError, "date and changelog release date differ"),
+            ):
+                changelog.tag(settings, "v1.2.3", dry_run=True)
+
     def test_quoted_unquoted_leap_dates_and_configured_authority(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
