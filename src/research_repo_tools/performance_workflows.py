@@ -191,12 +191,15 @@ def run(args: argparse.Namespace, settings: Config) -> int:
         package_tag = "v" + read_package_info(root).version
         pair = resolve_pair(mode, package_tag=package_tag, releases=releases, order=args.order, current=args.current or None, baseline=args.baseline or None)
         working_tree = mode == "current-vs-latest" or (mode == "infer-release" and not any(item.tag == pair.current for item in releases))
-        from research_repo_tools.source_exports import capture_source
+        from research_repo_tools.source_exports import _files, capture_source
 
         settings_config = configuration if isinstance(configuration, MeasurementConfig) else configuration.measurement
         settings_config.validate_release(pair.baseline)
         settings_config.validate_release(pair.current)
-        controller = capture_source(root, working_tree=True) if not isinstance(configuration, MeasurementConfig) and configuration.schema == 4 else None
+        controller_patterns = (*settings_config.sources, *settings_config.harness, *settings_config.workloads)
+        controller = (
+            _files(root, _inventory(root, controller_patterns)) if not isinstance(configuration, MeasurementConfig) and configuration.schema == 4 else None
+        )
 
         from research_repo_tools.host_metadata import capture_host
 
@@ -204,7 +207,9 @@ def run(args: argparse.Namespace, settings: Config) -> int:
         captured_references = (
             {
                 "baseline": capture_source(root, pair.baseline),
-                "current": capture_source(root, "HEAD" if working_tree else pair.current, working_tree=working_tree),
+                # Acquisition verifies full working-tree receipts before returning.
+                # Publication rechecks refs and declared inputs, not staged outputs.
+                "current": capture_source(root, "HEAD" if working_tree else pair.current),
             }
             if controller is not None
             else {}
@@ -214,14 +219,15 @@ def run(args: argparse.Namespace, settings: Config) -> int:
             if _path(root, args.configuration).read_bytes() != configuration_bytes:
                 raise ValueError("measurement declaration changed")
             if controller is not None:
-                controller.verify()
+                if _files(root, _inventory(root, controller_patterns)) != controller:
+                    raise ValueError("declared measurement inputs changed")
                 if capture_host(root, probes=settings_config.probes) != controller_host:
                     raise ValueError("controller host/tool identity changed")
                 for captured in captured_references.values():
                     captured.verify()
 
         verify_controller()
-        protected = tuple(dict.fromkeys((args.configuration, *_inventory(root, configuration.sources), *_inventory(root, configuration.harness))))
+        protected = tuple(dict.fromkeys((args.configuration, *_inventory(root, controller_patterns))))
         targets = (args.payload, args.manifest, *([args.report] if args.report else []))
         _validate_distinct_paths(tuple(_path(root, name) for name in (*targets, *protected)))
         retained = measure_pair(

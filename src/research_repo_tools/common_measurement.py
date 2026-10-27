@@ -130,11 +130,13 @@ class CompleteMeasurementPlan:
 
     def __post_init__(self) -> None:
         if type(self.schema) is not int or self.schema not in (2, 3, 4):
-            raise ValueError("common measurement schema must be integer 2 or 3")
+            raise ValueError("common measurement schema must be integer 2, 3, or 4")
         if self.harness_mode not in {"common", "independent"} or self.backend not in {"export", "worktree"}:
             raise ValueError("invalid harness mode or source backend")
         if self.schema != 4 and self.harness_mode != "common":
             raise ValueError("independent harness mode requires measurement schema 4")
+        if self.schema != 4 and (self.raw_files or self.saved_sample is not None):
+            raise ValueError("raw files and saved samples require measurement schema 4")
         from research_repo_tools.criterion_baselines import _raw_files, _saved_name
 
         _raw_files(("benchmark.json", "estimates.json", "sample.json", *self.raw_files))
@@ -145,6 +147,8 @@ class CompleteMeasurementPlan:
                 raise ValueError("saved sample must differ from fresh sample")
         if not isinstance(self.measurement, MeasurementConfig) or any(not isinstance(phase, MeasurementPhase) for phase in (self.baseline, self.current)):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
             raise TypeError("common plan requires measurement settings and two phases")
+        if self.schema == 4 and not self.measurement.workloads:
+            raise ValueError("measurement schema 4 requires nonempty workloads")
         if "harness_sha256" not in self.measurement.compatible:
             raise ValueError("common plan must require harness_sha256 compatibility")
         if not self.measurement.probes:
@@ -219,7 +223,7 @@ def parse_plan(document: dict[str, Any]) -> CompleteMeasurementPlan:
     phases = _object(raw["phases"], "phases", {"baseline", "current"})
     schema = _integer(raw["schema"], "common measurement schema")
     if schema not in (2, 3, 4):
-        raise ValueError("common measurement schema must be integer 2 or 3")
+        raise ValueError("common measurement schema must be integer 2, 3, or 4")
     if schema == 4 and not {"harness-mode", "backend"} <= raw.keys():
         raise ValueError("schema 4 requires explicit harness-mode and backend")
     parsed = {}

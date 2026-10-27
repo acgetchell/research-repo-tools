@@ -276,7 +276,8 @@ all configured raw files must match byte for byte. The retained sample preserves
 those exact bytes and a recorded successful saved-verification name. Raw outputs
 are rechecked before acquisition completes. Nothing is padded or repaired.
 
-Declare `workloads` as file patterns for benchmark fixtures/input definitions.
+Schema 4 requires a nonempty `workloads` list of file patterns for benchmark
+fixtures/input definitions; each pattern must match files in each measured source.
 Their actual bytes are captured separately from changing library sources.
 Independent acquisition does not require equal identities across phases.
 `ratio_incompatibilities(evidence)` derives diagnostic reasons from recorded
@@ -322,9 +323,11 @@ export backend never manufactures history or silently creates a worktree.
 
 Capture repeats identity/inventory/byte/mode observations to detect ordinary
 races, then independently verifies materialized files. Source receipts can recheck
-the original repository. The CLI also snapshots the controller working tree,
-declaration and controller host/tools, and rechecks them after output staging
-before publication. Keep exclusive writer control: these checks are not atomic
+the original repository during acquisition. The CLI also snapshots declared
+controller source, harness and workload inventories, bytes and modes, the
+declaration and controller host/tools. It rechecks these inputs and source refs
+after output staging before publication; unrelated output files are not inputs.
+Keep exclusive writer control: these checks are not atomic
 filesystem snapshots or protection against adversarial change-and-restore.
 Cleanup failures report retained recovery directories and prevent accepted
 publication. Retained evidence remains usable after successful source cleanup.

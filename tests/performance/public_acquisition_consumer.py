@@ -11,6 +11,7 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 import unittest
 from dataclasses import replace
 from datetime import UTC, datetime
@@ -18,9 +19,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from research_repo_tools.cli import main
-from research_repo_tools.common_measurement import CompleteMeasurementPlan, measure_prepared_pair, validate_run_policy
+from research_repo_tools.common_measurement import CompleteMeasurementPlan, measure_prepared_pair, parse_plan, validate_run_policy
 from research_repo_tools.complete_runs import parse_run, ratio_incompatibilities, render_run, validate_run_evidence
 from research_repo_tools.evidence import parse_evidence, serialize_evidence
+from research_repo_tools.files import _stage_writes
 from research_repo_tools.host_metadata import HostMetadata
 from research_repo_tools.measurement import load_measurement
 from research_repo_tools.release_discovery import PublishedRelease
@@ -72,7 +74,7 @@ def declaration(root: Path, *, disjoint: bool = False, harness_mode: str = "inde
         "schema=4",
         f'harness-mode="{harness_mode}"',
         'backend="export"',
-        'sources=["marker", "cases.json"]',
+        'sources=["marker"]',
         'workloads=["cases.json"]',
         'harness=["bench*"]',
         'saved-sample="saved"',
@@ -108,6 +110,30 @@ def declaration(root: Path, *, disjoint: bool = False, harness_mode: str = "inde
 
 
 class TestAcquisitionConsumer(unittest.TestCase):
+    def test_plan_rejects_unsupported_schema_options_before_acquisition(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            plan = declaration(root)
+            for schema in (2, 3):
+                for options in ({"raw_files": ("tukey.json",), "saved_sample": None}, {"raw_files": (), "saved_sample": "saved"}):
+                    with self.subTest(schema=schema, options=options), self.assertRaisesRegex(ValueError, "require measurement schema 4"):
+                        replace(plan, schema=schema, harness_mode="common", **options)
+            with self.assertRaisesRegex(ValueError, "integer 2, 3, or 4"):
+                replace(plan, schema=5)
+            document = tomllib.loads((root / "measurement.toml").read_text(encoding="utf-8"))
+            with self.assertRaisesRegex(ValueError, "integer 2, 3, or 4"):
+                parse_plan({**document, "schema": 5})
+            with self.assertRaisesRegex(ValueError, "requires nonempty workloads"):
+                replace(plan, measurement=replace(plan.measurement, workloads=()))
+            for workloads in (None, []):
+                invalid = dict(document)
+                if workloads is None:
+                    del invalid["workloads"]
+                else:
+                    invalid["workloads"] = workloads
+                with self.subTest(workloads=workloads), self.assertRaisesRegex(ValueError, "requires nonempty workloads"):
+                    parse_plan(invalid)
+
     def test_independent_harness_disjoint_union_raw_retention_and_policy(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -187,6 +213,30 @@ class TestAcquisitionConsumer(unittest.TestCase):
                     main([*args, "measure", "measurement.toml", "v1.1.0", "v1.0.0", "--payload", "target/run.json", "--manifest", "target/evidence.json"]), 0
                 )
             retained = parse_evidence((root / "target/run.json").read_bytes(), (root / "target/evidence.json").read_bytes())
+            for name in ("measurement.toml", "marker", "bench.py", "cases.json", "bench-new"):
+                path = root / name
+                original = path.read_bytes() if path.exists() else None
+
+                def stage_then_change(writes):
+                    staged = _stage_writes(writes)
+                    path.write_bytes(b"changed input")
+                    return staged
+
+                with (
+                    self.subTest(changed_input=name),
+                    patch("research_repo_tools.source_exports._git", side_effect=git),
+                    patch("research_repo_tools.performance_workflows.measure_pair", return_value=retained),
+                    patch("research_repo_tools.files._stage_writes", side_effect=stage_then_change),
+                ):
+                    self.assertNotEqual(
+                        main([*args, "measure", "measurement.toml", "v1.1.0", "v1.0.0", "--payload", "new/run.json", "--manifest", "new/evidence.json"]), 0
+                    )
+                    self.assertFalse((root / "new").exists())
+                    self.assertEqual((root / "target/run.json").read_bytes(), retained.payload)
+                if original is None:
+                    path.unlink()
+                else:
+                    path.write_bytes(original)
             self.assertEqual(dict(retained.sources)["baseline"].revision, "a" * 40)
             self.assertIn("source-export", dict(dict(retained.sources)["current"].context))
             current_source = dict(retained.sources)["current"]
@@ -319,11 +369,44 @@ class TestAcquisitionConsumer(unittest.TestCase):
     @unittest.skipIf(os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1", "Git mutations disabled before fixture setup")
     def test_native_export_cli_dirty_tree_retention_and_offline_read(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
-            root = Path(temporary).resolve()
+            directory = Path(temporary).resolve()
+            root = directory / "repository"
+            empty = directory / "empty"
+            empty.mkdir()
+            self.enterContext(
+                patch.dict(
+                    os.environ,
+                    {
+                        "GIT_DIR": str(directory / "wrong-repository"),
+                        "GIT_WORK_TREE": str(directory / "wrong-worktree"),
+                        "GIT_INDEX_FILE": str(directory / "wrong-index"),
+                        "GIT_CONFIG_COUNT": "1",
+                        "GIT_CONFIG_KEY_0": "core.bare",
+                        "GIT_CONFIG_VALUE_0": "true",
+                    },
+                )
+            )
+            environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
+            environment.update(
+                GIT_CONFIG_NOSYSTEM="1",
+                GIT_CONFIG_SYSTEM=os.devnull,
+                GIT_CONFIG_GLOBAL=os.devnull,
+                GIT_TEMPLATE_DIR=str(empty),
+                GIT_CONFIG_COUNT="4",
+                GIT_CONFIG_KEY_0="core.hooksPath",
+                GIT_CONFIG_VALUE_0=str(empty),
+                GIT_CONFIG_KEY_1="commit.gpgSign",
+                GIT_CONFIG_VALUE_1="false",
+                GIT_CONFIG_KEY_2="tag.gpgSign",
+                GIT_CONFIG_VALUE_2="false",
+                GIT_CONFIG_KEY_3="core.autocrlf",
+                GIT_CONFIG_VALUE_3="false",
+            )
+            self.enterContext(patch.dict(os.environ, environment, clear=True))
             fixture(root, "baseline")
 
             def git(*args: str) -> bytes:
-                return subprocess.run(["git", "--no-pager", *args], cwd=root, check=True, capture_output=True).stdout
+                return subprocess.run(["git", "--no-pager", *args], cwd=root, env=environment, check=True, capture_output=True).stdout
 
             git("init")
             git("config", "user.name", "Fixture")
@@ -349,7 +432,7 @@ class TestAcquisitionConsumer(unittest.TestCase):
             before = {path.relative_to(root).as_posix(): path.read_bytes() for path in root.rglob("*") if path.is_file()}
             args = ["--root", str(root), "performance"]
             self.assertEqual(
-                main([*args, "measure", "measurement.toml", "v1.1.0", "v1.0.0", "--payload", "target/run.json", "--manifest", "target/evidence.json"]), 0
+                main([*args, "measure", "measurement.toml", "v1.1.0", "v1.0.0", "--payload", "results/run.json", "--manifest", "results/evidence.json"]), 0
             )
             with patch(
                 "research_repo_tools.performance_workflows.published_releases", return_value=(PublishedRelease("v1.0.0", datetime(2026, 1, 1, tzinfo=UTC)),)
@@ -363,14 +446,14 @@ class TestAcquisitionConsumer(unittest.TestCase):
                             "--mode",
                             "current-vs-latest",
                             "--payload",
-                            "target/dirty-run.json",
+                            "results/new/dirty-run.json",
                             "--manifest",
-                            "target/dirty-evidence.json",
+                            "results/new/dirty-evidence.json",
                         ]
                     ),
                     0,
                 )
-            dirty = parse_evidence((root / "target/dirty-run.json").read_bytes(), (root / "target/dirty-evidence.json").read_bytes())
+            dirty = parse_evidence((root / "results/new/dirty-run.json").read_bytes(), (root / "results/new/dirty-evidence.json").read_bytes())
             receipt = json.loads(dict(dict(dirty.sources)["current"].context)["source-export"])
             self.assertEqual(receipt["mode"], "working-tree")
             self.assertTrue(receipt["dirty"])
@@ -378,7 +461,7 @@ class TestAcquisitionConsumer(unittest.TestCase):
             for name, data in before.items():
                 self.assertEqual((root / name).read_bytes(), data, name)
             (root / "report.toml").write_bytes(b'schema=2\ncurrent="target/current.md"\narchive="target/history"\ntitle="Synthetic timings"\n')
-            self.assertEqual(main([*args, "promote", "report.toml", "--payload", "target/run.json", "--manifest", "target/evidence.json"]), 0)
+            self.assertEqual(main([*args, "promote", "report.toml", "--payload", "results/run.json", "--manifest", "results/evidence.json"]), 0)
             self.assertEqual(parse_run(load_latest_run(root, "target/history").payload).harness_mode, "independent")
 
 
