@@ -171,11 +171,11 @@ templates +args:
 test:
     uv run --locked pytest
 
-# Upgrade tools, then Python dependencies and the development environment.
+# Upgrade tools and Python dependencies, synchronize dev, then audit final locks.
 update: update-tools update-dependencies
 
-# Update Python dependencies without upgrading uv.
-update-dependencies: update-python-dependencies
+# Update Python dependencies without upgrading uv, then audit the final lock.
+update-dependencies: update-python-dependencies audit
 
 # Update main dev pins, then upgrade and sync all declared Python projects.
 update-python-dependencies:

@@ -2,6 +2,7 @@
 
 import argparse
 import tempfile
+from collections.abc import Callable
 from pathlib import Path
 
 lazy from research_repo_tools import criterion, evidence, release_assets
@@ -22,7 +23,7 @@ def add_command(commands, name: str) -> None:
         "baseline": "measure a checked-out tag and package a shared release baseline",
         "convert": "convert verified historical CSV into new shared evidence paths",
         "export": "export verified comparison evidence as CSV",
-        "measure": "measure configured benchmarks in explicitly permitted isolated worktrees",
+        "measure": "measure configured benchmarks in read-only exports or authorized worktrees",
         "promote": "promote/archive new evidence or rerender the retained current report offline",
         "release-draft": "require an existing mutable stable GitHub draft release",
         "release-upload": "attach verified inert bytes, reuse identical retries, and optionally publish",
@@ -39,8 +40,9 @@ def add_command(commands, name: str) -> None:
         command.add_argument("--asset-template", required=True, help="exact filename with one {tag} placeholder")
         command.add_argument("--legacy-configuration", help="explicit historical archive metadata layout")
     if name == "measure":
-        command.add_argument("--mode", choices=("current-vs-latest", "explicit", "infer-release"))
         command.add_argument("--allow-git-mutations", action="store_true", help="permit temporary worktree creation/removal for measurement")
+        command.add_argument("--backend", choices=("export", "worktree"), help="source isolation backend; must agree with complete declaration")
+        command.add_argument("--mode", choices=("current-vs-latest", "explicit", "infer-release"))
     if name in {"assets", "convert", "measure"}:
         command.add_argument("--payload", required=True)
         command.add_argument("--manifest", required=True)
@@ -78,7 +80,9 @@ def add_command(commands, name: str) -> None:
         command.add_argument("--output", help="write target JSON here; otherwise print JSON when --commit is supplied")
 
 
-def _outputs(args: argparse.Namespace, settings: Config, retained: evidence.Evidence, *, inputs: tuple[str, ...] = ()) -> None:
+def _outputs(
+    args: argparse.Namespace, settings: Config, retained: evidence.Evidence, *, inputs: tuple[str, ...] = (), verify: Callable[[], None] | None = None
+) -> None:
     root = settings.root
     targets = tuple(_path(root, name) for name in (args.payload, args.manifest, *([args.report] if args.report else [])))
     _validate_distinct_paths((*targets, *(_path(root, name) for name in inputs)))
@@ -92,7 +96,7 @@ def _outputs(args: argparse.Namespace, settings: Config, retained: evidence.Evid
             else render_report(retained)
         )
         reports[_path(root, args.report)] = report
-    evidence.publish_evidence(retained, targets[0], targets[1], reports=reports)
+    evidence.publish_evidence(retained, targets[0], targets[1], reports=reports, **({"verify": verify} if verify is not None else {}))
 
 
 def _asset_pair(args: argparse.Namespace, settings: Config) -> evidence.Evidence:
@@ -171,10 +175,15 @@ def run(args: argparse.Namespace, settings: Config) -> int:
         sample, source = measure_checkout(root, config, tag, mode="tag")
         release_assets.package_baseline(sample, source, _path(root, args.output))
     elif args.action == "measure":
-        if not args.allow_git_mutations:
-            raise ValueError("measure requires --allow-git-mutations")
         if bool(args.current) != bool(args.baseline):
             raise ValueError("current and baseline tags must be provided together")
+        configuration_bytes = _path(root, args.configuration).read_bytes()
+        configuration = load_measurement(root, args.configuration)
+        selected_backend = args.backend or (configuration.backend if not isinstance(configuration, MeasurementConfig) else "worktree")
+        if selected_backend == "worktree" and not args.allow_git_mutations:
+            raise ValueError("measure requires --allow-git-mutations for the worktree backend")
+        if not isinstance(configuration, MeasurementConfig) and selected_backend != configuration.backend:
+            raise ValueError("backend must match the acquisition declaration")
         from research_repo_tools.release_metadata import read_package_info
 
         mode = args.mode or ("explicit" if args.current else "infer-release")
@@ -182,12 +191,43 @@ def run(args: argparse.Namespace, settings: Config) -> int:
         package_tag = "v" + read_package_info(root).version
         pair = resolve_pair(mode, package_tag=package_tag, releases=releases, order=args.order, current=args.current or None, baseline=args.baseline or None)
         working_tree = mode == "current-vs-latest" or (mode == "infer-release" and not any(item.tag == pair.current for item in releases))
-        configuration = load_measurement(root, args.configuration)
+        from research_repo_tools.source_exports import capture_source
+
+        settings_config = configuration if isinstance(configuration, MeasurementConfig) else configuration.measurement
+        settings_config.validate_release(pair.baseline)
+        settings_config.validate_release(pair.current)
+        controller = capture_source(root, working_tree=True) if not isinstance(configuration, MeasurementConfig) and configuration.schema == 4 else None
+
+        from research_repo_tools.host_metadata import capture_host
+
+        controller_host = capture_host(root, probes=settings_config.probes) if controller is not None else None
+        captured_references = (
+            {
+                "baseline": capture_source(root, pair.baseline),
+                "current": capture_source(root, "HEAD" if working_tree else pair.current, working_tree=working_tree),
+            }
+            if controller is not None
+            else {}
+        )
+
+        def verify_controller() -> None:
+            if _path(root, args.configuration).read_bytes() != configuration_bytes:
+                raise ValueError("measurement declaration changed")
+            if controller is not None:
+                controller.verify()
+                if capture_host(root, probes=settings_config.probes) != controller_host:
+                    raise ValueError("controller host/tool identity changed")
+                for captured in captured_references.values():
+                    captured.verify()
+
+        verify_controller()
         protected = tuple(dict.fromkeys((args.configuration, *_inventory(root, configuration.sources), *_inventory(root, configuration.harness))))
         targets = (args.payload, args.manifest, *([args.report] if args.report else []))
         _validate_distinct_paths(tuple(_path(root, name) for name in (*targets, *protected)))
-        retained = measure_pair(root, configuration, pair, working_tree=working_tree, allow_git_mutations=True)
-        _outputs(args, settings, retained, inputs=protected)
+        retained = measure_pair(
+            root, configuration, pair, working_tree=working_tree, allow_git_mutations=args.allow_git_mutations, backend=args.backend, verify=verify_controller
+        )
+        _outputs(args, settings, retained, inputs=protected, verify=verify_controller)
     elif args.action == "assets":
         _outputs(args, settings, _asset_pair(args, settings), inputs=(args.legacy_configuration,) if args.legacy_configuration else ())
     elif args.action == "convert":

@@ -165,7 +165,7 @@ def load_publication(
         optional |= {"baseline-label", "current-label"}
     else:
         required |= {"statistic", "series"}
-        optional |= {"payload", "manifest", "archive", "missing", "comparisons", "plot", "csv", "table", "measurement"}
+        optional |= {"payload", "manifest", "archive", "missing", "comparisons", "plot", "csv", "table", "measurement", "release"}
     if artifacts_only:
         if schema != 2:
             raise ValueError("artifacts-only requires complete-run publication schema 2")
@@ -207,6 +207,8 @@ def load_publication(
         from research_repo_tools.complete_runs import validate_run_evidence
 
         validate_run_evidence(retained)
+        if "release" in raw and "measurement" not in raw:
+            raise ValueError("publication release policy requires a measurement declaration")
         if "measurement" in raw:
             from research_repo_tools.common_measurement import validate_run_policy
             from research_repo_tools.measurement import load_measurement
@@ -215,7 +217,10 @@ def load_publication(
             _validate_distinct_paths(tuple(_path(root, name) for name in (policy_name, configuration, *names.values())))
             inputs[policy_name] = _path(root, policy_name).read_bytes()
             measurement = load_measurement(root, policy_name)
-            validate_run_policy(retained, measurement, release=not artifacts_only)
+            release = raw.get("release", not artifacts_only)
+            if type(release) is not bool:
+                raise ValueError("publication release must be a boolean")
+            validate_run_policy(retained, measurement, release=release)
             if not artifacts_only:
                 if "archive" not in raw:
                     raise ValueError("policy-checked document publication requires retained immutable archive evidence")

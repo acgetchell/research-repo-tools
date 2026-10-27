@@ -19,6 +19,8 @@ __all__ = [
     "RUN_SCHEMA",
     "RUN_SCHEMAS",
     "RUN_SCHEMA_V2",
+    "RUN_SCHEMA_V3",
+    "ratio_incompatibilities",
     "CompleteCase",
     "CompletePolicy",
     "CompleteRun",
@@ -37,7 +39,8 @@ __all__ = [
 RUN_SCHEMA = "research-repo-tools/complete-run/v1"
 LEGACY_RUN_SCHEMA = RUN_SCHEMA
 RUN_SCHEMA_V2 = "research-repo-tools/complete-run/v2"
-RUN_SCHEMAS = (RUN_SCHEMA, RUN_SCHEMA_V2)
+RUN_SCHEMA_V3 = "research-repo-tools/complete-run/v3"
+RUN_SCHEMAS = (RUN_SCHEMA, RUN_SCHEMA_V2, RUN_SCHEMA_V3)
 
 
 def _array(value: object, context: str) -> list[Any]:
@@ -169,11 +172,21 @@ class CompleteCase:
     benchmark: bytes
     estimates: bytes
     sample: bytes
+    raw_files: tuple[tuple[str, bytes], ...] = field(default=(), kw_only=True)
 
     def __post_init__(self) -> None:
         _publication_name(self.storage_path)
         if any(not isinstance(value, bytes) for value in (self.benchmark, self.estimates, self.sample)):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
             raise TypeError("Criterion files must be immutable bytes")
+        from research_repo_tools.criterion_baselines import _raw_files
+
+        names = tuple(name for name, _ in self.raw_files)
+        _raw_files(("benchmark.json", "estimates.json", "sample.json", *names))
+        for name, payload in self.raw_files:
+            if not isinstance(payload, bytes):
+                raise TypeError("Criterion raw files require immutable bytes")
+            _load_json(payload, name)
+        object.__setattr__(self, "raw_files", tuple(sorted(self.raw_files)))
         _ = self.full_id
         raw = _object(_load_json(self.sample, "Criterion raw sample"), "Criterion raw sample")
         iters, times = (_array(raw.get(key), key) for key in ("iters", "times"))
@@ -224,7 +237,7 @@ class CompleteSample:
         object.__setattr__(self, "cases", tuple(sorted(cases, key=lambda case: case.full_id)))
 
 
-def collect_complete_sample(criterion_dir: Path, sample: str, policy: CompletePolicy) -> CompleteSample:
+def collect_complete_sample(criterion_dir: Path, sample: str, policy: CompletePolicy, *, raw_files: tuple[str, ...] = ()) -> CompleteSample:
     """Reject incomplete inventories and unsafe trees; never infer IDs from paths."""
     _publication_name(sample)
     if "/" in sample:
@@ -253,6 +266,7 @@ def collect_complete_sample(criterion_dir: Path, sample: str, policy: CompletePo
                 CompleteCase(
                     directory.parent.relative_to(criterion_dir).as_posix(),
                     *(path.read_bytes() for path in raw_paths),
+                    raw_files=tuple((name, (directory / name).read_bytes()) for name in raw_files),
                 )
             )
     return CompleteSample(policy, tuple(cases))
@@ -281,15 +295,20 @@ class CompleteRun:
     series: tuple[RunSeries, ...]
     compatible: tuple[str, ...] = ("harness_sha256",)
     schema: str = field(default=RUN_SCHEMA, kw_only=True)
+    harness_mode: str = field(default="common", kw_only=True)
 
     def __post_init__(self) -> None:
         if self.schema not in RUN_SCHEMAS:
             raise ValueError("unsupported complete run schema")
+        if self.harness_mode not in {"common", "independent"} or (self.schema != RUN_SCHEMA_V3 and self.harness_mode != "common"):
+            raise ValueError("independent acquisition requires complete-run v3")
         phases = tuple((name, sample) for name, sample in self.phases)
         if len(phases) != 2 or {name for name, _ in phases} != {"baseline", "current"}:
             raise ValueError("complete run requires exactly baseline and current phases")
         if any(not isinstance(sample, CompleteSample) for _, sample in phases):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
             raise TypeError("run phases require complete samples")
+        if self.schema != RUN_SCHEMA_V3 and any(case.raw_files for _, sample in phases for case in sample.cases):
+            raise ValueError("supplemental raw retention requires complete-run v3")
         policies = [sample.policy for _, sample in phases]
         if self.schema == LEGACY_RUN_SCHEMA and (any(p.sample_count is None for p in policies) or policies[0].sample_count != policies[1].sample_count):
             raise ValueError("v1 run phases require matching uniform sample counts")
@@ -317,6 +336,7 @@ def serialize_run(run: CompleteRun) -> bytes:
     return deterministic_json(
         {
             "schema": run.schema,
+            **({"harness_mode": run.harness_mode} if run.schema == RUN_SCHEMA_V3 else {}),
             "compatible": run.compatible,
             "series": [{"name": series.name, "phase": series.phase, "rows": dict(series.rows)} for series in run.series],
             "phases": {
@@ -327,6 +347,11 @@ def serialize_run(run: CompleteRun) -> bytes:
                     "cases": [
                         {
                             "storage_path": case.storage_path,
+                            **(
+                                {"raw_files": {name: base64.b64encode(data).decode("ascii") for name, data in case.raw_files}}
+                                if run.schema == RUN_SCHEMA_V3
+                                else {}
+                            ),
                             **{key: base64.b64encode(getattr(case, key)).decode("ascii") for key in ("benchmark", "estimates", "sample")},
                         }
                         for case in sample.cases
@@ -339,7 +364,9 @@ def serialize_run(run: CompleteRun) -> bytes:
 
 
 def parse_run(payload: bytes) -> CompleteRun:
-    raw = _object(_load_json(payload, "complete run"), "complete run", {"schema", "compatible", "series", "phases"})
+    document = _object(_load_json(payload, "complete run"), "complete run")
+    modern = document.get("schema") == RUN_SCHEMA_V3
+    raw = _object(document, "complete run", {"schema", "compatible", "series", "phases"} | ({"harness_mode"} if modern else set()))
     if raw["schema"] not in RUN_SCHEMAS:
         raise ValueError("unsupported complete run schema")
     phases = []
@@ -348,12 +375,18 @@ def parse_run(payload: bytes) -> CompleteRun:
         parsed_policy = _parse_policy(phase["policy"], legacy=raw["schema"] == LEGACY_RUN_SCHEMA)
         cases = []
         for item in _array(phase["cases"], "cases"):
-            case = _object(item, "case", {"storage_path", "benchmark", "estimates", "sample"})
+            case = _object(item, "case", {"storage_path", "benchmark", "estimates", "sample"} | ({"raw_files"} if modern else set()))
             try:
                 files = tuple(base64.b64decode(_string(case[key], key), validate=True) for key in ("benchmark", "estimates", "sample"))
             except binascii.Error as error:
                 raise ValueError("invalid base64 Criterion file") from error
-            cases.append(CompleteCase(_string(case["storage_path"], "storage path"), *files))
+            try:
+                extra = tuple(
+                    (name, base64.b64decode(_string(data, name), validate=True)) for name, data in _object(case.get("raw_files", {}), "raw files").items()
+                )
+            except binascii.Error as error:
+                raise ValueError("invalid base64 Criterion file") from error
+            cases.append(CompleteCase(_string(case["storage_path"], "storage path"), *files, raw_files=extra))
         phases.append((name, CompleteSample(parsed_policy, tuple(cases))))
     series = []
     for item in _array(raw["series"], "series"):
@@ -365,7 +398,13 @@ def parse_run(payload: bytes) -> CompleteRun:
                 tuple((label, _string(full_id, "full ID")) for label, full_id in _object(row["rows"], "rows").items()),
             )
         )
-    return CompleteRun(tuple(phases), tuple(series), tuple(_array(raw["compatible"], "compatible")), schema=_string(raw["schema"], "run schema"))
+    return CompleteRun(
+        tuple(phases),
+        tuple(series),
+        tuple(_array(raw["compatible"], "compatible")),
+        schema=_string(raw["schema"], "run schema"),
+        harness_mode=_string(raw["harness_mode"], "harness mode") if modern else "common",
+    )
 
 
 def validate_run_evidence(evidence: Evidence) -> CompleteRun:
@@ -379,7 +418,7 @@ def validate_run_evidence(evidence: Evidence) -> CompleteRun:
         raise ValueError("run provenance requires baseline and current sources")
     for phase, source in sources.items():
         context = dict(source.context)
-        if run.schema == RUN_SCHEMA_V2:
+        if run.schema in (RUN_SCHEMA_V2, RUN_SCHEMA_V3):
             if "sampling-policy" not in context:
                 raise ValueError("run provenance missing sampling-policy")
             if parse_policy(context["sampling-policy"].encode("utf-8")) != dict(run.phases)[phase].policy:
@@ -422,9 +461,38 @@ def validate_run_evidence(evidence: Evidence) -> CompleteRun:
         _environment(environment.items())
     ReleasePair(dict(sources["current"].context)["release"], dict(sources["baseline"].context)["release"])
     compatibility = compare_provenance(sources["baseline"], sources["current"], fields=run.compatible)
-    if not compatibility.compatible:
+    if run.harness_mode == "common" and not compatibility.compatible:
         raise ValueError(f"required run provenance differs or is unknown: {compatibility.differences}")
+    if run.schema == RUN_SCHEMA_V3:
+        from research_repo_tools.common_measurement import validate_acquisition
+
+        validate_acquisition(evidence, run)
     return run
+
+
+def ratio_incompatibilities(evidence: Evidence) -> tuple[str, ...]:
+    """Derive eligibility from retained observations, never a stored verdict."""
+    run = validate_run_evidence(evidence)
+    if run.schema != RUN_SCHEMA_V3:
+        return ()
+    sources = dict(evidence.sources)
+    fields = set(run.compatible)
+    fields.update(("context.host", "context.workload-sha256", "context.environment"))
+    result = compare_provenance(sources["baseline"], sources["current"], fields=tuple(sorted(fields)))
+    reasons = [f"{item.field}: differs or is unknown" for item in result.differences]
+    from research_repo_tools.host_metadata import parse_host
+
+    for phase, source in sources.items():
+        host = parse_host(dict(source.context)["host"].encode("utf-8"))
+        for attribute in ("os", "architecture", "cpu", "physical_cores", "logical_threads", "memory_bytes"):
+            if getattr(host, attribute) is None:
+                reasons.append(f"{phase} host {attribute} is unknown")
+    left, right = (dict(run.phases)[phase].policy for phase in ("baseline", "current"))
+    if left != right:
+        reasons.append("phase sampling policies or inventories differ")
+    if not set(left.expected) & set(right.expected):
+        reasons.append("no common benchmark IDs")
+    return tuple(reasons)
 
 
 def run_identity(evidence: Evidence) -> str:
@@ -574,7 +642,7 @@ def _provenance_summary(evidence: Evidence) -> list[str]:
             ("Measurement mode", context.get("mode")),
             ("Original source SHA-256", context["original-source-sha256"]),
             ("Measured source SHA-256", source.source_sha256),
-            ("Common harness SHA-256", source.harness_sha256),
+            ("Measured harness SHA-256" if evidence.payload_schema == RUN_SCHEMA_V3 else "Common harness SHA-256", source.harness_sha256),
             ("Fingerprint schema", context["fingerprint-schema"]),
             ("OS", host.os),
             ("Architecture", host.architecture),
@@ -631,4 +699,24 @@ def render_run(
         links = f"Evidence: [run payload]({payload_link}) · [evidence envelope]({manifest_link})."
     timings = _render_run_v1(evidence, title=title).decode("utf-8").removesuffix("\n").split("\n")
     timings[4:4] = [links, ""]
+    run = validate_run_evidence(evidence)
+    if run.schema == RUN_SCHEMA_V3:
+        reasons = ratio_incompatibilities(evidence)
+        timings.extend(
+            [
+                "",
+                f"Harness mode: {run.harness_mode}.",
+                "",
+                "Ratio eligibility: " + ("suppressed — " + _markdown_text("; ".join(reasons)) if reasons else "compatible recorded identities"),
+            ]
+        )
+        phases = dict(run.phases)
+        timings.extend(["", "## Complete phase inventory", "", "| Benchmark | Baseline | Current |", "| --- | --- | --- |"])
+        for full_id in sorted(set(phases["baseline"].policy.expected) | set(phases["current"].policy.expected)):
+            cells = []
+            for phase in ("baseline", "current"):
+                sample = phases[phase]
+                case = next((case for case in sample.cases if case.full_id == full_id), None)
+                cells.append("unavailable" if case is None else _format_estimate(case.estimate(sample.policy.statistics[0]), sample.policy.unit))
+            timings.append(f"| {_markdown_text(full_id)} | " + " | ".join(cells) + " |")
     return ("<!-- research-repo-tools/run-report/v2 -->\n" + "\n".join([*timings, *_provenance_summary(evidence)]) + "\n").encode("utf-8")

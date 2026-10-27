@@ -293,3 +293,23 @@ explicit publication intent. Generic provider failure matrices belong in this
 package; consumers retain tests for their actual workflow composition.
 Benchmark measurements, scientific eligibility, plotting, historical evidence
 conversion, registry publication and live GitHub settings remain outside #94.
+
+## Independent acquisition and export adoption
+
+For new measurements, move composed independent sample/evidence orchestration to
+measurement schema 4 with `harness-mode = "independent"` and `backend = "export"`.
+Declare each revision's discovery/gates, full case/count policy, workload files,
+raw JSON requirements and optional saved-sample verification. The shared workflow
+retains both complete samples; no common-harness overlay is implied. A consumer
+that deliberately measures a common harness instead selects `"common"`.
+
+Preserve original historical artifacts. The new contract does not promise legacy
+compatibility where it obstructs correctness or API design, and never synthesizes
+missing proof. Unsupported artifacts require their producing release's reader;
+retain that environment separately when needed. Do not rewrite old files as v3.
+
+Delaunay #648 and mcmc-learned-proposals #44 remain separate adoption tasks.
+Verify the exact published supplying release and normal wheel/sdist resolution
+before removing their working adapters. Keep scientific selections, count policy,
+fixture validation and interpretation in consumers. A local implementation or
+merged PR is not publication or downstream acceptance.

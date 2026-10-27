@@ -8,7 +8,7 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Collection, Mapping, Sequence
+from collections.abc import Callable, Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -276,6 +276,7 @@ def publish_evidence(
     *,
     reports: Mapping[Path, bytes] | None = None,
     immutable: Collection[Path] = (),
+    verify: Callable[[], None] | None = None,
 ) -> None:
     """Publish verified evidence and pre-rendered reports in one transaction.
 
@@ -293,7 +294,7 @@ def publish_evidence(
     for (path, data), resolved in zip(writes, paths, strict=True):
         if any(_paths_alias(resolved, protected) for protected in immutable) and path.exists() and path.read_bytes() != data:
             raise ValueError(f"immutable evidence already exists with different bytes: {path}")
-    replace_many(dict(writes))
+    replace_many(dict(writes), **({"verify": verify} if verify is not None else {}))
 
 
 def fingerprint_files(root: Path, paths: Sequence[Path]) -> str:

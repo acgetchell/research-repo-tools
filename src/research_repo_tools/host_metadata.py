@@ -237,11 +237,11 @@ def capture_profile(root: Path, configuration: str) -> bytes:
             declarations[key] = {"path": name, "text": text, "toml": _toml_json(tomllib.loads(text))}
     source = None
     if "measurement" in raw:
-        from research_repo_tools.common_measurement import CommonHarnessPlan
+        from research_repo_tools.common_measurement import CompleteMeasurementPlan
         from research_repo_tools.measurement import capture_provenance, load_measurement
 
         selected = load_measurement(root, _string(raw["measurement"], "measurement"))
-        settings = selected.measurement if isinstance(selected, CommonHarnessPlan) else selected
+        settings = selected.measurement if isinstance(selected, CompleteMeasurementPlan) else selected
         provenance = capture_provenance(root, settings, _string(raw["release"], "release"), mode="profiling")
         source = {**asdict(provenance), "context": dict(provenance.context)}
     return deterministic_json(

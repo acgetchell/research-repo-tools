@@ -1,6 +1,12 @@
 # Consumer-owned IDs, sampling and native commands. No package-specific adapter.
 # Include every recipe entrypoint and scientific gate input used by the commands.
-schema = 2
+schema = 4
+harness-mode = "independent"
+backend = "export"
+raw-files = ["tukey.json"]
+# If the native command also saves a baseline, verify it before cleanup.
+# saved-sample = "retained"
+workloads = ["tests/benchmark_inputs.rs"]
 # Optional minimum stable label for both phases of new measurements.
 # minimum-release = "v1.0.0"
 sources = ["src/**/*.rs"]
