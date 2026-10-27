@@ -3,7 +3,7 @@
 import asyncio
 import threading
 import warnings
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 
 import nbformat
 import pytest
@@ -45,16 +45,21 @@ def test_execution_closes_its_loop_and_preserves_running_caller(tmp_path, monkey
         runner.run(caller())
 
 
-def test_interrupt_waits_for_cancellation_cleanup_and_closes_loop(tmp_path, monkeypatch):
+@pytest.mark.parametrize("boundary", ["result", "submit"])
+def test_interrupt_waits_for_cancellation_cleanup_and_closes_loop(tmp_path, monkeypatch, boundary):
     started = threading.Event()
     cleaned = threading.Event()
+    cancelled = threading.Event()
     observed = []
 
     async def execute(*args, **kwargs):
         observed.append(asyncio.get_running_loop())
         try:
             started.set()
-            await asyncio.Event().wait()
+            await asyncio.sleep(5)  # Bound the regression if cancellation is missed.
+        except asyncio.CancelledError:
+            cancelled.set()
+            raise
         finally:
             cleaned.set()
 
@@ -62,11 +67,20 @@ def test_interrupt_waits_for_cancellation_cleanup_and_closes_loop(tmp_path, monk
         assert started.wait(5)
         raise KeyboardInterrupt
 
+    submit = ThreadPoolExecutor.submit
+
+    def interrupt_submission(self, *args, **kwargs):
+        submit(self, *args, **kwargs)
+        interrupt(self)
+
     monkeypatch.setattr(notebooks, "_execute_async", execute)
-    monkeypatch.setattr(Future, "result", interrupt)
+    if boundary == "submit":
+        monkeypatch.setattr(ThreadPoolExecutor, "submit", interrupt_submission)
+    else:
+        monkeypatch.setattr(Future, "result", interrupt)
     with pytest.raises(KeyboardInterrupt):
         notebooks._execute(nbformat.v4.new_notebook(), cwd=tmp_path, timeout=1, env={}, progress=[])
-    assert cleaned.is_set() and observed[0].is_closed()
+    assert cancelled.is_set() and cleaned.is_set() and observed[0].is_closed()
     assert not any(thread.name.startswith("notebook-execution") for thread in threading.enumerate())
 
 

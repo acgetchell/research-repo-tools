@@ -7,8 +7,10 @@ import os
 import subprocess
 import sys
 import tempfile
+import threading
 import unittest
 import warnings
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import override
 from unittest.mock import patch
@@ -197,6 +199,47 @@ class TestNotebookProject(unittest.TestCase):
             self.assertEqual(result.source.read_bytes(), original)
             result = project.execute(self.relative)
             self.assertEqual(result.returncode, 0, result.report)
+
+    def test_interrupted_submission_cleans_the_real_kernel_and_workspace(self):
+        from jupyter_client import AsyncKernelManager
+        from jupyter_client.provisioning.local_provisioner import LocalProvisioner
+
+        original = self.write_notebook("import time\nfrom pathlib import Path\ntime.sleep(5)\nPath('completed').write_bytes(b'done')\n")
+        started = threading.Event()
+        processes = []
+
+        class StartedKernel(AsyncKernelManager):
+            @override
+            async def start_kernel(self, **kwargs):
+                await super().start_kernel(**kwargs)
+                assert isinstance(self.provisioner, LocalProvisioner) and self.provisioner.process is not None
+                processes.append(self.provisioner.process)
+                started.set()
+
+        class InterruptedSubmission(ThreadPoolExecutor):
+            @override
+            def submit(self, fn, /, *args, **kwargs):
+                super().submit(fn, *args, **kwargs)
+                if not started.wait(30):
+                    raise AssertionError("kernel did not start before the submission interrupt")
+                raise KeyboardInterrupt
+
+        with self.project() as project:
+            workspace = project.root.parent
+            with (
+                patch("jupyter_client.manager.AsyncKernelManager", StartedKernel),
+                patch("research_repo_tools.notebooks.ThreadPoolExecutor", InterruptedSubmission),
+                self.assertRaises(KeyboardInterrupt),
+            ):
+                project.execute(self.relative)
+            self.assertEqual(len(processes), 1)
+            self.assertIsNotNone(processes[0].poll(), "kernel survived interrupted submission")
+            self.assertFalse(psutil.pid_exists(processes[0].pid))
+            self.assertFalse((project.root / "completed").exists(), "interrupted notebook ran to completion")
+            self.assertEqual(list(project.artifacts.glob("research-notebook-*")), [])
+            self.assertEqual((project.root / self.relative).read_bytes(), original)
+        self.assertFalse(workspace.exists())
+        self.assertEqual((self.source / self.relative).read_bytes(), original)
 
     def test_bad_selection_and_environment_fail_before_creating_a_workspace(self):
         self.write_notebook("pass\n")

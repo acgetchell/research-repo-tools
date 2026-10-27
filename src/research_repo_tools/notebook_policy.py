@@ -177,7 +177,7 @@ def _shell_segments(command: str, *, windows: bool) -> list[list[str]]:
     return [_arguments(part, windows=windows) for part in parts]
 
 
-def _command_arguments(arguments: list[str], kind: str) -> list[str]:
+def _command_arguments(arguments: list[str], kind: str, *, uv_run: bool = False) -> list[str]:
     """Drop known leading options with their values; leave one literal command."""
     index = 0
     while index < len(arguments):
@@ -189,7 +189,7 @@ def _command_arguments(arguments: list[str], kind: str) -> list[str]:
         option, equals, _value = argument.partition("=")
         if option in OPTION_VALUES[kind]:
             index += 1 if equals else 2
-        elif argument in OPTION_FLAGS[kind] or re.fullmatch(r"-[qv]+", argument):
+        elif argument in OPTION_FLAGS[kind] or re.fullmatch(r"-[qv]+", argument) or uv_run and argument in {"-m", "--module"}:
             index += 1
         elif any(argument.startswith(short) and len(argument) > 2 for short in OPTION_VALUES[kind] if len(short) == 2):
             index += 1  # Attached short-option value, such as uv -p3.15.
@@ -202,12 +202,12 @@ def _python_module(arguments: list[str], *, launcher: bool) -> list[str]:
     index = 0
     while index < len(arguments):
         argument = arguments[index]
-        if module := re.fullmatch(r"-[bBdEiIOqRsSuUx]*m(.*)", argument):
+        if module := re.fullmatch(r"-[bBdEiIOPqRsSuUx]*m(.*)", argument):
             remaining = arguments[index + 1 :]
             return [module[1], *remaining] if module[1] else remaining
         if argument in {"-W", "-X"}:
             index += 2
-        elif argument.startswith(("-W", "-X")) or re.fullmatch(r"-[bBdEiIOqRsSuUx]+", argument):
+        elif argument.startswith(("-W", "-X")) or re.fullmatch(r"-[bBdEiIOPqRsSuUx]+", argument):
             index += 1
         elif launcher and re.fullmatch(r"-(?:[23](?:\.\d+)*(?:-\d+)?|V:.+)", argument):
             index += 1
@@ -229,12 +229,13 @@ def _installer_mutates(segment: list[str]) -> bool:
             if kind not in OPTION_VALUES:
                 return False
             remaining = _command_arguments(remaining, kind)
+            uv_run = kind == "uv" and remaining[:1] == ["run"]
             if remaining and (kind == "uv" and remaining[0] in {"pip", "tool", "python"} or kind == "conda" and remaining[0] == "env"):
                 remaining = _command_arguments(remaining[1:], kind)
             if not remaining:
                 return False
             if remaining[0] == "run" and kind in {"uv", "conda"}:
-                segment = _command_arguments(remaining[1:], kind)
+                segment = _command_arguments(remaining[1:], kind, uv_run=uv_run)
                 continue
             return remaining[0] in MUTATIONS
     return False

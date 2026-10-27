@@ -253,8 +253,8 @@ def _execute(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str]
             with runner:
                 runner.run(task)
 
-        result = worker.submit(run)
         try:
+            result = worker.submit(run)
             result.result()
         except BaseException:
             if not task.done():
