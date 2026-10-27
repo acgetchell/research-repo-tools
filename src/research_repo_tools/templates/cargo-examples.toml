@@ -1,0 +1,9 @@
+# Select real discovered Cargo example names and preserve consumer assertions.
+schema = 1
+profile = "release"
+timeout = 300
+build-timeout = 1800
+
+[examples.example]
+expect = ["consumer-defined stdout marker"]
+expect-stderr = ["consumer-defined logger marker"]

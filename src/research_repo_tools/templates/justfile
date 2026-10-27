@@ -38,6 +38,10 @@ ci: check
 clean *args:
     uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain clean "$@"
 
+# Acquire exploratory wall timings into a new JSON report with a concise summary.
+command-time configuration output:
+    uv run --locked --group dev research-repo-tools performance command-time "$1" --output "$2"
+
 # Show command help when invoked without a recipe.
 [default]
 [private]

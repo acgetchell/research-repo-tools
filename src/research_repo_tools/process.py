@@ -16,6 +16,7 @@ import sys
 import tempfile
 import time
 from collections.abc import Mapping, Sequence
+from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, cast
 
@@ -175,13 +176,15 @@ def run_command_live(
     timeout: float | None = DEFAULT_COMMAND_TIMEOUT_SECONDS,
     check: bool = True,
     stdout_markers: Sequence[bytes] = (),
+    stderr_markers: Sequence[bytes] = (),
 ) -> subprocess.CompletedProcess[bytes]:
     """Run an argument vector with inherited stdin/stdout/stderr and no shell.
 
     Output is visible while the child runs. Results and failures contain no
-    captured output. With stdout_markers, spool stdout to a temporary file and
-    echo its exact bytes live, then check literal markers; stdin/stderr remain
-    inherited. This opt-in mode changes stdout's TTY/buffering behavior and uses
+    captured output. Each nonempty stdout_markers/stderr_markers sequence spools
+    that stream and echoes its exact bytes live to the same caller stream, then
+    checks literal markers on that stream alone. Other streams stay inherited.
+    This opt-in mode changes the selected streams' TTY/buffering behavior and uses
     disk proportional to output, but bounded memory. Missing markers raise
     ValueError after successful completion. Command failures take precedence.
     Timeout cleanup covers the direct child, as for the byte runner; callers
@@ -191,20 +194,21 @@ def run_command_live(
         raise TypeError("args must be a sequence of strings without NUL")
     if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
         raise ValueError("timeout must be positive and finite, or None")
-    if (
-        not isinstance(stdout_markers, Sequence)
-        or isinstance(stdout_markers, (str, bytes))
-        or any(not isinstance(marker, bytes) or not marker for marker in stdout_markers)  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
-    ):
-        raise TypeError("stdout_markers must be a sequence of nonempty bytes")
+    for name, markers in (("stdout_markers", stdout_markers), ("stderr_markers", stderr_markers)):
+        if (
+            not isinstance(markers, Sequence) or isinstance(markers, (str, bytes)) or any(not isinstance(marker, bytes) or not marker for marker in markers)  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
+        ):
+            raise TypeError(f"{name} must be a sequence of nonempty bytes")
     path = resolve_executable(command, cwd=cwd, env=env)
-    if stdout_markers:
-        return _run_with_stdout_markers([str(path), *args], cwd=cwd, env=env, timeout=timeout, check=check, markers=stdout_markers)
+    if stdout_markers or stderr_markers:
+        return _run_with_markers(
+            [str(path), *args], cwd=cwd, env=env, timeout=timeout, check=check, streams={"stdout": stdout_markers, "stderr": stderr_markers}
+        )
     return subprocess.run([str(path), *args], cwd=cwd, env=env, check=check, timeout=timeout)
 
 
-def _run_with_stdout_markers(
-    argv: list[str], *, cwd: Path | None, env: Mapping[str, str] | None, timeout: float | None, check: bool, markers: Sequence[bytes]
+def _run_with_markers(
+    argv: list[str], *, cwd: Path | None, env: Mapping[str, str] | None, timeout: float | None, check: bool, streams: Mapping[str, Sequence[bytes]]
 ) -> subprocess.CompletedProcess[bytes]:
     # Forward in a disposable process, not the deadline-owning thread: a caller
     # that stops reading stdout must not prevent timeout cleanup. The spool also
@@ -222,34 +226,53 @@ def _run_with_stdout_markers(
     # Never flush caller-owned buffered stdout here: a full sink can block
     # that flush outside the subprocess deadline. Inherited mode also leaves
     # callers responsible for their own buffered output.
-    with (
-        tempfile.TemporaryDirectory(prefix="research-repo-tools-stdout-control-") as directory,
-        tempfile.NamedTemporaryFile(prefix="research-repo-tools-stdout-", buffering=0) as writer,
-    ):
+    with ExitStack() as stack:
+        directory = stack.enter_context(tempfile.TemporaryDirectory(prefix="research-repo-tools-stream-control-"))
         # Keep the spool outside the control directory. Windows deletes it
         # when the last inherited delete-sharing handle closes, which may be
         # later than the direct child's exit; control cleanup stays immediate.
-        spool = Path(writer.name)
-        done = Path(directory) / "done"
-        forward_command = [sys.executable, "-I", "-S", str(Path(__file__).with_name("_stdout_forwarder.py")), str(spool), str(done)]
-        with open_spool(spool) as reader, subprocess.Popen(argv, cwd=cwd, env=env, stdout=writer) as child:
-            forwarder = None
-            try:
-                forwarder = subprocess.Popen(forward_command, stdin=subprocess.DEVNULL)
-                child.wait(timeout=budget())
+        writers = {
+            name: stack.enter_context(tempfile.NamedTemporaryFile(prefix=f"research-repo-tools-{name}-", buffering=0))
+            for name, markers in streams.items()
+            if markers
+        }
+        readers = {name: stack.enter_context(open_spool(Path(writer.name))) for name, writer in writers.items()}
+        child = stack.enter_context(subprocess.Popen(argv, cwd=cwd, env=env, stdout=writers.get("stdout"), stderr=writers.get("stderr")))
+        forwarders: dict[str, subprocess.Popen[bytes]] = {}
+        try:
+            for name, writer in writers.items():
+                forward_command = [
+                    sys.executable,
+                    "-I",
+                    "-S",
+                    str(Path(__file__).with_name("_stdout_forwarder.py")),
+                    writer.name,
+                    str(Path(directory) / name),
+                    "1" if name == "stdout" else "2",
+                ]
+                forwarders[name] = subprocess.Popen(forward_command, stdin=subprocess.DEVNULL)
+            child.wait(timeout=budget())
+            endpoints = {name: os.fstat(writer.fileno()).st_size for name, writer in writers.items()}
+            for name, endpoint in endpoints.items():
                 # Publish a fixed endpoint: output from any still-running
                 # descendant cannot prolong forwarding past the direct child.
-                endpoint = os.fstat(writer.fileno()).st_size
+                done = Path(directory) / name
                 pending_done = done.with_suffix(".tmp")
                 pending_done.write_bytes(str(endpoint).encode("ascii"))
                 pending_done.replace(done)
+            for forwarder in forwarders.values():
                 forwarder.wait(timeout=budget())
-                result = subprocess.CompletedProcess(argv, child.returncode)
-                if check:
-                    result.check_returncode()
+            result = subprocess.CompletedProcess(argv, child.returncode)
+            if check:
+                result.check_returncode()
+            for name, forwarder in forwarders.items():
                 if forwarder.returncode:
-                    raise OSError(f"live stdout forwarding failed with exit status {forwarder.returncode}")
-                if result.returncode == 0:
+                    raise OSError(f"live {name} forwarding failed with exit status {forwarder.returncode}")
+            if result.returncode == 0:
+                missing = []
+                for name, reader in readers.items():
+                    markers = streams[name]
+                    endpoint = endpoints[name]
                     remaining = set(markers)
                     overlap = max(map(len, markers)) - 1
                     tail = b""
@@ -257,24 +280,25 @@ def _run_with_stdout_markers(
                         budget()
                         chunk = reader.read(min(endpoint, 65536))
                         if not chunk:
-                            raise OSError("live stdout spool ended before its recorded endpoint")
+                            raise OSError(f"live {name} spool ended before its recorded endpoint")
                         endpoint -= len(chunk)
                         data = tail + chunk
                         remaining.difference_update(marker for marker in tuple(remaining) if marker in data)
                         tail = data[-overlap:] if overlap else b""
                     if remaining:
-                        raise ValueError(f"command is missing expected stdout markers: {sorted(remaining)!r}")
-            except subprocess.TimeoutExpired as error:
-                # Nested waits use the remaining budget; report the caller's
-                # original command and deadline, not the forwarding helper.
-                assert timeout is not None
-                raise subprocess.TimeoutExpired(argv, timeout) from error
-            finally:
-                for process in (child, forwarder):
-                    if process is not None:  # ty: ignore[redundant-condition-strict]  Interrupted process setup may leave no child.
-                        if process.poll() is None:
-                            process.kill()
-                        process.wait()
+                        missing.append(f"command is missing expected {name} markers: {sorted(remaining)!r}")
+                if missing:
+                    raise ValueError("\n".join(missing))
+        except subprocess.TimeoutExpired as error:
+            # Nested waits use the remaining budget; report the caller's
+            # original command and deadline, not the forwarding helper.
+            assert timeout is not None
+            raise subprocess.TimeoutExpired(argv, timeout) from error
+        finally:
+            for process in (child, *forwarders.values()):
+                if process.poll() is None:
+                    process.kill()
+                process.wait()
     return cast(subprocess.CompletedProcess[bytes], result)
 
 

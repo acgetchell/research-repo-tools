@@ -41,6 +41,9 @@ def add_commands(groups) -> None:
     commands = groups.add_parser("performance", help="compare timings and verify retained evidence").add_subparsers(dest="action", required=True)
     add_command(commands, "assets")
     add_command(commands, "baseline")
+    command_timing = commands.add_parser("command-time", help="acquire exploratory external-command wall timings, separate from Criterion")
+    command_timing.add_argument("configuration")
+    command_timing.add_argument("--output", required=True, help="absent root-relative JSON report path; existing reports are preserved")
     compare = commands.add_parser("compare", help="write deterministic comparison JSON from two Criterion sample trees")
     compare.add_argument("baseline")
     compare.add_argument("current")
@@ -100,6 +103,11 @@ def run(args: argparse.Namespace, settings: Config) -> int:
 
     if args.action in performance_workflows.COMMANDS:
         return performance_workflows.run(args, settings)
+    if args.action == "command-time":
+        from research_repo_tools.command_timing import publish_command_timing, summarize_commands
+
+        _write_stdout(summarize_commands(publish_command_timing(settings.root, args.configuration, args.output)).encode("utf-8"))
+        return 0
     if args.action == "discover":
         from research_repo_tools.criterion_inventory import discover_inventory, load_discovery, serialize_inventory
         from research_repo_tools.publication import _path

@@ -33,6 +33,7 @@ class _Policy:
     features: tuple[str, ...] = ()
     no_default_features: bool = False
     timeout: int = 300
+    expect_stderr: tuple[bytes, ...] = ()
 
     @property
     def overrides_features(self) -> bool:
@@ -123,16 +124,24 @@ def discover_examples(root: Path, *, package: str | None = None, timeout: int = 
 
 
 def _policy(value: object, timeout: int) -> _Policy:
-    table = _table(value, "example policy", set(), {"args", "expect", "features", "no-default-features", "timeout"})
+    table = _table(value, "example policy", set(), {"args", "expect", "expect-stderr", "features", "no-default-features", "timeout"})
     args = _literals(table.get("args", []), "example args", allow_empty=True)
     expected = _literals(table.get("expect", []), "example expected markers")
+    expected_stderr = _literals(table.get("expect-stderr", []), "example expected stderr markers")
     features = _names(table.get("features", []), "example features")
     if any(any(character.isspace() for character in feature) or "," in feature for feature in features):
         raise ValueError("declare each Cargo feature as a separate name")
     no_default = table.get("no-default-features", False)
     if type(no_default) is not bool:
         raise ValueError("no-default-features must be boolean")
-    return _Policy(args, tuple(item.encode("utf-8") for item in expected), features, no_default, _budget(table.get("timeout", timeout), "example timeout"))
+    return _Policy(
+        args,
+        tuple(item.encode("utf-8") for item in expected),
+        features,
+        no_default,
+        _budget(table.get("timeout", timeout), "example timeout"),
+        tuple(item.encode("utf-8") for item in expected_stderr),
+    )
 
 
 def _build(root: Path, examples: tuple[CargoExample, ...], profile: str, timeout: int, override: _Policy | None = None) -> dict[str, Path]:
@@ -213,7 +222,7 @@ def run_examples(root: Path, configuration: str) -> None:
     def execute(example: CargoExample, executable: Path) -> None:
         policy = policies.get(example.name, default)
         print(f"Running Cargo example {example.package}/{example.name}", file=sys.stderr, flush=True)
-        run_command_live(executable, policy.args, cwd=root, timeout=policy.timeout, stdout_markers=policy.expect)
+        run_command_live(executable, policy.args, cwd=root, timeout=policy.timeout, stdout_markers=policy.expect, stderr_markers=policy.expect_stderr)
 
     if ordinary:
         binaries = _build(root, ordinary, profile, build_timeout)
