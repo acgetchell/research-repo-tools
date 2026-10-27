@@ -1,9 +1,9 @@
 # Exploratory external-command timing
 
-The release containing #134 adds `performance command-time` and
-`research_repo_tools.command_timing`. Pin the verified published version before
-adoption. This format is separate from Criterion, schema-4 acquisition,
-complete-run/v3, release eligibility, and scientific comparability evidence.
+Pin a verified published version that provides `performance command-time` and
+`research_repo_tools.command_timing` before adoption. This format is separate
+from Criterion, schema-4 acquisition, complete-run/v3, release eligibility,
+and scientific comparability evidence.
 It does not feed their promotion or publication paths. Workload selection,
 throughput definitions, correctness assertions, and scientific interpretation
 remain consumer policy. No consumer workloads run during package validation.
@@ -136,7 +136,5 @@ Malformed declarations/reports, changed inputs and invalid observations raise
 failures/timeouts and OS errors retain the shared process exceptions. No package
 or consumer repository is built implicitly outside declared preflights.
 
-CDT adoption belongs separately to causal-triangulations #303 after verified
-v0.2.4 publication under research-repo-tools #146. Preserve its current script,
-workload arguments and interpretation until its published replacement is pinned
-and integration-verified. Stderr assertion adoption is separately owned by #301.
+Preserve the current consumer script, workload arguments and interpretation
+until its published replacement is pinned and integration-verified.

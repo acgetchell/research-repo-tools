@@ -119,8 +119,8 @@ expect-stderr = ["consumer-defined logger marker"]
 Omit `include` to run every discovered binary example. Ordinary examples build
 once with default features; feature overrides build and run separately. Copy
 your existing scientific stdout markers into per-example `expect` arrays unchanged.
-Preserve logger/stderr markers in `expect-stderr` after pinning the release
-containing #132; stdout and stderr assertions remain independent.
+Preserve logger/stderr markers in `expect-stderr` after pinning a verified
+published version that supports it; stdout and stderr assertions remain independent.
 The packaged `cargo-examples.toml` provides a scaffold.
 Add a thin consumer recipe and run `just examples`:
 
@@ -1419,8 +1419,8 @@ See the [API contracts](https://github.com/acgetchell/research-repo-tools/blob/m
 
 ### Exploratory command timing
 
-After verified publication of the release containing #134, pin that version and
-replace generic command-timing loops with a declaration. Keep workload arguments,
+Pin a verified published version with command-timing support before replacing
+generic timing loops with a declaration. Keep workload arguments,
 source selection and interpretation in the consumer. This harmless example
 measures a native tool's version command, including process startup:
 
@@ -1459,10 +1459,9 @@ identity and execution policy; the summary shows sample counts and minimum,
 median and maximum wall seconds. Existing outputs are rejected before execution.
 See the [timing contract](docs/command-timing-api.md) for failure, freshness,
 source-selection and measurement limits. These exploratory timings stay separate
-from Criterion and scientific release/comparability evidence. [CDT #303](https://github.com/acgetchell/causal-triangulations/issues/303) timing
-adoption and [CDT #301](https://github.com/acgetchell/causal-triangulations/issues/301)
-stderr adoption remain consumer work after verified v0.2.4 publication under
-[research-repo-tools #146](https://github.com/acgetchell/research-repo-tools/issues/146).
+from Criterion and scientific release/comparability evidence. Preserve the
+current consumer workflow, workload arguments and interpretation until its
+published replacement is pinned and integration-verified.
 
 ### Performance evidence
 
