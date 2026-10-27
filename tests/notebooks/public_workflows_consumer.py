@@ -31,6 +31,49 @@ class Consumer(unittest.TestCase):
 
 
 class TestLaunch(Consumer):
+    def test_selected_notebook_rejections_preserve_files_and_do_not_create_scratch(self):
+        selected = self.root / "selected.ipynb"
+        selected.write_bytes(b"original notebook\r\n")
+        for path in ("", "missing.ipynb", "../selected.ipynb", "notes/../selected.ipynb", str(self.root.parent / "outside.ipynb"), "--ServerApp.port=9999"):
+            with self.subTest(path=path), self.assertRaises(ValueError):
+                launch(parse({}, root=self.root), notebook=path)
+        self.assertEqual(selected.read_bytes(), b"original notebook\r\n")
+        self.assertFalse((self.root / "target").exists())
+        status, _out, err = self.run_cli("launch", "missing.ipynb")
+        self.assertEqual(status, 1)
+        self.assertIn("existing .ipynb file", err)
+
+    def test_selected_notebook_symlink_is_rejected_before_launch(self):
+        target = self.root.parent / (self.root.name + "-outside.ipynb")
+        target.write_bytes(b"outside notebook\r\n")
+        self.addCleanup(target.unlink)
+        alias = self.root / "alias.ipynb"
+        try:
+            alias.symlink_to(target)
+        except OSError as error:
+            self.skipTest(f"native symlink privilege unavailable: {error}")
+        spelling = alias.readlink()
+        with self.assertRaisesRegex(ValueError, "symlink or junction"):
+            launch(parse({}, root=self.root), notebook=alias)
+        self.assertTrue(alias.is_symlink())
+        self.assertEqual(alias.readlink(), spelling)
+        self.assertTrue(alias.samefile(target))
+        self.assertEqual(target.read_bytes(), b"outside notebook\r\n")
+        self.assertFalse((self.root / "target").exists())
+
+    def test_selected_notebook_hard_link_cannot_alias_an_outside_file(self):
+        target = self.root.parent / (self.root.name + "-outside.ipynb")
+        target.write_bytes(b"outside notebook\r\n")
+        self.addCleanup(target.unlink)
+        alias = self.root / "alias.ipynb"
+        alias.hardlink_to(target)
+        self.assertTrue(alias.samefile(target))
+        with self.assertRaisesRegex(ValueError, "hard-link aliases"):
+            launch(parse({}, root=self.root), notebook=alias)
+        self.assertEqual(target.read_bytes(), b"outside notebook\r\n")
+        self.assertTrue(alias.samefile(target))
+        self.assertFalse((self.root / "target").exists())
+
     def test_windows_reserved_scratch_names_fail_before_sync(self):
         if os.name != "nt":
             self.skipTest("native Windows path validation")
@@ -100,6 +143,10 @@ class TestLaunch(Consumer):
         run_command("uv", ["lock", "--managed-python"], cwd=self.root, env=env)
         run_command("uv", ["sync", "--locked", "--managed-python", "--group", "analysis"], cwd=self.root, env=env)
         original_lock = (self.root / "uv.lock").read_bytes()
+        selected = self.root / "notebooks/analysis 分析 #%.ipynb"
+        selected.parent.mkdir()
+        selected.write_bytes(b"original notebook\r\n")
+        selection_argument = "--ServerApp.default_url=/lab/tree/notebooks/analysis%20%E5%88%86%E6%9E%90%20%23%25.ipynb"
         with patch.dict(os.environ, {**env, "UV_PROJECT": "/unrelated-project", "IPYTHONDIR": "parent-ipython"}, clear=True):
             before = dict(os.environ)
             self.assertEqual(launch(load(root=self.root)), 0)
@@ -113,11 +160,17 @@ class TestLaunch(Consumer):
                 self.assertTrue(Path(directory).is_relative_to(self.root / "scratch with spaces"))
                 self.assertFalse(Path(directory).exists())
             self.assertEqual((self.root / "uv.lock").read_bytes(), original_lock)
+            self.assertFalse(any(arg.startswith("--ServerApp.default_url=") for arg in observed["args"]))
+            self.assertEqual(launch(load(root=self.root), notebook=selected), 0)
+            observed = json.loads((self.root / "launch-report.json").read_text(encoding="utf-8"))
+            self.assertIn(selection_argument, observed["args"])
             with patch.dict(os.environ, {"RRT_LAB_EXIT": "7"}):
-                status, _out, err = self.run_cli("launch", "--no-browser")
+                status, _out, err = self.run_cli("launch", str(selected.relative_to(self.root)), "--no-browser")
             self.assertEqual((status, err), (7, ""))
             observed = json.loads((self.root / "launch-report.json").read_text(encoding="utf-8"))
             self.assertIn("--ServerApp.open_browser=False", observed["args"])
+            self.assertIn(selection_argument, observed["args"])
+            self.assertEqual(selected.read_bytes(), b"original notebook\r\n")
         self.assertEqual(list((self.root / "scratch with spaces").iterdir()), [])
 
 

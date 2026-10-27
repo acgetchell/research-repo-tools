@@ -9,6 +9,7 @@ import tempfile
 from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
+from urllib.parse import quote
 
 from research_repo_tools.config import Config
 from research_repo_tools.files import _paths_alias, _validate_distinct_paths
@@ -71,12 +72,14 @@ def _protected(settings: Config) -> tuple[Path, ...]:
     )
 
 
-def launch(settings: Config, *, browser: bool | None = None, scratch_dir: str | None = None) -> int:
+def launch(settings: Config, *, notebook: str | Path | None = None, browser: bool | None = None, scratch_dir: str | None = None) -> int:
     """Stream JupyterLab from uv's locked managed project environment until exit.
 
     Consumers declare JupyterLab in their notebook group and synchronize their
     project kernel. All session caches live in a private temporary directory
-    beneath scratch_dir; the caller's process environment is preserved.
+    beneath scratch_dir; the caller's process environment is preserved. An
+    optional notebook is a literal consumer-root-relative (or absolute) file
+    inside notebooks.cwd, opened using an encoded JupyterLab tree URL.
     """
     if browser is not None and type(browser) is not bool:
         raise ValueError("notebook browser policy must be a boolean")
@@ -91,6 +94,18 @@ def launch(settings: Config, *, browser: bool | None = None, scratch_dir: str | 
     working = settings.path(options.cwd).resolve()
     if not working.is_dir() or not working.is_relative_to(settings.root):
         raise ValueError(f"notebook working directory must exist inside the consumer root: {working}")
+    selection = []
+    if notebook is not None:
+        if os.fspath(notebook).startswith("-"):
+            raise ValueError(f"notebook selection must be a literal file path: {notebook!r}")
+        path = _safe_path(settings.root, notebook)
+        if path.suffix.lower() != ".ipynb" or not path.is_file():
+            raise ValueError(f"selected notebook must be an existing .ipynb file: {path}")
+        if path.stat().st_nlink != 1:
+            raise ValueError(f"selected notebook must not have hard-link aliases: {path}")
+        if not path.is_relative_to(working):
+            raise ValueError(f"selected notebook must be inside the notebook working directory: {path}")
+        selection = [f"--ServerApp.default_url=/lab/tree/{quote(path.relative_to(working).as_posix(), safe='/')}"]
     managed = runtime(settings)
     env = managed.project_environment()
     env.pop("PYTHONHOME", None)
@@ -129,6 +144,7 @@ def launch(settings: Config, *, browser: bool | None = None, scratch_dir: str | 
                     f"--ServerApp.open_browser={open_browser}",
                     f"--ServerApp.root_dir={working}",
                     f"--MappingKernelManager.default_kernel_name={KERNEL}",
+                    *selection,
                 ],
                 cwd=working,
                 env=env,

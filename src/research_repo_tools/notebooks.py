@@ -1,5 +1,7 @@
 """Optional notebook structure, environment, and fresh-kernel execution contract."""
 
+import asyncio
+import atexit
 import hashlib
 import json
 import math
@@ -9,6 +11,7 @@ import sys
 import tempfile
 import tomllib
 from collections.abc import Mapping
+from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass
 from importlib import import_module
 from importlib.metadata import version
@@ -236,6 +239,32 @@ def sync(settings: Config) -> None:
 
 
 def _execute(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str], progress: list[int]) -> None:
+    # Own a loop without reading/replacing the process-wide asyncio policy or
+    # caller's current loop. PyZMQ needs socket readers on Windows. The local
+    # Jupyter provisioner starts the kernel via Popen, not asyncio subprocesses.
+    # A worker also supports synchronous callers already running an event loop
+    # and keeps nbclient's signal registration away from the main thread.
+    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="notebook-execution") as worker:
+        runner = asyncio.Runner(loop_factory=asyncio.SelectorEventLoop)
+        loop = runner.get_loop()
+        task = loop.create_task(_execute_async(node, cwd=cwd, timeout=timeout, env=env, progress=progress))
+
+        def run():
+            with runner:
+                runner.run(task)
+
+        try:
+            result = worker.submit(run)
+            result.result()
+        except BaseException:
+            if not task.done():
+                loop.call_soon_threadsafe(task.cancel)
+            # The executor waits for kernel cleanup and loop shutdown in the
+            # worker, including when the caller interrupts execution.
+            raise
+
+
+async def _execute_async(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str], progress: list[int]) -> None:
     nbclient = dependency("nbclient")
     kernelspec = dependency("jupyter_client.kernelspec")
     manager = dependency("jupyter_client.manager")
@@ -278,7 +307,15 @@ def _execute(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str]
         on_cell_start=starting,
     )
     # A caller-supplied manager requires explicit cleanup ownership.
-    client.execute(cwd=str(cwd), env=env, cleanup_kc=True)
+    try:
+        await client.async_execute(cwd=str(cwd), env=env, cleanup_kc=True)
+    finally:
+        # nbclient registers an atexit fallback before startup, but its context
+        # cleanup begins only after startup completes. Close partial startup in
+        # this same loop too; never leave a callback targeting a closed loop.
+        atexit.unregister(client._cleanup_kernel)
+        if client.km is not None:
+            await client._async_cleanup_kernel()
 
 
 def execute(settings: Config, paths: list[Path], *, cwd: str | None = None, output_dir: str | None = None, timeout: int | None = None) -> int:

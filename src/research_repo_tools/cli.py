@@ -101,6 +101,7 @@ def parser() -> argparse.ArgumentParser:
         if action == "advise":
             command.add_argument("--strict", action="store_true", help="fail on advisory warnings as well as errors")
         if action == "launch":
+            command.add_argument("notebook", nargs="?", help="literal .ipynb path relative to the consumer root; must be inside notebooks.cwd")
             command.add_argument("--browser", action=argparse.BooleanOptionalAction, default=None, help="open a browser (default: configured policy, false)")
             command.add_argument("--scratch-dir", help="consumer-relative directory for private Jupyter/IPython/Matplotlib state")
         if action == "lint":
@@ -401,7 +402,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         if args.action == "launch":
             from research_repo_tools.notebook_workflows import launch
 
-            return launch(settings, browser=args.browser, scratch_dir=args.scratch_dir)
+            return launch(settings, notebook=args.notebook, browser=args.browser, scratch_dir=args.scratch_dir)
         if args.action == "reset":
             from research_repo_tools.notebook_workflows import reset
 

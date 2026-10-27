@@ -73,7 +73,7 @@ notebook-execute +files:
 notebook-inspect +files:
     uv run --locked --only-group tooling --inexact research-repo-tools notebooks inspect "$@"
 
-# Launch configured JupyterLab with private session caches and explicit browser policy.
+# Launch JupyterLab, optionally opening one notebook, with private session caches.
 notebook-launch *args:
     uv run --locked --managed-python --only-group tooling --inexact research-repo-tools notebooks launch "$@"
 

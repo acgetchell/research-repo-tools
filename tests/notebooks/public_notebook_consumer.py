@@ -416,6 +416,58 @@ class TestIdPattern(Consumer):
 
 
 class TestInstallPolicy(Consumer):
+    def test_literal_wrappers_and_option_values_retain_diagnostics_and_readonly_commands(self):
+        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.15"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
+        installing = [
+            "!python -m uv sync",
+            "!python -m uv pip install never-executed",
+            "!uv run pip install never-executed",
+            "!python -I -m pip install never-executed",
+            "!python -Im pip install never-executed",
+            "!python -Impip install never-executed",
+            "!python -P -m pip install never-executed",
+            "!python -Pmpip install never-executed",
+            "!uv run -m pip install never-executed",
+            "!uv run --module --no-sync uv pip install never-executed",
+            "%pip --log info install never-executed",
+            "!python3.15 -W ignore -X utf8 -m uv run --python 3.15 python -m pip install never-executed",
+            r'!"C:\Program Files\Python\python.exe" -I -m uv pip install never-executed',
+            "!py -3.15 -m pip install never-executed",
+            "%%bash\npython -m uv pip install never-executed",
+            "import subprocess\nsubprocess.run(['python', '-I', '-m', 'uv', '--directory', 'info', 'pip', 'install', 'never-executed'])",
+        ]
+        original = self.write([code(source, f"wrapper-{index}") for index, source in enumerate(installing, 1)])
+        status, _out, err = self.run_cli("lint")
+        self.assertEqual(status, 1, err)
+        self.assertEqual(err.count("dependency-install"), len(installing), err)
+        for index, source in enumerate(installing, 1):
+            self.assertIn(f"cell {index} (wrapper-{index}):{len(source.splitlines())}:1: dependency-install", err)
+        self.assertEqual(self.path.read_bytes(), original)
+
+        readonly = [
+            "!pip list",
+            "!python -m uv pip list",
+            "!python -Im pip list",
+            "!python -Impip show install",
+            "!python -P -m pip list",
+            "!python -Pmpip show install",
+            "!uv run -m pip list",
+            "!uv run --module uv pip list",
+            "!uv run --directory -m echo pip install never-executed",
+            "!uv run -- --module pip install never-executed",
+            "%pip --log install list",
+            "%pip --log info show install",
+            "!uv --directory install pip list",
+            "!uv run --with install python -c 'print(1)'",
+            "!uv run pip show install",
+            '# !python -m uv sync\nmessage = "!python -m uv pip install never-executed"',
+        ]
+        original = self.write([code(source, f"readonly-{index}") for index, source in enumerate(readonly, 1)])
+        status, _out, err = self.run_cli("lint")
+        self.assertEqual(status, 0, err)
+        self.assertNotIn("dependency-install", err)
+        self.assertEqual(self.path.read_bytes(), original)
+
     def test_unicode_string_separators_preserve_installed_policy_line_numbers(self):
         (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.15"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
         for separator in ("\f", "\x85", "\u2028", "\u2029"):

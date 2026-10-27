@@ -62,7 +62,8 @@ jobs:
           - os: windows-2025
             test-recipe: test
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
+    # Include native tool installation after the full source and distribution checks.
+    timeout-minutes: 90
     env:
       PYTHONUTF8: "1"
     steps:
