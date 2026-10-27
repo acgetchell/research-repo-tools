@@ -38,7 +38,7 @@ FIELDS = {
         "counts",
     },
     "release": {"date-policy", "final-changelog", "required-files", "exclude", "rules", "tag-policy"},
-    "changelog": {"formatter", "cliff-config", "owner", "repository", "dependency-bodies"},
+    "changelog": {"formatter", "cliff-config", "owner", "repository", "dependency-bodies", "date-source", "citation"},
     "publishing": {"registry", "package", "repository", "required-checks", "required-assets", "reuse"},
     "zizmor": {"persona", "timeout"},
 }
@@ -178,8 +178,15 @@ class ChangelogSettings:
     owner: str | None = None
     repository: str | None = None
     dependency_bodies: Literal["concise", "preserve"] = "concise"
+    date_source: Literal["explicit", "citation"] = "explicit"
+    citation: str = "CITATION.cff"
 
     def __post_init__(self) -> None:
+        if self.date_source not in ("explicit", "citation"):
+            raise ValueError("changelog.date-source must be explicit or citation")
+        from research_repo_tools.release_policy import relative_path
+
+        relative_path(self.citation)
         if not isinstance(self.dependency_bodies, str) or self.dependency_bodies not in {"concise", "preserve"}:
             raise ValueError("changelog.dependency-bodies must be concise or preserve")
         if self.cliff_config is not None and self.dependency_bodies != "concise":
@@ -502,6 +509,8 @@ def parse(value: object, *, root: Path) -> Config:
             owner=_optional_string(changelog, "owner", "changelog"),
             repository=_optional_string(changelog, "repository", "changelog"),
             dependency_bodies=cast(Literal["concise", "preserve"], changelog.get("dependency-bodies", "concise")),
+            date_source=cast(Literal["explicit", "citation"], changelog.get("date-source", "explicit")),
+            citation=_string(changelog.get("citation", "CITATION.cff"), "changelog.citation"),
         ),
         publishing=parse_publishing(_section(data, "publishing")) if "publishing" in data else None,
         notebooks=NotebookSettings(

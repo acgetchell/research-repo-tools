@@ -313,3 +313,47 @@ Verify the exact published supplying release and normal wheel/sdist resolution
 before removing their working adapters. Keep scientific selections, count policy,
 fixture validation and interpretation in consumers. A local implementation or
 merged PR is not publication or downstream acceptance.
+
+## Release interface reconciliation
+
+Use the same recipe names and meanings in every consumer. The shared replacement
+must be present in a verified published v0.2.4 (or later supplying release),
+pinned exactly and tested through the consumer's lock before deleting working
+adapters. Publication is tracked in #146; adoption remains separate in Delaunay
+#653, la-stack #304, MCMC #216/#209 and CDT #302. Do not patch site-packages or
+switch consumers to sibling source checkouts as a permanent replacement.
+
+| Existing consumer plumbing | Installed replacement | Retained consumer responsibility |
+| --- | --- | --- |
+| la-stack `tooling/release_evidence.py` and Delaunay `tooling/python/release_artifacts.py` | `release-evidence create/verify`, `release-evidence.toml`, `release_evidence` and `release_interfaces` | Actual workflow native/feature/Cargo gates, signing/upload steps, Cargo reproduction commands, approval/OIDC and release event/ref policy |
+| Delaunay `tooling/python/release_benchmarks.py` | `release-assets preflight/verify/upload`, `release-assets.toml`, captured target JSON and explicit `--checkout` | Scientific baseline production, expected asset filename, dispatch policy and trusted runtime/handoff storage |
+| Consumer `release_changelog.py` adapters | `changelog-release TAG [DATE]`, configured citation date authority | Metadata preparation and reviewed date choice |
+| la-stack `tooling/release_performance.py` | `performance-prepare`, `performance-release`, `performance-readme` with one workflow declaration | Measurement selection/scientific policy, source/harness inventories and document views |
+| CDT report-state Bash classifier | `performance promote CONFIG --check` with declared initialization directories/guards | Complete local inventory declaration and publication-plan guard |
+
+The shared foundation owns strict JSON/pagination, immutable run/attempt/job and
+artifact binding, bounded archive/signature verification, captured release IDs
+and exact-byte attachment retries. The configured CLI additionally observes
+checkout/package identity, checks executing producer context, saves immutable
+approval records and exports Actions identity transactionally through
+`ci.export_environment`. This replaces generic orchestration as well as names.
+Signed source validation does not establish Cargo archive identity. Cargo archive
+verification/reproduction does not prove the bytes a later native Cargo publish
+will repackage. Keep both policies explicit.
+
+Delaunay's former blanket rejection of existing baselines is deliberately
+superseded by the common identical-byte retry policy: provider metadata and
+freshly downloaded bytes must match; conflicting or incomplete assets fail
+without overwrite. Revalidate the original target and frozen CI selection after
+approval and before publication credentials. Never derive expected commits from
+the evidence being verified or pass them through recipe stdout.
+
+Place declarations under `tooling/`, retained reports under declared `docs/`
+paths, and temporary assertions/raw acquisition under ignored scratch storage.
+Keep any genuinely domain-specific Python under `tooling/` with capability names.
+During adoption update the actual recipe/workflow calls, imports, type-check
+inventory, runtime assembly, tests and release guide together. The installed
+runtime and trusted policy must survive source-checkout changes; do not copy
+superseded consumer evidence helpers into credential-bearing runtime bundles.
+Upstream owns generic malformed/stale/rollback/provider fixtures. Consumers keep
+focused installed wiring tests plus their complete scientific/native workloads.

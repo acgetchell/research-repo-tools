@@ -345,6 +345,7 @@ class PublicationPlan:
     git_checks: tuple[GitCheck, ...]
     glob_checks: tuple[GlobCheck, ...] = ()
     run_checks: tuple[RunSelectionCheck, ...] = ()
+    preparation_checks: tuple[str, ...] = ()
 
     @property
     def changed_paths(self) -> tuple[Path, ...]:
@@ -473,6 +474,10 @@ def _verify_plan(plan: PublicationPlan) -> None:
 
         if run_identity(load_latest_run(plan.root, check.archive)) != check.identity:
             raise ValueError("retained run selection changed after planning")
+    for name in plan.preparation_checks:
+        from research_repo_tools.performance_release import parse_preparation
+
+        parse_preparation(_path(plan.root, name).read_bytes()).verify(plan.root)
     available = {name: data for name, data in plan.originals if data is not None} | dict(plan.outputs)
     for check in plan.git_checks:
         missing = set(check.paths) - available.keys()

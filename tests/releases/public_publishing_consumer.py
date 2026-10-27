@@ -418,6 +418,18 @@ class TestPublishingConsumer(unittest.TestCase):
         self.assertIn("fn value<T>() -> Result<T, E>;", result)
         self.assertEqual((self.root / "CHANGELOG.md").read_bytes(), before)
 
+        # Repeat with the citation-owned default through the same real generator.
+        policy = self.root / "research.toml"
+        policy.write_bytes(policy.read_bytes() + b'date-source="citation"\n')
+        citation = self.root / "CITATION.cff"
+        citation.write_bytes(b"version: 1.2.3\r\ndate-released: '2026-09-01'\r\n")
+        snapshot = {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
+        with patch("research_repo_tools.changelog.run_safe_command", generate), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(args[:-2]), 0)
+            self.assertEqual(cli.main(args[:-2]), 0)
+            self.assertEqual(cli.main([*args[:-2], "--dry-run"]), 0)
+        self.assertEqual({path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}, snapshot)
+
     def test_managed_cargo_home_preserves_oidc_token_and_failed_publish_status(self):
         plan = toolchain_config.Toolchain(self.root, "0.12.23", "3.14", toolchain_config.RustToolchain("1.98.0", (), (), "minimal"), ())
         runtime = toolchain.Runtime(plan)

@@ -1,7 +1,6 @@
 """Immutable complete-run history and validated latest selection."""
 
 import re
-import tomllib
 from pathlib import Path
 from typing import Literal
 
@@ -9,8 +8,8 @@ from research_repo_tools.complete_runs import _render_run_v1, render_run, run_id
 from research_repo_tools.evidence import Evidence, _load_json, _object, _string, deterministic_json, parse_evidence, serialize_evidence
 from research_repo_tools.files import _validate_distinct_paths
 from research_repo_tools.publication import PublicationPlan, _path, _publication_name, plan_outputs
-from research_repo_tools.publication_config import _table
 from research_repo_tools.release_pairs import ReleasePair
+from research_repo_tools.report_inventory import report_configuration
 
 __all__ = ["load_latest_run", "load_run_report_plan"]
 
@@ -137,8 +136,7 @@ def load_run_report_plan(root: Path, configuration: str, *, payload: str | None 
     missing. Omit both paths to use the validated latest pointer after scratch cleanup.
     """
     root = root.resolve(strict=True)
-    config_bytes = _path(root, configuration).read_bytes()
-    raw = _table(tomllib.loads(config_bytes.decode("utf-8")), "complete report", {"schema", "current", "archive", "title"}, {"measurement", "release"})
+    config_bytes, raw = report_configuration(root, configuration)
     if type(raw["schema"]) is not int or raw["schema"] != 2:
         raise ValueError("complete report schema must be integer 2")
     current, archive, title = (_string(raw[key], key) for key in ("current", "archive", "title"))

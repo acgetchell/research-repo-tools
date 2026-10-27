@@ -24,6 +24,9 @@ schema = 1
 # Changelog archives always live in docs/archives/changelog/.
 owner = "__OWNER__"
 repository = "__REPOSITORY__"
+# Consume the date chosen by release metadata preparation for tagged generation.
+date-source = "citation"
+citation = "CITATION.cff"
 # Optional final lint/format gate using this repository's rules:
 # formatter = "rumdl.toml"
 # Optional custom git-cliff policy instead of the packaged template:

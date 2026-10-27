@@ -156,7 +156,6 @@ The consumer template provides:
 - `just changelog`: run the shared generator with the checked managed git-cliff.
 - `just clean`: preview obsolete package-owned installations; pass `--apply` to remove them.
 - `just help`: list all available commands and arguments in lexicographic order.
-- `just help-workflows`: alias for `help`.
 - `just setup`: synchronize declared tools and then the default Python environment.
 - `just tools-check`: inspect without syncing the environment or downloading Python.
 - `just tools-sync-binaries`: verify and repair pinned release binaries without package synchronization.
@@ -166,7 +165,6 @@ The consumer template provides:
 - `just update-cargo-tools`: upgrade declared Cargo tools and publish verified TOML pins.
 - `just update-dependencies`: run the Cargo and Python dependency workflows.
 - `just update-python-dependencies`: update main dev pins, then upgrade locks and sync the main and declared independent Python projects.
-- `just update-python-deps`: alias for `update-python-dependencies`.
 - `just update-tools`: upgrade uv and declared tools without shell/bootstrap setup.
 - `just update-uv`: upgrade uv through its installation owner and reconcile its pin.
 - `just workflow-allowlist-check`: check external workflow/composite references against strict consumer selected-actions policy.

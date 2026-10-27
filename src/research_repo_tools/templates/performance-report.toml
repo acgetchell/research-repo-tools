@@ -3,3 +3,10 @@ current = "docs/PERFORMANCE.md"
 archive = "docs/archive/performance"
 title = "Benchmark timings"
 # prose-file = "docs/performance-interpretation.md"
+
+# Explicit first-use state: every archive entry and these outputs must be absent.
+# Put companion plans outside the output directories. No file suffix is ignored.
+# [initialization]
+# allow-empty = true
+# directories = ["scratch/performance", "docs/assets/performance"]
+# guards = ["tooling/performance-publication.toml"]

@@ -2343,7 +2343,7 @@ class TestHeterogeneousConsumer(unittest.TestCase):
                 ),
                 retained_fixture().sources,
             )
-            with patch("research_repo_tools.performance_workflows.measure_pair", return_value=retained) as measure:
+            with patch("research_repo_tools.performance_acquisition.measure_pair", return_value=retained) as measure:
                 self.assertEqual(
                     main(
                         [

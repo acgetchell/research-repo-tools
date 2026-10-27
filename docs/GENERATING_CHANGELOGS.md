@@ -19,16 +19,38 @@ Run `just help` for the complete command list and arguments.
 | `just changelog-archive` | Archive existing notes without regenerating Git history |
 | `just changelog-check` | Validate the whole root changelog and all archives without writing |
 | `just changelog-preview` | Validate all candidate files and print the resulting root changelog without writing |
-| `just changelog-release TAG DATE` | Generate and archive a prospective release with an explicit ISO date |
-| `just changelog-unreleased TAG DATE` | Alias for `changelog-release` |
+| `just changelog-release TAG [DATE]` | Generate and archive with a citation-owned or explicit ISO date |
 | `just release-notes TAG` | Print notes from the root file or an archive |
 | `just release-tag TAG` | Create a local annotated tag from validated release notes |
 | `just release-tag-preview TAG` | Inspect the annotation without changing Git state |
 
 For a prospective-release preview, use
 `just changelog-preview --tag v1.2.0 --date YYYY-MM-DD`.
-Both release-generation names require the chosen date; they do not silently use
-the current date or update other release metadata. Generation never creates tags.
+Set `changelog.date-source = "citation"` (as in the packaged consumer template)
+to use the matching prepared citation date when DATE is omitted. The optional
+`changelog.citation` path defaults to `CITATION.cff`. Then both
+`just changelog-release "$TAG"` and `just changelog-preview --tag "$TAG"`
+consume the same date. Without that setting the default remains `"explicit"`.
+Neither mode uses today's date or updates metadata. Generation never creates tags.
+
+Citation lookup requires exactly one top-level scalar `version` matching the tag
+and one nonempty `date-released` in valid calendar `YYYY-MM-DD` form. Quoted and
+unquoted dates, including leap days, work. Duplicate, missing, malformed, empty,
+nonscalar and mismatched data fail before invoking the generator. Explicit dates
+bypass citation lookup; untagged history never consults it. `changelog.resolve_date`
+is the public API shared by generation and preview. Existing declared changelog
+and archive dates still reject conflicts.
+
+An explicit troubleshooting override remains available:
+
+```sh
+RELEASE_DATE="$(date -u +%F)"
+just changelog-release "$TAG" "$RELEASE_DATE"
+```
+
+Here `date -u` deliberately chooses today's UTC date. The maintainer must ensure
+it agrees with prepared citation metadata; an explicit override does not perform
+citation lookup or rewrite that metadata.
 Standalone `research-repo-tools changelog generate` runs the same complete workflow.
 
 ## Generation and normalization
@@ -38,8 +60,8 @@ changelog, small just wrappers, consumer TOML, and optional rumdl rules.
 Generation uses the packaged git-cliff template unless the consumer explicitly
 sets `changelog.cliff-config`. Owner and repository identify links; they do not
 select a policy profile. Generation is offline and disables template commands.
-A prospective tag requires an explicit ISO date, keeping output independent
-of an accidental wall-clock date.
+A prospective tag requires an explicit ISO date or a configured citation-owned
+date, keeping output independent of an accidental wall-clock date.
 For existing releases, dated headings in the root changelog and retained archives
 are authoritative: regeneration preserves them over Git-derived dates. Conflicting
 declared dates, or a prospective date that disagrees with an existing declaration,

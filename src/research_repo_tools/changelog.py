@@ -32,12 +32,15 @@ TEMPLATES = (
     "criterion-saved.toml",
     "examples.toml",
     "justfile",
+    "performance-release.toml",
     "performance-report.toml",
     "profiling.toml",
     "publish-crates.yml",
     "publishing.toml",
     "python-bootstrap.py",
     "python-validation.toml",
+    "release-assets.toml",
+    "release-evidence.toml",
     "research-repo-tools.toml",
     "rumdl.toml",
     "zizmor.yml",
@@ -111,11 +114,66 @@ def _preserve_declared_dates(text: str, dates: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+def resolve_date(config: Config, *, tag: str | None = None, released: str | None = None) -> str | None:
+    """Resolve an explicit date or the configured matching prepared citation date.
+
+    Untagged history never consults citation metadata. Explicit dates bypass
+    citation lookup; neither path consults the clock or updates metadata.
+    """
+    if tag is None:
+        if released is not None:
+            raise ValueError("prospective changelog generation requires both --tag and --date")
+        return None
+    validate_semver(tag)
+    if released is None:
+        if config.changelog.date_source != "citation":
+            raise ValueError("prospective changelog generation requires both --tag and --date, or changelog.date-source = 'citation'")
+        import yaml
+        from yaml.nodes import MappingNode, ScalarNode
+
+        from research_repo_tools.publication import _path
+
+        path = _path(config.root, config.changelog.citation)
+        try:
+            document = yaml.compose(path.read_bytes().decode("utf-8"), Loader=yaml.SafeLoader)
+            if not isinstance(document, MappingNode):
+                raise ValueError("expected a top-level YAML mapping")
+            fields = {}
+            for key, value in document.value:
+                if not isinstance(key, ScalarNode) or key.tag != "tag:yaml.org,2002:str" or key.value in fields or key.value == "<<":
+                    raise ValueError("duplicate, merge, or nonscalar top-level field")
+                fields[key.value] = value
+            values: dict[str, str] = {}
+            for name in ("version", "date-released"):
+                value = fields.get(name)
+                tags = {"tag:yaml.org,2002:str"} | ({"tag:yaml.org,2002:timestamp"} if name == "date-released" else set())
+                if (
+                    not isinstance(value, ScalarNode)
+                    or value.tag not in tags
+                    or not isinstance(value.value, str)
+                    or not value.value
+                    or value.style in ("|", ">")
+                ):
+                    raise ValueError(f"{name} requires one nonempty scalar")
+                values[name] = value.value
+            if values["version"] != tag.removeprefix("v"):
+                raise ValueError(f"citation version must match {tag}")
+            released = values["date-released"]
+        except (OSError, UnicodeError, ValueError, yaml.YAMLError, RecursionError) as error:
+            raise ValueError(f"prepare matching citation metadata in {path} before generation: {error}") from error
+    try:
+        if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", released) is None or date.fromisoformat(released).isoformat() != released:
+            raise ValueError("noncanonical date")
+    except (TypeError, ValueError) as error:
+        raise ValueError("release date must be a valid YYYY-MM-DD calendar date; prepare citation metadata or supply --date") from error
+    return released
+
+
 def generate(config: Config, *, tag: str | None = None, released: str | None = None, dry_run: bool = False) -> str:
     """Generate, normalize, and rotate history, then publish with recoverable rollback.
 
-    git-cliff runs offline. A prospective release requires an explicit date; it
-    does not acquire an accidental release date from this machine's wall clock.
+    git-cliff runs offline. Prospective dates are explicit or citation-owned;
+    generation never acquires a date from this machine's wall clock.
     Dry runs validate every candidate and return the trimmed root changelog
     without creating directories or replacing root/archive files.
     """
@@ -124,13 +182,10 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
     if path.is_symlink():
         raise ValueError(f"Changelog output must not be a symlink: {path}")
     dates = _declared_dates(path, archives)
-    if bool(tag) != bool(released):
-        raise ValueError("prospective changelog generation requires both --tag and --date")
+    released = resolve_date(config, tag=tag, released=released)
     if tag:
         validate_semver(tag)
         assert released is not None
-        if date.fromisoformat(released).isoformat() != released:
-            raise ValueError("release date must be YYYY-MM-DD")
         if tag.removeprefix("v") in dates and dates[tag.removeprefix("v")] != released:
             raise ValueError(f"prospective date conflicts with declared date for {tag}")
     if section.cliff_config is not None:

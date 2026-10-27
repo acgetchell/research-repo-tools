@@ -1,12 +1,15 @@
 """Installed evidence contracts using inert provider data and real archive bytes."""
 
+import contextlib
 import copy
 import gzip
 import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
+import sys
 import tarfile
 import tempfile
 import unittest
@@ -17,9 +20,12 @@ from pathlib import Path
 from typing import override
 from unittest.mock import patch
 
+from research_repo_tools import cli
+from research_repo_tools.changelog import template
 from research_repo_tools.process import run_git_bytes
 from research_repo_tools.release_assets import require_release_checkout
 from research_repo_tools.release_evidence import EvidencePolicy, create_evidence_manifest, verify_cargo_archive, verify_release_evidence
+from research_repo_tools.release_interfaces import load_evidence_policy, write_release_outputs
 from research_repo_tools.release_validation import ValidationPolicy, parse_release_json, read_pages, redact_release_diagnostic, verify_attestation
 
 COMMIT = "a" * 40
@@ -37,6 +43,47 @@ CARGO = EvidencePolicy(VALIDATION, "sample", "cargo-package", "cargo-archive")
 
 def encode(value):
     return (json.dumps(value, sort_keys=True) + "\n").encode("utf-8")
+
+
+def interface_policy(root, policy=SOURCE):
+    text = (
+        "\n".join(
+            f"{key} = {json.dumps(value)}"
+            for key, value in {
+                "schema": 1,
+                "repository": policy.validation.repository,
+                "package": policy.package,
+                "workflow": policy.validation.workflow,
+                "workflow-name": policy.validation.workflow_name,
+                "artifact-prefix": policy.artifact_prefix,
+                "guarantee": policy.guarantee,
+            }.items()
+        )
+        + "\n"
+    )
+    for name, steps in policy.validation.required_steps:
+        text += f"\n[[jobs]]\nname={json.dumps(name)}\nsteps={json.dumps(steps)}\n"
+        labels = dict(policy.validation.runner_labels).get(name)
+        if labels:
+            text += f"runner-labels={json.dumps(labels)}\n"
+    if policy.signing_job:
+        name, steps = policy.signing_job
+        text += f"\n[signing-job]\nname={json.dumps(name)}\nsteps={json.dumps(steps)}\n"
+    path = root / "evidence.toml"
+    path.write_text(text, encoding="utf-8", newline="\n")
+    return path
+
+
+def interface_fixture(root, arguments):
+    """Native child entrypoint: real CLI/Just/files, inert provider and checkout."""
+    provider = Provider(SOURCE)
+    provider.retain(create_evidence_manifest(SOURCE, "1.2.3", COMMIT, 123, 2, provider.read))
+    with (
+        patch("research_repo_tools.release_interfaces.api", side_effect=lambda endpoint, **kwargs: provider.read(endpoint)),
+        patch("research_repo_tools.release_interfaces.require_release_checkout"),
+        patch("research_repo_tools.release_validation.subprocess.run", provider.execute),
+    ):
+        return cli.main(["--root", str(root), *arguments])
 
 
 def crate(*, extra=None, vcs=None, manifest=None, kind=tarfile.REGTYPE):
@@ -120,7 +167,10 @@ class Provider:
         stream = io.BytesIO()
         with zipfile.ZipFile(stream, "w") as archive:
             for name, payload in self.files.items():
-                archive.writestr(name, payload)
+                # These model one immutable artifact across child processes.
+                # ZIP wall-clock timestamps would change its digest between
+                # normal/quiet runs, especially with coverage instrumentation.
+                archive.writestr(zipfile.ZipInfo(name, date_time=(2000, 1, 1, 0, 0, 0)), payload)
         self.payload = stream.getvalue()
         self.artifact.update(digest="sha256:" + hashlib.sha256(self.payload).hexdigest(), size_in_bytes=len(self.payload))
 
@@ -470,6 +520,167 @@ class TestEvidenceConsumer(unittest.TestCase):
             ):
                 with self.assertRaisesRegex(ValueError, "observed release checkout"):
                     require_release_checkout(Path("source"), COMMIT)
+
+
+class TestEvidenceInterfaces(unittest.TestCase):
+    @override
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="evidence café ")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.checkout = self.root / "checkout"
+        self.checkout.mkdir()
+        (self.checkout / "Cargo.toml").write_bytes(b'[package]\nname="sample"\nversion="1.2.3"\n')
+        self.policy = interface_policy(self.root)
+        self.output = self.root / "selection.json"
+        self.command_file = self.root / "actions-output"
+        self.command_file.write_bytes(b"prior=value\n")
+        self.args = [
+            "release",
+            "evidence",
+            "verify",
+            "evidence.toml",
+            "--checkout",
+            str(self.checkout),
+            "--commit",
+            COMMIT,
+            "--version",
+            "1.2.3",
+            "--output",
+            str(self.output),
+            "--github-output",
+            str(self.command_file),
+        ]
+
+    def test_configured_guarantees_are_distinct_and_strict(self):
+        for policy in (SOURCE, CARGO):
+            with self.subTest(guarantee=policy.guarantee):
+                self.assertEqual(load_evidence_policy(interface_policy(self.root, policy)), policy)
+        original = interface_policy(self.root).read_bytes()
+        for before, after in (
+            (b"schema = 1", b"schema = true"),
+            (b"schema = 1", b"schema = 2"),
+            (b'guarantee = "signed-source"', b'guarantee = "unsigned"'),
+            (b'workflow-name = "CI"', b'workflow-name = "CI"\nunknown = "field"'),
+        ):
+            self.policy.write_bytes(original.replace(before, after))
+            with self.assertRaises(ValueError):
+                load_evidence_policy(self.policy)
+
+    def test_cli_file_handoff_and_post_approval_attempt_revalidation(self):
+        provider = Provider(SOURCE)
+        provider.retain(create_evidence_manifest(SOURCE, "1.2.3", COMMIT, 123, 2, provider.read))
+        with (
+            patch("research_repo_tools.release_interfaces.api", side_effect=lambda endpoint, **kwargs: provider.read(endpoint)),
+            patch("research_repo_tools.release_interfaces.require_release_checkout") as observe,
+            patch("research_repo_tools.release_validation.subprocess.run", provider.execute),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(cli.main(["--root", str(self.root), *self.args]), 0)
+            self.assertGreaterEqual(observe.call_count, 3)
+            original = self.output.read_bytes()
+            command = self.command_file.read_bytes()
+            identity_line = next(line for line in command.splitlines() if line.startswith(b"identity="))
+            self.assertEqual(json.loads(identity_line.split(b"=", 1)[1]), json.loads(original))
+            provider.run["run_attempt"] = 3
+            args = [*self.args, "--expected", str(self.output)]
+            args[args.index("--output") + 1] = str(self.root / "revalidated.json")
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(cli.main(["--root", str(self.root), *args]), 1)
+            self.assertFalse((self.root / "revalidated.json").exists())
+            self.assertEqual(self.output.read_bytes(), original)
+            self.assertEqual(self.command_file.read_bytes(), command)
+
+    def test_create_requires_executing_push_and_observed_package(self):
+        provider = Provider(SOURCE)
+        args = [*self.args]
+        args[2] = "create"
+        args += ["--run-id", "123", "--attempt", "2"]
+        environment = {
+            "GITHUB_REPOSITORY": "example/package",
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": "refs/heads/main",
+            "GITHUB_SHA": COMMIT,
+            "GITHUB_RUN_ID": "123",
+            "GITHUB_RUN_ATTEMPT": "2",
+        }
+        with (
+            patch("research_repo_tools.release_interfaces.api", side_effect=lambda endpoint, **kwargs: provider.read(endpoint)),
+            patch("research_repo_tools.release_interfaces.require_release_checkout"),
+            contextlib.redirect_stdout(io.StringIO()),
+            contextlib.redirect_stderr(io.StringIO()),
+        ):
+            with patch.dict(os.environ, {**environment, "GITHUB_EVENT_NAME": "pull_request"}):
+                self.assertEqual(cli.main(["--root", str(self.root), *args]), 1)
+            self.assertFalse(self.output.exists())
+            with patch.dict(os.environ, environment):
+                self.assertEqual(cli.main(["--root", str(self.root), *args]), 0)
+            self.assertEqual(self.output.read_bytes(), create_evidence_manifest(SOURCE, "1.2.3", COMMIT, 123, 2, provider.read))
+            (self.checkout / "Cargo.toml").write_bytes(b'[package]\nname="wrong"\nversion="1.2.3"\n')
+            self.assertEqual(cli.main(["--root", str(self.root), *self.args]), 1)
+
+    def test_missing_unwritable_and_failed_output_transactions_preserve_records(self):
+        from research_repo_tools.files import _replace_path
+
+        self.output.write_bytes(b"original")
+        prior = self.command_file.read_bytes()
+        with self.assertRaises(FileNotFoundError):
+            write_release_outputs(self.output, b"original", github_output=self.root / "missing", values={"identity": "value"})
+        self.assertFalse((self.root / "missing").exists())
+
+        def fail_command(source, destination):
+            if destination == self.command_file and source.suffix == ".tmp":
+                raise OSError("output denied")
+            _replace_path(source, destination)
+
+        with patch("research_repo_tools.files._replace_path", side_effect=fail_command), self.assertRaises(OSError):
+            write_release_outputs(self.output, b"original", github_output=self.command_file, values={"identity": "value"})
+        self.assertEqual(self.output.read_bytes(), b"original")
+        self.assertEqual(self.command_file.read_bytes(), prior)
+        opening = Path.open
+
+        def unwritable(path, mode="r", *args, **kwargs):
+            if path == self.command_file and mode == "rb+":
+                raise PermissionError("unwritable command file")
+            return opening(path, mode, *args, **kwargs)
+
+        with patch.object(Path, "open", unwritable), self.assertRaises(PermissionError):
+            write_release_outputs(self.output, b"original", github_output=self.command_file, values={"identity": "value"})
+        with self.assertRaisesRegex(ValueError, "different evidence"):
+            write_release_outputs(self.output, b"changed")
+        self.assertEqual(self.command_file.read_bytes(), prior)
+        self.assertEqual(self.output.read_bytes(), b"original")
+
+    def test_normal_and_quiet_just_produce_the_same_file_based_identity(self):
+        import shlex
+
+        just = shutil.which("just")
+        self.assertIsNotNone(just, "Just is a required fixture prerequisite")
+        assert just is not None
+        driver = self.root / "driver.py"
+        driver.write_text(
+            "import runpy, sys\nfrom pathlib import Path\n"
+            f"suite = runpy.run_path({str(Path(__file__).resolve())!r})\n"
+            "raise SystemExit(suite['interface_fixture'](Path.cwd(), sys.argv[1:]))\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        justfile = template("justfile").replace(
+            'uv run --locked --group dev research-repo-tools release evidence "$@"',
+            f'{shlex.quote(Path(sys.executable).as_posix())} driver.py release evidence "$@"',
+        )
+        (self.root / "justfile").write_text(justfile, encoding="utf-8", newline="\n")
+        records = []
+        for quiet in (False, True):
+            self.output.unlink(missing_ok=True)
+            self.command_file.write_bytes(b"prior=value\n")
+            result = subprocess.run(
+                [just, *(["--quiet"] if quiet else []), "release-evidence", *self.args[2:]], cwd=self.root, capture_output=True, encoding="utf-8", timeout=60
+            )
+            self.assertEqual(result.returncode, 0, result.stderr)
+            self.assertNotIn('"artifact"', result.stdout)
+            records.append((self.output.read_bytes(), self.command_file.read_bytes()))
+        self.assertEqual(records[0], records[1])
 
 
 class TestReleaseCheckoutConsumer(unittest.TestCase):

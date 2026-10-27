@@ -196,16 +196,18 @@ files do not need normalization or regeneration.
 
 Install uv and the package's user-level Just setup as described in the
 [README](../README.md#install-with-uv). A consumer can add the following recipes
-to its existing Just module; `performance-prepare` deliberately fetches tags and
-must be run with authorization for that Git operation.
+to its existing Just module. The packaged `performance-prepare`,
+`performance-release`, and `performance-readme` recipes share one declarative
+workflow and independent retry boundaries; see the
+[README](../README.md#prepared-performance-releases) and
+[API contract](performance-release-api.md). Tag fetching requires explicit
+`--fetch-tags --allow-git-mutations`; preparation otherwise uses reviewed local
+refs. Lower-level acquisition, promotion and publication remain composable:
 
 ```just
 [positional-arguments]
 performance-measure current baseline:
     uv run --locked research-repo-tools performance measure tooling/measurement-full.toml "$1" "$2" --allow-git-mutations --payload target/run.json --manifest target/evidence.json
-
-performance-prepare:
-    git fetch origin --tags
 
 performance-promote:
     uv run --locked research-repo-tools performance promote tooling/report.toml --payload target/run.json --manifest target/evidence.json

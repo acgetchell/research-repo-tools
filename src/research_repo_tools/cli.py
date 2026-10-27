@@ -135,10 +135,15 @@ def parser() -> argparse.ArgumentParser:
     for action in ("check", "fix", "typecheck"):
         python.add_parser(action).add_argument("--timeout", type=float, default=300, help="positive per-batch timeout in seconds (default: 300)")
     release = groups.add_parser("release", help="prepare, check, publish, and verify reviewed releases").add_subparsers(dest="action", required=True)
+    from research_repo_tools.release_interfaces import add_commands as add_release_assets
+    from research_repo_tools.release_interfaces import add_evidence_commands
+
+    add_release_assets(release)
     command = release.add_parser("check")
     command.add_argument("tag", nargs="?", help="canonical stable tag; requires final metadata and release notes")
     command.add_argument("--final-release", action="store_true")
     command.add_argument("--previous-release")
+    add_evidence_commands(release)
     command = release.add_parser(
         "gate",
         help="require reviewed exact-commit evidence for a published release event",
@@ -652,6 +657,10 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
 
         return review.run(settings.root, base=args.base if args.action == "branch" else None)
     if args.group == "release":
+        if args.action in {"assets", "evidence"}:
+            from research_repo_tools.release_interfaces import run
+
+            return run(args, settings)
         from research_repo_tools import release_publishing
 
         reuse_options = {}

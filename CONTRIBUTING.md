@@ -50,7 +50,7 @@ the interpreter requires a dependency change.
 
 These recipes belong to this package's root justfile. Consumer setup and daily
 commands are documented in the [README](README.md#just-recipes).
-Run `just help`, `just help-workflows`, or
+Run `just help` or
 `just` for the complete lexicographically sorted command list,
 including changelog and release recipes.
 
@@ -68,14 +68,18 @@ including changelog and release recipes.
 | `just ci` | Run checks, tests, builds, and installation checks for final review |
 | `just clean [ARGS...]` | Preview obsolete package-owned installs; pass `--apply` to remove them |
 | `just coverage` | Run tests with branch and subprocess coverage; write `coverage/cobertura.xml` |
-| `just help` | List recipes and arguments in lexicographic order, with aliases inline |
-| `just help-workflows` | Alias for `help` |
+| `just help` | List recipes and arguments in lexicographic order, with arguments |
 | `just install-check` | Build and check isolated installations |
 | `just justfile-check` | Check maintainer and packaged recipes with the pinned Just formatter |
 | `just lock-check` | Verify the manifest and lock agree without changing dependencies |
 | `just newline-check` | Reject implicit newline translation in Python text-file writes |
+| `just performance-prepare CONFIG [ARGS...]` | Capture independent performance source assertions |
+| `just performance-readme CONFIG [ARGS...]` | Publish README from retained evidence without acquiring measurements |
+| `just performance-release CONFIG [ARGS...]` | Measure a prepared pair and retain/promote its report |
 | `just python-check` | Check formatting, lint, and strict types for the complete Python inventory |
+| `just release-assets COMMAND...` | Capture/revalidate release targets or explicitly upload attachments |
 | `just release-check TAG` | Check final release metadata and generated notes |
+| `just release-evidence COMMAND...` | Create/verify evidence and save file-based approval handoffs |
 | `just release-first TAG DATE` | Prepare a first release after checking stable published history |
 | `just release-notes TAG` | Print reviewed generated release notes |
 | `just release-publish TAG` | Approve a validated draft GitHub Release and trigger its registry workflow |

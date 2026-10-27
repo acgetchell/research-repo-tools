@@ -1,7 +1,6 @@
 """Retained comparison reports, current selection, archival and promotion."""
 
 import re
-import tomllib
 from pathlib import Path
 
 from research_repo_tools.criterion import COMPARISON_SCHEMA, _markdown_text, parse_comparison, render_comparison, serialize_comparison_csv
@@ -10,6 +9,7 @@ from research_repo_tools.files import _paths_alias, _validate_distinct_paths
 from research_repo_tools.publication import PublicationPlan, _path, _publication_name, _relative_link, plan_outputs
 from research_repo_tools.publication_config import _table
 from research_repo_tools.release_pairs import ReleasePair
+from research_repo_tools.report_inventory import report_configuration
 
 __all__ = ["evidence_pair", "load_report_plan", "parse_report_pair", "render_report", "retained_paths"]
 
@@ -89,13 +89,12 @@ def load_report_plan(root: Path, configuration: str, *, payload: str | None = No
     evidence. Historical pairs are immutable, and every output moves together.
     """
     root = root.resolve(strict=True)
-    config_bytes = _path(root, configuration).read_bytes()
-    document = tomllib.loads(config_bytes.decode("utf-8"))
+    config_bytes, document = report_configuration(root, configuration)
     if type(document.get("schema")) is int and document["schema"] == 2:
         from research_repo_tools.run_reports import load_run_report_plan
 
         return load_run_report_plan(root, configuration, payload=payload, manifest=manifest)
-    raw = _table(document, "report", {"schema", "current", "archive", "title"}, {"prose-file"})
+    raw = _table(document, "report", {"schema", "current", "archive", "title"}, {"prose-file", "initialization"})
     if type(raw["schema"]) is not int or raw["schema"] != 1:
         raise ValueError("report schema must be integer 1")
     from research_repo_tools.evidence import _string

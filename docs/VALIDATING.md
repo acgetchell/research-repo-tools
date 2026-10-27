@@ -14,7 +14,7 @@ history belong in the generated [CHANGELOG.md](../CHANGELOG.md). See
 | `just check-dist-changelog` | Exercise real CLI generation from existing wheel and sdist installations |
 | `just ci` | Final checks, tests, wheel/sdist builds, and isolated installation checks |
 | `just coverage` | Run tests with branch and subprocess coverage; write `coverage/cobertura.xml` |
-| `just help` | List recipes and arguments in lexicographic order, with aliases inline |
+| `just help` | List recipes and arguments in lexicographic order |
 | `just justfile-check` | Check maintainer and packaged recipes with the pinned Just formatter |
 | `just lock-check` | Verify the manifest and lock agree without changing dependencies |
 | `just newline-check` | Reject implicit newline translation in Python text-file writes |

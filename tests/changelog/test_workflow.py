@@ -147,7 +147,7 @@ def test_changelog_recipes_expose_the_common_command_surface(tmp_path: Path, con
         (["changelog"], "changelog generate"),
         (["changelog-preview"], "--dry-run"),
         (["changelog-release", "v1.0.0", "2026-09-17"], "--tag"),
-        (["changelog-unreleased", "v1.0.0", "2026-09-17"], "--date"),
+        (["changelog-release", "v1.0.0"], "--tag"),
         (["changelog-archive"], "changelog archive"),
         (["changelog-check"], "changelog check"),
         (["release-notes", "v1.0.0"], "changelog notes"),
@@ -156,6 +156,7 @@ def test_changelog_recipes_expose_the_common_command_surface(tmp_path: Path, con
     ]
     for arguments, expected in commands:
         result = run_safe_command("just", ["--justfile", str(justfile), "--dry-run", *arguments], cwd=tmp_path)
+        assert "research-repo-tools changelog " in result.stderr
         assert expected in result.stderr
 
 

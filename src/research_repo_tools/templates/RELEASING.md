@@ -18,12 +18,26 @@ substantive commits have landed. Run these commands in order:
 
 ```sh
 just release-update "$TAG" "$PREVIOUS_TAG" "$RELEASE_DATE"
-just changelog-preview --tag "$TAG" --date "$RELEASE_DATE"
-just changelog-release "$TAG" "$RELEASE_DATE"
+just changelog-preview --tag "$TAG"
+just changelog-release "$TAG"
 just changelog-check
 just release-check "$TAG"
 just ci
 ```
+
+The packaged configuration sets `changelog.date-source = "citation"`. Generation
+and tagged previews consume the matching `CITATION.cff` date prepared above.
+They never choose today or change metadata. An explicit troubleshooting override
+is `RELEASE_DATE="$(date -u +%F)"` followed by
+`just changelog-release "$TAG" "$RELEASE_DATE"`; this explicitly selects today
+in UTC and must agree with the prepared citation metadata.
+
+Performance is an independent workflow when configured:
+`just performance-prepare tooling/performance-release.toml`, then
+`just performance-release tooling/performance-release.toml`, then
+`just performance-readme tooling/performance-release.toml`. README retries consume
+retained results without repeating measurements. Fetching tags requires explicit
+`--fetch-tags --allow-git-mutations` during preparation.
 
 Review and commit the changes, then submit and merge the release PR manually.
 Require the configured native platform/package checks on the release commit.

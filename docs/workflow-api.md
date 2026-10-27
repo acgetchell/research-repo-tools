@@ -250,6 +250,12 @@ The current report may share the archive directory; it is excluded from the
 historical inventory and archive index.
 Old reports keep their paths; start shared reports at new paths during migration.
 
+Both report schemas also accept a declarative `initialization` inventory policy.
+The separate [first-use checker](performance-release-api.md#first-use-report-inventory)
+can report a truly empty inventory as uninitialized; the report planner itself
+still requires valid retained evidence. `performance promote CONFIG --check`
+uses this checker when no new payload/manifest is supplied.
+
 `evidence_pair`, `parse_report_pair`, `retained_paths`, and `render_report` expose
 the same identity/path/rendering rules without filesystem changes. Report prose,
 table selection, and interpretations remain consumer content.

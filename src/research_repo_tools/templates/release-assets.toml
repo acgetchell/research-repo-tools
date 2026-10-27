@@ -1,0 +1,5 @@
+schema = 1
+repository = "__OWNER__/__REPOSITORY__"
+expected-title = "tag"
+# Existing attachments are reused only with identical provider digest and bytes.
+# Conflicts fail; the shared policy never overwrites or deletes existing assets.

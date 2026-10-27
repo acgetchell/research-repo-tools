@@ -30,11 +30,9 @@ changelog-check:
 changelog-preview *args:
     uv run --locked research-repo-tools changelog generate --dry-run "$@"
 
-# Generate and archive a prospective release with an explicit YYYY-MM-DD date.
-changelog-release tag date:
-    uv run --locked research-repo-tools changelog generate --tag "$1" --date "$2"
-
-alias changelog-unreleased := changelog-release
+# Generate a prospective release using prepared citation metadata or an explicit date.
+changelog-release tag date="":
+    if [ -n "$2" ]; then uv run --locked research-repo-tools changelog generate --tag "$1" --date "$2"; else uv run --locked research-repo-tools changelog generate --tag "$1"; fi
 
 # Install the pinned external generator through Cargo.
 changelog-setup:
@@ -81,11 +79,9 @@ coverage:
 [private]
 default: help
 
-# List recipes and arguments in lexicographic order, with aliases inline.
+# List recipes and arguments in lexicographic order.
 help:
-    @just --justfile {{ quote(justfile()) }} --alias-style right --list
-
-alias help-workflows := help
+    @just --justfile {{ quote(justfile()) }} --list
 
 # Build and check isolated wheel and source-distribution installations.
 install-check: build check-dist
@@ -103,13 +99,33 @@ lock-check:
 newline-check:
     uv run --locked python scripts/check_newlines.py
 
+# Save independent source assertions; fetching needs explicit authorization flags.
+performance-prepare configuration *args:
+    uv run --locked research-repo-tools performance prepare "$@"
+
+# Publish retained results using saved or four explicit assertions; never measure.
+performance-readme configuration *args:
+    uv run --locked research-repo-tools performance readme "$@"
+
+# Measure the prepared pair and retain/promote its report; README is independent.
+performance-release configuration *args:
+    uv run --locked research-repo-tools performance release "$@"
+
 # Check lint, formatting, and types for the complete tracked/nonignored Python inventory.
 python-check:
     uv run --locked --no-sync --no-python-downloads research-repo-tools python check
 
+# Capture/revalidate a release target or explicitly upload verified attachments.
+release-assets +args:
+    uv run --locked research-repo-tools release assets "$@"
+
 # Read-only publication preflight; does not create or push a tag.
 release-check tag:
     uv run --locked research-repo-tools release check "$1"
+
+# Create or verify CI evidence and retain its approval handoff in explicit files.
+release-evidence +args:
+    uv run --locked research-repo-tools release evidence "$@"
 
 # Prepare a first release after verifying empty stable published history.
 release-first tag date:
