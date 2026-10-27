@@ -90,8 +90,8 @@ including changelog and release recipes.
 | `just sync` | Synchronize the locked development environment |
 | `just templates ARGS...` | Export a packaged configuration or workflow template |
 | `just test` | Run the Python test suite |
-| `just update` | Upgrade tools, then Python dependencies and the development environment |
-| `just update-dependencies` | Run the Python dependency workflow |
+| `just update` | Upgrade tools and Python dependencies, synchronize dev, then audit final locks |
+| `just update-dependencies` | Run the Python dependency workflow, then audit the final lock |
 | `just update-python-dependencies` | Update direct dev pins, upgrade the full lock, and synchronize dev |
 | `just update-tools` | Upgrade uv without repeating shell/bootstrap configuration |
 | `just update-uv [ARGS...]` | Upgrade uv through its verified owner; use `--dry-run` to preview |
@@ -221,8 +221,11 @@ An unavailable JIT yields no JIT performance evidence.
 Run `just update` to upgrade uv through its owner, reconcile its manifest pin,
 then advance exact development-tool pins through
 this package's `deps update-python --all-projects` command, refresh `uv.lock` within the resulting manifest
-constraints, and sync the development environment. Review the manifest and lockfile
-changes, then validate them with `just ci`. Exact runtime, build,
+constraints, and sync the development environment. Both `just update` and
+`just update-dependencies` then run `just audit` against the final lock. Findings
+or scanner errors make the update command fail; the audit leaves the updated
+manifest and lock available for review. Review those changes, then validate them
+with `just ci`. Exact runtime, build,
 and audit pins remain unchanged by this recipe. Ruff, ty, and pytest are pinned
 once in the published `python-tools` extra; the maintainer dev group selects that
 extra through a self dependency. Advance those three pins deliberately together

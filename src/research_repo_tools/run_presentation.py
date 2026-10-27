@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from decimal import Decimal
 from typing import Literal
 
-from research_repo_tools.complete_runs import CompleteRun, run_identity, validate_run_evidence
+from research_repo_tools.complete_runs import CompleteRun, ratio_incompatibilities, run_identity, validate_run_evidence
 from research_repo_tools.criterion import Comparison, ComparisonSet, Estimate, Sample, Statistic, Unit, _format_estimate, _markdown_text, _statistic, _unit
 from research_repo_tools.evidence import Evidence, _string
 from research_repo_tools.publication import TableLayout, _render_ratio_svg
@@ -197,6 +197,8 @@ def render_run_table(evidence: Evidence, layout: RunLayout, *, style: RunTableSt
         if headings and len(headings) != len(layout.comparisons):
             raise ValueError("comparison headings must match the number of layout comparisons")
     run, selected = _select(evidence, layout)
+    reasons = ratio_incompatibilities(evidence)
+    phases = {item.name: item.phase for item in run.series}
     labels = {item.name: item.label for item in layout.series}
     caption = f"Run: `{run_identity(evidence)}`. Statistic: {layout.statistic}. Unit: {layout.unit}."
     if style.timing_legend:
@@ -241,7 +243,7 @@ def render_run_table(evidence: Evidence, layout: RunLayout, *, style: RunTableSt
             )
         for a, b in layout.comparisons:
             first, second = selected[a].get(row.key), selected[b].get(row.key)
-            if first is None or second is None:
+            if first is None or second is None or (reasons and phases[a] != phases[b]):
                 cells.extend("unavailable" for _ in style.comparison_columns)
             else:
                 pair = Comparison(row.key, first, second)
@@ -255,6 +257,8 @@ def render_run_table(evidence: Evidence, layout: RunLayout, *, style: RunTableSt
         lines.append("Ratio is numerator time / denominator time; greater than one means less denominator time.")
     if "reduction" in style.comparison_columns:
         lines.append("Time reduction is 100 × (numerator − denominator) / numerator; positive means less denominator time.")
+    if reasons:
+        lines.extend(["", "Cross-phase ratios suppressed: " + _markdown_text("; ".join(reasons))])
     lines.extend(meanings)
     lines.extend(["", "Selection coverage:"])
     for item in layout.series:
@@ -454,6 +458,10 @@ def render_run_ratios(evidence: Evidence, layout: RunLayout) -> bytes:
     if len(layout.comparisons) != 1:
         raise ValueError("ratio SVG requires exactly one comparison")
     a, b = layout.comparisons[0]
+    phases = {item.name: item.phase for item in run.series}
+    reasons = ratio_incompatibilities(evidence)
+    if phases[a] != phases[b] and reasons:
+        raise ValueError(f"cross-phase ratio figure is ineligible: {reasons}")
     keys = [row for row in layout.rows if row.key in selected[a] and row.key in selected[b]]
     if not keys:
         raise ValueError("ratio SVG requires at least one available paired row")

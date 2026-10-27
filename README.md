@@ -1648,6 +1648,30 @@ The v0.2.1 additions include `complete-measurement.toml`, runtime saved names,
 required storage layouts, reusable publication identities and recorded version
 labels. Named configurations preserve consumer scientific selections.
 
+For new independent revision measurements, use the packaged
+`complete-measurement.toml` (schema 4). Set `harness-mode = "independent"` and
+`backend = "export"`, then declare your own gates, discovery, exhaustive counts,
+workload files and raw/saved-file requirements. Each revision keeps its original
+harness. Exports require no Git mutation permission; builds needing Git metadata
+can explicitly select `backend = "worktree"` with `--allow-git-mutations`.
+
+```sh
+just performance measure complete-measurement.toml v1.2.0 v1.1.0 \
+  --payload target/run.json --manifest target/evidence.json
+just performance verify target/run.json target/evidence.json --measurement complete-measurement.toml
+just performance promote complete-report.toml --payload target/run.json --manifest target/evidence.json
+just performance promote complete-report.toml
+```
+
+The last command uses retained evidence after scratch cleanup. Keep the report
+archive outside `target`. Different harnesses, workloads, hosts or tools retain
+valid absolute results and the complete union of cases, with incompatible ratios
+suppressed. Strict release eligibility is separate. Document publication can
+explicitly select `release = false` with a measurement declaration for absolute
+results. See the [complete acquisition contract](docs/DECLARING_PERFORMANCE.md#complete-acquisition-contract-schema-4).
+Pin a verified published release supplying this contract before retiring consumer
+adapters; implementation alone does not make it available on PyPI.
+
 The schema-2 measurement/report contracts and host capture are intended for
 v0.1.8; adopt an exact published release containing them before deleting working
 consumer tooling. Use the packaged `common-benchmark.toml`,

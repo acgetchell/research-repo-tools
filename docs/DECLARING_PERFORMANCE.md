@@ -238,3 +238,101 @@ configurations there. After v0.2.1 is published and its exact unyanked wheel/sdi
 are verified, pin that release and remove the two production orchestration
 modules. Retain scientific Rust gates and focused tests of actual recipe/config
 wiring. Publication and downstream cleanup are separate handoff boundaries.
+
+## Complete acquisition contract (schema 4)
+
+New workflows use measurement schema 4 and `complete-run/v3` evidence. Declare
+`harness-mode = "independent"` or `"common"` and `backend = "export"` or
+`"worktree"` explicitly. Independent mode preserves both original harnesses,
+including baseline-only files. Common mode still installs the captured current
+harness into both sources and requires its declared tool/dependency identities
+to agree before timing. These are experimental choices, not compatibility flags.
+
+The `CompleteMeasurementPlan` Python constructor requires `harness_mode` and
+`backend` keyword arguments. `load_measurement` reads the same contract from
+TOML; `measure_pair` owns acquisition, cleanup, and retained evidence. Prepared
+export callers supply both receipts from `source_exports.capture_source` and
+materialize them through `source_exports.export_source` before invoking
+`measure_prepared_pair(..., captured_sources=...)`. Arbitrary revision labels
+cannot substitute for capture receipts. Neither API authenticates evidence
+received from an untrusted party; independently supplied declarations and source
+assertions remain necessary.
+
+Each phase independently discovers its inventory, runs its gate, and measures
+its declared counts. Schema 4 also accepts a phase-local `sample-count`, or an
+exhaustive `sample-counts` map. Commands, environments, discovery, complete
+policies, series assignments, source/harness/workload patterns, probes, backend,
+mode and saved-file policy are bound into the acquisition declaration. Both gates
+finish before timing. Inputs and observations are rechecked around execution;
+changes invalidate acquisition. Commands are trusted shell-free argument vectors,
+not a sandbox: they must not mutate the original repository themselves.
+
+Core benchmark, estimate and sample JSON bytes are always retained. `raw-files`
+lists additional JSON filenames and defaults to `["tukey.json"]`; missing or
+malformed files fail. `saved-sample = "retained"` requires the native command to
+produce that saved copy as well as the fresh `sample` (normally `new`). Both
+inventories, all counts, statistics and confidence intervals must validate, and
+all configured raw files must match byte for byte. The retained sample preserves
+those exact bytes and a recorded successful saved-verification name. Raw outputs
+are rechecked before acquisition completes. Nothing is padded or repaired.
+
+Schema 4 requires a nonempty `workloads` list of file patterns for benchmark
+fixtures/input definitions; each pattern must match files in each measured source.
+Their actual bytes are captured separately from changing library sources.
+Independent acquisition does not require equal identities across phases.
+`ratio_incompatibilities(evidence)` derives diagnostic reasons from recorded
+harness, host, tools/dependencies, workload bytes, environment and complete
+sampling policies. Unknown required host/workload identity is ineligible even
+when both values are unknown. Different or disjoint inventories remain valid
+absolute evidence; the complete report exposes their union. The conservative
+cross-phase ratio policy suppresses ratios when complete policies differ.
+Tables retain absolute cells with unavailable ratio cells; an explicitly requested
+ineligible ratio-only figure fails clearly. Coordinate plots and timing CSV
+remain available. Same-phase series comparisons retain their original phase.
+
+`validate_run_policy` checks acquisition against an independent declaration;
+`release=True` additionally requires ratio eligibility and distinct release
+labels. Schema-2 report configuration already exposes this `release` setting.
+Schema-2 document publication now accepts `release = false` with `measurement`
+to publish policy-checked absolute results from retained evidence. Its default
+remains strict for document publication. Explicit source/release assertions,
+freshness checks, immutable retention and transactional writes still apply.
+
+### Export semantics and limits
+
+`capture_source(repository, reference, working_tree=False)` resolves an existing
+canonical stable tag, full commit ID, or HEAD. It reads stored Git tree/blob data,
+verifies object hashes, and captures ordinary regular files only. Export-ignore,
+export-subst, clean/smudge filters and checkout newline conversion are deliberately
+not applied. Working-tree capture uses HEAD plus the actual tracked/nonignored
+inventory, including edits, deletions and new files. The recorded dirty flag
+compares captured bytes and supported executable modes with the stored commit;
+checkout filters or newline conversion can therefore make it differ from Git's
+filtered status view. Ignored files are excluded;
+keep scratch/build outputs ignored. No index, refs, configuration or worktree
+registry is changed. A missing ref or unsupported source fails without fallback.
+
+Private export destinations start absent. Portable paths, parent/file aliases,
+links, junctions, special files and submodules are rejected. POSIX regular
+permission bits are copied exactly; committed files use Git's 0644/0755 modes.
+Windows verifies bytes and its supported writable/read-only mode; it cannot
+represent POSIX executable permissions. Original logical modes remain in the
+receipt. Use the explicitly authorized worktree backend when builds require Git
+metadata or checkout filtering; the
+export backend never manufactures history or silently creates a worktree.
+
+Capture repeats identity/inventory/byte/mode observations to detect ordinary
+races, then independently verifies materialized files. Source receipts can recheck
+the original repository during acquisition. The CLI also snapshots declared
+controller source, harness and workload inventories, bytes and modes, the
+declaration and controller host/tools. It rechecks these inputs and source refs
+after output staging before publication; unrelated output files are not inputs.
+Keep exclusive writer control: these checks are not atomic
+filesystem snapshots or protection against adversarial change-and-restore.
+Cleanup failures report retained recovery directories and prevent accepted
+publication. Retained evidence remains usable after successful source cleanup.
+
+Historical files remain untouched. There is no migration that relabels earlier
+evidence as v3, fills missing raw files, or retroactively captures host/source
+proofs. Older readers currently available are not a constraint on this new
+contract. Use the producing release to inspect unsupported historical formats.

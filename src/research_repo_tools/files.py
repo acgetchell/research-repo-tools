@@ -7,7 +7,7 @@ import shutil
 import stat
 import tempfile
 import unicodedata
-from collections.abc import Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -325,7 +325,7 @@ def preserve_files(paths: Sequence[Path]) -> Iterator[Mapping[Path, bytes | None
         _cleanup_temporary_paths(backup_paths)
 
 
-def _publish(writes: Sequence[tuple[Path, bytes]], *, expected: Mapping[Path, bytes] | None = None) -> None:
+def _publish(writes: Sequence[tuple[Path, bytes]], *, expected: Mapping[Path, bytes] | None = None, verify: Callable[[], None] | None = None) -> None:
     """Publish byte sequences as one rollback-capable transaction.
 
     All replacement files and backups are prepared before the first visible
@@ -354,6 +354,8 @@ def _publish(writes: Sequence[tuple[Path, bytes]], *, expected: Mapping[Path, by
         for target, (_path, original) in zip(guard_targets, guards, strict=True):
             if target.read_bytes() != original:
                 raise ValueError(f"file changed before publication: {target}; refusing to overwrite it")
+        if verify is not None:
+            verify()
         for item in staged_writes:
             _replace_path(item.staged, item.target)
     except BaseException as publication_error:
@@ -372,7 +374,7 @@ def _publish(writes: Sequence[tuple[Path, bytes]], *, expected: Mapping[Path, by
     _cleanup_temporary_paths(backup_paths)
 
 
-def replace_many(updates: Mapping[Path, bytes], *, expected: Mapping[Path, bytes] | None = None) -> None:
+def replace_many(updates: Mapping[Path, bytes], *, expected: Mapping[Path, bytes] | None = None, verify: Callable[[], None] | None = None) -> None:
     """Stage all replacements and backups, then publish with rollback on failure.
 
     Paths resolve relative to the caller's working directory. Targets must be
@@ -387,8 +389,10 @@ def replace_many(updates: Mapping[Path, bytes], *, expected: Mapping[Path, bytes
     Optional expected snapshots cover every replacement and may include unchanged
     input files. They are rechecked after staging, before the first replacement.
     A mismatch rejects the transaction and preserves current source files.
+    Optional verify runs after staging and snapshot checks, before replacements;
+    raising from it aborts publication and cleans staged candidates.
     """
-    _publish(tuple(updates.items()), expected=expected)
+    _publish(tuple(updates.items()), expected=expected, verify=verify)
 
 
 def _directory_target(destination: Path) -> Path:

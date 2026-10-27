@@ -175,3 +175,21 @@ package's usual stderr/exit-status contract. No heavy optional dependencies,
 or network operations on import are introduced. Explicit configured measurement,
 worktree and release-asset operations are documented separately in the
 [workflow API](workflow-api.md).
+
+## Complete acquisition and read-only sources
+
+The current complete acquisition API is
+`common_measurement.CompleteMeasurementPlan(..., harness_mode="independent",
+backend="export")`, loaded declaratively through `measurement.load_measurement`
+with schema 4. `measurement.measure_pair` returns complete-run v3 evidence after
+cleanup. `source_exports.capture_source` and `export_source` expose the verified
+read-only source boundary independently. References resolve locally; exports
+contain no Git metadata and never fall back to worktrees.
+
+`complete_runs.ratio_incompatibilities` returns retained diagnostic reasons
+without probing today's host. `validate_run_evidence` establishes acquisition
+validity; `common_measurement.validate_run_policy` checks independently supplied
+policy, with `release=True` adding strict comparison eligibility. Complete raw
+files, both inventories and absolute results remain inspectable when ratios are
+ineligible. See the [schema-4 contract](DECLARING_PERFORMANCE.md#complete-acquisition-contract-schema-4)
+for modes, counts, supplemental/saved files, source guarantees and limitations.

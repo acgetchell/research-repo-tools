@@ -201,6 +201,16 @@ saved-sample validation and offline retention. Historical v1 policies and
 evidence remain readable under their original contracts. Installed regressions
 also exercise unchanged uniform run and common-plan constructor calls, including
 their original v1 envelope and provenance requirements.
+The schema-4 acquisition consumer runs from source and both distributions. It
+exercises independent native child harnesses, disjoint inventories, heterogeneous
+counts, supplemental raw-byte retention, saved-copy rejection, and CLI acquisition,
+immutable retention, offline reports and policy-checked absolute document publication.
+Read-only Git transport models supplement native disposable repository checks;
+the native fixtures honor the Git-mutation opt-out before setup. Source export
+fixtures cover edits/deletions/new bytes, unsafe paths, capture races, blob identity
+verification and cleanup recovery. Synthetic timings establish workflow behavior,
+not performance or scientific validity.
+
 Shared regressions cover unsafe paths and links, resource limits, malformed and
 non-finite estimates, stale provenance, and publication/rollback failures. HTTP
 transport failure tests use synthetic responses; release selection and access

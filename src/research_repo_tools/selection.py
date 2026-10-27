@@ -12,20 +12,22 @@ from research_repo_tools.publication import _path
 __all__ = ["argument_batches", "run_selected", "select_files"]
 
 
-def select_files(root: Path, *, include: Sequence[str] = (), exclude: Sequence[str] = ()) -> tuple[str, ...]:
+def select_files(root: Path, *, include: Sequence[str] = (), exclude: Sequence[str] = (), env: Mapping[str, str] | None = None) -> tuple[str, ...]:
     """Select existing regular tracked and nonignored untracked files, sorted.
 
     Includes use Git pathspec syntax; exclusions use case-sensitive POSIX globs.
     Deleted files are omitted. Links (including parent links), special files,
     unsafe portable names, and aliases fail. Git failures never become an empty
-    selection. NUL transport preserves whitespace and newlines in Git output,
+    selection. env optionally replaces the Git subprocess environment. NUL transport preserves whitespace and newlines in Git output,
     although control characters in portable input names are rejected.
     """
     root = root.resolve(strict=True)
     for patterns in (include, exclude):
         if isinstance(patterns, (str, bytes)) or any(not isinstance(item, str) or not item or "\0" in item for item in patterns):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
             raise ValueError("file patterns must be nonempty strings without NUL")
-    result = run_git_bytes(["--no-pager", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", *include], cwd=root)
+    result = run_git_bytes(
+        ["--no-pager", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", *include], cwd=root, **({"env": env} if env is not None else {})
+    )
     if result.stdout and not result.stdout.endswith(b"\0"):
         raise ValueError("Git file inventory is not NUL terminated")
     selected = []
