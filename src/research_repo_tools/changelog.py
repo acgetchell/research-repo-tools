@@ -128,38 +128,16 @@ def resolve_date(config: Config, *, tag: str | None = None, released: str | None
     if released is None:
         if config.changelog.date_source != "citation":
             raise ValueError("prospective changelog generation requires both --tag and --date, or changelog.date-source = 'citation'")
-        import yaml
-        from yaml.nodes import MappingNode, ScalarNode
-
         from research_repo_tools.publication import _path
+        from research_repo_tools.release_metadata import _citation_scalars
 
         path = _path(config.root, config.changelog.citation)
         try:
-            document = yaml.compose(path.read_bytes().decode("utf-8"), Loader=yaml.SafeLoader)
-            if not isinstance(document, MappingNode):
-                raise ValueError("expected a top-level YAML mapping")
-            fields = {}
-            for key, value in document.value:
-                if not isinstance(key, ScalarNode) or key.tag != "tag:yaml.org,2002:str" or key.value in fields or key.value == "<<":
-                    raise ValueError("duplicate, merge, or nonscalar top-level field")
-                fields[key.value] = value
-            values: dict[str, str] = {}
-            for name in ("version", "date-released"):
-                value = fields.get(name)
-                tags = {"tag:yaml.org,2002:str"} | ({"tag:yaml.org,2002:timestamp"} if name == "date-released" else set())
-                if (
-                    not isinstance(value, ScalarNode)
-                    or value.tag not in tags
-                    or not isinstance(value.value, str)
-                    or not value.value
-                    or value.style in ("|", ">")
-                ):
-                    raise ValueError(f"{name} requires one nonempty scalar")
-                values[name] = value.value
-            if values["version"] != tag.removeprefix("v"):
+            values = _citation_scalars(path, ("version", "date-released"))
+            if values["version"][0] != tag.removeprefix("v"):
                 raise ValueError(f"citation version must match {tag}")
-            released = values["date-released"]
-        except (OSError, UnicodeError, ValueError, yaml.YAMLError, RecursionError) as error:
+            released = values["date-released"][0]
+        except (OSError, UnicodeError, ValueError) as error:
             raise ValueError(f"prepare matching citation metadata in {path} before generation: {error}") from error
     try:
         if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", released) is None or date.fromisoformat(released).isoformat() != released:
@@ -292,12 +270,13 @@ def tag(config: Config, version: str, *, force: bool = False, dry_run: bool = Fa
         raise ValueError("tagging requires a dated changelog release heading")
     if policy.date_policy == "today" and released != datetime.now(UTC).date().isoformat():
         raise ValueError("release heading date must equal the current UTC date before tagging")
-    citation = config.root / config.changelog.citation
-    if citation.exists():
-        from research_repo_tools.release_metadata import _citation_date_reference
+    citations = dict.fromkeys((config.root / name).resolve() for name in (config.changelog.citation, "CITATION.cff"))
+    for citation in citations:
+        if citation.exists():
+            from research_repo_tools.release_metadata import _citation_date_reference
 
-        if _citation_date_reference(citation).value != released:
-            raise ValueError(f"{config.changelog.citation} date and changelog release date differ")
+            if _citation_date_reference(citation).value != released:
+                raise ValueError(f"{citation} date and changelog release date differ")
     if len(body.encode("utf-8")) > _GITHUB_TAG_ANNOTATION_LIMIT:
         from research_repo_tools.release_tags import _github_repo_url
 

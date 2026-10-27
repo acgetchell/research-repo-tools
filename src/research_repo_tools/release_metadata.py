@@ -386,19 +386,46 @@ def _single_reference(references: list[MetadataReference], path: Path, descripti
     return references[0]
 
 
+def _citation_scalars(path: Path, names: Sequence[str]) -> dict[str, tuple[str, int, str]]:
+    """Parse unambiguous top-level citation scalars with their source locations."""
+    import yaml
+    from yaml.nodes import MappingNode, Node, ScalarNode
+
+    text = path.read_bytes().decode("utf-8")
+    try:
+        document = yaml.compose(text, Loader=yaml.SafeLoader)
+    except (yaml.YAMLError, RecursionError) as error:
+        raise ReleaseCheckError(f"{path}: invalid citation YAML: {error}") from error
+    if not isinstance(document, MappingNode):
+        raise ReleaseCheckError(f"{path}: expected a top-level YAML mapping")
+    fields: dict[str, list[tuple[Node, int]]] = {}
+    for key, value in document.value:
+        if not isinstance(key, ScalarNode) or key.tag != "tag:yaml.org,2002:str" or not isinstance(key.value, str) or key.value == "<<":
+            raise ReleaseCheckError(f"{path}: merge or nonscalar top-level field")
+        fields.setdefault(key.value, []).append((value, key.start_mark.line + 1))
+    for name in dict.fromkeys((*fields, *names)):
+        entries = fields.get(name, [])
+        if len(entries) != 1:
+            location = f":{entries[0][1]}" if entries else ""
+            lines = f" at lines {', '.join(str(line) for _, line in entries)}" if entries else ""
+            raise ReleaseCheckError(f"{path}{location} must contain exactly one top-level {name}; found {len(entries)}{lines}")
+    result = {}
+    source_lines = text.splitlines()
+    for name in names:
+        value, line = fields[name][0]
+        tags = {"tag:yaml.org,2002:str"} | ({"tag:yaml.org,2002:timestamp"} if name == "date-released" else set())
+        if not isinstance(value, ScalarNode) or value.tag not in tags or not isinstance(value.value, str) or not value.value or value.style in ("|", ">"):
+            raise ReleaseCheckError(f"{path}:{line}: top-level {name} must be a valid non-empty scalar")
+        result[name] = (value.value, line, source_lines[line - 1])
+    return result
+
+
 def _citation_metadata_reference(path: Path, field: str, value_pattern: str, kind: MetadataKind) -> MetadataReference:
     """Return one non-empty top-level scalar from CITATION.cff."""
-    pattern = re.compile(f"^{re.escape(field)}:\\s*(?P<quote>['\\\"]?)(?P<value>{value_pattern})(?P=quote)\\s*(?:#.*)?$")
-    references: list[MetadataReference] = []
-    for line_number, line in enumerate(path.read_text(encoding="utf-8").split("\n"), start=1):
-        if not line.startswith(f"{field}:"):
-            continue
-        match = pattern.fullmatch(line)
-        if match is None:
-            msg = f"{path}:{line_number}: top-level {field} must be a valid non-empty scalar"
-            raise ReleaseCheckError(msg)
-        references.append(_metadata_reference(path, line_number, match.group("value"), kind, line))
-    return _single_reference(references, path, f"top-level {field}")
+    value, line, text = _citation_scalars(path, (field,))[field]
+    if re.fullmatch(value_pattern, value) is None:
+        raise ReleaseCheckError(f"{path}:{line}: top-level {field} must be a valid non-empty scalar")
+    return _metadata_reference(path, line, value, kind, text)
 
 
 def _citation_doi_reference(path: Path) -> MetadataReference:

@@ -12,34 +12,82 @@ from research_repo_tools import changelog, cli, config
 
 
 class TestCitationDates(unittest.TestCase):
-    def test_tag_uses_configured_citation_for_date_comparison(self):
+    def test_tag_checks_configured_and_root_citation_dates(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             settings = config.parse({"changelog": {"citation": "prepared.cff"}, "release": {"date-policy": "declared"}}, root=root)
             (root / "pyproject.toml").write_bytes(b'[project]\nname="fixture"\nversion="1.2.3"\n')
             (root / "CHANGELOG.md").write_bytes(b"# Changelog\n\n## [1.2.3] - 2024-02-29\n\n- Prepared release.\n")
-            (root / "CITATION.cff").write_bytes(b"version: 1.2.3\ndate-released: 2024-03-01\n")
-            citation = root / "prepared.cff"
-            citation.write_bytes(b"version: 1.2.3\ndate-released: 2024-02-29\n")
+            citations = (root / "prepared.cff", root / "CITATION.cff")
+            for citation in citations:
+                citation.write_bytes(b"version: 1.2.3\ndate-released: 2024-02-29\n")
             with patch("research_repo_tools.changelog.run_git_command", return_value=subprocess.CompletedProcess([], 1, "")):
                 self.assertIn("Prepared release.", changelog.tag(settings, "v1.2.3", dry_run=True))
-            (root / "CITATION.cff").write_bytes(citation.read_bytes())
-            citation.write_bytes(b"version: 1.2.3\ndate-released: 2024-03-01\n")
-            with (
-                patch("research_repo_tools.changelog.run_git_command", side_effect=AssertionError("invalid citation reached Git")),
-                self.assertRaisesRegex(ValueError, "date and changelog release date differ"),
-            ):
-                changelog.tag(settings, "v1.2.3", dry_run=True)
+            for citation in citations:
+                with self.subTest(citation=citation):
+                    citation.write_bytes(b"version: 1.2.3\ndate-released: 2024-03-01\n")
+                    with (
+                        patch("research_repo_tools.changelog.run_git_command", side_effect=AssertionError("invalid citation reached Git")),
+                        self.assertRaisesRegex(ValueError, "date and changelog release date differ"),
+                    ):
+                        changelog.tag(settings, "v1.2.3", dry_run=True)
+                    citation.write_bytes(b"version: 1.2.3\ndate-released: 2024-02-29\n")
 
     def test_quoted_unquoted_leap_dates_and_configured_authority(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
-            settings = config.parse({"changelog": {"date-source": "citation", "citation": "prepared.cff"}}, root=root)
-            for quote in ("", "'", '"'):
-                (root / "prepared.cff").write_bytes(f"version: '1.2.3'\r\ndate-released: {quote}2024-02-29{quote}\r\n".encode())
-                before = (root / "prepared.cff").read_bytes()
-                self.assertEqual(changelog.resolve_date(settings, tag="v1.2.3"), "2024-02-29")
-                self.assertEqual((root / "prepared.cff").read_bytes(), before)
+            settings = config.parse({"changelog": {"date-source": "citation", "citation": "prepared.cff"}, "release": {"date-policy": "declared"}}, root=root)
+            (root / "pyproject.toml").write_bytes(b'[project]\nname="fixture"\nversion="1.2.3"\n')
+            (root / "CHANGELOG.md").write_bytes(b"# Changelog\n\n## [1.2.3] - 2024-02-29\n\n- Prepared release.\n")
+            for key_quote in ("", "'", '"'):
+                for quote in ("", "'", '"'):
+                    with self.subTest(key_quote=key_quote, quote=quote):
+                        (root / "prepared.cff").write_bytes(f"version: '1.2.3'\r\n{key_quote}date-released{key_quote}: {quote}2024-02-29{quote}\r\n".encode())
+                        before = (root / "prepared.cff").read_bytes()
+                        self.assertEqual(changelog.resolve_date(settings, tag="v1.2.3"), "2024-02-29")
+                        with patch("research_repo_tools.changelog.run_git_command", return_value=subprocess.CompletedProcess([], 1, "")):
+                            self.assertIn("Prepared release.", changelog.tag(settings, "v1.2.3", dry_run=True))
+                        self.assertEqual((root / "prepared.cff").read_bytes(), before)
+
+    def test_tag_checks_resolved_citation_path_only_once(self):
+        from research_repo_tools.release_metadata import _citation_date_reference
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            settings = config.parse({"changelog": {"citation": "alias.cff"}, "release": {"date-policy": "declared"}}, root=root)
+            (root / "pyproject.toml").write_bytes(b'[project]\nname="fixture"\nversion="1.2.3"\n')
+            (root / "CHANGELOG.md").write_bytes(b"# Changelog\n\n## [1.2.3] - 2024-02-29\n\n- Prepared release.\n")
+            (root / "CITATION.cff").write_bytes(b"version: 1.2.3\ndate-released: 2024-02-29\n")
+            resolve = Path.resolve
+            # Model a resolved alias without requiring native symlink privileges.
+            with (
+                patch.object(Path, "resolve", lambda path: root / "CITATION.cff" if path == root / "alias.cff" else resolve(path)),
+                patch("research_repo_tools.release_metadata._citation_date_reference", wraps=_citation_date_reference) as read,
+                patch("research_repo_tools.changelog.run_git_command", return_value=subprocess.CompletedProcess([], 1, "")),
+            ):
+                self.assertIn("Prepared release.", changelog.tag(settings, "v1.2.3", dry_run=True))
+            self.assertEqual(read.call_count, 1)
+
+    def test_generation_and_tagging_reject_ambiguous_date_keys(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            settings = config.parse({"changelog": {"date-source": "citation"}, "release": {"date-policy": "declared"}}, root=root)
+            (root / "pyproject.toml").write_bytes(b'[project]\nname="fixture"\nversion="1.2.3"\n')
+            (root / "CHANGELOG.md").write_bytes(b"# Changelog\n\n## [1.2.3] - 2024-02-29\n\n- Prepared release.\n")
+            for fields in (
+                b'date-released: 2024-02-29\n"date-released": 2024-02-29\n',
+                b"\"date-released\": 2024-02-29\n'date-released': 2024-03-01\n",
+                b"date-released: 2024-02-29\n<<: {date-released: 2024-03-01}\n",
+            ):
+                with self.subTest(fields=fields):
+                    (root / "CITATION.cff").write_bytes(b"version: 1.2.3\n" + fields)
+                    with self.assertRaises(ValueError):
+                        changelog.resolve_date(settings, tag="v1.2.3")
+                    with (
+                        patch("research_repo_tools.changelog.run_git_command", side_effect=AssertionError("ambiguous date reached Git")),
+                        self.assertRaises(ValueError),
+                    ):
+                        changelog.tag(settings, "v1.2.3", dry_run=True)
 
     def test_every_invalid_citation_fails_before_generator_and_preserves_files(self):
         invalid = (
