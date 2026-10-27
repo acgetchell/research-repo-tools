@@ -207,7 +207,7 @@ class TestAcquisitionConsumer(unittest.TestCase):
             with (
                 patch("research_repo_tools.source_exports._git", side_effect=git),
                 patch("research_repo_tools.source_exports.select_files", side_effect=selected),
-                patch("research_repo_tools.measurement.resolve_revision", return_value="b" * 40),
+                patch("research_repo_tools.measurement.resolve_revision", side_effect=AssertionError("export must use captured source revisions")),
             ):
                 self.assertEqual(
                     main([*args, "measure", "measurement.toml", "v1.1.0", "v1.0.0", "--payload", "target/run.json", "--manifest", "target/evidence.json"]), 0
@@ -430,6 +430,17 @@ class TestAcquisitionConsumer(unittest.TestCase):
             # Restore package metadata for CLI selection; leave dirty/new input.
             (root / "Cargo.toml").write_bytes(b'[package]\nname="fixture"\nversion="1.1.0"\n')
             before = {path.relative_to(root).as_posix(): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            # Production export capture must ignore ambient Git redirection too.
+            self.enterContext(
+                patch.dict(
+                    os.environ,
+                    {
+                        "GIT_DIR": str(directory / "wrong-repository"),
+                        "GIT_WORK_TREE": str(directory / "wrong-worktree"),
+                        "GIT_INDEX_FILE": str(directory / "wrong-index"),
+                    },
+                )
+            )
             args = ["--root", str(root), "performance"]
             self.assertEqual(
                 main([*args, "measure", "measurement.toml", "v1.1.0", "v1.0.0", "--payload", "results/run.json", "--manifest", "results/evidence.json"]), 0

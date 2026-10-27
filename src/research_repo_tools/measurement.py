@@ -270,9 +270,7 @@ def measure_pair(
     settings.validate_release(pair.baseline)
     settings.validate_release(pair.current)
     root = root.resolve(strict=True)
-    baseline_revision = resolve_revision(root, pair.baseline)
-    snapshot = capture_snapshot(root) if working_tree and selected_backend == "worktree" else None
-    current_revision = snapshot.revision if snapshot else resolve_revision(root, "HEAD" if working_tree else pair.current)
+    snapshot = None
     parent = Path(tempfile.mkdtemp(prefix="research-measurement-")).resolve()
     try:
         with ExitStack() as stack:
@@ -285,6 +283,9 @@ def measure_pair(
                 baseline = stack.enter_context(export_source(captures["baseline"], parent / "baseline"))
                 current = stack.enter_context(export_source(captures["current"], parent / "current"))
             else:
+                baseline_revision = resolve_revision(root, pair.baseline)
+                snapshot = capture_snapshot(root) if working_tree else None
+                current_revision = snapshot.revision if snapshot else resolve_revision(root, "HEAD" if working_tree else pair.current)
                 baseline = stack.enter_context(temporary_worktree(root, parent / "baseline", baseline_revision, allow_git_mutations=True))
                 current = stack.enter_context(temporary_worktree(root, parent / "current", current_revision, allow_git_mutations=True))
                 if snapshot:
