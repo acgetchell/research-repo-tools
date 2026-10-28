@@ -17,6 +17,7 @@ from dataclasses import replace
 from decimal import Inexact, Rounded, localcontext
 from html import unescape
 from pathlib import Path
+from stat import S_ISFIFO
 from types import SimpleNamespace
 from unittest.mock import patch
 from urllib.parse import unquote
@@ -1981,8 +1982,10 @@ if '--list' in sys.argv:
                 with self.assertRaisesRegex(ValueError, "regular JSON files"):
                     collect_complete_sample(root, "new", policy, raw_files=("tukey.json",))
 
-    @unittest.skipUnless(hasattr(os, "mkfifo"), "native FIFO fixture requires POSIX; portable nonregular-file model runs on every host")
     def test_supplemental_fifo_fails_without_blocking(self):
+        mkfifo = getattr(os, "mkfifo", None)
+        if mkfifo is None:
+            self.skipTest("native FIFO fixture requires POSIX; portable nonregular-file model runs on every host")
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             sample = root / "case" / "new"
@@ -1990,7 +1993,10 @@ if '--list' in sys.argv:
             case = mixed_case("case", 3)
             for name, payload in (("benchmark", case.benchmark), ("estimates", case.estimates), ("sample", case.sample)):
                 (sample / f"{name}.json").write_bytes(payload)
-            os.mkfifo(sample / "tukey.json")
+            extra = sample / "tukey.json"
+            mkfifo(extra)
+            self.assertTrue(S_ISFIFO(extra.stat().st_mode))
+            self.assertFalse(extra.is_file())
             script = """import sys
 from pathlib import Path
 from research_repo_tools.complete_runs import CompletePolicy, collect_complete_sample

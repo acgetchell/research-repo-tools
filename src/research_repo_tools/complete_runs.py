@@ -473,7 +473,10 @@ def validate_run_evidence(evidence: Evidence) -> CompleteRun:
 
 
 def ratio_incompatibilities(evidence: Evidence) -> tuple[str, ...]:
-    """Derive eligibility from retained observations, never a stored verdict."""
+    """Derive v3 ratio eligibility from retained observations, never a stored verdict.
+
+    Valid v1/v2 evidence returns an empty tuple without assessing ratio eligibility.
+    """
     run = validate_run_evidence(evidence)
     if run.schema != RUN_SCHEMA_V3:
         return ()

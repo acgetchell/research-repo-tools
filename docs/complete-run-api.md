@@ -114,7 +114,7 @@ The supported names in `complete_runs` are:
 | `collect_complete_sample(criterion_dir, sample, policy, *, raw_files=())` | Reject unsafe trees, incomplete rows, duplicate semantic IDs and missing/unexpected inventory; optional supplemental JSON filenames are validated before tree access and all selected files must be regular before reading |
 | `parse_policy(payload)`, `serialize_policy(policy)` | Strict v2 policy JSON for manually constructed phase provenance |
 | `parse_run(payload)`, `serialize_run(run)` | Versioned strict shared JSON; original Criterion bytes stored as base64 |
-| `ratio_incompatibilities(evidence)` | Recorded reasons the phases cannot support ratios, including host, harness, workload and inventory differences |
+| `ratio_incompatibilities(evidence)` | For v3, derive ratio-ineligibility reasons from recorded host, harness, workload and inventory differences; v1/v2 return `()` without assessing ratio eligibility |
 | `render_run(evidence, *, title="Benchmark timings", report_path=None, payload_path=None, manifest_path=None)` | Offline named-series timings and recorded per-phase provenance; supply all three root-relative publication paths for evidence links |
 | `run_identity(evidence)` | SHA-256 of exact payload and envelope with versioned framing |
 | `validate_run_evidence(evidence)` | Parse complete measurements and verify phase/source/gate/compatibility contracts |
