@@ -18,6 +18,7 @@ history belong in the generated [CHANGELOG.md](../CHANGELOG.md). See
 | `just justfile-check` | Check maintainer and packaged recipes with the pinned Just formatter |
 | `just lock-check` | Verify the manifest and lock agree without changing dependencies |
 | `just newline-check` | Reject implicit newline translation in Python text-file writes |
+| `just publish-check` | Validate the current built wheel and sdist with strict Twine checks without rebuilding or uploading |
 | `just python-check` | Check formatting, lint, and strict types for the complete Python inventory |
 | `just test` | Run the test suite |
 
@@ -32,6 +33,20 @@ audits. `just justfile-check` validates both the maintainer recipes and the
 packaged consumer template; their pinned formatter is installed during setup.
 The repository's `.gitattributes` preserves LF for both files on Windows checkouts.
 `just ci` shares the lock check between validation and building.
+
+`just ci` builds once and runs `just publish-check` before the source tests and
+isolated installation checks. The hosted build job runs the same publication
+check before uploading immutable distributions. The check requires exactly the
+current version's wheel and sdist and matching package metadata, then invokes
+the locked Twine version with `--strict`. It treats description warnings as
+errors and never builds or uploads. Markdown descriptions are not rendered by
+Twine; this is not a visual or link check.
+
+Use `just publish-check` alone to inspect existing artifacts, or
+`just build publish-check` if they are missing or for an older version. A checker-only
+change can be validated with its focused regressions, `just check`, and
+`just publish-check` after a successful full run; it does not require replaying
+the unaffected source and installation suites.
 
 `just check` includes `just newline-check`, so both local `just ci` and every
 native package job enforce explicit newline policies. The guard's positive and

@@ -1,259 +1,434 @@
 # Releasing research-repo-tools
 
-Use this procedure for stable releases of the Python package. PyPI distributes
-the package; GitHub hosts the source, review, CI, and release notes. Run the
-command blocks in order from the repository root, keeping the release variables
-in the same shell. The examples use a POSIX shell, such as Bash or Zsh; on
-Windows, use Git Bash. Stop and resolve a failed command before continuing.
+Prepare each `vX.Y.Z` release in a dedicated PR. After that PR is merged,
+create the annotated tag and a draft GitHub release. `Prepare GitHub release`
+attaches the validated wheel, sdist, and signed evidence, then review and publish
+the draft with `just release-publish`. The published release starts
+`Publish to PyPI`; approve its `pypi` deployment to permit the package upload.
 
-Git mutations and publication are maintainer actions. Assistants follow
-[AGENTS.md](../AGENTS.md), including the
-[validation restrictions](VALIDATING.md#validation-under-the-agent-git-policy).
-Release history belongs in the generated [CHANGELOG.md](../CHANGELOG.md).
+The changelog is generated for the target tag before the tag exists, so the
+release process does not require a temporary local tag.
 
-## Release workflow
+Release recipes are content-idempotent where their inputs permit it. Repeating
+`update-version` on the same UTC date produces no file changes. Rerunning
+`update-version` on a later UTC date intentionally advances the declared release
+date. Crossing midnight alone requires no update: the `declared` date policy
+allows preparation and tagging on different UTC days when citation and changelog
+dates agree. With unchanged history and configuration, repeating
+`changelog-release` reuses the declared citation date even after UTC midnight.
 
-1. Prepare a release PR with synchronized metadata and generated notes. Validate,
-   review, and merge it into `main`.
-2. Wait for the exact merged commit's successful main-push **Package checks**
-   run, including `release-evidence`. It builds once, validates those files on
-   Linux, macOS, Windows and through installed changelog consumers, then signs
-   the original validation evidence. Tag that commit and push the tag.
-   **Prepare GitHub release** retrieves those immutable artifacts and stages
-   the same bytes with signed validation and promotion provenance. It does not
-   rebuild distributions or rerun the test matrix.
-3. Review the draft and publish it with `just release-publish`. This starts
-   **Publish to PyPI**; it does not upload the package immediately.
-4. After asset verification succeeds, approve the `pypi` deployment in GitHub.
-   The workflow uploads the same validated files without rebuilding.
-5. Verify the exact PyPI version, GitHub Release, and release assets.
+## Contents
 
-The workflow definitions are [release preparation](../.github/workflows/prepare-release.yml)
-and [package publication](../.github/workflows/publish.yml). The shared release
-recipes also serve consumers, but this guide describes this package's PyPI
-workflow. Consumers retain their own registry, packaging, and domain checks.
+- [Reusable CI evidence](#reusable-ci-evidence)
+- [Prepare the environment](#prepare-the-environment)
+- [Step 1: Prepare the release PR](#step-1-prepare-the-release-pr)
+- [Step 2: Publish after the PR is merged](#step-2-publish-after-the-pr-is-merged)
+- [Configure or verify Trusted Publishing](#configure-trusted-publishing-before-the-next-release)
 
-## 1. Prepare the environment
+## Reusable CI evidence
 
-Complete [contributor setup](../CONTRIBUTING.md#development-environment), starting
-with the declared uv version. Setup installs user-level Just and synchronizes
-the locked development environment; no environment activation is needed. That
-guide also covers the native tools required by the tests.
+After a protected `main` push, `Package checks` builds the wheel and sdist once,
+validates those files on Linux, macOS, and Windows and through installed changelog
+consumers, then signs the original validation evidence in `release-evidence`.
+CI retains `distributions-ATTEMPT` and `validated-evidence-ATTEMPT` for 30 days.
 
-Changelog generation requires the git-cliff version declared in the root
-Justfile. With Cargo on PATH, install it if it is missing or out of date:
+`Prepare GitHub release` verifies this retained evidence for the tagged commit.
+It requires the exact successful main-push run, all required jobs and steps from
+the same attempt, and nonexpired artifacts retrieved by immutable ID. It validates
+ZIP digests and inventories, distribution metadata and hashes, source commit,
+version, and the original validation signature without rebuilding. PR,
+manual-dispatch and partial-rerun results cannot replace main-push evidence.
 
-```sh
-just changelog-setup
+The publishing workflow additionally requires a matching published release event,
+verifies the original main-validation and promotion signatures, and rechecks live
+validation results and artifact identities before deployment approval and upload.
+Local validation cannot substitute for these workflow gates.
+
+The release commands share Delaunay's operator-facing roles:
+
+| Recipe | Purpose |
+| --- | --- |
+| `changelog-preview [--tag TAG] [--date DATE]` | Preview generation without publishing files |
+| `changelog-release TAG [DATE]` | Generate prospective notes using the prepared citation date by default |
+| `publish-check` | Check the current built wheel and sdist with strict Twine validation |
+| `release-notes TAG` | Print the generated notes for the tag and GitHub release |
+| `release-publish TAG` | Check the reviewed draft and approve GitHub publication |
+| `release-verify TAG` | Verify GitHub assets and the exact PyPI version |
+| `release-version-check` | Require synchronized metadata and matching final changelog and citation dates |
+| `tag TAG` | Create the annotated tag after the final version check |
+| `update-version TAG [ARGS...]` | Prepare synchronized release metadata |
+
+This package has no release benchmark or README performance snapshot to generate.
+Its `publish-check` validates the built wheel and sdist for PyPI using pinned
+Twine with warnings treated as errors. It runs inside `just ci` after the build
+and is also available separately. Signed evidence verification and draft
+creation belong to the preparation workflow here;
+Delaunay's no-argument `release-evidence` adapter and manual draft creation do not
+apply. The shared `release-evidence COMMAND...` recipe exposes lower-level
+operations with explicit policy inputs, described in
+[release evidence](VERIFYING_RELEASE_EVIDENCE.md).
+
+## Prepare the environment
+
+Set the target tag once:
+
+```bash
+TAG=vX.Y.Z
 ```
 
-GitHub CLI (`gh`) must be installed and authenticated as a human maintainer with
-permission to push tags and publish releases. `gh attestation verify --help`
-must succeed: release verification requires a CLI with artifact-attestation
-support and source/signer digest and ref policy flags. Complete the private account-setup
-task for PyPI trusted publishing and GitHub's `pypi` environment approvals before
-starting. See [release configuration](CONFIGURING_GITHUB.md#release-configuration).
-Committing workflow files does not configure these accounts or approvals.
+Verify GitHub authentication and the repository remotes, then synchronize
+`main`:
 
-Land substantive changes before preparing the release. Start with a clean working
-tree, check the remote and published stable releases, then synchronize `main`:
-
-```sh
+```bash
 gh auth status
 git --no-pager remote -v
-git --no-pager status --short
-gh release list --exclude-drafts --exclude-pre-releases --limit 10
-```
-
-Confirm `origin` is `acgetchell/research-repo-tools` and the status output is empty
-before continuing. Preserve any unfinished work separately.
-
-```sh
 git switch main
 git pull --ff-only
-just sync
 ```
 
-Set the release inputs once. This example prepares `v0.2.3` after `v0.2.2` for
-October 21, 2026:
+Install or verify the declared development tools before running maintenance
+recipes. Setup installs user-level Just and synchronizes the development
+environment; see [development commands](../CONTRIBUTING.md#development-environment)
+for uv and native-tool prerequisites. Use Bash or Zsh, or Git Bash on Windows,
+and start with a clean working tree:
 
-```sh
-VERSION=0.2.3
-TAG="v$VERSION"
-PREVIOUS_TAG=v0.2.2
-RELEASE_DATE=2026-10-21
+```bash
+just setup
 ```
 
-Replace the example values with the target version, actual previous published
-stable tag, and intended UTC tagging date. This repository uses the default
-`today` date policy: the changelog date must equal the current UTC date when
-previewing or creating the tag. Allow time for review and CI on that date; if
-preparation crosses into another UTC day, follow the date recovery guidance below.
+Refresh exact direct Python development-tool pins, lockfiles, and the uv pin
+before creating the release branch:
 
-If dependencies or tools need upgrading, run `just update`, review and validate
-the changes, and land them separately. Release preparation does not upgrade
-dependencies. Run `just help` for the complete command list.
+```bash
+just update
+```
 
-## 2. Prepare and merge the release PR
+`just update` upgrades uv through its installation owner before updating
+Python dependencies. It advances exact direct dev pins, refreshes the full
+Python lock, synchronizes dev, and audits the final lock. Failures stop later
+steps; completed updates remain for review and retry.
 
-### Update metadata and generate notes
+Review any tracked dependency or tool changes and land them separately before
+continuing with the release PR, then synchronize `main` again. Dependency and
+tool upgrades remain independently reviewable; `just update-version`
+deliberately does not run `just update`.
 
-Create the release branch, then prepare metadata before generating the changelog:
+`update-version` uses published, non-draft, non-prerelease GitHub Releases as the
+authoritative stable release history. Changelog generation requires the
+Justfile's declared git-cliff version; install it with `just changelog-setup` if
+needed. Complete [Trusted Publishing setup](#configure-trusted-publishing-before-the-next-release)
+before proceeding. Git mutations and publication are maintainer actions;
+assistants follow [AGENTS.md](../AGENTS.md).
 
-```sh
+## Step 1: Prepare the release PR
+
+Keep the release PR focused on version metadata, the generated changelog,
+and release documentation. Major code changes should already be on `main`.
+
+### 1. Create the release branch
+
+```bash
 git switch -c "release/$TAG"
-just release-update "$TAG" "$PREVIOUS_TAG" "$RELEASE_DATE"
-just changelog-preview --tag "$TAG" --date "$RELEASE_DATE"
-just changelog-release "$TAG" "$RELEASE_DATE"
 ```
 
-`release-update` synchronizes the package version in `pyproject.toml` and its local
-entry in `uv.lock`, along with applicable existing release metadata. The explicit
-previous tag avoids GitHub release discovery. See
-[metadata preparation](UPDATING_RELEASE_METADATA.md) for the shared contract.
+### 2. Update release metadata
 
-`changelog-preview` prints prospective notes without writing them.
-`changelog-release` writes `CHANGELOG.md` and archives completed minor series
-under `docs/archives/changelog/` when applicable. Neither command creates a tag.
-Both receive the same explicit date as metadata preparation.
+```bash
+just update-version "$TAG"
+```
 
-Notes come from committed Git history. Staged or unstaged implementation changes
-will not appear. If a substantive fix is needed, commit it, regenerate the notes,
-and repeat the affected checks before review. Generate changelog content rather
-than editing it by hand; see [changelog maintenance](GENERATING_CHANGELOGS.md).
+The recipe infers the previous published stable release and atomically
+synchronizes:
 
-### Validate the prepared release
+- `pyproject.toml` and the local package entry in `uv.lock`;
+- `CITATION.cff` version and the current UTC `date-released`; and
+- the target changelog heading date when that generated heading already exists.
 
-```sh
-just changelog-check
-just release-check "$TAG"
+The complete edit is planned before any file is replaced and caught failures
+roll changed files back. The recipe preserves existing DOI metadata; it does not
+add or rotate a version-specific DOI. It does not generate the changelog or
+upgrade dependencies. Pass `--previous-release TAG` to select an explicitly
+reviewed predecessor without GitHub discovery.
+
+Review the resulting metadata diff before continuing.
+
+### 3. Generate the release changelog
+
+```bash
+just changelog-release "$TAG"
+```
+
+This generates `CHANGELOG.md` as though the target tag already existed,
+archives completed minor series under `docs/archives/changelog/`, and
+uses `date-released` already recorded in `CITATION.cff`. No `RELEASE_DATE`
+shell variable is needed. With this default-date path, the citation version must
+match the target tag and the date must be valid `YYYY-MM-DD`; invalid metadata
+stops generation before files change.
+
+Use `just changelog-preview --tag "$TAG"` for a read-only preview with the same
+date default. An explicit date is still available as the second argument to
+`changelog-release`, or as `--date YYYY-MM-DD` for the preview. An explicit
+date bypasses citation lookup and its version check; the shared generator still
+validates the supplied date. To advance the declared date deliberately, run
+`just update-version "$TAG" --date YYYY-MM-DD` before regenerating. Run the final
+version check to verify the heading matches package metadata and the citation
+date. Review the generated changelog and archive changes; do not edit them manually.
+
+### 4. Validate the release branch
+
+```bash
 just ci
-just audit
+just release-version-check
+just publish-check
 ```
 
-`changelog-check` validates the root changelog and its archives. `release-check`
-requires a canonical stable `vX.Y.Z` tag matching the package version,
-synchronized metadata, and dated, nonempty notes with valid references. It does
-not create a tag, check hosted CI, or publish anything.
+`just ci` includes lockfile, Justfile, Python, workflow, test, package-build,
+PyPI metadata, and isolated wheel/sdist installation checks. `release-version-check` invokes
+the strict `research-repo-tools release check --final-release` gate, requiring
+exactly one current changelog heading whose date matches `CITATION.cff`.
+`publish-check` requires exactly the current version's wheel and sdist in
+`dist/`, verifies their package name and version, and runs `twine check --strict`.
+It catches distribution metadata and description warnings without rebuilding,
+rerunning tests, or uploading. The explicit command repeats only this quick
+check against the artifacts already built by `just ci`.
 
-`just ci` runs local checks and tests, builds the wheel and sdist, and checks
-isolated installations of both. It covers only the current host and excludes the
-hosted native setup checks. `just audit` separately checks locked Python
-dependencies against online advisories; release preparation repeats that audit.
-See [validation coverage](VALIDATING.md) for details.
+Use `just publish-check` alone to recheck existing artifacts after a successful
+full run. If they are missing or for an older version, run
+`just build publish-check`. Source changes still require their affected checks
+and fresh artifacts before release.
 
-### Review and submit the PR
+Local validation covers only the current host; the hosted native checks remain
+required. See [validation coverage](VALIDATING.md), including the
+[agent Git policy](VALIDATING.md#validation-under-the-agent-git-policy).
 
-Inspect the prepared files before staging:
+### 5. Review, stage, and commit the release artifacts
 
-```sh
+Inspect all changes before staging:
+
+```bash
 git --no-pager status --short
 git --no-pager diff
 ```
 
-Stage only the reviewed paths with `git add`, including any new changelog archive.
-Then inspect the staged diff, commit, and open the release PR:
+Expected release artifacts include package metadata and lockfiles,
+`CITATION.cff`, `CHANGELOG.md`, and generated files under
+`docs/archives/changelog/`. Stage only reviewed paths; do not stage unrelated
+work or the entire `docs/` tree without inspecting it.
 
-```sh
+Then inspect and commit the staged release delta:
+
+```bash
 git --no-pager diff --cached
-git commit -m "chore(release): release $TAG"
-git push -u origin "release/$TAG"
-gh pr create --base main --head "release/$TAG" --title "chore(release): release $TAG"
+
+git commit -m "chore(release): release $TAG
+
+- Bump version to $TAG
+- Update citation and package metadata
+- Generate the release changelog
+- Update release documentation"
 ```
 
-Include validation results and any skipped checks in the PR description. Resolve
-review findings and require all configured branch checks before merging manually.
-The publication gate in [pyproject.toml](../pyproject.toml) requires successful
-`check (ubuntu-24.04)`, `check (macos-15)`, `check (windows-2025)`, and
-`changelog-integration` and `release-evidence` results on the release commit.
-The latter runs only on trusted main pushes, after PR validation and merge. Local validation alone
-does not satisfy these requirements.
+### 6. Push the branch and open the PR
 
-## 3. Tag the reviewed release commit
+```bash
+git push -u origin "release/$TAG"
+```
 
-After the PR merges, restore the same release variables if using a new shell.
-Start with a clean working tree, then synchronize the reviewed release:
+Use `chore(release): release $TAG` as the PR title and describe the PR as a
+focused release preparation without feature work. Include validation results
+and skipped checks. Resolve review findings and require the configured protected
+branch checks before merging.
 
-```sh
+### Handling fixes found during preparation
+
+For a critical fix that must be included, make and commit the fix. Rerun
+`just changelog-release "$TAG"`, review and stage only the regenerated release
+outputs, commit that update separately, and rerun the affected checks and final
+release gate.
+
+For a non-critical fix, file an issue and defer it. Do not hand-edit the
+generated changelog to add a known-issue note.
+
+Retries preserve the declared release date unless the maintainer deliberately
+advances it with `update-version` and regenerates the matching changelog.
+
+### Resuming an unpublished release after another PR
+
+A corrective PR can include the affected preparation steps: regenerate the
+changelog and validate. Do not repeat the version bump or dependency updates
+solely because another PR is needed. Once the corrected artifacts merge, resume
+Step 2 from the new clean `main` commit and require its successful main-push
+validation.
+
+If the tag or draft already exists, follow the
+[unpublished-candidate recovery procedure](#other-preparation-and-publication-failures).
+This package's tag push starts signed artifact promotion, so cancel superseded
+preparation runs and reconcile their evidence before replacing an unpublished
+candidate. Never use this recovery path for a published release; publish a new
+version instead.
+
+## Step 2: Publish after the PR is merged
+
+### 1. Synchronize `main`
+
+```bash
 git switch main
 git pull --ff-only
-just sync
-git --no-pager status --short
-git --no-pager log -1 --format=fuller
 ```
 
-The status output must be empty. Compare the full commit SHA with the merged
-release PR and the successful **Package checks** run in GitHub. Record the
-selected SHA and the main-push run ID/attempt in the release PR or tracking issue.
-Require successful `build`, all three native checks, `changelog-integration`,
-and `release-evidence` in that same attempt. Stop if the commit differs or any
-required result is pending, skipped, failed, or belongs to another attempt.
+Use a clean checkout of the reviewed release commit. If `main` has advanced,
+review the intervening changes and refresh generated notes through a PR as
+needed. Require its complete main-push validation before continuing; pushing
+the tag starts preparation immediately.
 
-```sh
+### 2. Create and verify the annotated tag
+
+```bash
+just tag "$TAG"
+git --no-pager tag -l --format='%(contents)' "$TAG"
+```
+
+`just tag` first runs `release-version-check`, then builds the annotation from
+the matching active or archived changelog section. For a changelog larger than
+125 kB, the annotation points to that section instead of embedding it.
+Use `just tag-preview "$TAG"` for an optional read-only preview. Confirm the tag
+resolves to the reviewed release commit; never move a published tag.
+
+### 3. Push the tag
+
+```bash
+git push origin "$TAG"
+```
+
+### 4. Verify the release commit
+
+```bash
 RELEASE_COMMIT=$(git --no-pager rev-parse HEAD)
 gh run list --workflow ci.yml --event push --branch main --commit "$RELEASE_COMMIT" --limit 20
 ```
 
-Inspect the matching run in GitHub before tagging. Preparation independently
-requires exactly one successful matching main-push run from this repository's
-active `.github/workflows/ci.yml`. A workflow dispatch, PR run, fork, unrelated
-commit or ambiguous successful runs cannot substitute for it. Partial reruns
-are ineligible: use **Re-run all jobs** on the original main-push run so the
-producer and every validator run together in the new attempt.
+Require successful `build`, `check (ubuntu-24.04)`, `check (macos-15)`,
+`check (windows-2025)`, `changelog-integration`, and `release-evidence` jobs for
+this exact commit in the same attempt. The publishing policy in `pyproject.toml`
+binds its required checks to GitHub Actions app ID `15368`. PR review remains a
+protected-branch requirement; it does not replace merged `main` evidence.
+Missing, pending, cancelled or failed required jobs block preparation.
 
-If `main` has advanced since the release PR, review the intervening changes and
-refresh generated notes through a PR as needed. Validate the final contents and
-require successful native checks for the selected commit before tagging it.
+Inspect the matching main-push run in GitHub and record its full commit,
+run ID, and attempt in the release PR or tracking issue. The preparation workflow
+independently requires exactly one successful matching run from this repository's
+active `ci.yml`. Manual dispatch and partial reruns cannot supply promotion
+evidence. If the original main-push run failed, rerun all its jobs within
+GitHub's 30-day rerun window. If no eligible run exists, land a new reviewed
+commit that triggers main-push CI; do not move an already published tag.
 
-### Preview and create the annotated tag
+### 5. Create the draft GitHub release
 
-```sh
-just release-check "$TAG"
-just release-notes "$TAG"
-just release-tag-preview "$TAG"
-```
+The tag push starts `Prepare GitHub release`, which creates the draft after
+verifying and signing the retained distributions. Wait for that workflow:
 
-Confirm the version, UTC date, notes, and proposed annotation. The preview runs
-tag validation without changing Git state. If it reports a stale date, return to
-metadata preparation before proceeding.
-
-```sh
-just release-tag "$TAG"
-git --no-pager show --no-patch "$TAG"
-```
-
-`release-tag` creates a local annotated tag at the current commit; it does not
-push or publish. Confirm the displayed commit matches the recorded SHA and the
-annotation matches the preview. Oversized annotations link to the complete notes.
-If the tag already exists or differs from the reviewed commit, stop and inspect
-local and remote state. Never move a published tag.
-
-### Push the tag and wait for preparation
-
-```sh
-git push origin "$TAG"
+```bash
 gh run list --workflow prepare-release.yml --limit 5
 gh run watch --exit-status
 ```
 
-Select the **Prepare GitHub release** run for this tag and commit when prompted;
-if it has not appeared yet, repeat the listing. Wait for the complete workflow,
-including staging, to succeed. It requires an unchanged tag whose full commit
-belongs to `main`, checks metadata and generated notes, and audits dependencies.
-It selects that commit's trusted successful main run, checks all required job
-and step identities, and downloads the distribution and evidence artifacts by
-immutable ID. It checks original ZIP digests, flat inventory, wheel/sdist
-metadata, package version, file hashes and signed source association. It signs
-promotion only after verifying the original main-validation signature.
+Select the run for this tag and commit when prompted. If it has not appeared,
+repeat the listing. Wait for the complete workflow, including staging, to succeed.
+Its pending-validation wait is bounded to 30 polls at 20-second intervals;
+missing, failed, expired, ambiguous or mismatched evidence fails with recovery
+instructions. It never rebuilds or falls back to another commit.
 
-The preparation log records the original run/attempt, distribution artifact ID
-and ZIP digest. Its default pending-validation wait is bounded to 30 polls at
-20-second intervals (under ten minutes); missing, failed, expired, ambiguous or
-mismatched evidence fails with recovery instructions. There is no rebuild or
-fallback to another commit. Let this workflow create the draft and assets; a
-manually assembled release cannot replace its signed validation provenance.
+Let this workflow create the draft and assets. A manually created draft cannot
+replace its signed provenance. Keep the release title identical to the tag,
+including its leading `v`, and leave it as a stable draft until review.
 
-### Artifact retention and recovery window
+### 6. Review the draft
+
+Open the repository's [Releases page](https://github.com/acgetchell/research-repo-tools/releases).
+Inspect the draft, generated notes, and assets:
+
+```bash
+gh release view "$TAG" --json tagName,isDraft,isPrerelease,body,assets
+just release-notes "$TAG"
+```
+
+Confirm `isDraft: true`, `isPrerelease: false`, and the expected tag and notes.
+The draft must contain exactly these three nonempty uploaded assets, with
+`VERSION` replaced by `$TAG` without the leading `v`:
+
+- `research_repo_tools-VERSION-py3-none-any.whl`
+- `research_repo_tools-VERSION.tar.gz`
+- `release-attestation.json`
+
+GitHub's automatically provided source archives are separate from this inventory.
+The attestation retains the original main-validation manifest and Sigstore bundle
+plus a signed promotion predicate. Review the original main run/attempt,
+immutable artifact IDs and ZIP digests, promoted file hashes, and successful
+preparation run. Do not edit the draft, move the tag, or publish while preparation
+is running. Runs for the same tag are serialized without cancelling an active run.
+
+### 7. Publish the reviewed draft and approve PyPI publication
+
+From the clean tagged checkout, using your human GitHub CLI session, run:
+
+```bash
+just release-publish "$TAG"
+gh run list --workflow publish.yml --limit 5
+```
+
+This command authorizes GitHub Release publication. The shared gate checks the
+clean checkout, stable tag/package metadata, remote tag commit, protected default
+branch ancestry, successful exact-commit checks and required assets. Human
+authentication is essential: publishing with a workflow's `GITHUB_TOKEN` does
+not trigger the separate `release: published` workflow.
+
+Open the matching `Publish to PyPI` run. Its `verify` job checks the exact uploaded
+inventory and provider digests, then verifies both signatures. Main validation
+must be signed by `ci.yml` at the exact source/signer commit and `refs/heads/main`,
+with the original push run/attempt in its certificate. Promotion must be signed
+by `prepare-release.yml` at that same commit and the release tag ref, binding the
+retained evidence and promoted bytes. Both reject self-hosted runners.
+
+The verifier rechecks live validation results, artifact association, the remote
+tag and release asset identity before allowing upload. After `verify` succeeds
+and `publish` is waiting for approval, approve the `pypi` environment deployment
+in GitHub. Follow the configured reviewer policy and wait for completion:
+
+```bash
+gh run watch --exit-status
+```
+
+Select the publication run for this tag and commit. The upload uses PyPI trusted
+publishing and the verified wheel and sdist; there is no local upload step,
+rebuild, or second native test matrix at release time.
+
+### 8. Verify registry availability and downstream resolution
+
+After the publishing workflow completes:
+
+```bash
+just release-verify "$TAG"
+```
+
+This requires the published stable GitHub release, its required assets, and the
+exact version on PyPI with wheel and sdist upload evidence. It retries proven
+registry absence seven times at ten-second intervals, never an upload. A
+published GitHub release alone is insufficient.
+
+Check a fresh consuming project using the
+[installation instructions](../README.md#install-with-uv) with the exact
+published version. Complete setup and run that consumer's focused integration
+checks. Consumers retain their Rust, platform, and domain checks.
+
+Preserve the output and record the tag, full commit, original main run/attempt,
+immutable distribution/evidence artifact IDs and ZIP digests, promoted file
+hashes, preparation run, publishing run, and consumer results in the release PR
+or tracking issue. Keep that issue open until publication and consumer
+verification succeed.
+
+### Recovering a failed run
+
+#### Artifact retention and recovery window
 
 Both `distributions-ATTEMPT` and `validated-evidence-ATTEMPT` are retained for
 30 days. Complete preparation and publication within that window; the verifier
@@ -268,7 +443,7 @@ first inspect retention and access. GitHub permits workflow reruns only within
 30 days of the original run. Within that window and with access restored,
 rerun **all** jobs of the original **push to main** run for the exact tagged commit:
 
-```sh
+```bash
 MAIN_RUN_ID=REPLACE_WITH_THE_RECORDED_MAIN_PUSH_RUN_ID
 gh run rerun "$MAIN_RUN_ID"
 gh run watch "$MAIN_RUN_ID" --exit-status
@@ -288,97 +463,16 @@ The workflow cannot manufacture equivalent evidence from an unrelated run. For a
 follow the draft recovery procedure below before rerunning the recorded
 preparation run with `gh run rerun PREPARATION_RUN_ID`.
 
-## 4. Review the draft and publish
-
-Stay in the clean checkout of the tagged commit. Inspect the draft and compare
-its notes with the generated notes:
-
-```sh
-gh release view "$TAG" --json tagName,isDraft,isPrerelease,body,assets
-just release-notes "$TAG"
-```
-
-Confirm the expected tag, `isDraft: true`, and `isPrerelease: false`. The draft
-must have exactly these three nonempty uploaded assets, substituting `$VERSION`:
-
-- `research_repo_tools-$VERSION-py3-none-any.whl`
-- `research_repo_tools-$VERSION.tar.gz`
-- `release-attestation.json`
-
-GitHub's automatically provided source archives are separate from this uploaded
-asset inventory. `release-attestation.json` retains the original main-validation
-manifest and Sigstore bundle plus a second signed promotion predicate. Review
-the selected main run/attempt and immutable artifact IDs/digests, the successful
-preparation run, and the generated notes before approving publication.
-
-Using the authenticated human GitHub CLI session, run:
-
-```sh
-just release-publish "$TAG"
-gh run list --workflow publish.yml --limit 5
-```
-
-**`release-publish` is approval to publish the GitHub Release.** It checks the
-clean checkout, metadata, remote tag and commit, protected-branch ancestry,
-required CI checks, draft state, and required assets before publishing. Use the
-human session so the release event can trigger the publication workflow.
-
-Open the matching **Publish to PyPI** run in GitHub. Its `verify` job checks the
-exact uploaded inventory and provider digests, then verifies both signatures.
-Main validation must be signed by `ci.yml` at the exact source/signer commit and
-`refs/heads/main`, with the original push run/attempt in its certificate.
-Promotion must be signed by `prepare-release.yml` at that same commit and the
-release tag ref, binding the retained validation evidence and promoted bytes.
-Both reject self-hosted runners. The verifier rechecks live validation results,
-artifact association, the remote tag and release asset identity before allowing
-upload. After it succeeds, approve the pending `pypi` environment deployment in GitHub to allow
-the upload. Follow the configured reviewer policy, then wait for completion:
-
-```sh
-gh run watch --exit-status
-```
-
-Select the publication run for this tag and commit. The upload uses PyPI trusted
-publishing and the verified wheel and sdist; there is no local upload step.
-
-## 5. Verify and finish
-
-After the publication workflow completes, verify both registry and GitHub state:
-
-```sh
-just release-verify "$TAG" --attempts 7 --interval 10
-```
-
-The command requires a published stable GitHub Release with the required assets
-and the exact version on PyPI. The attempts and interval allow time for registry
-visibility; they never repeat an upload. A published GitHub Release alone does
-not establish that PyPI publication succeeded.
-
-In a fresh consuming project, follow the [installation instructions](../README.md#install-with-uv)
-with the exact published version, complete setup, and run that consumer's focused
-integration checks. Consumers retain their Rust, platform, and domain checks.
-
-Record the version, full release commit, original main run/attempt, immutable
-distribution/evidence artifact IDs and ZIP digests, promoted file hashes,
-successful preparation/publication runs and verification results in the release
-PR or tracking issue. After verification,
-remove the merged release branch if it still exists:
-
-```sh
-git branch -d "release/$TAG"
-git push origin --delete "release/$TAG"
-```
-
-## Recover a failed attempt
+#### Other preparation and publication failures
 
 - **Metadata, notes, or validation failed:** fix the source, regenerate notes
   after substantive commits, and repeat the affected checks before review.
-- **The UTC date changed before tagging:** set `RELEASE_DATE` to the new intended
-  UTC tagging date and rerun `release-update`, `changelog-preview`, and
-  `changelog-release` from step 2. The updater synchronizes an existing target
-  heading before generation, avoiding conflicting declared dates. Review, commit,
-  validate, and merge the changes before returning to step 3. Do not hand-edit
-  generated dates or bypass the tag check.
+- **The intended release date changed:** crossing UTC midnight alone requires no
+  change under the `declared` policy. To choose a different date deliberately, run
+  `just update-version "$TAG" --date YYYY-MM-DD`, then repeat changelog generation
+  and validation from Step 1. The updater synchronizes an existing target heading
+  before generation, avoiding conflicting dates. Review, commit, and merge the
+  changes before returning to Step 2. Do not hand-edit generated dates.
 - **A tag exists or its push was rejected:** inspect the local tag, remote tag,
   GitHub Release, and PyPI state before continuing. Do not force-push a published
   tag. A correction to published package contents requires a new version.
@@ -397,7 +491,7 @@ git push origin --delete "release/$TAG"
   commit in a complete trusted main-push attempt. Record the old and corrected
   full SHAs and tag object IDs. Remove only a reviewed superseded unpublished
   draft and its assets, then reconcile the unpublished tag with an explicit
-  expected-old-ref guard, recreate its annotation through `just release-tag`,
+  expected-old-ref guard, recreate its annotation through `just tag`,
   and verify the remote tag resolves to the corrected commit before preparation.
   Never reuse superseded assets, validation, or signed evidence. Do not move a
   published tag, release, or registry artifact.
@@ -419,3 +513,56 @@ git push origin --delete "release/$TAG"
   after an upload was accepted, and registry lookup errors never prove absence.
   Verify an existing publication instead of uploading it again. Do not follow a
   successful workflow with a second manual upload.
+
+### 9. Verify the Zenodo release metadata
+
+If Zenodo integration is enabled, open the new version-specific record after
+it archives the GitHub release. Check that it identifies the exact release and
+that its publication date, authors, ORCID, and license agree with `CITATION.cff`.
+The all-versions concept landing page alone is not evidence for the new record.
+Correct a mismatch before declaring the release complete.
+
+Record the version DOI in the release PR or tracking issue. Use that DOI for
+this release and the concept DOI for project-wide references. Add DOI links in
+a follow-up documentation change once the record exists; do not move the
+published tag to insert a newly assigned DOI.
+
+### 10. Remove the merged release branch
+
+After PyPI, GitHub, release-asset, consumer, and applicable Zenodo verification
+succeed:
+
+```bash
+git branch -d "release/$TAG"
+git push origin --delete "release/$TAG"
+```
+
+## Configure Trusted Publishing before the next release
+
+Before starting a release, verify this exact PyPI trusted publisher identity:
+
+| Field | Value |
+| --- | --- |
+| Publisher | GitHub |
+| Repository owner | `acgetchell` |
+| Repository name | `research-repo-tools` |
+| Workflow filename | `publish.yml` |
+| Environment name | `pypi` |
+
+Use only the workflow filename, without `.github/workflows/`. Verify GitHub's
+`pypi` environment and required maintainer-review policy, and that the human
+GitHub CLI session can publish the reviewed draft and approve deployment.
+`gh attestation verify --help` must support the source/signer digest and ref
+policy flags used by the workflows.
+
+Workflow YAML does not apply account configuration. Keep account-specific
+registration and approval choices in the maintainer's private setup task; follow
+[release configuration](CONFIGURING_GITHUB.md#release-configuration). Re-read live
+settings before changing them, preserving newer entries. Do not start a second
+upload to test setup after a successful publication.
+
+For a citable archive, enable this repository in
+[Zenodo's GitHub integration](https://docs.github.com/en/repositories/archiving-a-github-repository/referencing-and-citing-content)
+before publishing the GitHub Release. The integration assigns DOIs after
+publication and cannot reserve them in advance. Keep `CITATION.cff` valid without
+a DOI until an archive exists; see [Zenodo's DOI guidance](https://zenodo.org/help/versioning).

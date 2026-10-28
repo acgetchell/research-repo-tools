@@ -114,8 +114,8 @@ and self-referencing notebook extra. Set `[tool.uv] package=false`,
 retain exact shared pins in tooling/notebook dependency groups, refresh the lock,
 and remove local wheel/entry-point tests. Rust/scientific and configuration tests
 remain. Declare `release.tag-policy="canonical-stable"` where `vX.Y.Z` is required;
-use `just release-update TAG PREVIOUS DATE` for offline release preparation.
-Version-independent documentation examples avoid release-update callbacks.
+use `just update-version TAG --previous-release PREVIOUS --date DATE` for offline release preparation.
+Version-independent documentation examples avoid release metadata callbacks.
 
 ## Release benchmark jobs
 

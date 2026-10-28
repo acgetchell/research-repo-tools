@@ -149,21 +149,13 @@ release-publish tag *args:
 release-reuse commit +args:
     uv run --locked --group dev research-repo-tools release reuse "$@"
 
-# Create a local annotated release tag from validated notes (maintainer only).
-release-tag tag:
-    uv run --locked --group dev research-repo-tools changelog tag "$1"
-
-# Preview the release annotation without changing Git state.
-release-tag-preview tag:
-    uv run --locked --group dev research-repo-tools changelog tag "$1" --dry-run
-
-# Prepare release metadata offline with a reviewed predecessor and date.
-release-update tag previous date:
-    uv run --locked --group dev research-repo-tools release update "$1" --previous-release "$2" --date "$3"
-
 # Require the stable GitHub Release/assets and exact published registry version.
 release-verify tag *args:
-    uv run --locked --group dev research-repo-tools release verify "$@"
+    uv run --locked --group dev research-repo-tools release verify --attempts 7 --interval 10 "$@"
+
+# Require synchronized package metadata and complete dated release notes.
+release-version-check:
+    uv run --locked --group dev research-repo-tools release check --final-release
 
 # Review branch and local changes with CodeRabbit against a verified origin/main by default.
 review base="origin/main":
@@ -203,6 +195,14 @@ shared-python-plan version:
 # Apply the validated shared-package/Python/tool-profile migration and recreate the environment.
 shared-python-update version:
     uv run --no-config --no-project --isolated --managed-python --script python-bootstrap.py "$1" --apply
+
+# Create a local annotated release tag after checking final metadata.
+tag tag: release-version-check
+    uv run --locked --group dev research-repo-tools changelog tag "$1"
+
+# Preview the release annotation without changing Git state.
+tag-preview tag: release-version-check
+    uv run --locked --group dev research-repo-tools changelog tag "$1" --dry-run
 
 # Discover/export existing native dependencies; never install host packages.
 tectonic +args:
@@ -257,6 +257,10 @@ update-tools: update-uv update-cargo-tools
 # Upgrade uv through its installation owner and reconcile the project pin.
 update-uv *args:
     uv run --no-config --no-sync --no-python-downloads research-repo-tools deps update-uv "$@"
+
+# Update release metadata; optional flags select an explicit predecessor or date.
+update-version tag *args:
+    uv run --locked --group dev research-repo-tools release update "$@"
 
 # Run declared scientific examples or validators in configuration order.
 validate configuration *names:
