@@ -3,12 +3,12 @@
 import re
 import tomllib
 import unicodedata
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 
 from research_repo_tools.complete_runs import CompletePolicy, CompleteSample, _integer, collect_complete_sample
 from research_repo_tools.criterion import _positive, _statistic, _unit
-from research_repo_tools.criterion_inventory import parse_inventory
+from research_repo_tools.criterion_inventory import CriterionInventory, parse_inventory
 from research_repo_tools.evidence import _load_json, _object, _string
 from research_repo_tools.measurement import _strings
 from research_repo_tools.publication import _path, _publication_name
@@ -67,8 +67,21 @@ class SavedSamplePlan:
         object.__setattr__(self, "storage_paths", tuple(sorted(paths)))
 
 
-def load_saved_sample(root: Path, configuration: str, *, saved_sample: str | None = None, criterion_dir: str | None = None) -> SavedSamplePlan:
-    """Read strict saved-sample TOML and an explicit expected or retained inventory."""
+def _scope_plan(plan: SavedSamplePlan, inventory: CriterionInventory, suite: str) -> SavedSamplePlan:
+    if suite not in dict(inventory.suites):
+        raise ValueError(f"unknown Criterion suite: {suite}")
+    included = set(inventory.expected)
+    expected = tuple(identity for identity in dict(inventory.suites)[suite] if identity in included)
+    if not expected:
+        raise ValueError(f"Criterion suite has no included cases: {suite}")
+    selected = set(expected)
+    policy = replace(plan.policy, expected=expected, sample_counts=tuple((key, value) for key, value in plan.policy.sample_counts if key in selected))
+    return replace(plan, policy=policy, storage_paths=tuple((key, value) for key, value in plan.storage_paths if key in selected))
+
+
+def _load_saved_sample(
+    root: Path, configuration: str, *, saved_sample: str | None = None, criterion_dir: str | None = None
+) -> tuple[SavedSamplePlan, CriterionInventory | None]:
     raw = _table(
         tomllib.loads(_path(root.resolve(), configuration).read_bytes().decode("utf-8")),
         "saved sample",
@@ -95,11 +108,8 @@ def load_saved_sample(root: Path, configuration: str, *, saved_sample: str | Non
         raise ValueError("sample-counts requires schema 2 and excludes sample-count")
     if ("expected" in raw) == ("inventory" in raw):
         raise ValueError("saved sample requires exactly one of expected or inventory")
-    expected = (
-        parse_inventory(_path(root.resolve(), _string(raw["inventory"], "inventory path")).read_bytes()).expected
-        if "inventory" in raw
-        else _strings(raw["expected"], "expected")
-    )
+    inventory = parse_inventory(_path(root.resolve(), _string(raw["inventory"], "inventory path")).read_bytes()) if "inventory" in raw else None
+    expected = inventory.expected if inventory is not None else _strings(raw["expected"], "expected")
     required = _strings(raw.get("required", []), "required", nonempty=False)
     if len(set(required)) != len(required) or not set(required) <= set(expected):
         raise ValueError("saved inventory omits required IDs or required IDs are duplicated")
@@ -111,7 +121,7 @@ def load_saved_sample(root: Path, configuration: str, *, saved_sample: str | Non
         _unit(raw.get("unit", "ns")),
         sample_counts=tuple((key, _integer(value, "sample count")) for key, value in _object(raw.get("sample-counts", {}), "sample counts").items()),
     )
-    return SavedSamplePlan(
+    plan = SavedSamplePlan(
         _string(criterion_dir if criterion_dir is not None else raw.get("criterion-dir", "target/criterion"), "criterion-dir"),
         _string(saved_sample if saved_sample is not None else raw.get("saved-sample"), "saved-sample"),
         policy,
@@ -119,6 +129,23 @@ def load_saved_sample(root: Path, configuration: str, *, saved_sample: str | Non
         _strings(raw.get("raw-files", list(_CORE_FILES)), "raw-files"),
         storage_paths=tuple((key, _string(value, "storage path")) for key, value in _object(raw.get("storage-paths", {}), "storage paths").items()),
     )
+    return plan, inventory
+
+
+def load_saved_sample(
+    root: Path, configuration: str, *, saved_sample: str | None = None, criterion_dir: str | None = None, suite: str | None = None
+) -> SavedSamplePlan:
+    """Validate the entire configuration, then optionally select one retained suite.
+
+    Suite selection honors exclusions and per-case counts. Explicit expected-ID
+    configurations cannot select a suite; unknown or entirely excluded suites fail.
+    """
+    plan, inventory = _load_saved_sample(root, configuration, saved_sample=saved_sample, criterion_dir=criterion_dir)
+    if suite is None:
+        return plan
+    if inventory is None:
+        raise ValueError("suite selection requires a retained inventory")
+    return _scope_plan(plan, inventory, suite)
 
 
 def validate_saved_sample(

@@ -35,7 +35,7 @@ Starting in v0.1.8, the installed package's Python support minimum applies to
 managed consumers regardless of development opt-ins. This supersedes v0.1.7
 policies that allowed application metadata below that minimum. Development-selector
 mirroring remains opt-in; explicit lower lint/type targets remain consumer policy.
-See [shared Python adoption](../README.md#shared-python-adoption) before updating
+See [shared Python adoption](UPDATING_DEPENDENCIES.md#shared-python-adoption) before updating
 the exact package pin. Unreleased-only
 changelogs are accepted only during explicit first-release preparation; final
 release validation remains strict. Native scanner schemas and Semgrep assertion
@@ -43,7 +43,7 @@ semantics remain upstream-owned rather than becoming consumer-specific variants.
 
 Review adoption on Linux, macOS and Windows. Local deterministic models supplement
 native installed-package checks; a successful host-only check does not establish
-another platform's support. See [README](../README.md) for operational commands
+another platform's support. See [task guide](../README.md) for operational commands
 and [CONTRIBUTING](../CONTRIBUTING.md) for package development.
 
 ## SARIF and batched scan adoption

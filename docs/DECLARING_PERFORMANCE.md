@@ -195,11 +195,11 @@ files do not need normalization or regeneration.
 ## Consumer migration
 
 Install uv and the package's user-level Just setup as described in the
-[README](../README.md#install-with-uv). A consumer can add the following recipes
+[task guide](../README.md#install-with-uv). A consumer can add the following recipes
 to its existing Just module. The packaged `performance-prepare`,
 `performance-release`, and `performance-readme` recipes share one declarative
 workflow and independent retry boundaries; see the
-[README](../README.md#prepared-performance-releases) and
+[task guide](RECORDING_PERFORMANCE.md#prepared-performance-releases) and
 [API contract](performance-release-api.md). Tag fetching requires explicit
 `--fetch-tags --allow-git-mutations`; preparation otherwise uses reviewed local
 refs. Lower-level acquisition, promotion and publication remain composable:
@@ -207,18 +207,21 @@ refs. Lower-level acquisition, promotion and publication remain composable:
 ```just
 [positional-arguments]
 performance-measure current baseline:
-    uv run --locked research-repo-tools performance measure tooling/measurement-full.toml "$1" "$2" --allow-git-mutations --payload target/run.json --manifest target/evidence.json
+    uv run --locked research-repo-tools performance measure tooling/measurement-full.toml "$1" "$2" --allow-git-mutations \
+        --payload target/run.json --manifest target/evidence.json
 
 performance-promote:
     uv run --locked research-repo-tools performance promote tooling/report.toml --payload target/run.json --manifest target/evidence.json
 
 [positional-arguments]
 performance-publish current current_commit baseline baseline_commit:
-    uv run --locked research-repo-tools performance publish tooling/publication.toml --current-release "$1" --current-revision "$2" --baseline-release "$3" --baseline-revision "$4"
+    uv run --locked research-repo-tools performance publish tooling/publication.toml \
+        --current-release "$1" --current-revision "$2" --baseline-release "$3" --baseline-revision "$4"
 
 [positional-arguments]
 performance-render current current_commit baseline baseline_commit:
-    uv run --locked research-repo-tools performance publish tooling/publication.toml --artifacts-only --current-release "$1" --current-revision "$2" --baseline-release "$3" --baseline-revision "$4"
+    uv run --locked research-repo-tools performance publish tooling/publication.toml --artifacts-only \
+        --current-release "$1" --current-revision "$2" --baseline-release "$3" --baseline-revision "$4"
 
 performance-retained:
     uv run --locked research-repo-tools performance promote tooling/report.toml

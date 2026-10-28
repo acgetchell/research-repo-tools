@@ -39,6 +39,13 @@ def add_commands(groups) -> None:
     from research_repo_tools.performance_workflows import add_command
 
     commands = groups.add_parser("performance", help="compare timings and verify retained evidence").add_subparsers(dest="action", required=True)
+    assemble = commands.add_parser("assemble-suites", help="verify and archive the complete union of independent Criterion suites")
+    assemble.add_argument("configuration")
+    assemble.add_argument("archives", nargs="+")
+    assemble.add_argument("--output", required=True)
+    assemble.add_argument("--revision", required=True)
+    assemble.add_argument("--session", required=True, help="independent collection attempt identity shared by all suite jobs")
+    assemble.add_argument("--saved-sample")
     add_command(commands, "assets")
     add_command(commands, "baseline")
     command_timing = commands.add_parser("command-time", help="acquire exploratory external-command wall timings, separate from Criterion")
@@ -69,6 +76,20 @@ def add_commands(groups) -> None:
     host = commands.add_parser("host", help="capture versioned host observations without compatibility policy")
     host.add_argument("--output", required=True)
     add_command(commands, "measure")
+    pack = commands.add_parser("pack-suite", help="verify and archive one Criterion suite with its original runner provenance")
+    pack.add_argument("configuration")
+    pack.add_argument("suite")
+    pack.add_argument("--output", required=True)
+    pack.add_argument("--revision", required=True)
+    pack.add_argument("--session", required=True)
+    pack.add_argument("--host", required=True, help="host JSON captured on the measurement runner")
+    pack.add_argument("--started-at", required=True, type=int, help="measurement start in UTC Unix seconds")
+    pack.add_argument("--finished-at", required=True, type=int, help="measurement end in UTC Unix seconds")
+    pack.add_argument("--context", action="append", default=[], metavar="KEY=VALUE", help="retain command, features or other measurement context")
+    pack.add_argument("--source-sha256")
+    pack.add_argument("--harness-sha256")
+    pack.add_argument("--criterion-dir")
+    pack.add_argument("--saved-sample")
     add_command(commands, "prepare")
     profile = commands.add_parser("profile", help="capture configured profiling context and native Rust/Cargo declarations")
     profile.add_argument("configuration")
@@ -99,6 +120,7 @@ def add_commands(groups) -> None:
     saved.add_argument("configuration")
     saved.add_argument("--criterion-dir", help="root-relative Criterion output directory (for example the release CRITERION_HOME)")
     saved.add_argument("--saved-sample", help="actual safe saved sample name for this release")
+    saved.add_argument("--suite", help="verify one included suite after validating the entire retained inventory and configuration")
 
 
 def run(args: argparse.Namespace, settings: Config) -> int:
@@ -106,6 +128,33 @@ def run(args: argparse.Namespace, settings: Config) -> int:
 
     if args.action in performance_workflows.COMMANDS:
         return performance_workflows.run(args, settings)
+    if args.action in {"assemble-suites", "pack-suite"}:
+        from research_repo_tools.criterion_suites import SuiteRun, assemble_saved_suites, pack_saved_suite
+        from research_repo_tools.host_metadata import parse_host
+        from research_repo_tools.publication import _path
+
+        if args.action == "assemble-suites":
+            result = assemble_saved_suites(
+                settings.root,
+                args.configuration,
+                tuple(args.archives),
+                args.output,
+                revision=args.revision,
+                session=args.session,
+                saved_sample=args.saved_sample,
+            )
+        else:
+            if any("=" not in value for value in args.context):
+                raise ValueError("suite context requires KEY=VALUE entries")
+            provenance = evidence.Provenance(
+                args.revision, args.source_sha256, args.harness_sha256, tuple((value.partition("=")[0], value.partition("=")[2]) for value in args.context)
+            )
+            run = SuiteRun(provenance, args.session, parse_host(_path(settings.root, args.host).read_bytes()), args.started_at, args.finished_at)
+            result = pack_saved_suite(
+                settings.root, args.configuration, args.suite, args.output, run=run, saved_sample=args.saved_sample, criterion_dir=args.criterion_dir
+            )
+        print(f"Archived {len(result.cases)} verified Criterion benchmarks")
+        return 0
     if args.action == "command-time":
         from research_repo_tools.command_timing import publish_command_timing, summarize_commands
 
@@ -126,7 +175,7 @@ def run(args: argparse.Namespace, settings: Config) -> int:
         from research_repo_tools.criterion_baselines import load_saved_sample, validate_saved_sample
         from research_repo_tools.criterion_inventory import _directory
 
-        plan = load_saved_sample(settings.root, args.configuration, saved_sample=args.saved_sample, criterion_dir=args.criterion_dir)
+        plan = load_saved_sample(settings.root, args.configuration, saved_sample=args.saved_sample, criterion_dir=args.criterion_dir, suite=args.suite)
         result = validate_saved_sample(
             _directory(settings.root, plan.criterion_dir),
             plan.saved_sample,

@@ -509,6 +509,8 @@ def _render_run_v1(evidence: Evidence, *, title: str = "Benchmark timings") -> b
     """Frozen timing presentation for validating immutable renderer-1 histories."""
     run = validate_run_evidence(evidence)
     phases = dict(run.phases)
+    cases = {phase: {case.full_id: case for case in sample.cases} for phase, sample in run.phases}
+    rows = [(series, dict(series.rows)) for series in run.series]
     policy = phases["baseline"].policy
     labels = sorted({label for series in run.series for label, _ in series.rows})
     lines = [
@@ -536,9 +538,9 @@ def _render_run_v1(evidence: Evidence, *, title: str = "Benchmark timings") -> b
         )
         for label in labels:
             cells = []
-            for series in run.series:
-                full_id = dict(series.rows).get(label)
-                case = next((case for case in phases[series.phase].cases if case.full_id == full_id), None)
+            for series, mapping in rows:
+                full_id = mapping.get(label)
+                case = cases[series.phase].get(full_id) if full_id is not None else None
                 cells.append("—" if case is None else _format_estimate(case.estimate(statistic), policy.unit))
             lines.append(f"| {_markdown_text(label)} | " + " | ".join(cells) + " |")
     return ("\n".join(lines) + "\n").encode("utf-8")
@@ -711,12 +713,13 @@ def render_run(
             ]
         )
         phases = dict(run.phases)
+        cases = {phase: {case.full_id: case for case in sample.cases} for phase, sample in run.phases}
         timings.extend(["", "## Complete phase inventory", "", "| Benchmark | Baseline | Current |", "| --- | --- | --- |"])
         for full_id in sorted(set(phases["baseline"].policy.expected) | set(phases["current"].policy.expected)):
             cells = []
             for phase in ("baseline", "current"):
                 sample = phases[phase]
-                case = next((case for case in sample.cases if case.full_id == full_id), None)
+                case = cases[phase].get(full_id)
                 cells.append("unavailable" if case is None else _format_estimate(case.estimate(sample.policy.statistics[0]), sample.policy.unit))
             timings.append(f"| {_markdown_text(full_id)} | " + " | ".join(cells) + " |")
     return ("<!-- research-repo-tools/run-report/v2 -->\n" + "\n".join([*timings, *_provenance_summary(evidence)]) + "\n").encode("utf-8")

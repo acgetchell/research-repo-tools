@@ -12,6 +12,25 @@ Checker failures, malformed JSON, other stderr, and source diagnostics retain
 their failure behavior. A nonzero checker status without source diagnostics still
 fails even when the target-support notice is present.
 
+## First notebook workflow
+
+After [consumer setup](../README.md#install-with-uv), add the notebook extra at
+the same exact tooling version and declare your analysis packages. Declare and
+lock Ruff and ty in the development dependencies as described under
+[Python linting](#python-linting); the notebook extra does not install these
+checkers. Refresh the lock before running the first workflow:
+
+```sh
+uv lock
+just notebook-sync
+just notebook-lint notebooks/analysis.ipynb
+just notebook-execute notebooks/analysis.ipynb
+```
+
+Lint success reports the notebook without changing it. Execution publishes its
+executed copy and JSON report under `target/notebooks`; a failed cell returns
+nonzero and identifies the cell. Repair source or inputs before rerunning.
+
 ## Environment
 
 Declare `research-repo-tools[notebooks]` at the same exact version as the tooling
@@ -111,10 +130,10 @@ output policy; `notebooks lint` also replaces the common Python lint/format/type
 helper. Consumers retain their fast/slow selections, preparation recipes, and
 scientific assertions.
 
-For integration tests, the v0.1.8-targeted
-[public fixture API](api.md#python-notebook-integration-test-api) prepares isolated
+For integration tests, the
+[public fixture API](notebooks-api.md#python-notebook-integration-test-api) prepares isolated
 projects and returns executed notebooks and reports while borrowing the test
-process's locked interpreter. The [README example](../README.md#consumer-integration-tests)
+process's locked interpreter. The [worked example](notebooks-api.md#consumer-integration-tests)
 replaces temporary-file copying and manifest surgery. Adopt it after publication;
 retain scientific notebook cells, input policies, and assertions in the consumer.
 
@@ -161,7 +180,7 @@ maps diagnostics directly to cells. Configure notebook-specific rules against
 `notebooks.id-pattern` is an optional Python regular expression, matched with
 `fullmatch` against all existing IDs, including Markdown and raw cells.
 `notebooks lint --id-pattern PATTERN` overrides configuration for one invocation.
-The [README](../README.md#notebooks) supplies the lowercase kebab-case pattern
+Use the lowercase kebab-case pattern
 `[a-z0-9]+(?:-[a-z0-9]+)*`: lowercase ASCII letters/digits separated by single
 hyphens, with no leading/trailing hyphen. A different full-match expression can
 declare another consumer spelling policy. Invalid or empty patterns fail before
@@ -177,9 +196,8 @@ Passing a spelling pattern does not certify descriptive meaning.
 
 ## Interactive launch and explicit reset
 
-These optional interfaces target v0.1.8. Consumers must verify the exact published
-PyPI release before replacing their launch/reset implementations. Notebook paths,
-analysis dependencies, and deliberate-execution policy remain consumer-owned.
+Notebook paths, analysis dependencies and deliberate-execution policy remain
+consumer-owned. Verify the exact published package before replacing an adapter.
 
 `notebooks launch` runs `python -m jupyterlab` through uv with `--locked`,
 `--managed-python`, the declared Python selector, `dev`, and the configured
@@ -200,7 +218,27 @@ working directory without traversal, symlink/junction components, or hard-link a
 uses an encoded Lab tree URL, preserving spaces, Unicode, and URL punctuation
 without forwarding arbitrary Jupyter arguments. No selection preserves the Lab
 landing page; consumer recipes choose any preferred starting notebook. See the
-[README launch examples](../README.md#notebooks).
+[launch examples](#interactive-launch-and-explicit-reset).
+
+A consumer can configure browser/cache policy and an explicit cleanup map:
+
+```toml
+[tool.research-repo-tools.notebooks.lab]
+browser = false
+scratch-dir = "target/jupyter"
+
+[tool.research-repo-tools.notebooks.reset]
+sources = ["notebooks"]
+scratch = ["target/notebooks", "target/jupyter"]
+checkpoints = ["notebooks/.ipynb_checkpoints"]
+```
+
+```sh
+just notebook-launch "notebooks/analysis with spaces.ipynb" --browser
+just notebook-reset
+# Apply only after reviewing the printed restore/deletion map:
+just notebook-reset --apply
+```
 
 `notebooks.lab.browser` defaults to false. CLI `--browser`/`--no-browser` override
 it. `notebooks.lab.scratch-dir` defaults to `target/jupyter`; `--scratch-dir PATH`
@@ -233,7 +271,7 @@ The consumer deletion map is entirely declarative:
 | `notebooks.reset.checkpoints` | Literal directories whose final component is `.ipynb_checkpoints` | Entire declared checkpoint trees; absent paths are no-ops |
 
 There are no default deletion paths. Consumers declare execution/report/cache
-outputs that they intend to discard, as in the [README example](../README.md#notebooks).
+outputs that they intend to discard, as in the [cleanup example](#interactive-launch-and-explicit-reset).
 Other scratch artifacts and checkpoint directories remain untouched. This
 replaces broad shell cleanup with an explicit deletion map. Lint, check, sync,
 and launch never call source reset or its declared cleanup.
@@ -269,8 +307,7 @@ stored-output policy. Use inspection before repairing older or malformed files.
 Advice does not certify syntax, formatting, types, or output cleanliness; keep
 native lint in the workflow.
 
-Configure `[tool.research-repo-tools.notebooks.advice]` as shown in the
-[README](../README.md#notebooks). Unknown fields and invalid values fail before
+Configure `[tool.research-repo-tools.notebooks.advice]` in the consumer manifest. Unknown fields and invalid values fail before
 analysis. Supported fields are:
 
 | Field | Default | Behavior |
@@ -309,3 +346,39 @@ Invalid structure, Python metadata, configuration, missing checkers, native synt
 errors, malformed checker results, checker failures, and timeouts always return
 nonzero. Diagnostics can include source identifiers and rule messages; the
 inspection `--no-preview` option does not redact advisory or native lint output.
+
+## Notebook dependency installation policy
+
+Consumers can opt into a blocking source policy with:
+
+```toml
+[tool.research-repo-tools.notebooks]
+prohibit-installs = true
+```
+
+`just notebook-lint FILE...` then rejects literal dependency-changing pip, uv,
+conda, and mamba commands in line magics, `!` commands, `%%bash`, `%%sh`, and
+`%%script bash/sh` cells. It also checks literal `subprocess` calls and
+`os.system` commands in Python cells, including after line magics and inside
+`%%capture`, `%%debug`, `%%prun`, `%%time`, and `%%timeit` cells.
+Diagnostics retain notebook paths,
+cell IDs, and original source line numbers. The policy never runs cells or
+changes their source. Python strings and comments containing installation
+examples are not commands.
+
+The v0.2.4 policy follows literal `python -m pip`, `python -m uv`, and `uv run`
+installer commands, including versioned/path-qualified executables and Windows
+`py -3.15` launchers. It consumes Python flags such as `-I`, `-W`, and `-X` and
+known installer options with values: `%pip --log info install numpy` is rejected,
+while `%pip --log install list` and `!python -m uv pip list` are accepted.
+Nested literal installers are checked without treating package names or option
+values as commands. Unknown options and dynamically selected commands are outside
+this bounded static check; it does not execute wrappers to discover their behavior.
+
+This is a source convention, not a sandbox: dynamically assembled commands,
+aliases, wrapper functions, arbitrary cell magics, and shell heredoc semantics
+are outside its contract. Keep dependency installation in the project setup;
+put quoted Python examples in strings or Markdown. Review unusual shell cells
+manually; the consumer can disable this policy and retain its own stricter gate
+if its syntax is outside the supported set. Native Ruff and ty remain responsible
+for Python syntax and type checks.

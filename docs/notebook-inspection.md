@@ -2,7 +2,7 @@
 
 `notebooks inspect` and `cli.main` expose a supported read-only inventory of
 nbformat 4 files. Internal loaders are not supported Python interfaces. See the
-[README](../README.md#notebooks) for consumer commands and source-preview controls.
+[task guide](RUNNING_NOTEBOOKS.md) for consumer commands and source-preview controls.
 
 Inspection uses only standard-library parsing and the base package. It never
 loads optional Jupyter dependencies, normalizes source files, generates IDs,

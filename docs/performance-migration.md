@@ -5,7 +5,7 @@ Adoption requires a published package after `0.1.2` containing the
 and consumer adoption are separate checkpoints. Keep retained evidence readable
 throughout the migration; a new common envelope does not replace old schemas
 automatically. Consumer commands and new-evidence examples are in the
-[README](../README.md#performance-evidence).
+[task guide](RECORDING_PERFORMANCE.md#performance-evidence).
 
 ## Release capability adoption
 
@@ -20,7 +20,7 @@ GitHub release operations require authenticated GitHub CLI. Notebook, paper and
 Python validator dependencies retain their separately documented extras.
 
 v0.1.9 requires Python 3.15 or newer and selects Python 3.15 for development.
-Use the existing [shared Python adoption recipes](../README.md#shared-python-adoption)
+Use the existing [shared Python adoption recipes](UPDATING_DEPENDENCIES.md#shared-python-adoption)
 to reconcile the exact package pin, support metadata, tool declarations and
 locked environment. Preserve consumer Ruff configuration and precise exceptions;
 the shared gate now runs format, lint and strict ty with first-failure termination.
@@ -29,7 +29,7 @@ actual native workflow before deleting generic helpers.
 
 | Capability | Migration and supported interface | Compatibility boundary |
 | --- | --- | --- |
-| Captured release targets (#94) | Pass versioned target JSON from [trusted preflight to the writer](../README.md#trusted-release-target-handoff) | Bind uploads to the captured ID, tag commit, title and lifecycle; consumers retain trusted handoff, archive formats and publication decisions |
+| Captured release targets (#94) | Pass versioned target JSON from [trusted preflight to the writer](VERIFYING_RELEASE_EVIDENCE.md#trusted-release-target-handoff) | Bind uploads to the captured ID, tag commit, title and lifecycle; consumers retain trusted handoff, archive formats and publication decisions |
 | Coordinate plots (#95) | Declare series, coordinates, statistic, units and axes through [configured presentation](complete-run-api.md#configured-presentation) | Preserve original phases and recorded marginal timing intervals; coordinates and scientific interpretation stay in consumers |
 | Provenance reports (#96) | Use [retention and report rendering](complete-run-api.md#retention-and-publication) with existing current/archive paths | The mutable index can migrate to renderer version 2; old retained reports and exact evidence bytes remain immutable, with no host recapture |
 | Complete-run document publication (#97) | Select complete evidence or retained history with [publication schema 2](publication-api.md#publication-configuration-v2) | Schema 1 still accepts comparison evidence; retain original series phases, document bytes outside markers and transactional freshness checks |
@@ -216,7 +216,7 @@ test, then remove the generic helpers. An implementation merge does not unblock
 consumer adoption. Existing raw baselines, archives, legacy fingerprints and
 scientific gates remain intact; this extraction authorizes no history pruning or
 rewriting. Examples and ordered commands live in the
-[README](../README.md#criterion-inventory-and-saved-baselines).
+[task guide](RECORDING_PERFORMANCE.md#criterion-inventory-and-saved-baselines).
 
 The deletion map refers to la-stack's merged `f3eb43d` consumer sources:
 [release_baseline.py](https://github.com/acgetchell/la-stack/blob/f3eb43dde08bef4a5aba04baf0e57e1c79de443c/scripts/release_baseline.py)
@@ -254,6 +254,25 @@ scientific coverage assertions. Shared failure tests and isolated wheel/sdist
 consumer suites live here; native Linux, macOS and Windows jobs remain required
 package evidence.
 
+
+## Parallel Criterion suite adoption
+
+[Issue #158](https://github.com/acgetchell/research-repo-tools/issues/158) targets
+v0.2.4 for [suite verification and archive assembly](criterion-api.md#parallel-suite-transport).
+[la-stack #316](https://github.com/acgetchell/la-stack/issues/316) targets v0.5.2
+for adoption after the supplying package is published. Pin that exact published
+version and run the consumer integration before deleting the temporary adapter.
+
+| Consumer surface | Shared replacement | Consumer responsibility |
+| --- | --- | --- |
+| Suite-scoped policy filtering and fresh/saved checks | `load_saved_sample(..., suite=...)`, `performance verify-saved --suite` | Complete native inventory, exclusions, required scientific cases and sampling policy |
+| Runner metadata JSON, raw-file packaging and provenance manifests | `performance host`, `SuiteRun`, `performance pack-suite` | Measured revision, unique collection attempt, native command/features, measurement interval and original runner capture |
+| Shell extraction, duplicate checks, provenance comparisons and final tar creation | `performance assemble-suites` | Exact artifact selection, independent complete contract/revision/session, parallel job budgets and publication gate |
+
+Shared malformed-input, path, digest and transport tests live upstream and run
+from wheel/sdist installations. Consumers retain focused tests of their actual
+inventory, workflow commands, artifact names and release barriers. Preserve
+historical archives; this changes newly collected artifacts only.
 
 ## Captured release target adoption
 

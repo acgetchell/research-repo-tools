@@ -310,8 +310,8 @@ def test_tagged_source_expectations_are_separate_from_asset_checks(tmp_path: Pat
 def test_documentation_configuration_is_executable(tmp_path: Path, newline: bytes) -> None:
     # Keep the copyable consumer example tied to its documented evidence shape.
     make_fixture(tmp_path)
-    readme = (Path(__file__).resolve().parents[2] / "README.md").read_text(encoding="utf-8")
-    section = readme.split("### Document publication", 1)[1]
+    guide = (Path(__file__).resolve().parents[2] / "docs/PUBLISHING_REPORTS.md").read_text(encoding="utf-8")
+    section = guide.split("## Document publication", 1)[1]
     configuration = section.split("```toml\n", 1)[1].split("```", 1)[0]
     evidence = tmp_path / "evidence"
     evidence.mkdir()
