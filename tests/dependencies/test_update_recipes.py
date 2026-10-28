@@ -190,10 +190,26 @@ def test_maintainer_ci_checks_early_and_coalesces_lock_validation(recipes):
     result, calls = invoke(justfile, "ci")
     assert result.returncode == 0, result.stderr
     assert calls == maintainer_checks(justfile) + [
-        ["run", "--locked", "pytest", "--cov", "--cov-report=term-missing", "--cov-report=xml:coverage/cobertura.xml"],
         ["build", "--no-sources", "--clear"],
+        ["run", "--locked", "python", "scripts/check_publish.py"],
+        ["run", "--locked", "pytest", "--cov", "--cov-report=term-missing", "--cov-report=xml:coverage/cobertura.xml"],
         ["run", "--locked", "python", "scripts/check_install.py"],
     ]
+
+
+@pytest.mark.parametrize("recipe", ["ci", "install-check"])
+def test_maintainer_publish_failure_prevents_tests_and_installation(recipes, monkeypatch, recipe):
+    justfile, consumer = recipes
+    if consumer:
+        pytest.skip("maintainer publication checks")
+    expected = (maintainer_checks(justfile) if recipe == "ci" else [["lock", "--check"]]) + [
+        ["build", "--no-sources", "--clear"],
+        ["run", "--locked", "python", "scripts/check_publish.py"],
+    ]
+    monkeypatch.setenv("FAIL_STEP", str(len(expected)))
+    result, calls = invoke(justfile, recipe)
+    assert result.returncode == 23, result.stderr
+    assert calls == expected
 
 
 @pytest.mark.parametrize("failure_step", [1, 2, 3, 5])

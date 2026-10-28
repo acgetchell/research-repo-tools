@@ -52,10 +52,8 @@ arguments in lexicographic order.
 | `just release-notes TAG` | Print release notes from the root changelog or an archive |
 | `just release-publish TAG [ARGS...]` | Approve a validated draft GitHub Release and trigger its registry workflow |
 | `just release-reuse COMMIT ARGS...` | Save explicitly selected, verified PR source-check evidence for a squash release |
-| `just release-tag TAG` | Create a local annotated tag from validated release notes |
-| `just release-tag-preview TAG` | Inspect the release annotation without changing Git state |
-| `just release-update TAG PREVIOUS DATE` | Prepare metadata with an explicit predecessor and date |
 | `just release-verify TAG [ARGS...]` | Verify the exact stable registry version and GitHub Release/assets |
+| `just release-version-check` | Check synchronized metadata and complete dated release notes |
 | `just review [base]` | Review branch and local changes; default to verified `origin/main` |
 | `just review-uncommitted` | Review staged, unstaged, and non-ignored untracked changes |
 | `just security` | Audit selected lockfiles, then scan for secrets |
@@ -66,6 +64,8 @@ arguments in lexicographic order.
 | `just setup` | Install and verify declared tools, then synchronize the Python environment |
 | `just shared-python-plan VERSION` | Preview mandatory Python-minimum and optional tool-profile adoption outside the old environment |
 | `just shared-python-update VERSION` | Apply the migration and recreate the locked environment and notebook kernel |
+| `just tag TAG` | Create a local annotated tag from validated release notes |
+| `just tag-preview TAG` | Inspect the release annotation without changing Git state |
 | `just tectonic COMMAND...` | Discover or export existing native dependency environments |
 | `just templates ARGS...` | Export a packaged configuration or workflow template |
 | `just tools-check` | Check installed tools and versions without installing them |
@@ -80,6 +80,7 @@ arguments in lexicographic order.
 | `just update-python-dependencies` | Update direct dev pins, upgrade the full Python lock, and synchronize dev |
 | `just update-tools` | Upgrade uv and managed tools without repeating shell configuration |
 | `just update-uv` | Upgrade uv through its installation owner and reconcile its pin |
+| `just update-version TAG [ARGS...]` | Prepare release metadata; optionally override predecessor or date |
 | `just validate CONFIGURATION [NAME...]` | Check configured example outputs |
 | `just workflow-allowlist-check` | Check workflow and composite action references against strict consumer selected-actions settings |
 | `just zizmor-check [ARGS...]` | Run local workflow audits; accept `--offline`, `--require-online`, and `--format sarif` |

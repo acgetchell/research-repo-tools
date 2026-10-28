@@ -64,7 +64,7 @@ check-setup:
     uv run --locked --no-sync --no-python-downloads python scripts/check_setup.py
 
 # Run checks, tests, builds, and isolated installation checks.
-ci: check coverage install-check
+ci: check build publish-check coverage install-check
 
 # Preview obsolete package-owned tool installs; pass --apply to remove them.
 clean *args:
@@ -84,7 +84,7 @@ help:
     @just --justfile {{ quote(justfile()) }} --list
 
 # Build and check isolated wheel and source-distribution installations.
-install-check: build check-dist
+install-check: build publish-check check-dist
 
 # Check the maintainer and packaged consumer recipes with the pinned Just formatter.
 justfile-check:
@@ -110,6 +110,10 @@ performance-readme configuration *args:
 # Measure the prepared pair and retain/promote its report; README is independent.
 performance-release configuration *args:
     uv run --locked research-repo-tools performance release "$@"
+
+# Check the current wheel and sdist for PyPI without building or uploading.
+publish-check:
+    uv run --locked python scripts/check_publish.py
 
 # Check lint, formatting, and types for the complete tracked/nonignored Python inventory.
 python-check:
@@ -143,21 +147,13 @@ release-publish tag *args:
 release-reuse commit +args:
     uv run --locked research-repo-tools release reuse "$@"
 
-# Create a local annotated release tag from validated notes (maintainer only).
-release-tag tag:
-    uv run --locked research-repo-tools changelog tag "$1"
-
-# Preview the release annotation without changing Git state.
-release-tag-preview tag:
-    uv run --locked research-repo-tools changelog tag "$1" --dry-run
-
-# Update release metadata using an explicit previous tag and UTC release date.
-release-update tag previous date:
-    uv run --locked research-repo-tools release update "$1" --previous-release "$2" --date "$3"
-
 # Require the stable GitHub Release/assets and exact published registry version.
 release-verify tag *args:
-    uv run --locked research-repo-tools release verify "$@"
+    uv run --locked research-repo-tools release verify --attempts 7 --interval 10 "$@"
+
+# Require synchronized package metadata and complete dated release notes.
+release-version-check:
+    uv run --locked research-repo-tools release check --final-release
 
 # Review branch and local changes with CodeRabbit against a verified origin/main by default.
 review base="origin/main":
@@ -178,6 +174,14 @@ setup:
 # Synchronize the locked development environment.
 sync:
     uv sync --locked
+
+# Create a local annotated release tag after checking final metadata.
+tag tag: release-version-check
+    uv run --locked research-repo-tools changelog tag "$1"
+
+# Preview the release annotation without changing Git state.
+tag-preview tag: release-version-check
+    uv run --locked research-repo-tools changelog tag "$1" --dry-run
 
 # Export a packaged configuration or workflow template.
 templates +args:
@@ -203,6 +207,10 @@ update-tools: update-uv
 # Upgrade uv through its installation owner and reconcile the project pin.
 update-uv *args:
     uv run --no-config --no-sync --no-python-downloads research-repo-tools deps update-uv "$@"
+
+# Update release metadata; optional flags select an explicit predecessor or date.
+update-version tag *args:
+    uv run --locked research-repo-tools release update "$@"
 
 # Run actionlint and zizmor with authenticated online audits when available.
 workflow-check:

@@ -77,6 +77,7 @@ including changelog and release recipes.
 | `just performance-prepare CONFIG [ARGS...]` | Capture independent performance source assertions |
 | `just performance-readme CONFIG [ARGS...]` | Publish README from retained evidence without acquiring measurements |
 | `just performance-release CONFIG [ARGS...]` | Measure a prepared pair and retain/promote its report |
+| `just publish-check` | Check the current built wheel and sdist with strict Twine validation; no build or upload |
 | `just python-check` | Check formatting, lint, and strict types for the complete Python inventory |
 | `just release-assets COMMAND...` | Capture/revalidate release targets or explicitly upload attachments |
 | `just release-check TAG` | Check final release metadata and generated notes |
@@ -84,15 +85,16 @@ including changelog and release recipes.
 | `just release-first TAG DATE` | Prepare a first release after checking stable published history |
 | `just release-notes TAG` | Print reviewed generated release notes |
 | `just release-publish TAG` | Approve a validated draft GitHub Release and trigger its registry workflow |
-| `just release-tag TAG` | Create a local annotated release tag (maintainer only) |
-| `just release-tag-preview TAG` | Preview the release annotation without changing Git state |
-| `just release-update TAG PREVIOUS DATE` | Synchronize release metadata before generating notes |
+| `just release-reuse COMMIT ARGS...` | Save verified PR source-check evidence for an explicit squash release commit |
 | `just release-verify TAG [ARGS...]` | Verify the exact registry version and GitHub Release/assets |
+| `just release-version-check` | Check synchronized metadata and complete dated release notes |
 | `just review [base]` | Run opt-in CodeRabbit review of branch and local changes |
 | `just review-uncommitted` | Run opt-in CodeRabbit review of local changes only |
 | `just semgrep-setup` | Prepare the package-pinned Semgrep environment for native tests |
 | `just setup` | Install user Just and synchronize the declared development environment |
 | `just sync` | Synchronize the locked development environment |
+| `just tag TAG` | Create a local annotated release tag (maintainer only) |
+| `just tag-preview TAG` | Preview the release annotation without changing Git state |
 | `just templates ARGS...` | Export a packaged configuration or workflow template |
 | `just test` | Run the Python test suite |
 | `just update` | Upgrade tools and Python dependencies, synchronize dev, then audit final locks |
@@ -100,6 +102,7 @@ including changelog and release recipes.
 | `just update-python-dependencies` | Update direct dev pins, upgrade the full lock, and synchronize dev |
 | `just update-tools` | Upgrade uv without repeating shell/bootstrap configuration |
 | `just update-uv [ARGS...]` | Upgrade uv through its verified owner; use `--dry-run` to preview |
+| `just update-version TAG [ARGS...]` | Synchronize release metadata before generating notes |
 | `just workflow-check` | Run actionlint and shared zizmor audits with reported authentication policy |
 
 The maintainer justfile also exposes the [shared changelog recipes](docs/RUNNING_COMMANDS.md#just-recipes).

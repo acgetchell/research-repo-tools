@@ -21,12 +21,13 @@ Run `just help` for the complete command list and arguments.
 | `just changelog-preview` | Validate all candidate files and print the resulting root changelog without writing |
 | `just changelog-release TAG [DATE]` | Generate and archive with a citation-owned or explicit ISO date |
 | `just release-notes TAG` | Print notes from the root file or an archive |
-| `just release-tag TAG` | Create a local annotated tag from validated release notes |
-| `just release-tag-preview TAG` | Inspect the annotation without changing Git state |
+| `just tag TAG` | Create a local annotated tag from validated release notes |
+| `just tag-preview TAG` | Inspect the annotation without changing Git state |
 
 For a prospective-release preview, use
-`just changelog-preview --tag v1.2.0 --date YYYY-MM-DD`.
-Set `changelog.date-source = "citation"` (as in the packaged consumer template)
+`just changelog-preview --tag v1.2.0`.
+This repository and the packaged consumer template set
+`changelog.date-source = "citation"`
 to use the matching prepared citation date when DATE is omitted. The optional
 `changelog.citation` path defaults to `CITATION.cff`. Then both
 `just changelog-release "$TAG"` and `just changelog-preview --tag "$TAG"`

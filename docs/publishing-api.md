@@ -66,10 +66,14 @@ retry only absence, with 1..31 requests, a 0..10 second interval and a
 15-second timeout per request. PyPI requires both wheel and sdist upload evidence;
 crates.io requires an archive checksum. Neither lookup retries uploads.
 
-The canonical recipe surface is identical in root and consumer templates:
+The canonical release recipe surface is identical in root and consumer templates:
 `release-check TAG`, `release-first TAG DATE`, `release-notes TAG`,
-`release-publish TAG`, `release-tag TAG`, `release-tag-preview TAG`,
-`release-update TAG PREVIOUS DATE`, and `release-verify TAG [ARGS...]`.
+`release-publish TAG [ARGS...]`, `release-reuse COMMIT ARGS...`,
+`release-verify TAG [ARGS...]`, `release-version-check`, `tag TAG`,
+`tag-preview TAG`, and `update-version TAG [ARGS...]`.
+`release-verify` defaults to seven attempts at ten-second intervals; optional
+flags override those defaults. `release-version-check` validates the current
+prepared version without a tag argument; `tag` and `tag-preview` run it first.
 The low-level CLI also retains untagged `release check` for metadata inspection.
 
 ## Python release API
@@ -157,8 +161,9 @@ still require the actual target heading. Previewing remains non-mutating and
 The CLI equivalents are `research-repo-tools release update v0.1.0
 --first-release --date 2026-09-25 --dry-run` and the same command without
 `--dry-run` to apply. Add `--offline` only when empty history has been reviewed.
-The template's `just release-first TAG DATE` uses online discovery. Existing
-`just release-update TAG PREVIOUS DATE` continues to use an explicit predecessor.
+The template's `just release-first TAG DATE` uses online discovery. For subsequent
+releases, `just update-version TAG` discovers the predecessor;
+`--previous-release PREVIOUS --date DATE` selects explicit inputs without discovery.
 
 ## Preparing a structured release
 

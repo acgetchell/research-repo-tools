@@ -17,6 +17,7 @@ from typing import override
 from unittest.mock import patch
 
 from research_repo_tools import changelog, cli, config, registry, release_metadata, toolchain, toolchain_config, update_release
+from research_repo_tools.just_inspect import dry_run, inspect_justfile
 from research_repo_tools.release_assets import GitHubRelease
 from research_repo_tools.release_publishing import RequiredCheck, check_metadata, publish_reviewed_release, require_checks, validate_event, verify_publication
 
@@ -334,6 +335,22 @@ class TestPublishingConsumer(unittest.TestCase):
             self.assertIn(f"if {condition}", rendered)
         with self.assertRaises(ValueError):
             config.parse({"changelog": {"dependency-bodies": "deps-dev"}}, root=self.root)
+
+    def test_installed_release_recipes_use_prepared_metadata_before_tagging(self):
+        (self.root / "justfile").write_text(changelog.template("justfile"), encoding="utf-8", newline="\n")
+        recipes = inspect_justfile(self.root)
+        self.assertFalse(recipes.aliases)
+        for recipe in ["release-tag", "release-tag-preview", "release-update"]:
+            self.assertNotIn(recipe, recipes.recipes)
+        for recipe in ["tag", "tag-preview"]:
+            with self.subTest(recipe=recipe):
+                output = dry_run(self.root, recipe, ["v1.2.3"]).stderr
+                self.assertLess(output.index("release check --final-release"), output.index("changelog tag"))
+                self.assertEqual("--dry-run" in output, recipe == "tag-preview")
+        for arguments in [["v1.2.3"], ["v1.2.3", "--previous-release", "v1.2.2", "--date", "2026-09-01", "--dry-run"]]:
+            with self.subTest(arguments=arguments):
+                self.assertIn('release update "$@"', dry_run(self.root, "update-version", arguments).stderr)
+        self.assertIn('release verify --attempts 7 --interval 10 "$@"', dry_run(self.root, "release-verify", ["v1.2.3"]).stderr)
 
     def test_installed_cli_generation_with_real_external_generator(self):
         # Synthetic git-cliff context avoids creating Git objects or refs. Hosted

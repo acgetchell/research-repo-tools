@@ -164,13 +164,17 @@ publication follow package adoption.
 
 | Previous surface | Canonical replacement |
 | --- | --- |
-| Untagged `release-check` recipe | `release-check TAG` with final notes/metadata validation |
-| `tag`, `tag-release` | `release-tag TAG` |
-| `tag-preview` | `release-tag-preview TAG` |
+| Untagged `release-check` recipe | `release-version-check` for prepared metadata; `release-check TAG` for explicit publication preflight |
+| `release-tag`, `tag-release` | `tag TAG` |
+| `release-tag-preview` | `tag-preview TAG` |
 | `tag-force` recipe | Removed; never move a published release tag |
-| Metadata-only release update variants | `release-update TAG PREVIOUS DATE` |
+| `release-update TAG PREVIOUS DATE` | `update-version TAG`; add `--previous-release PREVIOUS --date DATE` for explicit inputs |
 | Transitional manual `publish` / Cargo upload | `release-publish TAG`, then approve the OIDC workflow |
 | Local Cargo info / registry-only checks | `release-verify TAG` for exact registry and GitHub state |
+
+The replacements are recipe definitions, not aliases. Adopt the prepared
+citation date with `changelog.date-source = "citation"` and
+`release.date-policy = "declared"`, as in the packaged configuration.
 
 Retain consumer preparation, required assets, scientific checks, feature/MSRV
 policy, crate selection and dependency ordering. Extend the shared workflow

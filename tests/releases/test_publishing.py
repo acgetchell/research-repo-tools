@@ -318,38 +318,47 @@ def test_common_release_recipes_and_guides_share_argument_contracts(tmp_path):
         ("release-publish", ["v1.2.3"], "--approve"),
         ("release-publish", ["v1.2.3", "--reuse-evidence", "saved approval.json"], 'release publish "$@" --approve'),
         ("release-reuse", [SHA, "--pull-request", "9", "--run-id", "123", "--attempt", "2", "--output", "saved approval.json"], "release reuse"),
-        ("release-tag", ["v1.2.3"], "changelog tag"),
-        ("release-tag-preview", ["v1.2.3"], "--dry-run"),
-        ("release-update", ["v1.2.3", "v1.2.2", "2026-09-01"], "--previous-release"),
-        ("release-verify", ["v1.2.3", "--attempts", "7"], "release verify"),
+        ("tag", ["v1.2.3"], "changelog tag"),
+        ("tag-preview", ["v1.2.3"], "--dry-run"),
+        ("update-version", ["v1.2.3"], 'release update "$@"'),
+        ("update-version", ["v1.2.3", "--previous-release", "v1.2.2", "--date", "2026-09-01"], 'release update "$@"'),
+        ("release-version-check", [], "release check --final-release"),
+        ("release-verify", ["v1.2.3"], 'release verify --attempts 7 --interval 10 "$@"'),
+        ("release-verify", ["v1.2.3", "--attempts", "2", "--interval", "0"], 'release verify --attempts 7 --interval 10 "$@"'),
     ]:
         for path in [root / "justfile", justfile]:
             result = publishing.run_safe_command("just", ["--justfile", str(path), "--dry-run", recipe, *arguments], cwd=tmp_path)
             assert expected in result.stderr
+            if recipe in {"tag", "tag-preview"}:
+                assert result.stderr.index("release check --final-release") < result.stderr.index("changelog tag")
         assert maintained.recipes[recipe]["parameters"] == packaged.recipes[recipe]["parameters"]
 
-    # This package has no citation authority and supplies its chosen date
-    # explicitly. The consumer template now consumes that same prepared choice.
+    for inspected in [maintained, packaged]:
+        assert not inspected.aliases
+        assert not {"release-tag", "release-tag-preview", "release-update"}.intersection(inspected.recipes)
+
+    # Both workflows consume the date prepared in their citation metadata,
+    # including after UTC midnight. Explicit CLI date overrides remain available.
     maintained_settings = config.load(root=root)
-    consumer_settings = config.parse({"changelog": tomllib.loads(changelog.template("research-repo-tools.toml"))["changelog"]}, root=tmp_path)
-    assert maintained_settings.changelog.date_source == "explicit"
-    assert consumer_settings.changelog.date_source == "citation"
+    template_settings = tomllib.loads(changelog.template("research-repo-tools.toml"))
+    consumer_settings = config.parse({key: template_settings[key] for key in ["changelog", "release"]}, root=tmp_path)
+    for settings in [maintained_settings, consumer_settings]:
+        assert settings.changelog.date_source == "citation"
+        assert settings.release.date_policy == "declared"
     (tmp_path / "CITATION.cff").write_bytes(b"version: 1.2.3\ndate-released: 2026-09-01\n")
-    assert changelog.resolve_date(consumer_settings, tag="v1.2.3") == changelog.resolve_date(maintained_settings, tag="v1.2.3", released="2026-09-01")
-    equivalent_date_forms = {
-        'just changelog-preview --tag "$TAG" --date "$RELEASE_DATE"': 'just changelog-preview --tag "$TAG"',
-        'just changelog-release "$TAG" "$RELEASE_DATE"': 'just changelog-release "$TAG"',
-    }
+    assert changelog.resolve_date(consumer_settings, tag="v1.2.3") == "2026-09-01"
+    assert changelog.resolve_date(consumer_settings, tag="v1.2.3", released="2026-09-02") == "2026-09-02"
+    assert cli.main(["--root", str(root), "release", "check", "--final-release"]) == 0
 
     def commands(text):
-        return [equivalent_date_forms.get(line, line) for line in text.splitlines() if line.startswith("just ")]
+        return [line for line in text.splitlines() if line.startswith("just ")]
 
     common = commands(changelog.template("RELEASING.md"))
     shared_recipes = {command.split()[1] for command in common}
     documented = commands((root / "docs/RELEASING.md").read_text(encoding="utf-8"))
     shared = [command for command in documented if command.split()[1] in shared_recipes]
     # Package-specific setup and checks may extend the guide, but shared recipe
-    # arguments and workflow order must agree after resolving the date source.
+    # arguments and workflow order must agree.
     # Read-only notes may be repeated.
     assert set(shared) == set(common)
     assert [command for command in shared if not command.startswith("just release-notes ")] == [

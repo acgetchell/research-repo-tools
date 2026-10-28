@@ -1,0 +1,23 @@
+cff-version: 1.2.0
+message: "If you use this software, please cite it as below."
+type: software
+title: "research-repo-tools: Shared maintenance and validation for research software repositories"
+version: 0.2.4
+date-released: 2026-10-28
+url: "https://github.com/acgetchell/research-repo-tools"
+repository-code: "https://github.com/acgetchell/research-repo-tools"
+authors:
+  - family-names: "Getchell"
+    given-names: "Adam"
+    email: "adam@adamgetchell.org"
+    orcid: "https://orcid.org/0000-0002-0797-0021"
+keywords:
+  - "changelog"
+  - "release-management"
+  - "research-software"
+  - "validation"
+abstract: >-
+  Shared Python tooling for maintaining and validating research software
+  repositories, including changelog generation, release metadata, publication
+  evidence, dependency updates, and repository checks.
+license: BSD-3-Clause

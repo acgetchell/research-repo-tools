@@ -151,8 +151,8 @@ def test_changelog_recipes_expose_the_common_command_surface(tmp_path: Path, con
         (["changelog-archive"], "changelog archive"),
         (["changelog-check"], "changelog check"),
         (["release-notes", "v1.0.0"], "changelog notes"),
-        (["release-tag", "v1.0.0"], "changelog tag"),
-        (["release-tag-preview", "v1.0.0"], "--dry-run"),
+        (["tag", "v1.0.0"], "changelog tag"),
+        (["tag-preview", "v1.0.0"], "--dry-run"),
     ]
     for arguments, expected in commands:
         result = run_safe_command("just", ["--justfile", str(justfile), "--dry-run", *arguments], cwd=tmp_path)

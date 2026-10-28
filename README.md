@@ -193,6 +193,12 @@ attachment uploads and downstream adoption remain distinct actions.
 See [CONTRIBUTING.md][contributing] for package development, tests and maintainer
 commands. [Supported interfaces][api] defines the consumer compatibility boundary.
 
+## Citation
+
+If you use research-repo-tools in your work, cite the software using
+[CITATION.cff](https://github.com/acgetchell/research-repo-tools/blob/main/CITATION.cff). Include the version used so others can identify
+the same release.
+
 ## License
 
 BSD-3-Clause. See [LICENSE][license].
