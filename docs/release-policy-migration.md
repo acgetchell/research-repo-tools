@@ -39,10 +39,14 @@ value = "10.5281/zenodo.20033111"
 
 [[tool.research-repo-tools.release.rules]]
 path = "README.md"
-pattern = 'https://(?:github\.com/example/consumer/(?:blob|raw|tree)/|raw\.githubusercontent\.com/example/consumer/)(?P<value>main|[0-9a-f]{7,40}|v[0-9]+\.[0-9]+\.[0-9]+)/[^\s)\]>"?#]+'
+pattern = '''(?x)
+https://(?:github\.com/example/consumer/(?:blob|raw|tree)/
+|raw\.githubusercontent\.com/example/consumer/)
+(?P<value>main|[0-9a-f]{7,40}|v[0-9]+\.[0-9]+\.[0-9]+)/[^\s)\]>"?#]+
+'''
 source = "tag"
 count = 1
-exclude = '/docs/(?:PERFORMANCE\.md(?:$|[?#])|archive/performance/)'
+exclude = '/docs/|/(?:README|CONTRIBUTING|AGENTS|SECURITY)\.md(?:$|[?#])'
 
 [[tool.research-repo-tools.release.rules]]
 path = "docs/RELEASING.md"
@@ -173,6 +177,11 @@ policy, crate selection and dependency ordering. Extend the shared workflow
 example there. Remove manual uploads from repeat-release guides after adoption;
 initial crate registration remains a distinct consumer setup decision. The
 package's root guide and packaged guide use the same ordered operational commands.
+
+`toolchain run` uses a managed `CARGO_HOME`; an ordinary local `cargo login` may
+configure a different home. The OIDC workflow supplies its temporary token through
+the upload step's environment. Review consumer credential-provider overrides for
+that flow.
 
 For dependency-body configuration, see the
 [changelog guide](GENERATING_CHANGELOGS.md).

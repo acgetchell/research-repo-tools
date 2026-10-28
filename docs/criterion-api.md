@@ -1,8 +1,7 @@
 # Criterion discovery and saved-sample contracts
 
-These additions target v0.1.9; implementation, exact package publication and
-consumer adoption are separate checkpoints. Consumer setup and commands are in
-the [README](../README.md#criterion-inventory-and-saved-baselines).
+Consumer setup and commands are in
+the [task guide](RECORDING_PERFORMANCE.md#criterion-inventory-and-saved-baselines).
 
 ## Native inventory discovery
 
@@ -32,7 +31,7 @@ characters. Listing parses stdout using strict UTF-8. LF and CRLF are equivalent
 for discovery. Ordinary compiler and plotting noise is ignored; malformed records
 containing a benchmark marker fail. A nonzero exit, missing executable, timeout,
 invalid encoding or invalid inventory rejects the operation. Process exceptions
-use the [shared subprocess contract](api.md#python-process-api).
+use the [shared subprocess contract](process-api.md#python-process-api).
 
 Discovery TOML requires integer `schema=1` and `[[suites]]` tables. Each suite
 requires `name` and `command`; optional fields are `cwd`, `environment` and
@@ -107,7 +106,7 @@ The supported `criterion_baselines` APIs are:
 | API | Contract |
 | --- | --- |
 | `SavedSamplePlan(criterion_dir, saved_sample, policy, fresh_sample="new", raw_files=("benchmark.json", "estimates.json", "sample.json"), *, storage_paths=())` | Portable root-relative tree path, safe sample names, complete policy, required raw filenames and independent storage assertions |
-| `load_saved_sample(root, configuration, *, saved_sample=None, criterion_dir=None)` | Strict schema-1/2 TOML using exactly one of explicit `expected` IDs or a retained `inventory` file, with validated runtime overrides |
+| `load_saved_sample(root, configuration, *, saved_sample=None, criterion_dir=None, suite=None)` | Strict schema-1/2 TOML using exactly one of explicit `expected` IDs or a retained `inventory` file, with validated runtime overrides and optional suite selection |
 | `validate_saved_sample(criterion_dir, saved_sample, policy, *, fresh_sample="new", raw_files=("benchmark.json", "estimates.json", "sample.json"), storage_paths=())` | Read-only complete inventories, declared storage and exact raw-file equality; returns the saved `CompleteSample` |
 
 Saved-sample TOML requires integer `schema=1` or `schema=2`, `saved-sample`
@@ -124,7 +123,7 @@ Additional required JSON, including `tukey.json`, must parse even when both copi
 have identical bytes. Unknown native JSON fields remain accepted and preserved;
 outlier interpretation remains consumer policy.
 
-Schema 1 retains uniform sampling. Schema 2 (target v0.1.9) additionally accepts
+Schema 1 retains uniform sampling. Schema 2 additionally accepts
 `sample-counts`, an exhaustive exact full-ID/count map, mutually exclusive with
 `sample-count`. It uses the same `CompletePolicy` validation as common-harness
 measurements, including when IDs come from a retained `inventory`. The public
@@ -157,3 +156,57 @@ relationship, not when a standalone tree was measured. Use fresh isolated output
 and provenance checks to establish freshness. Consumers retain required benchmark
 selections, compatibility exclusions, phase/suite assignments, scientific
 assertions, and release acceptance policy.
+
+## Parallel suite transport
+
+These additions target v0.2.4. `load_saved_sample(..., suite=name)` and
+`performance verify-saved --suite NAME` validate the entire saved-sample
+configuration first, including required inventory coverage, storage assertions
+and exhaustive per-case counts. They then select that suite's included IDs,
+counts and storage paths. Unknown or entirely excluded suites fail. Explicit
+`expected` configurations cannot select a suite because they declare no suite
+membership. Without `suite`, verification remains complete-inventory validation.
+
+The supported `criterion_suites` APIs are:
+
+| API | Contract |
+| --- | --- |
+| `SUITE_SCHEMA` | `research-repo-tools/criterion-suite/v1` |
+| `SuiteRun(provenance, session, host, started_at, finished_at)` | Immutable `Provenance`, attempt identity, original `HostMetadata`, ordered nonnegative integer UTC Unix seconds |
+| `pack_saved_suite(root, configuration, suite, output, *, run, saved_sample=None, criterion_dir=None, limits=ArchiveLimits())` | Verify one suite, retain original raw bytes and metadata in an absent tar.gz output, return its `CompleteSample` |
+| `assemble_saved_suites(root, configuration, archives, output, *, revision, session, saved_sample=None, limits=ArchiveLimits())` | Verify one archive per included suite against the independent complete contract and source/session, publish an absent combined tar.gz, return the complete `CompleteSample` |
+
+Configuration, archive and output names are portable consumer-root-relative
+paths. Inputs and output ancestors cannot traverse symlinks/junctions. Callers
+exclude concurrent writers. Existing output paths fail before work begins; caught
+failures publish nothing. Publication uses the shared recoverable file transaction.
+`ArchiveLimits` bounds each input and the aggregate output; all extraction uses
+the existing staged tar/ZIP reader and its portable path, link, special-file,
+traversal, duplicate and implicit-directory alias checks.
+
+Packing captures only the configured fresh and saved raw filenames. It verifies
+the captured bytes again before publication and omits unrelated Criterion
+reports. `suite.json` records the full inventory (including exclusions), full
+sampling policy, saved/fresh names, raw filename requirements and independent
+storage assertions. Its `files` map binds every retained raw file to SHA-256.
+`run` retains the original `Provenance`, session, host and interval. The CLI reads
+`--host` from a measurement-runner record; it never captures the packaging host.
+Repeat `--context KEY=VALUE` to retain command, feature, dependency or runner
+identity, and optionally supply `--source-sha256` and `--harness-sha256`.
+
+Assembly rejects missing, duplicate, unknown or extra included suites; altered
+full contracts; mismatched source revision/session; missing or extra files;
+digest changes; invalid fresh/saved pairs; and cross-suite storage collisions.
+An entirely excluded suite requires no artifact. The combined archive contains
+the original Criterion files at its root, `criterion-inventory.json`, and exact
+original manifests at `release-suites/<index>.json`, indexed by sorted included
+suite name. Suite names are metadata, never interpolated into filesystem paths.
+Reserved metadata paths also participate in collision checking.
+
+Host differences are retained and allowed for parallel absolute measurements.
+No comparison eligibility is inferred and no host is probed during replay.
+The source/session/timestamps are caller assertions, not proofs of when native
+code ran. Use fresh isolated output and trusted runner orchestration to establish
+freshness. Manifest digests detect changed raw files; they are not signatures.
+Consumers continue to own scientific inputs/gates, discovery commands, sampling
+choices, matrix/job budgets, artifact selection and release publication.

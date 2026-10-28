@@ -2,7 +2,7 @@
 
 The `research_repo_tools.performance_release` module owns the independent
 prepare → acquire/retain → README handoff. Consumer commands are in the
-[README](../README.md#prepared-performance-releases). Scientific workloads,
+[task guide](RECORDING_PERFORMANCE.md#prepared-performance-releases). Scientific workloads,
 acceptance, interpretation and deployment remain consumer decisions.
 
 | Public interface | Contract |

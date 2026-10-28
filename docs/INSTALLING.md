@@ -12,16 +12,16 @@ mandatory Python support minimum through its published `Requires-Python` metadat
 This language-feature guard applies to application packaging and dependency-only
 projects without an enablement switch. `toolchain.inherit-python` controls only
 development-selector mirroring and cannot bypass the minimum. See
-[consumer adoption](../README.md#shared-python-adoption). There are no repository-name profiles.
+[consumer adoption](UPDATING_DEPENDENCIES.md#shared-python-adoption). There are no repository-name profiles.
 The independent `toolchain.inherit-python-tools` opt-in selects the installed
 `python-tools` extra as the authority for Ruff, ty, and pytest. See
-[tool-profile adoption](../README.md#shared-python-tool-versions).
+[tool-profile adoption](UPDATING_DEPENDENCIES.md#shared-python-tool-versions).
 
 Install the published `python-bootstrap.py` template beside the matching Justfile
 adoption recipes. This standard-library-only helper starts under older Python,
 reads the exact requested release's PyPI metadata, and selects a compatible managed
 interpreter before importing the target package. The installed target distribution
-then owns the mandatory floor. See [standalone adoption](../README.md#shared-python-adoption)
+then owns the mandatory floor. See [standalone adoption](UPDATING_DEPENDENCIES.md#shared-python-adoption)
 for offline/local-artifact metadata and dry-run/apply behavior.
 
 | Input | Authority |
@@ -42,11 +42,11 @@ below are examples, not automatic upgrades:
 
 ```toml
 [dependency-groups]
-tooling = ["research-repo-tools==0.1.0"]
+tooling = ["research-repo-tools==0.2.3"]
 dev = [{include-group = "tooling"}]
 
 [tool.uv]
-required-version = "==0.12.15"
+required-version = "==0.13.6"
 
 [tool.research-repo-tools.toolchain.cargo]
 git-cliff = "2.14.1"
@@ -80,7 +80,7 @@ GitHub release-metadata requests optionally authenticate with `GITHUB_TOKEN`,
 falling back to `GH_TOKEN`; requests remain unauthenticated when neither is set.
 Use the supported `toolchain sync-binaries` command for authenticated installation
 without package synchronization or dependency builds. The
-[GitHub Actions integration](../README.md#authenticated-release-installation-in-github-actions)
+[GitHub Actions integration](#authenticated-release-installation-in-github-actions)
 keeps locked package installation and ordinary setup in separate steps.
 Setup commands and toolchain probes remove both lookup variables from child
 environments; explicitly requested `toolchain run` commands retain them.
@@ -92,7 +92,7 @@ publication. Setup, check, run, export and upgrade use these same managed paths;
 checks do not install or fall back to ambient executables. Both architectures of
 the supported macOS, glibc Linux and Windows hosts have explicit asset mappings,
 except native Windows ARM64 rumdl, which requires its explicit Cargo owner.
-See [scanner commands](../README.md#dependency-and-secret-scanning) for scope,
+See [scanner commands](RUNNING_CHECKS.md#dependency-and-secret-scanning) for scope,
 redaction, reports and consumer-owned exceptions.
 
 ## First adoption and setup
@@ -107,29 +107,10 @@ On Windows, install Git for Windows and add its `bin` directory containing
 PATH alone is insufficient. Setup checks the shell before installing tools;
 `just tools-check` includes the same read-only shell check.
 
-The consuming project's maintainer adds the published package to `tooling`,
-includes that group from `dev`, and refreshes the lockfile. Merge the packaged
-just recipes into the existing justfile, or create one if the project has none:
-
-```sh
-uv add --group tooling --no-sync "research-repo-tools==0.1.0"
-# After including tooling from dev and completing the declarations above:
-uv lock
-uv run --locked --only-group tooling research-repo-tools templates justfile --output justfile
-```
-
-The template command refuses to overwrite existing files; print the template
-without `--output` when merging into an existing justfile. Commit the declarations,
-lockfile, and recipes. No checkout of research-repo-tools or generated installer
-scripts are needed. Installing the dependency alone does not run setup or modify
-the consumer's source files.
-
-Developers run one command from the configured consumer checkout on any supported
-platform:
-
-```sh
-uv run --locked --managed-python --only-group tooling research-repo-tools setup
-```
+Follow the [consumer quickstart](../README.md#install-with-uv) to add the published
+pin, include `tooling` from `dev`, refresh the lock, export the matching Justfile
+and run setup. The template exporter refuses to overwrite existing files.
+Installing the dependency alone does not modify source or run setup.
 
 The tooling-only environment excludes the consumer project and its runtime or
 notebook dependencies, so setup can start before a native build backend has Rust
@@ -321,7 +302,7 @@ including Ubuntu for Code Scanning consumers. Platform support for a release
 requires these native jobs to pass; synthetic probes alone are insufficient.
 The compiler's Clippy component must be declared separately. SARIF uploading,
 Clippy arguments, and pipeline failure policy remain consumer-owned; see the
-[consumer example](../README.md#clippy-sarif-helpers). Upstream `clippy-sarif` ignores
+[consumer example](RUNNING_CHECKS.md#clippy-sarif-helpers). Upstream `clippy-sarif` ignores
 unrecognized input lines, so successful conversion alone does not validate every
 Cargo diagnostic or establish that Clippy succeeded.
 
@@ -375,7 +356,7 @@ the Rust compiler and shared package pins. Changing those pins remains a manual,
 reviewed operation. The dependency steps then update Cargo requirements and
 resolution, update main Python pins, refresh the full main lock, sync dev, and
 refresh and sync any declared independent Python projects.
-See the [consumer update recipes](../README.md#dependency-and-tool-updates) for
+See the [consumer update recipes](UPDATING_DEPENDENCIES.md#dependency-and-tool-updates) for
 Cargo exclusions, extra manifests, and Python-only behavior.
 The Python pin updater preserves included tooling-group pins as resolver
 constraints; it updates only direct exact `dev` requirements.
@@ -410,10 +391,10 @@ user Cargo installation, or Rust compiler pin is changed by this command.
 `deps update-tools` supports consumers whose Just variables track user-installed
 Cargo tools, explicitly declared Homebrew tools, and uv. It reconciles mapped pins after the consumer's
 native package-manager update; it never installs tools itself. Machine-configuration
-repositories can use the [user-installed tool recipes](../README.md#user-installed-tool-updates),
+repositories can use the [user-installed tool recipes](UPDATING_DEPENDENCIES.md#user-installed-tool-updates),
 including `cargo install-update --all --locked`. This separate ownership model
 does not change the isolated TOML toolchain contract or its standard template.
-For mixed inventories, see the [portable ownership composition](../README.md#mixed-installation-owners-on-linux-and-macos).
+For mixed inventories, see the [portable ownership composition](UPDATING_DEPENDENCIES.md#mixed-installation-owners-on-linux-and-macos).
 Prebuilt dprint and rumdl use `toolchain.binaries`; their authoritative TOML pins
 are upgraded by the existing verified release-binary machinery. Do not map those
 managed tools back into competing Just variables. Just remains supplied by
@@ -424,3 +405,55 @@ Upstream behavior: [uv installation](https://docs.astral.sh/uv/getting-started/i
 [managed Python](https://docs.astral.sh/uv/concepts/python-versions/),
 [dependency groups](https://docs.astral.sh/uv/concepts/projects/sync/), and
 [rustup installers](https://rust-lang.github.io/rustup/installation/other.html).
+
+## Authenticated release installation in GitHub Actions
+
+`toolchain sync-binaries` installs the exact release-binary pins declared by the
+consumer (dprint, gitleaks, osv-scanner, and rumdl). It checks warm caches and repairs damaged
+executables through the same SHA-256-verified installer as setup. It does not
+install Python, Rust, Cargo tools, Just, or project dependencies.
+
+Install the locked tooling package first, then authenticate binary installation
+in a separate step. This example uses an existing uv installation and the
+consumer's committed manifest and lockfile:
+
+```yaml
+- name: Install locked tooling package
+  run: uv sync --locked --managed-python --only-group tooling
+- name: Install pinned release binaries
+  env:
+    GITHUB_TOKEN: ${{ github.token }}
+  run: uv run --locked --no-sync --no-python-downloads python -I -X utf8 -m research_repo_tools toolchain sync-binaries
+- name: Set up development tools and dependencies
+  run: uv run --locked --managed-python --only-group tooling research-repo-tools setup
+```
+
+The credential-bearing step uses the already installed package without
+synchronizing its environment. Release metadata requests authenticate with the
+first nonempty `GITHUB_TOKEN`, then `GH_TOKEN`; asset downloads carry no lookup
+credential. Setup commands and all toolchain version probes receive neither
+variable, and handled release-installation diagnostics redact both values.
+An explicit `toolchain run -- COMMAND ...` retains the caller's credentials for
+that command. Other native build and package-index settings continue to pass
+through. After setup, use `just tools-sync-binaries` for binary-only repair.
+
+To reclaim obsolete managed Cargo tools, Rust toolchains, release binaries, and
+Python interpreters, use the shared `clean` recipe. Include every other consumer
+whose installed pins you want to retain:
+
+```sh
+just clean --keep-root ../la-stack
+just clean --apply --keep-root ../la-stack
+```
+
+The default is a preview. Cleanup preserves current declarations, newer versions,
+unknown tools, other hosts, and Python interpreters referenced by the selected
+consumers' environments or uv tools. It only removes installations inside the
+package-owned store; user-wide Cargo, rustup and uv Python installs, project
+`.venv`, build artifacts, and dependency caches remain intact. See the
+[cleanup contract](INSTALLING.md#cleaning-obsolete-installations) for retention
+rules and Windows guidance. Consumers copy the packaged recipe and pin the shared
+package; the cleanup implementation lives here.
+
+Follow the [toolchain guide](INSTALLING.md) for declarations, first-time setup, and
+strictly read-only tool checks.

@@ -53,7 +53,7 @@ For new shared-envelope evidence, the configuration adapter can replace this
 Python wrapper. Record baseline/current releases under provenance `context.release`,
 maintain independent revision and optional context/digest expectations in the
 publication TOML, and configure all three package/report reference selectors.
-The [README](../README.md#document-publication) contains a complete example.
+The [task guide](PUBLISHING_REPORTS.md#document-publication) contains a complete example.
 
 ## Intentional contract changes
 

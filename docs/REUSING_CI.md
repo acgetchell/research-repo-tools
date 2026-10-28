@@ -147,7 +147,7 @@ checks after downloading and verifying the evidence.
 
 After the reviewed PR is squash-merged, use the full release commit SHA and an
 explicit successful run/attempt. With uv installed and the user-level Just
-command set up as described in [README](../README.md), use:
+command set up as described in [task guide](../README.md), use:
 
 ```sh
 just release-reuse RELEASE_SHA --pull-request PR_NUMBER --run-id RUN_ID \

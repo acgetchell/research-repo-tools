@@ -1,24 +1,28 @@
 # Complete measurements and host metadata
 
-The base measurement and host contracts target v0.1.8; the provenance renderer,
-versioned report history and heterogeneous sampling additions target v0.1.9.
-Source availability, package publication, native platform checks and consumer
-adoption are separate requirements. Consumer
-commands and editable scaffolds are described in the [README](../README.md#common-harness-and-complete-runs).
+Complete runs retain original Criterion files, phase-owned series and recorded
+host/source identities. Consumer commands and editable scaffolds are described
+in the [task guide](RECORDING_PERFORMANCE.md#common-harness-and-complete-runs).
 Existing comparison, baseline asset and report schema-1 contracts remain supported.
-For v0.2.1 selectors, independent eligibility and installed workflow examples,
-see [Declaring complete performance workflows](DECLARING_PERFORMANCE.md).
+For source selection, independent eligibility and the schema-4 acquisition
+contract, see [Declaring complete performance workflows](DECLARING_PERFORMANCE.md).
 
 ## Configuration and measurement
 
 `measurement.load_measurement(root, configuration)` accepts schema-1
-`MeasurementConfig` or schema-2/3 `common_measurement.CommonHarnessPlan`.
-The latter contains a shared `measurement` configuration, `baseline` and
+`MeasurementConfig`, schema-2/3 `common_measurement.CommonHarnessPlan`, or
+schema-4 `common_measurement.CompleteMeasurementPlan`. Schema 4 explicitly
+selects common/independent harnesses and export/worktree sources; its
+[acquisition contract](DECLARING_PERFORMANCE.md#complete-acquisition-contract-schema-4)
+defines complete-run v3 and union-inventory reporting. The schema-2/3 contract
+below preserves historical common-harness behavior.
+
+The complete plans contain a shared `measurement` configuration, `baseline` and
 `current` `MeasurementPhase` objects, and a tuple of `RunSeries` views or
 `DiscoveredSeries` selectors.
 `MeasurementPhase(command, gate, policy, environment=())` uses immutable argument
-vectors, a completeness policy and string environment pairs. The v0.1.9 additions
-also accept `DiscoveryPolicy`; see the [Criterion contracts](criterion-api.md).
+vectors, a completeness policy and string environment pairs. They also accept
+`DiscoveryPolicy`; see the [Criterion contracts](criterion-api.md).
 `CommonHarnessPlan(..., *, schema=2)` preserves the original uniform measurement
 contract. Pass `schema=3` explicitly for phase-owned sampling policies and v2
 evidence; loading a plan preserves its declared schema.
@@ -55,8 +59,8 @@ fail before commands run. Every source/harness glob must match regular files in
 the current checkout. Include gate programs, native toolchain declarations,
 build manifests and complete dependency resolution files in the harness.
 
-`measure_pair` uses its existing opt-in isolated worktree lifecycle for all
-schemas. `common_measurement.measure_prepared_pair(baseline, current, plan,
+Schemas 2 and 3 use `measure_pair`'s opt-in isolated worktree lifecycle.
+`common_measurement.measure_prepared_pair(baseline, current, plan,
 pair, *, working_tree=False)` exposes the same common-harness operation for two
 distinct, nonoverlapping disposable checkouts supplied by a caller. It changes
 files in those checkouts; the caller owns cleanup. It does not create Git refs.
@@ -255,7 +259,7 @@ release-asset contracts.
 
 ## Configured presentation
 
-Import from `research_repo_tools.run_presentation` (target v0.1.9):
+Import from `research_repo_tools.run_presentation`:
 
 | API | Contract |
 | --- | --- |
@@ -331,8 +335,8 @@ Differing levels are rejected before any table is produced, in every style;
 presentation never weakens that evidence contract or substitutes 95%. Compact
 tables retain both marginal bounds and the explanation that ratios are point
 estimates without ratio intervals or significance claims. These controls are
-unreleased; published v0.1.9 consumers need a compatible release containing them.
-See the [README](../README.md#complete-run-document-sections-and-coordinate-plots)
+available from v0.2.0; older consumers need a compatible published pin.
+See the [task guide](PUBLISHING_REPORTS.md#complete-run-document-sections-and-coordinate-plots)
 for the six-column ratio-only configuration and Python usage.
 
 Pure renderers do no I/O. Use `publication.plan_outputs` to transactionally

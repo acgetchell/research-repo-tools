@@ -2,7 +2,7 @@
 
 The supported names below are available starting with the release containing
 them, after `0.1.2`. Private names and the CLI implementation module are not public
-APIs. The [README](../README.md#performance-evidence) contains consumer commands
+APIs. The [task guide](RECORDING_PERFORMANCE.md#performance-evidence) contains consumer commands
 and examples. All paths are `Path` objects; relative paths use the calling process's
 directory in Python and the selected consumer root in the CLI.
 
@@ -105,7 +105,7 @@ It excludes permissions, Git attributes, and files not in the supplied inventory
 hash. Consumers own inventory discovery, additions/deletions, executable-mode
 evidence where relevant, and exclusion of concurrent changes. Capture source and
 harness separately, including applied uncommitted source and any substituted
-harness. Use the [byte process API](api.md#python-process-api) for Git filters
+harness. Use the [byte process API](process-api.md#python-process-api) for Git filters
 and binary patches. Existing digest schemes remain distinct and unchanged.
 
 New envelopes use `deterministic_json`; it is a package convention, not RFC 8785.
@@ -123,7 +123,7 @@ Every immutable path must be a publication target and may be absent or contain
 identical bytes. This allows repeat promotion but refuses conflicting archive
 content before any writes. Consumers pre-validate payload semantics, compatibility,
 and all report/index bytes, then publish the whole group in one call.
-The operation shares [file-publication rollback](api.md#python-file-publication-api),
+The operation shares [file-publication rollback](files-api.md#python-file-publication-api),
 including `RecoveryError` backups when restoration fails. It requires exclusive
 writer control and is not crash-atomic across files. No Git state is changed.
 

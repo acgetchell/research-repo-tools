@@ -145,7 +145,8 @@ groups) after the hosted updater accepts 3.15. The reusable approval contract
 continues to support uv for consumers using supported Python versions.
 
 The hosted `Configured Graph Update: uv` job is a separate dependency-graph
-operation. GitHub can run [Dependabot graph jobs](https://docs.github.com/en/code-security/concepts/supply-chain-security/dependency-graph-data#dependabot-graph-jobs)
+operation. GitHub can run
+[Dependabot graph jobs](https://docs.github.com/en/code-security/concepts/supply-chain-security/dependency-graph-data#dependabot-graph-jobs)
 whenever the repository's dependency graph is enabled, independently of this
 version-update entry. Pausing uv version updates does not guarantee that these
 graph jobs stop. Their Python 3.15 rejection requires upstream runtime support;

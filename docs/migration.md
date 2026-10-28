@@ -64,7 +64,7 @@ After an exact release containing the implementation is published:
 Dry runs and checks leave source files, environments and Git state untouched.
 Checks do not select a newer shared release or repair metadata. Apply restores
 prior declarations and the environment on caught failures; recovery errors name
-retained backups. See [adoption and recovery](../README.md#shared-python-adoption).
+retained backups. See [adoption and recovery](UPDATING_DEPENDENCIES.md#shared-python-adoption).
 Merge, shared-package publication, and consumer rollout are separate steps:
 [#85](https://github.com/acgetchell/research-repo-tools/issues/85) implements the
 guard; [#69](https://github.com/acgetchell/research-repo-tools/issues/69) and the
@@ -139,7 +139,7 @@ does not establish that a consumer workflow has migrated successfully.
 
 ## Dependency and tool update adoption
 
-Adopt the [complete update recipe contract](../README.md#dependency-and-tool-updates)
+Adopt the [complete update recipe contract](UPDATING_DEPENDENCIES.md#dependency-and-tool-updates)
 as a unit. Retain consumer exclusions and extra Cargo resolution roots in
 `update-cargo-dependencies`; Python-only consumers use the same template with
 no Rust declarations or root Cargo manifest. Use the canonical
@@ -211,7 +211,7 @@ validation of each consumer's generated artifacts remain in that consumer.
 The shared review contract follows the branch/uncommitted scopes and live-base
 checks in markov-chain-monte-carlo's Just review helper. Consumer adoption is
 separate from maintenance-tool migration and requires a published package version
-containing the review capability. See the [review recipes](../README.md#coderabbit-review).
+containing the review capability. See the [review recipes](RUNNING_CHECKS.md#coderabbit-review).
 
 Replace duplicated review helpers with the packaged thin recipes. The common
 default is verified `origin/main`, superseding local `main` defaults; explicit local
@@ -225,7 +225,7 @@ authorized work, outside routine checks and CI.
 ## Migrating Python helpers
 
 Published `0.1.2` does not support process or transaction imports. Wait for a
-subsequent published package containing the [public APIs](api.md#python-process-api),
+subsequent published package containing the [public APIs](process-api.md#python-process-api),
 pin that version, and run the consumer's focused integration checks before
 removing local helper copies. Local wheels remain a pre-publication evaluation aid.
 
@@ -242,7 +242,7 @@ rejected, overlapping targets fail before effects, and incomplete rollback expos
 recovery files through `RecoveryError` children of the exception group. This
 supersedes local writers that follow output symlinks or discard recovery failures;
 do not add compatibility flags to retain those behaviors. See the
-[README example](../README.md#calling-from-python) and full publication contract.
+[worked example](process-api.md#calling-from-python) and full publication contract.
 
 Clippy SARIF consumers can also remove their separate Cargo installers and Just
 version variables after adopting a release with the catalog additions. Move the
@@ -255,8 +255,8 @@ handling in the consumer.
 Pin a published package containing the required capabilities before downstream
 adoption; exact-commit policy and composite support target 0.2.4. Release
 publication and consumer PRs are separate
-operations. Follow the [Actions policy wiring](../README.md#actions-allowlists-and-opt-in-pin-updates)
-and [mixed installation ownership](../README.md#mixed-installation-owners-on-linux-and-macos).
+operations. Follow the [Actions policy wiring](UPDATING_DEPENDENCIES.md#actions-allowlists-and-opt-in-pin-updates)
+and [mixed installation ownership](UPDATING_DEPENDENCIES.md#mixed-installation-owners-on-linux-and-macos).
 
 Move generic YAML allowlist checks upstream while retaining the consumer's existing
 strict selected-actions JSON and focused integration tests. Remove duplicate

@@ -22,7 +22,7 @@ passing an old plan to the new action is an error, not implicit conversion.
 | Logger/stderr expectations and shell `2>&1` | Pin the release containing #132 and copy stderr markers unchanged into `expect-stderr`; remove shell redirection and guessed executable paths |
 | Arguments or intentional omissions | Preserve literal `args` and explicit consumer `include`/`exclude` policy |
 
-Use the [README example](../README.md#cargo-examples) to wire a thin Just recipe.
+Use the [worked example](RUNNING_CHECKS.md#cargo-examples) to wire a thin Just recipe.
 The runner's order is sorted ordinary targets followed by sorted feature
 overrides. A static plan depending on custom interleaving or arbitrary commands
 should retain `validation run` for those steps rather than assume its list order

@@ -124,7 +124,7 @@ exact portable flat-file inventory and provider ZIP digest.
 ## Shared primitives and asset composition
 
 Consumer commands are in the
-[README](../README.md#release-evidence-and-attachment-handoffs). Both Justfiles use
+[task guide](VERIFYING_RELEASE_EVIDENCE.md#release-evidence-and-attachment-handoffs). Both Justfiles use
 `release-evidence` for `release evidence` and `release-assets` for `release assets`.
 Recipes forward arguments; stdout is human-readable status, never evidence.
 

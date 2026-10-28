@@ -49,7 +49,8 @@ the interpreter requires a dependency change.
 ## Maintainer commands
 
 These recipes belong to this package's root justfile. Consumer setup and daily
-commands are documented in the [README](README.md#just-recipes).
+commands start in the [README](README.md#common-workflows), with the full
+[consumer command reference](docs/RUNNING_COMMANDS.md#just-recipes) linked there.
 Run `just help` or
 `just` for the complete lexicographically sorted command list,
 including changelog and release recipes.
@@ -101,7 +102,7 @@ including changelog and release recipes.
 | `just update-uv [ARGS...]` | Upgrade uv through its verified owner; use `--dry-run` to preview |
 | `just workflow-check` | Run actionlint and shared zizmor audits with reported authentication policy |
 
-The maintainer justfile also exposes the [shared changelog recipes](README.md#just-recipes).
+The maintainer justfile also exposes the [shared changelog recipes](docs/RUNNING_COMMANDS.md#just-recipes).
 
 When reviewing GitHub Actions pin updates, reconcile the distributed
 `src/research_repo_tools/templates/publish-crates.yml` and `zizmor.yml` templates
@@ -235,7 +236,7 @@ once in the published `python-tools` extra; the maintainer dev group selects tha
 extra through a self dependency. Advance those three pins deliberately together
 for a tested shared release, refresh the lock, and validate with `just ci`.
 The generic dev-pin updater retains this release-owned profile. See the
-[dependency and tool updates](README.md#dependency-and-tool-updates) guidance for
+[dependency and tool updates](docs/UPDATING_DEPENDENCIES.md#dependency-and-tool-updates) guidance for
 declaring and updating independent consumer projects.
 
 ## Local package evaluation

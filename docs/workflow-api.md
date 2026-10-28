@@ -2,7 +2,7 @@
 
 The original workflow APIs belong to the coordinated v0.1.4 extraction.
 Availability in the working tree does not mean that release has been published. Consumer commands
-and configuration examples are in the [README](../README.md#configured-benchmark-workflows).
+and configuration examples are in the [task guide](RECORDING_PERFORMANCE.md#configured-benchmark-workflows).
 The [MCMC ownership map](mcmc-extraction.md) defines the first adoption gate.
 Schema-2/3 common-harness measurement, complete-run retention and reusable host/
 profiling capture are described in the [complete-run contract](complete-run-api.md).
@@ -98,7 +98,7 @@ archives cannot fall back to a more permissive legacy reader.
 
 The captured release-target APIs require v0.1.9 or newer; they are not available
 in v0.1.8. Pin an exact verified published package before adopting the
-[trusted handoff](../README.md#trusted-release-target-handoff).
+[trusted handoff](VERIFYING_RELEASE_EVIDENCE.md#trusted-release-target-handoff).
 
 `ReleaseTarget(repository, tag, release_id, commit, expected_title=None)` is a
 frozen validated identity. Repository is a GitHub `owner/name`, ID is a positive
@@ -136,7 +136,7 @@ nesting. All six fields are required, including nullable `expected_title`:
 
 Parsing proves structural validity, not authenticity, freshness or approval.
 Consumers own a trusted job-output/artifact handoff and must prevent benchmark
-code from replacing the captured target. See the [trusted-job example](../README.md#trusted-release-target-handoff).
+code from replacing the captured target. See the [trusted-job example](VERIFYING_RELEASE_EVIDENCE.md#trusted-release-target-handoff).
 `revalidate_release_target(root, target, *, checkout=None)` reads the captured ID directly and
 returns `GitHubRelease` after checking identity, title assertion, mutable stable
 draft state and resolved tag SHA. A missing/deleted ID fails; it never substitutes

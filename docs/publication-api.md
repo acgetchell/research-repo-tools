@@ -2,7 +2,7 @@
 
 Available in the release containing these APIs, after `0.1.2`. Consumer commands
 and complete configuration examples live in the
-[README](../README.md#document-publication). Historical-schema adoption is covered
+[task guide](PUBLISHING_REPORTS.md#document-publication). Historical-schema adoption is covered
 in [publication migration](publication-migration.md).
 
 ## Python API
@@ -49,7 +49,7 @@ bytes and can come from consumer renderers. The built-in renderer creates SVG;
 the generic planner also accepts other figure formats.
 
 `references` uses the existing public
-[`ReleaseRule`](api.md#python-release-api) selector type, with fixed `value`
+[`ReleaseRule`](publishing-api.md#python-release-api) selector type, with fixed `value`
 assertions only. Each rule must find exactly its configured number of nonempty
 named `value` captures and every capture must equal the expected value. Rules
 selecting outputs inspect candidate bytes. This supports release/report identity
@@ -80,7 +80,7 @@ reject added, removed, renamed, unsafe, or aliased matching paths. The TOML adap
 retains these checks for both `current-sources` and `current-harness`; files outside
 those patterns do not change the selected inventory. Caught failures roll back earlier writes;
 incomplete rollback exposes `RecoveryError` backups through the existing
-[file-publication contract](api.md#python-file-publication-api).
+[file-publication contract](files-api.md#python-file-publication-api).
 No-op outputs are not rewritten. Concurrent writers must be excluded by the
 caller: snapshot comparisons provide neither locking nor crash atomicity.
 
@@ -162,11 +162,11 @@ traceback; a successful check is silent.
 
 ## Publication configuration v2
 
-Schema 2 targets v0.1.9 and accepts `research-repo-tools/complete-run/v1` and
+Schema 2 accepts `research-repo-tools/complete-run/v1` and
 `research-repo-tools/complete-run/v2`
 evidence directly, with the same independent provenance pins, source/harness
 checks, references, markers, tagged links, preview/check and transaction contracts
-as schema 1. The [README](../README.md#complete-run-document-sections-and-coordinate-plots)
+as schema 1. The [task guide](PUBLISHING_REPORTS.md#complete-run-document-sections-and-coordinate-plots)
 owns commands and the packaged `complete-publication.toml` provides an editable
 configuration example. Schema 1 continues to require comparison evidence.
 

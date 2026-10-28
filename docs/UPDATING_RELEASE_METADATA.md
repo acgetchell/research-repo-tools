@@ -82,8 +82,7 @@ with a real predecessor remains unchanged.
 
 ## Declarative consumer policies
 
-These additions require a published package newer than `0.1.2` containing the
-release-plan API. Existing defaults remain unchanged when no rules are declared.
+Existing defaults remain unchanged when no rules are declared.
 Put the following under `[tool.research-repo-tools.release]` in `pyproject.toml`,
 or use `[release]` in a standalone configuration:
 
@@ -145,7 +144,7 @@ publication; it does not replace `--date` for release preparation.
 
 ## Structured plans and adapters
 
-The [release API](api.md#python-release-api) exposes discovery, checking, planning,
+The [release API](publishing-api.md#python-release-api) exposes discovery, checking, planning,
 and application without CLI-output parsing. A plan contains exact before/after
 bytes for the entire selected file set. Preview creates and validates the plan;
 apply publishes its changed bytes in one shared transaction. There is no second

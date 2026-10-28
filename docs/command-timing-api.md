@@ -7,7 +7,7 @@ and scientific comparability evidence.
 It does not feed their promotion or publication paths. Workload selection,
 throughput definitions, correctness assertions, and scientific interpretation
 remain consumer policy. No consumer workloads run during package validation.
-See the [README example](../README.md#exploratory-command-timing).
+See the [worked example](TIMING_COMMANDS.md#exploratory-command-timing).
 
 ## Declaration
 
@@ -30,7 +30,7 @@ Case and probe IDs are 1–128 ASCII letters, digits, dots, underscores or hyphe
 starting with a letter or digit. Argv includes the executable and permits empty
 arguments, spaces and Unicode. NUL is rejected. There is no interpolation,
 expression language, shell redirection, workload expansion or throughput formula.
-The shared [process discovery rules](api.md#python-process-api) apply, including
+The shared [process discovery rules](process-api.md#python-process-api) apply, including
 native Windows batch-file limitations. Prefer native executables for literal argv.
 Source globs use the producing platform's native case rules, recorded in
 `runner.platform`. Offline readers apply those recorded rules on every host.

@@ -4,7 +4,7 @@ The release containing this capability adds `validation cargo-examples CONFIG`
 and `research_repo_tools.cargo_examples`. Consumers must pin the exact published
 release containing it before adoption. Implementation of issue #71 does not
 publish a release or perform consumer rollout. The existing `validation run`
-contract remains supported. See the [consumer example](../README.md#cargo-examples)
+contract remains supported. See the [consumer example](RUNNING_CHECKS.md#cargo-examples)
 and [migration guidance](cargo-examples-migration.md).
 
 ## CLI and discovery
@@ -141,7 +141,7 @@ metadata fields are tolerated, while the fields used for discovery are checked.
 Both functions raise `ValueError` for malformed configuration/discovery/artifacts,
 `ExecutableNotFoundError` for missing commands, and standard process or OS errors
 for execution failures. The existing
-[`run_command_live`](api.md#python-process-api) also accepts
+[`run_command_live`](process-api.md#python-process-api) also accepts
 `stdout_markers: Sequence[bytes] = ()` and
 `stderr_markers: Sequence[bytes] = ()`. Nonempty markers enable the same
 streaming assertion mode on each selected stream, with exact binary matching and no captured output in its result
