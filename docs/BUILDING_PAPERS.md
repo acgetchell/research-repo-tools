@@ -34,10 +34,24 @@ export SOURCE_DATE_EPOCH="$(just papers source-date --paper example)"
 # Consumer recipe compiles into its declared build directory using that environment.
 just papers normalize --paper example
 just papers check --paper example
+```
+
+Optionally compare the build with a retained reference artifact:
+
+```sh
 just papers check --paper example --reference papers/example.pdf
-# Explicit refresh intent, after consumer scientific and build checks:
+```
+
+To refresh that artifact after consumer scientific and build checks, first remove
+or comment out any configured `reference` for the document. Both named `check`
+and `normalize` commands otherwise compare against it, even when `--reference`
+is omitted. With the configured reference disabled, publish the refreshed PDF:
+
+```sh
 just papers normalize --paper example --output papers/example.pdf
 ```
+
+Restore the configured reference afterward if future builds should match it.
 
 Literal-path commands are also supported: `papers source-date SOURCE.tex`,
 `papers check BUILT.pdf --min-pages 1 --require-text TITLE --reference RETAINED.pdf`,

@@ -1,7 +1,9 @@
 # Verifying release evidence and attachments
 
-Use this guide when composing trusted preflight and writer jobs. Follow the
-[release procedure](RELEASING.md) for the overall order and approvals. These
+Use this guide when composing trusted preflight and writer jobs. Follow your
+consumer's adapted release procedure, using the
+[packaged release template](../src/research_repo_tools/templates/RELEASING.md)
+for the overall order and approvals. These
 interfaces require a verified published v0.2.4 package. Exact-release-commit
 evidence is the default; [CI reuse](REUSING_CI.md) is a separate explicit policy.
 
@@ -106,8 +108,9 @@ details validation, retry guarantees and the limits of client-side rechecks.
 The [la-stack deletion map](performance-migration.md#captured-release-target-adoption)
 keeps downstream migration tied to an exact published package and integration checks.
 
-Once no local executable modules remain, remove the consumer's build backend,
-console scripts and self-referencing notebook extra. Set `[tool.uv] package=false`,
+Only when no local executable modules remain and the consumer neither installs
+nor distributes its own Python package, remove its build backend, console scripts
+and self-referencing notebook extra. Set `[tool.uv] package=false`,
 retain exact shared pins in tooling/notebook dependency groups, refresh the lock,
 and remove local wheel/entry-point tests. Rust/scientific and configuration tests
 remain. Declare `release.tag-policy="canonical-stable"` where `vX.Y.Z` is required;

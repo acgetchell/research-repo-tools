@@ -237,8 +237,10 @@ fixtures = "tests/semgrep"
 ```
 
 `--config PATH` reads unprefixed tables from a separate TOML file when needed.
-Paths are relative to the consumer root, which defaults to the configuration
-directory; `--root PATH` overrides that root. Explicit executable paths such as
+Relative config paths resolve against the caller's current working directory,
+independently of `--root`. Consumer-relative paths in settings use the consumer
+root, which defaults to the configuration directory; `--root PATH` overrides
+that root. Explicit executable paths such as
 `deps.uv = "./bin/uv"` use the same root; bare names use `PATH`.
 The selected uv executable is used for dependency resolution, Python pin updates,
 and uv version checks.

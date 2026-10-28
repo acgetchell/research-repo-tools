@@ -15,8 +15,10 @@ fails even when the target-support notice is present.
 ## First notebook workflow
 
 After [consumer setup](../README.md#install-with-uv), add the notebook extra at
-the same exact tooling version and declare your analysis packages. Refresh the
-lock, then run:
+the same exact tooling version and declare your analysis packages. Declare and
+lock Ruff and ty in the development dependencies as described under
+[Python linting](#python-linting); the notebook extra does not install these
+checkers. Refresh the lock before running the first workflow:
 
 ```sh
 just notebook-sync

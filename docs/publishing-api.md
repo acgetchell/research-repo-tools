@@ -83,7 +83,7 @@ These functions do not print or parse CLI output.
 | `apply_release(plan) -> ReleaseResult` | Publish a validated, unchanged plan using the file-publication API |
 | `check_release(root, *, policy=None, previous_tag=None, adapter=None) -> ReleaseCheckResult` | Check shared metadata and consumer rules without writing source files |
 | `discover_release(root, *, policy=None, adapter=None) -> ReleaseDiscovery` | Read package identity, selected files, and standard version references; validate explicit selector cardinality without GitHub access |
-| `plan_release(root, tag, *, previous_tag=None, release_date=None, policy=None, adapter=None) -> ReleasePlan` | Prepare all shared, declarative, and adapter edits in an isolated tree and validate them before returning |
+| `plan_release(root, tag, *, previous_tag=None, release_date=None, policy=None, adapter=None, first_release=False, offline=False) -> ReleasePlan` | Prepare all shared, declarative, and adapter edits in an isolated tree and validate them before returning |
 | `published_releases(root, *, repository=None) -> tuple[PublishedRelease, ...]` | Query `gh release list`, excluding drafts/prereleases, sorted by descending numeric stable version |
 
 By default `plan_release` accepts `X.Y.Z` or `vX.Y.Z` and normalizes to `vX.Y.Z`, including

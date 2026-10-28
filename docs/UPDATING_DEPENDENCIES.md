@@ -252,7 +252,7 @@ consumer checks for coupled dependencies and additional manifests. Review both
 manifests and lockfiles after updating. See [update adoption](migration.md#dependency-and-tool-update-adoption)
 for superseded policies and consumer integration requirements.
 
-#### User-installed tool updates
+### User-installed tool updates
 
 A machine-configuration repository can use the same dependency commands while
 owning its user-wide Cargo installations. Keep the shared package's exact pin in

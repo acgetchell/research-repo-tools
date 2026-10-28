@@ -35,6 +35,7 @@ also illustrates an explicit build preflight. Merge this thin recipe from the
 packaged justfile:
 
 ```just
+[positional-arguments]
 command-time configuration output:
     uv run --locked --group dev research-repo-tools performance command-time "$1" --output "$2"
 ```
