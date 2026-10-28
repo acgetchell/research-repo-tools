@@ -1,7 +1,6 @@
 """Package-owned Semgrep pin and isolated uv tool provisioning."""
 
 import json
-import os
 import subprocess
 import tempfile
 from pathlib import Path
@@ -39,17 +38,12 @@ _REDIRECTS = frozenset(
 )
 
 
-def _environment(binary: Path | None = None) -> dict[str, str]:
+def _environment() -> dict[str, str]:
     """Keep uv cache/network policy while isolating the scanner's Python runtime."""
     env = {key: value for key, value in release_credentials.environment().items() if key.upper() not in _REDIRECTS and not key.upper().startswith("PYTHON")}
     # Keep the scanner's older runtime separate from project Python retention.
     env.setdefault("UV_PYTHON_INSTALL_DIR", str(home() / "semgrep" / "python"))
     env.update(PYTHONNOUSERSITE="1", PYTHONSAFEPATH="1", PYTHONUTF8="1", SEMGREP_SEND_METRICS="off", OTEL_SDK_DISABLED="true")
-    if binary is not None:
-        # The native launcher delegates some commands to pysemgrep through PATH.
-        # Keep that child in the verified environment even when a project or
-        # another installation already supplies a different pysemgrep.
-        env["PATH"] = os.pathsep.join((str(binary.parent), env.get("PATH", "")))
     return env
 
 
@@ -96,7 +90,6 @@ def setup(root: Path) -> Path:
         if not isinstance(path, str) or not Path(path).is_absolute() or not Path(path).is_file():
             raise ValueError("uv did not return an existing absolute Semgrep executable")
         binary = resolve_executable(Path(path), cwd=root, env=env).resolve()
-        env = _environment(binary)
         with tempfile.TemporaryDirectory(prefix="research-semgrep-tool-") as directory:
             temporary = Path(directory)
             env.update(

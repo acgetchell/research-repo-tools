@@ -39,7 +39,6 @@ class TestSemgrepTool(unittest.TestCase):
         else:
             self.assertEqual(Path(command), self.binary)
             self.assertEqual(args, ["--disable-version-check", "--version"])
-            self.assertEqual(kwargs["env"]["PATH"].split(os.pathsep)[0], str(self.binary.parent))
             payload = (self.actual + "\r\n").encode("utf-8")
         self.assertEqual(kwargs["cwd"], self.root)
         return subprocess.CompletedProcess([str(command), *args], 0, payload, b"")

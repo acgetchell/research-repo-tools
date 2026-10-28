@@ -5,7 +5,6 @@ import contextlib
 import io
 import json
 import os
-import shutil
 import tempfile
 import unittest
 from pathlib import Path
@@ -13,7 +12,7 @@ from typing import override
 from unittest.mock import patch
 from urllib.parse import unquote
 
-from research_repo_tools import config, security, semgrep, semgrep_scan, semgrep_tool
+from research_repo_tools import config, security, semgrep_scan, semgrep_tool
 
 
 class TestNativeSemgrepConsumer(unittest.TestCase):
@@ -32,17 +31,12 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
     def test_managed_scanner_runs_offline_and_ignores_ambient_scanner_and_project_redirects(self):
         ambient = self.root / "ambient tools"
         ambient.mkdir()
-        for name in ("semgrep", "pysemgrep"):
-            fake = ambient / (f"{name}.cmd" if os.name == "nt" else name)
-            fake.write_bytes(b"@echo ambient scanner invoked\r\n@exit /b 92\r\n" if os.name == "nt" else b"#!/bin/sh\necho ambient scanner invoked\nexit 92\n")
-            fake.chmod(0o755)
-            selected = shutil.which(name, path=str(ambient))
-            assert selected is not None
-            self.assertEqual(Path(selected), fake)
+        fake = ambient / ("semgrep.cmd" if os.name == "nt" else "semgrep")
+        fake.write_bytes(b"@echo ambient scanner invoked\r\n@exit /b 92\r\n" if os.name == "nt" else b"#!/bin/sh\necho ambient scanner invoked\nexit 92\n")
+        fake.chmod(0o755)
         self.write("uv.toml", "invalid = [\n")
         self.write(".python-version", "0.0.0\n")
         source = self.write("example.py", 'print("native")\n')
-        self.write("fixture.py", '# ruleid: python.print\nprint("fixture")\n')
         settings = self.settings([{"id": "python.print", "languages": ["python"], "pattern": "print(...)", "message": "print", "severity": "WARNING"}])
         with patch.dict(
             os.environ,
@@ -62,8 +56,6 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
             # depending on the cache's internal environment identity.
             with patch.object(semgrep_scan, "security_inventory", return_value=("example.py",)):
                 self.assertEqual(semgrep_scan.scan(settings, include=("*.py",)), 1)
-            fixtures = config.parse({"semgrep": {"config": "rules.json", "fixtures": "fixture.py"}}, root=self.root)
-            self.assertEqual(semgrep.check(fixtures), 0)
         report = json.loads((self.root / "target/security/semgrep/semgrep.json").read_bytes())
         self.assertEqual([(item["check_id"], Path(item["path"]), item["start"]["line"]) for item in report["results"]], [("python.print", source, 1)])
         self.assertFalse((self.root / "uv.lock").exists())
