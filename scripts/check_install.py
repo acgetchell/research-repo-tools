@@ -348,6 +348,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             validation_release_suite.write_bytes((ROOT / "tests/releases/public_validation_consumer.py").read_bytes())
             run_consumer_suite(python, [str(validation_release_suite)], cwd=consumer, env=local_env)
             evidence_suite = consumer / "public_evidence_consumer.py"
+            dates_suite = consumer / "public_dates_consumer.py"
+            dates_suite.write_bytes((ROOT / "tests/changelog/public_dates_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(dates_suite)], cwd=consumer, env=local_env)
             evidence_suite.write_bytes((ROOT / "tests/releases/public_evidence_consumer.py").read_bytes())
             run_consumer_suite(python, [str(evidence_suite)], cwd=consumer, env=local_env)
             reuse_suite = consumer / "public_reuse_consumer.py"
@@ -355,6 +358,12 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             run_consumer_suite(python, [str(reuse_suite)], cwd=consumer, env=local_env)
             run_consumer_suite(python, [str(publishing_suite)], cwd=consumer, env=local_env)
             performance_suite = consumer / "public_performance_consumer.py"
+            preparation_suite = consumer / "public_preparation_consumer.py"
+            preparation_suite.write_bytes((ROOT / "tests/performance/public_preparation_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(preparation_suite)], cwd=consumer, env=local_env)
+            inventory_suite = consumer / "public_report_inventory_consumer.py"
+            inventory_suite.write_bytes((ROOT / "tests/performance/public_report_inventory_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(inventory_suite)], cwd=consumer, env=local_env)
             performance_suite.write_bytes((ROOT / "tests/performance/public_performance_consumer.py").read_bytes())
             run_consumer_suite(python, [str(performance_suite)], cwd=consumer, env=local_env)
             workflows_suite = consumer / "public_workflows_consumer.py"

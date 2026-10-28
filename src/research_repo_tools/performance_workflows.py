@@ -8,13 +8,13 @@ from pathlib import Path
 lazy from research_repo_tools import criterion, evidence, release_assets
 lazy from research_repo_tools.config import Config
 lazy from research_repo_tools.files import _validate_distinct_paths
-lazy from research_repo_tools.measurement import MeasurementConfig, load_measurement, measure_checkout, measure_pair, resolve_revision
+lazy from research_repo_tools.measurement import MeasurementConfig, load_measurement, measure_checkout, resolve_revision
 lazy from research_repo_tools.performance_reports import render_report
 lazy from research_repo_tools.publication import _inventory, _path
 lazy from research_repo_tools.release_pairs import resolve_pair
 lazy from research_repo_tools.releases import published_releases
 
-COMMANDS = {"assets", "baseline", "convert", "export", "measure", "promote", "release-draft", "release-upload"}
+COMMANDS = {"assets", "baseline", "convert", "export", "measure", "prepare", "promote", "readme", "release", "release-draft", "release-upload"}
 
 
 def add_command(commands, name: str) -> None:
@@ -24,13 +24,27 @@ def add_command(commands, name: str) -> None:
         "convert": "convert verified historical CSV into new shared evidence paths",
         "export": "export verified comparison evidence as CSV",
         "measure": "measure configured benchmarks in read-only exports or authorized worktrees",
+        "prepare": "save independent release assertions under ignored scratch storage",
         "promote": "promote/archive new evidence or rerender the retained current report offline",
+        "readme": "publish README from retained evidence and independent prepared or explicit assertions",
+        "release": "measure a prepared pair and retain/promote its report; publish README separately",
         "release-draft": "require an existing mutable stable GitHub draft release",
         "release-upload": "attach verified inert bytes, reuse identical retries, and optionally publish",
     }
     command = commands.add_parser(name, help=help_text[name])
-    if name in {"baseline", "convert", "measure", "promote"}:
+    if name in {"baseline", "convert", "measure", "prepare", "promote", "readme", "release"}:
         command.add_argument("configuration")
+    if name in {"prepare", "release"}:
+        command.add_argument("--allow-git-mutations", action="store_true", help="authorize only requested tag fetching or configured temporary worktrees")
+    if name == "prepare":
+        command.add_argument("--fetch-tags", action="store_true", help="fetch repository tags before selection; also requires --allow-git-mutations")
+    if name == "readme":
+        for phase in ("baseline", "current"):
+            command.add_argument(f"--{phase}-release")
+            command.add_argument(f"--{phase}-revision")
+        mode = command.add_mutually_exclusive_group()
+        mode.add_argument("--check", action="store_true")
+        mode.add_argument("--preview", action="store_true")
     if name in {"assets", "measure"}:
         command.add_argument("current", nargs="?", default="")
         command.add_argument("baseline", nargs="?", default="")
@@ -131,6 +145,37 @@ def _asset_pair(args: argparse.Namespace, settings: Config) -> evidence.Evidence
 
 def run(args: argparse.Namespace, settings: Config) -> int:
     root = settings.root
+    if args.action in {"prepare", "readme", "release"}:
+        from research_repo_tools.performance import _write_stdout
+        from research_repo_tools.performance_release import load_performance_release, load_readme_plan, measure_release, prepare_performance
+        from research_repo_tools.publication import preview_publication, publish_publication
+
+        workflow = load_performance_release(root, args.configuration)
+        if args.action == "prepare":
+            record = prepare_performance(root, workflow, fetch_tags=args.fetch_tags, allow_git_mutations=args.allow_git_mutations)
+            _write_stdout(
+                (
+                    f"Current: {record.pair.current} {record.current_revision}\nBaseline: {record.pair.baseline} {record.baseline_revision}\n"
+                    f"Saved preparation: {workflow.preparation}\n"
+                ).encode("utf-8")
+            )
+        elif args.action == "release":
+            measure_release(root, workflow, allow_git_mutations=args.allow_git_mutations)
+            print("Retained measurement and report. README publication is a separate step.")
+        else:
+            values = [getattr(args, f"{phase}_{field}") for phase in ("current", "baseline") for field in ("release", "revision")]
+            if any(value is not None for value in values) and not all(value is not None for value in values):
+                raise ValueError("README publication requires all four explicit release/revision assertions")
+            identities = {"current": (values[0], values[1]), "baseline": (values[2], values[3])} if any(value is not None for value in values) else None
+            plan = load_readme_plan(root, workflow, identities=identities)
+            if args.preview:
+                _write_stdout(preview_publication(plan).encode("utf-8"))
+            elif args.check:
+                return int(bool(plan.changed_paths))
+            else:
+                publish_publication(plan)
+                print("README publication is current.")
+        return 0
     if args.action == "release-draft":
         if args.output is not None and not args.output.strip():
             raise ValueError("--output must be a nonempty path")
@@ -177,63 +222,29 @@ def run(args: argparse.Namespace, settings: Config) -> int:
     elif args.action == "measure":
         if bool(args.current) != bool(args.baseline):
             raise ValueError("current and baseline tags must be provided together")
-        configuration_bytes = _path(root, args.configuration).read_bytes()
-        configuration = load_measurement(root, args.configuration)
-        selected_backend = args.backend or (configuration.backend if not isinstance(configuration, MeasurementConfig) else "worktree")
-        if selected_backend == "worktree" and not args.allow_git_mutations:
-            raise ValueError("measure requires --allow-git-mutations for the worktree backend")
-        if not isinstance(configuration, MeasurementConfig) and selected_backend != configuration.backend:
-            raise ValueError("backend must match the acquisition declaration")
-        from research_repo_tools.release_metadata import read_package_info
+        from research_repo_tools.performance_acquisition import measure_and_retain
+        from research_repo_tools.performance_release import select_measurement_pair
 
-        mode = args.mode or ("explicit" if args.current else "infer-release")
-        releases = () if mode == "explicit" else published_releases(root, repository=args.repository)
-        package_tag = "v" + read_package_info(root).version
-        pair = resolve_pair(mode, package_tag=package_tag, releases=releases, order=args.order, current=args.current or None, baseline=args.baseline or None)
-        working_tree = mode == "current-vs-latest" or (mode == "infer-release" and not any(item.tag == pair.current for item in releases))
-        from research_repo_tools.source_exports import _files, capture_source
-
-        settings_config = configuration if isinstance(configuration, MeasurementConfig) else configuration.measurement
-        settings_config.validate_release(pair.baseline)
-        settings_config.validate_release(pair.current)
-        controller_patterns = (*settings_config.sources, *settings_config.harness, *settings_config.workloads)
-        controller = (
-            _files(root, _inventory(root, controller_patterns)) if not isinstance(configuration, MeasurementConfig) and configuration.schema == 4 else None
+        pair, working_tree = select_measurement_pair(
+            root,
+            args.configuration,
+            repository=args.repository,
+            mode=args.mode or ("explicit" if args.current else "infer-release"),
+            order=args.order,
+            current=args.current or None,
+            baseline=args.baseline or None,
         )
-
-        from research_repo_tools.host_metadata import capture_host
-
-        controller_host = capture_host(root, probes=settings_config.probes) if controller is not None else None
-        captured_references = (
-            {
-                "baseline": capture_source(root, pair.baseline),
-                # Acquisition verifies full working-tree receipts before returning.
-                # Publication rechecks refs and declared inputs, not staged outputs.
-                "current": capture_source(root, "HEAD" if working_tree else pair.current),
-            }
-            if controller is not None
-            else {}
+        measure_and_retain(
+            root,
+            args.configuration,
+            pair,
+            payload=args.payload,
+            manifest=args.manifest,
+            report=args.report,
+            working_tree=working_tree,
+            allow_git_mutations=args.allow_git_mutations,
+            backend=args.backend,
         )
-
-        def verify_controller() -> None:
-            if _path(root, args.configuration).read_bytes() != configuration_bytes:
-                raise ValueError("measurement declaration changed")
-            if controller is not None:
-                if _files(root, _inventory(root, controller_patterns)) != controller:
-                    raise ValueError("declared measurement inputs changed")
-                if capture_host(root, probes=settings_config.probes) != controller_host:
-                    raise ValueError("controller host/tool identity changed")
-                for captured in captured_references.values():
-                    captured.verify()
-
-        verify_controller()
-        protected = tuple(dict.fromkeys((args.configuration, *_inventory(root, controller_patterns))))
-        targets = (args.payload, args.manifest, *([args.report] if args.report else []))
-        _validate_distinct_paths(tuple(_path(root, name) for name in (*targets, *protected)))
-        retained = measure_pair(
-            root, configuration, pair, working_tree=working_tree, allow_git_mutations=args.allow_git_mutations, backend=args.backend, verify=verify_controller
-        )
-        _outputs(args, settings, retained, inputs=protected, verify=verify_controller)
     elif args.action == "assets":
         _outputs(args, settings, _asset_pair(args, settings), inputs=(args.legacy_configuration,) if args.legacy_configuration else ())
     elif args.action == "convert":
@@ -257,6 +268,12 @@ def run(args: argparse.Namespace, settings: Config) -> int:
         from research_repo_tools.performance_reports import load_report_plan
         from research_repo_tools.publication import preview_publication, publish_publication
 
+        if args.check and args.payload is None and args.manifest is None:
+            from research_repo_tools.report_inventory import check_report
+
+            checked = check_report(root, args.configuration)
+            print(f"Report inventory: {checked.status}.")
+            return int(checked.status == "stale")
         plan = load_report_plan(root, args.configuration, payload=args.payload, manifest=args.manifest)
         if args.preview:
             _write_stdout(preview_publication(plan).encode("utf-8"))

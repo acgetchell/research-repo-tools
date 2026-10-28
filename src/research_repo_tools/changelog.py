@@ -32,12 +32,15 @@ TEMPLATES = (
     "criterion-saved.toml",
     "examples.toml",
     "justfile",
+    "performance-release.toml",
     "performance-report.toml",
     "profiling.toml",
     "publish-crates.yml",
     "publishing.toml",
     "python-bootstrap.py",
     "python-validation.toml",
+    "release-assets.toml",
+    "release-evidence.toml",
     "research-repo-tools.toml",
     "rumdl.toml",
     "zizmor.yml",
@@ -111,11 +114,44 @@ def _preserve_declared_dates(text: str, dates: dict[str, str]) -> str:
     return "\n".join(lines)
 
 
+def resolve_date(config: Config, *, tag: str | None = None, released: str | None = None) -> str | None:
+    """Resolve an explicit date or the configured matching prepared citation date.
+
+    Untagged history never consults citation metadata. Explicit dates bypass
+    citation lookup; neither path consults the clock or updates metadata.
+    """
+    if tag is None:
+        if released is not None:
+            raise ValueError("prospective changelog generation requires both --tag and --date")
+        return None
+    validate_semver(tag)
+    if released is None:
+        if config.changelog.date_source != "citation":
+            raise ValueError("prospective changelog generation requires both --tag and --date, or changelog.date-source = 'citation'")
+        from research_repo_tools.publication import _path
+        from research_repo_tools.release_metadata import _citation_scalars
+
+        path = _path(config.root, config.changelog.citation)
+        try:
+            values = _citation_scalars(path, ("version", "date-released"))
+            if values["version"][0] != tag.removeprefix("v"):
+                raise ValueError(f"citation version must match {tag}")
+            released = values["date-released"][0]
+        except (OSError, UnicodeError, ValueError) as error:
+            raise ValueError(f"prepare matching citation metadata in {path} before generation: {error}") from error
+    try:
+        if re.fullmatch(r"[0-9]{4}-[0-9]{2}-[0-9]{2}", released) is None or date.fromisoformat(released).isoformat() != released:
+            raise ValueError("noncanonical date")
+    except (TypeError, ValueError) as error:
+        raise ValueError("release date must be a valid YYYY-MM-DD calendar date; prepare citation metadata or supply --date") from error
+    return released
+
+
 def generate(config: Config, *, tag: str | None = None, released: str | None = None, dry_run: bool = False) -> str:
     """Generate, normalize, and rotate history, then publish with recoverable rollback.
 
-    git-cliff runs offline. A prospective release requires an explicit date; it
-    does not acquire an accidental release date from this machine's wall clock.
+    git-cliff runs offline. Prospective dates are explicit or citation-owned;
+    generation never acquires a date from this machine's wall clock.
     Dry runs validate every candidate and return the trimmed root changelog
     without creating directories or replacing root/archive files.
     """
@@ -124,13 +160,10 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
     if path.is_symlink():
         raise ValueError(f"Changelog output must not be a symlink: {path}")
     dates = _declared_dates(path, archives)
-    if bool(tag) != bool(released):
-        raise ValueError("prospective changelog generation requires both --tag and --date")
+    released = resolve_date(config, tag=tag, released=released)
     if tag:
         validate_semver(tag)
         assert released is not None
-        if date.fromisoformat(released).isoformat() != released:
-            raise ValueError("release date must be YYYY-MM-DD")
         if tag.removeprefix("v") in dates and dates[tag.removeprefix("v")] != released:
             raise ValueError(f"prospective date conflicts with declared date for {tag}")
     if section.cliff_config is not None:
@@ -237,12 +270,13 @@ def tag(config: Config, version: str, *, force: bool = False, dry_run: bool = Fa
         raise ValueError("tagging requires a dated changelog release heading")
     if policy.date_policy == "today" and released != datetime.now(UTC).date().isoformat():
         raise ValueError("release heading date must equal the current UTC date before tagging")
-    citation = config.root / "CITATION.cff"
-    if citation.exists():
-        from research_repo_tools.release_metadata import _citation_date_reference
+    citations = dict.fromkeys((config.root / name).resolve() for name in (config.changelog.citation, "CITATION.cff"))
+    for citation in citations:
+        if citation.exists():
+            from research_repo_tools.release_metadata import _citation_date_reference
 
-        if _citation_date_reference(citation).value != released:
-            raise ValueError("CITATION.cff date and changelog release date differ")
+            if _citation_date_reference(citation).value != released:
+                raise ValueError(f"{citation} date and changelog release date differ")
     if len(body.encode("utf-8")) > _GITHUB_TAG_ANNOTATION_LIMIT:
         from research_repo_tools.release_tags import _github_repo_url
 

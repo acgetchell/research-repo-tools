@@ -142,8 +142,10 @@ does not establish that a consumer workflow has migrated successfully.
 Adopt the [complete update recipe contract](../README.md#dependency-and-tool-updates)
 as a unit. Retain consumer exclusions and extra Cargo resolution roots in
 `update-cargo-dependencies`; Python-only consumers use the same template with
-no Rust declarations or root Cargo manifest. The former `update-python-deps`
-name now aliases the full Python update and sync workflow.
+no Rust declarations or root Cargo manifest. Use the canonical
+`update-python-dependencies` name; the former `update-python-deps` alias is removed.
+Likewise, use `help` and `changelog-release` in place of the removed
+`help-workflows` and `changelog-unreleased` aliases.
 
 The Python recipe calls `deps update-python --all-projects`. Declare any extra
 independent uv project directories in `deps.python-projects`, keeping each

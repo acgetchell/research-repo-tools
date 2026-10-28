@@ -1,0 +1,14 @@
+# One declaration, three independently retriable commands. Ignore scratch/ in Git.
+schema = 1
+repository = "__OWNER__/__REPOSITORY__"
+measurement = "tooling/measurement-full.toml"
+report = "tooling/performance-report.toml"
+publication = "tooling/performance-publication.toml"
+preparation = "scratch/preparation.json"
+payload = "scratch/performance/run.json"
+manifest = "scratch/performance/evidence.json"
+mode = "infer-release"
+order = "published"
+# Explicit pairs require mode = "explicit" and BOTH current and baseline.
+# current = "v1.2.0"
+# baseline = "v1.1.0"

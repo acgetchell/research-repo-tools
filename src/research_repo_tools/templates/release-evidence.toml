@@ -1,0 +1,36 @@
+# Replace every job/step with the consumer's actual exact native gates.
+schema = 1
+repository = "__OWNER__/__REPOSITORY__"
+package = "your-package"
+workflow = ".github/workflows/ci.yml"
+workflow-name = "CI"
+branch = "main"
+artifact-prefix = "release-evidence"
+guarantee = "signed-source"
+# Cargo archive policies use guarantee = "cargo-archive". Retain validation.json
+# and PACKAGE-VERSION.crate, with independently observed cargo/rustc tool strings.
+# Signing remains optional for Cargo archives and mandatory for signed-source.
+path-in-vcs = ""
+
+[[jobs]]
+name = "linux"
+steps = ["Native checks"]
+runner-labels = ["ubuntu-latest"]
+
+[[jobs]]
+name = "macos"
+steps = ["Native checks"]
+runner-labels = ["macos-latest"]
+
+[[jobs]]
+name = "windows"
+steps = ["Native checks"]
+runner-labels = ["windows-latest"]
+
+[[jobs]]
+name = "package"
+steps = ["Default and exact archive checks"]
+
+[signing-job]
+name = "sign"
+steps = ["Capture", "Sign", "Upload"]

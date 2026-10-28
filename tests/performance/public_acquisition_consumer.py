@@ -225,7 +225,7 @@ class TestAcquisitionConsumer(unittest.TestCase):
                 with (
                     self.subTest(changed_input=name),
                     patch("research_repo_tools.source_exports._git", side_effect=git),
-                    patch("research_repo_tools.performance_workflows.measure_pair", return_value=retained),
+                    patch("research_repo_tools.performance_acquisition.measure_pair", return_value=retained),
                     patch("research_repo_tools.files._stage_writes", side_effect=stage_then_change),
                 ):
                     self.assertNotEqual(
@@ -446,7 +446,7 @@ class TestAcquisitionConsumer(unittest.TestCase):
                 main([*args, "measure", "measurement.toml", "v1.1.0", "v1.0.0", "--payload", "results/run.json", "--manifest", "results/evidence.json"]), 0
             )
             with patch(
-                "research_repo_tools.performance_workflows.published_releases", return_value=(PublishedRelease("v1.0.0", datetime(2026, 1, 1, tzinfo=UTC)),)
+                "research_repo_tools.performance_release.published_releases", return_value=(PublishedRelease("v1.0.0", datetime(2026, 1, 1, tzinfo=UTC)),)
             ):
                 self.assertEqual(
                     main(

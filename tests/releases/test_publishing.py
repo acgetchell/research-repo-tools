@@ -4,6 +4,7 @@ import copy
 import json
 import subprocess
 import sys
+import tomllib
 from dataclasses import replace
 from pathlib import Path
 
@@ -327,15 +328,29 @@ def test_common_release_recipes_and_guides_share_argument_contracts(tmp_path):
             assert expected in result.stderr
         assert maintained.recipes[recipe]["parameters"] == packaged.recipes[recipe]["parameters"]
 
+    # This package has no citation authority and supplies its chosen date
+    # explicitly. The consumer template now consumes that same prepared choice.
+    maintained_settings = config.load(root=root)
+    consumer_settings = config.parse({"changelog": tomllib.loads(changelog.template("research-repo-tools.toml"))["changelog"]}, root=tmp_path)
+    assert maintained_settings.changelog.date_source == "explicit"
+    assert consumer_settings.changelog.date_source == "citation"
+    (tmp_path / "CITATION.cff").write_bytes(b"version: 1.2.3\ndate-released: 2026-09-01\n")
+    assert changelog.resolve_date(consumer_settings, tag="v1.2.3") == changelog.resolve_date(maintained_settings, tag="v1.2.3", released="2026-09-01")
+    equivalent_date_forms = {
+        'just changelog-preview --tag "$TAG" --date "$RELEASE_DATE"': 'just changelog-preview --tag "$TAG"',
+        'just changelog-release "$TAG" "$RELEASE_DATE"': 'just changelog-release "$TAG"',
+    }
+
     def commands(text):
-        return [line for line in text.splitlines() if line.startswith("just ")]
+        return [equivalent_date_forms.get(line, line) for line in text.splitlines() if line.startswith("just ")]
 
     common = commands(changelog.template("RELEASING.md"))
     shared_recipes = {command.split()[1] for command in common}
     documented = commands((root / "docs/RELEASING.md").read_text(encoding="utf-8"))
     shared = [command for command in documented if command.split()[1] in shared_recipes]
     # Package-specific setup and checks may extend the guide, but shared recipe
-    # arguments and workflow order must agree. Read-only notes may be repeated.
+    # arguments and workflow order must agree after resolving the date source.
+    # Read-only notes may be repeated.
     assert set(shared) == set(common)
     assert [command for command in shared if not command.startswith("just release-notes ")] == [
         command for command in common if not command.startswith("just release-notes ")

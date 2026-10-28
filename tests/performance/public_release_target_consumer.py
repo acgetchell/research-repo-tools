@@ -117,6 +117,35 @@ class GitHubFixture:
 
 
 class TestReleaseTargetConsumer(unittest.TestCase):
+    def test_configured_asset_cli_observes_checkout_and_requires_captured_target(self):
+        root = self.root.resolve()
+        configuration = root / "assets.toml"
+        configuration.write_bytes(b'schema=1\nrepository="example/project"\nexpected-title="tag"\n')
+        destination = root / "target.json"
+        output = root / "actions-output"
+        output.write_bytes(b"")
+        common = ["--root", str(root), "release", "assets"]
+        assertions = ["assets.toml", "--checkout", str(root), "--commit", SHA, "--tag", TAG]
+        with (
+            patch("research_repo_tools.release_interfaces.resolve_revision", return_value=SHA),
+            patch("research_repo_tools.release_interfaces.require_release_checkout") as observed,
+            patch("research_repo_tools.release_assets.require_release_checkout"),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(cli.main([*common, "preflight", *assertions, "--output", str(destination), "--github-output", str(output)]), 0)
+            self.assertGreater(observed.call_count, 0)
+            target = parse_release_target(destination.read_bytes())
+            self.assertEqual((target.repository, target.tag, target.commit, target.release_id), (REPOSITORY, TAG, SHA, 9))
+            self.assertIn(f"commit={SHA}\n".encode(), output.read_bytes())
+            upload = [*common, "upload", *assertions, "--target", str(destination), "--asset", str(self.asset), "--approve"]
+            self.assertEqual(cli.main(upload), 0)
+            self.assertEqual(cli.main(upload), 0)  # Identical-byte retry is deliberate.
+            self.server.commit = "c" * 40
+            before = len(self.server.calls)
+            with contextlib.redirect_stderr(io.StringIO()):
+                self.assertEqual(cli.main(upload), 1)
+            self.assertFalse(any("POST" in call or "PATCH" in call for call in self.server.calls[before:]))
+
     @override
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="release target café ")

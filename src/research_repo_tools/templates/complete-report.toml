@@ -5,3 +5,8 @@ title = "Benchmark timings"
 # Enable the independent consumer policy before release promotion:
 # measurement = "tooling/measurement-full.toml"
 # release = true
+
+# [initialization]
+# allow-empty = true
+# directories = ["scratch/performance", "docs/assets/performance"]
+# guards = ["tooling/performance-publication.toml"]

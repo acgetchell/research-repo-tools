@@ -3,16 +3,26 @@
 `research_repo_tools.release_evidence` provides the public core used to create,
 verify and freeze exact-commit release evidence. Consumer deployment workflows,
 Cargo commands, scientific checks, approval environments and token acquisition
-remain consumer-owned. The unified CLI/configuration/recipe migration belongs to
-the later interface reconciliation in [#140](https://github.com/acgetchell/research-repo-tools/issues/140).
-Working consumer adapters must remain until a published replacement is pinned
-and its integration is verified.
+remain consumer-owned. Installed `release evidence` and `release assets` commands
+expose the foundation through strict declarative policies and file handoffs.
+Working consumer adapters remain until the verified published supplying release
+is pinned and its integration passes. See the
+[migration map](performance-migration.md#release-interface-reconciliation).
 
 [Verified CI reuse](REUSING_CI.md) is a separate, opt-in source-check contract.
 The APIs on this page continue to require the exact release commit and preserve
 the distinction between source validation and package/archive identity.
 
 ## Policy and guarantees
+
+The CLI/configuration module is `research_repo_tools.release_interfaces`.
+`load_evidence_policy(path)` reads schema-1 TOML into `EvidencePolicy`.
+Required fields are `repository`, `package`, `workflow`, `workflow-name`,
+`artifact-prefix`, `guarantee`, and `jobs`. Optional `branch` defaults to `main`,
+and `path-in-vcs` defaults to the package root. Each `[[jobs]]` contains exact
+`name`, nonempty `steps`, and optional `runner-labels`. `[signing-job]` contains
+its separate `name` and `steps`. Use the packaged `release-evidence.toml` as a
+scaffold, declaring the consumer's actual native/feature/Cargo gates.
 
 `EvidencePolicy(validation, package, artifact_prefix, guarantee,
 signing_job=None, path_in_vcs="")` is immutable. Its `validation` is a
@@ -112,6 +122,56 @@ The outer artifact download additionally enforces its 32 MiB ZIP/expanded bound,
 exact portable flat-file inventory and provider ZIP digest.
 
 ## Shared primitives and asset composition
+
+Consumer commands are in the
+[README](../README.md#release-evidence-and-attachment-handoffs). Both Justfiles use
+`release-evidence` for `release evidence` and `release-assets` for `release assets`.
+Recipes forward arguments; stdout is human-readable status, never evidence.
+
+`release evidence create` requires independent `--version`, `--commit`,
+`--checkout`, `--run-id`, `--attempt`, and `--output`. It observes the clean
+checkout/package and requires the executing GitHub repository, push event,
+branch ref, SHA, run and attempt to match. Cargo mode also requires `--archive`
+and `--tools`, a JSON object with independently captured `cargo` and `rustc`
+identity strings. The workflow owns those producer commands and signing/upload
+of the exact manifest. Creation never builds, signs, uploads a crate or gets
+publication credentials.
+
+`release evidence verify` observes the same checkout/version/commit, verifies
+retained evidence, and saves `--output`. Pass a frozen selection with `--expected`
+after approval, using a separate output path. Optional `--reproduced-archive`
+and `--tools` require exact archive/tool identity. Run the live verification
+immediately before token acquisition; saved JSON alone is not authorization.
+
+Both commands optionally accept `--github-output PATH`. That file must already
+exist, be writable and contain complete LF-terminated assignments or be empty.
+Only after verification are `identity` (compact complete JSON) and `commit`
+exported. `write_release_outputs(destination, payload, *, github_output=None,
+values=None, verify=None)` stages command data through `ci.export_environment`
+and publishes it with the handoff in one rollback-capable transaction. Existing
+handoffs permit identical bytes only; changed selections require new paths.
+Missing/unwritable output, changed inputs or failed replacement preserve prior
+records on successful rollback; recovery errors identify retained backups.
+Exclusive writer control is required; this is not crash-atomic across files.
+Local verification omits `--github-output` and needs no Actions environment.
+
+`load_asset_policy(path)` returns `AssetPolicy(repository, expected_title=None)`.
+Schema-1 `release-assets.toml` accepts `repository` and optional
+`expected-title = "tag"`. `release assets preflight` requires `--tag`, `--commit`,
+`--checkout`, and `--output`, capturing release ID, tag, commit and title policy.
+Optional Actions output contains `commit`, `tag`, and `release_id`. `verify`
+rechecks a captured `--target` against those independent assertions. `upload`
+also requires `--asset` and `--approve`; `--publish` separately permits publishing
+the verified draft. Upload never silently recaptures its target. Existing direct
+`performance release-draft` / `release-upload` interfaces remain supported.
+
+Run trusted pinned installed tooling outside the observed checkout in workflows
+that carry credentials. `--checkout` is separate from the runtime/configuration
+root, and these CLI interfaces reject a runtime imported from that checkout.
+This is not proof that an already-running interpreter, executable path or Git
+configuration is trustworthy. Consumers retain clean environments, event/ref
+gates, approval/OIDC policy and trusted handoff storage. They must not copy
+arbitrary consumer Python into the trusted runtime.
 
 `release_validation` also exposes `read_pages`, `parse_release_json`,
 `artifact_identity`, `download_artifact`, `verify_attestation`, `select_main_run`,

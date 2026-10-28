@@ -30,6 +30,14 @@ The v0.2.1 [declarative workflow contract](DECLARING_PERFORMANCE.md) adds
 independent retained-run eligibility, saved-name/storage assertions and reusable
 publication identities without consumer Python orchestration.
 
+The [prepared performance API](performance-release-api.md) supplies saved
+independent assertions, separate acquisition/report and README stages, and strict
+first-use inventory checks. The [release evidence interfaces](release-evidence-api.md)
+expose configured exact-commit evidence and captured asset targets through installed
+commands, with file-based Actions output. `changelog.resolve_date` and
+`ChangelogSettings(date_source="citation", citation="CITATION.cff")` provide the
+prepared-date policy shared by generation and tagged previews.
+
 ## Consumer just recipes
 
 The [packaged justfile template](../src/research_repo_tools/templates/justfile)

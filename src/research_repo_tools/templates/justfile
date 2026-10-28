@@ -22,11 +22,9 @@ changelog-check:
 changelog-preview *args:
     uv run --locked --group dev research-repo-tools toolchain run -- research-repo-tools changelog generate --dry-run "$@"
 
-# Generate and archive a prospective release with an explicit YYYY-MM-DD date.
-changelog-release tag date:
-    uv run --locked --group dev research-repo-tools toolchain run -- research-repo-tools changelog generate --tag {{ quote(tag) }} --date {{ quote(date) }}
-
-alias changelog-unreleased := changelog-release
+# Generate a prospective release using prepared citation metadata or an explicit date.
+changelog-release tag date="":
+    if [ -n "$2" ]; then uv run --locked --group dev research-repo-tools toolchain run -- research-repo-tools changelog generate --tag "$1" --date "$2"; else uv run --locked --group dev research-repo-tools toolchain run -- research-repo-tools changelog generate --tag "$1"; fi
 
 # Extend this gate with the consumer's Rust/domain checks; retain fixture validation.
 check: python-check semgrep-check zizmor-check
@@ -51,11 +49,9 @@ default: help
 files +args:
     uv run --locked --group dev research-repo-tools files "$@"
 
-# List recipes and arguments in lexicographic order, with aliases inline.
+# List recipes and arguments in lexicographic order.
 help:
-    @just --justfile {{ quote(justfile()) }} --alias-style right --list
-
-alias help-workflows := help
+    @just --justfile {{ quote(justfile()) }} --list
 
 # Review configured notebook advisories; pass --strict to fail on warnings.
 notebook-advise +files:
@@ -101,6 +97,18 @@ papers +args:
 performance +args:
     uv run --locked --group dev research-repo-tools performance "$@"
 
+# Save independent source assertions; fetching needs explicit authorization flags.
+performance-prepare configuration *args:
+    uv run --locked --group dev research-repo-tools performance prepare "$@"
+
+# Publish retained results using saved or four explicit assertions; never measure.
+performance-readme configuration *args:
+    uv run --locked --group dev research-repo-tools performance readme "$@"
+
+# Measure the prepared pair and retain/promote its report; README is independent.
+performance-release configuration *args:
+    uv run --locked --group dev research-repo-tools performance release "$@"
+
 # Check every tracked/nonignored Python file, including deliberate negative fixtures.
 python-check:
     uv run --locked --no-sync --no-python-downloads research-repo-tools python check
@@ -113,9 +121,17 @@ python-fix:
 python-typecheck:
     uv run --locked --no-sync --no-python-downloads research-repo-tools python typecheck
 
+# Capture/revalidate a release target or explicitly upload verified attachments.
+release-assets +args:
+    uv run --locked --group dev research-repo-tools release assets "$@"
+
 # Check final release metadata and dated notes against the canonical stable tag.
 release-check tag:
     uv run --locked --group dev research-repo-tools release check "$1"
+
+# Create or verify CI evidence and retain its approval handoff in explicit files.
+release-evidence +args:
+    uv run --locked --group dev research-repo-tools release evidence "$@"
 
 # Prepare a first release after verifying empty stable published history.
 release-first tag date:
@@ -234,8 +250,6 @@ update-dependencies: update-cargo-dependencies update-python-dependencies audit
 # Update main dev pins, then upgrade and sync all declared Python projects.
 update-python-dependencies:
     uv run --locked --only-group tooling --inexact research-repo-tools deps update-python --all-projects
-
-alias update-python-deps := update-python-dependencies
 
 # Upgrade uv and declared tools, then sync without shell/bootstrap configuration.
 update-tools: update-uv update-cargo-tools

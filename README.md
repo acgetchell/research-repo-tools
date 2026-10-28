@@ -83,9 +83,9 @@ use the setup command described in [CONTRIBUTING.md][contributing].
 | File selection | `files check-lines`, `list`, `run` | Configurable raw line gate, tracked/nonignored inputs, exclusions and portable argument batching |
 | Notebooks | `notebooks advise`, `check`, `clear`, `execute`, `group`, `inspect`, `launch`, `lint`, `reset`, `sync` | Read-only review, locked JupyterLab, native Ruff/ty checks, execution reports, and explicit restoration |
 | Papers | `papers check`, `normalize`, `source-date` | Explicit UTC dates, optional PDF text/geometry checks and validated metadata normalization |
-| Performance | `performance assets`, `baseline`, `command-time`, `compare`, `convert`, `discover`, `export`, `extract`, `fetch`, `host`, `measure`, `profile`, `promote`, `publish`, `release-draft`, `release-upload`, `render`, `verify`, `verify-saved` | Complete configured measurement, retained evidence, release assets and publication |
+| Performance | `performance assets`, `baseline`, `command-time`, `compare`, `convert`, `discover`, `export`, `extract`, `fetch`, `host`, `measure`, `prepare`, `profile`, `promote`, `publish`, `readme`, `release`, `release-draft`, `release-upload`, `render`, `verify`, `verify-saved` | Complete configured measurement, retained evidence, release assets and publication |
 | Python | `python check`, `fix`, `typecheck` | Complete tracked/nonignored inventory; native Ruff/ty policy; explicit fixes only |
-| Releases | `release check`, `gate`, `publish`, `registry`, `reuse`, `update`, `verify` | Metadata preparation, reviewed publication gates and exact registry/GitHub verification |
+| Releases | `release assets`, `check`, `evidence`, `gate`, `publish`, `registry`, `reuse`, `update`, `verify` | Metadata preparation, reviewed publication gates and exact registry/GitHub verification |
 | Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
 | SARIF | `sarif split` | Consumer-selected drivers/namespaces, corrected rule indices and complete output generations |
 | Security | `security osv`, `secrets` | Managed OSV/Gitleaks, explicit inputs, full history, redacted native reports |
@@ -141,7 +141,7 @@ Stdin and unasserted streams remain inherited. See the
 For routine workflows, merge the [consumer justfile template][just-template] into
 the consuming repository's justfile. These thin recipes invoke its locked package
 version. After initialization, use `just` directly.
-Run `just help`, `just help-workflows`, or bare `just` to list commands and their
+Run `just help` or bare `just` to list commands and their
 arguments in lexicographic order.
 
 | Consumer recipe | Purpose |
@@ -151,15 +151,13 @@ arguments in lexicographic order.
 | `just changelog-archive` | Archive existing notes without regenerating history |
 | `just changelog-check` | Validate the whole root changelog and all archives without writing |
 | `just changelog-preview` | Validate the generated root and archives without writing; print the root candidate |
-| `just changelog-release TAG DATE` | Generate a prospective release with an explicit `YYYY-MM-DD` date |
-| `just changelog-unreleased TAG DATE` | Alias for `changelog-release` |
+| `just changelog-release TAG [DATE]` | Generate a prospective release from prepared citation metadata or an explicit date |
 | `just check` | Run Python, Semgrep fixture, and zizmor validation; extend with consumer domain gates |
 | `just ci` | Run the same canonical consumer gate as local validation |
 | `just clean [ARGS...]` | Preview obsolete package-owned installs; `--apply` removes them; repeat `--keep-root PATH` to retain other consumers' pins |
 | `just command-time CONFIG OUTPUT` | Acquire exploratory external-command timings into a new JSON report and print a summary |
 | `just files COMMAND...` | Check raw line limits, list selected files or run a command over them |
-| `just help` | List recipes and arguments in lexicographic order, with aliases inline |
-| `just help-workflows` | Alias for `help` |
+| `just help` | List recipes and arguments in lexicographic order, with arguments |
 | `just notebook-advise FILE... [--strict]` | Report configured review warnings, optionally failing on them |
 | `just notebook-check FILE...` | Validate notebook structure, cell IDs, and output policy |
 | `just notebook-clear FILE...` | Deliberately clear generated notebook state |
@@ -171,10 +169,15 @@ arguments in lexicographic order.
 | `just notebook-sync` | Synchronize locked notebook dependencies and the project kernel |
 | `just papers COMMAND...` | Read explicit source dates, check PDFs or normalize their metadata |
 | `just performance COMMAND...` | Compare Criterion samples, handle assets, and verify, render, or publish retained evidence |
+| `just performance-prepare CONFIG [ARGS...]` | Save independent release assertions in ignored scratch storage |
+| `just performance-readme CONFIG [ARGS...]` | Publish README using retained evidence and prepared or explicit assertions |
+| `just performance-release CONFIG [ARGS...]` | Measure the prepared pair and retain/promote its report |
 | `just python-check` | Check lint, formatting, and types for all tracked and nonignored Python, including fixtures |
 | `just python-fix` | Apply configured Ruff fixes and formatting to the same complete inventory |
 | `just python-typecheck` | Run native ty without modifying source |
+| `just release-assets COMMAND...` | Capture/revalidate release targets or explicitly upload verified attachments |
 | `just release-check TAG` | Check final release metadata and generated notes |
+| `just release-evidence COMMAND...` | Create or verify exact-commit CI evidence and save file-based handoffs |
 | `just release-first TAG DATE` | Prepare a first release after checking published stable history |
 | `just release-notes TAG` | Print release notes from the root changelog or an archive |
 | `just release-publish TAG [ARGS...]` | Approve a validated draft GitHub Release and trigger its registry workflow |
@@ -205,7 +208,6 @@ arguments in lexicographic order.
 | `just update-cargo-tools` | Upgrade declared Cargo tools and release binaries; publish verified TOML pins |
 | `just update-dependencies` | Run Cargo and Python dependency updates, then audit the final selected locks |
 | `just update-python-dependencies` | Update direct dev pins, upgrade the full Python lock, and synchronize dev |
-| `just update-python-deps` | Alias for `update-python-dependencies` |
 | `just update-tools` | Upgrade uv and managed tools without repeating shell configuration |
 | `just update-uv` | Upgrade uv through its installation owner and reconcile its pin |
 | `just validate CONFIGURATION [NAME...]` | Check configured example outputs |
@@ -795,7 +797,6 @@ entire lock resolution within the resulting manifest constraints, and explicitly
 synchronizes `dev`, even with `default-groups = []`. The final sync runs with
 checked managed tools so native Python builds can find Rust. Included groups,
 including the pinned shared package in `tooling`, retain their declared constraints.
-The older `update-python-deps` spelling is an alias for this complete workflow.
 
 Starting with v0.2.4, candidate resolution retains named uv indexes, marker-split
 package source mappings, explicit-index isolation, overrides, constraints, build
@@ -1462,6 +1463,102 @@ source-selection and measurement limits. These exploratory timings stay separate
 from Criterion and scientific release/comparability evidence. Preserve the
 current consumer workflow, workload arguments and interpretation until its
 published replacement is pinned and integration-verified.
+
+### Release evidence and attachment handoffs
+
+These interfaces target v0.2.4. Adopt them after verified publication under
+[#146](https://github.com/acgetchell/research-repo-tools/issues/146); local builds
+and merged source do not establish package availability.
+
+The packaged `release-evidence.toml` declares exact repository/workflow/native
+job/step/signer policy; `release-assets.toml` declares repository and optional
+release-title policy. Merge the `release-evidence` and `release-assets` recipes.
+Keep the trusted installed runtime and policy separate from the source checkout
+in release workflows. The observed checkout must be clean at the independently
+asserted commit and package version.
+
+```sh
+just release-evidence verify tooling/release-evidence.toml \
+  --checkout /path/to/source --commit FULL_COMMIT --version 1.2.3 \
+  --output /trusted/selection.json
+# After approval, before token acquisition:
+just release-evidence verify tooling/release-evidence.toml \
+  --checkout /path/to/source --commit FULL_COMMIT --version 1.2.3 \
+  --expected /trusted/selection.json --output /trusted/revalidated.json
+just release-assets preflight tooling/release-assets.toml \
+  --checkout /path/to/source --tag v1.2.3 --commit FULL_COMMIT \
+  --output /trusted/target.json
+just release-assets upload tooling/release-assets.toml \
+  --checkout /path/to/source --tag v1.2.3 --commit FULL_COMMIT \
+  --target /trusted/target.json --asset /path/to/baseline.tar.gz --approve
+```
+
+For Actions, append `--github-output "$GITHUB_OUTPUT"` to evidence verification
+or asset preflight. It requires an existing writable command file; normal and
+quiet Just execution produce the same evidence. Evidence records bind the exact
+run, attempt, jobs, artifact and digest/signature policy. Existing output records
+can only be reused with identical bytes; use new paths for changed selections.
+
+`release-evidence create` produces the manifest only in the matching trusted
+push/run/attempt. Cargo evidence also consumes the independently retained archive
+and tool identity JSON; signing, Cargo gates and archive reproduction stay in the
+workflow. `release-assets upload` reuses identical existing attachments, rejects
+conflicting bytes, and publishes the draft only with a separate `--publish` flag.
+Neither interface acquires a registry token or runs scientific workloads. See the
+[release evidence API](docs/release-evidence-api.md) and
+[migration map](docs/performance-migration.md#release-interface-reconciliation).
+
+### Prepared performance releases
+
+Merge the packaged `performance-prepare`, `performance-release`, and
+`performance-readme` recipes and declare one `tooling/performance-release.toml`.
+Export `performance-release.toml` with `just templates`, set the repository and
+measurement/report/publication paths, and ignore the declared scratch directory
+in Git. Use matching installed configuration/templates from a verified published
+supplying release before replacing a working consumer adapter.
+
+```sh
+just performance-prepare tooling/performance-release.toml
+just performance-release tooling/performance-release.toml
+just performance-readme tooling/performance-release.toml --preview
+just performance-readme tooling/performance-release.toml
+```
+
+Preparation prints and saves independently selected current/baseline tags and
+full commits. The default uses reviewed local tags. An authorized refresh uses
+`just performance-prepare tooling/performance-release.toml --fetch-tags --allow-git-mutations`.
+The export backend needs no Git-mutation permission; a configured worktree
+backend requires `--allow-git-mutations` on the measurement step separately.
+
+Successful measurements survive README errors. Repair the README/view or source
+assertions and retry only `performance-readme`. A failed report promotion can be
+retried using `just performance promote REPORT --payload PAYLOAD --manifest MANIFEST`
+with the declared retained raw paths. README publication never measures, promotes,
+fetches tags or changes Git refs. All four independent overrides remain supported:
+
+```sh
+just performance-readme tooling/performance-release.toml \
+  --current-release v1.2.0 --current-revision FULL_CURRENT_COMMIT \
+  --baseline-release v1.1.0 --baseline-revision FULL_BASELINE_COMMIT
+```
+
+For an honest first-use report state, add this table to either report schema:
+
+```toml
+[initialization]
+allow-empty = true
+directories = ["scratch/performance", "docs/assets/performance"]
+guards = ["tooling/performance-publication.toml"]
+```
+
+`just performance promote tooling/performance-report.toml --check` then accepts
+only a completely empty declared inventory when the current report is missing.
+The archive is included automatically; extra directories must be disjoint and
+companion guards must be outside them. Any payload, manifest, CSV, figure,
+archived report, pointer, companion plan or partial directory rejects first use.
+Initialized reports retain strict evidence/history/render checks. The check
+creates nothing. See the [prepared performance API](docs/performance-release-api.md)
+for schema, freshness and retry details.
 
 ### Performance evidence
 

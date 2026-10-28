@@ -69,7 +69,6 @@ def commands(consumer, cargo):
         "update-cargo-tools": tools,
         "update-dependencies": rust + python + audit,
         "update-python-dependencies": python,
-        "update-python-deps": python,
         "update-tools": uv + tools,
         "update-uv": uv,
     }
@@ -84,15 +83,14 @@ def commands(consumer, cargo):
         "update-cargo-tools",
         "update-dependencies",
         "update-python-dependencies",
-        "update-python-deps",
         "update-tools",
         "update-uv",
     ],
 )
 def test_update_workflows_compose_once_in_order(recipes, cargo, recipe):
     justfile, consumer = recipes
-    if not consumer and (cargo or recipe in {"update-cargo-dependencies", "update-cargo-tools", "update-python-deps"}):
-        pytest.skip("the maintainer is a Python-only project with no legacy alias")
+    if not consumer and (cargo or recipe in {"update-cargo-dependencies", "update-cargo-tools"}):
+        pytest.skip("the maintainer is a Python-only project")
     if cargo:
         justfile.with_name("Cargo.toml").write_text("[workspace]\nmembers=[]\n", newline="\n")
     result, calls = invoke(justfile, recipe)
