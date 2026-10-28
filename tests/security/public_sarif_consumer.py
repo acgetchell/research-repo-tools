@@ -3,6 +3,7 @@
 import copy
 import io
 import json
+import os
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -291,6 +292,60 @@ class TestSarifConsumer(unittest.TestCase):
                 for alias in (command_file, retained):
                     self.assertTrue(alias.samefile(previous))
                     self.assertEqual(alias.read_bytes(), b"old generation")
+
+    def test_cli_output_alias_inspection_errors_preserve_files(self):
+        for failure in ("scan", "stat", "samefile"):
+            with self.subTest(failure=failure), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                source = root / "input.sarif"
+                original = json.dumps(document()).encode()
+                source.write_bytes(original)
+                destination = root / "reports"
+                previous = destination / "nested" / "old.sarif"
+                previous.parent.mkdir(parents=True)
+                previous.write_bytes(b"old generation")
+                command_file = root / "command-file"
+                command_file.hardlink_to(previous)
+                self.assertTrue(command_file.samefile(previous))
+                settings = config.parse({"sarif": {"drivers": {"Scanner": ["project."]}}}, root=root)
+                original_scandir, original_stat, original_samefile = os.scandir, os.stat, Path.samefile
+                inspections = []
+
+                def scandir(path):
+                    if not isinstance(path, int) and Path(path) == previous.parent:
+                        inspections.append("scan")
+                        raise PermissionError("cannot inspect output directory")
+                    return original_scandir(path)
+
+                def stat(path, *args, **kwargs):
+                    if not isinstance(path, int) and Path(path) == previous:
+                        inspections.append("stat")
+                        raise PermissionError("cannot inspect output member")
+                    return original_stat(path, *args, **kwargs)
+
+                def samefile(path, other):
+                    if other == previous:
+                        inspections.append("samefile")
+                        raise PermissionError("cannot inspect output identity")
+                    return original_samefile(path, other)
+
+                faults = {
+                    "scan": patch.object(os, "scandir", scandir),
+                    "stat": patch.object(os, "stat", stat),
+                    "samefile": patch.object(Path, "samefile", samefile),
+                }
+                errors, output = io.StringIO(), io.StringIO()
+                with faults[failure], patch("research_repo_tools.cli.config.load", return_value=settings), redirect_stdout(output), redirect_stderr(errors):
+                    self.assertEqual(
+                        main(["--root", str(root), "sarif", "split", str(source), "--output", str(destination), "--github-output", str(command_file)]), 1
+                    )
+                self.assertIn(failure, inspections)
+                self.assertIn("cannot inspect output", errors.getvalue())
+                self.assertEqual(output.getvalue(), "")
+                self.assertEqual(source.read_bytes(), original)
+                self.assertEqual(previous.read_bytes(), b"old generation")
+                self.assertTrue(command_file.samefile(previous))
+                self.assertEqual(command_file.read_bytes(), b"old generation")
 
     def test_cli_command_file_aliases_fail_before_publishing(self):
         for kind in ("source", "output", "case", "unicode", "hardlink", "symlink", "parent-symlink", "relative-symlink", "relative-parent-symlink"):

@@ -569,8 +569,16 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             if command_file.exists() and source.exists() and command_file.samefile(source):
                 raise ValueError("SARIF command file must not alias the source")
             if command_file.exists() and destination.is_dir():
-                if any(path.is_file() and command_file.samefile(path) for path in destination.rglob("*")):
-                    raise ValueError("SARIF command file must not alias an output file")
+                from stat import S_ISREG
+
+                def fail_output_walk(error: OSError) -> None:
+                    raise error
+
+                for directory, _, filenames in destination.walk(on_error=fail_output_walk):
+                    for name in filenames:
+                        member = directory / name
+                        if S_ISREG(member.stat().st_mode) and command_file.samefile(member):
+                            raise ValueError("SARIF command file must not alias an output file")
             if any(character in str(destination) for character in "\0\r\n"):
                 raise ValueError("SARIF directory command-file value must not contain NUL/CR/LF")
         outputs = split(source, destination, settings.sarif)
