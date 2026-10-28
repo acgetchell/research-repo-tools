@@ -196,7 +196,7 @@ commands. [Supported interfaces][api] defines the consumer compatibility boundar
 ## Citation
 
 If you use research-repo-tools in your work, cite the software using
-[CITATION.cff](CITATION.cff). Include the version used so others can identify
+[CITATION.cff](https://github.com/acgetchell/research-repo-tools/blob/main/CITATION.cff). Include the version used so others can identify
 the same release.
 
 ## License

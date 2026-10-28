@@ -23,13 +23,20 @@ def checker():
     return module
 
 
-def project(root: Path, *, content_type: bool = True, description: bool = True, metadata_version: str = "1.2.3") -> Path:
+def project(
+    root: Path,
+    *,
+    content_type: bool = True,
+    description: bool = True,
+    metadata_name: str = "research-repo-tools",
+    metadata_version: str = "1.2.3",
+) -> Path:
     root.mkdir()
     (root / "pyproject.toml").write_text('[project]\nname="research-repo-tools"\nversion="1.2.3"\n', encoding="utf-8", newline="\n")
     dist = root / "dist"
     dist.mkdir()
     (dist / ".gitignore").write_bytes(b"*")
-    metadata = f"Metadata-Version: 2.4\nName: research-repo-tools\nVersion: {metadata_version}\nSummary: Publication fixture\n"
+    metadata = f"Metadata-Version: 2.4\nName: {metadata_name}\nVersion: {metadata_version}\nSummary: Publication fixture\n"
     if content_type:
         metadata += "Description-Content-Type: text/markdown\n"
     metadata += "\n" + ("A small publication fixture.\n" if description else "")
@@ -78,9 +85,15 @@ def test_twine_warnings_fail_strict_check(tmp_path, checker, missing, capfd):
     assert snapshot(root) == before
 
 
-@pytest.mark.parametrize("damage", ["missing-directory", "empty", "missing-wheel", "old-version", "extra-artifact", "metadata-version", "filename-case"])
+@pytest.mark.parametrize(
+    "damage", ["missing-directory", "empty", "missing-wheel", "old-version", "extra-artifact", "metadata-name", "metadata-version", "filename-case"]
+)
 def test_incomplete_or_stale_artifacts_fail_before_twine(tmp_path, checker, damage, monkeypatch):
-    root = project(tmp_path / "release", metadata_version="1.2.2" if damage == "metadata-version" else "1.2.3")
+    root = project(
+        tmp_path / "release",
+        metadata_name="another-project" if damage == "metadata-name" else "research-repo-tools",
+        metadata_version="1.2.2" if damage == "metadata-version" else "1.2.3",
+    )
     dist = root / "dist"
     if damage in {"missing-directory", "empty"}:
         for artifact in dist.iterdir():
