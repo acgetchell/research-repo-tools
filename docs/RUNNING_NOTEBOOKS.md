@@ -21,6 +21,7 @@ lock Ruff and ty in the development dependencies as described under
 checkers. Refresh the lock before running the first workflow:
 
 ```sh
+uv lock
 just notebook-sync
 just notebook-lint notebooks/analysis.ipynb
 just notebook-execute notebooks/analysis.ipynb
