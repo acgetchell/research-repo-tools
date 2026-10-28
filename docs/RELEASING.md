@@ -349,7 +349,7 @@ protected-branch requirement; it does not replace merged `main` evidence.
 Missing, pending, cancelled or failed required jobs block preparation.
 
 Record the printed JSON's full commit, run ID/attempt, artifact identities, and
-file hashes in the release PR or tracking issue. Pending checks cause an immediate
+file hashes in the release PR or review notes. Pending checks cause an immediate
 failure; wait for main CI to finish, then rerun `just release-evidence`.
 The preparation workflow independently requires exactly one successful matching
 run from this repository's active `ci.yml`. Manual dispatch and partial reruns

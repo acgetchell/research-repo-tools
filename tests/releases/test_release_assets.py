@@ -4,6 +4,7 @@ import copy
 import hashlib
 import io
 import json
+import os
 import stat
 import subprocess
 import sys
@@ -25,7 +26,7 @@ NAMES = release.distribution_names(TAG)
 WORKFLOW = {"id": 12, "path": ".github/workflows/ci.yml", "name": "Package checks", "state": "active"}
 
 
-def run():
+def run(commit=COMMIT):
     return {
         "id": 123,
         "run_attempt": 1,
@@ -34,7 +35,7 @@ def run():
         "name": WORKFLOW["name"],
         "event": "push",
         "head_branch": "main",
-        "head_sha": COMMIT,
+        "head_sha": commit,
         "repository": {"id": 99, "full_name": release.REPOSITORY},
         "head_repository": {"id": 99, "full_name": release.REPOSITORY},
         "pull_requests": [],
@@ -43,13 +44,13 @@ def run():
     }
 
 
-def jobs():
+def jobs(commit=COMMIT):
     return [
         {
             "id": index,
             "run_id": 123,
             "run_attempt": 1,
-            "head_sha": COMMIT,
+            "head_sha": commit,
             "head_branch": "main",
             "name": name,
             "status": "completed",
@@ -80,47 +81,47 @@ def zipped(contents):
     return result.getvalue()
 
 
-def artifact(identifier, name, payload):
+def artifact(identifier, name, payload, *, commit=COMMIT):
     return {
         "id": identifier,
         "name": name,
         "digest": f"sha256:{hashlib.sha256(payload).hexdigest()}",
         "size_in_bytes": len(payload),
         "expired": False,
-        "workflow_run": {"id": 123, "repository_id": 99, "head_repository_id": 99, "head_branch": "main", "head_sha": COMMIT},
+        "workflow_run": {"id": 123, "repository_id": 99, "head_repository_id": 99, "head_branch": "main", "head_sha": commit},
     }
 
 
-@pytest.fixture
-def remote(monkeypatch, tmp_path):
+def mock_remote(monkeypatch, tmp_path, *, commit=COMMIT):
     """Fake authenticated transport, not selection, extraction or verification policy."""
+    run_command = subprocess.run
     contents = distributions()
     distribution_zip = zipped(contents)
-    producer = artifact(31, "distributions-1", distribution_zip)
+    producer = artifact(31, "distributions-1", distribution_zip, commit=commit)
     manifest = {
         "schema": release.SCHEMA,
         "repository": release.REPOSITORY,
         "repository_id": 99,
-        "run": release._identity(run()),
-        "jobs": {job["name"]: job["id"] for job in jobs()},
-        "artifact": release._artifact(producer, run(), "distributions-1"),
+        "run": release._identity(run(commit)),
+        "jobs": {job["name"]: job["id"] for job in jobs(commit)},
+        "artifact": release._artifact(producer, run(commit), "distributions-1"),
         "version": "0.2.3",
         "files": {name: hashlib.sha256(payload).hexdigest() for name, payload in contents.items()},
     }
     manifest_bytes = release._bytes(manifest)
     evidence_zip = zipped({release.MANIFEST: manifest_bytes, release.VALIDATION_BUNDLE: b"original signed main bundle"})
-    evidence = artifact(32, "validated-evidence-1", evidence_zip)
+    evidence = artifact(32, "validated-evidence-1", evidence_zip, commit=commit)
     state: dict[str, Any] = {
-        "run": run(),
-        "runs": [run()],
-        "jobs": [*jobs(), {"id": 19, "name": "release-evidence", "run_attempt": 1, "status": "completed", "conclusion": "success"}],
+        "run": run(commit),
+        "runs": [run(commit)],
+        "jobs": [*jobs(commit), {"id": 19, "name": "release-evidence", "run_attempt": 1, "status": "completed", "conclusion": "success"}],
         "artifacts": [producer, evidence],
         "zip": {31: distribution_zip, 32: evidence_zip},
         "contents": contents,
         "manifest": manifest_bytes,
         "calls": [],
         "release": None,
-        "tag_commit": COMMIT,
+        "tag_commit": commit,
         "signature_defect": None,
         "downloads": {},
         "listing": [],
@@ -155,7 +156,7 @@ def remote(monkeypatch, tmp_path):
         if args[:2] == ("attestation", "verify"):
             # Preserve verification as an explicit trust boundary: verify CLI
             # constraints and emulate only its already-authenticated JSON output.
-            expected = {"--repo": release.REPOSITORY, "--signer-digest": COMMIT, "--source-digest": COMMIT, "--format": "json"}
+            expected = {"--repo": release.REPOSITORY, "--signer-digest": commit, "--source-digest": commit, "--format": "json"}
             assert "--deny-self-hosted-runners" in args
             for flag, value in expected.items():
                 assert args[args.index(flag) + 1] == value
@@ -192,6 +193,8 @@ def remote(monkeypatch, tmp_path):
         pytest.fail(f"unexpected gh args {args}")
 
     def execute(args, **kwargs):
+        if args[0] == "git":
+            return run_command(args, **kwargs)
         state["calls"].append(tuple(args))
         assert args[:2] == ["gh", "api"] and kwargs["timeout"] == 120 and kwargs["check"]
         identifier = int(args[2].split("/")[-2] if args[2].endswith("/zip") else args[2].split("/")[-1])
@@ -208,6 +211,11 @@ def remote(monkeypatch, tmp_path):
     return state
 
 
+@pytest.fixture
+def remote(monkeypatch, tmp_path):
+    return mock_remote(monkeypatch, tmp_path)
+
+
 def prepare(tmp_path):
     release.promote(TAG, COMMIT, tmp_path / "dist", tmp_path / "promotion.json", attempts=1, interval=0)
     bundle = tmp_path / "promotion.sigstore.json"
@@ -216,47 +224,69 @@ def prepare(tmp_path):
 
 
 @pytest.fixture
-def checkout(remote, tmp_path, monkeypatch):
+def checkout(tmp_path, monkeypatch, git_mutations_allowed):
+    """Exercise checkout identity with real Git, isolated from user configuration."""
     root = tmp_path / "release café with spaces"
     root.mkdir()
+    for name in tuple(os.environ):
+        if name.upper().startswith("GIT_"):
+            monkeypatch.delenv(name)
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", os.devnull)
+    monkeypatch.setenv("GIT_CONFIG_NOSYSTEM", "1")
+    run_command = subprocess.run
+
+    def git(*args):
+        return run_command(
+            [
+                "git",
+                "--no-pager",
+                "--no-optional-locks",
+                "-c",
+                "core.autocrlf=false",
+                "-c",
+                "commit.gpgsign=false",
+                "-c",
+                "user.name=Release fixture",
+                "-c",
+                "user.email=release@example.invalid",
+                *args,
+            ],
+            cwd=root,
+            check=True,
+            capture_output=True,
+            encoding="utf-8",
+            timeout=30,
+        ).stdout.strip()
+
+    git("init", "--quiet", "--template=", "--initial-branch=main", "--object-format=sha1")
     (root / "pyproject.toml").write_bytes(b'[project]\nname = "research-repo-tools"\nversion = "0.2.3"\n')
+    (root / ".gitignore").write_bytes(b"/dist/\n")
     (root / "dist").mkdir()
     (root / "dist/existing.whl").write_bytes(b"preserve existing local artifacts")
-    state = {"top": str(root), "commit": COMMIT, "status": ""}
-    execute = release.subprocess.run
-
-    def run_command(args, **kwargs):
-        if args[0] != "git":
-            return execute(args, **kwargs)
-        assert args[:2] == ["git", "--no-pager"]
-        assert kwargs == {"cwd": root, "check": True, "capture_output": True, "encoding": "utf-8", "timeout": 30}
-        values = {
-            ("rev-parse", "--show-toplevel"): state["top"],
-            ("rev-parse", "HEAD"): state["commit"],
-            ("status", "--porcelain", "--untracked-files=all"): state["status"],
-        }
-        return subprocess.CompletedProcess(args, 0, values[tuple(args[2:])] + "\n", "")
-
-    monkeypatch.setattr(release.subprocess, "run", run_command)
+    git("add", "--", ".gitignore", "pyproject.toml")
+    git("commit", "--quiet", "-m", "Release fixture")
+    assert git("status", "--porcelain", "--untracked-files=all") == ""
+    remote = mock_remote(monkeypatch, tmp_path, commit=git("rev-parse", "HEAD"))
     monkeypatch.setattr(release.time, "sleep", lambda _: pytest.fail("local inspection must not wait for pending CI"))
     monkeypatch.chdir(root)
     for name in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_SHA"):
         monkeypatch.delenv(name, raising=False)
     monkeypatch.setattr(release.sys, "argv", ["release_assets.py", "evidence"])
-    return root, state
+    return root, git, remote
 
 
-def test_local_evidence_verifies_retained_bytes_without_writing_checkout(remote, checkout, capsys):
-    root, _ = checkout
+def test_local_evidence_verifies_retained_bytes_without_writing_checkout(checkout, capsys):
+    root, git, remote = checkout
+    commit = git("rev-parse", "HEAD")
     before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
     assert release.main() == 0
     selection = json.loads(capsys.readouterr().out)
     assert selection == {
         "tag": TAG,
-        "commit": COMMIT,
-        "run": release._identity(run()),
-        "artifact": release._artifact(remote["artifacts"][0], run(), "distributions-1"),
-        "evidence_artifact": release._artifact(remote["artifacts"][1], run(), "validated-evidence-1"),
+        "commit": commit,
+        "run": release._identity(run(commit)),
+        "artifact": release._artifact(remote["artifacts"][0], run(commit), "distributions-1"),
+        "evidence_artifact": release._artifact(remote["artifacts"][1], run(commit), "validated-evidence-1"),
         "files": {name: hashlib.sha256(payload).hexdigest() for name, payload in remote["contents"].items()},
     }
     assert {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()} == before
@@ -267,28 +297,51 @@ def test_local_evidence_verifies_retained_bytes_without_writing_checkout(remote,
     assert not any(isinstance(call, tuple) and call[0] == "release" for call in remote["calls"])
 
 
-@pytest.mark.parametrize("damage", ["dirty", "wrong-root", "wrong-package", "unstable-version", "invalid-sha"])
-def test_local_evidence_rejects_invalid_checkout_before_remote_access(remote, checkout, damage, capsys):
-    root, state = checkout
-    if damage == "dirty":
-        state["status"] = "?? untracked-file"
+@pytest.mark.parametrize(
+    ("damage", "diagnostic"),
+    [
+        ("untracked", "requires a clean checkout"),
+        ("modified", "requires a clean checkout"),
+        ("staged", "requires a clean checkout"),
+        ("wrong-root", "requires the repository root"),
+        ("wrong-package", "requires the research-repo-tools package"),
+        ("unstable-version", "require a canonical stable vX.Y.Z tag"),
+        ("missing-commit", "HEAD"),
+    ],
+)
+def test_local_evidence_rejects_invalid_checkout_before_remote_access(checkout, monkeypatch, damage, diagnostic, capsys):
+    root, git, remote = checkout
+    if damage == "untracked":
+        (root / "untracked café.txt").write_bytes(b"untracked\n")
+    elif damage in {"modified", "staged"}:
+        (root / "pyproject.toml").write_bytes((root / "pyproject.toml").read_bytes() + b"# changed\n")
+        if damage == "staged":
+            git("add", "--", "pyproject.toml")
     elif damage == "wrong-root":
-        state["top"] = str(root.parent)
+        monkeypatch.chdir(root / "dist")
     elif damage == "wrong-package":
         (root / "pyproject.toml").write_bytes(b'[project]\nname = "other-package"\nversion = "0.2.3"\n')
+        git("commit", "--quiet", "-am", "Wrong package")
     elif damage == "unstable-version":
         (root / "pyproject.toml").write_bytes(b'[project]\nname = "research-repo-tools"\nversion = "0.2.3rc1"\n')
+        git("commit", "--quiet", "-am", "Unstable version")
     else:
-        state["commit"] = "abcdef"
+        git("symbolic-ref", "HEAD", "refs/heads/unborn")
     assert release.main() == 1
     assert not remote["calls"]
     output = capsys.readouterr()
     assert output.out == "" and "Release assets failed:" in output.err
+    assert diagnostic in output.err
+
+
+def test_commit_identity_rejects_abbreviated_sha():
+    with pytest.raises(ValueError, match="expected a full lowercase commit SHA"):
+        release._commit("abcdef")
 
 
 @pytest.mark.parametrize("damage", ["pending", "missing-evidence", "bad-signature", "moved-tag", "changed-checkout"])
-def test_local_evidence_failure_preserves_files_and_emits_no_selection(remote, checkout, monkeypatch, damage, capsys):
-    root, state = checkout
+def test_local_evidence_failure_preserves_files_and_emits_no_selection(checkout, monkeypatch, damage, capsys):
+    root, git, remote = checkout
     if damage == "pending":
         remote["runs"][0].update(status="in_progress", conclusion=None)
     elif damage == "missing-evidence":
@@ -301,9 +354,13 @@ def test_local_evidence_failure_preserves_files_and_emits_no_selection(remote, c
         gh = release.gh
 
         def change_checkout(*args):
+            nonlocal before
             result = gh(*args)
             if args[:2] == ("attestation", "verify"):
-                state["commit"] = "c" * 40
+                assert {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()} == before
+                git("commit", "--quiet", "--allow-empty", "-m", "Changed checkout")
+                assert git("rev-parse", "HEAD") != remote["tag_commit"]
+                before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
             return result
 
         monkeypatch.setattr(release, "gh", change_checkout)
@@ -311,6 +368,8 @@ def test_local_evidence_failure_preserves_files_and_emits_no_selection(remote, c
     assert release.main() == 1
     output = capsys.readouterr()
     assert output.out == "" and "Release assets failed:" in output.err
+    if damage == "changed-checkout":
+        assert "checkout changed during evidence inspection" in output.err
     assert {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()} == before
     assert remote["uploaded"] is None and remote["release"] is None
 
