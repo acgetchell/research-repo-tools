@@ -30,7 +30,8 @@ in the canonical English form. Parsing uses a fixed month map and UTC midnight,
 with no wall clock or locale dependency. A consumer build recipe can use:
 
 ```sh
-export SOURCE_DATE_EPOCH="$(just papers source-date --paper example)"
+SOURCE_DATE_EPOCH="$(just papers source-date --paper example)" || exit
+export SOURCE_DATE_EPOCH
 # Consumer recipe compiles into its declared build directory using that environment.
 just papers normalize --paper example
 just papers check --paper example

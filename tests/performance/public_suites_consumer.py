@@ -93,6 +93,33 @@ def assemble(root: Path, archives: tuple[str, ...], **kwargs):
 
 
 class TestSuiteConsumer(unittest.TestCase):
+    def test_repacking_and_assembly_ignore_wall_clock_and_input_order(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            prepare(root)
+            packed = []
+            assembled = []
+            for attempt, clock in enumerate((100, 200)):
+                archives = []
+                with patch("gzip.time.time", return_value=clock):
+                    for suite in ("left", "right"):
+                        output = f"{suite}-{attempt}.tar.gz"
+                        pack_saved_suite(root, "saved.toml", suite, output, run=RUN, criterion_dir=suite)
+                        archives.append(output)
+                    output = f"complete-{attempt}.tar.gz"
+                    assemble_saved_suites(
+                        root, "saved.toml", tuple(archives if attempt == 0 else reversed(archives)), output, revision=REVISION, session=RUN.session
+                    )
+                packed.append(tuple((root / name).read_bytes() for name in archives))
+                assembled.append((root / output).read_bytes())
+            self.assertEqual(packed[0], packed[1])
+            self.assertEqual(assembled[0], assembled[1])
+            for payload in (*packed[0], assembled[0]):
+                self.assertEqual(payload[4:8], b"\x00\x00\x00\x00")
+            for name, payload in read_archive(root / "left-0.tar.gz").items():
+                if name != "suite.json":
+                    self.assertEqual(payload, (root / "left" / name).read_bytes())
+
     def test_round_trip_retains_exact_bytes_and_each_original_host_without_probes(self):
         with tempfile.TemporaryDirectory(prefix="suites café ") as temporary:
             root = Path(temporary)

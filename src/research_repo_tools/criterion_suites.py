@@ -1,5 +1,6 @@
 """Verified transport of independent Criterion suites, without host recapture."""
 
+import gzip
 import io
 import tarfile
 import tempfile
@@ -104,12 +105,13 @@ def _archive(files: dict[str, bytes], limits: ArchiveLimits) -> bytes:
     if len(files) > limits.members or sum(map(len, files.values())) > limits.content_bytes:
         raise ValueError("suite content exceeds archive limits")
     output = io.BytesIO()
-    with tarfile.open(fileobj=output, mode="w:gz") as archive:
-        for name, payload in sorted(files.items()):
-            member = tarfile.TarInfo(name)
-            member.size = len(payload)
-            member.mode = 0o600
-            archive.addfile(member, io.BytesIO(payload))
+    with gzip.GzipFile(fileobj=output, mode="wb", compresslevel=6, mtime=0, filename="") as compressed:
+        with tarfile.open(fileobj=compressed, mode="w") as archive:
+            for name, payload in sorted(files.items()):
+                member = tarfile.TarInfo(name)
+                member.size = len(payload)
+                member.mode = 0o600
+                archive.addfile(member, io.BytesIO(payload))
     payload = output.getvalue()
     if len(payload) > limits.archive_bytes:
         raise ValueError("suite archive exceeds archive byte limit")

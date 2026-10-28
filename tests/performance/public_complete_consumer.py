@@ -1943,6 +1943,69 @@ if '--list' in sys.argv:
                 with self.assertRaisesRegex(ValueError, "incomplete"):
                     collect_complete_sample(root, "new", policy)
 
+    def test_supplemental_names_fail_before_tree_access(self):
+        policy = CompletePolicy(("case",), sample_count=3)
+        for names in (("../escape.json",), ("benchmark.json",), ("Extra.json", "extra.json"), ("café.json", "cafe\u0301.json")):
+            with self.subTest(names=names), patch.object(Path, "walk", side_effect=AssertionError("unexpected tree access")):
+                with self.assertRaises(ValueError):
+                    collect_complete_sample(Path.cwd(), "new", policy, raw_files=names)
+
+    def test_supplemental_json_bytes_and_regular_file_preflight(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sample = root / "case" / "new"
+            sample.mkdir(parents=True)
+            case = mixed_case("case", 3)
+            for name, payload in (("benchmark", case.benchmark), ("estimates", case.estimates), ("sample", case.sample)):
+                (sample / f"{name}.json").write_bytes(payload)
+            policy = CompletePolicy(("case",), sample_count=3)
+            extra = sample / "tukey.json"
+            retained = b"[1, 2, 3, 4]\r\n"
+            extra.write_bytes(retained)
+            result = collect_complete_sample(root, "new", policy, raw_files=("tukey.json",))
+            self.assertEqual(result.cases[0].raw_files, (("tukey.json", retained),))
+            original_is_file = Path.is_file
+
+            def is_file(path, *args, **kwargs):
+                return False if path == extra else original_is_file(path, *args, **kwargs)
+
+            with patch.object(Path, "is_file", is_file), patch.object(Path, "read_bytes", side_effect=AssertionError("read before file-kind validation")):
+                with self.assertRaisesRegex(ValueError, "regular JSON files"):
+                    collect_complete_sample(root, "new", policy, raw_files=("tukey.json",))
+            extra.write_bytes(b"not JSON")
+            with self.assertRaises(ValueError):
+                collect_complete_sample(root, "new", policy, raw_files=("tukey.json",))
+            extra.unlink()
+            extra.mkdir()
+            with patch.object(Path, "read_bytes", side_effect=AssertionError("read before file-kind validation")):
+                with self.assertRaisesRegex(ValueError, "regular JSON files"):
+                    collect_complete_sample(root, "new", policy, raw_files=("tukey.json",))
+
+    @unittest.skipUnless(hasattr(os, "mkfifo"), "native FIFO fixture requires POSIX; portable nonregular-file model runs on every host")
+    def test_supplemental_fifo_fails_without_blocking(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            sample = root / "case" / "new"
+            sample.mkdir(parents=True)
+            case = mixed_case("case", 3)
+            for name, payload in (("benchmark", case.benchmark), ("estimates", case.estimates), ("sample", case.sample)):
+                (sample / f"{name}.json").write_bytes(payload)
+            os.mkfifo(sample / "tukey.json")
+            script = """import sys
+from pathlib import Path
+from research_repo_tools.complete_runs import CompletePolicy, collect_complete_sample
+try:
+    collect_complete_sample(Path(sys.argv[1]), 'new', CompletePolicy(('case',), sample_count=3), raw_files=('tukey.json',))
+except ValueError as error:
+    assert 'regular JSON files' in str(error), error
+else:
+    raise AssertionError('FIFO accepted')
+"""
+            result = subprocess.run(
+                [sys.executable, "-I", "-B", "-X", "utf8", "-c", script, str(root)], capture_output=True, encoding="utf-8", timeout=10, check=False
+            )
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+
     def test_profile_retains_native_toml_scalars_and_exact_source(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

@@ -5,7 +5,7 @@ import io
 import json
 import tempfile
 import unittest
-from contextlib import redirect_stdout
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from typing import Any
 from unittest.mock import patch
@@ -258,6 +258,58 @@ class TestSarifConsumer(unittest.TestCase):
             self.assertEqual(len(list((root / "reports").glob("*.sarif"))), 1)
             with patch("research_repo_tools.cli.config.load", return_value=config.parse({}, root=root)):
                 self.assertEqual(main(["sarif", "split", "input.sarif", "--output", "reports"]), 1)
+
+    def test_cli_command_file_aliases_fail_before_publishing(self):
+        for kind in ("source", "output", "case", "unicode", "hardlink", "symlink", "parent-symlink", "relative-symlink", "relative-parent-symlink"):
+            with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                source = root / "input.sarif"
+                original = json.dumps(document()).encode()
+                source.write_bytes(original)
+                destination = root / "réports"
+                destination.mkdir()
+                previous = destination / "old.sarif"
+                previous.write_bytes(b"old generation")
+                settings = config.parse({"sarif": {"drivers": {"Scanner": ["project."]}}}, root=root)
+                command_file = source
+                link_identity = None
+                if kind == "output":
+                    command_file = destination / "new.sarif"
+                elif kind == "case":
+                    command_file = root / "RÉPORTS" / "outputs"
+                elif kind == "unicode":
+                    command_file = root / "re\u0301ports" / "outputs"
+                elif kind == "hardlink":
+                    command_file = root / "command-file"
+                    command_file.hardlink_to(source)
+                    self.assertTrue(command_file.samefile(source))
+                elif kind.endswith("symlink"):
+                    alias = root / "alias"
+                    target = destination if "parent" in kind else source
+                    try:
+                        alias.symlink_to(target.name if kind.startswith("relative") else target, target_is_directory="parent" in kind)
+                    except OSError as error:
+                        if getattr(error, "winerror", None) == 1314:
+                            continue  # Other portable alias cases still execute without link privileges.
+                        raise
+                    self.assertTrue(alias.is_symlink())
+                    link_identity = (alias, alias.readlink(), target)
+                    command_file = alias / "outputs" if "parent" in kind else alias
+                errors = io.StringIO()
+                with patch("research_repo_tools.cli.config.load", return_value=settings), redirect_stdout(io.StringIO()), redirect_stderr(errors):
+                    self.assertEqual(
+                        main(["--root", str(root), "sarif", "split", str(source), "--output", str(destination), "--github-output", str(command_file)]), 1
+                    )
+                self.assertRegex(errors.getvalue(), r"duplicate target paths|overlapping target paths|must be outside|must not alias the source")
+                if link_identity is not None:
+                    alias, link_text, target = link_identity
+                    self.assertTrue(alias.is_symlink())
+                    self.assertEqual(alias.readlink(), link_text)
+                    self.assertTrue(alias.samefile(target))
+                if kind == "hardlink":
+                    self.assertTrue(command_file.samefile(source))
+                self.assertEqual(source.read_bytes(), original)
+                self.assertEqual({path.name: path.read_bytes() for path in destination.iterdir()}, {"old.sarif": b"old generation"})
 
 
 if __name__ == "__main__":

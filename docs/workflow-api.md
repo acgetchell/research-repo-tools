@@ -280,7 +280,9 @@ NUL-delimited. Links, traversal and portable aliases fail. `argument_batches`
 validates complete filename input before making bounded argument tuples; paths
 receive `./` to prevent option interpretation. Bounds account for quoted Windows
 UTF-16 command size and POSIX byte size. `run_selected` inherits live streams
-and stops at the first failed batch; a genuinely empty selection is a no-op.
+and returns the selected file count after all batches succeed. An empty selection
+returns zero without launching a command. A failed batch raises the process
+error and prevents later batches from running.
 
 `validation.require_executables(root, names)` resolves prerequisites without
 launching them. `run_checks(root, configuration, names=())` validates all schema-1

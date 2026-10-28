@@ -415,7 +415,7 @@ def download_artifact(repository: str, artifact: dict[str, Any], destination: Pa
         raise ValueError("downloaded artifact ZIP size or SHA-256 differs from immutable API identity")
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         members = archive.infolist()
-        if len(members) != len(names) or {member.filename for member in members} != set(names):
+        if len(members) != len(names) or {member.orig_filename for member in members} != set(names):
             raise ValueError(f"artifact must contain exactly {names}")
         if any(member.is_dir() or member.flag_bits & 1 or stat.S_IFMT(member.external_attr >> 16) not in (0, stat.S_IFREG) for member in members):
             raise ValueError("artifact entries must be regular, unencrypted files")

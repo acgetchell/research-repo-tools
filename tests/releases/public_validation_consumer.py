@@ -109,6 +109,28 @@ class TestValidationConsumer(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "portable plain filenames"):
                     download_artifact(POLICY.repository, {"id": 42}, Path("unused"), names)
 
+    def test_original_zip_member_names_cannot_hide_nul_suffixes(self):
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as archive:
+            archive.writestr("wanted.jsonXhidden", b"{}")
+        serialized = stream.getvalue()
+        self.assertEqual(serialized.count(b"wanted.jsonXhidden"), 2)
+        payload = serialized.replace(b"wanted.jsonXhidden", b"wanted.json\0hidden")
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            self.assertEqual([entry.orig_filename for entry in archive.infolist()], ["wanted.json\0hidden"])
+            self.assertEqual(archive.namelist(), ["wanted.json"])
+        artifact = {"id": 42, "digest": f"sha256:{hashlib.sha256(payload).hexdigest()}", "size_in_bytes": len(payload)}
+
+        def execute(args, **kwargs):
+            kwargs["stdout"].write(payload)
+            return subprocess.CompletedProcess(args, 0)
+
+        with tempfile.TemporaryDirectory() as directory, patch("research_repo_tools.release_validation.subprocess.run", side_effect=execute):
+            destination = Path(directory) / "artifact"
+            with self.assertRaisesRegex(ValueError, "exactly"):
+                download_artifact(POLICY.repository, artifact, destination, ("wanted.json",))
+            self.assertFalse(destination.exists())
+
 
 if __name__ == "__main__":
     unittest.main()

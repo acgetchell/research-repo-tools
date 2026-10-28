@@ -247,10 +247,11 @@ For pre-publication checks or debugging across local checkouts, build a wheel:
 just build
 ```
 
-Then install it in a disposable consuming project:
+The build clears `dist/` before writing one wheel and one sdist. Install the
+wheel in a disposable consuming project:
 
 ```sh
-uv add --dev /path/to/research-repo-tools/dist/research_repo_tools-0.1.0-py3-none-any.whl
+uv add --dev /path/to/research-repo-tools/dist/research_repo_tools-*-py3-none-any.whl
 uv run --locked research-repo-tools --help
 ```
 

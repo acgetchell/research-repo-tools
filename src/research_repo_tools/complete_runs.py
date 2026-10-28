@@ -239,6 +239,9 @@ class CompleteSample:
 
 def collect_complete_sample(criterion_dir: Path, sample: str, policy: CompletePolicy, *, raw_files: tuple[str, ...] = ()) -> CompleteSample:
     """Reject incomplete inventories and unsafe trees; never infer IDs from paths."""
+    from research_repo_tools.criterion_baselines import _CORE_FILES, _raw_files
+
+    selected = _raw_files((*_CORE_FILES, *raw_files))
     _publication_name(sample)
     if "/" in sample:
         raise ValueError("sample must be a single component")
@@ -259,13 +262,12 @@ def collect_complete_sample(criterion_dir: Path, sample: str, policy: CompletePo
         if directory != criterion_dir and directory.name == sample and (required.intersection(files) or not directories):
             if not required <= set(files):
                 raise ValueError(f"incomplete Criterion sample: {directory}")
-            raw_paths = tuple(directory / name for name in ("benchmark.json", "estimates.json", "sample.json"))
-            if any(not path.is_file() for path in raw_paths):
-                raise ValueError(f"Criterion sample requires regular core JSON files: {directory}")
+            if any(not (directory / name).is_file() for name in selected):
+                raise ValueError(f"Criterion sample requires regular JSON files: {directory}")
             cases.append(
                 CompleteCase(
                     directory.parent.relative_to(criterion_dir).as_posix(),
-                    *(path.read_bytes() for path in raw_paths),
+                    *((directory / name).read_bytes() for name in _CORE_FILES),
                     raw_files=tuple((name, (directory / name).read_bytes()) for name in raw_files),
                 )
             )

@@ -563,6 +563,7 @@ class TestReuseConsumer(unittest.TestCase):
                 alias.symlink_to(root, target_is_directory=True)
                 self.assertTrue(alias.is_symlink())
             self.assertTrue(alias.samefile(root))
+
             before = {path.name: path.read_bytes() for path in root.iterdir()}
             outputs = [
                 Path("approval.json"),
@@ -593,6 +594,50 @@ class TestReuseConsumer(unittest.TestCase):
                     verify.assert_not_called()
                     self.assertEqual({path.name: path.read_bytes() for path in root.iterdir()}, before)
             self.assertTrue(alias.samefile(root))
+
+    def test_cli_reuse_paths_are_relative_to_explicit_root(self):
+        saved = self.verify(self.provider())
+        with tempfile.TemporaryDirectory(prefix="reuse root café ") as temporary:
+            root = Path(temporary).resolve()
+            checkout, caller = root / "checkout", root / "elsewhere" / "caller"
+            checkout.mkdir()
+            caller.mkdir(parents=True)
+            settings = self.settings(checkout)
+            output = root / "approval.json"
+            with (
+                contextlib.chdir(caller),
+                patch("research_repo_tools.cli.config.load", return_value=settings),
+                patch("research_repo_tools.release_reuse.verify_ci_reuse", return_value=saved),
+                contextlib.redirect_stdout(io.StringIO()),
+            ):
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "--root",
+                            str(checkout),
+                            "release",
+                            "reuse",
+                            RELEASE,
+                            "--attempt",
+                            "2",
+                            "--output",
+                            "../approval.json",
+                            "--pull-request",
+                            "9",
+                            "--run-id",
+                            "123",
+                        ]
+                    ),
+                    0,
+                )
+                self.assertEqual(output.read_bytes(), saved)
+                # A conflicting caller-relative file must never be read.
+                (caller.parent / "approval.json").write_bytes(b"wrong approval")
+                with patch("research_repo_tools.release_publishing.publish_reviewed_release") as publish:
+                    self.assertEqual(
+                        cli.main(["--root", str(checkout), "release", "publish", "v1.2.3", "--approve", "--reuse-evidence", "../approval.json"]), 0
+                    )
+                    self.assertEqual(publish.call_args.kwargs, {"reuse_evidence": saved})
 
     @unittest.skipIf(os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1", "disposable Git mutations explicitly disabled")
     def test_manifest_observes_real_clean_merge_checkout_without_changing_index(self):
