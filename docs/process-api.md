@@ -81,8 +81,10 @@ and defaults to the caller's current directory. Explicit relative executable
 paths and relative `PATH` entries resolve against that directory. `env` is a
 replacement mapping, not an overlay; omit it to inherit the environment. A missing
 `PATH` uses `os.defpath`; an empty `PATH` searches the selected directory. Windows
-extension discovery follows `shutil.which`, including the host process's
-`PATHEXT`. Symlinks to executables are preserved so virtual-environment Python
+extension discovery follows `shutil.which` ordering using the selected
+environment's `PATHEXT`; missing or empty values use the standard default
+extensions. Windows environment keys are matched case-insensitively. Symlinks
+to executables are preserved so virtual-environment Python
 and executable dispatchers keep their invocation identity. Discovery is not a
 security boundary against executable replacement. Native Windows batch-file
 execution retains the operating system's shell behavior; prefer native executables

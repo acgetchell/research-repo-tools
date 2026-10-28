@@ -209,7 +209,11 @@ Explicit toolchain synchronization installs pinned
 Rust/Cargo and supported declared Cargo tools, including git-cliff and rumdl.
 See [toolchain setup](INSTALLING.md) for declarations, host support, installation
 ownership, and remaining native validation gates. Git is a system prerequisite;
-Semgrep belongs in the consumer's Python dependencies. GitHub CLI is needed for
+Semgrep is provisioned by this package in a separate uv environment using its
+pinned scanner version and Python minor. `just semgrep-setup` can prepare it in
+advance; scans also provision it automatically. See the
+[Semgrep setup and offline requirements](RUNNING_CHECKS.md) for the scanner cache.
+GitHub CLI is needed for
 automatic discovery of a previous release; an explicit previous release permits
 offline preparation. The optional `notebooks` extra supplies notebook validation,
 cleanup, synchronization, and execution. Notebook Python linting also requires

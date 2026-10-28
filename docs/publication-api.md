@@ -162,13 +162,18 @@ traceback; a successful check is silent.
 
 ## Publication configuration v2
 
-Schema 2 accepts `research-repo-tools/complete-run/v1` and
-`research-repo-tools/complete-run/v2`
+Schema 2 accepts `research-repo-tools/complete-run/v1`,
+`research-repo-tools/complete-run/v2` and `research-repo-tools/complete-run/v3`
 evidence directly, with the same independent provenance pins, source/harness
 checks, references, markers, tagged links, preview/check and transaction contracts
 as schema 1. The [task guide](PUBLISHING_REPORTS.md#complete-run-document-sections-and-coordinate-plots)
 owns commands and the packaged `complete-publication.toml` provides an editable
 configuration example. Schema 1 continues to require comparison evidence.
+Independent v3 measurements can be published even when their phases are not
+comparable. Tables mark incompatible cross-phase ratio and reduction cells
+unavailable while retaining same-phase comparisons. A configured incompatible
+cross-phase ratio SVG rejects the publication before any output writes. See the
+[complete-run presentation contract](complete-run-api.md#configured-presentation).
 
 Required common fields are `schema`, `document`, `begin`, `end`, `unit`, `rows`,
 `provenance`, and `references`; schema 2 additionally requires `statistic` and
@@ -201,8 +206,8 @@ The remaining optional common fields are `links`, `repository`, `tag-policy`,
 `prose-file`, `current-sources`, and `current-harness`. Schema-1-only
 `baseline-label`/`current-label` fields are replaced by explicit series labels.
 Unknown fields, ambiguous mappings and duplicated/aliased output paths fail.
-The optional `table` controls are an unreleased additive extension; omitting
-them preserves the published default output. Table options never change CSV,
+The optional `table` controls customize presentation; omitting
+them preserves the default output. Table options never change CSV,
 figures, source estimates or comparison arithmetic. Nested unknown keys, invalid
 types and mismatched comparison heading counts fail before any output writes.
 Missing mappings require explicit unavailable policy; unmeasured or out-of-view

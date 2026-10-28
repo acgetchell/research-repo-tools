@@ -556,15 +556,40 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
 
         if settings.sarif is None:
             raise ValueError("sarif split requires explicit sarif.drivers configuration")
-        outputs = split(settings.path(args.source), settings.path(args.output), settings.sarif)
-        if args.github_output is not None:
+        source, destination = settings.path(args.source), settings.path(args.output)
+        command_file = None if args.github_output is None else settings.path(str(args.github_output))
+        if command_file is not None:
+            from research_repo_tools.files import _paths_alias, _validate_distinct_paths
+
+            _validate_distinct_paths((source, destination, command_file))
+            if any(_paths_alias(destination, parent) for parent in command_file.absolute().parents):
+                raise ValueError("SARIF command file must be outside the output directory")
+            if command_file.is_symlink() or (command_file.exists() and not command_file.is_file()):
+                raise ValueError("SARIF command file must be a regular file")
+            if command_file.exists() and source.exists() and command_file.samefile(source):
+                raise ValueError("SARIF command file must not alias the source")
+            if command_file.exists() and destination.is_dir():
+                from stat import S_ISREG
+
+                def fail_output_walk(error: OSError) -> None:
+                    raise error
+
+                for directory, _, filenames in destination.walk(on_error=fail_output_walk):
+                    for name in filenames:
+                        member = directory / name
+                        if S_ISREG(member.stat().st_mode) and command_file.samefile(member):
+                            raise ValueError("SARIF command file must not alias an output file")
+            if any(character in str(destination) for character in "\0\r\n"):
+                raise ValueError("SARIF directory command-file value must not contain NUL/CR/LF")
+        outputs = split(source, destination, settings.sarif)
+        if command_file is not None:
             from research_repo_tools.ci import export_environment
 
             export_environment(
-                settings.path(str(args.github_output)),
+                command_file,
                 ("SARIF_DIRECTORY", "SARIF_HAS_UPLOADABLE_RUNS", "SARIF_RUN_COUNT"),
                 environment={
-                    "SARIF_DIRECTORY": str(settings.path(args.output)),
+                    "SARIF_DIRECTORY": str(destination),
                     "SARIF_HAS_UPLOADABLE_RUNS": "true" if outputs else "false",
                     "SARIF_RUN_COUNT": str(len(outputs)),
                 },
@@ -663,20 +688,19 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             return run(args, settings)
         from research_repo_tools import release_publishing
 
-        reuse_options = {}
+        reuse_payload: bytes | None = None
         if getattr(args, "reuse_evidence", None) is not None:
-            with args.reuse_evidence.open("rb") as stream:
+            with settings.path(str(args.reuse_evidence)).open("rb") as stream:
                 reuse_payload = stream.read(1024 * 1024 + 1)
             if len(reuse_payload) > 1024 * 1024:
                 raise ValueError("CI reuse approval exceeds the byte limit")
-            reuse_options["reuse_evidence"] = reuse_payload
         if args.action == "reuse":
             from research_repo_tools.release_reuse import verify_ci_reuse
 
             publishing = release_publishing._settings(settings)
             if publishing.reuse is None:
                 raise ValueError("configure publishing.reuse before selecting CI evidence")
-            output, root = args.output.resolve(), settings.root.resolve()
+            output, root = settings.path(str(args.output)).resolve(), settings.root.resolve()
             # Filesystem identity also covers case aliases on macOS volumes.
             if output.is_relative_to(root) or any(parent.exists() and parent.samefile(root) for parent in output.parents):
                 raise ValueError("save CI reuse approval outside the reviewed checkout; publication requires a clean checkout")
@@ -707,10 +731,10 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             event = release_publishing.validate_event(
                 _load_json(payload, "GitHub release event"), os.environ["GITHUB_REPOSITORY"], os.environ.get("GITHUB_SHA", ""), os.environ.get("GITHUB_REF", "")
             )
-            release_publishing.check_reviewed_release(settings, args.tag, event=event, **reuse_options)
+            release_publishing.check_reviewed_release(settings, args.tag, event=event, reuse_evidence=reuse_payload)
             return 0
         if args.action == "publish":
-            release_publishing.publish_reviewed_release(settings, args.tag, **reuse_options)
+            release_publishing.publish_reviewed_release(settings, args.tag, reuse_evidence=reuse_payload)
             return 0
         if args.action == "registry":
             from research_repo_tools.registry import lookup_version

@@ -43,13 +43,20 @@ def test_release_metadata_authentication_precedence(monkeypatch, github_token, g
     assert prebuilt.release_metadata("osv-scanner", "v2.6.0")["tag_name"] == "v2.6.0"
 
 
-@pytest.mark.parametrize("host", prebuilt.HOSTS)
-@pytest.mark.parametrize("name,version", [("gitleaks", "8.30.1"), ("osv-scanner", "2.6.0")])
-def test_assets(host, name, version):
-    asset = prebuilt.asset_name(BinaryTool(name, version), host)
-    assert ("windows" in asset) == ("windows" in host)
-    assert ("arm64" in asset) == host.startswith("aarch64")
-    assert asset.endswith(".exe" if name == "osv-scanner" else ".zip") if "windows" in host else not asset.endswith((".exe", ".zip"))
+@pytest.mark.parametrize(
+    "host,gitleaks,osv",
+    [
+        ("aarch64-apple-darwin", "gitleaks_8.30.1_darwin_arm64.tar.gz", "osv-scanner_darwin_arm64"),
+        ("aarch64-pc-windows-msvc", "gitleaks_8.30.1_windows_arm64.zip", "osv-scanner_windows_arm64.exe"),
+        ("aarch64-unknown-linux-gnu", "gitleaks_8.30.1_linux_arm64.tar.gz", "osv-scanner_linux_arm64"),
+        ("x86_64-apple-darwin", "gitleaks_8.30.1_darwin_x64.tar.gz", "osv-scanner_darwin_amd64"),
+        ("x86_64-pc-windows-msvc", "gitleaks_8.30.1_windows_x64.zip", "osv-scanner_windows_amd64.exe"),
+        ("x86_64-unknown-linux-gnu", "gitleaks_8.30.1_linux_x64.tar.gz", "osv-scanner_linux_amd64"),
+    ],
+)
+def test_assets(host, gitleaks, osv):
+    assert prebuilt.asset_name(BinaryTool("gitleaks", "8.30.1"), host) == gitleaks
+    assert prebuilt.asset_name(BinaryTool("osv-scanner", "2.6.0"), host) == osv
 
 
 def test_unsupported_host():

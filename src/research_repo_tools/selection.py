@@ -101,7 +101,11 @@ def run_selected(
     env: Mapping[str, str] | None = None,
     timeout: float | None = 300,
 ) -> int:
-    """Run selected files in bounded batches, stopping on the first failure."""
+    """Return the selected file count after successful bounded batch execution.
+
+    An empty selection returns zero. A failed batch raises the process error
+    and prevents later batches from running.
+    """
     if not command:
         raise ValueError("files run requires a command after --")
     argument_batches(command, (), batch_size=batch_size)

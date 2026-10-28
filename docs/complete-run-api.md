@@ -103,16 +103,18 @@ The supported names in `complete_runs` are:
 | --- | --- |
 | `LEGACY_RUN_SCHEMA` | Alias of `RUN_SCHEMA` |
 | `RUN_SCHEMA` | `research-repo-tools/complete-run/v1`; original uniform policy and provenance rules |
-| `RUN_SCHEMAS` | Both supported schemas, in version order |
+| `RUN_SCHEMAS` | All three supported schemas, in version order |
 | `RUN_SCHEMA_V2` | `research-repo-tools/complete-run/v2`; explicit phase-owned policy and provenance rules |
-| `CompleteCase(storage_path, benchmark, estimates, sample)` | Portable relative path plus original immutable bytes for Criterion's three JSON files |
+| `RUN_SCHEMA_V3` | `research-repo-tools/complete-run/v3`; common or independent acquisition and supplemental raw JSON files |
+| `CompleteCase(storage_path, benchmark, estimates, sample, *, raw_files=())` | Portable relative path plus original immutable bytes for Criterion's three core JSON files and optional `(filename, bytes)` pairs |
 | `CompletePolicy(expected, sample_count=100, statistics=("mean", "median"), confidence_level=0.95, unit="ns", *, sample_counts=())` | Exact unique semantic IDs; select uniform counts or exhaustive immutable ID/count pairs with `sample_count=None` |
-| `CompleteRun(phases, series, compatible=("harness_sha256",), *, schema=RUN_SCHEMA)` | Exactly baseline/current complete samples, named views and required provenance selection; defaults to v1, with explicit `schema=RUN_SCHEMA_V2` for independent phase counts |
+| `CompleteRun(phases, series, compatible=("harness_sha256",), *, schema=RUN_SCHEMA, harness_mode="common")` | Exactly baseline/current complete samples, named views and required provenance selection; defaults to v1, with v2 for independent phase counts and v3 for independent acquisition |
 | `CompleteSample(policy, cases)` | Immutable sorted cases validated against the complete policy |
 | `RunSeries(name, phase, rows)` | Unique display labels mapped to full IDs in one recorded phase |
-| `collect_complete_sample(criterion_dir, sample, policy)` | Reject unsafe trees, incomplete rows, duplicate semantic IDs and missing/unexpected inventory |
+| `collect_complete_sample(criterion_dir, sample, policy, *, raw_files=())` | Reject unsafe trees, incomplete rows, duplicate semantic IDs and missing/unexpected inventory; optional supplemental JSON filenames are validated before tree access and all selected files must be regular before reading |
 | `parse_policy(payload)`, `serialize_policy(policy)` | Strict v2 policy JSON for manually constructed phase provenance |
 | `parse_run(payload)`, `serialize_run(run)` | Versioned strict shared JSON; original Criterion bytes stored as base64 |
+| `ratio_incompatibilities(evidence)` | For v3, derive ratio-ineligibility reasons from recorded host, harness, workload and inventory differences; v1/v2 return `()` without assessing ratio eligibility |
 | `render_run(evidence, *, title="Benchmark timings", report_path=None, payload_path=None, manifest_path=None)` | Offline named-series timings and recorded per-phase provenance; supply all three root-relative publication paths for evidence links |
 | `run_identity(evidence)` | SHA-256 of exact payload and envelope with versioned framing |
 | `validate_run_evidence(evidence)` | Parse complete measurements and verify phase/source/gate/compatibility contracts |
@@ -266,7 +268,7 @@ Import from `research_repo_tools.run_presentation`:
 | `CoordinatePlot(title, x_label, y_label, x_scale="linear", y_scale="linear")` | Nonempty labels and `linear`/`log` scales |
 | `RunLayout(series, rows, statistic, unit, missing="error", comparisons=())` | Explicit series/row order, recorded mean/median and timing unit; comparisons are `(numerator_name, denominator_name)` tuples |
 | `RunRow(key, label, coordinate=None)` | Unique selection key and display label; optional finite numeric coordinate |
-| `RunTableStyle(*, row_heading="Case", intervals="inline", timing_legend=False, comparison_columns=("ratio", "reduction"), ratio_headings=(), reduction_headings=(), ratio_suffix="")` | Frozen Markdown-only style; additive, unreleased API |
+| `RunTableStyle(*, row_heading="Case", intervals="inline", timing_legend=False, comparison_columns=("ratio", "reduction"), ratio_headings=(), reduction_headings=(), ratio_suffix="")` | Frozen Markdown-only style |
 | `SeriesSelection(name, label, rows)` | Existing retained view name, unique display label and unique `(row_key, semantic_full_id)` mappings |
 | `render_coordinate_svg(evidence, layout, plot)` | Deterministic UTF-8/LF accessible SVG with point estimates and recorded marginal timing intervals |
 | `render_run_ratios(evidence, layout)` | Exactly one configured comparison, rendered as point-ratio bars with original phase labels and run identity |
@@ -274,7 +276,16 @@ Import from `research_repo_tools.run_presentation`:
 | `serialize_run_csv(evidence, layout)` | Deterministic UTF-8/LF long-form CSV with each cell's run/series/phase/revision/release, fingerprints, row/coordinate/ID, statistic/unit, status and estimate/bounds/confidence |
 
 Every renderer validates the entire complete evidence, including phase gates and
-compatibility, before selecting presentation data. A series mapping must select
+the selected schema's acquisition contracts, before selecting presentation data.
+Independent v3 acquisition retains valid measurements with differing hosts,
+workloads or inventories; it does not establish comparability. When
+`ratio_incompatibilities(evidence)` reports differences, tables mark cross-phase
+ratio and reduction cells unavailable; same-phase comparisons remain available.
+`render_run_ratios` raises `ValueError` for an incompatible cross-phase SVG,
+so a publication configured with that figure fails before writing any output.
+For strict release eligibility, call `common_measurement.validate_run_policy(evidence, plan,
+release=True)`. The [v3 acquisition contract](DECLARING_PERFORMANCE.md#complete-acquisition-contract-schema-4)
+defines the common and independent modes. A series mapping must select
 IDs belonging to that original named view; changing a label cannot change its
 phase. Unknown views, duplicate row keys or benchmark mappings, incompatible
 units and unrecorded statistics fail. No conversion or scientific eligibility
