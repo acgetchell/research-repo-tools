@@ -127,9 +127,9 @@ release-assets +args:
 release-check tag:
     uv run --locked research-repo-tools release check "$1"
 
-# Create or verify CI evidence and retain its approval handoff in explicit files.
-release-evidence +args:
-    uv run --locked research-repo-tools release evidence "$@"
+# Inspect this release's signed CI evidence, or pass explicit shared evidence commands.
+release-evidence *args:
+    if [ "$#" -eq 0 ]; then uv run --locked python scripts/release_assets.py evidence; else uv run --locked research-repo-tools release evidence "$@"; fi
 
 # Prepare a first release after verifying empty stable published history.
 release-first tag date:

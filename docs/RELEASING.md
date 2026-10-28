@@ -1,9 +1,10 @@
 # Releasing research-repo-tools
 
 Prepare each `vX.Y.Z` release in a dedicated PR. After that PR is merged,
-create the annotated tag and a draft GitHub release. `Prepare GitHub release`
-attaches the validated wheel, sdist, and signed evidence, then review and publish
-the draft with `just release-publish`. The published release starts
+wait for its complete main CI run, then create and push the annotated tag.
+The tag push starts `Prepare GitHub release`, which creates the draft and
+attaches the validated wheel, sdist, and signed evidence. Review and publish
+the draft with `just release-publish`. Publishing the GitHub release starts
 `Publish to PyPI`; approve its `pypi` deployment to permit the package upload.
 
 The changelog is generated for the target tag before the tag exists, so the
@@ -51,6 +52,7 @@ The release commands share Delaunay's operator-facing roles:
 | `changelog-preview [--tag TAG] [--date DATE]` | Preview generation without publishing files |
 | `changelog-release TAG [DATE]` | Generate prospective notes using the prepared citation date by default |
 | `publish-check` | Check the current built wheel and sdist with strict Twine validation |
+| `release-evidence` | Verify the clean checkout's retained signed main CI evidence without rebuilding |
 | `release-notes TAG` | Print the generated notes for the tag and GitHub release |
 | `release-publish TAG` | Check the reviewed draft and approve GitHub publication |
 | `release-verify TAG` | Verify GitHub assets and the exact PyPI version |
@@ -61,10 +63,10 @@ The release commands share Delaunay's operator-facing roles:
 This package has no release benchmark or README performance snapshot to generate.
 Its `publish-check` validates the built wheel and sdist for PyPI using pinned
 Twine with warnings treated as errors. It runs inside `just ci` after the build
-and is also available separately. Signed evidence verification and draft
-creation belong to the preparation workflow here;
-Delaunay's no-argument `release-evidence` adapter and manual draft creation do not
-apply. The shared `release-evidence COMMAND...` recipe exposes lower-level
+and is also available separately. `release-evidence` inspects the retained
+signed distributions locally using the same verifier as automated preparation.
+Draft creation and promotion signing remain in the preparation workflow here.
+Explicit `release-evidence COMMAND...` arguments still expose the shared
 operations with explicit policy inputs, described in
 [release evidence](VERIFYING_RELEASE_EVIDENCE.md).
 
@@ -269,7 +271,7 @@ version instead.
 
 ## Step 2: Publish after the PR is merged
 
-### 1. Synchronize `main`
+### 1. Synchronize `main` and wait for CI
 
 ```bash
 git switch main
@@ -278,8 +280,30 @@ git pull --ff-only
 
 Use a clean checkout of the reviewed release commit. If `main` has advanced,
 review the intervening changes and refresh generated notes through a PR as
-needed. Require its complete main-push validation before continuing; pushing
-the tag starts preparation immediately.
+needed. Find the main-push `Package checks` run for this exact commit:
+
+```bash
+RELEASE_COMMIT=$(git --no-pager rev-parse HEAD)
+gh run list --workflow ci.yml --event push --branch main --commit "$RELEASE_COMMIT" --limit 20
+```
+
+Set `MAIN_RUN_ID` to the matching run's ID from that listing, then wait for it:
+
+```bash
+MAIN_RUN_ID=REPLACE_WITH_THE_MATCHING_MAIN_PUSH_RUN_ID
+gh run watch "$MAIN_RUN_ID" --exit-status
+```
+
+Continue only after the complete run succeeds, including all native package
+checks and the `release-evidence` job. If the run has not appeared, repeat the
+listing; if it fails, follow the [recovery guidance](#recovering-a-failed-run).
+Keep this checkout at the verified commit through tagging and publication.
+
+The `release-evidence` job is inside the `Package checks` workflow in `ci.yml`.
+It depends on `build`, every platform in `check`, and `changelog-integration`,
+so it starts only after they succeed and may not appear in the jobs list while
+they are running. It signs and retains the validation evidence. The local
+`just release-evidence` recipe in step 4 inspects that evidence after the tag push.
 
 ### 2. Create and verify the annotated tag
 
@@ -289,12 +313,15 @@ git --no-pager tag -l --format='%(contents)' "$TAG"
 ```
 
 `just tag` first runs `release-version-check`, then builds the annotation from
-the matching active or archived changelog section. For a changelog larger than
-125 kB, the annotation points to that section instead of embedding it.
+the matching active or archived changelog section. For release notes larger than
+125 kB of UTF-8 text, the annotation points to that section instead of embedding it.
 Use `just tag-preview "$TAG"` for an optional read-only preview. Confirm the tag
 resolves to the reviewed release commit; never move a published tag.
 
 ### 3. Push the tag
+
+After the main CI wait in step 1 succeeds, push the tag. This immediately starts
+`Prepare GitHub release`; step 5 watches the workflow already started here.
 
 ```bash
 git push origin "$TAG"
@@ -303,9 +330,16 @@ git push origin "$TAG"
 ### 4. Verify the release commit
 
 ```bash
-RELEASE_COMMIT=$(git --no-pager rev-parse HEAD)
-gh run list --workflow ci.yml --event push --branch main --commit "$RELEASE_COMMIT" --limit 20
+just release-evidence
 ```
+
+The no-argument recipe derives the stable package version and full commit from
+the clean repository-root checkout. It requires the already-pushed tag to resolve
+to that commit, downloads the retained distributions and signed evidence into
+temporary storage, and verifies their original ZIP digests, inventories, package
+metadata, file hashes, main-run signature, and live run/attempt association.
+It rechecks the checkout before returning and leaves local `dist/` unchanged.
+It neither rebuilds nor creates, signs, uploads, or publishes release assets.
 
 Require successful `build`, `check (ubuntu-24.04)`, `check (macos-15)`,
 `check (windows-2025)`, `changelog-integration`, and `release-evidence` jobs for
@@ -314,29 +348,40 @@ binds its required checks to GitHub Actions app ID `15368`. PR review remains a
 protected-branch requirement; it does not replace merged `main` evidence.
 Missing, pending, cancelled or failed required jobs block preparation.
 
-Inspect the matching main-push run in GitHub and record its full commit,
-run ID, and attempt in the release PR or tracking issue. The preparation workflow
-independently requires exactly one successful matching run from this repository's
-active `ci.yml`. Manual dispatch and partial reruns cannot supply promotion
-evidence. If the original main-push run failed, rerun all its jobs within
+Record the printed JSON's full commit, run ID/attempt, artifact identities, and
+file hashes in the release PR or review notes. Pending checks cause an immediate
+failure; wait for main CI to finish, then rerun `just release-evidence`.
+The preparation workflow independently requires exactly one successful matching
+run from this repository's active `ci.yml`. Manual dispatch and partial reruns
+cannot supply promotion evidence. If the original main-push run failed, rerun all its jobs within
 GitHub's 30-day rerun window. If no eligible run exists, land a new reviewed
 commit that triggers main-push CI; do not move an already published tag.
 
-### 5. Create the draft GitHub release
+### 5. Wait for the draft GitHub release
 
 The tag push starts `Prepare GitHub release`, which creates the draft after
 verifying and signing the retained distributions. Wait for that workflow:
 
 ```bash
-gh run list --workflow prepare-release.yml --limit 5
-gh run watch --exit-status
+gh run list --workflow prepare-release.yml --event push --branch "$TAG" --commit "$RELEASE_COMMIT" --limit 20
 ```
 
-Select the run for this tag and commit when prompted. If it has not appeared,
-repeat the listing. Wait for the complete workflow, including staging, to succeed.
+Set `PREPARATION_RUN_ID` to the matching run's ID from that listing:
+
+```bash
+PREPARATION_RUN_ID=REPLACE_WITH_THE_MATCHING_PREPARATION_RUN_ID
+gh run watch "$PREPARATION_RUN_ID" --exit-status
+```
+
+These commands inspect the workflow started by step 3; they do not start another
+run. If it has not appeared, repeat the listing. If it already succeeded,
+continue to draft review. Otherwise, wait for the complete workflow, including
+staging, to succeed.
 Its pending-validation wait is bounded to 30 polls at 20-second intervals;
 missing, failed, expired, ambiguous or mismatched evidence fails with recovery
-instructions. It never rebuilds or falls back to another commit.
+instructions. For a wait timeout, follow
+[preparation timeout recovery](#preparation-timed-out-waiting-for-main-ci).
+It never rebuilds or falls back to another commit.
 
 Let this workflow create the draft and assets. A manually created draft cannot
 replace its signed provenance. Keep the release title identical to the tag,
@@ -348,11 +393,12 @@ Open the repository's [Releases page](https://github.com/acgetchell/research-rep
 Inspect the draft, generated notes, and assets:
 
 ```bash
-gh release view "$TAG" --json tagName,isDraft,isPrerelease,body,assets
+gh release view "$TAG" --json tagName,name,isDraft,isPrerelease,body,assets
 just release-notes "$TAG"
 ```
 
-Confirm `isDraft: true`, `isPrerelease: false`, and the expected tag and notes.
+Confirm `isDraft: true`, `isPrerelease: false`, the expected tag and title, and
+notes matching `just release-notes` (or its changelog link for a long annotation).
 The draft must contain exactly these three nonempty uploaded assets, with
 `VERSION` replaced by `$TAG` without the leading `v`:
 
@@ -373,7 +419,7 @@ From the clean tagged checkout, using your human GitHub CLI session, run:
 
 ```bash
 just release-publish "$TAG"
-gh run list --workflow publish.yml --limit 5
+gh run list --workflow publish.yml --event release --branch "$TAG" --commit "$RELEASE_COMMIT" --limit 20
 ```
 
 This command authorizes GitHub Release publication. The shared gate checks the
@@ -382,9 +428,16 @@ branch ancestry, successful exact-commit checks and required assets. Human
 authentication is essential: publishing with a workflow's `GITHUB_TOKEN` does
 not trigger the separate `release: published` workflow.
 
-Open the matching `Publish to PyPI` run. Its `verify` job checks the exact uploaded
-inventory and provider digests, then verifies both signatures. Main validation
-must be signed by `ci.yml` at the exact source/signer commit and `refs/heads/main`,
+Record the matching run's ID as `PUBLISH_RUN_ID` and open it:
+
+```bash
+PUBLISH_RUN_ID=REPLACE_WITH_THE_MATCHING_PUBLISH_RUN_ID
+gh run view "$PUBLISH_RUN_ID" --web
+```
+
+If it has not appeared, repeat the filtered listing. Its `verify` job checks the
+exact uploaded inventory and provider digests, then verifies both signatures.
+Main validation must be signed by `ci.yml` at the exact source/signer commit and `refs/heads/main`,
 with the original push run/attempt in its certificate. Promotion must be signed
 by `prepare-release.yml` at that same commit and the release tag ref, binding the
 retained evidence and promoted bytes. Both reject self-hosted runners.
@@ -395,12 +448,11 @@ and `publish` is waiting for approval, approve the `pypi` environment deployment
 in GitHub. Follow the configured reviewer policy and wait for completion:
 
 ```bash
-gh run watch --exit-status
+gh run watch "$PUBLISH_RUN_ID" --exit-status
 ```
 
-Select the publication run for this tag and commit. The upload uses PyPI trusted
-publishing and the verified wheel and sdist; there is no local upload step,
-rebuild, or second native test matrix at release time.
+The upload uses PyPI trusted publishing and the verified wheel and sdist;
+there is no local upload step, rebuild, or second native test matrix at release time.
 
 ### 8. Verify registry availability and downstream resolution
 
@@ -428,6 +480,24 @@ verification succeed.
 
 ### Recovering a failed run
 
+#### Preparation timed out waiting for main CI
+
+If the tag was pushed before main CI finished and preparation failed only while
+waiting for that run, keep the existing tag. Pushing an unchanged tag again does
+not trigger another preparation run. Using the run IDs recorded in steps 1 and 5,
+wait for the complete main-push run to succeed, then retry the failed preparation
+job and watch it:
+
+```bash
+gh run watch "$MAIN_RUN_ID" --exit-status &&
+  gh run rerun "$PREPARATION_RUN_ID" --failed &&
+  gh run watch "$PREPARATION_RUN_ID" --exit-status
+```
+
+The successful main CI attempt and its artifacts are reused. If main CI itself
+failed, use the full main-run recovery below. This preparation-only timeout occurs
+before draft creation or upload; other failures require inspection before retrying.
+
 #### Artifact retention and recovery window
 
 Both `distributions-ATTEMPT` and `validated-evidence-ATTEMPT` are retained for
@@ -449,8 +519,9 @@ gh run rerun "$MAIN_RUN_ID"
 gh run watch "$MAIN_RUN_ID" --exit-status
 ```
 
-Do not use `--failed`, `--job`, or `gh workflow run`: those cannot establish a
-complete main-push production/validation attempt. Wait for `release-evidence`
+For this main CI evidence recovery, do not use `--failed`, `--job`, or
+`gh workflow run`: those cannot establish a complete main-push
+production/validation attempt. Wait for `release-evidence`
 and inspect the new artifact IDs before retrying preparation. If the original
 main-push run itself is unavailable or is older than the 30-day rerun window,
 stop: rerunning it cannot recover the evidence. Land a new reviewed commit on
