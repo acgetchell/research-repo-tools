@@ -259,6 +259,39 @@ class TestSarifConsumer(unittest.TestCase):
             with patch("research_repo_tools.cli.config.load", return_value=config.parse({}, root=root)):
                 self.assertEqual(main(["sarif", "split", "input.sarif", "--output", "reports"]), 1)
 
+    def test_cli_command_file_hardlinks_to_outputs_fail_before_publishing(self):
+        for member in ("old.sarif", "nested/old.sarif"):
+            with self.subTest(member=member), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory).resolve()
+                source = root / "input.sarif"
+                original = json.dumps(document()).encode()
+                source.write_bytes(original)
+                destination = root / "reports"
+                previous = destination / member
+                previous.parent.mkdir(parents=True)
+                previous.write_bytes(b"old generation")
+                command_file, retained = root / "command-file", root / "retained.sarif"
+                command_file.hardlink_to(previous)
+                retained.hardlink_to(previous)
+                self.assertTrue(command_file.samefile(previous))
+                self.assertTrue(retained.samefile(previous))
+                settings = config.parse({"sarif": {"drivers": {"Scanner": ["project."]}}}, root=root)
+                errors, output = io.StringIO(), io.StringIO()
+                with patch("research_repo_tools.cli.config.load", return_value=settings), redirect_stdout(output), redirect_stderr(errors):
+                    self.assertEqual(
+                        main(["--root", str(root), "sarif", "split", str(source), "--output", str(destination), "--github-output", str(command_file)]), 1
+                    )
+                self.assertIn("must not alias an output file", errors.getvalue())
+                self.assertEqual(output.getvalue(), "")
+                self.assertEqual(source.read_bytes(), original)
+                self.assertEqual(
+                    {path.relative_to(destination).as_posix(): path.read_bytes() for path in destination.rglob("*") if path.is_file()},
+                    {member: b"old generation"},
+                )
+                for alias in (command_file, retained):
+                    self.assertTrue(alias.samefile(previous))
+                    self.assertEqual(alias.read_bytes(), b"old generation")
+
     def test_cli_command_file_aliases_fail_before_publishing(self):
         for kind in ("source", "output", "case", "unicode", "hardlink", "symlink", "parent-symlink", "relative-symlink", "relative-parent-symlink"):
             with self.subTest(kind=kind), tempfile.TemporaryDirectory() as directory:
