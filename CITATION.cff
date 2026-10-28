@@ -4,6 +4,7 @@ type: software
 title: "research-repo-tools: Shared maintenance and validation for research software repositories"
 version: 0.2.4
 date-released: 2026-10-28
+doi: "10.5281/zenodo.23744167"
 url: "https://github.com/acgetchell/research-repo-tools"
 repository-code: "https://github.com/acgetchell/research-repo-tools"
 authors:

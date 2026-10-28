@@ -16,6 +16,7 @@ import pytest
 import yaml
 
 from research_repo_tools import release_validation as release
+from research_repo_tools.just_inspect import dry_run
 
 ROOT = Path(__file__).resolve().parents[2]
 COMMIT = "a" * 40
@@ -212,6 +213,115 @@ def prepare(tmp_path):
     bundle = tmp_path / "promotion.sigstore.json"
     bundle.write_bytes(b"signed promotion bundle")
     return bundle
+
+
+@pytest.fixture
+def checkout(remote, tmp_path, monkeypatch):
+    root = tmp_path / "release café with spaces"
+    root.mkdir()
+    (root / "pyproject.toml").write_bytes(b'[project]\nname = "research-repo-tools"\nversion = "0.2.3"\n')
+    (root / "dist").mkdir()
+    (root / "dist/existing.whl").write_bytes(b"preserve existing local artifacts")
+    state = {"top": str(root), "commit": COMMIT, "status": ""}
+    execute = release.subprocess.run
+
+    def run_command(args, **kwargs):
+        if args[0] != "git":
+            return execute(args, **kwargs)
+        assert args[:2] == ["git", "--no-pager"]
+        assert kwargs == {"cwd": root, "check": True, "capture_output": True, "encoding": "utf-8", "timeout": 30}
+        values = {
+            ("rev-parse", "--show-toplevel"): state["top"],
+            ("rev-parse", "HEAD"): state["commit"],
+            ("status", "--porcelain", "--untracked-files=all"): state["status"],
+        }
+        return subprocess.CompletedProcess(args, 0, values[tuple(args[2:])] + "\n", "")
+
+    monkeypatch.setattr(release.subprocess, "run", run_command)
+    monkeypatch.setattr(release.time, "sleep", lambda _: pytest.fail("local inspection must not wait for pending CI"))
+    monkeypatch.chdir(root)
+    for name in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_SHA"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setattr(release.sys, "argv", ["release_assets.py", "evidence"])
+    return root, state
+
+
+def test_local_evidence_verifies_retained_bytes_without_writing_checkout(remote, checkout, capsys):
+    root, _ = checkout
+    before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    assert release.main() == 0
+    selection = json.loads(capsys.readouterr().out)
+    assert selection == {
+        "tag": TAG,
+        "commit": COMMIT,
+        "run": release._identity(run()),
+        "artifact": release._artifact(remote["artifacts"][0], run(), "distributions-1"),
+        "evidence_artifact": release._artifact(remote["artifacts"][1], run(), "validated-evidence-1"),
+        "files": {name: hashlib.sha256(payload).hexdigest() for name, payload in remote["contents"].items()},
+    }
+    assert {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()} == before
+    verified = [call for call in remote["calls"] if isinstance(call, tuple) and call[:2] == ("attestation", "verify")]
+    assert len(verified) == 1
+    assert not Path(verified[0][2]).is_relative_to(root) and not Path(verified[0][2]).exists()
+    assert remote["uploaded"] is None and remote["release"] is None
+    assert not any(isinstance(call, tuple) and call[0] == "release" for call in remote["calls"])
+
+
+@pytest.mark.parametrize("damage", ["dirty", "wrong-root", "wrong-package", "unstable-version", "invalid-sha"])
+def test_local_evidence_rejects_invalid_checkout_before_remote_access(remote, checkout, damage, capsys):
+    root, state = checkout
+    if damage == "dirty":
+        state["status"] = "?? untracked-file"
+    elif damage == "wrong-root":
+        state["top"] = str(root.parent)
+    elif damage == "wrong-package":
+        (root / "pyproject.toml").write_bytes(b'[project]\nname = "other-package"\nversion = "0.2.3"\n')
+    elif damage == "unstable-version":
+        (root / "pyproject.toml").write_bytes(b'[project]\nname = "research-repo-tools"\nversion = "0.2.3rc1"\n')
+    else:
+        state["commit"] = "abcdef"
+    assert release.main() == 1
+    assert not remote["calls"]
+    output = capsys.readouterr()
+    assert output.out == "" and "Release assets failed:" in output.err
+
+
+@pytest.mark.parametrize("damage", ["pending", "missing-evidence", "bad-signature", "moved-tag", "changed-checkout"])
+def test_local_evidence_failure_preserves_files_and_emits_no_selection(remote, checkout, monkeypatch, damage, capsys):
+    root, state = checkout
+    if damage == "pending":
+        remote["runs"][0].update(status="in_progress", conclusion=None)
+    elif damage == "missing-evidence":
+        remote["artifacts"].pop()
+    elif damage == "bad-signature":
+        remote["signature_defect"] = "signature"
+    elif damage == "moved-tag":
+        remote["tag_commit"] = "c" * 40
+    else:
+        gh = release.gh
+
+        def change_checkout(*args):
+            result = gh(*args)
+            if args[:2] == ("attestation", "verify"):
+                state["commit"] = "c" * 40
+            return result
+
+        monkeypatch.setattr(release, "gh", change_checkout)
+    before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+    assert release.main() == 1
+    output = capsys.readouterr()
+    assert output.out == "" and "Release assets failed:" in output.err
+    assert {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()} == before
+    assert remote["uploaded"] is None and remote["release"] is None
+
+
+def test_maintainer_evidence_recipe_accepts_local_and_shared_commands():
+    local = dry_run(ROOT, "release-evidence").stderr
+    assert "scripts/release_assets.py evidence" in local
+    shared = dry_run(ROOT, "release-evidence", ["verify", "policy with spaces.toml", "--output", "selection.json"]).stderr
+    assert 'research-repo-tools release evidence "$@"' in shared
+    guide = (ROOT / "docs/RELEASING.md").read_text(encoding="utf-8")
+    assert "```bash\njust release-evidence\n```" in guide
 
 
 def test_end_to_end_promotes_exact_original_bytes_and_verifies_both_signatures(remote, tmp_path):

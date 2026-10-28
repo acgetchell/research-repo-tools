@@ -81,7 +81,7 @@ including changelog and release recipes.
 | `just python-check` | Check formatting, lint, and strict types for the complete Python inventory |
 | `just release-assets COMMAND...` | Capture/revalidate release targets or explicitly upload attachments |
 | `just release-check TAG` | Check final release metadata and generated notes |
-| `just release-evidence COMMAND...` | Create/verify evidence and save file-based approval handoffs |
+| `just release-evidence [COMMAND...]` | Inspect this checkout's signed CI evidence; explicit commands create/verify shared handoffs |
 | `just release-first TAG DATE` | Prepare a first release after checking stable published history |
 | `just release-notes TAG` | Print reviewed generated release notes |
 | `just release-publish TAG` | Approve a validated draft GitHub Release and trigger its registry workflow |

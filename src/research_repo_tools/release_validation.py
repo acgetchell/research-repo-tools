@@ -672,7 +672,8 @@ def _validate_evidence(document: dict[str, Any], tag: str, commit: str, dist: Pa
     _current(run)
 
 
-def promote(tag: str, commit: str, dist: Path, evidence: Path, *, attempts: int = 30, interval: int = 20) -> None:
+def _retrieve_evidence(tag: str, commit: str, dist: Path, *, attempts: int, interval: int) -> dict[str, Any]:
+    """Share exact signed main validation between local inspection and promotion."""
     distribution_names(tag)
     _commit(commit)
     _remote_tag(tag, commit)
@@ -689,15 +690,58 @@ def promote(tag: str, commit: str, dist: Path, evidence: Path, *, attempts: int 
             "manifest": (path / MANIFEST).read_bytes().decode("utf-8"),
             "validation_bundle": (path / VALIDATION_BUNDLE).read_bytes().decode("utf-8"),
             "evidence_artifact": proof,
-            "promotion_run": _integer(int(os.environ.get("GITHUB_RUN_ID", "0")), "promotion run"),
-            "promotion_attempt": _integer(int(os.environ.get("GITHUB_RUN_ATTEMPT", "0")), "promotion attempt"),
         }
     manifest = _json(document["manifest"])
     if manifest.get("artifact") != artifact or manifest.get("run") != _identity(run):
         raise ValueError("signed validation does not describe the selected run and artifact")
     download_artifact(REPOSITORY, artifact, dist, distribution_names(tag))
     _validate_evidence(document, tag, commit, dist)
+    return document
+
+
+def _checkout_identity(root: Path) -> tuple[str, str]:
+    def git(*args: str) -> str:
+        return subprocess.run(["git", "--no-pager", *args], cwd=root, check=True, capture_output=True, encoding="utf-8", timeout=30).stdout.strip()
+
+    if Path(git("rev-parse", "--show-toplevel")).resolve() != root.resolve():
+        raise ValueError("release evidence requires the repository root")
+    commit = _commit(git("rev-parse", "HEAD"))
+    if git("status", "--porcelain", "--untracked-files=all"):
+        raise ValueError("release evidence requires a clean checkout, including untracked files")
+    project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
+    if project["name"] != "research-repo-tools":
+        raise ValueError("release evidence requires the research-repo-tools package")
+    tag = f"v{project['version']}"
+    distribution_names(tag)
+    return tag, commit
+
+
+def inspect_evidence(root: Path) -> dict[str, Any]:
+    """Inspect this clean checkout's signed distributions without persistent writes."""
+    tag, commit = _checkout_identity(root)
+    with tempfile.TemporaryDirectory(prefix="research-repo-tools-evidence-") as temporary:
+        document = _retrieve_evidence(tag, commit, Path(temporary) / "dist", attempts=1, interval=0)
+        if _checkout_identity(root) != (tag, commit):
+            raise ValueError("checkout changed during evidence inspection; retry from the reviewed release commit")
+    manifest = _json(document["manifest"])
+    return {
+        "tag": tag,
+        "commit": commit,
+        "run": manifest["run"],
+        "artifact": manifest["artifact"],
+        "evidence_artifact": document["evidence_artifact"],
+        "files": manifest["files"],
+    }
+
+
+def promote(tag: str, commit: str, dist: Path, evidence: Path, *, attempts: int = 30, interval: int = 20) -> None:
+    promotion_run = _integer(int(os.environ.get("GITHUB_RUN_ID", "0")), "promotion run")
+    promotion_attempt = _integer(int(os.environ.get("GITHUB_RUN_ATTEMPT", "0")), "promotion attempt")
+    document = _retrieve_evidence(tag, commit, dist, attempts=attempts, interval=interval)
+    document.update(promotion_run=promotion_run, promotion_attempt=promotion_attempt)
     evidence.write_bytes(_bytes(document))
+    manifest = _json(document["manifest"])
+    artifact, run = manifest["artifact"], manifest["run"]
     print(
         f"Reused {artifact['id']} ({artifact['digest']}) from {REPOSITORY}/actions/runs/{run['id']}/attempts/{run['run_attempt']}; no build or test matrix ran during promotion."
     )
@@ -840,6 +884,7 @@ def main() -> int:
     command = commands.add_parser("consume")
     command.add_argument("--artifact", type=int, required=True)
     command.add_argument("--dist", type=Path, default=Path("dist"))
+    commands.add_parser("evidence", help="inspect the clean checkout's retained signed distributions without rebuilding or uploading")
     command = commands.add_parser("seal")
     command.add_argument("--run", type=int, default=int(os.environ.get("GITHUB_RUN_ID", "0")))
     command.add_argument("--attempt", type=int, default=int(os.environ.get("GITHUB_RUN_ATTEMPT", "0")))
@@ -865,6 +910,8 @@ def main() -> int:
     try:
         if args.command == "consume":
             consume(args.artifact, args.dist)
+        elif args.command == "evidence":
+            print(_bytes(inspect_evidence(Path.cwd())).decode("utf-8"), end="")
         elif args.command == "seal":
             seal(args.run, args.attempt, args.artifact, args.output)
         elif args.command == "promote":

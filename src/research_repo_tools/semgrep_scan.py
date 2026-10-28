@@ -441,7 +441,7 @@ def scan(
         groups = _scan_groups(settings.root, names, temporary, settings.path(policy.config), rust_docs)
         binary = semgrep_tool.setup(settings.root)
         env = {
-            **semgrep_tool._environment(),
+            **semgrep_tool._environment(binary),
             "SEMGREP_SEND_METRICS": "off",
             "OTEL_SDK_DISABLED": "true",
             "SEMGREP_SETTINGS_FILE": str(temporary / "settings.yml"),

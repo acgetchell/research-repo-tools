@@ -175,7 +175,7 @@ def check(config: Config, *, rust_docs: bool = False) -> int:
     missing = selected_rules - positives
     if missing:
         raise ValueError(f"Semgrep rules without positive fixtures: {', '.join(sorted(missing))}")
-    binary = str(semgrep_tool.setup(config.root))
+    binary = semgrep_tool.setup(config.root)
     with tempfile.TemporaryDirectory(prefix="research-repo-semgrep-") as directory:
         temporary = Path(directory)
         for index, case in enumerate(selected):
@@ -202,7 +202,7 @@ def check(config: Config, *, rust_docs: bool = False) -> int:
                 newline="\n",
             )
             env = {
-                **semgrep_tool._environment(),
+                **semgrep_tool._environment(binary),
                 "SEMGREP_SEND_METRICS": "off",
                 "SEMGREP_SETTINGS_FILE": str(generated.parent / "settings.yml"),
                 "SEMGREP_VERSION_CACHE_PATH": str(generated.parent / "version-cache"),
@@ -212,7 +212,7 @@ def check(config: Config, *, rust_docs: bool = False) -> int:
             target = str(path.relative_to(cwd)) if path.is_relative_to(cwd) else str(path)
             # Scan original fixture paths so filename/directory rules retain meaning.
             result = run_safe_command(
-                binary,
+                str(binary),
                 [
                     "scan",
                     "--disable-version-check",
@@ -278,7 +278,7 @@ def check(config: Config, *, rust_docs: bool = False) -> int:
             fixed_paths = (Path(str(path) + ".fixed"), path.with_name(f"{path.stem}.fixed{path.suffix}"))
             if not count_mode and any(fixed.exists() for fixed in fixed_paths):
                 run_safe_command(
-                    binary,
+                    str(binary),
                     ["scan", "--disable-version-check", "--metrics", "off", "--test", "--strict", "--config", str(generated), target],
                     cwd=cwd,
                     env=env,

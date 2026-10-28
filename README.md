@@ -1,5 +1,6 @@
 # research-repo-tools
 
+[![DOI](https://zenodo.org/badge/DOI/10.5281/zenodo.23744167.svg)](https://doi.org/10.5281/zenodo.23744167)
 [![PyPI version][pypi-badge]][pypi]
 [![License][license-badge]][license]
 [![CI][ci-badge]][ci-workflow]
@@ -196,8 +197,10 @@ commands. [Supported interfaces][api] defines the consumer compatibility boundar
 ## Citation
 
 If you use research-repo-tools in your work, cite the software using
-[CITATION.cff](https://github.com/acgetchell/research-repo-tools/blob/main/CITATION.cff). Include the version used so others can identify
-the same release.
+[CITATION.cff](https://github.com/acgetchell/research-repo-tools/blob/main/CITATION.cff).
+Include the version used so others can identify the same release. The
+[Zenodo concept DOI][doi] covers all versions; use the version-specific DOI from
+the corresponding Zenodo record when citing an exact release.
 
 ## License
 
@@ -220,6 +223,7 @@ BSD-3-Clause. See [LICENSE][license].
 [configuration-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/configuration-api.md
 [contributing]: https://github.com/acgetchell/research-repo-tools/blob/main/CONTRIBUTING.md
 [dependabot]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/AUTOMATING_DEPENDABOT.md
+[doi]: https://doi.org/10.5281/zenodo.23744167
 [files-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/files-api.md
 [github-settings]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/CONFIGURING_GITHUB.md
 [just-template]: https://github.com/acgetchell/research-repo-tools/blob/main/src/research_repo_tools/templates/justfile
