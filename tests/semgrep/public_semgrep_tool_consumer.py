@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -57,11 +58,12 @@ class TestSemgrepTool(unittest.TestCase):
         self.metadata = {"path": str(self.binary), "version": semgrep_tool.VERSION, "python": python_baseline.DEVELOPMENT_PYTHON}
         self.actual = semgrep_tool.VERSION
         self.calls = []
+        self.python = Path(sys.executable)
 
     def native(self, command, args, **kwargs):
         self.calls.append((command, args, kwargs))
         if args[0] == "-I":
-            self.assertEqual(Path(command), Path(sys.executable))
+            self.assertEqual(Path(command), self.python)
             self.assertNotIn("uv", args)
             self.assertEqual(args[args.index("-X") + 1], "utf8")
             payload = json.dumps(self.metadata).encode("utf-8")
@@ -104,6 +106,20 @@ class TestSemgrepTool(unittest.TestCase):
         self.assertFalse(Path(self.calls[-1][2]["env"]["SEMGREP_SETTINGS_FILE"]).parent.exists())
         self.assertFalse((self.root / "uv.lock").exists())
         self.assertFalse((self.root / ".venv").exists())
+
+    def test_explicit_python_interpreter_is_used_for_the_metadata_query(self):
+        self.python = self.root / ("python.exe" if os.name == "nt" else "python")
+        shutil.copy2(sys.executable, self.python)
+        with patch.object(semgrep_tool, "run_command_bytes", side_effect=self.native):
+            self.assertEqual(semgrep_tool.setup(self.root, python=self.python), self.binary)
+        self.assertEqual(len(self.calls), 2)
+        self.assertEqual(self.calls[0][0], self.python)
+
+    def test_missing_python_interpreter_fails_before_running_commands(self):
+        with patch.object(semgrep_tool, "run_command_bytes") as run:
+            with self.assertRaisesRegex(RuntimeError, "Semgrep .* setup failed"):
+                semgrep_tool.setup(self.root, python=self.root / "absent-python")
+        run.assert_not_called()
 
     def test_returned_executable_has_one_canonical_cache_identity(self):
         alias = self.root / "alias"
