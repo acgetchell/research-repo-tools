@@ -16,6 +16,7 @@ from unittest.mock import patch
 from urllib.parse import unquote
 
 from research_repo_tools import config, security, semgrep_scan, semgrep_tool
+from research_repo_tools.process import run_command_bytes
 
 
 class TestNativeSemgrepConsumer(unittest.TestCase):
@@ -75,6 +76,43 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
     def settings(self, rules):
         self.write("rules.json", json.dumps({"rules": rules}))
         return config.parse({"semgrep": {"config": "rules.json", "batch-size": 2, "jobs": 1, "inline-suppressions": True}}, root=self.root)
+
+    def test_native_engine_reports_a_finding_with_the_shared_dependencies(self):
+        """Expose engine startup failures without logging real consumer inputs."""
+        binary = semgrep_tool.setup(self.root)
+        self.settings([{"id": "native.probe", "languages": ["rust"], "pattern": "println!(...)", "message": "native probe", "severity": "WARNING"}])
+        source = self.write("probe.rs", 'fn main() { println!("native probe"); }\n')
+        report = self.root / "report.json"
+        result = run_command_bytes(
+            binary,
+            [
+                "scan",
+                "--config",
+                str(self.root / "rules.json"),
+                "--metrics",
+                "off",
+                "--disable-version-check",
+                "--strict",
+                "--no-rewrite-rule-ids",
+                "--jobs",
+                "1",
+                "--error",
+                "--json",
+                "--output",
+                str(report),
+                str(source),
+            ],
+            cwd=self.root,
+            env={**semgrep_tool._environment(), "SEMGREP_SETTINGS_FILE": str(self.root / "settings.yml"), "SEMGREP_LOG_FILE": str(self.root / "scanner.log")},
+            timeout=60,
+            check=False,
+        )
+        payload = report.read_bytes() if report.is_file() else result.stdout
+        diagnostic = (payload + b"\n" + result.stderr).decode("utf-8", errors="replace")[:12000]
+        self.assertEqual(result.returncode, 1, diagnostic)
+        data = json.loads(payload)
+        self.assertEqual(data["errors"], [], diagnostic)
+        self.assertEqual([(item["check_id"], Path(item["path"]).resolve(), item["start"]["line"]) for item in data["results"]], [("native.probe", source, 1)])
 
     def scoped_rules(self):
         def rule(name, pattern, representations, **extra):

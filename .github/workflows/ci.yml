@@ -80,6 +80,8 @@ jobs:
           enable-cache: true
       - name: Install locked development environment
         run: uv sync --locked
+      - name: Verify native Semgrep startup with synthetic input
+        run: uv run --locked pytest tests/semgrep/test_native_semgrep.py -k native_engine_reports --cov --cov-report=term
       - name: Provision native pkg-config discovery test prerequisite
         if: runner.os != 'Windows'
         shell: bash
