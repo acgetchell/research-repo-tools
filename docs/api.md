@@ -32,6 +32,7 @@ Use `just help` for the consumer's actual recipes and the
 | Cargo examples | [Discovery, configuration and live streams](cargo-examples-api.md) |
 | Configuration and CLI | [Configuration objects, entry point and platform contract](configuration-api.md) |
 | Files and text | [Selection, line checks and transactional file/directory publication](files-api.md) |
+| Git inspection | [Index-preserving status and content-based changed paths](process-api.md#python-git-inspection-api) |
 | Notebooks | [Workflow and isolated test APIs](notebooks-api.md), [inspection JSON](notebook-inspection.md) |
 | Papers | [Explicit dates, PDFs and native dependency discovery](papers-api.md) |
 | Processes and Just | [Byte/text execution, stderr assertions and recipe inspection](process-api.md) |

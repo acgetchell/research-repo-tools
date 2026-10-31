@@ -1,10 +1,84 @@
-# Process and Just inspection APIs
+# Process, Git and Just inspection APIs
 
 Part of the [supported interface contract](api.md). Use the [task guides](../README.md#capability-index)
 for setup and ordinary workflows.
 
+- [Python Git inspection API](#python-git-inspection-api)
 - [Python Just inspection API](#python-just-inspection-api)
 - [Python process API](#python-process-api)
+
+## Python Git inspection API
+
+`research_repo_tools.git_inspect` exports two fixed queries, targeting v0.2.5.
+They return `subprocess.CompletedProcess[bytes]` with exact byte stdout/stderr,
+without decoding, quoting or newline translation. The existing general
+`process.run_git_bytes` defaults and caller-owned Git policy remain unchanged.
+
+| Interface | Selection and result |
+| --- | --- |
+| `git_diff_paths_bytes(cwd=None, *, base=None, cached=False, paths=(), env=None, timeout=30)` | NUL-terminated changed paths; default compares index to worktree, `base` compares a tree to worktree, `cached=True` compares HEAD (or `base`) to index |
+| `git_status_bytes(cwd=None, *, paths=(), env=None, timeout=30)` | Porcelain-v1 `XY path` records terminated by NUL, including individual nonignored untracked files |
+
+`cwd: Path | None` selects the working directory; omission uses the caller's.
+`paths: Sequence[str]` are literal Git path boundaries relative to that directory.
+Directories include their descendants. An empty sequence selects the repository;
+an empty string or NUL is rejected. Use `'.'` for the current directory.
+Pathspec magic, globs and leading dashes in filenames are passed literally after
+`--`. This is Git path selection, not a filesystem containment/security check.
+Both outputs use repository-relative paths even when `cwd` is nested.
+Renames are reported as separate deletion/addition paths. Status reports both
+index and worktree changes; diff excludes untracked files. `cached=True` also
+supports an unborn index without requiring HEAD. `base: str | None` is passed
+as one revision argument after `--end-of-options`; it cannot add Git options.
+
+The diff helper uses native `--numstat -z` with external diff and textconv
+disabled, then removes the two count fields while preserving the filename bytes.
+Splitting only the first two tabs preserves tabs/newlines in names on supporting
+filesystems. Git's name-only/exit-code content check depends on external diff
+being enabled in Git 2.56; numstat retains internal content comparison with those
+helpers disabled. Clean files with changed timestamps are excluded, while empty
+file additions, binary changes and file-mode changes remain selected. The result's
+`args` retains the actual numstat invocation. Its `returncode` is normalized to
+0 for no selected paths and 1 for differences, since Git can return 1 for a
+stat-only candidate absent from numstat output. Any native exit other than 0/1
+raises `CalledProcessError` with original byte diagnostics; status accepts only 0.
+
+`env: Mapping[str, str] | None` replaces the child environment, or inherits it
+when omitted, using the process API's executable lookup rules. The mapping and
+parent environment are never modified. Both queries force `--no-pager`,
+`--no-optional-locks`, `--literal-pathspecs`, `diff.autoRefreshIndex=false`, and
+`core.fsmonitor=false`. They remove `GIT_LITERAL_PATHSPECS`, `GIT_GLOB_PATHSPECS`,
+`GIT_NOGLOB_PATHSPECS`, and `GIT_ICASE_PATHSPECS` from the selected environment
+to avoid conflicting pathspec switches. Diff also forces `--no-relative`,
+`--no-renames`, `--no-ext-diff`, and `--no-textconv`; status disables rename
+detection too. Both explicitly inspect dirty/untracked submodules. Other Git
+environment/configuration is retained, including repository selectors,
+`GIT_INDEX_FILE`, attributes, clean filters, ignore rules and stat-cache policy.
+
+The guarantee covers unchanged bytes and staged entries in the selected existing
+index, including stale-stat and racy-timestamp refresh cases. These queries do
+not refresh or replace the caller's on-disk index, create a substitute index, or
+repair/un-stage entries. Git may update its in-memory stat cache while comparing.
+Normal Git rules still apply: assume-unchanged/skip-worktree entries and trusted
+non-racy metadata can suppress comparisons, and clean filters define content
+equality. This is not an independent hash of every raw worktree byte.
+Status preserves native Git status semantics: for example, a worktree-size
+discrepancy can report ` M` even when a size-changing clean filter produces the
+indexed content. Use the diff query for content-based changed-path selection.
+
+The guarantee assumes a trusted Git executable, repository and configured clean
+filters, with no concurrent index writer. These functions are not a sandbox or
+a general read-only security boundary: remaining Git configuration, clean filters,
+submodules and partial-clone object retrieval can invoke programs or have effects
+outside the selected index. They provide neither an atomic repository snapshot
+nor protection against a helper or another process writing the index.
+
+`timeout: float` must be positive and finite; `None` is rejected. The default
+30-second deadline bounds the single Git subprocess. Process lookup/launch errors
+and `TimeoutExpired` retain the [process API](#python-process-api) contract,
+including raw partial diagnostics and direct-child termination/reaping. No
+descendant cleanup guarantee is added. Invalid arguments raise `TypeError` or
+`ValueError`; malformed numstat records raise `ValueError`.
 
 ## Python Just inspection API
 

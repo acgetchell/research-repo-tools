@@ -236,6 +236,21 @@ checked failures with raw byte diagnostics. `env` replaces the environment rathe
 than overlaying it. Use `run_command_live` for inherited input/output streams;
 repository-specific command policy remains in the consumer.
 
+For index-preserving status and changed-path inspection, adopt
+`research_repo_tools.git_inspect.git_status_bytes` and `git_diff_paths_bytes`
+from the targeted v0.2.5 release once its PyPI publication is verified. Replace
+local status calls with `git_status_bytes`; replace index/worktree diffs with
+`git_diff_paths_bytes`, selecting `cached=True` for staged changes or `base=...`
+for a resolved base tree. Both return byte `CompletedProcess` results; split
+stdout on NUL rather than lines. Diff returns 0/1 for content selection and
+raises on fatal exits. See the [inspection contract](process-api.md#python-git-inspection-api)
+and [usage example](../README.md#git-inspection). Keep review modes, merge-base
+selection, capture identities, repair/staging lifecycles and consumer-specific
+path normalization downstream. Retain a working adapter until the normally
+resolved published distribution supplies the imports and passes focused native
+consumer checks; a local wheel or source override does not establish availability.
+`run_git_bytes` remains the general Git runner with its existing defaults.
+
 Replace generic multi-file writers with `replace_many`, including single-file
 writes as one-entry mappings. Encode payloads explicitly. Leaf symlinks are
 rejected, overlapping targets fail before effects, and incomplete rollback exposes

@@ -121,6 +121,10 @@ point, public process/file-publication/release-plan/performance/document-publica
 imports, packaged templates, runtime dependencies, and the bundled `just` executable.
 Installed public suites also cover complete-directory rollback/recovery, SARIF
 selection/indexing, and batched Semgrep policy and paired-report coverage.
+Git inspection consumers run from source and both installed formats. Disposable
+repositories force stale cached timestamps and a same-size racy edit without
+sleeps, and jointly check selected paths, index bytes and staged entries. Keep
+their native Linux/macOS/Windows coverage when changing the inspection contract.
 The source suite and both installed distributions also run real Semgrep scans
 for anchored path filters, mixed Rustdoc/Markdown inputs, fixture assertions and
 paired reports. `src/research_repo_tools/semgrep_tool.py` owns the exact scanner

@@ -144,6 +144,26 @@ for exhaustive arguments, configuration and Python contracts.
 | Time external commands | [Exploratory command timing][timing-guide] | [Timing evidence contract][timing-api] |
 | Update dependencies and Actions pins | [Update and adoption workflows][updates-guide] | [CLI/configuration][configuration-api] |
 
+### Git inspection
+
+The index-preserving inspection API targets v0.2.5. After that release is
+published, pin it before replacing local inspection wrappers:
+
+```python
+from pathlib import Path
+
+from research_repo_tools.git_inspect import git_diff_paths_bytes, git_status_bytes
+
+root = Path.cwd()
+status = git_status_bytes(root).stdout
+staged = git_diff_paths_bytes(root, cached=True).stdout.split(b"\0")[:-1]
+worktree = git_diff_paths_bytes(root, base="HEAD", paths=["src"]).stdout.split(b"\0")[:-1]
+```
+
+Queries preserve the selected index bytes and return NUL-delimited byte output
+with literal path selection. See the [inspection contract][git-inspection-api]
+for configuration, deadlines, error handling and guarantee limits.
+
 ### Notebooks
 
 Add the `notebooks` extra at your exact tooling version to a separate notebook
@@ -225,6 +245,7 @@ BSD-3-Clause. See [LICENSE][license].
 [dependabot]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/AUTOMATING_DEPENDABOT.md
 [doi]: https://doi.org/10.5281/zenodo.23744167
 [files-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/files-api.md
+[git-inspection-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/process-api.md#python-git-inspection-api
 [github-settings]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/CONFIGURING_GITHUB.md
 [just-template]: https://github.com/acgetchell/research-repo-tools/blob/main/src/research_repo_tools/templates/justfile
 [license]: https://github.com/acgetchell/research-repo-tools/blob/main/LICENSE

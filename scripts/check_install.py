@@ -320,6 +320,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             public_suite = consumer / "public_api_consumer.py"
             public_suite.write_bytes((ROOT / "tests/utilities/public_api_consumer.py").read_bytes())
             run_consumer_suite(python, [str(public_suite)], cwd=consumer, env=local_env)
+            git_suite = consumer / "public_git_inspection_consumer.py"
+            git_suite.write_bytes((ROOT / "tests/utilities/public_git_inspection_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(git_suite)], cwd=consumer, env=local_env)
             cargo_suite = consumer / "public_cargo_examples_consumer.py"
             cargo_suite.write_bytes((ROOT / "tests/cargo_examples/public_cargo_examples_consumer.py").read_bytes())
             run_consumer_suite(python, [str(cargo_suite)], cwd=consumer, env=local_env)
