@@ -33,6 +33,8 @@ def command(binary: Path) -> tuple[str, ...]:
 
 
 def main() -> None:
+    if os.name == "nt":
+        raise RuntimeError("the Semgrep stack-limit launcher is POSIX-only")
     import resource
 
     soft, hard = resource.getrlimit(resource.RLIMIT_STACK)
