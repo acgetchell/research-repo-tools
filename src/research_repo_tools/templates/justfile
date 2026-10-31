@@ -180,7 +180,7 @@ security-secrets *args:
 semgrep-check:
     uv run --locked --group dev research-repo-tools semgrep check-fixtures
 
-# Prepare the package-pinned Semgrep environment before offline scans.
+# Verify the pinned Semgrep extra in the shared locked Python environment.
 semgrep-setup:
     uv run --locked --group dev research-repo-tools semgrep setup
 

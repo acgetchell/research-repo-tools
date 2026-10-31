@@ -201,11 +201,14 @@ automatically. To adopt this workflow in an existing repository, upgrade its
 shared-package pin, merge the packaged `update-python-dependencies` recipe, and
 declare its extra projects. Installing the package does not rewrite copied recipes.
 
-Semgrep's separate Python runtime is provisioned by the shared package. When
-adopting this release, replace nested `tooling/semgrep` launches with direct
-wrapper calls, remove the redundant Semgrep dependency/project declarations
-and lock only if that project has no other consumers, and update lockfile audit
-lists accordingly. Consumer recipes can remain thin:
+For v0.2.5 Semgrep adoption, request the shared package's `semgrep` extra in the
+root locked dev environment and adopt its shared compatibility overrides before
+locking. Both scanner and wrapper use the common Python 3.15 baseline. Replace
+nested `tooling/semgrep` launches with direct wrapper calls, remove redundant
+scanner projects only when they have no other consumers, and update lockfile
+audit lists accordingly. Merge changed exported Just recipes and run focused
+consumer integration checks before deleting version-guarded adapters. See
+[representation, extraction and retention migration](RUNNING_CHECKS.md#rust-documentation-scans). Consumer recipes can remain thin:
 
 ```just
 semgrep-check:

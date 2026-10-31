@@ -33,6 +33,7 @@ class TestSharedCapabilities(unittest.TestCase):
                     root = Path(directory).resolve()
                     (root / "uv.lock").write_bytes(b"version=1\n")
                     (root / "source café.py").write_bytes(b"value = 1\n")
+                    (root / "rules.yml").write_bytes(b"rules: [{id: FAKE-RULE, languages: [python], pattern: value, message: fixture, severity: WARNING}]\n")
                     settings = config.parse({"semgrep": {"config": "rules.yml"}}, root=root)
                     fallback = behavior in {"malformed-json", "missing-json"}
                     found = behavior == "findings" or fallback
@@ -193,6 +194,7 @@ class TestSharedCapabilities(unittest.TestCase):
             root = Path(directory).resolve()
             (root / "uv.lock").write_bytes(b"version = 1\n")
             (root / "source.py").write_bytes(b"value = 1\n")
+            (root / "rules.yml").write_bytes(b"rules: [{id: fixture, languages: [python], pattern: value, message: fixture, severity: WARNING}]\n")
             external = root / "external"
             (external / "nested").mkdir(parents=True)
             for parent in (external, external / "nested"):
@@ -240,6 +242,7 @@ class TestSharedCapabilities(unittest.TestCase):
             (root / "uv.lock").write_bytes(b"version = 1\n")
             (root / "source.py").write_bytes(b"value = 1\n")
             external = root / "external.json"
+            (root / "rules.yml").write_bytes(b"rules: [{id: fixture, languages: [python], pattern: value, message: fixture, severity: WARNING}]\n")
             external.write_bytes(b"external report\n")
             settings = config.parse({"semgrep": {"config": "rules.yml"}}, root=root)
             for scanner, prefix in (("osv", "osv-"), ("semgrep", "")):

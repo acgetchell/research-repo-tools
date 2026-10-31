@@ -1,5 +1,6 @@
 """Initialize a checkout using an existing uv installation."""
 
+import os
 import tomllib
 from importlib.metadata import version
 from pathlib import Path
@@ -60,11 +61,15 @@ def setup(runtime: Runtime, *, semgrep: bool = False) -> None:
     sync = ["sync", "--locked", "--managed-python"]
     if include_dev:
         sync += ["--group", "dev"]
-    run_safe_command(uv.path, sync, cwd=root, env=runtime.project_environment(), timeout=INSTALL_TIMEOUT, capture_output=False)
+    project_env = runtime.project_environment()
+    run_safe_command(uv.path, sync, cwd=root, env=project_env, timeout=INSTALL_TIMEOUT, capture_output=False)
     if semgrep:
         from research_repo_tools import semgrep_tool
         from research_repo_tools.scanner_output import _print
 
-        binary = semgrep_tool.setup(root)
+        environment = Path(project_env.get("UV_PROJECT_ENVIRONMENT", ".venv"))
+        if not environment.is_absolute():
+            environment = root / environment
+        binary = semgrep_tool.setup(root, python=executable(environment / ("Scripts" if os.name == "nt" else "bin"), "python"))
         _print(f"Semgrep {semgrep_tool.VERSION}: {binary}")
     print("Setup complete. Open a new terminal if PATH changed, then run just help.")

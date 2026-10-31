@@ -103,10 +103,13 @@ date-policy = "declared"
 # [semgrep]
 # batch-size = 100
 # config = "semgrep.yaml"
+# failure-reports = "clear"
 # inline-suppressions = false
 # jobs = 1
 # report-category = "semgrep"
 # report-layout = "aggregate"
+# rustdoc-exclude = []
+# rustdoc-include = ["**"]
 # target-timeout = 120
 # timeout = 300
 

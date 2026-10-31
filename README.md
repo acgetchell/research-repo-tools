@@ -20,7 +20,8 @@ then choose a [capability](#capability-index). Package development belongs in
 
 ## Release availability
 
-This README describes current source, including work intended for **v0.2.4**.
+This README describes current source, including work intended for **v0.2.5**.
+The shared-environment Semgrep and representation/retention policy need v0.2.5.
 The quickstart uses the published [0.2.3 package][published-pin]. Newer examples
 are marked where a supplying release is required: prepared performance stages,
 parallel Criterion suites, shared release-evidence handoffs, command timing,
@@ -83,6 +84,14 @@ tools, configures PATH and synchronizes the locked development environment.
 Open a new terminal if PATH changed. A failed step stops setup with a diagnostic;
 fix that prerequisite and rerun. [Installation and recovery][toolchain] explains
 ownership, native build prerequisites and platform behavior.
+
+Semgrep consumers of v0.2.5 must request the `semgrep` extra on their shared
+package pin, retain the shared Python 3.15 selector, and adopt the package's
+[shared dependency overrides](docs/RUNNING_CHECKS.md#rust-documentation-scans)
+before locking. Scans and fixture checks use that same environment. A package
+upgrade does not rewrite copied Just recipes; merge the relevant exported
+recipes as part of each consumer adoption and verify its integration before
+removing temporary adapters.
 
 ## First workflow
 

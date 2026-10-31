@@ -17,6 +17,7 @@ dependencies = ["packaging>=26.1", "PyYAML>=6", "rust-just==1.59.0"]
 notebooks = ["ipykernel>=7.3.0,<8", "nbclient>=0.11.0,<1", "nbformat>=5.10.4,<6"]
 papers = ["pypdf>=6,<7"]
 python-tools = ["pytest==9.1.1", "ruff==0.16.9", "ty==0.0.84"]
+semgrep = ["semgrep==1.182.1"]
 
 [project.scripts]
 research-repo-tools = "research_repo_tools.cli:main"
@@ -34,7 +35,7 @@ dev = [
     "nbclient==0.11.0",
     "nbformat==5.11.1",
     "pytest-cov==7.1.0",
-    "research-repo-tools[papers,python-tools]",
+    "research-repo-tools[papers,python-tools,semgrep]",
     "twine==7.0.0",
     "zizmor==1.31.1",
 ]
@@ -44,10 +45,11 @@ audit = ["pip-audit==2.10.1"]
 packages = ["src/research_repo_tools"]
 
 [tool.hatch.build.targets.sdist]
-include = ["src", "tests", "docs", "scripts", "pyproject.toml", "uv.lock", "README.md", "CONTRIBUTING.md", "AGENTS.md", "CHANGELOG.md", "CITATION.cff", "LICENSE", "justfile", ".gitattributes", ".python-version"]
+include = ["src", "tests", "docs", "scripts", "pyproject.toml", "uv.lock", "README.md", "CONTRIBUTING.md", "AGENTS.md", "CHANGELOG.md", "CITATION.cff", "LICENSE", "justfile", ".gitattributes", ".gitleaks.toml", ".python-version"]
 
 [tool.uv]
 required-version = "==0.13.6"
+override-dependencies = ["jsonschema==4.26.0", "mcp==1.30.0", "opentelemetry-api==1.45.1", "opentelemetry-exporter-otlp-proto-http==1.45.1", "opentelemetry-instrumentation-requests==0.66b1", "opentelemetry-instrumentation-threading==0.66b1", "opentelemetry-sdk==1.45.1", "pywin32==312; sys_platform == 'win32'", "tomli==2.5.0"]
 
 [tool.research-repo-tools.changelog]
 owner = "acgetchell"
@@ -74,6 +76,9 @@ required-assets = ["research_repo_tools-{version}-py3-none-any.whl", "research_r
 
 [tool.research-repo-tools.zizmor]
 persona = "regular"
+
+[tool.research-repo-tools.toolchain.binaries]
+gitleaks = "8.30.1"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

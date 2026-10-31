@@ -5,14 +5,18 @@ import contextlib
 import io
 import json
 import os
+import sys
+import sysconfig
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import override
 from unittest.mock import patch
 from urllib.parse import unquote
 
 from research_repo_tools import config, security, semgrep_scan, semgrep_tool
+from research_repo_tools.process import run_command_bytes
 
 
 class TestNativeSemgrepConsumer(unittest.TestCase):
@@ -28,7 +32,9 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
         self.root = Path(self.temporary.name).resolve()
         self.addCleanup(patch.stopall)
 
-    def test_managed_scanner_runs_offline_and_ignores_ambient_scanner_and_project_redirects(self):
+    def test_shared_scanner_runs_offline_and_ignores_ambient_scanner_and_project_redirects(self):
+        self.assertEqual(sys.version_info[:2], (3, 15))
+        self.assertEqual(semgrep_tool.setup(self.root).parent, Path(sysconfig.get_path("scripts")).resolve())
         ambient = self.root / "ambient tools"
         ambient.mkdir()
         fake = ambient / ("semgrep.cmd" if os.name == "nt" else "semgrep")
@@ -70,6 +76,187 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
     def settings(self, rules):
         self.write("rules.json", json.dumps({"rules": rules}))
         return config.parse({"semgrep": {"config": "rules.json", "batch-size": 2, "jobs": 1, "inline-suppressions": True}}, root=self.root)
+
+    def test_native_engine_reports_a_finding_with_the_shared_dependencies(self):
+        """Expose engine startup failures without logging real consumer inputs."""
+        binary = semgrep_tool.setup(self.root)
+        invocation = semgrep_tool.command(binary)
+        self.settings([{"id": "native.probe", "languages": ["rust"], "pattern": "println!(...)", "message": "native probe", "severity": "WARNING"}])
+        source = self.write("probe.rs", 'fn main() { println!("native probe"); }\n')
+        report = self.root / "report.json"
+        result = run_command_bytes(
+            invocation[0],
+            [
+                *invocation[1:],
+                "scan",
+                "--config",
+                str(self.root / "rules.json"),
+                "--metrics",
+                "off",
+                "--disable-version-check",
+                "--strict",
+                "--no-rewrite-rule-ids",
+                "--jobs",
+                "1",
+                "--error",
+                "--json",
+                "--output",
+                str(report),
+                str(source),
+            ],
+            cwd=self.root,
+            env={**semgrep_tool._environment(), "SEMGREP_SETTINGS_FILE": str(self.root / "settings.yml"), "SEMGREP_LOG_FILE": str(self.root / "scanner.log")},
+            timeout=60,
+            check=False,
+        )
+        payload = report.read_bytes() if report.is_file() else result.stdout
+        diagnostic = (payload + b"\n" + result.stderr).decode("utf-8", errors="replace")[:12000]
+        self.assertEqual(result.returncode, 1, diagnostic)
+        data = json.loads(payload)
+        self.assertEqual(data["errors"], [], diagnostic)
+        self.assertEqual([(item["check_id"], Path(item["path"]).resolve(), item["start"]["line"]) for item in data["results"]], [("native.probe", source, 1)])
+
+    def scoped_rules(self):
+        def rule(name, pattern, representations, **extra):
+            return {
+                "id": name,
+                "languages": ["rust"],
+                "message": name,
+                "severity": "WARNING",
+                "pattern": pattern,
+                "metadata": {"research-repo-tools": {"representations": representations, **extra}},
+            }
+
+        return [
+            rule("production.print", "println!(...)", ["source"]),
+            {
+                **rule("example.panic", "panic!(...)", ["rust-block"], **{"rust-block-paths": {"include": ["/src/**/*.rs", "/docs/**/*.md"]}}),
+                "paths": {"include": ["/src/**/*.rs"]},
+            },
+            {"id": "prose.bad", "languages": ["generic"], "pattern-regex": "PROSE_BAD", "message": "prose", "severity": "WARNING"},
+        ]
+
+    def test_representation_rules_and_explicit_extraction_scope_preserve_original_prose(self):
+        settings = self.settings(self.scoped_rules())
+        settings = replace(settings, semgrep=replace(settings.semgrep, rustdoc_include=("src/**", "docs/**"), rustdoc_exclude=("docs/archive/**",)))
+        sources = [
+            self.write(
+                "src/lib.rs",
+                'fn main() { println!("production"); }\r\n/// ```rust\r\n/// println!("allowed example");\r\n/// ```\r\n/// ```rust\r\n/// # panic!("later");\r\n/// ```\r\n',
+            ),
+            self.write("docs/guide café 100%.md", '```rust\nprintln!("allowed");\n```\n```rust\npanic!("later");\n```\n'),
+            self.write("docs/archive/sketch.md", "PROSE_BAD\n```rust\nnot valid Rust ...\n"),
+        ]
+        original = {path: path.read_bytes() for path in sources}
+        with patch.object(semgrep_scan, "security_inventory", return_value=tuple(path.relative_to(self.root).as_posix() for path in sources)):
+            self.assertEqual(semgrep_scan.scan(settings, include=("*.rs", "*.md"), rust_docs=True, batch_size=1), 1)
+        output = self.root / "target/security/semgrep"
+        semgrep_scan.require_current_reports(output)
+        data = json.loads((output / "semgrep.json").read_bytes())
+        self.assertEqual(
+            collections.Counter((item["check_id"], Path(item["path"]).relative_to(self.root).as_posix(), item["start"]["line"]) for item in data["results"]),
+            collections.Counter(
+                {
+                    ("production.print", "src/lib.rs", 1): 1,
+                    ("example.panic", "src/lib.rs", 6): 1,
+                    ("example.panic", "docs/guide café 100%.md", 5): 1,
+                    ("prose.bad", "docs/archive/sketch.md", 1): 1,
+                }
+            ),
+        )
+        self.assertEqual(len(data["batches"]), 7)
+        self.assertEqual(
+            [(item["path"], item["block"]) for item in data["input_coverage"] if item["representation"] == "rust-block"],
+            [("src/lib.rs", 1), ("docs/guide café 100%.md", 1), ("src/lib.rs", 2), ("docs/guide café 100%.md", 2)],
+        )
+        self.assertEqual(
+            data["extraction_scope"],
+            {
+                "enabled": True,
+                "include": ["src/**", "docs/**"],
+                "exclude": ["docs/archive/**"],
+                "selected_paths": ["src/lib.rs", "docs/guide café 100%.md"],
+                "excluded_paths": ["docs/archive/sketch.md"],
+            },
+        )
+        sarif = json.loads((output / "semgrep.sarif").read_bytes())
+        self.assertEqual(len(sarif["runs"]), 1)
+        self.assertEqual(len(sarif["runs"][0]["results"]), 4)
+        for item in sarif["runs"][0]["results"]:
+            if "ruleIndex" in item:
+                self.assertEqual(sarif["runs"][0]["tool"]["driver"]["rules"][item["ruleIndex"]]["id"], item["ruleId"])
+        self.assertEqual({path: path.read_bytes() for path in sources}, original)
+
+    def test_source_comment_and_extracted_fixture_ownership_share_representation_policy(self):
+        rules = self.scoped_rules()
+        rules.append(
+            {
+                "id": "comment.import",
+                "languages": ["rust"],
+                "pattern-regex": r"(?m)^/// use forbidden::",
+                "message": "raw comment",
+                "severity": "WARNING",
+                "metadata": {"research-repo-tools": {"representations": ["source"]}},
+            }
+        )
+        settings = self.settings(rules)
+        settings = replace(settings, semgrep=replace(settings.semgrep, fixtures="fixtures"))
+        path = self.write(
+            "fixtures/mixed.rs",
+            '/// ```rust\n/// // ruleid: comment.import\n/// use forbidden::Thing;\n/// // ruleid: example.panic\n/// panic!("example");\n/// // ok: example.panic\n/// println!("allowed");\n/// ```\n// ruleid: production.print\nfn main() { println!("native"); }\n',
+        )
+        prose = self.write(
+            "fixtures/guide.md",
+            '<!-- ruleid: prose.bad -->\nPROSE_BAD\n```rust\n// ruleid: example.panic\npanic!("later");\n// ok: example.panic\nprintln!("allowed");\n```\n',
+        )
+        original = {item: item.read_bytes() for item in (path, prose)}
+        self.assertEqual(semgrep_scan.check_documentation_fixtures(settings), 0)
+        self.assertEqual({item: item.read_bytes() for item in (path, prose)}, original)
+        path.write_bytes(original[path].replace(b'println!("allowed");', b'panic!("unannotated");'))
+        with self.assertRaisesRegex(ValueError, "unexpected finding"):
+            semgrep_scan.check_documentation_fixtures(settings)
+
+    def test_retention_after_real_later_block_parse_error_preserves_pair_but_invalidates_upload(self):
+        rules = self.scoped_rules()
+        # Force native parsing even when the malformed block contains no tokens
+        # from the finding rules. Semgrep's token prefilter otherwise omits it.
+        rules.append(
+            {
+                "id": "rust.parse",
+                "languages": ["rust"],
+                "patterns": [{"pattern": "$X"}, {"metavariable-regex": {"metavariable": "$X", "regex": "NEVER_MATCH_PARSE_PROBE"}}],
+                "message": "parse",
+                "severity": "WARNING",
+            }
+        )
+        settings = self.settings(rules)
+        source = self.write("src/lib.rs", 'fn main() {}\n/// ```rust\n/// println!("allowed");\n/// ```\n/// ```rust\n/// fn later() {}\n/// ```\n')
+        output = self.root / "target/security/semgrep"
+        with patch.object(semgrep_scan, "security_inventory", return_value=("src/lib.rs",)):
+            self.assertEqual(semgrep_scan.scan(settings, include=("*.rs",), rust_docs=True, failure_reports="retain"), 0)
+            previous = {path: path.read_bytes() for path in semgrep_scan.require_current_reports(output)}
+            source.write_bytes(source.read_bytes().replace(b"fn later() {}", b"fn later( {"))
+            error = io.StringIO()
+            with contextlib.redirect_stderr(error):
+                self.assertNotEqual(semgrep_scan.scan(settings, include=("*.rs",), rust_docs=True, failure_reports="retain"), 0)
+        self.assertIn("Rust block 2", error.getvalue())
+        self.assertIn("native Semgrep errors", error.getvalue())
+        self.assertEqual({path: path.read_bytes() for path in output.iterdir()}, previous)
+        with self.assertRaisesRegex(ValueError, "not current"):
+            semgrep_scan.require_current_reports(output)
+
+    def test_shared_dependency_overrides_support_native_fixture_autofix_validation(self):
+        from research_repo_tools import semgrep
+
+        settings = self.settings(
+            [{"id": "python.print", "languages": ["python"], "pattern": "print(...)", "fix": "pass", "message": "print", "severity": "WARNING"}]
+        )
+        settings = replace(settings, semgrep=replace(settings.semgrep, fixtures="fixtures"))
+        path = self.write("fixtures/print.py", '# ruleid: python.print\nprint("example")\n')
+        fixed = self.write("fixtures/print.fixed.py", "# ruleid: python.print\npass\n")
+        original = {item: item.read_bytes() for item in (path, fixed)}
+        self.assertEqual(semgrep.check(settings), 0)
+        self.assertEqual({item: item.read_bytes() for item in (path, fixed)}, original)
 
     def test_logical_filters_and_independent_blocks_keep_native_prose_and_suppression(self):
         rust_scope = {"include": ["/src/**/*.rs", "/docs/**/*.md"]}

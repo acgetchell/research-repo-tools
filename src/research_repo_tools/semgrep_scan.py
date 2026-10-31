@@ -1,11 +1,15 @@
 """Strict native Semgrep scans over the shared portable file inventory."""
 
 import copy
+import hashlib
 import json
 import subprocess
 import sys
 import tempfile
+import uuid
 from collections import Counter
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from pathlib import Path, PurePath, PureWindowsPath
 from typing import Any
@@ -15,15 +19,16 @@ import yaml
 
 from research_repo_tools import config, security, semgrep, semgrep_tool
 from research_repo_tools.evidence import _load_json, _object, deterministic_json
-from research_repo_tools.files import _path_keys, publish_directory
+from research_repo_tools.files import _directory_target, _path_keys, publish_directory, replace_many
 from research_repo_tools.sarif import _metadata_references, _objects, _reindex_reference, _rule_id, _rule_relationships, _run
 from research_repo_tools.scanner_output import FindingOutput
 from research_repo_tools.security import security_inventory
 from research_repo_tools.selection import argument_batches
 from research_repo_tools.semgrep_docs import RustBlock, documentation_blocks
 from research_repo_tools.semgrep_findings import parse_results
+from research_repo_tools.semgrep_policy import extraction_selected, representation_rules
 
-__all__ = ["check_documentation_fixtures", "scan"]
+__all__ = ["check_documentation_fixtures", "require_current_reports", "scan"]
 
 
 def check_documentation_fixtures(settings: config.Config) -> int:
@@ -53,14 +58,22 @@ class ScanInput:
         return result
 
 
-def _scan_groups(root: Path, names: tuple[str, ...], temporary: Path, configuration: Path, rust_docs: bool):
+def _scan_groups(root: Path, names: tuple[str, ...], temporary: Path, configuration: Path, rust_docs: bool, policy: config.SemgrepSettings):
     """Give each block its source-relative name, without rewriting path filters."""
     originals = [ScanInput(root / name, root / name, name) for name in names]
-    groups = [(root, configuration, originals, False)]
+    rules = [representation_rules(rule) for rule in semgrep.rules(configuration).values()]
+    source_rules = [rule["source"] for rule in rules if "source" in rule]
+    if not source_rules:
+        raise ValueError("original sources require source rules; keep original/prose checks additive")
+    source_configuration = temporary / "source-rules.yaml"
+    source_configuration.write_text(yaml.safe_dump({"rules": source_rules}, sort_keys=False), encoding="utf-8", newline="\n")
+    groups = [(root, source_configuration, originals, False)]
     layers: dict[int, list[ScanInput]] = {}
     if rust_docs:
         for original in originals:
             if original.source.suffix not in {".md", ".rs"}:
+                continue
+            if not extraction_selected(original.logical, policy.rustdoc_include, policy.rustdoc_exclude):
                 continue
             for block in documentation_blocks(original.source):
                 scan_root = temporary / "blocks" / str(block.index)
@@ -69,13 +82,60 @@ def _scan_groups(root: Path, names: tuple[str, ...], temporary: Path, configurat
                 physical.write_text(block.code, encoding="utf-8", newline="\n")
                 layers.setdefault(block.index, []).append(ScanInput(physical, original.source, original.logical, block))
     if layers:
-        selected = [{**rule, "languages": ["rust"]} for rule in semgrep.rules(configuration).values() if "rust" in rule.get("languages", [])]
+        selected = [rule["rust-block"] for rule in rules if "rust-block" in rule]
         if not selected:
             raise ValueError("Rust documentation blocks require Rust rules; include their logical source paths in the rule scopes")
         rust_configuration = temporary / "rust-rules.yaml"
         rust_configuration.write_text(yaml.safe_dump({"rules": selected}, sort_keys=False), encoding="utf-8", newline="\n")
         groups.extend((temporary / "blocks" / str(index), rust_configuration, inputs, True) for index, inputs in sorted(layers.items()))
     return groups
+
+
+def _attempt_path(destination: Path) -> Path:
+    return destination.with_name(destination.name + ".attempt.json")
+
+
+def require_current_reports(destination: Path) -> tuple[Path, ...]:
+    """Reject failed attempts or changed/stale bytes before uploading reports.
+
+    A valid scan containing findings is current but still has a nonzero gate.
+    Exclusive ownership of the output and sidecar is required, as for scanning.
+    """
+    marker = _attempt_path(destination)
+    if marker.is_symlink() or marker.is_junction() or destination.is_symlink() or destination.is_junction():
+        raise ValueError("Semgrep report/currentness paths must not be links")
+    data = _object(_load_json(marker.read_bytes(), "Semgrep attempt"), "Semgrep attempt")
+    if data.get("schema") != 1 or data.get("published") is not True or not isinstance(data.get("attempt"), str):
+        raise ValueError("Semgrep reports are not current: latest attempt did not publish")
+    hashes = _object(data.get("reports"), "Semgrep report hashes")
+    if not hashes or set(hashes) != {path.name for path in destination.iterdir()}:
+        raise ValueError("Semgrep current report inventory differs")
+    reports = []
+    for name, expected in hashes.items():
+        if Path(name).name != name or "/" in name or "\\" in name or not name.endswith((".json", ".sarif")):
+            raise ValueError("invalid Semgrep current report name")
+        path = destination / name
+        if path.is_symlink() or not path.is_file() or hashlib.sha256(path.read_bytes()).hexdigest() != expected:
+            raise ValueError("Semgrep current report digest differs")
+        reports.append(path)
+    return tuple(reports)
+
+
+class _RetainReports(Exception):
+    """Abort an empty candidate while preserving the prior directory."""
+
+
+@contextmanager
+def _report_generation(destination: Path, policy: config.SemgrepSettings, attempt: dict[str, Any]) -> Iterator[Path]:
+    try:
+        with publish_directory(destination) as candidate:
+            yield candidate
+            if not any(candidate.iterdir()) and policy.failure_reports == "retain":
+                raise _RetainReports
+            hashes = {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in candidate.iterdir()}
+        attempt.update(published=bool(hashes), reports=hashes)
+    except _RetainReports:
+        pass
 
 
 def _locations(value, mapping):
@@ -405,24 +465,40 @@ def scan(
     output: str = "target/security/semgrep",
     rust_docs: bool = False,
     batch_size: int | None = None,
+    failure_reports: str | None = None,
     inline_suppressions: bool | None = None,
     jobs: int | None = None,
     report_category: str | None = None,
     report_layout: str | None = None,
+    rustdoc_include: tuple[str, ...] | None = None,
+    rustdoc_exclude: tuple[str, ...] | None = None,
     target_timeout: int | None = None,
 ) -> int:
     """Scan bounded explicit batches once each, producing paired native reports.
 
     Overrides use the same validated contract as semgrep configuration. Verify
     exact input coverage and agreement of active JSON/SARIF findings before
-    publication. Invalid scans publish an empty generation. Valid findings and
+    publication. Invalid scans clear reports by default; retain preserves the
+    previous bytes with an invalidated currentness marker. Valid findings and
     native nonzero statuses remain blocking. Aggregate layout emits one SARIF
     run/category; numbered layout emits one report pair per bounded batch.
     """
     overrides = {
         key: value
         for key, value in locals().items()
-        if key in {"batch_size", "inline_suppressions", "jobs", "report_category", "report_layout", "target_timeout"} and value is not None
+        if key
+        in {
+            "batch_size",
+            "failure_reports",
+            "inline_suppressions",
+            "jobs",
+            "report_category",
+            "report_layout",
+            "rustdoc_include",
+            "rustdoc_exclude",
+            "target_timeout",
+        }
+        and value is not None
     }
     policy = replace(settings.semgrep, **overrides)
     if not include or policy.config is None:
@@ -431,14 +507,43 @@ def scan(
     if not names:
         raise ValueError("no Semgrep inputs selected")
     destination = settings.path(output)
+    marker = _attempt_path(destination)
     destination_keys = _path_keys(destination)
     for name in names:
         source = (settings.root / name).resolve()
-        if any(not destination_keys.isdisjoint(_path_keys(parent)) for parent in (source, *source.parents)):
+        if not _path_keys(marker).isdisjoint(_path_keys(source)) or any(
+            not destination_keys.isdisjoint(_path_keys(parent)) for parent in (source, *source.parents)
+        ):
             raise ValueError("Semgrep output directory must not contain selected inputs")
-    with publish_directory(destination) as candidate, tempfile.TemporaryDirectory(prefix="research-semgrep-scan-") as directory:
+    _directory_target(destination)
+    if marker.is_symlink() or marker.is_junction():
+        raise ValueError("Semgrep attempt marker must not be a link")
+    attempt: dict[str, Any] = {"schema": 1, "attempt": str(uuid.uuid4()), "published": False, "exit_code": None, "reports": {}}
+    replace_many({marker: deterministic_json(attempt)})
+    try:
+        code = _scan(settings, names, destination, policy, rust_docs, attempt)
+        attempt["exit_code"] = code
+        return code
+    except BaseException:
+        attempt["published"] = False
+        raise
+    finally:
+        replace_many({marker: deterministic_json(attempt)})
+
+
+def _scan(settings: config.Config, names: tuple[str, ...], destination: Path, policy: config.SemgrepSettings, rust_docs: bool, attempt: dict[str, Any]) -> int:
+    assert policy.config is not None
+    documentation = [name for name in names if Path(name).suffix in {".rs", ".md"}]
+    extraction_scope = {
+        "enabled": rust_docs,
+        "include": list(policy.rustdoc_include),
+        "exclude": list(policy.rustdoc_exclude),
+        "selected_paths": [name for name in documentation if rust_docs and extraction_selected(name, policy.rustdoc_include, policy.rustdoc_exclude)],
+        "excluded_paths": [name for name in documentation if rust_docs and not extraction_selected(name, policy.rustdoc_include, policy.rustdoc_exclude)],
+    }
+    with _report_generation(destination, policy, attempt) as candidate, tempfile.TemporaryDirectory(prefix="research-semgrep-scan-") as directory:
         temporary = Path(directory)
-        groups = _scan_groups(settings.root, names, temporary, settings.path(policy.config), rust_docs)
+        groups = _scan_groups(settings.root, names, temporary, settings.path(policy.config), rust_docs, policy)
         binary = semgrep_tool.setup(settings.root)
         env = {
             **semgrep_tool._environment(),
@@ -450,7 +555,7 @@ def scan(
         }
         json_path, sarif_path = temporary / "report.json", temporary / "report.sarif"
         command = [
-            str(binary),
+            *semgrep_tool.command(binary),
             "scan",
             "--config",
             str(settings.path(policy.config)),
@@ -522,6 +627,7 @@ def scan(
                 print(f"Semgrep: inconsistent source-mapped reports: {str(error)[:1600]}; no report published", file=sys.stderr)
                 return code or 1
             data["input_coverage"] = [item.coverage() for item in selected.values()]
+            data["extraction_scope"] = extraction_scope
             reports.append((data, sarif, found))
         payloads = {}
         if policy.report_layout == "aggregate":
@@ -530,6 +636,7 @@ def scan(
                 "errors": [],
                 "paths": {"scanned": sorted({path for data, _, _ in reports for path in data["paths"]["scanned"]})},
                 "input_coverage": [item for data, _, _ in reports for item in data["input_coverage"]],
+                "extraction_scope": extraction_scope,
                 "batches": [data for data, _, _ in reports],
             }
             try:
@@ -553,5 +660,5 @@ def scan(
                 **value,
                 "results": [item for item in _objects(value["results"], "results") if not _object(item.get("extra", {}), "extra").get("is_ignored", False)],
             }
-        present(value, name.rsplit(".", 1)[1], settings.path(output) / name, code, any(found for _, _, found in reports))
+        present(value, name.rsplit(".", 1)[1], destination / name, code, any(found for _, _, found in reports))
     return code

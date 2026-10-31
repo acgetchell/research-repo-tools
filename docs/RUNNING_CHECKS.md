@@ -195,20 +195,29 @@ Declare `cargo-deny = "0.20.2"` in the managed Cargo table to run the exact
 
 Consumers can wrap `semgrep scan --include '*.rs' --include '*.py' --include '*.md'
 --rust-docs` in their own `just semgrep-scan` recipe. Keep rules and scope local.
-The installed shared package owns the Semgrep version and compatible scanner
-Python version. Both scans and fixture checks provision and verify that pin
-through uv in an isolated tool environment; ambient Semgrep executables and
-consumer dependency pins do not select the scanner. The wrapper continues to
-use the project's Python environment.
+The installed shared package owns the Semgrep pin through its optional `semgrep`
+extra. Starting with v0.2.5, request that extra on the shared-package dependency
+in the consumer's locked dev graph. Scans, fixture checks and the wrapper all
+use the same shared Python 3.15 environment. Ambient scanners cannot select it.
+`just semgrep-setup` verifies the installed scanner without installing anything;
+`just setup` synchronizes dev first and then verifies declared Semgrep use.
 
-Run `just semgrep-setup` to prepare the scanner before an offline gate. `just setup`
-also prepares it when `semgrep.config` is declared. A cold cache needs network
-access; provisioning failures stop the command without falling back to PATH.
-uv shares its tool cache across repos, and scanner Python defaults to
-`~/.cache/research-repo-tools/semgrep/python`, separate from project-interpreter
-cleanup. Existing `UV_CACHE_DIR` and `UV_PYTHON_INSTALL_DIR` settings are honored.
-Upgrade the shared-package pin to adopt a new scanner version. Rules, fixtures,
-selected paths and suppression policy remain consumer-owned.
+Semgrep's published transitive pins need shared temporary overrides. The packaged
+`semgrep-constraints.txt` owns the tested policy: current tomli/jsonschema, patched
+MCP and a consistent OpenTelemetry release family, and pywin32 312 for Windows
+Python 3.15. Root uv overrides cannot propagate through an extra. The normal
+`toolchain adopt` workflow adds this policy for shared-package pins requesting
+`[semgrep]`, rejects competing overrides, resolves a private candidate and
+preserves normal rollback. See [Python adoption](INSTALLING.md).
+For an explicit review of the exact installed policy, export it with the template
+command. Keep the corresponding root `tool.uv.override-dependencies` declarations
+and lock together. Installed wheel/sdist consumers resolve with these same
+constraints. Native Windows execution remains a release gate.
+
+Upgrade the shared package to adopt scanner/override changes. Complete the
+consumer pin/lock, recipe and configuration migration before deleting local
+scanner or Rustdoc adapters. Separate scanner projects are no longer needed for
+this capability; retain any unrelated tools they supply.
 
 The shared scan checks native errors, exact coverage and agreement of active
 JSON/SARIF findings from the same native invocation. It scans batches of at most
@@ -227,13 +236,17 @@ inline-suppressions = true
 jobs = 1
 report-category = "semgrep-repository-rules"
 report-layout = "aggregate"
+rustdoc-exclude = ["docs/archive/**", "docs/dev/**"]
+rustdoc-include = ["src/**/*.rs", "docs/**/*.md"]
+failure-reports = "clear"
 target-timeout = 120
 timeout = 600
 ```
 
 Matching CLI overrides are `--batch-size`, `--inline-suppressions` /
 `--no-inline-suppressions`, `--jobs`, `--report-category`, `--report-layout`
-and `--target-timeout`. `numbered` layout writes one JSON/SARIF pair per batch.
+`--rustdoc-include`, `--rustdoc-exclude`, `--failure-reports` and
+`--target-timeout`. `numbered` layout writes one JSON/SARIF pair per batch.
 Each layout owns the entire output directory: successful generations remove
 all prior members, including reports from larger inventories or other layouts.
 Missing/malformed reports, scan errors in JSON, incomplete coverage and timeouts
@@ -255,7 +268,34 @@ rules intended for Markdown examples must therefore include the relevant `.md`
 paths as well as production `.rs` paths. Every original and every block must be
 covered by at least one applicable rule; excluded blocks fail with their source
 path, block number and line range. Restrict the selected inventory when a source
-is intentionally outside the scan policy.
+is intentionally outside the scan policy. Use `rustdoc-include` and
+`rustdoc-exclude` to choose executable documentation independently of originals;
+excluded prose/policy/archive files still receive original-source checks.
+The JSON `extraction_scope` records this selection and every selected block
+still needs applicable rule coverage.
+
+Use per-rule metadata for production-only rules or different example path scopes:
+
+```yaml
+metadata:
+  research-repo-tools:
+    representations: [source]  # e.g. production diagnostics disallowing println!
+```
+
+Rust rules default to `[source, rust-block]`; other rules default to `[source]`.
+A Rust example rule can select `[rust-block]`, or both representations, and set
+`rust-block-paths: {include: ["/src/**/*.rs", "/docs/**/*.md"]}`. This changes only
+extracted-code path scope. Native definitions, filters and rule IDs stay intact.
+Unknown metadata, non-Rust block rules and invalid scopes fail before execution.
+
+`failure-reports = "retain"` / `--failure-reports retain` preserves prior report
+bytes when a later scan fails validation or times out. The adjacent
+`<output>.attempt.json` marker is invalidated before execution and records a
+committed generation's exact hashes and exit status. Retention never makes a
+failed scan pass. Before uploading retained SARIF, CI must require the scan to
+succeed and run `semgrep check-reports --output PATH`; the check rejects failed
+attempts and changed/stale report bytes. Use the same locked CLI in the consumer
+upload recipe. Both the directory and marker require exclusive ownership.
 
 Source lines, columns and byte offsets are restored in findings; lines hidden by
 a `#` followed by a space remain code. Identical rule/span/suppression findings
@@ -267,8 +307,9 @@ attributes are outside the adapter's scope.
 
 `semgrep check-fixtures --rust-docs` accepts mixed native, prose-only and Rust
 fence fixtures. An annotation targets the next nonblank, non-fence line. A Rust
-rule annotation targeting a Rust block belongs to that block; other assertions
-belong to the original file. Put `ruleid:` or `ok:` directly before the code or
+rule enabled for extracted blocks and targeting a selected block belongs to
+that block. Source-only assertions retain original text, including raw-comment
+markers. Fixture ownership uses the same representation/extraction policy. Put `ruleid:` or `ok:` directly before the code or
 its opening fence, and give every Rust block at least one Rust-rule annotation.
 Each representation checks its owned positive counts and rejects unexpected
 findings, including violations of negative assertions. As in ordinary annotated

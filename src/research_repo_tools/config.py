@@ -27,11 +27,14 @@ FIELDS = {
         "batch-size",
         "config",
         "fixtures",
+        "failure-reports",
         "inline-suppressions",
         "jobs",
         "namespace",
         "report-category",
         "report-layout",
+        "rustdoc-exclude",
+        "rustdoc-include",
         "target-timeout",
         "timeout",
         "cwd",
@@ -156,6 +159,9 @@ class SemgrepSettings:
     report_category: str = "semgrep"
     report_layout: Literal["aggregate", "numbered"] = "aggregate"
     target_timeout: int = 120
+    failure_reports: Literal["clear", "retain"] = "clear"
+    rustdoc_include: tuple[str, ...] = ("**",)
+    rustdoc_exclude: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         for name in ("batch_size", "jobs", "target_timeout", "timeout"):
@@ -166,6 +172,13 @@ class SemgrepSettings:
             raise ValueError("semgrep.inline-suppressions must be a boolean")
         if self.report_layout not in ("aggregate", "numbered"):
             raise ValueError("semgrep.report-layout must be aggregate or numbered")
+        if self.failure_reports not in ("clear", "retain"):
+            raise ValueError("semgrep.failure-reports must be clear or retain")
+        for name in ("rustdoc_include", "rustdoc_exclude"):
+            value = getattr(self, name)
+            if not isinstance(value, (list, tuple)) or any(not isinstance(item, str) or not item or "\0" in item for item in value):
+                raise ValueError(f"semgrep.{name.replace('_', '-')} must be an array of nonempty glob strings")
+            object.__setattr__(self, name, tuple(value))
         if not isinstance(self.report_category, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", self.report_category) is None:
             raise ValueError("semgrep.report-category must be a filename-safe identifier")
         object.__setattr__(self, "counts", MappingProxyType({path: MappingProxyType(dict(counts)) for path, counts in self.counts.items()}))
@@ -493,6 +506,9 @@ def parse(value: object, *, root: Path) -> Config:
             report_category=_string(semgrep.get("report-category", "semgrep"), "semgrep.report-category"),
             report_layout=_report_layout(semgrep.get("report-layout", "aggregate")),
             target_timeout=_positive_integer(semgrep.get("target-timeout", 120), "semgrep.target-timeout"),
+            failure_reports=cast(Literal["clear", "retain"], semgrep.get("failure-reports", "clear")),
+            rustdoc_include=cast(tuple[str, ...], semgrep.get("rustdoc-include", ("**",))),
+            rustdoc_exclude=cast(tuple[str, ...], semgrep.get("rustdoc-exclude", ())),
         ),
         sarif=_sarif_policy(sarif) if "sarif" in data else None,
         release=ReleasePolicy(

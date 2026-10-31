@@ -406,6 +406,12 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             semgrep_tool_suite.write_bytes((ROOT / "tests/semgrep/public_semgrep_tool_consumer.py").read_bytes())
             run_consumer_suite(python, [str(semgrep_tool_suite)], cwd=consumer, env=local_env)
             native_semgrep_suite = consumer / "public_native_semgrep_consumer.py"
+            # Resolve the published extra in this same Python 3.15 environment.
+            # The shared temporary override is required by Semgrep's Windows pin.
+            scanner_constraints = consumer / "semgrep-constraints.txt"
+            with zipfile.ZipFile(wheel) as archive:
+                scanner_constraints.write_bytes(archive.read("research_repo_tools/templates/semgrep-constraints.txt"))
+            run([uv, "pip", "install", "--python", str(python), "--override", str(scanner_constraints), f"{artifact}[semgrep]"], cwd=consumer, env=env)
             native_semgrep_suite.write_bytes((ROOT / "tests/semgrep/public_native_semgrep_consumer.py").read_bytes())
             run_consumer_suite(python, [str(native_semgrep_suite)], cwd=consumer, env=local_env)
             toolchain_suite = consumer / "public_toolchain_consumer.py"
