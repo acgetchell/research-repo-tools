@@ -17,13 +17,31 @@ def open_spool(spool: Path) -> BinaryIO:
     return os.fdopen(os.open(spool, flags), "rb", buffering=0)
 
 
+def publish_endpoint(done: Path, endpoint: int) -> None:
+    """Publish complete metadata in a name; observing it needs no read open."""
+    done.with_name(f"{done.name}.{endpoint}.done").touch(exist_ok=False)
+
+
+def _endpoint(done: Path) -> int | None:
+    prefix = done.name + "."
+    with os.scandir(done.parent) as entries:
+        for entry in entries:
+            if entry.name.startswith(prefix) and entry.name.endswith(".done"):
+                value = entry.name[len(prefix) : -5]
+                if value.isdecimal():
+                    endpoint = int(value)
+                    if str(endpoint) == value:
+                        return endpoint
+    return None
+
+
 def forward(spool: Path, done: Path, descriptor: int = 1) -> None:
     """Forward exact spool bytes, stopping at the parent's published endpoint."""
     with open_spool(spool) as reader, os.fdopen(os.dup(descriptor), "wb", buffering=0) as output:
         endpoint = None
         while True:
-            if endpoint is None and done.exists():
-                endpoint = int(done.read_bytes())
+            if endpoint is None:
+                endpoint = _endpoint(done)
             count = 65536 if endpoint is None else min(65536, endpoint - reader.tell())
             if count <= 0:
                 return

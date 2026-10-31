@@ -403,6 +403,11 @@ checkout tests and the isolated consumers before changing package checks.
   walk operations, and let cleanup inspect ordinary modeled directories.
   Exercise the path-based cleanup implementation locally when diagnosing this
   difference, then verify the native Windows job.
+- **Published notifications:** A renamed file can become visible before its
+  publisher closes the rename handle. A subsequent read can fail without
+  compatible `FILE_SHARE_DELETE`, even after an existence check. Keep process
+  completion metadata observable without a conflicting file open; see
+  [Microsoft's rename-stage explanation](https://devblogs.microsoft.com/oldnewthing/20211022-00/?p=105822).
 
 Python's [startup flags](https://docs.python.org/3.15/using/cmdline.html#cmdoption-I)
 and Just's [Windows path rules](https://just.systems/man/en/paths-on-windows.html)

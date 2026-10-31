@@ -20,7 +20,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, cast
 
-from research_repo_tools._stdout_forwarder import open_spool
+from research_repo_tools._stdout_forwarder import open_spool, publish_endpoint
 
 type RunKwargs = dict[str, Any]
 type ExceptionFamily = tuple[type[BaseException], ...]
@@ -256,10 +256,7 @@ def _run_with_markers(
             for name, endpoint in endpoints.items():
                 # Publish a fixed endpoint: output from any still-running
                 # descendant cannot prolong forwarding past the direct child.
-                done = Path(directory) / name
-                pending_done = done.with_suffix(".tmp")
-                pending_done.write_bytes(str(endpoint).encode("ascii"))
-                pending_done.replace(done)
+                publish_endpoint(Path(directory) / name, endpoint)
             for forwarder in forwarders.values():
                 forwarder.wait(timeout=budget())
             result = subprocess.CompletedProcess(argv, child.returncode)
