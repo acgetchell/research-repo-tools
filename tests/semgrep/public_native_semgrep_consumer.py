@@ -80,12 +80,14 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
     def test_native_engine_reports_a_finding_with_the_shared_dependencies(self):
         """Expose engine startup failures without logging real consumer inputs."""
         binary = semgrep_tool.setup(self.root)
+        invocation = semgrep_tool.command(binary)
         self.settings([{"id": "native.probe", "languages": ["rust"], "pattern": "println!(...)", "message": "native probe", "severity": "WARNING"}])
         source = self.write("probe.rs", 'fn main() { println!("native probe"); }\n')
         report = self.root / "report.json"
         result = run_command_bytes(
-            binary,
+            invocation[0],
             [
+                *invocation[1:],
                 "scan",
                 "--config",
                 str(self.root / "rules.json"),

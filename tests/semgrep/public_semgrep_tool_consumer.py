@@ -16,10 +16,36 @@ from unittest.mock import patch
 
 from packaging.requirements import Requirement
 
-from research_repo_tools import cli, python_baseline, semgrep_tool
+from research_repo_tools import _semgrep_launcher, cli, python_baseline, semgrep_tool
 
 
 class TestSemgrepTool(unittest.TestCase):
+    def test_unlimited_stack_uses_the_prior_finite_budget_without_changing_finite_limits(self):
+        for infinity in (-1, (1 << 64) - 1):
+            with self.subTest(infinity=infinity):
+                self.assertEqual(_semgrep_launcher.stack_limits(8 << 20, infinity, infinity), (8 << 20, 1_000_000_000))
+                self.assertEqual(_semgrep_launcher.stack_limits(32 << 20, infinity, infinity), (32 << 20, 100 * (32 << 20)))
+                self.assertEqual(_semgrep_launcher.stack_limits(infinity, infinity, infinity), (1_000_000_000, 1_000_000_000))
+                self.assertEqual(_semgrep_launcher.stack_limits(8 << 20, 64 << 20, infinity), (8 << 20, 64 << 20))
+        infinity = (1 << 64) - 1
+        self.assertEqual(_semgrep_launcher.stack_limits(infinity - 1, infinity, infinity), (infinity - 1, infinity - 1))
+
+    def test_scanner_child_limit_guard_preserves_the_callers_limits(self):
+        if os.name == "nt":
+            self.assertEqual(semgrep_tool.command(self.binary), (str(self.binary),))
+            return
+        import resource
+
+        before = resource.getrlimit(resource.RLIMIT_STACK)
+        probe = self.root / "probe.py"
+        probe.write_bytes(b"import json, resource, sys\nprint(json.dumps([sys.argv[1:], resource.getrlimit(resource.RLIMIT_STACK)]))\n")
+        invocation = (sys.executable, "-I", "-X", "utf8", "-m", "research_repo_tools._semgrep_launcher", sys.executable)
+        result = subprocess.run([*invocation, str(probe), "literal café"], capture_output=True, check=True, encoding="utf-8", timeout=30)
+        arguments, selected = json.loads(result.stdout)
+        self.assertEqual(arguments, ["literal café"])
+        self.assertEqual(tuple(selected), _semgrep_launcher.stack_limits(*before, resource.RLIM_INFINITY))
+        self.assertEqual(resource.getrlimit(resource.RLIMIT_STACK), before)
+
     @override
     def setUp(self):
         self.temporary = tempfile.TemporaryDirectory(prefix="managed scanner café ")

@@ -13,10 +13,11 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
 from research_repo_tools import python_baseline, release_credentials
+from research_repo_tools._semgrep_launcher import command as command
 from research_repo_tools.process import ExecutableNotFoundError, resolve_executable, run_command_bytes
 from research_repo_tools.toml_source import set_value
 
-__all__ = ["VERSION", "setup"]
+__all__ = ["VERSION", "command", "setup"]
 
 
 def _pinned_version() -> str:

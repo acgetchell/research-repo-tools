@@ -15,6 +15,7 @@ from research_repo_tools import cli, config, semgrep, semgrep_tool
 @pytest.fixture(autouse=True)
 def managed_scanner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(semgrep.semgrep_tool, "setup", lambda root: tmp_path / "managed-semgrep")
+    monkeypatch.setattr(semgrep.semgrep_tool, "command", lambda binary: (str(binary),))
 
 
 def test_root_override_policy_mirrors_the_packaged_constraints():

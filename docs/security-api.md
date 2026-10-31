@@ -52,7 +52,13 @@ requesting that extra, preserving unrelated constraints and rejecting conflicts.
 `toolchain adopt` includes this migration in its normal candidate validation and
 rollback. uv overrides are root-project policy and do not propagate from package
 metadata. Both `semgrep.check` and `semgrep_scan.scan` select the interpreter's
-scanner directly; `semgrep setup` / `just semgrep-setup` verify the same selection.
+scanner; `semgrep_tool.command(binary)` supplies its launch argument vector.
+On POSIX systems with an unlimited stack hard limit, a child-only launcher
+restores the finite stack budget selected by Semgrep's pre-3.15 calculation,
+avoiding [upstream #11979](https://github.com/semgrep/semgrep/issues/11979).
+Finite inherited limits and the caller's limits remain unchanged. This adapter
+uses the same interpreter and installed scanner, with no dependency patching.
+`semgrep setup` / `just semgrep-setup` verify the same selection.
 Top-level setup synchronizes dev before verifying a declared scanner. Native
 Linux/macOS/Windows validation is required for pin and override changes.
 

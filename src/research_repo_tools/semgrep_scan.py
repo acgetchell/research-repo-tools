@@ -555,7 +555,7 @@ def _scan(settings: config.Config, names: tuple[str, ...], destination: Path, po
         }
         json_path, sarif_path = temporary / "report.json", temporary / "report.sarif"
         command = [
-            str(binary),
+            *semgrep_tool.command(binary),
             "scan",
             "--config",
             str(settings.path(policy.config)),
