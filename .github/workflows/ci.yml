@@ -82,6 +82,12 @@ jobs:
         run: uv sync --locked
       - name: Verify native Semgrep startup with synthetic input
         run: uv run --locked pytest tests/semgrep/test_native_semgrep.py -k native_engine_reports --cov --cov-report=term
+      - name: Diagnose native Windows process byte transport
+        if: runner.os == 'Windows'
+        run: >-
+          uv run --locked python -c "import sys, unittest; from tests.cargo_examples.public_cargo_examples_consumer import TestLiveProcess;
+          suite = unittest.TestSuite(TestLiveProcess('test_separate_stream_markers_large_chunks_and_exact_bytes') for _ in range(20));
+          result = unittest.TextTestRunner(verbosity=2, failfast=True).run(suite); sys.exit(not result.wasSuccessful())"
       - name: Provision native pkg-config discovery test prerequisite
         if: runner.os != 'Windows'
         shell: bash

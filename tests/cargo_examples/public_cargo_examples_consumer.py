@@ -347,6 +347,7 @@ class TestLiveProcess(unittest.TestCase):
 
     def test_separate_stream_markers_large_chunks_and_exact_bytes(self) -> None:
         child = "import sys;sys.stdout.buffer.write(b'out\\xff\\r\\n');sys.stderr.buffer.write(b'x'*65534+b'boundary\\r\\n'+b'y'*1000000)"
+        payload = b"x" * 65534 + b"boundary\r\n" + b"y" * 1000000
         for stdout, stderr, success in (
             ((), (b"boundary\r\n",), True),
             ((b"out\xff\r\n",), (b"boundary\r\n",), True),
@@ -361,7 +362,18 @@ class TestLiveProcess(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode == 0, success, result.stderr[-2000:])
                 self.assertEqual(result.stdout, b"out\xff\r\n")
-                self.assertTrue(result.stderr.startswith(b"x" * 65534 + b"boundary\r\n" + b"y" * 1000000))
+                matches = result.stderr.startswith(payload)
+                detail = ""
+                if not matches:
+                    offset = next(
+                        (index for index, (expected, actual) in enumerate(zip(payload, result.stderr, strict=False)) if expected != actual),
+                        min(len(payload), len(result.stderr)),
+                    )
+                    detail = (
+                        f"stderr differs at byte {offset}; returncode={result.returncode}; expected prefix bytes={len(payload)}; actual bytes={len(result.stderr)}; "
+                        f"prefix={result.stderr[:128]!r}; near mismatch={result.stderr[max(0, offset - 16) : offset + 32]!r}; suffix={result.stderr[-1024:]!r}"
+                    )
+                self.assertTrue(matches, detail)
                 if not success:
                     self.assertIn(b"missing expected", result.stderr)
 
