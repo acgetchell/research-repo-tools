@@ -737,8 +737,10 @@ def test_setup_prepares_declared_semgrep_after_sync_and_reports_failure(runtime,
     monkeypatch.setattr(toolchain, "Runtime", lambda plan: instance)
     calls = []
 
-    def provision(root):
+    def provision(root, *, python):
         calls.append(root)
+        assert python.parent.name in {"bin", "Scripts"}
+        assert python.parent.parent == root / ".venv"
         assert fake.calls[-1][1] == ["sync", "--locked", "--managed-python", "--group", "dev"]
         if failure:
             raise RuntimeError("scanner provisioning unavailable")

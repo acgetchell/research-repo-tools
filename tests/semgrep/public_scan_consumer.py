@@ -11,7 +11,7 @@ from typing import override
 from unittest.mock import patch
 from urllib.parse import quote, unquote
 
-from research_repo_tools import config, security, semgrep_scan
+from research_repo_tools import config, security, semgrep, semgrep_scan
 from research_repo_tools.cli import main
 from research_repo_tools.selection import argument_batches
 
@@ -46,6 +46,9 @@ class TestScanConsumer(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
         self.names = ("src/one.rs", "tests/two.rs", "scripts/tests/three.py")
+        (self.root / "rules.yml").write_bytes(
+            b"rules:\n  - id: project.rule\n    pattern: bad()\n    message: example\n    languages: [rust, python]\n    severity: ERROR\n"
+        )
         for name in self.names:
             path = self.root / name
             path.parent.mkdir(parents=True, exist_ok=True)
@@ -243,6 +246,45 @@ class TestScanConsumer(unittest.TestCase):
         self.assertEqual({path.name for path in output.iterdir()}, {"semgrep.json", "semgrep.sarif"})
         self.assertEqual([result["check_id"] for result in json.loads((output / "semgrep.json").read_bytes())["results"]], ["project.rule"] * 3)
 
+    def test_retention_preserves_prior_bytes_and_rejects_stale_upload_after_every_failed_attempt(self):
+        output = self.root / "target/security/semgrep"
+        self.behavior = "clean"
+        self.assertEqual(semgrep_scan.scan(self.settings, include=("*.rs",), failure_reports="retain"), 0)
+        previous = {path: path.read_bytes() for path in semgrep_scan.require_current_reports(output)}
+        for behavior in ("late-incomplete", "malformed-paths", "mismatch", "parse-error", "timeout"):
+            with self.subTest(behavior=behavior):
+                self.calls.clear()
+                self.behavior = behavior
+                status = semgrep_scan.scan(self.settings, include=("*.rs",), failure_reports="retain")
+                self.assertEqual(status, 124 if behavior == "timeout" else 1)
+                self.assertEqual({path: path.read_bytes() for path in output.iterdir()}, previous)
+                with self.assertRaisesRegex(ValueError, "not current"):
+                    semgrep_scan.require_current_reports(output)
+                attempt = json.loads(output.with_name(output.name + ".attempt.json").read_bytes())
+                self.assertIs(attempt["published"], False)
+                self.assertEqual(attempt["exit_code"], status)
+        self.behavior = "findings"
+        self.assertEqual(semgrep_scan.scan(self.settings, include=("*.rs",), failure_reports="retain"), 1)
+        current = semgrep_scan.require_current_reports(output)
+        self.assertEqual(len(current), 2)
+        with patch("research_repo_tools.cli.config.load", return_value=self.settings):
+            self.assertEqual(main(["semgrep", "check-reports", "--output", str(output)]), 0)
+        current[0].write_bytes(b"changed bytes")
+        with self.assertRaisesRegex(ValueError, "digest differs"):
+            semgrep_scan.require_current_reports(output)
+
+    def test_exception_invalidates_currentness_and_retains_prior_reports(self):
+        output = self.root / "target/security/semgrep"
+        self.behavior = "clean"
+        semgrep_scan.scan(self.settings, include=("*.rs",))
+        previous = {path: path.read_bytes() for path in semgrep_scan.require_current_reports(output)}
+        with patch.object(semgrep_scan.semgrep_tool, "setup", side_effect=RuntimeError("setup failed")):
+            with self.assertRaisesRegex(RuntimeError, "setup failed"):
+                semgrep_scan.scan(self.settings, include=("*.rs",), failure_reports="retain")
+        self.assertEqual({path: path.read_bytes() for path in output.iterdir()}, previous)
+        with self.assertRaisesRegex(ValueError, "not current"):
+            semgrep_scan.require_current_reports(output)
+
     def test_reviewed_suppressed_findings_do_not_block_but_remain_in_native_reports(self):
         self.behavior = "suppressed"
         self.assertEqual(semgrep_scan.scan(self.settings, include=("*.rs",)), 0)
@@ -258,9 +300,32 @@ class TestScanConsumer(unittest.TestCase):
             ("inline-suppressions", "yes"),
             ("report-layout", "file"),
             ("report-category", "../escape"),
+            ("failure-reports", "ignore"),
+            ("rustdoc-include", "*.rs"),
+            ("rustdoc-exclude", [""]),
         ):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 config.parse({"semgrep": {key: value}}, root=self.root)
+        self.assertEqual(self.calls, [])
+
+    def test_invalid_representation_metadata_cannot_launch_native_scans(self):
+        for metadata, languages in (
+            (None, ["rust"]),
+            ({"research-repo-tools": {"unknown": True}}, ["rust"]),
+            ({"research-repo-tools": {"representations": []}}, ["rust"]),
+            ({"research-repo-tools": {"representations": ["source", "source"]}}, ["rust"]),
+            ({"research-repo-tools": {"representations": ["source", {}]}}, ["rust"]),
+            ({"research-repo-tools": {"representations": ["rust-block"]}}, ["python"]),
+            ({"research-repo-tools": {"representations": ["source"], "rust-block-paths": {"include": ["**"]}}}, ["rust"]),
+            ({"research-repo-tools": {"rust-block-paths": {}}}, ["rust"]),
+            ({"research-repo-tools": {"rust-block-paths": {"include": "**"}}}, ["rust"]),
+            ({"research-repo-tools": {"rust-block-paths": {"include": [""]}}}, ["rust"]),
+        ):
+            with self.subTest(metadata=metadata, languages=languages):
+                rule = {"id": "project.rule", "languages": languages, "pattern": "bad()", "metadata": metadata}
+                (self.root / "rules.yml").write_bytes(json.dumps({"rules": [rule]}).encode("utf-8"))
+                with self.assertRaises(ValueError):
+                    semgrep.rules(self.root / "rules.yml")
         self.assertEqual(self.calls, [])
 
     def test_absolute_file_arguments_are_preserved_and_output_cannot_replace_source_inputs(self):

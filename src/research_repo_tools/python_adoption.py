@@ -71,6 +71,9 @@ def _sync(uv: str, root: Path, request: str, groups: tuple[str, ...], *, check: 
 
 
 def _manifest(text: str, authority: python_baseline.PythonBaseline, old_selector: str, *, inherit_python: bool = True, inherit_tools: bool = False) -> str:
+    from research_repo_tools import semgrep_tool
+
+    text = semgrep_tool.adopt_manifest(text)
     if inherit_tools:
         text = python_tools.adopt_manifest(text)
     document = tomllib.loads(text)
@@ -225,6 +228,17 @@ def _check_tools(root: Path, inherited: bool) -> None:
             ["-c", "from pathlib import Path; from research_repo_tools.python_tools import check; check(Path.cwd())"],
             cwd=root,
             env=env,
+            timeout=60,
+        )
+    document = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    groups = python_baseline.package_groups(document)
+    if any("semgrep" in item.extras for entries in groups.values() for item in entries):
+        python = toolchain_config.executable(root / ".venv" / ("Scripts" if os.name == "nt" else "bin"), "python")
+        run_safe_command(
+            str(python),
+            ["-I", "-c", "from pathlib import Path; from research_repo_tools.semgrep_tool import setup; setup(Path.cwd())"],
+            cwd=root,
+            env=_environment(root),
             timeout=60,
         )
 

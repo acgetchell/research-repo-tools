@@ -36,20 +36,25 @@ redacted in addition to native detected-secret redaction. Report directories are
 caller-owned outputs. These commands are not an assurance that unknown secrets,
 ignored inputs or unsupported binary formats are detected.
 
-`semgrep_tool.setup(root)` provisions the package's exact `semgrep_tool.VERSION`
-in a cached, isolated uv tool environment and returns the verified executable
-`Path`. It verifies package/interpreter metadata and the executable's version.
-Consumer manifests, locks, and `.venv` are unchanged. Active environments,
-project uv configuration, and ambient Semgrep executables cannot replace the pin;
-uv cache, interpreter-store and network settings remain available. Provisioning
-or version failures raise `RuntimeError` with diagnostics. The CLI entry point
-is `semgrep setup`, exposed as `just semgrep-setup`. Normal setup also provisions
-the scanner for consumers declaring `semgrep.config`.
+`semgrep_tool.setup(root, *, python=None)` verifies the exact scanner pin from
+the installed `semgrep` extra in the executing Python environment and returns
+its absolute executable `Path`. It checks the shared `python_baseline.DEVELOPMENT_PYTHON`
+(currently 3.15), distribution version and executable version. `python` is an
+explicit interpreter override used by top-level setup to verify the freshly
+synchronized project environment. It never selects a separate scanner Python,
+resolves dependencies, installs tools or falls back to an ambient scanner.
+Missing extras/version drift raise `RuntimeError` with setup guidance.
 
-Both `semgrep.check` and `semgrep_scan.scan` use this managed executable. A cold
-cache can require network access; prepare it before an offline gate. The package
-owns the scanner pin and Python minor, while consumers own their rule policy.
-Pin updates require a new shared-package release and native matrix validation.
+Consumers request `research-repo-tools[semgrep]` in their locked dev graph.
+`semgrep_tool.constraints()` returns the packaged compatibility overrides;
+`semgrep_tool.adopt_manifest(text)` adds them for exact shared-package group pins
+requesting that extra, preserving unrelated constraints and rejecting conflicts.
+`toolchain adopt` includes this migration in its normal candidate validation and
+rollback. uv overrides are root-project policy and do not propagate from package
+metadata. Both `semgrep.check` and `semgrep_scan.scan` select the interpreter's
+scanner directly; `semgrep setup` / `just semgrep-setup` verify the same selection.
+Top-level setup synchronizes dev before verifying a declared scanner. Native
+Linux/macOS/Windows validation is required for pin and override changes.
 
 `semgrep_docs.rust_blocks(path)` returns line-padded Rust fence source strings
 from UTF-8 Markdown or line/block rustdoc comments. It does not execute code or
@@ -57,8 +62,9 @@ change the source. Hidden Rust lines remain code; unclosed selected fences raise
 `ValueError`. Macro-generated documentation and `#[doc = ...]` are not extracted.
 
 `semgrep_scan.scan(settings, *, include, exclude=(), output="target/security/semgrep",
-rust_docs=False, batch_size=None, inline_suppressions=None, jobs=None,
-report_category=None, report_layout=None, target_timeout=None)` runs the native
+rust_docs=False, batch_size=None, failure_reports=None, inline_suppressions=None,
+jobs=None, report_category=None, report_layout=None, rustdoc_include=None,
+rustdoc_exclude=None, target_timeout=None)` runs the native
 scanner once per bounded batch, generating JSON and SARIF in the same invocation.
 Optional overrides follow `config.SemgrepSettings`: positive integer batch size,
 jobs and target timeout; boolean inline suppressions; `aggregate` or `numbered`
@@ -82,12 +88,23 @@ and block identities. Original line/column/byte positions are restored, and
 identical overlapping rule/span/suppression findings are retained once.
 Accepted SARIF suppressions and JSON `extra.is_ignored` findings are inactive
 only when inline suppressions are enabled. Invalid pairs or process timeouts
-commit an empty generation, removing stale members. Precondition, generation
-and publication exceptions preserve/restore the previous generation. Valid
-reports remain available when findings or native status make the gate fail.
+clear reports by default (`failure_reports="clear"`). Opt-in `"retain"` preserves
+the prior directory byte-for-byte on these failures. Generation/publication
+exceptions preserve or restore it under either policy. Valid reports remain
+available when findings or native status make the gate fail.
+
+Every started scan invalidates `<output>.attempt.json` before native execution.
+Only a complete committed generation marks `published=true`, with an attempt ID,
+exit code and SHA-256 inventory. `require_current_reports(destination)` checks
+that marker and exact report bytes; it raises on a failed attempt or changed
+reports. The CLI equivalent is `semgrep check-reports --output PATH`. CI must
+require both a successful scan gate and this check before SARIF upload when
+retention is enabled. A valid report containing findings is current but its
+scan status remains nonzero. Outputs and sidecars require exclusive ownership;
+this does not serialize writers or provide crash atomicity.
 
 Aggregate layout publishes `semgrep.json` and `semgrep.sarif`. JSON contains
-combined `results`, `errors`, `paths.scanned`, `input_coverage` and per-batch JSON
+combined `results`, `errors`, `paths.scanned`, `input_coverage`, `extraction_scope` and per-batch JSON
 with native metadata in `batches`. Each coverage record has a logical `path` and
 `representation` (`source` or `rust-block`); blocks also have a one-based `block`
 number and inclusive `start_line`/`end_line`. Per-block coverage survives finding
@@ -103,13 +120,31 @@ categories. Both layouts replace the whole owned output directory, superseding
 
 `check_documentation_fixtures(settings)` (also `semgrep.check(settings,
 rust_docs=True)`) validates mixed native, Markdown prose and Rust-fence fixtures.
-An annotation targets the next nonblank, non-fence line; a Rust-rule assertion
-targeting a Rust block belongs to that block, and other assertions belong to the
-original input. Every block needs Rust-rule annotations. Positive counts and
+An annotation targets the next nonblank, non-fence line. A block-enabled rule
+assertion targeting a selected Rust block belongs to that block; source-only
+rules (including raw-comment regexes) retain original-text ownership even there.
+Every selected block needs block-rule annotations. A block-only rule annotation
+outside selected extraction scope fails. Positive counts and
 negative assertions are checked per representation, without double-counting
 matches owned by a block. Mismatches identify the original source and block.
 Annotated fixtures ignore production path filters, as ordinary fixture checking
 does. Count-based expectations remain in a separate fixture gate.
+
+Rule `metadata.research-repo-tools.representations` optionally selects a nonempty,
+distinct array of `source` and/or `rust-block`. Defaults retain source checks and,
+for Rust rules, extracted checks. `rust-block` requires a Rust-language rule.
+`rust-block-paths` optionally supplies validated native Semgrep `include`/`exclude`
+patterns for the extracted representation only; otherwise original rule paths
+apply. IDs and native/source rule definitions stay stable. Source/prose scanning
+remains additive and requires source rules with coverage of every original.
+
+`rustdoc_include` (default `("**",)`) and `rustdoc_exclude` (default `()`) use
+case-sensitive root-relative POSIX globs to choose extraction independently of
+original inventory. An empty include selects no extraction. JSON `extraction_scope`
+records enabled status, patterns, selected paths and excluded paths; selected
+physical blocks still require complete native coverage. Rust extraction and
+fixture ownership use the same rule/scope policy. Native syntax diagnostics are
+blocking; this is a Semgrep scan, not a Rust compiler or syntax-validity proof.
 
 ## SARIF API
 

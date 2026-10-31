@@ -1,0 +1,10 @@
+[extend]
+useDefault = true
+
+[[allowlists]]
+description = "The release diagnostic docstring describes redaction and contains no credential."
+targetRules = ["generic-api-key"]
+condition = "AND"
+paths = ['''(^|/)src/research_repo_tools/release_validation\.py$''']
+regexTarget = "line"
+regexes = ['''^\s*"""Remove URL credentials, queries/fragments and recognizable GitHub tokens\.$''']

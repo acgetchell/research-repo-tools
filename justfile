@@ -163,7 +163,14 @@ review base="origin/main":
 review-uncommitted:
     uv run --locked research-repo-tools review uncommitted
 
-# Prepare the package-pinned Semgrep environment before offline scans or tests.
+# Audit locked dependencies and scan full history/current files for secrets.
+security: audit security-secrets
+
+# Scan full history and current tracked/nonignored files with managed Gitleaks.
+security-secrets *args:
+    uv run --locked research-repo-tools security secrets "$@"
+
+# Verify the pinned Semgrep extra in the shared locked Python environment.
 semgrep-setup:
     uv run --locked research-repo-tools semgrep setup
 

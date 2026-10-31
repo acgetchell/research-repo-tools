@@ -199,9 +199,11 @@ def parser() -> argparse.ArgumentParser:
     secrets.add_argument("--scanner-config")
     semgrep = groups.add_parser("semgrep", help="validate consumer rules and fixtures").add_subparsers(dest="action", required=True)
     semgrep.add_parser("check-fixtures").add_argument("--rust-docs", action="store_true")
+    semgrep.add_parser("check-reports", help="require current report bytes before upload").add_argument("--output", default="target/security/semgrep")
     scan = semgrep.add_parser("scan", help="scan explicit inventory with strict native reports")
     scan.add_argument("--batch-size", type=int)
     scan.add_argument("--exclude", action="append", default=[])
+    scan.add_argument("--failure-reports", choices=("clear", "retain"))
     scan.add_argument("--include", action="append", required=True)
     scan.add_argument("--inline-suppressions", action=argparse.BooleanOptionalAction, default=None)
     scan.add_argument("--jobs", type=int)
@@ -209,8 +211,10 @@ def parser() -> argparse.ArgumentParser:
     scan.add_argument("--report-category")
     scan.add_argument("--report-layout", choices=("aggregate", "numbered"))
     scan.add_argument("--rust-docs", action="store_true")
+    scan.add_argument("--rustdoc-exclude", action="append", default=None)
+    scan.add_argument("--rustdoc-include", action="append", default=None)
     scan.add_argument("--target-timeout", type=int)
-    semgrep.add_parser("setup", help="provision and verify the package-pinned Semgrep environment")
+    semgrep.add_parser("setup", help="verify Semgrep in the shared locked Python environment")
     groups.add_parser("setup", help="install Just and declared tools, configure PATH, and sync the locked environment")
     from research_repo_tools.changelog import TEMPLATES
 
@@ -605,6 +609,11 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             return scan_osv(settings, tuple(args.lockfiles), output=args.output, configuration=args.scanner_config)
         return scan_secrets(settings, output=args.output, configuration=args.scanner_config, exclude=tuple(args.exclude))
     if args.group == "semgrep":
+        if args.action == "check-reports":
+            from research_repo_tools.semgrep_scan import require_current_reports
+
+            require_current_reports(settings.path(args.output))
+            return 0
         if args.action == "setup":
             from research_repo_tools import semgrep_tool
             from research_repo_tools.scanner_output import _print
@@ -622,10 +631,13 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
                 output=args.output,
                 rust_docs=args.rust_docs,
                 batch_size=args.batch_size,
+                failure_reports=args.failure_reports,
                 inline_suppressions=args.inline_suppressions,
                 jobs=args.jobs,
                 report_category=args.report_category,
                 report_layout=args.report_layout,
+                rustdoc_include=None if args.rustdoc_include is None else tuple(args.rustdoc_include),
+                rustdoc_exclude=None if args.rustdoc_exclude is None else tuple(args.rustdoc_exclude),
                 target_timeout=args.target_timeout,
             )
         if args.rust_docs:

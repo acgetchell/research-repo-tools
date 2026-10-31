@@ -1,17 +1,22 @@
-"""Installed managed-scanner failure and environment-isolation contracts."""
+"""Installed shared-environment scanner selection and failure contracts."""
 
 import contextlib
 import io
 import json
 import os
 import subprocess
+import sys
 import tempfile
+import tomllib
 import unittest
+from importlib.metadata import version
 from pathlib import Path
 from typing import override
 from unittest.mock import patch
 
-from research_repo_tools import cli, semgrep_tool
+from packaging.requirements import Requirement
+
+from research_repo_tools import cli, python_baseline, semgrep_tool
 
 
 class TestSemgrepTool(unittest.TestCase):
@@ -23,17 +28,15 @@ class TestSemgrepTool(unittest.TestCase):
         self.binary = self.root / ("semgrep.exe" if os.name == "nt" else "semgrep")
         self.binary.write_bytes(b"fixture")
         self.binary.chmod(0o755)
-        self.metadata = {"path": str(self.binary), "version": semgrep_tool.VERSION, "python": semgrep_tool.PYTHON}
+        self.metadata = {"path": str(self.binary), "version": semgrep_tool.VERSION, "python": python_baseline.DEVELOPMENT_PYTHON}
         self.actual = semgrep_tool.VERSION
         self.calls = []
 
     def native(self, command, args, **kwargs):
         self.calls.append((command, args, kwargs))
-        if args[0] == "tool":
-            self.assertEqual(args[args.index("--from") + 1], f"semgrep=={semgrep_tool.VERSION}")
-            self.assertEqual(args[args.index("--python") + 1], semgrep_tool.PYTHON)
-            for flag in ("--isolated", "--no-config", "--no-env-file", "--managed-python", "-I"):
-                self.assertIn(flag, args)
+        if args[0] == "-I":
+            self.assertEqual(Path(command), Path(sys.executable))
+            self.assertNotIn("uv", args)
             self.assertEqual(args[args.index("-X") + 1], "utf8")
             payload = json.dumps(self.metadata).encode("utf-8")
         else:
@@ -43,10 +46,14 @@ class TestSemgrepTool(unittest.TestCase):
         self.assertEqual(kwargs["cwd"], self.root)
         return subprocess.CompletedProcess([str(command), *args], 0, payload, b"")
 
-    def test_isolated_provisioning_checks_real_selected_version_and_keeps_cache_policy(self):
+    def test_shared_interpreter_selection_checks_version_and_keeps_project_policy(self):
         injected = {
             "PYTHONPATH": "foreign",
             "PYTHONHOME": "foreign",
+            "GH_TOKEN": "private",
+            "github_token": "private",
+        }
+        preserved = {
             "VIRTUAL_ENV": "foreign",
             "UV_PROJECT": "foreign",
             "UV_CONFIG_FILE": "foreign",
@@ -55,10 +62,10 @@ class TestSemgrepTool(unittest.TestCase):
             "UV_OVERRIDE": "foreign",
             "UV_CONSTRAINT": "foreign",
             "UV_BUILD_CONSTRAINT": "foreign",
-            "GH_TOKEN": "private",
-            "github_token": "private",
+            "UV_CACHE_DIR": str(self.root / "cache"),
+            "UV_OFFLINE": "1",
+            "SSL_CERT_FILE": str(self.root / "cert.pem"),
         }
-        preserved = {"UV_CACHE_DIR": str(self.root / "cache"), "UV_OFFLINE": "1", "SSL_CERT_FILE": str(self.root / "cert.pem")}
         with patch.dict(os.environ, injected | preserved), patch.object(semgrep_tool, "run_command_bytes", side_effect=self.native):
             before = dict(os.environ)
             self.assertEqual(semgrep_tool.setup(self.root), self.binary)
@@ -81,7 +88,7 @@ class TestSemgrepTool(unittest.TestCase):
 
     def test_wrong_package_python_path_and_executable_version_fail_without_fallback(self):
         valid = self.metadata.copy()
-        for changed in ({"version": "0.0.0"}, {"python": "3.15"}, {"path": "relative/semgrep"}, {"path": str(self.root / "absent")}, {"path": str(self.root)}):
+        for changed in ({"version": "0.0.0"}, {"python": "3.14"}, {"path": "relative/semgrep"}, {"path": str(self.root / "absent")}, {"path": str(self.root)}):
             with self.subTest(changed=changed), patch.object(semgrep_tool, "run_command_bytes", side_effect=self.native):
                 self.calls.clear()
                 self.metadata = valid | changed
@@ -114,6 +121,20 @@ class TestSemgrepTool(unittest.TestCase):
         with patch.object(semgrep_tool, "setup", side_effect=RuntimeError("setup unavailable")), contextlib.redirect_stderr(err):
             self.assertEqual(cli.main(["--root", str(self.root), "semgrep", "setup"]), 1)
         self.assertIn("setup unavailable", err.getvalue())
+
+    def test_shared_override_adoption_is_idempotent_and_preserves_unrelated_constraints(self):
+        original = f'[project]\nname="example"\nrequires-python=">=3.15"\n[dependency-groups]\ndev=["research-repo-tools[semgrep]=={version("research-repo-tools")}"]\n'
+        original += '[tool.uv]\noverride-dependencies=["unrelated==1"] # retained\n'
+        adopted = semgrep_tool.adopt_manifest(original)
+        self.assertEqual(
+            tomllib.loads(adopted)["tool"]["uv"]["override-dependencies"],
+            ["unrelated==1", *[str(Requirement(raw)) for raw in semgrep_tool.constraints()]],
+        )
+        self.assertIn("# retained", adopted)
+        self.assertEqual(semgrep_tool.adopt_manifest(adopted), adopted)
+        self.assertEqual(semgrep_tool.adopt_manifest(original.replace("[semgrep]", "")), original.replace("[semgrep]", ""))
+        with self.assertRaisesRegex(ValueError, "conflicts with the shared Semgrep override"):
+            semgrep_tool.adopt_manifest(original.replace("unrelated==1", "pywin32==311"))
 
 
 if __name__ == "__main__":

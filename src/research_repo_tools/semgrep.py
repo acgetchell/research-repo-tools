@@ -14,6 +14,7 @@ from research_repo_tools.config import Config
 from research_repo_tools.process import run_safe_command
 from research_repo_tools.semgrep_docs import FENCE, RustBlock, _documentation, documentation_blocks
 from research_repo_tools.semgrep_findings import _expected_findings, _finding_mismatches, parse_results
+from research_repo_tools.semgrep_policy import extraction_selected, representation_rules
 
 ANNOTATION = re.compile(r"(?<![A-Za-z0-9_])(?P<kind>ruleid|ok):\s*(?P<ids>[A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*)")
 
@@ -66,6 +67,7 @@ def rules(path: Path) -> dict[str, dict[str, Any]]:
             raise ValueError(f"{path}: every rule requires a nonempty ID")
         if rule["id"] in result:
             raise ValueError(f"{path}: duplicate rule ID: {rule['id']}")
+        representation_rules(rule)
         result[rule["id"]] = rule
     return result
 
@@ -102,8 +104,9 @@ class FixtureCase:
         return f"{self.source} (Rust block {self.block.index + 1}, lines {self.block.start_line}-{self.block.end_line})"
 
 
-def _documentation_cases(path: Path, source: dict[str, dict[str, Any]], namespace: str) -> list[FixtureCase]:
-    blocks = documentation_blocks(path) if path.suffix in {".rs", ".md"} else ()
+def _documentation_cases(path: Path, source: dict[str, dict[str, Any]], namespace: str, *, extract: bool = True) -> list[FixtureCase]:
+    blocks = documentation_blocks(path) if extract and path.suffix in {".rs", ".md"} else ()
+    policies = {name: representation_rules(rule) for name, rule in source.items()}
     lines = _documentation(path, preserve_source=True)
     cases: dict[int | None, FixtureCase] = {}
     for number, line in enumerate(lines, start=1):
@@ -113,9 +116,9 @@ def _documentation_cases(path: Path, source: dict[str, dict[str, Any]], namespac
             target = number + 1
             while target <= len(lines) and (not lines[target - 1].strip() or FENCE.match(lines[target - 1])):
                 target += 1
-            block = (
-                next((block for block in blocks if block.start_line <= target <= block.end_line), None) if "rust" in source[name].get("languages", []) else None
-            )
+            block = next((block for block in blocks if block.start_line <= target <= block.end_line), None) if "rust-block" in policies[name] else None
+            if block is None and "source" not in policies[name]:
+                raise ValueError(f"{path}:{number}: {name} annotation requires a selected Rust block")
             key = None if block is None else block.index
             case = cases.setdefault(key, FixtureCase(path, [], block=block, expected=Counter()))
             if name not in case.names:
@@ -129,7 +132,9 @@ def _documentation_cases(path: Path, source: dict[str, dict[str, Any]], namespac
     if path.suffix == ".rs" and blocks:
         names = list(dict.fromkeys(name for case in cases.values() if case.block is not None for name in case.names))
         native = cases.setdefault(None, FixtureCase(path, [], expected=Counter()))
-        native.names.extend(name for name in names if name not in native.names)
+        native.names.extend(name for name in names if name not in native.names and "source" in policies[name])
+        if not native.names:
+            del cases[None]
     return list(cases.values())
 
 
@@ -162,14 +167,30 @@ def check(config: Config, *, rust_docs: bool = False) -> int:
             raise ValueError(f"fixture has no Semgrep annotations or configured count expectations: {path}")
         if annotated:
             if rust_docs:
-                selected.extend(_documentation_cases(path, source, namespace))
+                selected.extend(
+                    _documentation_cases(
+                        path,
+                        source,
+                        namespace,
+                        extract=extraction_selected(
+                            path.relative_to(config.root).as_posix() if path.is_relative_to(config.root) else path.as_posix(),
+                            section.rustdoc_include,
+                            section.rustdoc_exclude,
+                        ),
+                    )
+                )
             else:
-                selected.append(FixtureCase(path, fixture_rule_ids(path, source, namespace)))
+                names = fixture_rule_ids(path, source, namespace)
+                if any("source" not in representation_rules(source[name]) for name in names):
+                    raise ValueError(f"{path}: Rust-block annotations require --rust-docs and selected extraction scope")
+                selected.append(FixtureCase(path, names))
         if expected_counts:
             names = [name for name in expected_counts if name.startswith(namespace)]
             if set(names) - source.keys():
                 raise ValueError(f"{path}: unknown rules in count expectations")
             if names:
+                if any("source" not in representation_rules(source[name]) for name in names):
+                    raise ValueError(f"{path}: count expectations require source rules")
                 selected.append(FixtureCase(path, names, count_mode=True))
                 positives.update(name for name in names if expected_counts[name] > 0)
     missing = selected_rules - positives
@@ -186,7 +207,7 @@ def check(config: Config, *, rust_docs: bool = False) -> int:
                 path.write_text(case.block.code, encoding="utf-8", newline="\n")
             generated = temporary / str(index) / path.with_suffix(".yaml").name
             generated.parent.mkdir(parents=True)
-            case_rules = [{**source[name], "languages": ["rust"]} if case.block is not None else source[name] for name in names]
+            case_rules = [representation_rules(source[name])["rust-block" if case.block is not None else "source"] for name in names]
             generated.write_text(yaml.safe_dump({"rules": case_rules}, sort_keys=False), encoding="utf-8", newline="\n")
             # Semgrep's fixture test mode ignores production path filters.
             # Apply that same rule to the span-aware scan: several production

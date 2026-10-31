@@ -9,12 +9,22 @@ from typing import Any
 import pytest
 import yaml
 
-from research_repo_tools import cli, config, semgrep
+from research_repo_tools import cli, config, semgrep, semgrep_tool
 
 
 @pytest.fixture(autouse=True)
 def managed_scanner(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(semgrep.semgrep_tool, "setup", lambda root: tmp_path / "managed-semgrep")
+
+
+def test_root_override_policy_mirrors_the_packaged_constraints():
+    import tomllib
+
+    from packaging.requirements import Requirement
+
+    root = Path(__file__).resolve().parents[2]
+    document = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
+    assert {Requirement(raw) for raw in document["tool"]["uv"]["override-dependencies"]} == {Requirement(raw) for raw in semgrep_tool.constraints()}
 
 
 def consumer(tmp_path: Path, content: str = "# ruleid: shared.rule\nbad()\n") -> tuple[config.Config, Path]:
