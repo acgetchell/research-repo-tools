@@ -304,17 +304,18 @@ def load_publication(
             raise ValueError("prepare policy requires a repository for existing-tag verification")
         if dict(sources["current"].context).get("mode") != "working-tree" or _tag_version(releases["current"]) <= _tag_version(releases["baseline"]):
             raise ValueError("prepare policy requires prospective working-tree evidence newer than its baseline")
-        if (retained.payload_schema != RUN_SCHEMA_V4 or artifacts_only) and not {"current-sources", "current-harness"} <= raw.keys():
+        if retained.payload_schema != RUN_SCHEMA_V4 and not {"current-sources", "current-harness"} <= raw.keys():
             raise ValueError("prepare policy requires current-sources and current-harness inventories")
     inventories = []
-    if retained.payload_schema == RUN_SCHEMA_V4 and not artifacts_only:
-        from research_repo_tools.suite_runs import publication_inputs
-
+    if retained.payload_schema == RUN_SCHEMA_V4:
         if {"current-sources", "current-harness"} & raw.keys():
             raise ValueError("suite evidence derives current input checks from its per-suite declarations")
-        suite_inputs, suite_checks = publication_inputs(root, retained)
-        inputs.update(suite_inputs)
-        inventories.extend(suite_checks)
+        if not artifacts_only or tag_policy == "prepare":
+            from research_repo_tools.suite_runs import publication_inputs
+
+            suite_inputs, suite_checks = publication_inputs(root, retained)
+            inputs.update(suite_inputs)
+            inventories.extend(suite_checks)
     for field, attribute in (("current-sources", "source_sha256"), ("current-harness", "harness_sha256")):
         if field in raw:
             patterns = tuple(_string(item, field) for item in _array(raw[field], field))

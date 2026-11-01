@@ -266,7 +266,7 @@ class TestSuiteAcquisition(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "same-release"):
             validate_run_policy(changed, selected, release=True)
 
-    def test_prepare_artifacts_require_current_inventories(self) -> None:
+    def test_prepare_artifacts_derive_suite_inventories(self) -> None:
         original = self.revisions["v1.1.0"]
         for name, data in original.items():
             (self.root / name).write_bytes(data)
@@ -285,12 +285,26 @@ class TestSuiteAcquisition(unittest.TestCase):
             '[provenance.baseline]\nrelease="v1.0.0"\nrevision="' + "a" * 40 + '"\n'
             '[provenance.current]\nrelease="v1.1.0"\nrevision="' + "b" * 40 + '"\n'
         )
-        for inventory in ("", 'current-sources=["revision", "apis.json"]\n', 'current-harness=["bench.py", "input-shared.json"]\n'):
-            (self.root / "publication.toml").write_text(inventory + config, encoding="utf-8", newline="\n")
-            with self.subTest(inventory=inventory), self.assertRaisesRegex(ValueError, "requires current-sources and current-harness"):
-                load_publication(self.root, "publication.toml", artifacts_only=True)
+        (self.root / "publication.toml").write_text(config, encoding="utf-8", newline="\n")
+        prepared = load_publication(self.root, "publication.toml", artifacts_only=True)
+        self.assertTrue(prepared.glob_checks)
+        for name in ("revision", "apis.json", "bench.py", "input-shared.json"):
+            self.assertEqual(dict(prepared.originals)[name], original[name])
+        source_inventory = 'current-sources=["revision", "apis.json"]\n'
+        harness_inventory = 'current-harness=["bench.py", "input-shared.json"]\n'
+        for policy in ("prepare", "existing"):
+            for inventory in (source_inventory, harness_inventory, source_inventory + harness_inventory):
+                (self.root / "publication.toml").write_text(
+                    inventory + config.replace('tag-policy="prepare"', f'tag-policy="{policy}"'), encoding="utf-8", newline="\n"
+                )
+                with self.subTest(policy=policy, inventory=inventory), self.assertRaisesRegex(ValueError, "suite evidence derives current input checks"):
+                    load_publication(self.root, "publication.toml", artifacts_only=True)
+        (self.root / "input-shared.json").write_bytes(b"changed after acquisition")
+        (self.root / "publication.toml").write_text(config, encoding="utf-8", newline="\n")
+        with self.assertRaisesRegex(ValueError, "differs from measured inputs"):
+            load_publication(self.root, "publication.toml", artifacts_only=True)
         (self.root / "publication.toml").write_text(config.replace('tag-policy="prepare"', 'tag-policy="existing"'), encoding="utf-8", newline="\n")
-        self.assertIsNotNone(load_publication(self.root, "publication.toml", artifacts_only=True))
+        self.assertFalse(load_publication(self.root, "publication.toml", artifacts_only=True).glob_checks)
 
     def test_resume_reuses_complete_pair_and_recollects_interrupted_pair(self) -> None:
         selected = plan(self.log, ("shared", "later"))

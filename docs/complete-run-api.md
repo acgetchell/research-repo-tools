@@ -140,9 +140,10 @@ The supported names in `complete_runs` are:
 | --- | --- |
 | `LEGACY_RUN_SCHEMA` | Alias of `RUN_SCHEMA` |
 | `RUN_SCHEMA` | `research-repo-tools/complete-run/v1`; original uniform policy and provenance rules |
-| `RUN_SCHEMAS` | All three supported schemas, in version order |
+| `RUN_SCHEMAS` | All four supported schemas, in version order |
 | `RUN_SCHEMA_V2` | `research-repo-tools/complete-run/v2`; explicit phase-owned policy and provenance rules |
 | `RUN_SCHEMA_V3` | `research-repo-tools/complete-run/v3`; common or independent acquisition and supplemental raw JSON files |
+| `RUN_SCHEMA_V4` | `research-repo-tools/complete-run/v4`; suite availability, complete acquisition units and observation-level comparisons |
 | `CompleteCase(storage_path, benchmark, estimates, sample, *, raw_files=())` | Portable relative path plus original immutable bytes for Criterion's three core JSON files and optional `(filename, bytes)` pairs |
 | `CompletePolicy(expected, sample_count=100, statistics=("mean", "median"), confidence_level=0.95, unit="ns", *, sample_counts=())` | Exact unique semantic IDs; select uniform counts or exhaustive immutable ID/count pairs with `sample_count=None` |
 | `CompleteRun(phases, series, compatible=("harness_sha256",), *, schema=RUN_SCHEMA, harness_mode="common")` | Exactly baseline/current complete samples, named views and required provenance selection; defaults to v1, with v2 for independent phase counts and v3 for independent acquisition |
