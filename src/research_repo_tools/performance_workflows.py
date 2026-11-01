@@ -36,6 +36,11 @@ def add_command(commands, name: str) -> None:
         command.add_argument("configuration")
     if name in {"prepare", "release"}:
         command.add_argument("--allow-git-mutations", action="store_true", help="authorize only requested tag fetching or configured temporary worktrees")
+    if name in {"measure", "release"}:
+        command.add_argument("--checkpoint", help="ignored root-relative checkpoint directory; schema 5 only")
+        command.add_argument("--progress", choices=("human", "json", "none"), default="human", help="advisory status on stderr")
+        command.add_argument("--progress-cadence", type=float, default=10.0, help="heartbeat interval in seconds, at least 1")
+        command.add_argument("--resume", action="store_true", help="validate and reuse completed units from --checkpoint")
     if name == "prepare":
         command.add_argument("--fetch-tags", action="store_true", help="fetch repository tags before selection; also requires --allow-git-mutations")
     if name == "readme":
@@ -160,7 +165,9 @@ def run(args: argparse.Namespace, settings: Config) -> int:
                 ).encode("utf-8")
             )
         elif args.action == "release":
-            measure_release(root, workflow, allow_git_mutations=args.allow_git_mutations)
+            measure_release(
+                root, workflow, allow_git_mutations=args.allow_git_mutations, checkpoint=args.checkpoint, resume=args.resume, progress=_progress(args)
+            )
             print("Retained measurement and report. README publication is a separate step.")
         else:
             values = [getattr(args, f"{phase}_{field}") for phase in ("current", "baseline") for field in ("release", "revision")]
@@ -244,6 +251,9 @@ def run(args: argparse.Namespace, settings: Config) -> int:
             working_tree=working_tree,
             allow_git_mutations=args.allow_git_mutations,
             backend=args.backend,
+            checkpoint=args.checkpoint,
+            resume=args.resume,
+            progress=_progress(args),
         )
     elif args.action == "assets":
         _outputs(args, settings, _asset_pair(args, settings), inputs=(args.legacy_configuration,) if args.legacy_configuration else ())
@@ -283,3 +293,9 @@ def run(args: argparse.Namespace, settings: Config) -> int:
             for path in publish_publication(plan):
                 print(f"Updated {path.relative_to(root).as_posix()}")
     return 0
+
+
+def _progress(args: argparse.Namespace):
+    from research_repo_tools.performance_progress import ProgressReporter
+
+    return ProgressReporter(mode=args.progress, cadence=args.progress_cadence)

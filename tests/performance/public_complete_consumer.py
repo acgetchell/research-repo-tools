@@ -603,6 +603,7 @@ raw-files=["benchmark.json", "estimates.json", "sample.json", "tukey.json"]
             raised_floor = replace(plan, measurement=replace(plan.measurement, minimum_release="v2.0.0"))
             self.assertEqual(validate_run_policy(evidence, raised_floor), validate_run_evidence(evidence))
             run = validate_run_evidence(evidence)
+            assert isinstance(run, CompleteRun)
             alternatives = [
                 replace(
                     plan,
@@ -1044,6 +1045,7 @@ ratio-suffix="×"
     def test_presentation_multiple_coordinates_order_and_missing_cells(self):
         original = retained_fixture()
         run = validate_run_evidence(original)
+        assert isinstance(run, CompleteRun)
         phases = []
         for phase, sample in run.phases:
             cases = list(sample.cases)
@@ -1243,6 +1245,7 @@ ratio-suffix="×"
             config = presentation_fixture(root)
             evidence = retained_fixture()
             run = validate_run_evidence(evidence)
+            assert isinstance(run, CompleteRun)
             phases = dict(run.phases)
             current = phases["current"]
             case = replace(current.cases[0], storage_path="current-only", benchmark=b'{"full_id":"current-only"}\r\n')
@@ -1391,6 +1394,7 @@ if '--list' in sys.argv:
             with patch("research_repo_tools.measurement.resolve_revision", return_value="a" * 40):
                 evidence = measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.0.0"))
             run = validate_run_evidence(evidence)
+            assert isinstance(run, CompleteRun)
             for phase, source in evidence.sources:
                 inventory = parse_inventory(dict(source.context)["discovery-inventory"].encode("utf-8"))
                 self.assertEqual(inventory.expected, dict(run.phases)[phase].policy.expected)
@@ -1440,6 +1444,7 @@ if '--list' in sys.argv:
             root = Path(directory).resolve()
             evidence = measured(root, same_label=True)
             run = validate_run_evidence(evidence)
+            assert isinstance(run, CompleteRun)
             self.assertEqual(parse_run(serialize_run(run)), run)
             baseline, current = dict(run.phases)["baseline"], dict(run.phases)["current"]
             self.assertEqual(len(baseline.cases), 2)
@@ -1468,7 +1473,9 @@ if '--list' in sys.argv:
     def test_recorded_provenance_unknowns_escaping_redaction_and_offline_determinism(self):
         with patch("research_repo_tools.common_measurement.capture_provenance", side_effect=AssertionError("retained setup must not probe")):
             evidence = retained_fixture()
-        evidence = replace(evidence, payload=serialize_run(replace(validate_run_evidence(evidence), compatible=("harness_sha256",))))
+        run = validate_run_evidence(evidence)
+        assert isinstance(run, CompleteRun)
+        evidence = replace(evidence, payload=serialize_run(replace(run, compatible=("harness_sha256",))))
         sources = []
         for phase, source in evidence.sources:
             host = HostMetadata(

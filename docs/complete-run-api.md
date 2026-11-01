@@ -1,5 +1,42 @@
 # Complete measurements and host metadata
 
+## Availability-aware suite APIs (v0.2.5)
+
+`suite_measurement.AcquisitionSuite(name, contract, measurement, since=None,
+before=None, nominal_seconds_per_case=None, compilation=())` wraps a schema-4
+export plan. `SuiteMeasurementPlan(suites)` is loaded by
+`measurement.load_measurement` from schema 5. Its `document()` returns the
+canonical declaration. `measurement.measure_pair` adds keyword arguments
+`checkpoint: Path | None`, `resume=False` and `progress: ProgressReporter | None`.
+The direct/prepared CLI and `performance_release.measure_release` expose the same
+checkpoint/resume options; retention accepts a root-relative checkpoint string.
+Lower-level `measurement_checkpoints.open_checkpoint` handles are usable only
+inside their owning context; reads and writes reject expired handles.
+
+`suite_runs.parse_suite_run(evidence)` and `complete_runs.validate_run_evidence`
+return a `SuiteRun` for complete-run v4. Its authoritative `units` retain absence
+decisions, session/collection interval, complete samples and original provenance.
+Its `phases` and `series` are derived presentation views: an absent phase is a
+`PhaseView` with zero cases, not a `CompleteSample`. Historical evidence still
+returns `CompleteRun`. `serialize_run` remains the v1–v3 serializer; retain v4
+through the ordinary exact-byte evidence envelope.
+
+`suite_runs.comparison_incompatibilities(evidence, numerator, denominator)` takes
+two `(phase, native_full_id)` tuples and returns diagnostic strings. Unknown
+observations raise `ValueError`. Tables and ratio figures use individual checks;
+the legacy global `ratio_incompatibilities` deliberately rejects blanket v4
+eligibility. `validate_run_policy` checks independently supplied suite policy;
+`release=True` additionally validates shared release comparisons. Offline reports,
+immutable history and transactional README publication use the same public APIs.
+Current document-input checks derive from each suite's recorded declarations.
+
+`performance_progress.ProgressReporter(mode="human", cadence=10, stream=None,
+observer=None, clock=time.monotonic)` exposes the documented event contract.
+The default stream is stderr. An observer receives event dictionaries; heartbeats
+invoke it on a background thread. Keep custom observers fast and nonblocking.
+The [schema-5 guide](DECLARING_PERFORMANCE.md#availability-progress-and-resume-schema-5)
+defines availability, comparison, checkpoint, cadence and recovery semantics.
+
 Complete runs retain original Criterion files, phase-owned series and recorded
 host/source identities. Consumer commands and editable scaffolds are described
 in the [task guide](RECORDING_PERFORMANCE.md#common-harness-and-complete-runs).

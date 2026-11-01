@@ -195,15 +195,16 @@ def _relative_link(document: str, target: str) -> str:
     return quote(posixpath.relpath(target, posixpath.dirname(document) or "."), safe="/.")
 
 
-def _path(root: Path, name: str) -> Path:
+def _path(root: Path, name: str, *, directory: bool = False) -> Path:
     _publication_name(name)
     path = root / name
     if any(item.is_symlink() or item.is_junction() for item in (path, *path.parents) if item.is_relative_to(root)):
         raise ValueError(f"publication path must not contain a symlink or junction: {name}")
     if not path.resolve().is_relative_to(root):
         raise ValueError(f"publication path must remain inside the root: {name}")
-    if path.exists() and not path.is_file():
-        raise ValueError(f"publication path must be a regular file: {name}")
+    if path.exists() and not (path.is_dir() if directory else path.is_file()):
+        kind = "directory" if directory else "regular file"
+        raise ValueError(f"publication path must be a {kind}: {name}")
     return path
 
 
