@@ -17,6 +17,7 @@ from research_repo_tools.complete_runs import (
     CompleteRun,
     CompleteSample,
     RunSeries,
+    _render_run_v2,
     render_run,
     serialize_policy,
     serialize_run,
@@ -140,15 +141,21 @@ class TestRenderingConsumer(unittest.TestCase):
             with self.subTest(schema=schema, disjoint=disjoint):
                 evidence = fixture(schema=schema, disjoint=disjoint)
                 before = serialize_evidence(evidence)
-                rendered = report(evidence)
+                rendered = _render_run_v2(
+                    evidence, title="Timings | <&>", report_path="docs/report.md", payload_path="data/run.json", manifest_path="data/evidence.json"
+                )
                 self.assertEqual(hashlib.sha256(rendered).hexdigest(), digest)
+                current = report(evidence)
+                self.assertTrue(current.startswith(b"<!-- research-repo-tools/run-report/v3 -->"))
+                self.assertEqual(report(evidence), current)
+                for output in (rendered, current):
+                    self.assertIn(b"| row&#124;&lt;000&gt; | 11 ns [10, 12] (0.95 confidence) |", output)
+                    self.assertIn("| — | 101 ns [100, 102] (0.95 confidence) |".encode(), output)
+                    self.assertIn(b"[run payload](../data/run.json)", output)
+                    if disjoint:
+                        self.assertIn(b"no common benchmark IDs", output)
+                        self.assertIn(b"| unavailable | 101 ns [100, 102] (0.95 confidence) |", output)
                 self.assertEqual(serialize_evidence(evidence), before)
-                self.assertIn(b"| row&#124;&lt;000&gt; | 11 ns [10, 12] (0.95 confidence) |", rendered)
-                self.assertIn("| — | 101 ns [100, 102] (0.95 confidence) |".encode(), rendered)
-                self.assertIn(b"[run payload](../data/run.json)", rendered)
-                if disjoint:
-                    self.assertIn(b"no common benchmark IDs", rendered)
-                    self.assertIn(b"| unavailable | 101 ns [100, 102] (0.95 confidence) |", rendered)
 
     def test_id_decoding_and_row_mapping_work_scale_with_inventory(self):
         for schema, disjoint in ((RUN_SCHEMA, False), (RUN_SCHEMA_V2, False), (RUN_SCHEMA_V3, False), (RUN_SCHEMA_V3, True)):

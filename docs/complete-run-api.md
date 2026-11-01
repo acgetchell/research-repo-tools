@@ -1,5 +1,9 @@
 # Complete measurements and host metadata
 
+For exact-tagged v4 evidence, the [reuse API](benchmark-reuse-api.md) derives a
+release archive without acquisition, preserving the original run and separately
+asserted release target. It does not manufacture native saved samples or CI trust.
+
 ## Availability-aware suite APIs (v0.2.5)
 
 `suite_measurement.AcquisitionSuite(name, contract, measurement, since=None,
@@ -229,6 +233,14 @@ platform. Without publication paths, the pure renderer explicitly reports that
 evidence links were not supplied. It never guesses the evidence location or
 captures the machine performing an offline rerender.
 
+Generated report source wraps at 160 characters. Wide tables use multiline HTML
+tables, preserving the exact displayed cell contents, timing intervals and
+recorded provenance. HTML comments carry source line breaks inside long cells
+without adding characters to values. Recorded URLs in provenance cells remain
+plain data. Evidence and history links use reference definitions when needed;
+their destinations are never split or shortened. An indivisible link destination
+or prose token longer than the limit still requires a consumer policy decision.
+
 The CLI renderer supplies evidence links when `--output` and both evidence paths
 share a portable relative-path context, including absolute paths outside the
 consumer root. Stdout, paths on different Windows drives, and filenames outside
@@ -262,8 +274,8 @@ replaced; differing bytes, partial directories, corrupt pointers and mismatching
 indexes fail. Empty directories left by a caught rollback are harmless.
 Do not share these new paths with legacy reports or schema-1 archives.
 
-New reports use `research-repo-tools/run-report/v2`. New indexes use
-`research-repo-tools/run-index/v2`, with an integer `report_renderer` (1 or 2)
+New reports use `research-repo-tools/run-report/v3`. New indexes use
+`research-repo-tools/run-index/v2`, with an integer `report_renderer` (1, 2 or 3)
 in every run entry. The latest-pointer schema and content-derived run identity
 remain version 1. Renderer versions describe presentation; they do not alter the
 run payload, evidence envelope or evidence hashes. Current and new retained
@@ -272,15 +284,18 @@ relative to each report's own directory. Measurement CLI reports link to their
 explicit output evidence paths.
 
 Version-1 indexes remain readable and select the frozen renderer-1 presentation
-for exact-byte report validation. Promotion or offline rerender upgrades the
-mutable index to version 2 and renders the current report with provenance and
-links. Every existing immutable report, payload and envelope stays byte for byte,
+for exact-byte report validation. Version-2 entries also retain their frozen
+renderer-2 provenance presentation. Promotion or offline rerender upgrades the
+mutable index to version 2 and renders the current report with wrapped source,
+provenance and links. Every existing immutable report, payload and envelope stays byte for byte,
 including when an old run is selected or promoted again. Old reports therefore
 retain their original presentation without new links. Mixed histories record
-renderer 1 for those entries and renderer 2 for newly retained runs; unknown
+renderer 1 or 2 for those entries and renderer 3 for newly retained runs; unknown
 renderer versions or report bytes inconsistent with the recorded version fail.
-Older package versions cannot read version-2 indexes; keep the upgraded package
-pin with the migrated publication configuration.
+Historical reports keep their original formatting, including any long lines;
+scope lint exceptions to those frozen files rather than rewriting them.
+No benchmark resampling is needed. Older package versions cannot read newer
+renderer versions; keep the upgraded package pin with the migrated history.
 
 `run_reports.load_latest_run(root, archive)` validates the whole indexed history,
 exact envelope hashes, content-derived IDs, phase provenance, stored reports,

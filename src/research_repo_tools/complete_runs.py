@@ -698,7 +698,7 @@ def _provenance_summary(evidence: Evidence) -> list[str]:
     return lines
 
 
-def render_run(
+def _render_run_v2(
     evidence: Evidence,
     *,
     title: str = "Benchmark timings",
@@ -706,12 +706,7 @@ def render_run(
     payload_path: str | None = None,
     manifest_path: str | None = None,
 ) -> bytes:
-    """Render timings and recorded provenance, with optional publication paths.
-
-    Supply all three normalized root-relative paths to link the exact evidence
-    files from the report's directory. No host, tool, environment or filesystem
-    observations are captured. Missing locations are explicitly unlinked.
-    """
+    """Frozen provenance presentation for validating renderer-2 histories."""
     _string(title, "report title")
     paths = (report_path, payload_path, manifest_path)
     if any(path is not None for path in paths) and not all(path is not None for path in paths):
@@ -750,3 +745,30 @@ def render_run(
                 cells.append("unavailable" if case is None else _format_estimate(case.estimate(sample.policy.statistics[0]), sample.policy.unit))
             timings.append(f"| {_markdown_text(full_id)} | " + " | ".join(cells) + " |")
     return ("<!-- research-repo-tools/run-report/v2 -->\n" + "\n".join([*timings, *_provenance_summary(evidence)]) + "\n").encode("utf-8")
+
+
+def render_run(
+    evidence: Evidence,
+    *,
+    title: str = "Benchmark timings",
+    report_path: str | None = None,
+    payload_path: str | None = None,
+    manifest_path: str | None = None,
+) -> bytes:
+    """Render timings and recorded provenance with bounded source lines.
+
+    Supply all three normalized root-relative paths to link the exact evidence
+    files from the report's directory. No host, tool, environment or filesystem
+    observations are captured. Missing locations are explicitly unlinked.
+    Wide tables use HTML; old immutable reports keep their recorded renderer.
+    """
+    from research_repo_tools.markdown import _generated_report_layout, _GeneratedLinks
+
+    report = _render_run_v2(evidence, title=title, report_path=report_path, payload_path=payload_path, manifest_path=manifest_path).decode("utf-8")
+    lines = report.splitlines()
+    lines[0] = "<!-- research-repo-tools/run-report/v3 -->"
+    links = _GeneratedLinks(report)
+    if report_path is not None and payload_path is not None and manifest_path is not None:
+        payload_link, manifest_link = (_relative_link(report_path, path) for path in (payload_path, manifest_path))
+        lines[5] = "Evidence: " + links.render("run payload", payload_link) + " · " + links.render("evidence envelope", manifest_link) + "."
+    return (_generated_report_layout("\n".join(lines)) + links.definitions()).encode("utf-8")

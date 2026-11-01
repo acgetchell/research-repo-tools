@@ -225,6 +225,29 @@ and retry that last stage without measuring again. The [performance guide][perfo
 explains source exports versus worktrees, common versus independent harnesses,
 parallel suite assembly, ratio eligibility and first-use report state.
 
+The v0.2.5 [benchmark reuse API][benchmark-reuse] derives release archives from
+one accepted complete-run v4 acquisition. Supply a trusted, independently prepared
+reuse policy, then plan and publish the archive without invoking benchmarks:
+
+```python
+from pathlib import Path
+
+from research_repo_tools.benchmark_reuse import plan_reuse_archive
+from research_repo_tools.publication import publish_publication
+
+candidate = plan_reuse_archive(
+    Path.cwd(), "target/run.json", "target/evidence.json",
+    "tooling/reuse-policy.json", "target/benchmark-release.tar.gz",
+)
+publish_publication(candidate)
+```
+
+This requires exact tagged source measurements. If README updates must precede
+the final release commit, retain the existing two-acquisition workflow. The
+derived archive preserves original evidence and does not authenticate CI origin;
+attachment and approval retain the existing release safeguards. Verify the
+supplying PyPI release before adoption.
+
 ### Releases
 
 Follow the [ordered release procedure][publishing] and matching installed
@@ -263,6 +286,7 @@ BSD-3-Clause. See [LICENSE][license].
 [codeql-badge]: https://github.com/acgetchell/research-repo-tools/actions/workflows/codeql.yml/badge.svg?branch=main
 [codeql-workflow]: https://github.com/acgetchell/research-repo-tools/actions/workflows/codeql.yml
 [commands]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_COMMANDS.md
+[benchmark-reuse]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/benchmark-reuse-api.md
 [complete-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/complete-run-api.md
 [configuration-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/configuration-api.md
 [contributing]: https://github.com/acgetchell/research-repo-tools/blob/main/CONTRIBUTING.md

@@ -49,6 +49,7 @@ Choose the contract that matches the evidence you have:
 | Input or task | Reference |
 | --- | --- |
 | Complete native acquisitions | [Declaration and source/harness modes](DECLARING_PERFORMANCE.md), [complete-run API](complete-run-api.md) |
+| Complete acquisition reuse | [Derived release archives, independent assertions and trust boundaries](benchmark-reuse-api.md) |
 | Criterion discovery and saved samples | [Inventories, exact raw files and parallel suite assembly](criterion-api.md) |
 | Existing Criterion comparisons | [Samples, provenance, archive retrieval and extraction](performance-api.md) |
 | Exploratory external-command timing | [Plans, retained timing reports and claim limits](command-timing-api.md) |

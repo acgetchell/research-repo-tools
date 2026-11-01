@@ -5,6 +5,7 @@ import io
 import json
 import math
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -16,9 +17,11 @@ from contextlib import contextmanager, redirect_stderr, redirect_stdout
 from dataclasses import replace
 from decimal import Inexact, Rounded, localcontext
 from html import unescape
+from html.parser import HTMLParser
 from pathlib import Path
 from stat import S_ISFIFO
 from types import SimpleNamespace
+from typing import override
 from unittest.mock import patch
 from urllib.parse import unquote
 
@@ -63,6 +66,7 @@ from research_repo_tools.run_presentation import (
     serialize_run_csv,
 )
 from research_repo_tools.run_reports import load_latest_run, load_run_report_plan
+from research_repo_tools.text_lines import inspect_lines
 
 BENCHMARK = """import json, os
 from pathlib import Path
@@ -108,6 +112,134 @@ Intervals are marginal timing intervals. No significance or ratio interval is in
 | --- | --- | --- | --- |
 | size 2 | 10 ns [9, 11] (0.95 confidence) | 5 ns [4.5, 5.5] (0.95 confidence) | 10 ns [9, 11] (0.95 confidence) |
 """
+
+
+# Captured from renderer 2 before the layout change; no current renderer builds it.
+PROVENANCE_REPORT = """<!-- research-repo-tools/run-report/v2 -->
+# Benchmark timings
+
+Run: `{identity}`
+
+Evidence: [run payload](run.json) · [evidence envelope](evidence.json).
+
+Intervals are marginal timing intervals. No significance or ratio interval is inferred.
+
+- Library baseline: measured in **baseline** phase (v1.0.0), revision `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`.
+- Library current: measured in **current** phase (v1.1.0), revision `bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb`.
+- Reference reused: measured in **baseline** phase (v1.0.0), revision `aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa`.
+
+## Mean (ns)
+
+| Case | Library baseline | Library current | Reference reused |
+| --- | --- | --- | --- |
+| size 2 | 10 ns [9, 11] (0.95 confidence) | 5 ns [4.5, 5.5] (0.95 confidence) | 10 ns [9, 11] (0.95 confidence) |
+
+## Median (ns)
+
+| Case | Library baseline | Library current | Reference reused |
+| --- | --- | --- | --- |
+| size 2 | 10 ns [9, 11] (0.95 confidence) | 5 ns [4.5, 5.5] (0.95 confidence) | 10 ns [9, 11] (0.95 confidence) |
+
+## Recorded measurement provenance
+
+These observations belong to the measured phases. Rerendering does not recapture the publisher's environment.
+
+### Baseline phase
+
+| Field | Recorded value |
+| --- | --- |
+| Release | v1.0.0 |
+| Revision | aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa |
+| Measurement mode | tag |
+| Original source SHA-256 | 1111111111111111111111111111111111111111111111111111111111111111 |
+| Measured source SHA-256 | 3333333333333333333333333333333333333333333333333333333333333333 |
+| Common harness SHA-256 | 4444444444444444444444444444444444444444444444444444444444444444 |
+| Fingerprint schema | research-repo-tools/files/v1 |
+| OS | fixture OS |
+| Architecture | fixture arch |
+| CPU | not recorded |
+| Physical cores | not recorded |
+| Logical threads | not recorded |
+| Memory (bytes) | not recorded |
+| Tool: python | Python fixture |
+| Dependency: reference | 2.0.0 |
+| Environment overrides (names only) | PHASE |
+| Measurement command (argv) | &#91;&quot;python&quot;, &quot;bench.py&quot;&#93; |
+| Independent correctness gate | passed |
+| Gate command (argv) | &#91;&quot;python&quot;, &quot;gate.py&quot;&#93; |
+
+### Current phase
+
+| Field | Recorded value |
+| --- | --- |
+| Release | v1.1.0 |
+| Revision | bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb |
+| Measurement mode | tag |
+| Original source SHA-256 | 2222222222222222222222222222222222222222222222222222222222222222 |
+| Measured source SHA-256 | 2222222222222222222222222222222222222222222222222222222222222222 |
+| Common harness SHA-256 | 4444444444444444444444444444444444444444444444444444444444444444 |
+| Fingerprint schema | research-repo-tools/files/v1 |
+| OS | fixture OS |
+| Architecture | fixture arch |
+| CPU | not recorded |
+| Physical cores | not recorded |
+| Logical threads | not recorded |
+| Memory (bytes) | not recorded |
+| Tool: python | Python fixture |
+| Dependency: reference | 2.0.0 |
+| Environment overrides (names only) | PHASE |
+| Measurement command (argv) | &#91;&quot;python&quot;, &quot;bench.py&quot;&#93; |
+| Independent correctness gate | passed |
+| Gate command (argv) | &#91;&quot;python&quot;, &quot;gate.py&quot;&#93; |
+"""
+
+
+class _HTMLRows(HTMLParser):
+    """Read displayed table cells independently of the report renderer."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.rows: list[tuple[str, ...]] = []
+        self.row: list[str] = []
+        self.cell: str | None = None
+
+    @override
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag == "tr":
+            self.row = []
+        elif tag in {"td", "th"}:
+            self.cell = ""
+        elif tag == "br" and self.cell is not None:
+            self.cell += "\n"
+
+    @override
+    def handle_endtag(self, tag: str) -> None:
+        if tag in {"td", "th"}:
+            assert self.cell is not None
+            self.row.append(self.cell)
+            self.cell = None
+        elif tag == "tr":
+            self.rows.append(tuple(self.row))
+
+    @override
+    def handle_data(self, data: str) -> None:
+        if self.cell is not None:
+            self.cell += data
+
+
+def report_rows(report: str) -> list[tuple[str, ...]]:
+    rows = []
+    for block in re.split(r"(<table>.*?</table>)", report, flags=re.DOTALL):
+        if block.startswith("<table>"):
+            parser = _HTMLRows()
+            parser.feed(block)
+            parser.close()
+            rows.extend(parser.rows)
+        else:
+            for line in block.splitlines():
+                if line.startswith("| ") and not line.startswith("| ---"):
+                    rows.append(tuple(unescape(cell.replace("<br>", "\n")) for cell in line[2:-2].split(" | ")))
+    return rows
 
 
 def fixture(root: Path) -> CommonHarnessPlan:
@@ -791,6 +923,70 @@ raw-files=["benchmark.json", "estimates.json", "sample.json", "tukey.json"]
             with self.assertRaisesRegex(ValueError, "changed"):
                 publish_publication(plan)
             self.assertEqual((root / "README.md").read_bytes(), before[root / "README.md"])
+
+    def test_readme_generated_links_fit_raw_line_limit_without_changing_destinations(self):
+        with tempfile.TemporaryDirectory(prefix="publication café ") as directory:
+            root = Path(directory)
+            config = presentation_fixture(root, archive=True)
+            prefix = b"\xef\xbb\xbf# Fixture\r\n[Historical][RRT-PERFORMANCE-LINK-1]\r\n[RRT-PERFORMANCE-LINK-1]: /old\r\n<!-- BEGIN -->"
+            suffix = b"<!-- END -->\r\nTail caf\xc3\xa9\r\n"
+            (root / "README.md").write_bytes(prefix + b"\r\nstale\r\n" + suffix)
+            (root / "prose.md").write_bytes(b"[Inputs][rrt-performance-link-2]\n\n[rrt-performance-link-2]: /inputs\n")
+            config = config.replace(
+                "schema=2",
+                'schema=2\nrepository="example/scientific-library"\nprose-file="prose.md"\n'
+                'table={intervals="below", timing-legend=true, comparison-columns=["ratio"], ratio-headings=["Speedup"]}',
+            )
+            config = config.replace('label="Library old"', 'label="Old"').replace('label="Library <new> & fast"', 'label="New"')
+            config = config.replace(
+                'title="Timings <&>"', 'title="Timings for the complete representative scientific workloads with original confidence intervals <&>"'
+            )
+            (root / "publication.toml").write_text(config, encoding="utf-8", newline="\n")
+            before = {path: path.read_bytes() for path in (root / "history").rglob("*") if path.is_file()}
+            with patch("research_repo_tools.publication.verify_tagged_files", return_value="b" * 40) as tags:
+                plan = load_publication(root, "publication.toml")
+                publish_publication(plan)
+                self.assertEqual(publish_publication(load_publication(root, "publication.toml")), ())
+            self.assertTrue(tags.called)
+            self.assertEqual(plan.git_checks[-1].tag, "v1.1.0")
+            document = (root / "README.md").read_bytes()
+            self.assertTrue(document.startswith(prefix))
+            self.assertTrue(document.endswith(suffix))
+            self.assertEqual(inspect_lines(root / "README.md", limit=160), ())
+            self.assertIn(b"Selection coverage:\n\n- Old", document)
+            self.assertIn(b"Complete evidence is retained independently.\n- [Complete run evidence]", document)
+            self.assertEqual({path: path.read_bytes() for path in before}, before)
+            references = dict(re.findall(r"^\[(rrt-performance-link-[0-9]+)\]:\n  <([^\n]+)>$", document.decode("utf-8"), re.MULTILINE))
+            self.assertNotIn("rrt-performance-link-1", references)
+            self.assertNotIn("rrt-performance-link-2", references)
+            identity = run_identity(load_latest_run(root, "history"))
+            expected = {
+                f"https://github.com/example/scientific-library/blob/v1.1.0/history/runs/{identity}/run.json",
+                f"https://github.com/example/scientific-library/blob/v1.1.0/history/runs/{identity}/evidence.json",
+                "https://raw.githubusercontent.com/example/scientific-library/v1.1.0/figures/coordinates.svg",
+            }
+            self.assertEqual(set(references.values()), expected)
+            self.assertIn(b"[Selected timings CSV](https://github.com/example/scientific-library/blob/v1.1.0/exports/timings.csv)", document)
+            for name in references:
+                self.assertEqual(document.count(f"][{name}]".encode()), 1)
+
+    def test_reference_name_selection_rejects_concurrent_document_change(self):
+        from research_repo_tools.publication import plan_publication
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            presentation_fixture(root)
+            replacement = (root / "README.md").read_bytes() + b"\n[rrt-performance-link-1]: /concurrent\n"
+
+            def changed_document(*args, **kwargs):
+                (root / "README.md").write_bytes(replacement)
+                return plan_publication(*args, **kwargs)
+
+            with patch("research_repo_tools.publication_config.plan_publication", side_effect=changed_document):
+                with self.assertRaisesRegex(ValueError, "document changed"):
+                    load_publication(root, "publication.toml")
+            self.assertEqual((root / "README.md").read_bytes(), replacement)
+            self.assertFalse((root / "figures").exists())
 
     def test_presentation_template_is_available_from_installed_cli(self):
         output = io.StringIO()
@@ -1521,18 +1717,19 @@ if '--list' in sys.argv:
         self.assertEqual(serialize_evidence(evidence), original)
         self.assertIn("Reference reused: measured in **baseline**", report)
         baseline, current = report.split("### Baseline phase", 1)[1].split("### Current phase", 1)
-        self.assertIn("| Dependency: reference | 2.0.0 |", baseline)
-        self.assertIn("| Dependency versions | not recorded |", current)
-        self.assertIn("| Tools / toolchain | not recorded |", current)
-        self.assertIn("| Tool: missing | not recorded |", baseline)
-        self.assertIn("| Measurement mode | not recorded |", baseline)
-        self.assertIn("| CPU | not recorded |", report)
-        self.assertIn("| Logical threads | 8 |", report)
+        baseline_rows, current_rows = report_rows(baseline), report_rows(current)
+        self.assertIn(("Dependency: reference", "2.0.0"), baseline_rows)
+        self.assertIn(("Dependency versions", "not recorded"), current_rows)
+        self.assertIn(("Tools / toolchain", "not recorded"), current_rows)
+        self.assertIn(("Tool: missing", "not recorded"), baseline_rows)
+        self.assertIn(("Measurement mode", "not recorded"), baseline_rows)
+        self.assertIn(("CPU", "not recorded"), baseline_rows)
+        self.assertIn(("Logical threads", "8"), current_rows)
         self.assertIn("rustc 1.90<br>host: &lt;arm64&gt;&#124;&#96;&#42;", report)
         self.assertIn("&lt;script&gt;&#124;&#96;&#42;", report)
         self.assertIn('"--phase", "baseline"', baseline.replace("&quot;", '"'))
         self.assertIn('"--phase", "current"', current.replace("&quot;", '"'))
-        self.assertEqual(report.count("| Independent correctness gate | passed |"), 2)
+        self.assertEqual(report_rows(report).count(("Independent correctness gate", "passed")), 2)
         for secret in (
             "recorded-secret",
             "another-secret",
@@ -1544,7 +1741,7 @@ if '--list' in sys.argv:
             "PRIVATE CONTEXT",
         ):
             self.assertNotIn(secret, report)
-        self.assertNotIn("77", report.split("| Environment overrides", 1)[1].split("\n", 1)[0])
+        self.assertNotIn("77", next(row[1] for row in baseline_rows if row[0] == "Environment overrides (names only)"))
         self.assertNotIn("\x1b", report)
         self.assertIn("Evidence links: publication paths not supplied.", report)
         for phase, source in evidence.sources:
@@ -1586,9 +1783,9 @@ if '--list' in sys.argv:
                 self.assertFalse(load_run_report_plan(root, "report.toml").changed_paths)
             index = json.loads((archive / "index.json").read_bytes())
             self.assertEqual(index["schema"], "research-repo-tools/run-index/v2")
-            self.assertEqual(index["runs"][0]["report_renderer"], 2)
+            self.assertEqual(index["runs"][0]["report_renderer"], 3)
             before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
-            for renderer in (True, 0, 3, "2", None):
+            for renderer in (True, 0, 4, "2", None):
                 with self.subTest(renderer=renderer):
                     index["runs"][0]["report_renderer"] = renderer
                     (archive / "index.json").write_bytes(deterministic_json(index))
@@ -1603,6 +1800,46 @@ if '--list' in sys.argv:
             retained.write_bytes(retained.read_bytes().replace(b"run.json", b"other.json"))
             with self.assertRaisesRegex(ValueError, "report do not match"):
                 load_latest_run(root, "history/café retained (#96)")
+
+    def test_wide_report_preserves_cells_and_evidence_with_bounded_lines(self):
+        evidence = retained_fixture()
+        run = validate_run_evidence(evidence)
+        assert isinstance(run, CompleteRun)
+        label = "Scientific café | <script> " + "x" * 350
+        series = tuple(replace(item, rows=tuple((label, full_id) for _, full_id in item.rows)) for item in run.series)
+        evidence = replace(evidence, payload=serialize_run(replace(run, series=series)))
+        tool = json.dumps({"source": "registry+https://github.com/rust-lang/crates.io-index", "features": ["scientific_feature"] * 30})
+        argv = ["bench", "--workload", "y" * 400, "--iterations", "2"]
+        sources = []
+        for phase, source in evidence.sources:
+            context = dict(source.context)
+            host = parse_host(context["host"].encode())
+            context["host"] = json.dumps(json.loads(serialize_host(replace(host, tools=(*host.tools, ("criterion", tool))))))
+            context["command"] = json.dumps(argv)
+            sources.append((phase, replace(source, context=tuple(context.items()))))
+        evidence = replace(evidence, sources=tuple(sources))
+        original = serialize_evidence(evidence)
+        with tempfile.TemporaryDirectory(prefix="report café ") as directory:
+            root = Path(directory)
+            publish_evidence(evidence, root / "run.json", root / "evidence.json")
+            (root / "report.toml").write_bytes(b'schema=2\ncurrent="docs/current.md"\narchive="docs/history"\ntitle="Timing"\n')
+            with patch("research_repo_tools.host_metadata.capture_host", side_effect=AssertionError("offline must not probe")):
+                publish_publication(load_run_report_plan(root, "report.toml", payload="run.json", manifest="evidence.json"))
+                self.assertFalse(load_run_report_plan(root, "report.toml").changed_paths)
+            retained = root / "docs/history/runs" / run_identity(evidence)
+            for path in (root / "docs/current.md", retained / "report.md", root / "docs/history/README.md"):
+                self.assertEqual(inspect_lines(path, limit=160), (), path)
+            for path in (root / "docs/current.md", retained / "report.md"):
+                report = path.read_text(encoding="utf-8")
+                self.assertTrue(report.startswith("<!-- research-repo-tools/run-report/v3 -->"))
+                self.assertNotIn("<script>", report)
+                rows = report_rows(report)
+                expected = (label, "10 ns [9, 11] (0.95 confidence)", "5 ns [4.5, 5.5] (0.95 confidence)", "10 ns [9, 11] (0.95 confidence)")
+                self.assertEqual(rows.count(expected), 2)
+                self.assertEqual(rows.count(("Tool: criterion", tool)), 2)
+                self.assertEqual([json.loads(row[1]) for row in rows if row[0] == "Measurement command (argv)"], [argv, argv])
+            self.assertEqual(((retained / "run.json").read_bytes(), (retained / "evidence.json").read_bytes()), original)
+            self.assertEqual(serialize_evidence(load_latest_run(root, "docs/history")), original)
 
     def test_known_credentials_are_redacted_before_argv_serialization(self):
         evidence = retained_fixture()
@@ -1634,12 +1871,12 @@ if '--list' in sys.argv:
                     sources.append((phase, replace(source, context=tuple(context.items()))))
                 retained = replace(evidence, sources=tuple(sources))
                 original = serialize_evidence(retained)
-                report = unescape(render_run(retained).decode())
+                report = render_run(retained).decode()
                 for label, expected in (
                     ("Measurement command (argv)", ["bench", f"--{name}", "[redacted]", f"--{name}=[redacted]", "[redacted]"]),
                     ("Gate command (argv)", ["gate", f"--{name}", "[redacted]", f"{name}=[redacted]"]),
                 ):
-                    commands = [line.removeprefix(f"| {label} | ").removesuffix(" |") for line in report.splitlines() if line.startswith(f"| {label} | ")]
+                    commands = [row[1] for row in report_rows(report) if row[0] == label]
                     self.assertEqual([json.loads(command) for command in commands], [expected, expected])
                 self.assertEqual(serialize_evidence(retained), original)
 
@@ -1690,9 +1927,9 @@ if '--list' in sys.argv:
                     sources.append((phase, replace(source, context=tuple(context.items()))))
                 retained = replace(evidence, sources=tuple(sources))
                 original = serialize_evidence(retained)
-                report = unescape(render_run(retained).decode())
+                report = render_run(retained).decode()
                 for label in ("Measurement command (argv)", "Gate command (argv)"):
-                    recorded = [line.removeprefix(f"| {label} | ").removesuffix(" |") for line in report.splitlines() if line.startswith(f"| {label} | ")]
+                    recorded = [row[1] for row in report_rows(report) if row[0] == label]
                     self.assertEqual([json.loads(command) for command in recorded], [expected, expected])
                 self.assertEqual(serialize_evidence(retained), original)
 
@@ -1738,42 +1975,44 @@ if '--list' in sys.argv:
                 self.assertEqual(main([*base, "--output", "unlinked.md"]), 0)
             self.assertIn("publication paths not supplied", (consumer / "unlinked.md").read_text(encoding="utf-8"))
 
-    def test_legacy_history_migrates_index_and_current_without_rewriting_retained_files(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory)
-            evidence = retained_fixture()
-            payload, manifest = serialize_evidence(evidence)
-            # Deliberately retain a noncanonical envelope's original bytes.
-            manifest = manifest.replace(b"\n", b"\r\n")
-            evidence = parse_evidence(payload, manifest)
-            identity = run_identity(evidence)
-            entry = {"id": identity, "baseline": "v1.0.0", "current": "v1.1.0"}
-            retained = root / f"history/runs/{identity}"
-            retained.mkdir(parents=True)
-            for name, data in (("run.json", payload), ("evidence.json", manifest), ("report.md", LEGACY_REPORT.format(identity=identity).encode())):
-                (retained / name).write_bytes(data)
-            (root / "history/index.json").write_bytes(deterministic_json({"schema": "research-repo-tools/run-index/v1", "runs": [entry]}))
-            (root / "history/latest.json").write_bytes(deterministic_json({"schema": "research-repo-tools/latest-run/v1", "run": entry}))
-            (root / "report.toml").write_bytes(b'schema=2\ncurrent="current.md"\narchive="history"\ntitle="Timing"\n')
-            before = {path: path.read_bytes() for path in retained.iterdir()}
-            with patch("research_repo_tools.host_metadata.capture_host", side_effect=AssertionError("offline must not probe")):
-                self.assertEqual(load_latest_run(root, "history"), evidence)
-                publish_publication(load_run_report_plan(root, "report.toml"))
-                self.assertFalse(load_run_report_plan(root, "report.toml").changed_paths)
-            self.assertEqual({path: path.read_bytes() for path in retained.iterdir()}, before)
-            self.assertIn(b"Recorded measurement provenance", (root / "current.md").read_bytes())
-            index = json.loads((root / "history/index.json").read_bytes())
-            self.assertEqual(index["runs"], [{**entry, "report_renderer": 1}])
-            publish_evidence(evidence, root / "new.json", root / "manifest.json")
-            publish_publication(load_run_report_plan(root, "report.toml", payload="new.json", manifest="manifest.json"))
-            self.assertEqual({path: path.read_bytes() for path in retained.iterdir()}, before)
-            second = retained_fixture(baseline_point=12)
-            publish_evidence(second, root / "new.json", root / "manifest.json")
-            publish_publication(load_run_report_plan(root, "report.toml", payload="new.json", manifest="manifest.json"))
-            self.assertEqual(load_latest_run(root, "history"), second)
-            self.assertEqual({path: path.read_bytes() for path in retained.iterdir()}, before)
-            index = json.loads((root / "history/index.json").read_bytes())
-            self.assertEqual({item["report_renderer"] for item in index["runs"]}, {1, 2})
+    def test_historical_history_migrates_index_and_current_without_rewriting_retained_files(self):
+        for renderer, report in ((1, LEGACY_REPORT), (2, PROVENANCE_REPORT)):
+            with self.subTest(renderer=renderer), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                evidence = retained_fixture()
+                payload, manifest = serialize_evidence(evidence)
+                # Deliberately retain a noncanonical envelope's original bytes.
+                manifest = manifest.replace(b"\n", b"\r\n")
+                evidence = parse_evidence(payload, manifest)
+                identity = run_identity(evidence)
+                entry = {"id": identity, "baseline": "v1.0.0", "current": "v1.1.0"}
+                retained = root / f"history/runs/{identity}"
+                retained.mkdir(parents=True)
+                for name, data in (("run.json", payload), ("evidence.json", manifest), ("report.md", report.format(identity=identity).encode())):
+                    (retained / name).write_bytes(data)
+                index_entry = entry if renderer == 1 else {**entry, "report_renderer": renderer}
+                (root / "history/index.json").write_bytes(deterministic_json({"schema": f"research-repo-tools/run-index/v{renderer}", "runs": [index_entry]}))
+                (root / "history/latest.json").write_bytes(deterministic_json({"schema": "research-repo-tools/latest-run/v1", "run": entry}))
+                (root / "report.toml").write_bytes(b'schema=2\ncurrent="current.md"\narchive="history"\ntitle="Timing"\n')
+                before = {path: path.read_bytes() for path in retained.iterdir()}
+                with patch("research_repo_tools.host_metadata.capture_host", side_effect=AssertionError("offline must not probe")):
+                    self.assertEqual(load_latest_run(root, "history"), evidence)
+                    publish_publication(load_run_report_plan(root, "report.toml"))
+                    self.assertFalse(load_run_report_plan(root, "report.toml").changed_paths)
+                self.assertEqual({path: path.read_bytes() for path in retained.iterdir()}, before)
+                self.assertIn(b"Recorded measurement provenance", (root / "current.md").read_bytes())
+                index = json.loads((root / "history/index.json").read_bytes())
+                self.assertEqual(index["runs"], [{**entry, "report_renderer": renderer}])
+                publish_evidence(evidence, root / "new.json", root / "manifest.json")
+                publish_publication(load_run_report_plan(root, "report.toml", payload="new.json", manifest="manifest.json"))
+                self.assertEqual({path: path.read_bytes() for path in retained.iterdir()}, before)
+                second = retained_fixture(baseline_point=12)
+                publish_evidence(second, root / "new.json", root / "manifest.json")
+                publish_publication(load_run_report_plan(root, "report.toml", payload="new.json", manifest="manifest.json"))
+                self.assertEqual(load_latest_run(root, "history"), second)
+                self.assertEqual({path: path.read_bytes() for path in retained.iterdir()}, before)
+                index = json.loads((root / "history/index.json").read_bytes())
+                self.assertEqual({item["report_renderer"] for item in index["runs"]}, {renderer, 3})
 
     def test_cli_measure_promote_repeat_runs_offline_and_corrupt_pointer(self):
         with tempfile.TemporaryDirectory(prefix="retention café ") as directory:

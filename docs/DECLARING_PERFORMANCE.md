@@ -345,6 +345,16 @@ formatting, existing byte preservation outside the replaced section is unchanged
 Formatter errors, stale inputs and validation failures leave all outputs intact.
 Caught replacement failures use the existing rollback/recovery contract.
 
+Generated document links whose inline spelling exceeds 160 characters use
+reference-style links with destinations on continuation lines. Their definitions
+stay inside the generated section, avoid reference names in surrounding text or
+consumer prose, and remain stable on reruns. Exact tagged URLs, image labels and
+evidence identities are preserved. Short links keep their existing spelling.
+Wide generated tables use multiline HTML tables with the same displayed cells;
+list spacing is valid before optional formatter processing. Consumer prose is
+not rewritten. Individual link destinations remain indivisible; the raw-line
+checker continues to apply the consumer's selected inventory and limit.
+
 The shared complete-run link and envelope replace a redundant new plot-provenance
 sidecar: retained evidence identifies the run, phase, statistic, unit, source and
 harness, while SVG/CSV preserve originating series and run identity. Historical

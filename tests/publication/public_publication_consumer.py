@@ -110,6 +110,29 @@ def fixture_git(root: Path, *args: str, input: bytes | None = None) -> bytes:
 
 
 class TestPublicationConsumer(unittest.TestCase):
+    def test_long_custom_links_preserve_destination_and_short_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = make_fixture(root)
+            name = "details " + "x" * 100 + "(café).md"
+            (root / name).write_bytes(b"# Original parameters\n")
+            config = config.replace(
+                'label = "Report", path = "report.md"',
+                f'label = "Complete original measurement parameters and diagnostics", path = "{name}"',
+            )
+            (root / "publication.toml").write_text(config, encoding="utf-8", newline="\n")
+            plan = load_publication(root, "publication.toml")
+            content = dict(plan.outputs)["README.md"]
+            from urllib.parse import quote
+
+            destination = quote(name, safe="/.")
+            self.assertIn(f"[rrt-performance-link-1]:\n  <{destination}>".encode(), content)
+            self.assertIn(b"[Complete original measurement parameters and diagnostics][rrt-performance-link-1]", content)
+            self.assertIn(b"[Evidence](evidence.json)", content)
+            self.assertIn(name, dict(plan.originals))
+            publish_publication(plan)
+            self.assertEqual(publish_publication(load_publication(root, "publication.toml")), ())
+
     def test_glob_checks_require_complete_snapshotted_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()
