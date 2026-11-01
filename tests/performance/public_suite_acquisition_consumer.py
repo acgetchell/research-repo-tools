@@ -26,6 +26,7 @@ from research_repo_tools.measurement_checkpoints import open_checkpoint
 from research_repo_tools.performance_acquisition import measure_and_retain
 from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.process import run_command_live
+from research_repo_tools.publication import publish_publication
 from research_repo_tools.publication_config import load_publication
 from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.run_presentation import RunLayout, RunRow, SeriesSelection, render_run_ratios, render_run_table, serialize_run_csv
@@ -286,10 +287,59 @@ class TestSuiteAcquisition(unittest.TestCase):
             '[provenance.current]\nrelease="v1.1.0"\nrevision="' + "b" * 40 + '"\n'
         )
         (self.root / "publication.toml").write_text(config, encoding="utf-8", newline="\n")
+        tagged_files = None
+
+        def publication_git(args, *, cwd, check=True):
+            self.assertEqual(cwd, self.root)
+            command = tuple(args)
+            status, output = 0, b""
+            if command == ("--no-pager", "show-ref", "--verify", "--quiet", "refs/tags/v1.1.0"):
+                status = 1 if tagged_files is None else 0
+            elif command in (
+                ("--no-pager", "--no-replace-objects", "rev-parse", "--show-prefix"),
+                ("--no-pager", "--no-replace-objects", "check-ref-format", "refs/tags/v1.1.0"),
+            ):
+                pass
+            elif command == ("--no-pager", "--no-replace-objects", "rev-parse", "--verify", "refs/tags/v1.1.0^{commit}"):
+                status, output = (1, b"") if tagged_files is None else (0, ("b" * 40 + "\n").encode())
+            elif command[:5] == ("--no-pager", "--no-replace-objects", "ls-tree", "-z", "b" * 40):
+                assert tagged_files is not None
+                name = command[-1].removeprefix(":(literal)")
+                output = b"100644 blob " + b"c" * 40 + b"\t" + name.encode() + b"\0" if name in tagged_files else b""
+            elif command[:4] == ("--no-pager", "--no-replace-objects", "cat-file", "blob"):
+                assert tagged_files is not None
+                output = tagged_files[command[-1].split(":", 1)[1]]
+            else:
+                raise AssertionError(f"unexpected Git operation: {command}")
+            return subprocess.CompletedProcess(args, status, output, b"")
+
+        self.stack.enter_context(patch("research_repo_tools.publication.run_git_bytes", side_effect=publication_git))
+        output_path = self.root / "result.csv"
+        output_path.write_bytes(b"previous artifact\r\n")
         prepared = load_publication(self.root, "publication.toml", artifacts_only=True)
         self.assertTrue(prepared.glob_checks)
         for name in ("revision", "apis.json", "bench.py", "input-shared.json"):
             self.assertEqual(dict(prepared.originals)[name], original[name])
+        expected_files = {
+            **{name: original[name] for name in ("revision", "apis.json", "bench.py", "input-shared.json")},
+            "run.json": payload,
+            "evidence.json": manifest,
+            "result.csv": dict(prepared.outputs)["result.csv"],
+        }
+        tagged_files = dict(expected_files)
+        self.assertEqual(load_publication(self.root, "publication.toml", artifacts_only=True).outputs, prepared.outputs)
+        for name in ("revision", "run.json", "evidence.json", "result.csv"):
+            tagged_files = {**expected_files, name: b"different tagged bytes\r\n"}
+            with self.subTest(path=name):
+                with self.assertRaisesRegex(ValueError, "exact publication artifact"):
+                    load_publication(self.root, "publication.toml", artifacts_only=True)
+                with self.assertRaisesRegex(ValueError, "exact publication artifact"):
+                    publish_publication(prepared)
+                self.assertEqual(output_path.read_bytes(), b"previous artifact\r\n")
+        tagged_files = dict(expected_files)
+        publish_publication(prepared)
+        self.assertEqual(output_path.read_bytes(), expected_files["result.csv"])
+        tagged_files = None
         source_inventory = 'current-sources=["revision", "apis.json"]\n'
         harness_inventory = 'current-harness=["bench.py", "input-shared.json"]\n'
         for policy in ("prepare", "existing"):

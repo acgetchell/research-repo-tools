@@ -394,6 +394,9 @@ def load_publication(
             _validate_distinct_paths(tuple(_path(root, name) for name in (_string(raw["document"], "document"), *figures)))
         for selection in run_checks:
             _validate_distinct_paths((root / selection.archive, *(_path(root, name) for name in figures)))
+        if retained.payload_schema == RUN_SCHEMA_V4 and tag_policy == "prepare":
+            paths = tuple(dict.fromkeys([*(name for name in inputs if name != configuration), *figures]))
+            checks.append(GitCheck(releases["current"], paths, allow_missing=True))
         plan = plan_outputs(root, figures, inputs=inputs)
         plan = replace(plan, git_checks=tuple(checks), glob_checks=tuple(inventories), run_checks=tuple(run_checks))
         from research_repo_tools.publication import _verify_plan
