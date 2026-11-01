@@ -903,6 +903,27 @@ raw-files=["benchmark.json", "estimates.json", "sample.json", "tukey.json"]
             with self.assertRaisesRegex(ValueError, "changed"):
                 publish_publication(pending)
 
+    @unittest.skipUnless(shutil.which("rumdl"), "native rumdl is not installed")
+    def test_first_formatted_publication_resolves_new_csv_and_svg_without_writes(self):
+        for newline in (b"\n", b"\r\n"):
+            with self.subTest(newline=newline), tempfile.TemporaryDirectory(prefix="publication café ") as directory:
+                root = Path(directory).resolve()
+                config = presentation_fixture(root)
+                (root / "README.md").write_bytes(b"# Fixture\n<!-- BEGIN -->\nold\n<!-- END -->\n".replace(b"\n", newline))
+                (root / "format.toml").write_bytes(b'[global]\nenable = ["MD013", "MD051", "MD057"]\n[MD013]\nline-length = 160\n')
+                (root / "publication.toml").write_text(config.replace("schema=2", 'schema=2\nformatter="format.toml"'), encoding="utf-8", newline="\n")
+                before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+                plan = load_publication(root, "publication.toml")
+                self.assertEqual({path: path.read_bytes() for path in root.rglob("*") if path.is_file()}, before)
+                self.assertFalse((root / "exports").exists())
+                self.assertFalse((root / "figures").exists())
+                publish_publication(plan)
+                for name in ("exports/timings.csv", "figures/ratios.svg", "figures/coordinates.svg"):
+                    self.assertEqual((root / name).read_bytes(), dict(plan.outputs)[name])
+                self.assertIn(b"[Selected timings CSV](exports/timings.csv)", (root / "README.md").read_bytes())
+                self.assertNotIn(b"\r", (root / "README.md").read_bytes())
+                self.assertEqual(publish_publication(load_publication(root, "publication.toml")), ())
+
     def test_formatter_failure_and_changed_configuration_preserve_publication(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -915,7 +936,7 @@ raw-files=["benchmark.json", "estimates.json", "sample.json", "tukey.json"]
                 with self.assertRaisesRegex(RuntimeError, "formatter failed"):
                     load_publication(root, "publication.toml")
             self.assertEqual({path: path.read_bytes() for path in root.rglob("*") if path.is_file()}, before)
-            with patch("research_repo_tools.postprocess_changelog.format_markdown", side_effect=lambda text, *_: text.replace("\r\n", "\n")) as formatter:
+            with patch("research_repo_tools.postprocess_changelog.format_markdown", side_effect=lambda text, *_, **__: text.replace("\r\n", "\n")) as formatter:
                 plan = load_publication(root, "publication.toml")
             formatter.assert_called_once()
             self.assertNotIn(b"\r", dict(plan.outputs)["README.md"])

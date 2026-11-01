@@ -342,6 +342,9 @@ on formatted candidates. `publication.plan_publication(..., formatter=None)`
 offers the same operation; a supplied root-relative formatter configuration must
 be included in `inputs`. Configured formatting requires UTF-8 Markdown. Without
 formatting, existing byte preservation outside the replaced section is unchanged.
+Formatting with planned CSV/SVG outputs requires rumdl 0.3.0 or newer. Its
+[candidate-aware validation](publication-api.md#python-api) resolves generated
+links before creating those files and still checks other workspace links.
 Formatter errors, stale inputs and validation failures leave all outputs intact.
 Caught replacement failures use the existing rollback/recovery contract.
 
