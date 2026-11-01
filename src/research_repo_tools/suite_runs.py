@@ -265,7 +265,8 @@ def validate_suite_policy(evidence: Evidence, plan: SuiteMeasurementPlan, *, rel
         raise ValueError("suite acquisition declaration changed")
     if release:
         sources = dict(evidence.sources)
-        if dict(sources["baseline"].context)["release"] == dict(sources["current"].context)["release"]:
+        pair = ReleasePair(dict(sources["current"].context)["release"], dict(sources["baseline"].context)["release"])
+        if pair.current == pair.baseline:
             raise ValueError("same-release acquisitions cannot be promoted as release comparisons")
         shared = set(dict(run.phases)["baseline"].policy.expected) & set(dict(run.phases)["current"].policy.expected)
         eligible = 0

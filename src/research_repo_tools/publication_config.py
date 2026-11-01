@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import quote
 
+from research_repo_tools.complete_runs import RUN_SCHEMA_V4
 from research_repo_tools.criterion import COMPARISON_SCHEMA, _markdown_text, _unit, parse_comparison
 from research_repo_tools.evidence import Evidence, Provenance, _object, _string, compare_provenance, fingerprint_files, parse_evidence
 from research_repo_tools.files import _validate_distinct_paths
@@ -303,10 +304,10 @@ def load_publication(
             raise ValueError("prepare policy requires a repository for existing-tag verification")
         if dict(sources["current"].context).get("mode") != "working-tree" or _tag_version(releases["current"]) <= _tag_version(releases["baseline"]):
             raise ValueError("prepare policy requires prospective working-tree evidence newer than its baseline")
-        if retained.payload_schema != "research-repo-tools/complete-run/v4" and not {"current-sources", "current-harness"} <= raw.keys():
+        if (retained.payload_schema != RUN_SCHEMA_V4 or artifacts_only) and not {"current-sources", "current-harness"} <= raw.keys():
             raise ValueError("prepare policy requires current-sources and current-harness inventories")
     inventories = []
-    if retained.payload_schema == "research-repo-tools/complete-run/v4" and not artifacts_only:
+    if retained.payload_schema == RUN_SCHEMA_V4 and not artifacts_only:
         from research_repo_tools.suite_runs import publication_inputs
 
         if {"current-sources", "current-harness"} & raw.keys():

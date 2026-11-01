@@ -94,6 +94,13 @@ or corrupt final unit is an error, not missing work. File data is fsynced before
 atomic replacement; directory-entry persistence after power loss depends on the
 native filesystem. Rejected resume preserves accepted units and published outputs.
 
+The inherited-environment digest excludes only `_`, `SHLVL`, `TERM_SESSION_ID`
+and `ITERM_SESSION_ID`, which identify shell/terminal sessions. Every other
+inherited key remains included, including unknown keys; no prefix is ignored.
+Checkpoint identity and checks during acquisition use the same reduced environment.
+If a native workload depends on an excluded key, declare its value explicitly in
+the phase environment so the retained declaration binds it.
+
 ### Progress contract
 
 `--progress human` is the default; `json` emits JSON Lines; `none` disables status.

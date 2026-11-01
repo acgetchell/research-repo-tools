@@ -30,7 +30,7 @@ eligibility. `validate_run_policy` checks independently supplied suite policy;
 immutable history and transactional README publication use the same public APIs.
 Current document-input checks derive from each suite's recorded declarations.
 
-`performance_progress.ProgressReporter(mode="human", cadence=10, stream=None,
+`performance_progress.ProgressReporter(*, mode="human", cadence=10, stream=None,
 observer=None, clock=time.monotonic)` exposes the documented event contract.
 The default stream is stderr. An observer receives event dictionaries; heartbeats
 invoke it on a background thread. Keep custom observers fast and nonblocking.

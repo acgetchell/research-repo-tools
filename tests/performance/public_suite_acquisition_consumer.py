@@ -5,11 +5,12 @@ import csv
 import hashlib
 import io
 import json
+import os
 import subprocess
 import sys
 import tempfile
 import unittest
-from contextlib import ExitStack
+from contextlib import ExitStack, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import override
@@ -25,8 +26,10 @@ from research_repo_tools.measurement_checkpoints import open_checkpoint
 from research_repo_tools.performance_acquisition import measure_and_retain
 from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.process import run_command_live
+from research_repo_tools.publication_config import load_publication
 from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.run_presentation import RunLayout, RunRow, SeriesSelection, render_run_ratios, render_run_table, serialize_run_csv
+from research_repo_tools.source_exports import export_source
 from research_repo_tools.suite_measurement import AcquisitionSuite, SuiteMeasurementPlan
 from research_repo_tools.suite_runs import comparison_incompatibilities, parse_suite_run
 
@@ -178,6 +181,116 @@ class TestSuiteAcquisition(unittest.TestCase):
         invalid = SuiteMeasurementPlan((replace(first, measurement=replace(first.measurement, current=replace(first.measurement.current, policy=changed))),))
         with self.assertRaisesRegex(ValueError, "required"):
             measure_pair(self.root, invalid, PAIR, progress=self.quiet)
+
+    def test_exports_follow_required_phases_and_release_completed_suites(self) -> None:
+        for mode in ("common", "independent"):
+            with self.subTest(mode=mode):
+                exports = {}
+
+                @contextmanager
+                def tracked_export(capture, destination):
+                    exports[destination.name] = destination
+                    with export_source(capture, destination) as directory:
+                        yield directory
+
+                def checked_command(command, args=(), **kwargs):
+                    if args[1:3] == ("new", "measure"):
+                        self.assertFalse(exports["shared-baseline"].exists())
+                        self.assertFalse(exports["shared-current"].exists())
+                    return run_command_live(command, args, **kwargs)
+
+                with (
+                    patch("research_repo_tools.suite_measurement.export_source", side_effect=tracked_export),
+                    patch("research_repo_tools.common_measurement.run_command_live", side_effect=checked_command),
+                ):
+                    evidence = measure_pair(self.root, plan(self.log, mode=mode), PAIR, progress=self.quiet)
+                expected = {"shared-baseline", "shared-current", "new-current", "removed-baseline"}
+                if mode == "common":
+                    expected.add("removed-current")  # Supplies the current harness, never measured.
+                self.assertEqual(set(exports), expected)
+                self.assertTrue(all(not path.exists() for path in exports.values()))
+                self.assertEqual(len(parse_suite_run(evidence).observations), 4)
+
+    def test_session_environment_changes_allow_resume_and_other_changes_reject(self) -> None:
+        selected = plan(self.log, ("shared",))
+        checkpoint = self.root / "checkpoint"
+        ignored = ("_", "SHLVL", "TERM_SESSION_ID", "ITERM_SESSION_ID")
+
+        def changing_session(command, args=(), **kwargs):
+            for name in ignored:
+                os.environ[name] += "-next"
+            return run_command_live(command, args, **kwargs)
+
+        with patch.dict(os.environ, dict.fromkeys(ignored, "first")):
+            with patch("research_repo_tools.common_measurement.run_command_live", side_effect=changing_session):
+                measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, progress=self.quiet)
+            accepted = (checkpoint / "unit-shared.json").read_bytes()
+            for name in ignored:
+                os.environ[name] = "second"
+            measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+            self.assertEqual((checkpoint / "unit-shared.json").read_bytes(), accepted)
+            self.assertEqual(self.log.read_text().splitlines().count("shared measure old"), 1)
+            with patch.dict(os.environ, {"RRT_UNKNOWN_SESSION_VALUE": "changed"}), self.assertRaisesRegex(ValueError, "environment-sha256"):
+                measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+
+            def changing_input(command, args=(), **kwargs):
+                os.environ["RRT_UNKNOWN_SESSION_VALUE"] = "changed"
+                return run_command_live(command, args, **kwargs)
+
+            with (
+                patch("research_repo_tools.common_measurement.run_command_live", side_effect=changing_input),
+                self.assertRaisesRegex(ValueError, "acquisition environment changed"),
+            ):
+                measure_pair(self.root, selected, PAIR, progress=self.quiet)
+
+    def test_normalized_same_release_cannot_be_promoted(self) -> None:
+        original = self.revisions["v1.1.0"]
+        for name, data in original.items():
+            (self.root / name).write_bytes(data)
+        (self.root / "revision").write_bytes(b"working")
+        selected = plan(self.log, ("shared",))
+        with patch("research_repo_tools.source_exports.select_files", return_value=tuple(sorted(original))):
+            evidence = measure_pair(self.root, selected, ReleasePair("v1.1.0", "v1.1.0"), working_tree=True, progress=self.quiet)
+        raw = json.loads(evidence.payload)
+        raw["units"][0]["availability"]["current"]["release"] = "1.1.0"
+        raw["units"][0]["observations"]["current"]["source"]["context"]["release"] = "1.1.0"
+        changed = replace(
+            evidence,
+            payload=deterministic_json(raw),
+            sources=tuple(
+                (phase, replace(source, context=tuple({**dict(source.context), "release": "1.1.0"}.items())) if phase == "current" else source)
+                for phase, source in evidence.sources
+            ),
+        )
+        validate_run_policy(changed, selected)
+        with self.assertRaisesRegex(ValueError, "same-release"):
+            validate_run_policy(changed, selected, release=True)
+
+    def test_prepare_artifacts_require_current_inventories(self) -> None:
+        original = self.revisions["v1.1.0"]
+        for name, data in original.items():
+            (self.root / name).write_bytes(data)
+        selected = plan(self.log, ("shared",))
+        with patch("research_repo_tools.source_exports.select_files", return_value=tuple(sorted(original))):
+            evidence = measure_pair(self.root, selected, PAIR, working_tree=True, progress=self.quiet)
+        payload, manifest = serialize_evidence(evidence)
+        (self.root / "run.json").write_bytes(payload)
+        (self.root / "evidence.json").write_bytes(manifest)
+        config = (
+            'schema=2\npayload="run.json"\nmanifest="evidence.json"\n'
+            'repository="example/project"\ntag-policy="prepare"\n'
+            'unit="ns"\nstatistic="median"\ncsv="result.csv"\n'
+            'rows=[{key="case",label="Case"}]\n'
+            'series=[{name="shared/current",label="Current",rows={case="shared/case"}}]\n'
+            '[provenance.baseline]\nrelease="v1.0.0"\nrevision="' + "a" * 40 + '"\n'
+            '[provenance.current]\nrelease="v1.1.0"\nrevision="' + "b" * 40 + '"\n'
+        )
+        for inventory in ("", 'current-sources=["revision", "apis.json"]\n', 'current-harness=["bench.py", "input-shared.json"]\n'):
+            (self.root / "publication.toml").write_text(inventory + config, encoding="utf-8", newline="\n")
+            with self.subTest(inventory=inventory), self.assertRaisesRegex(ValueError, "requires current-sources and current-harness"):
+                load_publication(self.root, "publication.toml", artifacts_only=True)
+        (self.root / "publication.toml").write_text(config.replace('tag-policy="prepare"', 'tag-policy="existing"'), encoding="utf-8", newline="\n")
+        self.assertIsNotNone(load_publication(self.root, "publication.toml", artifacts_only=True))
 
     def test_resume_reuses_complete_pair_and_recollects_interrupted_pair(self) -> None:
         selected = plan(self.log, ("shared", "later"))

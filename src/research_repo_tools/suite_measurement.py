@@ -166,6 +166,12 @@ def _source_record(source: Provenance) -> dict[str, object]:
     return {"revision": source.revision, "source_sha256": source.source_sha256, "harness_sha256": source.harness_sha256, "context": dict(source.context)}
 
 
+def _environment_digest() -> str:
+    """Ignore only documented shell/terminal session bookkeeping, never prefixes."""
+    ignored = {"_", "SHLVL", "TERM_SESSION_ID", "ITERM_SESSION_ID"}
+    return sha256(deterministic_json({key: value for key, value in os.environ.items() if key not in ignored}))
+
+
 def measure_suites(
     root: Path,
     plan: SuiteMeasurementPlan,
@@ -237,14 +243,14 @@ def _measure_suites(
         )
         for phase, capture in captures.items()
     )
-    ambient = sha256(deterministic_json(dict(os.environ)))
+    ambient = _environment_digest()
 
     def unchanged() -> None:
         if verify is not None:
             verify()
         for capture in captures.values():
             capture.verify()
-        if sha256(deterministic_json(dict(os.environ))) != ambient:
+        if _environment_digest() != ambient:
             raise ValueError("acquisition environment changed")
 
     with ExitStack() as stack:
@@ -269,6 +275,7 @@ def _measure_suites(
             ],
         ] = {}
         counts: dict[str, int] = {}
+        resources: dict[str, ExitStack] = {}
         inventory = {(suite.name, phase): 0 for suite in plan.suites for phase in captures}
         nominal: float | None = 0.0
         ownership: dict[str, set[str]] = {"baseline": set(), "current": set()}
@@ -277,9 +284,11 @@ def _measure_suites(
             active = tuple(phase for phase in captures if decisions[suite.name][phase]["state"] == "available")
             if not active:
                 continue
-            directories = {}
+            resources[suite.name] = stack.enter_context(ExitStack())
+            directories = {phase: temporary / f"{suite.name}-{phase}" for phase in captures}
             for phase, capture in captures.items():
-                directories[phase] = stack.enter_context(export_source(capture, temporary / f"{suite.name}-{phase}"))
+                if phase in active or (phase == "current" and suite.measurement.harness_mode == "common"):
+                    directories[phase] = resources[suite.name].enter_context(export_source(capture, directories[phase]))
 
             def accepted_sample(phase: str, sample: CompleteSample, elapsed: float, selected: AcquisitionSuite = suite) -> None:
                 policy, source = prepared[selected.name][0][phase], prepared[selected.name][1][phase]
@@ -356,6 +365,8 @@ def _measure_suites(
                 for phase, policy in policies.items():
                     reporter.state, reporter.phase = "checkpoint", phase
                     reporter.accept(_work_class(suite, declared[phase], policy), len(policy.expected), elapsed * len(policy.expected) / count, retained=reused)
+            if suite.name in resources:
+                resources[suite.name].close()
         unchanged()
         result = Evidence(
             deterministic_json({"schema": SUITE_RUN_SCHEMA, "declaration": plan.document(), "units": units, "reused": sorted(retained)}),

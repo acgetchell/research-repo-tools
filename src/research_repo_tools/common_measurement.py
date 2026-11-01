@@ -453,23 +453,27 @@ def _prepare_phases(
     reporter = progress or ProgressReporter(mode="none")
     for phase in active:
         plan.measurement.validate_release(getattr(pair, phase))
-    roots = {"baseline": baseline.resolve(strict=True), "current": current.resolve(strict=True)}
-    if roots["baseline"] == roots["current"] or any(
-        left in right.parents for left, right in ((roots["baseline"], roots["current"]), (roots["current"], roots["baseline"]))
+    roots = {
+        phase: path.resolve(strict=True)
+        for phase, path in (("baseline", baseline), ("current", current))
+        if phase in active or (phase == "current" and plan.harness_mode == "common")
+    }
+    if len(roots) == 2 and (
+        roots["baseline"] == roots["current"]
+        or any(left in right.parents for left, right in ((roots["baseline"], roots["current"]), (roots["current"], roots["baseline"])))
     ):
         raise ValueError("measurement checkouts must be distinct and nonoverlapping")
     if plan.schema == 4 and (plan.backend == "export") != (captured_sources is not None):
         raise ValueError("prepared sources must match the declared export/worktree backend")
     if captured_sources is not None:
-        if set(captured_sources) != set(roots):
+        if set(captured_sources) != {"baseline", "current"}:
             raise ValueError("captured sources must identify both phases")
         for phase, root in roots.items():
             receipt = captured_sources[phase]
             verify_export(receipt, root)
             receipt.verify()
-    current = roots["current"]
+    harness_root = roots["current"] if plan.harness_mode == "common" else roots[active[0]]
     roots = {phase: root for phase, root in roots.items() if phase in active}
-    harness_root = current if plan.harness_mode == "common" else next(iter(roots.values()))
     inventory = _inventory(harness_root, plan.harness)
     captured = {name: (_path(harness_root, name).read_bytes(), _path(harness_root, name).stat().st_mode & 0o777) for name in inventory}
     if any(path not in captured for _, path in plan.measurement.dependencies):
