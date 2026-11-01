@@ -8,6 +8,7 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import quote
 
+from research_repo_tools.complete_runs import RUN_SCHEMA_V4
 from research_repo_tools.criterion import COMPARISON_SCHEMA, _markdown_text, _unit, parse_comparison
 from research_repo_tools.evidence import Evidence, Provenance, _object, _string, compare_provenance, fingerprint_files, parse_evidence
 from research_repo_tools.files import _validate_distinct_paths
@@ -224,8 +225,11 @@ def load_publication(
             if not artifacts_only:
                 if "archive" not in raw:
                     raise ValueError("policy-checked document publication requires retained immutable archive evidence")
-                raw.setdefault("current-sources", list(measurement.sources))
-                raw.setdefault("current-harness", list(measurement.harness))
+                from research_repo_tools.suite_measurement import SuiteMeasurementPlan
+
+                if not isinstance(measurement, SuiteMeasurementPlan):
+                    raw.setdefault("current-sources", list(measurement.sources))
+                    raw.setdefault("current-harness", list(measurement.harness))
         if not artifacts_only and dict(dict(retained.sources)["current"].context)["release"] == dict(dict(retained.sources)["baseline"].context)["release"]:
             raise ValueError("same-release local comparisons cannot be published as release documentation")
     pins = _table(raw["provenance"], "provenance", {"baseline", "current"})
@@ -300,9 +304,18 @@ def load_publication(
             raise ValueError("prepare policy requires a repository for existing-tag verification")
         if dict(sources["current"].context).get("mode") != "working-tree" or _tag_version(releases["current"]) <= _tag_version(releases["baseline"]):
             raise ValueError("prepare policy requires prospective working-tree evidence newer than its baseline")
-        if not {"current-sources", "current-harness"} <= raw.keys():
+        if retained.payload_schema != RUN_SCHEMA_V4 and not {"current-sources", "current-harness"} <= raw.keys():
             raise ValueError("prepare policy requires current-sources and current-harness inventories")
     inventories = []
+    if retained.payload_schema == RUN_SCHEMA_V4:
+        if {"current-sources", "current-harness"} & raw.keys():
+            raise ValueError("suite evidence derives current input checks from its per-suite declarations")
+        if not artifacts_only or tag_policy == "prepare":
+            from research_repo_tools.suite_runs import publication_inputs
+
+            suite_inputs, suite_checks = publication_inputs(root, retained)
+            inputs.update(suite_inputs)
+            inventories.extend(suite_checks)
     for field, attribute in (("current-sources", "source_sha256"), ("current-harness", "harness_sha256")):
         if field in raw:
             patterns = tuple(_string(item, field) for item in _array(raw[field], field))
@@ -381,6 +394,9 @@ def load_publication(
             _validate_distinct_paths(tuple(_path(root, name) for name in (_string(raw["document"], "document"), *figures)))
         for selection in run_checks:
             _validate_distinct_paths((root / selection.archive, *(_path(root, name) for name in figures)))
+        if retained.payload_schema == RUN_SCHEMA_V4 and tag_policy == "prepare":
+            paths = tuple(dict.fromkeys([*(name for name in inputs if name != configuration), *figures]))
+            checks.append(GitCheck(releases["current"], paths, allow_missing=True))
         plan = plan_outputs(root, figures, inputs=inputs)
         plan = replace(plan, git_checks=tuple(checks), glob_checks=tuple(inventories), run_checks=tuple(run_checks))
         from research_repo_tools.publication import _verify_plan

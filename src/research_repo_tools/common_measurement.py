@@ -2,11 +2,16 @@
 
 import json
 import os
+import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from research_repo_tools.suite_measurement import SuiteMeasurementPlan
+    from research_repo_tools.suite_runs import SuiteRun
 
 from research_repo_tools.complete_runs import (
     RUN_SCHEMA,
@@ -14,6 +19,7 @@ from research_repo_tools.complete_runs import (
     RUN_SCHEMA_V3,
     CompletePolicy,
     CompleteRun,
+    CompleteSample,
     RunSeries,
     _array,
     _integer,
@@ -37,6 +43,7 @@ from research_repo_tools.criterion_inventory import (
 )
 from research_repo_tools.evidence import Evidence, Provenance, _digest, _object, _string, compare_provenance, fingerprint_files
 from research_repo_tools.measurement import MeasurementConfig, _strings, capture_provenance
+from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.process import run_command_live
 from research_repo_tools.publication import _inventory, _path
 from research_repo_tools.publication_config import _table
@@ -343,14 +350,23 @@ def _declaration(plan: CompleteMeasurementPlan) -> str:
 
 
 def _series(plan: CompleteMeasurementPlan, policies: dict[str, CompletePolicy]) -> tuple[RunSeries, ...]:
-    return tuple(item.resolve(policies[item.phase].expected) if isinstance(item, DiscoveredSeries) else item for item in plan.series)
+    return tuple(item.resolve(policies[item.phase].expected) if isinstance(item, DiscoveredSeries) else item for item in plan.series if item.phase in policies)
 
 
-def validate_run_policy(evidence: Evidence, plan: MeasurementConfig | CompleteMeasurementPlan, *, release: bool = False) -> CompleteRun:
+def validate_run_policy(
+    evidence: Evidence, plan: MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan, *, release: bool = False
+) -> CompleteRun | SuiteRun:
     """Validate acquisition against independent declarations; release adds eligibility."""
+    from research_repo_tools.suite_measurement import SuiteMeasurementPlan
+    from research_repo_tools.suite_runs import validate_suite_policy
+
+    if isinstance(plan, SuiteMeasurementPlan):
+        return validate_suite_policy(evidence, plan, release=release)
     if not isinstance(plan, CompleteMeasurementPlan):
         raise ValueError("run eligibility requires a complete measurement policy")
     run = validate_run_evidence(evidence)
+    if not isinstance(run, CompleteRun):
+        raise ValueError("suite evidence requires a suite measurement policy")
     return _validate_policy(evidence, plan, run, release=release)
 
 
@@ -375,41 +391,51 @@ def _validate_policy(evidence: Evidence, plan: CompleteMeasurementPlan, run: Com
         raise ValueError("same-release local comparisons cannot be promoted as release comparisons")
     policies = {}
     for phase, sample in run.phases:
-        selected = getattr(plan, phase)
-        policy = selected.policy
-        context = dict(sources[phase].context)
-        if plan.schema == 4:
-            _validate_phase_identity(sources[phase], plan, phase)
-            if any(tuple(name for name, _ in case.raw_files) != plan.raw_files for case in sample.cases):
-                raise ValueError("retained raw files differ from acquisition declaration")
-            if context.get("saved-sample") != (plan.saved_sample or "none"):
-                raise ValueError("retained saved verification differs from acquisition declaration")
-        if context.get("measurement-declaration") != _declaration(plan):
-            raise ValueError(f"{phase} acquisition declaration differs from measurement policy or is missing")
-        expected = policy.expected if isinstance(policy, CompletePolicy) else sample.policy.expected
-        if isinstance(policy, DiscoveryPolicy):
-            inventory = parse_inventory(context.get("discovery-inventory", "").encode("utf-8"))
-            if set(dict(inventory.suites)) != {suite.name for suite in policy.discovery.suites} or inventory.excluded != policy.discovery.excluded:
-                raise ValueError(f"{phase} discovery suites/exclusions differ from measurement policy")
-            if not set(policy.discovery.required) <= set(inventory.expected):
-                raise ValueError(f"{phase} retained discovery omits required IDs")
-            expected = inventory.expected
-        policies[phase] = CompletePolicy(
-            expected, policy.sample_count, policy.statistics, policy.confidence_level, policy.unit, sample_counts=policy.sample_counts
-        )
-        if sample.policy != policies[phase]:
-            raise ValueError(f"{phase} sampling policy differs from measurement policy")
-        for key, value in (("command", list(selected.command)), ("gate-command", list(selected.gate)), ("environment", dict(selected.environment))):
-            if json.loads(context[key]) != value:
-                raise ValueError(f"{phase} {key} differs from measurement policy")
-        if any(context.get(key) != value for key, value in plan.measurement.context):
-            raise ValueError(f"{phase} context differs from measurement policy")
+        policies[phase] = _validate_phase_sample(plan, phase, sample, sources[phase])
     if run.series != _series(plan, policies):
         raise ValueError("retained series selections or phases differ from measurement policy")
     return run
 
 
-def measure_prepared_pair(
+def _validate_phase_sample(plan: CompleteMeasurementPlan, phase: str, sample: CompleteSample, source: Provenance) -> CompletePolicy:
+    """Validate one available side without inventing an unavailable peer."""
+    selected = getattr(plan, phase)
+    policy = selected.policy
+    context = dict(source.context)
+    if plan.schema == 4:
+        _validate_phase_identity(source, plan, phase)
+        if any(tuple(name for name, _ in case.raw_files) != plan.raw_files for case in sample.cases):
+            raise ValueError("retained raw files differ from acquisition declaration")
+        if context.get("saved-sample") != (plan.saved_sample or "none"):
+            raise ValueError("retained saved verification differs from acquisition declaration")
+    if context.get("measurement-declaration") != _declaration(plan):
+        raise ValueError(f"{phase} acquisition declaration differs from measurement policy or is missing")
+    expected = policy.expected if isinstance(policy, CompletePolicy) else sample.policy.expected
+    if isinstance(policy, DiscoveryPolicy):
+        inventory = parse_inventory(context.get("discovery-inventory", "").encode("utf-8"))
+        if set(dict(inventory.suites)) != {suite.name for suite in policy.discovery.suites} or inventory.excluded != policy.discovery.excluded:
+            raise ValueError(f"{phase} discovery suites/exclusions differ from measurement policy")
+        if not set(policy.discovery.required) <= set(inventory.expected):
+            raise ValueError(f"{phase} retained discovery omits required IDs")
+        expected = inventory.expected
+    expected_policy = CompletePolicy(expected, policy.sample_count, policy.statistics, policy.confidence_level, policy.unit, sample_counts=policy.sample_counts)
+    if sample.policy != expected_policy:
+        raise ValueError(f"{phase} sampling policy differs from measurement policy")
+    for series in plan.series:
+        if series.phase != phase:
+            continue
+        resolved = series.resolve(sample.policy.expected) if isinstance(series, DiscoveredSeries) else series
+        if any(full_id not in sample.policy.expected for _, full_id in resolved.rows):
+            raise ValueError(f"{phase} series refers to an unmeasured benchmark")
+    for key, value in (("command", list(selected.command)), ("gate-command", list(selected.gate)), ("environment", dict(selected.environment))):
+        if json.loads(context[key]) != value:
+            raise ValueError(f"{phase} {key} differs from measurement policy")
+    if any(context.get(key) != value for key, value in plan.measurement.context):
+        raise ValueError(f"{phase} context differs from measurement policy")
+    return expected_policy
+
+
+def _prepare_phases(
     baseline: Path,
     current: Path,
     plan: CompleteMeasurementPlan,
@@ -418,32 +444,38 @@ def measure_prepared_pair(
     working_tree: bool = False,
     captured_sources: dict[str, CapturedSource] | None = None,
     verify: Callable[[], None] | None = None,
-) -> Evidence:
-    """Measure two disposable, caller-owned checkouts using captured current files.
-
-    Commands are trusted consumer code. Both gates pass independently before any
-    timing. Retained raw files survive checkout cleanup. No Git state is mutated by
-    this function; measure_pair owns optional worktree lifecycle.
-    """
-    plan.measurement.validate_release(pair.baseline)
-    plan.measurement.validate_release(pair.current)
-    roots = {"baseline": baseline.resolve(strict=True), "current": current.resolve(strict=True)}
-    if roots["baseline"] == roots["current"] or any(
-        left in right.parents for left, right in ((roots["baseline"], roots["current"]), (roots["current"], roots["baseline"]))
+    active: tuple[str, ...] = ("baseline", "current"),
+    progress: ProgressReporter | None = None,
+    compilation: dict[str, tuple[str, ...]] | None = None,
+    on_sample: Callable[[str, CompleteSample, float], None] | None = None,
+) -> tuple[dict[str, CompletePolicy], dict[str, Provenance], Callable[[], tuple[tuple[tuple[str, CompleteSample], ...], tuple[tuple[str, Provenance], ...]]]]:
+    """Prepare a complete unit; return the same validated sampler used by v1-v3."""
+    reporter = progress or ProgressReporter(mode="none")
+    for phase in active:
+        plan.measurement.validate_release(getattr(pair, phase))
+    roots = {
+        phase: path.resolve(strict=True)
+        for phase, path in (("baseline", baseline), ("current", current))
+        if phase in active or (phase == "current" and plan.harness_mode == "common")
+    }
+    if len(roots) == 2 and (
+        roots["baseline"] == roots["current"]
+        or any(left in right.parents for left, right in ((roots["baseline"], roots["current"]), (roots["current"], roots["baseline"])))
     ):
         raise ValueError("measurement checkouts must be distinct and nonoverlapping")
     if plan.schema == 4 and (plan.backend == "export") != (captured_sources is not None):
         raise ValueError("prepared sources must match the declared export/worktree backend")
     if captured_sources is not None:
-        if set(captured_sources) != set(roots):
+        if set(captured_sources) != {"baseline", "current"}:
             raise ValueError("captured sources must identify both phases")
         for phase, root in roots.items():
             receipt = captured_sources[phase]
             verify_export(receipt, root)
             receipt.verify()
-    current = roots["current"]
-    inventory = _inventory(current, plan.harness)
-    captured = {name: (_path(current, name).read_bytes(), _path(current, name).stat().st_mode & 0o777) for name in inventory}
+    harness_root = roots["current"] if plan.harness_mode == "common" else roots[active[0]]
+    roots = {phase: root for phase, root in roots.items() if phase in active}
+    inventory = _inventory(harness_root, plan.harness)
+    captured = {name: (_path(harness_root, name).read_bytes(), _path(harness_root, name).stat().st_mode & 0o777) for name in inventory}
     if any(path not in captured for _, path in plan.measurement.dependencies):
         raise ValueError("dependency resolution files must belong to the captured harness")
     originals = {}
@@ -476,12 +508,12 @@ def measure_prepared_pair(
             if captured_sources is not None:
                 names.update(name for name, _, _ in captured_sources[phase].files if (root / name).exists())
             effective[phase] = _files(root, tuple(sorted(names)))
-    before = {}
-    declared = {}
+    before: dict[str, Provenance] = {}
+    declared: dict[str, Provenance] = {}
     configurations = {}
     environments = {}
     for phase, root in roots.items():
-        selected = getattr(plan, phase)
+        selected = plan.baseline if phase == "baseline" else plan.current
         config = replace(plan.measurement, command=selected.command)
         configurations[phase] = config
         env = _overlay_environment(os.environ, selected.environment)
@@ -509,7 +541,7 @@ def measure_prepared_pair(
             ),
         )
     early_fields = tuple(field for field in plan.measurement.compatible if field not in {"context.discovery-inventory", "context.sampling-policy"})
-    compatibility = compare_provenance(declared["baseline"], declared["current"], fields=early_fields)
+    compatibility = compare_provenance(declared[active[0]], declared[active[-1]], fields=early_fields)
     if plan.harness_mode == "common" and not compatibility.compatible:
         raise ValueError(f"required benchmark provenance differs or is unknown before timing: {compatibility.differences}")
 
@@ -534,11 +566,19 @@ def measure_prepared_pair(
         ):
             raise ValueError(f"{phase} measurement inputs or host/tool identity changed")
 
-    policies = {}
+    policies: dict[str, CompletePolicy] = {}
     for phase, root in roots.items():
-        policy = getattr(plan, phase).policy
+        if compilation and phase in compilation:
+            command = compilation[phase]
+            with reporter.stage("compilation", suite=reporter.suite, phase=phase):
+                run_command_live(command[0], command[1:], cwd=root, env=environments[phase], timeout=plan.measurement.timeout)
+            unchanged(phase)
+            if (root / plan.measurement.criterion_dir).exists():
+                raise ValueError("compilation produced timing output before measurement")
+        policy = (plan.baseline if phase == "baseline" else plan.current).policy
         if isinstance(policy, DiscoveryPolicy):
-            inventory = discover_inventory(root, policy.discovery, env=environments[phase])
+            with reporter.stage("discovery", suite=reporter.suite, phase=phase):
+                inventory = discover_inventory(root, policy.discovery, env=environments[phase])
             policies[phase] = CompletePolicy(
                 inventory.expected, policy.sample_count, policy.statistics, policy.confidence_level, policy.unit, sample_counts=policy.sample_counts
             )
@@ -559,63 +599,107 @@ def measure_prepared_pair(
             if (roots[selected] / plan.measurement.criterion_dir).exists():
                 raise ValueError("discovery produced timing output before measurement")
 
-    compatibility = compare_provenance(declared["baseline"], declared["current"], fields=plan.measurement.compatible)
+    compatibility = compare_provenance(declared[active[0]], declared[active[-1]], fields=plan.measurement.compatible)
     if plan.harness_mode == "common" and not compatibility.compatible:
         raise ValueError(f"required benchmark provenance differs or is unknown before timing: {compatibility.differences}")
-    series = _series(plan, policies)
-    if pair.current == pair.baseline and before["baseline"].source_sha256 == before["current"].source_sha256:
+    _series(plan, policies)
+    if len(active) == 2 and pair.current == pair.baseline and before["baseline"].source_sha256 == before["current"].source_sha256:
         raise ValueError("same-release comparisons require distinct source identities")
 
     for phase, root in roots.items():
         gate = getattr(plan, phase).gate
-        result = run_command_live(gate[0], gate[1:], cwd=root, env=environments[phase], timeout=plan.measurement.timeout, check=False)
+        with reporter.stage("gate", suite=reporter.suite, phase=phase):
+            result = run_command_live(gate[0], gate[1:], cwd=root, env=environments[phase], timeout=plan.measurement.timeout, check=False)
         if result.returncode:
             raise ValueError(f"{phase} preflight gate failed")
         for checked in roots:
             unchanged(checked)
         if any((directory / plan.measurement.criterion_dir).exists() for directory in roots.values()):
             raise ValueError("preflight gate produced timing output before measurement")
-    samples, sources = [], []
-    for phase, root in roots.items():
-        selected = getattr(plan, phase)
-        unchanged(phase)
-        if (root / plan.measurement.criterion_dir).exists():
-            raise ValueError(f"{phase} timing output appeared before its measurement")
-        result = run_command_live(selected.command[0], selected.command[1:], cwd=root, env=environments[phase], timeout=plan.measurement.timeout)
-        if result.returncode:
-            raise ValueError(f"{phase} measurement failed")
-        criterion = root / plan.measurement.criterion_dir
-        if plan.saved_sample is not None:
-            from research_repo_tools.criterion_baselines import validate_saved_sample
 
-            validate_saved_sample(
-                criterion,
-                plan.saved_sample,
-                policies[phase],
-                fresh_sample=plan.measurement.sample,
-                raw_files=("benchmark.json", "estimates.json", "sample.json", *plan.raw_files),
-            )
-        samples.append((phase, collect_complete_sample(criterion, plan.measurement.sample, policies[phase], raw_files=plan.raw_files)))
-        unchanged(phase)
-        source = declared[phase]
-        context = {**dict(source.context), "gate-status": "passed", **({"saved-sample": plan.saved_sample or "none"} if plan.schema == 4 else {})}
-        sources.append((phase, Provenance(source.revision, source.source_sha256, source.harness_sha256, tuple(context.items()))))
-    for phase, root in roots.items():
-        unchanged(phase)
-        criterion = root / plan.measurement.criterion_dir
-        retained_sample = dict(samples)[phase]
-        if collect_complete_sample(criterion, plan.measurement.sample, policies[phase], raw_files=plan.raw_files) != retained_sample:
-            raise ValueError(f"{phase} raw observations changed before retention")
-        if plan.saved_sample is not None:
-            from research_repo_tools.criterion_baselines import validate_saved_sample
+    def acquire() -> tuple[tuple[tuple[str, CompleteSample], ...], tuple[tuple[str, Provenance], ...]]:
+        samples: list[tuple[str, CompleteSample]] = []
+        sources: list[tuple[str, Provenance]] = []
+        for phase, root in roots.items():
+            selected = getattr(plan, phase)
+            unchanged(phase)
+            if (root / plan.measurement.criterion_dir).exists():
+                raise ValueError(f"{phase} timing output appeared before its measurement")
+            started = time.monotonic()
+            with reporter.stage("acquisition", suite=reporter.suite, phase=phase):
+                result = run_command_live(selected.command[0], selected.command[1:], cwd=root, env=environments[phase], timeout=plan.measurement.timeout)
+            if result.returncode:
+                raise ValueError(f"{phase} measurement failed")
+            criterion = root / plan.measurement.criterion_dir
+            if plan.saved_sample is not None:
+                from research_repo_tools.criterion_baselines import validate_saved_sample
 
-            validate_saved_sample(
-                criterion,
-                plan.saved_sample,
-                policies[phase],
-                fresh_sample=plan.measurement.sample,
-                raw_files=("benchmark.json", "estimates.json", "sample.json", *plan.raw_files),
-            )
+                validate_saved_sample(
+                    criterion,
+                    plan.saved_sample,
+                    policies[phase],
+                    fresh_sample=plan.measurement.sample,
+                    raw_files=("benchmark.json", "estimates.json", "sample.json", *plan.raw_files),
+                )
+            samples.append((phase, collect_complete_sample(criterion, plan.measurement.sample, policies[phase], raw_files=plan.raw_files)))
+            unchanged(phase)
+            source = declared[phase]
+            context = {**dict(source.context), "gate-status": "passed", **({"saved-sample": plan.saved_sample or "none"} if plan.schema == 4 else {})}
+            sources.append((phase, Provenance(source.revision, source.source_sha256, source.harness_sha256, tuple(context.items()))))
+            if on_sample is not None:
+                on_sample(phase, samples[-1][1], time.monotonic() - started)
+        for phase, root in roots.items():
+            unchanged(phase)
+            criterion = root / plan.measurement.criterion_dir
+            retained_sample = dict(samples)[phase]
+            if collect_complete_sample(criterion, plan.measurement.sample, policies[phase], raw_files=plan.raw_files) != retained_sample:
+                raise ValueError(f"{phase} raw observations changed before retention")
+            if plan.saved_sample is not None:
+                from research_repo_tools.criterion_baselines import validate_saved_sample
+
+                validate_saved_sample(
+                    criterion,
+                    plan.saved_sample,
+                    policies[phase],
+                    fresh_sample=plan.measurement.sample,
+                    raw_files=("benchmark.json", "estimates.json", "sample.json", *plan.raw_files),
+                )
+        return tuple(samples), tuple(sources)
+
+    return policies, declared, acquire
+
+
+def measure_prepared_pair(
+    baseline: Path,
+    current: Path,
+    plan: CompleteMeasurementPlan,
+    pair: ReleasePair,
+    *,
+    working_tree: bool = False,
+    captured_sources: dict[str, CapturedSource] | None = None,
+    verify: Callable[[], None] | None = None,
+    progress: ProgressReporter | None = None,
+) -> Evidence:
+    """Measure two disposable, caller-owned checkouts using captured current files.
+
+    Commands are trusted consumer code. Both gates pass independently before any
+    timing. Retained raw files survive checkout cleanup. No Git state is mutated by
+    this function; measure_pair owns optional worktree lifecycle.
+    """
+    reporter = progress or ProgressReporter(mode="none")
+
+    def accepted_sample(phase: str, sample: CompleteSample, elapsed: float) -> None:
+        reporter.accept(phase, len(sample.cases), elapsed)
+
+    policies, _declared, acquire = _prepare_phases(
+        baseline, current, plan, pair, working_tree=working_tree, captured_sources=captured_sources, verify=verify, progress=reporter, on_sample=accepted_sample
+    )
+    # Historical plans retain separate work classes: they do not declare the
+    # suite-level contract needed to extrapolate timing between phases.
+    reporter.budget({phase: len(policy.expected) for phase, policy in policies.items()})
+    samples, sources = acquire()
+    series = _series(plan, policies)
+
     run = CompleteRun(
         tuple(samples),
         series,
@@ -644,7 +728,7 @@ def _plan_document(plan: CompleteMeasurementPlan) -> dict[str, Any]:
         "probes": dict(config.probes),
         "dependencies": dict(config.dependencies),
         "context": dict(config.context),
-        "compatible": config.compatible,
+        "compatible": tuple(sorted(config.compatible)),
         "statistics": plan.baseline.policy.statistics,
         "confidence-level": plan.baseline.policy.confidence_level,
         "unit": plan.baseline.policy.unit,

@@ -22,6 +22,8 @@ then choose a [capability](#capability-index). Package development belongs in
 
 This README describes current source, including work intended for **v0.2.5**.
 The shared-environment Semgrep and representation/retention policy need v0.2.5.
+Availability-aware benchmark suites, acquisition progress and checkpoint/resume
+also require a supplying v0.2.5 release; see the [suite contract][performance-policy].
 The quickstart uses the published [0.2.3 package][published-pin]. Newer examples
 are marked where a supplying release is required: prepared performance stages,
 parallel Criterion suites, shared release-evidence handoffs, command timing,
@@ -202,6 +204,19 @@ just performance-release tooling/performance-release.toml
 just performance-readme tooling/performance-release.toml --preview
 just performance-readme tooling/performance-release.toml
 ```
+
+For schema-5 measurement declarations, use a new ignored checkpoint directory
+whose parent already exists. Resume explicitly after an interruption:
+
+```sh
+just performance-release tooling/performance-release.toml --checkpoint target/performance-checkpoint
+just performance-release tooling/performance-release.toml --checkpoint target/performance-checkpoint --resume
+```
+
+Completed paired suites retain their original raw bytes and sessions. An
+incomplete pair is recollected in full. `--progress json` emits versioned status
+events on stderr; `--progress none` disables status. Report and README retries
+continue to use retained evidence without measuring again.
 
 Preparation saves independently selected release tags and full commits. Measurement
 runs the gates and benchmarks, then retains/promotes the complete evidence.

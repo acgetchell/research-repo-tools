@@ -384,6 +384,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             acquisition_suite = consumer / "public_acquisition_consumer.py"
             acquisition_suite.write_bytes((ROOT / "tests/performance/public_acquisition_consumer.py").read_bytes())
             run_consumer_suite(python, [str(acquisition_suite)], cwd=consumer, env=local_env)
+            suite_acquisition = consumer / "public_suite_acquisition_consumer.py"
+            suite_acquisition.write_bytes((ROOT / "tests/performance/public_suite_acquisition_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(suite_acquisition)], cwd=consumer, env=local_env)
             criterion_suite = consumer / "public_criterion_consumer.py"
             criterion_suite.write_bytes((ROOT / "tests/performance/public_criterion_consumer.py").read_bytes())
             run_consumer_suite(python, [str(criterion_suite)], cwd=consumer, env=local_env)

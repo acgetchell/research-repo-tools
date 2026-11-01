@@ -9,6 +9,7 @@ from typing import Literal, cast
 from research_repo_tools.evidence import Provenance, _load_json, _object, _string, deterministic_json, sha256
 from research_repo_tools.files import _validate_distinct_paths, replace_many
 from research_repo_tools.measurement import MeasurementConfig, load_measurement, resolve_revision
+from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.process import run_git_bytes
 from research_repo_tools.publication import PublicationPlan, _path, _publication_name
 from research_repo_tools.publication_config import _table, load_publication
@@ -120,8 +121,11 @@ def select_measurement_pair(
     pair = resolve_pair(mode, package_tag="v" + read_package_info(root).version, releases=releases, order=order, current=current, baseline=baseline)
     measurement = load_measurement(root, configuration)
     policy = measurement if isinstance(measurement, MeasurementConfig) else measurement.measurement
-    policy.validate_release(pair.current)
-    policy.validate_release(pair.baseline)
+    from research_repo_tools.suite_measurement import SuiteMeasurementPlan
+
+    if not isinstance(measurement, SuiteMeasurementPlan):
+        policy.validate_release(pair.current)
+        policy.validate_release(pair.baseline)
     working_tree = mode == "current-vs-latest" or (mode == "infer-release" and not any(item.tag == pair.current for item in releases))
     return pair, working_tree
 
@@ -312,7 +316,15 @@ def load_readme_plan(root: Path, settings: PerformanceRelease, *, identities: di
     )
 
 
-def measure_release(root: Path, settings: PerformanceRelease, *, allow_git_mutations: bool = False) -> tuple[Path, ...]:
+def measure_release(
+    root: Path,
+    settings: PerformanceRelease,
+    *,
+    allow_git_mutations: bool = False,
+    checkpoint: str | None = None,
+    resume: bool = False,
+    progress: ProgressReporter | None = None,
+) -> tuple[Path, ...]:
     """Measure a prepared pair, retain the raw evidence, then promote its report.
 
     A report failure preserves successful raw acquisition. Retry promotion with
@@ -324,6 +336,7 @@ def measure_release(root: Path, settings: PerformanceRelease, *, allow_git_mutat
 
     root = root.resolve(strict=True)
     record = load_preparation(root, settings)
+    reporter = progress or ProgressReporter()
     measure_and_retain(
         root,
         settings.measurement,
@@ -333,5 +346,9 @@ def measure_release(root: Path, settings: PerformanceRelease, *, allow_git_mutat
         working_tree=record.working_tree,
         allow_git_mutations=allow_git_mutations,
         verify=lambda: record.verify(root),
+        checkpoint=checkpoint,
+        resume=resume,
+        progress=reporter,
     )
-    return publish_publication(load_report_plan(root, settings.report, payload=settings.payload, manifest=settings.manifest))
+    with reporter.stage("publication"):
+        return publish_publication(load_report_plan(root, settings.report, payload=settings.payload, manifest=settings.manifest))

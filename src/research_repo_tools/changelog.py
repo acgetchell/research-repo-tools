@@ -44,6 +44,7 @@ TEMPLATES = (
     "research-repo-tools.toml",
     "rumdl.toml",
     "semgrep-constraints.txt",
+    "suite-measurement.toml",
     "zizmor.yml",
 )
 _COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")

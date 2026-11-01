@@ -1,5 +1,163 @@
 # Declaring complete performance workflows
 
+## Availability, progress and resume (schema 5)
+
+These interfaces are intended for v0.2.5. Implementation, merge, PyPI publication
+and consumer adoption are separate states. Verify the supplying exact-version
+registry installation before changing a consumer pin.
+
+The `suite-measurement.toml` template declares `schema = 5` and ordered
+`[[suites]]` tables. Each has a unique lowercase slug `name`, a consumer-owned
+semantic `contract`, and an inline `measurement` following schema 4. Both phase
+commands, discovery policies, gates, complete sampling requirements, supplemental
+raw files and series retain their existing rules. All suites share a harness
+mode, statistics, confidence and units. Declare every scientific input, feature,
+flag, fixture/seed, tool and dependency used by the native commands. Shared build
+manifests belong in the harness even when this conservatively suppresses ratios.
+
+Optional `since = "v1.1.0"` is inclusive; `before = "v2.0.0"` is exclusive.
+Bounds are canonical stable tags; no bounds means available on both revisions.
+Resolution uses independently captured tag/revision/source receipts before any
+harness overlay or native command. Prospective working-tree labels must match
+the original captured package version. Compilation, discovery, missing required
+IDs, failed gates and incomplete samples remain errors for available suites.
+Advancing the baseline automatically enables newly supported suites. Consumers
+must split Cargo targets/features so an available command never indirectly
+compiles an unavailable API. Runtime case filtering cannot supply this boundary.
+
+Optional `compilation = { baseline = [...], current = [...] }` commands run after
+source preparation and before discovery, only on available sides. Without them,
+native discovery may include compilation and is reported as discovery. Optional
+positive `nominal-seconds-per-case` declares expected warmup plus sampling time.
+Its product with discovered case counts is a budget, never an upper bound or
+timeout. One unknown suite budget makes the overall nominal budget unknown.
+
+Schema 5 requires `backend = "export"` in each nested measurement. Both common
+and independent harnesses are supported. Worktrees are rejected before execution;
+schemas 1–4 preserve their existing behavior and authorization boundary. Exports
+provide stored source bytes without Git metadata or checkout filters. Native
+commands requiring those facilities cannot use schema 5 yet.
+
+Complete-run v4 records every suite decision and available side. Entirely absent
+phases have no fabricated sample. Reports expose the union, absence reasons,
+original source identities, sessions and collection times. Series names become
+`SUITE/SERIES`, such as `core/current`. Renamed IDs remain distinct. Represent
+changed semantics with separate suites and nonoverlapping release intervals;
+no implicit identity mapping is inferred. Duplicate ownership within a phase
+is rejected, including duplicate native IDs across available suites.
+
+Ratios compare individual observations in the same accepted unit. They require
+matching workload identities, applicable harness bytes/modes, inputs, environment,
+tools/dependencies, sample counts, statistics, confidence, units and known host
+observations. An unrelated one-sided suite does not suppress shared ratios.
+Cross-phase measurement and optional compilation argument vectors must also
+match exactly. Differing phase names, paths, seeds, sizes, features or flags
+retain absolute results; no command-equivalence mapping is inferred.
+Cross-unit ratios, including same-phase peers, remain unavailable. Keep compatible
+peer and library cases in one suite. Release promotion validates shared comparisons
+while retaining declared one-sided results; disjoint runs remain absolute-only.
+Schemas 1–4 retain their original comparison policies.
+Derived ratios must remain finite and positive; report rendering rejects
+arithmetic overflow or underflow without rewriting retained absolute samples.
+
+### Checkpoint and recovery
+
+`performance measure` and `performance release` accept `--checkpoint PATH` for
+a new checkpoint and `--checkpoint PATH --resume` for explicit reuse. CLI paths
+are root-relative, have an existing parent, do not overlap inputs/outputs, and
+must be ignored during working-tree capture. Python callers pass a `Path` to
+`measurement.measure_pair`. There is no automatic fresh/resume fallback.
+
+The acceptance unit is a whole suite: both available phases, or its one available
+side. Gates pass before timing. Completed units are committed atomically; an
+incomplete pair is recollected in full. Resume repeats preparation, discovery and
+gates, validates every retained unit before missing work, and preserves original
+raw bytes, host, session and collection times. Final evidence attributes retained
+and new units. Validated phase progress never makes a half-pair resumable.
+
+Preparation keeps exports and build outputs for only one suite at a time. A
+first pass compiles, discovers and gates every available suite, then releases
+its trees. After all retained units are validated, missing suites are exported
+and prepared again immediately before measurement. Their resolved policies and
+provenance must match the first pass. This repeats preparation for missing
+suites to bound temporary disk usage while preserving fail-fast validation
+before any timing; retained suites are never measured again.
+
+The header binds the declaration, release/source receipts, availability and a
+digest of the inherited environment. Each accepted unit binds effective source,
+harness/input identities, resolved discovery/sampling, tools/dependencies, host,
+gate status and exact raw files. Current independent observations must match
+before reuse. Source, declaration, environment, tool, host or raw-data drift
+rejects resume with a fresh-checkpoint path as the recovery option. The inherited
+environment is represented only by its digest; explicitly configured commands
+and environment values remain in the retained declaration. Digests establish integrity, not external
+authenticity; these local records assume trusted, exclusive ownership.
+
+An exclusive `.writer` directory rejects concurrent writers. A hard-killed owner
+can leave it behind. Verify that all owners/native processes have stopped before
+manually removing only the stale lock; never steal a lock based on PID or age.
+Each immutable `unit-NAME.json` contains its content digest and complete base64
+raw observations. Known unpublished temporary files are not accepted. A truncated
+or corrupt final unit is an error, not missing work. File data is fsynced before
+atomic replacement; directory-entry persistence after power loss depends on the
+native filesystem. Rejected resume preserves accepted units and published outputs.
+
+The inherited-environment digest excludes only shell, terminal, multiplexer and
+SSH connection/agent session metadata: `_`, `SHLVL`, `TERM_SESSION_ID`,
+`ITERM_SESSION_ID`, `SSH_CONNECTION`, `SSH_CLIENT`, `SSH_TTY`, `SSH_AUTH_SOCK`,
+`SSH_AGENT_PID`, `TMUX`, `TMUX_PANE`, `STY`, `WINDOW` and `WINDOWID`. This allows
+resume after an SSH reconnect or terminal-session change. Every other inherited
+key remains included, including `PATH`, `TERM`, `OMP_NUM_THREADS` and unknown
+keys; no prefix is ignored.
+Checkpoint identity and checks during acquisition use the same reduced environment.
+If a native workload depends on an excluded key, declare its value explicitly in
+the phase environment so the retained declaration binds it.
+
+### Progress contract
+
+`--progress human` is the default; `json` emits JSON Lines; `none` disables status.
+Status uses stderr without changing native stdout/data output. The finite
+`--progress-cadence SECONDS` defaults to 10 and must be at least 1. Transitions
+are immediate; ordinary heartbeat work is bounded by the suite inventory, without
+scanning directories, parsing native logs or triggering measurements.
+JSON status shares stderr with inherited native diagnostics; filter records by
+their schema. Use the Python observer or a dedicated stream for an isolated
+machine-readable channel.
+
+Events use schema `research-repo-tools/acquisition-progress/v1` with fields
+`event`, `state`, `suite`, `phase`, `completed`, `remaining`, `total`,
+`elapsed_seconds`, `nominal_seconds`, `eta_seconds`, `compatible_eta_seconds`,
+`unknown_cases`, `eta_reason`, `unseen_work_classes`, and `inventory`. Each schema-5
+inventory row names its suite/phase and total, completed and remaining case counts;
+unavailable sides have zero cases. Counts/budgets can be
+null before discovery. States distinguish availability, optional compilation,
+discovery, gate, acquisition, checkpoint, retention and publication. Events are
+started, heartbeat, finished, budget, validated, retained, acquisition-complete,
+failed and interrupted. Counts advance after complete phase results pass raw-file,
+sampling and freshness validation. Partial files/directories never count; final
+validation and durable unit acceptance are independent safeguards.
+
+Rates come from observed compatible contracts, harness/input identities,
+commands, compilation flags, tools, host, environment and sampling policies.
+Retained units do not train rates. Unseen
+work keeps overall ETA null; `compatible_eta_seconds` estimates only the known
+remainder alongside `unknown_cases`. Stalls and extended native sampling can
+exceed estimates. Compilation, gates and publication are not extrapolated from
+sampling. Failure/interruption preserves phase and remaining counts in its event.
+A new attempt revalidates the checkpoint and starts fresh progress counts.
+Schemas 2–4 also advance completion after each validated phase. Their separate
+phase work classes keep cross-phase ETA unknown without a suite-level contract.
+
+### Bounded la-stack migration
+
+Keep scientific operations, benchmark inputs, API introduction versions, peer
+selection and gates in la-stack. Split shared and newly introduced APIs into
+independently compilable suites, then replace permanent baseline exclusion lists
+with release intervals. Keep peers with their library suite when ratios are needed.
+Verify the supplying PyPI version before adoption. Upstream publication does not
+wait for the consumer release. Preparation, acquisition/promotion and README
+retry remain separate; existing running acquisitions are not migrated.
+
 The v0.2.1 interfaces connect installed commands to consumer TOML and native
 Just/Cargo commands. Consumers own benchmark definitions, scientific gates,
 dimensions, report selections, peer mappings, sampling and compatibility policy.

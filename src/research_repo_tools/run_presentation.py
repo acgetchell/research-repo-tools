@@ -12,6 +12,7 @@ from research_repo_tools.complete_runs import CompleteRun, ratio_incompatibiliti
 from research_repo_tools.criterion import Comparison, ComparisonSet, Estimate, Sample, Statistic, Unit, _format_estimate, _markdown_text, _statistic, _unit
 from research_repo_tools.evidence import Evidence, _string
 from research_repo_tools.publication import TableLayout, _render_ratio_svg
+from research_repo_tools.suite_runs import SuiteRun, comparison_for_run
 
 __all__ = [
     "CoordinatePlot",
@@ -120,7 +121,7 @@ class RunLayout:
         object.__setattr__(self, "comparisons", pairs)
 
 
-def _select(evidence: Evidence, layout: RunLayout) -> tuple[CompleteRun, dict[str, dict[str, Estimate]]]:
+def _select(evidence: Evidence, layout: RunLayout) -> tuple[CompleteRun | SuiteRun, dict[str, dict[str, Estimate]]]:
     run = validate_run_evidence(evidence)
     phases, views = dict(run.phases), {item.name: item for item in run.series}
     policy = phases["baseline"].policy
@@ -139,7 +140,7 @@ def _select(evidence: Evidence, layout: RunLayout) -> tuple[CompleteRun, dict[st
     return run, selected
 
 
-def _attribution(evidence: Evidence, run: CompleteRun, name: str) -> str:
+def _attribution(evidence: Evidence, run: CompleteRun | SuiteRun, name: str) -> str:
     phase = next(item.phase for item in run.series if item.name == name)
     source = dict(evidence.sources)[phase]
     return f"{phase} phase, {dict(source.context)['release']}, revision {source.revision}"
@@ -197,17 +198,16 @@ def render_run_table(evidence: Evidence, layout: RunLayout, *, style: RunTableSt
         if headings and len(headings) != len(layout.comparisons):
             raise ValueError("comparison headings must match the number of layout comparisons")
     run, selected = _select(evidence, layout)
-    reasons = ratio_incompatibilities(evidence)
+    reasons = () if isinstance(run, SuiteRun) else ratio_incompatibilities(evidence)
     phases = {item.name: item.phase for item in run.series}
     labels = {item.name: item.label for item in layout.series}
     caption = f"Run: `{run_identity(evidence)}`. Statistic: {layout.statistic}. Unit: {layout.unit}."
     if style.timing_legend:
         # Whole-run validation above guarantees matching, complete intervals.
-        estimate = next(iter(next(iter(selected.values())).values()))
-        assert estimate.confidence_level is not None
+        confidence_level = dict(run.phases)["baseline"].policy.confidence_level
         # Shift the exact decimal digits without using the caller's precision,
         # exponent limits or traps. Only fractional trailing zeros are removable.
-        sign, digits, exponent = Decimal(str(estimate.confidence_level)).as_tuple()
+        sign, digits, exponent = Decimal(str(confidence_level)).as_tuple()
         assert isinstance(exponent, int)  # Complete evidence guarantees a finite level.
         percentage = format(Decimal((sign, digits, exponent + 2)), "f")
         if "." in percentage:
@@ -226,6 +226,7 @@ def render_run_table(evidence: Evidence, layout: RunLayout, *, style: RunTableSt
             if headings:
                 meanings.append(f"- {_markdown_text(heading)}: {column}; numerator = {_markdown_text(labels[a])}; denominator = {_markdown_text(labels[b])}.")
     lines.extend(["", "| " + " | ".join(headers) + " |", "| " + " | ".join("---" for _ in headers) + " |"])
+    ratio_notes: set[str] = set()
     for row in layout.rows:
         cells = [_markdown_text(row.label)]
         for item in layout.series:
@@ -243,7 +244,9 @@ def render_run_table(evidence: Evidence, layout: RunLayout, *, style: RunTableSt
             )
         for a, b in layout.comparisons:
             first, second = selected[a].get(row.key), selected[b].get(row.key)
-            if first is None or second is None or (reasons and phases[a] != phases[b]):
+            row_reasons = _ratio_reasons(run, layout, a, b, row.key) if first is not None and second is not None else ()
+            ratio_notes.update(row_reasons)
+            if first is None or second is None or row_reasons or (reasons and phases[a] != phases[b]):
                 cells.extend("unavailable" for _ in style.comparison_columns)
             else:
                 pair = Comparison(row.key, first, second)
@@ -259,6 +262,8 @@ def render_run_table(evidence: Evidence, layout: RunLayout, *, style: RunTableSt
         lines.append("Time reduction is 100 × (numerator − denominator) / numerator; positive means less denominator time.")
     if reasons:
         lines.extend(["", "Cross-phase ratios suppressed: " + _markdown_text("; ".join(reasons))])
+    if ratio_notes:
+        lines.extend(["", "Selected ratios suppressed: " + _markdown_text("; ".join(sorted(ratio_notes)))])
     lines.extend(meanings)
     lines.extend(["", "Selection coverage:"])
     for item in layout.series:
@@ -302,9 +307,12 @@ def serialize_run_csv(evidence: Evidence, layout: RunLayout) -> bytes:
     identity = run_identity(evidence)
     for item in layout.series:
         view = next(view for view in run.series if view.name == item.name)
-        source = dict(evidence.sources)[view.phase]
+        phase_source = dict(evidence.sources)[view.phase]
         for row in layout.rows:
+            source = phase_source
             estimate = selected[item.name].get(row.key)
+            if isinstance(run, SuiteRun) and estimate is not None:
+                _, _, source = run.observation(view.phase, dict(item.rows)[row.key])
             writer.writerow(
                 [
                     identity,
@@ -459,12 +467,16 @@ def render_run_ratios(evidence: Evidence, layout: RunLayout) -> bytes:
         raise ValueError("ratio SVG requires exactly one comparison")
     a, b = layout.comparisons[0]
     phases = {item.name: item.phase for item in run.series}
-    reasons = ratio_incompatibilities(evidence)
+    reasons = () if isinstance(run, SuiteRun) else ratio_incompatibilities(evidence)
     if phases[a] != phases[b] and reasons:
         raise ValueError(f"cross-phase ratio figure is ineligible: {reasons}")
     keys = [row for row in layout.rows if row.key in selected[a] and row.key in selected[b]]
     if not keys:
         raise ValueError("ratio SVG requires at least one available paired row")
+    for row in keys:
+        rejected = _ratio_reasons(run, layout, a, b, row.key)
+        if rejected:
+            raise ValueError(f"ratio figure row {row.key} is ineligible: {rejected}")
     samples = [Sample(tuple((row.key, selected[name][row.key]) for row in keys), layout.statistic, layout.unit) for name in (a, b)]
     labels = {item.name: item.label for item in layout.series}
     table = TableLayout(
@@ -479,3 +491,11 @@ def render_run_ratios(evidence: Evidence, layout: RunLayout) -> bytes:
     return _render_ratio_svg(
         ComparisonSet(*samples), table, description=description, caption="Numerator/denominator point ratio; dashed line = 1", identity=identity
     )
+
+
+def _ratio_reasons(run: CompleteRun | SuiteRun, layout: RunLayout, a: str, b: str, key: str) -> tuple[str, ...]:
+    if not isinstance(run, SuiteRun):
+        return ()
+    phases = {view.name: view.phase for view in run.series}
+    mappings = {item.name: dict(item.rows) for item in layout.series}
+    return comparison_for_run(run, (phases[a], mappings[a][key]), (phases[b], mappings[b][key]))

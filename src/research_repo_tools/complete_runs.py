@@ -7,7 +7,10 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from research_repo_tools.suite_runs import SuiteRun
 
 from research_repo_tools.criterion import Estimate, Statistic, Unit, _format_estimate, _markdown_text, _positive, _statistic, _unit, parse_estimate
 from research_repo_tools.evidence import Evidence, Provenance, _digest, _load_json, _object, _string, compare_provenance, deterministic_json, serialize_evidence
@@ -20,6 +23,7 @@ __all__ = [
     "RUN_SCHEMAS",
     "RUN_SCHEMA_V2",
     "RUN_SCHEMA_V3",
+    "RUN_SCHEMA_V4",
     "ratio_incompatibilities",
     "CompleteCase",
     "CompletePolicy",
@@ -40,7 +44,8 @@ RUN_SCHEMA = "research-repo-tools/complete-run/v1"
 LEGACY_RUN_SCHEMA = RUN_SCHEMA
 RUN_SCHEMA_V2 = "research-repo-tools/complete-run/v2"
 RUN_SCHEMA_V3 = "research-repo-tools/complete-run/v3"
-RUN_SCHEMAS = (RUN_SCHEMA, RUN_SCHEMA_V2, RUN_SCHEMA_V3)
+RUN_SCHEMA_V4 = "research-repo-tools/complete-run/v4"
+RUN_SCHEMAS = (RUN_SCHEMA, RUN_SCHEMA_V2, RUN_SCHEMA_V3, RUN_SCHEMA_V4)
 
 
 def _array(value: object, context: str) -> list[Any]:
@@ -300,7 +305,7 @@ class CompleteRun:
     harness_mode: str = field(default="common", kw_only=True)
 
     def __post_init__(self) -> None:
-        if self.schema not in RUN_SCHEMAS:
+        if self.schema not in (RUN_SCHEMA, RUN_SCHEMA_V2, RUN_SCHEMA_V3):
             raise ValueError("unsupported complete run schema")
         if self.harness_mode not in {"common", "independent"} or (self.schema != RUN_SCHEMA_V3 and self.harness_mode != "common"):
             raise ValueError("independent acquisition requires complete-run v3")
@@ -334,6 +339,20 @@ class CompleteRun:
         object.__setattr__(self, "compatible", tuple(sorted(compatible)))
 
 
+def _sample_document(sample: CompleteSample, schema: str = RUN_SCHEMA_V3) -> dict[str, object]:
+    return {
+        "policy": {key: value for key, value in _policy_document(sample.policy).items() if schema != LEGACY_RUN_SCHEMA or key != "sample_counts"},
+        "cases": [
+            {
+                "storage_path": case.storage_path,
+                **({"raw_files": {name: base64.b64encode(data).decode("ascii") for name, data in case.raw_files}} if schema == RUN_SCHEMA_V3 else {}),
+                **{key: base64.b64encode(getattr(case, key)).decode("ascii") for key in ("benchmark", "estimates", "sample")},
+            }
+            for case in sample.cases
+        ],
+    }
+
+
 def serialize_run(run: CompleteRun) -> bytes:
     return deterministic_json(
         {
@@ -341,28 +360,30 @@ def serialize_run(run: CompleteRun) -> bytes:
             **({"harness_mode": run.harness_mode} if run.schema == RUN_SCHEMA_V3 else {}),
             "compatible": run.compatible,
             "series": [{"name": series.name, "phase": series.phase, "rows": dict(series.rows)} for series in run.series],
-            "phases": {
-                name: {
-                    "policy": {
-                        key: value for key, value in _policy_document(sample.policy).items() if run.schema != LEGACY_RUN_SCHEMA or key != "sample_counts"
-                    },
-                    "cases": [
-                        {
-                            "storage_path": case.storage_path,
-                            **(
-                                {"raw_files": {name: base64.b64encode(data).decode("ascii") for name, data in case.raw_files}}
-                                if run.schema == RUN_SCHEMA_V3
-                                else {}
-                            ),
-                            **{key: base64.b64encode(getattr(case, key)).decode("ascii") for key in ("benchmark", "estimates", "sample")},
-                        }
-                        for case in sample.cases
-                    ],
-                }
-                for name, sample in run.phases
-            },
+            "phases": {name: _sample_document(sample, run.schema) for name, sample in run.phases},
         }
     )
+
+
+def _parse_complete_sample(value: object, schema: str = RUN_SCHEMA_V3) -> CompleteSample:
+    modern = schema == RUN_SCHEMA_V3
+    phase = _object(value, "phase", {"policy", "cases"})
+    parsed_policy = _parse_policy(phase["policy"], legacy=schema == LEGACY_RUN_SCHEMA)
+    cases = []
+    for item in _array(phase["cases"], "cases"):
+        case = _object(item, "case", {"storage_path", "benchmark", "estimates", "sample"} | ({"raw_files"} if modern else set()))
+        try:
+            files = tuple(base64.b64decode(_string(case[key], key), validate=True) for key in ("benchmark", "estimates", "sample"))
+        except binascii.Error as error:
+            raise ValueError("invalid base64 Criterion file") from error
+        try:
+            extra = tuple(
+                (name, base64.b64decode(_string(data, name), validate=True)) for name, data in _object(case.get("raw_files", {}), "raw files").items()
+            )
+        except binascii.Error as error:
+            raise ValueError("invalid base64 Criterion file") from error
+        cases.append(CompleteCase(_string(case["storage_path"], "storage path"), *files, raw_files=extra))
+    return CompleteSample(parsed_policy, tuple(cases))
 
 
 def parse_run(payload: bytes) -> CompleteRun:
@@ -373,23 +394,7 @@ def parse_run(payload: bytes) -> CompleteRun:
         raise ValueError("unsupported complete run schema")
     phases = []
     for name, value in _object(raw["phases"], "phases").items():
-        phase = _object(value, "phase", {"policy", "cases"})
-        parsed_policy = _parse_policy(phase["policy"], legacy=raw["schema"] == LEGACY_RUN_SCHEMA)
-        cases = []
-        for item in _array(phase["cases"], "cases"):
-            case = _object(item, "case", {"storage_path", "benchmark", "estimates", "sample"} | ({"raw_files"} if modern else set()))
-            try:
-                files = tuple(base64.b64decode(_string(case[key], key), validate=True) for key in ("benchmark", "estimates", "sample"))
-            except binascii.Error as error:
-                raise ValueError("invalid base64 Criterion file") from error
-            try:
-                extra = tuple(
-                    (name, base64.b64decode(_string(data, name), validate=True)) for name, data in _object(case.get("raw_files", {}), "raw files").items()
-                )
-            except binascii.Error as error:
-                raise ValueError("invalid base64 Criterion file") from error
-            cases.append(CompleteCase(_string(case["storage_path"], "storage path"), *files, raw_files=extra))
-        phases.append((name, CompleteSample(parsed_policy, tuple(cases))))
+        phases.append((name, _parse_complete_sample(value, _string(raw["schema"], "run schema"))))
     series = []
     for item in _array(raw["series"], "series"):
         row = _object(item, "series", {"name", "phase", "rows"})
@@ -409,7 +414,11 @@ def parse_run(payload: bytes) -> CompleteRun:
     )
 
 
-def validate_run_evidence(evidence: Evidence) -> CompleteRun:
+def validate_run_evidence(evidence: Evidence) -> CompleteRun | SuiteRun:
+    if evidence.payload_schema == RUN_SCHEMA_V4:
+        from research_repo_tools.suite_runs import parse_suite_run
+
+        return parse_suite_run(evidence)
     if evidence.payload_schema not in RUN_SCHEMAS:
         raise ValueError("requires complete-run evidence")
     run = parse_run(evidence.payload)
@@ -430,37 +439,7 @@ def validate_run_evidence(evidence: Evidence) -> CompleteRun:
 
             if parse_inventory(context["discovery-inventory"].encode("utf-8")).expected != dict(run.phases)[phase].policy.expected:
                 raise ValueError("retained discovered inventory differs from complete policy")
-        if source.source_sha256 is None or context.get("phase") != phase or context.get("gate-status") != "passed":
-            raise ValueError("run requires source identity and a passed gate attributed to each phase")
-        for key in (
-            "command",
-            "environment",
-            "gate-command",
-            "host",
-            "source-inventory",
-            "harness-inventory",
-            "release",
-            "original-source-sha256",
-            "original-source-inventory",
-        ):
-            if key not in context:
-                raise ValueError(f"run provenance missing {key}")
-        if context.get("fingerprint-schema") != "research-repo-tools/files/v1":
-            raise ValueError("complete runs require the shared file fingerprint framing")
-        _digest(context["original-source-sha256"], "original source fingerprint")
-        from research_repo_tools.host_metadata import parse_host
-
-        parse_host(context["host"].encode("utf-8"))
-        for key in ("command", "gate-command", "source-inventory", "harness-inventory", "original-source-inventory"):
-            values = _array(_load_json(context[key].encode("utf-8"), key), key)
-            if not values:
-                raise ValueError(f"{key} must not be empty")
-            for value in values:
-                _string(value, key)
-        environment = _object(_load_json(context["environment"].encode("utf-8"), "environment"), "environment")
-        from research_repo_tools.criterion_inventory import _environment
-
-        _environment(environment.items())
+        _validate_sample_source(source, phase)
     ReleasePair(dict(sources["current"].context)["release"], dict(sources["baseline"].context)["release"])
     compatibility = compare_provenance(sources["baseline"], sources["current"], fields=run.compatible)
     if run.harness_mode == "common" and not compatibility.compatible:
@@ -472,15 +451,54 @@ def validate_run_evidence(evidence: Evidence) -> CompleteRun:
     return run
 
 
+def _validate_sample_source(source: Provenance, phase: str) -> None:
+    """Validate common observation provenance before schema-specific consumers."""
+    context = dict(source.context)
+    if source.source_sha256 is None or context.get("phase") != phase or context.get("gate-status") != "passed":
+        raise ValueError("run requires source identity and a passed gate attributed to each phase")
+    for key in (
+        "command",
+        "environment",
+        "gate-command",
+        "host",
+        "source-inventory",
+        "harness-inventory",
+        "release",
+        "original-source-sha256",
+        "original-source-inventory",
+    ):
+        if key not in context:
+            raise ValueError(f"run provenance missing {key}")
+    if context.get("fingerprint-schema") != "research-repo-tools/files/v1":
+        raise ValueError("complete runs require the shared file fingerprint framing")
+    _digest(context["original-source-sha256"], "original source fingerprint")
+    from research_repo_tools.host_metadata import parse_host
+
+    parse_host(context["host"].encode("utf-8"))
+    for key in ("command", "gate-command", "source-inventory", "harness-inventory", "original-source-inventory"):
+        values = _array(_load_json(context[key].encode("utf-8"), key), key)
+        if not values:
+            raise ValueError(f"{key} must not be empty")
+        for value in values:
+            _string(value, key)
+    environment = _object(_load_json(context["environment"].encode("utf-8"), "environment"), "environment")
+    from research_repo_tools.criterion_inventory import _environment
+
+    _environment(environment.items())
+
+
 def ratio_incompatibilities(evidence: Evidence) -> tuple[str, ...]:
     """Derive v3 ratio eligibility from retained observations, never a stored verdict.
 
     Valid v1/v2 evidence returns an empty tuple without assessing ratio eligibility.
     """
     run = validate_run_evidence(evidence)
+    if run.schema == RUN_SCHEMA_V4:
+        return ("suite evidence requires observation-level comparison eligibility",)
     if run.schema != RUN_SCHEMA_V3:
         return ()
     sources = dict(evidence.sources)
+    assert isinstance(run, CompleteRun)
     fields = set(run.compatible)
     fields.update(("context.host", "context.workload-sha256", "context.environment"))
     result = compare_provenance(sources["baseline"], sources["current"], fields=tuple(sorted(fields)))
@@ -704,6 +722,10 @@ def render_run(
             _publication_name(path)
         payload_link, manifest_link = (_relative_link(report_path, path) for path in (payload_path, manifest_path))
         links = f"Evidence: [run payload]({payload_link}) · [evidence envelope]({manifest_link})."
+    if evidence.payload_schema == RUN_SCHEMA_V4:
+        from research_repo_tools.suite_runs import render_suite_run
+
+        return render_suite_run(evidence, title=title, links=links, identity=run_identity(evidence))
     timings = _render_run_v1(evidence, title=title).decode("utf-8").removesuffix("\n").split("\n")
     timings[4:4] = [links, ""]
     run = validate_run_evidence(evidence)

@@ -1,0 +1,41 @@
+# Requires a supplying v0.2.5 release. Copy the suites block for independent
+# targets, with per-suite source/harness/input declarations and semantic identity.
+schema = 5
+
+[[suites]]
+name = "extended"
+contract = "extended-inputs-v1"
+since = "v1.1.0"
+# before = "v2.0.0" # Exclusive removal or semantic-contract boundary.
+# nominal-seconds-per-case = 8 # Warmup + sampling estimate, never a limit.
+compilation = { baseline = ["just", "extended-build"], current = ["just", "extended-build"] }
+
+[suites.measurement]
+schema = 4
+backend = "export"
+harness-mode = "common"
+sources = ["src/**/*.rs"]
+harness = ["benches/extended.rs", "tests/extended_inputs.rs", "Cargo.toml", "Cargo.lock", "justfile", "rust-toolchain.toml"]
+workloads = ["tests/extended_inputs.rs"]
+sample-count = 100
+probes = { rustc = ["rustc", "-Vv"] }
+
+[suites.measurement.phases.baseline]
+command = ["just", "extended-bench"]
+gate = ["just", "extended-check"]
+discovery = { required = ["extended/size-2"], suites = [{ name = "extended", command = ["just", "extended-list"] }] }
+
+[suites.measurement.phases.current]
+command = ["just", "extended-bench"]
+gate = ["just", "extended-check"]
+discovery = { required = ["extended/size-2"], suites = [{ name = "extended", command = ["just", "extended-list"] }] }
+
+[[suites.measurement.series]]
+name = "baseline"
+phase = "baseline"
+select = { include = ["*"] }
+
+[[suites.measurement.series]]
+name = "current"
+phase = "current"
+select = { include = ["*"] }
