@@ -75,6 +75,14 @@ gates, validates every retained unit before missing work, and preserves original
 raw bytes, host, session and collection times. Final evidence attributes retained
 and new units. Validated phase progress never makes a half-pair resumable.
 
+Preparation keeps exports and build outputs for only one suite at a time. A
+first pass compiles, discovers and gates every available suite, then releases
+its trees. After all retained units are validated, missing suites are exported
+and prepared again immediately before measurement. Their resolved policies and
+provenance must match the first pass. This repeats preparation for missing
+suites to bound temporary disk usage while preserving fail-fast validation
+before any timing; retained suites are never measured again.
+
 The header binds the declaration, release/source receipts, availability and a
 digest of the inherited environment. Each accepted unit binds effective source,
 harness/input identities, resolved discovery/sampling, tools/dependencies, host,
@@ -94,9 +102,13 @@ or corrupt final unit is an error, not missing work. File data is fsynced before
 atomic replacement; directory-entry persistence after power loss depends on the
 native filesystem. Rejected resume preserves accepted units and published outputs.
 
-The inherited-environment digest excludes only `_`, `SHLVL`, `TERM_SESSION_ID`
-and `ITERM_SESSION_ID`, which identify shell/terminal sessions. Every other
-inherited key remains included, including unknown keys; no prefix is ignored.
+The inherited-environment digest excludes only shell, terminal, multiplexer and
+SSH connection/agent session metadata: `_`, `SHLVL`, `TERM_SESSION_ID`,
+`ITERM_SESSION_ID`, `SSH_CONNECTION`, `SSH_CLIENT`, `SSH_TTY`, `SSH_AUTH_SOCK`,
+`SSH_AGENT_PID`, `TMUX`, `TMUX_PANE`, `STY`, `WINDOW` and `WINDOWID`. This allows
+resume after an SSH reconnect or terminal-session change. Every other inherited
+key remains included, including `PATH`, `TERM`, `OMP_NUM_THREADS` and unknown
+keys; no prefix is ignored.
 Checkpoint identity and checks during acquisition use the same reduced environment.
 If a native workload depends on an excluded key, declare its value explicitly in
 the phase environment so the retained declaration binds it.

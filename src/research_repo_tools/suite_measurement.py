@@ -167,8 +167,23 @@ def _source_record(source: Provenance) -> dict[str, object]:
 
 
 def _environment_digest() -> str:
-    """Ignore only documented shell/terminal session bookkeeping, never prefixes."""
-    ignored = {"_", "SHLVL", "TERM_SESSION_ID", "ITERM_SESSION_ID"}
+    """Ignore only documented shell/terminal/SSH session bookkeeping, never prefixes."""
+    ignored = {
+        "_",
+        "SHLVL",
+        "TERM_SESSION_ID",
+        "ITERM_SESSION_ID",
+        "SSH_CONNECTION",
+        "SSH_CLIENT",
+        "SSH_TTY",
+        "SSH_AUTH_SOCK",
+        "SSH_AGENT_PID",
+        "TMUX",
+        "TMUX_PANE",
+        "STY",
+        "WINDOW",
+        "WINDOWID",
+    }
     return sha256(deterministic_json({key: value for key, value in os.environ.items() if key not in ignored}))
 
 
@@ -265,36 +280,32 @@ def _measure_suites(
         if checkpoint is not None:
             with reporter.stage("checkpoint"):
                 journal = stack.enter_context(open_checkpoint(checkpoint, identity, tuple(s.name for s in plan.suites), resume=resume))
-        temporary = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="research-suites-"))).resolve()
-        prepared: dict[
-            str,
-            tuple[
-                dict[str, CompletePolicy],
-                dict[str, Provenance],
-                Callable[[], tuple[tuple[tuple[str, CompleteSample], ...], tuple[tuple[str, Provenance], ...]]],
-            ],
-        ] = {}
+        exports_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="research-suites-"))).resolve()
+        prepared: dict[str, tuple[dict[str, CompletePolicy], dict[str, Provenance]]] = {}
         counts: dict[str, int] = {}
-        resources: dict[str, ExitStack] = {}
         inventory = {(suite.name, phase): 0 for suite in plan.suites for phase in captures}
         nominal: float | None = 0.0
         ownership: dict[str, set[str]] = {"baseline": set(), "current": set()}
-        for suite in plan.suites:
-            reporter.suite = suite.name
+
+        def prepare(
+            suite: AcquisitionSuite,
+            resources: ExitStack,
+        ) -> tuple[
+            dict[str, CompletePolicy],
+            dict[str, Provenance],
+            Callable[[], tuple[tuple[tuple[str, CompleteSample], ...], tuple[tuple[str, Provenance], ...]]],
+        ]:
             active = tuple(phase for phase in captures if decisions[suite.name][phase]["state"] == "available")
-            if not active:
-                continue
-            resources[suite.name] = stack.enter_context(ExitStack())
-            directories = {phase: temporary / f"{suite.name}-{phase}" for phase in captures}
+            directories = {phase: exports_root / f"{suite.name}-{phase}" for phase in captures}
             for phase, capture in captures.items():
                 if phase in active or (phase == "current" and suite.measurement.harness_mode == "common"):
-                    directories[phase] = resources[suite.name].enter_context(export_source(capture, directories[phase]))
+                    directories[phase] = resources.enter_context(export_source(capture, directories[phase]))
 
-            def accepted_sample(phase: str, sample: CompleteSample, elapsed: float, selected: AcquisitionSuite = suite) -> None:
-                policy, source = prepared[selected.name][0][phase], prepared[selected.name][1][phase]
-                reporter.accept(_work_class(selected, source, policy), len(sample.cases), elapsed)
+            def accepted_sample(phase: str, sample: CompleteSample, elapsed: float) -> None:
+                policy, source = prepared[suite.name][0][phase], prepared[suite.name][1][phase]
+                reporter.accept(_work_class(suite, source, policy), len(sample.cases), elapsed)
 
-            prepared[suite.name] = _prepare_phases(
+            return _prepare_phases(
                 directories["baseline"],
                 directories["current"],
                 suite.measurement,
@@ -307,7 +318,16 @@ def _measure_suites(
                 compilation=dict(suite.compilation),
                 on_sample=accepted_sample,
             )
-            policies, declared, _acquire = prepared[suite.name]
+
+        # Discover and gate every suite before timing, retaining only metadata.
+        # Each export (including its build outputs) is removed before the next suite.
+        for suite in plan.suites:
+            reporter.suite = suite.name
+            if not any(decision["state"] == "available" for decision in decisions[suite.name].values()):
+                continue
+            with ExitStack() as resources:
+                policies, declared, _acquire = prepare(suite, resources)
+            prepared[suite.name] = policies, declared
             for phase, policy in policies.items():
                 if ownership[phase] & set(policy.expected):
                     raise ValueError(f"duplicate benchmark ownership in {phase}: {sorted(ownership[phase] & set(policy.expected))}")
@@ -328,7 +348,7 @@ def _measure_suites(
         for suite in plan.suites:
             if suite.name in retained:
                 with reporter.stage("checkpoint", suite=suite.name):
-                    validate_unit(retained[suite.name], suite, decisions[suite.name], prepared.get(suite.name, ({}, {}, None))[1])
+                    validate_unit(retained[suite.name], suite, decisions[suite.name], prepared.get(suite.name, ({}, {}))[1])
         units = []
         for suite in plan.suites:
             reporter.suite = suite.name
@@ -340,7 +360,13 @@ def _measure_suites(
                 measurements: tuple[tuple[str, CompleteSample], ...] = ()
                 sources: tuple[tuple[str, Provenance], ...] = ()
                 if suite.name in prepared:
-                    measurements, sources = prepared[suite.name][2]()
+                    # Rebuild only missing units, one suite at a time. Bind the
+                    # new sampler to the inventory/provenance checked above.
+                    with ExitStack() as resources:
+                        policies, declared, acquire = prepare(suite, resources)
+                        if (policies, declared) != prepared[suite.name]:
+                            raise ValueError(f"{suite.name} preparation changed before measurement")
+                        measurements, sources = acquire()
                 unit = {
                     "name": suite.name,
                     "contract": suite.contract,
@@ -352,21 +378,19 @@ def _measure_suites(
                         phase: {"sample": sample_document(sample), "source": _source_record(dict(sources)[phase])} for phase, sample in measurements
                     },
                 }
-                validate_unit(unit, suite, decisions[suite.name], prepared.get(suite.name, ({}, {}, None))[1])
+                validate_unit(unit, suite, decisions[suite.name], prepared.get(suite.name, ({}, {}))[1])
                 unchanged()
                 if journal:
                     with reporter.stage("checkpoint", suite=suite.name):
                         journal.accept(suite.name, unit)
             units.append(unit)
             if reused and suite.name in prepared:
-                policies, declared, _acquire = prepared[suite.name]
+                policies, declared = prepared[suite.name]
                 count = sum(len(policy.expected) for policy in policies.values())
                 elapsed = reporter.clock() - elapsed_started
                 for phase, policy in policies.items():
                     reporter.state, reporter.phase = "checkpoint", phase
                     reporter.accept(_work_class(suite, declared[phase], policy), len(policy.expected), elapsed * len(policy.expected) / count, retained=reused)
-            if suite.name in resources:
-                resources[suite.name].close()
         unchanged()
         result = Evidence(
             deterministic_json({"schema": SUITE_RUN_SCHEMA, "declaration": plan.document(), "units": units, "reused": sorted(retained)}),

@@ -25,7 +25,7 @@ from research_repo_tools.measurement import load_measurement, measure_pair
 from research_repo_tools.measurement_checkpoints import open_checkpoint
 from research_repo_tools.performance_acquisition import measure_and_retain
 from research_repo_tools.performance_progress import ProgressReporter
-from research_repo_tools.process import run_command_live
+from research_repo_tools.process import run_command, run_command_live
 from research_repo_tools.publication import publish_publication
 from research_repo_tools.publication_config import load_publication
 from research_repo_tools.release_pairs import ReleasePair
@@ -190,6 +190,8 @@ class TestSuiteAcquisition(unittest.TestCase):
 
                 @contextmanager
                 def tracked_export(capture, destination):
+                    suite = destination.name.rsplit("-", 1)[0]
+                    self.assertTrue(all(not path.exists() for name, path in exports.items() if name.rsplit("-", 1)[0] != suite))
                     exports[destination.name] = destination
                     with export_source(capture, destination) as directory:
                         yield directory
@@ -212,10 +214,85 @@ class TestSuiteAcquisition(unittest.TestCase):
                 self.assertTrue(all(not path.exists() for path in exports.values()))
                 self.assertEqual(len(parse_suite_run(evidence).observations), 4)
 
+    def test_late_gate_failure_precedes_all_timing_and_releases_exports(self) -> None:
+        selected = plan(self.log, ("shared", "later"))
+        first, later = selected.suites
+        failing = replace(later.measurement.current, gate=(sys.executable, "-c", "raise SystemExit(1)"))
+        selected = SuiteMeasurementPlan((first, replace(later, measurement=replace(later.measurement, current=failing))))
+        exports = []
+
+        @contextmanager
+        def tracked_export(capture, destination):
+            exports.append(destination)
+            with export_source(capture, destination) as directory:
+                yield directory
+
+        with patch("research_repo_tools.suite_measurement.export_source", side_effect=tracked_export), self.assertRaisesRegex(ValueError, "gate failed"):
+            measure_pair(self.root, selected, PAIR, progress=self.quiet)
+        self.assertIn("shared gate new", self.log.read_text())
+        self.assertNotIn(" measure ", self.log.read_text())
+        self.assertTrue(all(not path.exists() for path in exports))
+
+    def test_recreated_exports_reject_changed_host_or_discovery_before_timing(self) -> None:
+        for changed in ("host", "discovery"):
+            with self.subTest(changed=changed):
+                self.log.write_bytes(b"")
+                exports = []
+                preparations = 0
+
+                @contextmanager
+                def tracked_export(capture, destination):
+                    nonlocal preparations
+                    if destination.name == "shared-baseline":
+                        preparations += 1
+                    exports.append(destination)
+                    with export_source(capture, destination) as directory:
+                        yield directory
+
+                def host(*args, **kwargs):
+                    return replace(HOST, cpu="changed") if changed == "host" and preparations > 1 else HOST
+
+                def discovery(command, args=(), **kwargs):
+                    if changed == "discovery" and preparations > 1:
+                        return run_command(sys.executable, ("-c", "print('shared/case: benchmark\\nshared/extra: benchmark')"), **kwargs)
+                    return run_command(command, args, **kwargs)
+
+                with (
+                    patch("research_repo_tools.suite_measurement.export_source", side_effect=tracked_export),
+                    patch("research_repo_tools.measurement.capture_host", side_effect=host),
+                    patch("research_repo_tools.criterion_inventory.run_command", side_effect=discovery),
+                    self.assertRaisesRegex(ValueError, "preparation changed before measurement"),
+                ):
+                    measure_pair(self.root, plan(self.log, ("shared",)), PAIR, progress=self.quiet)
+                self.assertNotIn(" measure ", self.log.read_text())
+                self.assertTrue(all(not path.exists() for path in exports))
+
     def test_session_environment_changes_allow_resume_and_other_changes_reject(self) -> None:
         selected = plan(self.log, ("shared",))
+        first = selected.suites[0]
+        configured = replace(
+            first.measurement,
+            baseline=replace(first.measurement.baseline, environment=(("SSH_TTY", "/dev/declared-tty"),)),
+            current=replace(first.measurement.current, environment=(("SSH_TTY", "/dev/declared-tty"),)),
+        )
+        selected = SuiteMeasurementPlan((replace(first, measurement=configured),))
         checkpoint = self.root / "checkpoint"
-        ignored = ("_", "SHLVL", "TERM_SESSION_ID", "ITERM_SESSION_ID")
+        ignored = (
+            "_",
+            "SHLVL",
+            "TERM_SESSION_ID",
+            "ITERM_SESSION_ID",
+            "SSH_CONNECTION",
+            "SSH_CLIENT",
+            "SSH_TTY",
+            "SSH_AUTH_SOCK",
+            "SSH_AGENT_PID",
+            "TMUX",
+            "TMUX_PANE",
+            "STY",
+            "WINDOW",
+            "WINDOWID",
+        )
 
         def changing_session(command, args=(), **kwargs):
             for name in ignored:
@@ -231,8 +308,13 @@ class TestSuiteAcquisition(unittest.TestCase):
             measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
             self.assertEqual((checkpoint / "unit-shared.json").read_bytes(), accepted)
             self.assertEqual(self.log.read_text().splitlines().count("shared measure old"), 1)
-            with patch.dict(os.environ, {"RRT_UNKNOWN_SESSION_VALUE": "changed"}), self.assertRaisesRegex(ValueError, "environment-sha256"):
-                measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+            self.assertEqual(self.log.read_text().splitlines().count("shared measure new"), 1)
+            for name in ("RRT_UNKNOWN_SESSION_VALUE", "SSH_UNKNOWN_VALUE", "OMP_NUM_THREADS", "PATH", "TERM"):
+                with self.subTest(name=name), patch.dict(os.environ, {name: "changed"}), self.assertRaisesRegex(ValueError, "environment-sha256"):
+                    measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+            changed = SuiteMeasurementPlan((replace(first, measurement=replace(configured, current=replace(configured.current, environment=()))),))
+            with self.assertRaisesRegex(ValueError, "declaration"):
+                measure_pair(self.root, changed, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
 
             def changing_input(command, args=(), **kwargs):
                 os.environ["RRT_UNKNOWN_SESSION_VALUE"] = "changed"
