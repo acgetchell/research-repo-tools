@@ -5,7 +5,123 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.5] - 2026-11-02
+
+### Merged Pull Requests
+
+- Add verified reuse and fix shared generators [#176](https://github.com/acgetchell/research-repo-tools/pull/176)
+- Add suite availability, progress, and resume [#175](https://github.com/acgetchell/research-repo-tools/pull/175)
+- Share Python and scope documentation rules [#174](https://github.com/acgetchell/research-repo-tools/pull/174)
+- Bump the github-actions group with 4 updates [#173](https://github.com/acgetchell/research-repo-tools/pull/173)
+
+### Added
+
+- Add index-preserving status and diff inspection [`17edec0`](https://github.com/acgetchell/research-repo-tools/commit/17edec0cc70fa80124d46b7054ed3ecd82ae5283)
+
+  Expose fixed byte-oriented queries with literal paths and bounded deadlines
+  while retaining the general Git runner's defaults. Derive changed paths from
+  content-comparing numstat output to exclude stat-only false positives.
+
+  Document configuration overrides, index-preservation limits, and migration
+  for the planned v0.2.5 release. Update the PyPI publishing action to the
+  patched v1.14.3 pin required by the workflow audit.
+- Add suite availability, progress, and resume [#175](https://github.com/acgetchell/research-repo-tools/pull/175)
+  [`39914eb`](https://github.com/acgetchell/research-repo-tools/commit/39914eb1ab4865a441ca840c8192b554111394cf)
+
+#### feat(performance): add suite availability, progress, and resume
+  - Declare workload availability from original revision receipts before compiling
+    or discovering benchmarks, with explicit one-sided results and justified
+    per-workload comparisons.
+  - Report phase and suite budgets, accepted completion counts, and compatible
+    remaining-time estimates through human or JSON progress events.
+  - Resume atomically retained suite units after validating source, environment,
+    host, toolchain, and raw evidence; recollect interrupted pairs in full.
+  - Preserve offline report and README retries without repeating acquisition.
+- Add verified reuse and fix shared generators [#176](https://github.com/acgetchell/research-repo-tools/pull/176)
+  [`4a53d40`](https://github.com/acgetchell/research-repo-tools/commit/4a53d40f57f1895dff247bc5e285b1078c6f5140)
+
+#### feat(performance): add verified benchmark reuse and bounded reports
+
+  Derive deterministic release benchmark archives from independently asserted
+  complete-run v4 acquisitions while preserving original bytes and provenance.
+  Require exact tagged source identity and eligible comparisons, and retain the
+  existing publication revalidation, artifact authentication, and approval
+  boundaries.
+
+  Wrap generated links, wide tables, and recorded provenance, and normalize
+  generated list spacing. Introduce report renderer 3 while preserving immutable
+  renderer-1 and renderer-2 histories and their original evidence.
+
+### Changed
+
+- Remove Semgrep isolation changes from release maintenance
+  [`76d67c7`](https://github.com/acgetchell/research-repo-tools/commit/76d67c777107421ce31885fc1368ecaa4560c884)
+- Verify checkout evidence with real Git [`56dfa82`](https://github.com/acgetchell/research-repo-tools/commit/56dfa8258230164688cd4b5ffcadcf9143aa83dc)
+
+  Use disposable committed repositories for release-evidence checkout tests, including dirty trees, wrong roots, missing HEAD, and commit changes during
+  verification. Keep remote evidence transport mocked and honor the Git-mutation test control.
+
+  Record release evidence in PRs or review notes as required by repository guidance.
+
+### Fixed
+
+- Improve release evidence and Semgrep isolation [`57a4799`](https://github.com/acgetchell/research-repo-tools/commit/57a47993f9d0ef2ace1df86778108ad6f57912ca)
+
+  Add no-argument inspection of signed main CI evidence while preserving
+  explicit shared evidence commands and automatic release preparation.
+
+  Clarify CI waits, exact workflow selection, and preparation timeout recovery.
+  Add the Zenodo concept DOI to the README badge and citation metadata.
+
+  Keep Semgrep's pysemgrep child in its verified tool environment and cover
+  ambient executable conflicts in the public consumer regressions.
+- Share Python and scope documentation rules [#174](https://github.com/acgetchell/research-repo-tools/pull/174)
+  [`871cdff`](https://github.com/acgetchell/research-repo-tools/commit/871cdff1331c7cb190fe78e96afc377a388d1304)
+
+  Use the pinned Semgrep extra in the shared Python 3.15 environment and apply one consistent representation, extraction, and report-currentness policy. Publish
+  process completion endpoints without Windows read-sharing races. Export shared dependency constraints and security commands for consumer adoption.
+
+### Maintenance
+
+- Refresh locked Python dependencies [`ea261a8`](https://github.com/acgetchell/research-repo-tools/commit/ea261a8efe6d55a6dbb063ef7d489b34ba887d28)
+
+  Update filelock to 4.2.5, IPython to 9.18.0, platformdirs to 4.14.0, and
+  pypdf to 6.21.4 from the maintainer's dependency refresh.
+- Bump the github-actions group with 4 updates [#173](https://github.com/acgetchell/research-repo-tools/pull/173)
+  [`30e1342`](https://github.com/acgetchell/research-repo-tools/commit/30e1342490530e5178fd378b556022e75e7b419a)
+
+  Bumps the github-actions group with 4 updates: [astral-sh/setup-uv](https://github.com/astral-sh/setup-uv),
+  [github/codeql-action/init](https://github.com/github/codeql-action), [github/codeql-action/analyze](https://github.com/github/codeql-action) and
+  [github/codeql-action/upload-sarif](https://github.com/github/codeql-action).
+
+  Updates `astral-sh/setup-uv` from 10.3.0 to 10.3.2
+
+  - [Release notes](https://github.com/astral-sh/setup-uv/releases)
+  - [Commits](https://github.com/astral-sh/setup-uv/compare/1c37ad07a6a961277cf70c0d37d6f313000f5884...07a047e608db84b3d8c06cd9a7c7dcc9c355c18e)
+
+  Updates `github/codeql-action/init` from 4.39.0 to 4.39.1
+  - [Release notes](https://github.com/github/codeql-action/releases)
+  - [Changelog](https://github.com/github/codeql-action/blob/main/CHANGELOG.md)
+  - [Commits](https://github.com/github/codeql-action/compare/6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee...9b3254085494b55a0f7c4c2b3d2d52cc712ce370)
+
+  Updates `github/codeql-action/analyze` from 4.39.0 to 4.39.1
+  - [Release notes](https://github.com/github/codeql-action/releases)
+  - [Changelog](https://github.com/github/codeql-action/blob/main/CHANGELOG.md)
+  - [Commits](https://github.com/github/codeql-action/compare/6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee...9b3254085494b55a0f7c4c2b3d2d52cc712ce370)
+
+  Updates `github/codeql-action/upload-sarif` from 4.39.0 to 4.39.1
+  - [Release notes](https://github.com/github/codeql-action/releases)
+  - [Changelog](https://github.com/github/codeql-action/blob/main/CHANGELOG.md)
+  - [Commits](https://github.com/github/codeql-action/compare/6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee...9b3254085494b55a0f7c4c2b3d2d52cc712ce370)
+
 ## [0.2.4] - 2026-10-28
+
+### ⚠️ Breaking Changes
+
+- Replace release-tag and release-tag-preview with tag
+  and tag-preview. Replace release-update TAG PREVIOUS DATE with
+  update-version TAG --previous-release PREVIOUS --date DATE.
+  The removed recipe names have no compatibility aliases.
 
 ### Merged Pull Requests
 
@@ -204,6 +320,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Propagate directory traversal and member metadata errors during command-file
   alias checks so inaccessible prior outputs cannot bypass validation.
 
+- Restore package checks and fix the PyPI citation link
+  [`6dd1fc5`](https://github.com/acgetchell/research-repo-tools/commit/6dd1fc53f7e9b0b49a5b2a37d286e3a0448801aa)
+
+  - Align CI recipe expectations with the build and publish-check sequence.
+  - Cover publication-check failure propagation and package-name mismatches.
+  - Use an absolute CITATION.cff URL so the citation link works on PyPI.
+
 ### Maintenance
 
 - Bump the github-actions group with 3 updates [#147](https://github.com/acgetchell/research-repo-tools/pull/147)
@@ -227,6 +350,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - [Release notes](https://github.com/github/codeql-action/releases)
   - [Changelog](https://github.com/github/codeql-action/blob/main/CHANGELOG.md)
   - [Commits](https://github.com/github/codeql-action/compare/24c54180a607b1449ed407dd24f251e4e9147c8d...6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee)
+- [**breaking**] Release v0.2.4 [`437679a`](https://github.com/acgetchell/research-repo-tools/commit/437679a9d142864ad99a41ccbe047a77d3c3a09f)
+
+  - Bump package and citation metadata to v0.2.4.
+  - Generate the release changelog.
+  - Align release documentation and shared recipes with Delaunay's workflow.
+  - Add CITATION.cff, adopt declared citation dates, and document Zenodo
+    verification.
+  - Add strict PyPI publication checks for wheel and sdist artifacts,
+    including CI integration.
+  - Require final metadata checks before tagging and default registry
+    verification to seven attempts.
 
 ## [0.2.3] - 2026-10-21
 
@@ -397,6 +531,7 @@ Older releases are archived by minor series:
 
 - [0.1.x](docs/archives/changelog/0.1.md)
 
+[0.2.5]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.1...v0.2.2
