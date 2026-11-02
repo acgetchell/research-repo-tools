@@ -63,7 +63,7 @@ jobs:
             test-recipe: test
     runs-on: ${{ matrix.os }}
     # Include native tool installation after the full source and distribution checks.
-    timeout-minutes: 90
+    timeout-minutes: 120
     env:
       PYTHONUTF8: "1"
     steps:
