@@ -76,7 +76,9 @@ commit history. Once a release exists, it links to the comparison with that tag.
 
 The packaged template preserves complete breaking-change footer descriptions,
 including compiler requirements, multiline migration instructions, and dependency
-breaks. Commits marked only with `!` use their subject as the fallback summary.
+breaks. Namespace paths such as `Error::Variant` continue the description when
+git-cliff misclassifies them as trailers; genuine trailers such as `Refs` remain
+separate. Commits marked only with `!` use their subject as the fallback summary.
 Across summaries and ordinary entries, angle brackets in prose are escaped while
 inline code spans and fenced code retain their literal contents. Markdown links,
 autolinks, and blockquote markers remain intact.

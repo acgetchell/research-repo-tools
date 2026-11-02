@@ -12,6 +12,7 @@ from research_repo_tools.complete_runs import RUN_SCHEMA_V4
 from research_repo_tools.criterion import COMPARISON_SCHEMA, _markdown_text, _unit, parse_comparison
 from research_repo_tools.evidence import Evidence, Provenance, _object, _string, compare_provenance, fingerprint_files, parse_evidence
 from research_repo_tools.files import _validate_distinct_paths
+from research_repo_tools.markdown import _generated_report_layout, _GeneratedLinks
 from research_repo_tools.publication import (
     GitCheck,
     GlobCheck,
@@ -25,6 +26,7 @@ from research_repo_tools.publication import (
     plan_publication,
     render_svg,
     render_table,
+    replace_section,
 )
 from research_repo_tools.release_policy import ReleaseRule
 from research_repo_tools.release_tags import _github_repo_url, validate_semver
@@ -403,6 +405,7 @@ def load_publication(
 
         _verify_plan(plan)
         return plan
+    content = _generated_report_layout(content)
     repository = _github_repo_url(_string(raw["repository"], "repository")) if "repository" in raw else None
     link_paths: list[str] = []
 
@@ -420,22 +423,32 @@ def load_publication(
         # Relative to the document, including documents in nested directories.
         return quote(posixpath.relpath(name, posixpath.dirname(document) or "."), safe="/.")
 
-    if schema == 2:
-        content += f"\n- [Complete run evidence]({link(names['payload'])})\n- [Evidence envelope]({link(names['manifest'])})\n"
-        if "csv" in raw:
-            content += f"- [Selected timings CSV]({link(_string(raw['csv'], 'csv'))})\n"
+    markers = MarkerPair(_string(raw["begin"], "begin"), _string(raw["end"], "end"))
+    original_document = _path(root, document).read_bytes()
+    surrounding = replace_section(original_document, markers, "").decode("utf-8", errors="surrogateescape")
+    prose = ""
     if "prose-file" in raw:
         prose_path = _string(raw["prose-file"], "prose-file")
         inputs[prose_path] = _path(root, prose_path).read_bytes()
-        content += "\n" + inputs[prose_path].decode("utf-8").rstrip() + "\n"
+        prose = inputs[prose_path].decode("utf-8").rstrip()
+    links = _GeneratedLinks(surrounding + "\n" + prose)
+    if schema == 2:
+        content += links.render("Complete run evidence", link(names["payload"]), prefix="- ") + "\n"
+        content += links.render("Evidence envelope", link(names["manifest"]), prefix="- ") + "\n"
+        if "csv" in raw:
+            content += links.render("Selected timings CSV", link(_string(raw["csv"], "csv")), prefix="- ") + "\n"
+    if "prose-file" in raw:
+        content += "\n" + prose + "\n"
     if images:
-        content = "".join(f"![{_markdown_text(label)}]({link(path, image=True)})\n\n" for path, label in images) + content
+        content = "".join(links.render(_markdown_text(label), link(path, image=True), image=True) + "\n\n" for path, label in images) + content
     if "links" in raw:
-        content += "\n"
+        if not content.rstrip().rsplit("\n", 1)[-1].startswith("- "):
+            content += "\n"
         for item in _array(raw["links"], "links"):
             entry = _table(item, "publication link", {"label", "path"})
             label, path = _string(entry["label"], "link label"), _string(entry["path"], "link path")
-            content += f"- [{_markdown_text(label)}]({link(path)})\n"
+            content += links.render(_markdown_text(label), link(path), prefix="- ") + "\n"
+    content += links.definitions()
     for name in link_paths:
         if name not in figures and name != document and name not in inputs:
             inputs[name] = _path(root, name).read_bytes()
@@ -448,10 +461,10 @@ def load_publication(
     if formatter is not None:
         _validate_distinct_paths(tuple(_path(root, name) for name in (formatter, document, *figures)))
         inputs[formatter] = _path(root, formatter).read_bytes()
-    return plan_publication(
+    plan = plan_publication(
         root,
         document,
-        MarkerPair(_string(raw["begin"], "begin"), _string(raw["end"], "end")),
+        markers,
         content,
         inputs=inputs,
         figures=figures,
@@ -461,3 +474,6 @@ def load_publication(
         run_checks=run_checks,
         formatter=formatter,
     )
+    if dict(plan.originals)[document] != original_document:
+        raise ValueError("publication document changed during link rendering")
+    return plan

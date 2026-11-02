@@ -17,6 +17,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 # prose angle brackets after protecting Markdown code, so Rust generics remain
 # literal inside code spans and fences. Breaking footers are separate from
 # commit.body; render their full descriptions before grouping ordinary entries.
+# git-cliff can mistake column-zero namespace paths for trailers. Recover only
+# adjacent fragments whose exact token:value spelling occurs in the raw message;
+# a real trailer (including Token: :value) ends the continuation.
 body = """
 {% if version -%}
     ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
@@ -27,8 +30,23 @@ body = """
 {% if breaking_commits | length > 0 %}
     ### ⚠️ Breaking Changes
     {% for commit in breaking_commits %}
-        {% if commit.breaking_description and commit.breaking_description != commit.message %}
-            - {{ commit.breaking_description | trim | indent(prefix="  ", first=false) }}
+        {% set_global breaking_description = commit.breaking_description %}
+        {% set_global continuing_breaking = false %}
+        {% set raw_message = commit.raw_message | replace(from="\r\n", to="\n") %}
+        {% for footer in commit.footers %}
+            {% set footer_text = footer.token ~ footer.separator ~ footer.value %}
+            {% set raw_footer = "\n" ~ footer_text %}
+            {% set raw_footer = raw_footer | replace(from="\r\n", to="\n") %}
+            {% if footer.breaking and footer.value == commit.breaking_description %}
+                {% set_global continuing_breaking = true %}
+            {% elif continuing_breaking and footer.separator == ":" and footer.value is starting_with(":") and raw_message is containing(raw_footer) %}
+                {% set_global breaking_description = breaking_description ~ "\n" ~ footer_text %}
+            {% else %}
+                {% set_global continuing_breaking = false %}
+            {% endif %}
+        {% endfor %}
+        {% if breaking_description and breaking_description != commit.message %}
+            - {{ breaking_description | trim | indent(prefix="  ", first=false) }}
         {% else %}
             - {{ commit.message | split(pat="\n") | first | upper_first | trim }}
         {% endif %}

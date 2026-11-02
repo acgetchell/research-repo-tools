@@ -94,6 +94,43 @@ def test_ordinary_commit_does_not_create_a_breaking_summary(tmp_path: Path) -> N
     assert "### Merged Pull Requests" in result
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+@pytest.mark.parametrize("marker", ["BREAKING CHANGE", "BREAKING-CHANGE"])
+def test_namespace_paths_continue_breaking_footer_but_real_trailers_do_not(tmp_path: Path, newline: str, marker: str) -> None:
+    description = (
+        "The source fields in\n"
+        "ConversionError::Failed, QualityError::EdgeLength,\n"
+        "RandomError::Vector and\n"
+        "AngleError::Failed now contain Box<LaError>.\n"
+        "Dereference the boxed source or downcast Error::source() to Box<LaError>.\n"
+        "Existing From<LaError> conversions remain available."
+    )
+    message = f"refactor!: box error sources\n\n{marker}: {description}\n\nRefs #42\nReview-Note: :keep separate\nOther::unrelated trailer"
+    result = render(tmp_path, message.replace("\n", newline))
+    summary = result.split("### ⚠️ Breaking Changes\n\n", 1)[1].split("\n### ", 1)[0].strip()
+    escaped = description.replace("<", "&lt;").replace(">", "&gt;")
+    assert summary == "- " + escaped.replace("\n", "\n  ")
+    assert postprocess_text(result) == result
+
+
+def test_colon_prefixed_trailer_value_is_not_a_namespace_continuation(tmp_path: Path) -> None:
+    result = render(tmp_path, "fix!: change contract\n\nBREAKING CHANGE: Migrate explicitly.\nNote: :separate value\nOther::separate trailer")
+    summary = result.split("### ⚠️ Breaking Changes\n\n", 1)[1].split("\n### ", 1)[0].strip()
+    assert summary == "- Migrate explicitly."
+
+
+def test_recovered_description_is_not_replaced_by_matching_subject(tmp_path: Path) -> None:
+    result = render(tmp_path, "refactor!: Change source fields\n\nBREAKING CHANGE: Change source fields\nError::Failed now boxes its source.\n\nRefs #42")
+    summary = result.split("### ⚠️ Breaking Changes\n\n", 1)[1].split("\n### ", 1)[0].strip()
+    assert summary == "- Change source fields\n  Error::Failed now boxes its source."
+
+
+def test_recovered_namespace_paths_keep_fenced_code_contents(tmp_path: Path) -> None:
+    result = render(tmp_path, 'refactor!: change API\n\nBREAKING CHANGE: Use this exact literal:\n\n```rust\nlet text = "\nError::Failed\n";\n```\n\nRefs #42')
+    summary = result.split("### ⚠️ Breaking Changes\n\n", 1)[1].split("\n### ", 1)[0].strip()
+    assert summary == '- Use this exact literal:\n\n  ```rust\n  let text = "\n  Error::Failed\n  ";\n  ```'
+
+
 @pytest.mark.parametrize("fence", ["```", "~~~~"])
 def test_ordinary_entries_preserve_rust_code_and_escape_prose(tmp_path: Path, fence: str) -> None:
     result = render(

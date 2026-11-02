@@ -342,8 +342,21 @@ on formatted candidates. `publication.plan_publication(..., formatter=None)`
 offers the same operation; a supplied root-relative formatter configuration must
 be included in `inputs`. Configured formatting requires UTF-8 Markdown. Without
 formatting, existing byte preservation outside the replaced section is unchanged.
+Formatting with planned CSV/SVG outputs requires rumdl 0.3.0 or newer. Its
+[candidate-aware validation](publication-api.md#python-api) resolves generated
+links before creating those files and still checks other workspace links.
 Formatter errors, stale inputs and validation failures leave all outputs intact.
 Caught replacement failures use the existing rollback/recovery contract.
+
+Generated document links whose inline spelling exceeds 160 characters use
+reference-style links with destinations on continuation lines. Their definitions
+stay inside the generated section, avoid reference names in surrounding text or
+consumer prose, and remain stable on reruns. Exact tagged URLs, image labels and
+evidence identities are preserved. Short links keep their existing spelling.
+Wide generated tables use multiline HTML tables with the same displayed cells;
+list spacing is valid before optional formatter processing. Consumer prose is
+not rewritten. Individual link destinations remain indivisible; the raw-line
+checker continues to apply the consumer's selected inventory and limit.
 
 The shared complete-run link and envelope replace a redundant new plot-provenance
 sidecar: retained evidence identifies the run, phase, statistic, unit, source and

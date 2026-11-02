@@ -2,6 +2,7 @@
 
 import io
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -14,6 +15,7 @@ from unittest.mock import patch
 from research_repo_tools.cli import main
 from research_repo_tools.criterion import COMPARISON_SCHEMA, Estimate, Sample, compare_samples, serialize_comparison
 from research_repo_tools.evidence import Evidence, Provenance, fingerprint_files, load_evidence, publish_evidence, serialize_evidence
+from research_repo_tools.postprocess_changelog import MarkdownFormatError
 from research_repo_tools.publication import (
     GitCheck,
     GlobCheck,
@@ -110,6 +112,108 @@ def fixture_git(root: Path, *args: str, input: bytes | None = None) -> bytes:
 
 
 class TestPublicationConsumer(unittest.TestCase):
+    def test_formatter_receives_candidate_contents_and_binary_target_inventory(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="publication café ") as temporary:
+            root = Path(temporary).resolve()
+            original = b"# Results\r\n" + MARKERS.begin.encode() + b"\r\nold\r\n" + MARKERS.end.encode() + b"\r\n"
+            (root / "README.md").write_bytes(original)
+            (root / "format.toml").write_bytes(b"[global]\n")
+            figures = {"new/data.csv": b"value\r\n42\r\n", "new/image.png": b"\x89PNG\0\xff", "new/Guide.MD": b"# New heading\n"}
+            calls = []
+            inventories = []
+
+            def formatter(command, args, **kwargs):
+                self.assertEqual(command, "rumdl")
+                self.assertFalse((root / "new").exists())
+                self.assertEqual((root / "README.md").read_bytes(), original)
+                calls.append(args)
+                if "--fix" in args:
+                    self.assertIn("--extend-disable", args)
+                    return subprocess.CompletedProcess(args, 0, kwargs["input"].replace("\r\n", "\n"), "")
+                self.assertNotIn("--extend-disable", args)
+                self.assertNotIn("--stdin-batch-closed-world", args)
+                inventory = Path(args[args.index("--stdin-batch-targets") + 1])
+                inventories.append(inventory)
+                self.assertEqual(inventory.read_bytes(), (str(root / "new/data.csv") + "\0" + str(root / "new/image.png") + "\0").encode("utf-8"))
+                records = kwargs["input"].split("\0")
+                self.assertEqual(records[-1], "")
+                documents = dict(zip(records[:-1:2], records[1::2], strict=True))
+                self.assertEqual(documents[str(root / "new/Guide.MD")], "# New heading\n")
+                self.assertIn("[Guide](new/Guide.MD#new-heading)", documents[str(root / "README.md")])
+                return subprocess.CompletedProcess(args, 0, "", "")
+
+            with patch("research_repo_tools.postprocess_changelog.run_safe_command", side_effect=formatter):
+                plan = plan_publication(
+                    root,
+                    "README.md",
+                    MARKERS,
+                    "[Guide](new/Guide.MD#new-heading)",
+                    inputs={"format.toml": b"[global]\n"},
+                    figures=figures,
+                    formatter="format.toml",
+                )
+            self.assertEqual(len(calls), 2)
+            self.assertTrue(all(not path.exists() for path in inventories))
+            self.assertFalse((root / "new").exists())
+            publish_publication(plan)
+            for name, expected in figures.items():
+                self.assertEqual((root / name).read_bytes(), expected)
+
+    @unittest.skipUnless(shutil.which("rumdl"), "native rumdl is not installed")
+    def test_formatter_checks_proposed_markdown_fragments_and_real_workspace_links(self) -> None:
+        for link, accepted in (("new/Guide.MD#new-heading", True), ("new/Guide.MD#old-heading", False), ("missing.csv", False)):
+            with self.subTest(link=link), tempfile.TemporaryDirectory(prefix="publication café ") as temporary:
+                root = Path(temporary).resolve()
+                (root / "README.md").write_bytes(b"# Results\n" + MARKERS.begin.encode() + b"\nold\n" + MARKERS.end.encode() + b"\n")
+                (root / "new").mkdir()
+                (root / "new/Guide.MD").write_bytes(b"# Old heading\n")
+                (root / "existing.md").write_bytes(b"# Existing\n")
+                policy = b'[global]\nenable = ["MD051", "MD057"]\n'
+                (root / "format.toml").write_bytes(policy)
+                before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
+
+                def prepare():
+                    return plan_publication(
+                        root,
+                        "README.md",
+                        MARKERS,
+                        f"[Guide]({link})\n\n[Existing](existing.md#existing)",
+                        inputs={"format.toml": policy},
+                        figures={"new/Guide.MD": b"# New heading\n"},
+                        formatter="format.toml",
+                    )
+
+                if accepted:
+                    plan = prepare()
+                    self.assertEqual(dict(plan.outputs)["new/Guide.MD"], b"# New heading\n")
+                else:
+                    with self.assertRaisesRegex(MarkdownFormatError, "MD051|MD057"):
+                        prepare()
+                self.assertEqual({path: path.read_bytes() for path in root.rglob("*") if path.is_file()}, before)
+
+    def test_long_custom_links_preserve_destination_and_short_links(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            config = make_fixture(root)
+            name = "details " + "x" * 100 + "(café).md"
+            (root / name).write_bytes(b"# Original parameters\n")
+            config = config.replace(
+                'label = "Report", path = "report.md"',
+                f'label = "Complete original measurement parameters and diagnostics", path = "{name}"',
+            )
+            (root / "publication.toml").write_text(config, encoding="utf-8", newline="\n")
+            plan = load_publication(root, "publication.toml")
+            content = dict(plan.outputs)["README.md"]
+            from urllib.parse import quote
+
+            destination = quote(name, safe="/.")
+            self.assertIn(f"[rrt-performance-link-1]:\n  <{destination}>".encode(), content)
+            self.assertIn(b"[Complete original measurement parameters and diagnostics][rrt-performance-link-1]", content)
+            self.assertIn(b"[Evidence](evidence.json)", content)
+            self.assertIn(name, dict(plan.originals))
+            publish_publication(plan)
+            self.assertEqual(publish_publication(load_publication(root, "publication.toml")), ())
+
     def test_glob_checks_require_complete_snapshotted_inputs(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve()

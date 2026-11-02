@@ -20,6 +20,8 @@ import argparse
 import re
 import subprocess
 import sys
+import tempfile
+from collections.abc import Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -1187,14 +1189,47 @@ class MarkdownFormatError(RuntimeError):
     """An explicitly requested Markdown formatter failed to produce valid output."""
 
 
-def format_markdown(text: str, path: Path, config: Path) -> str:
+def _check_markdown_candidates(text: str, path: Path, config: Path, candidates: Mapping[Path, bytes]) -> None:
+    """Check the proposed workspace without materializing publication outputs."""
+    # Match rumdl's Markdown link-target extensions. Supplying their actual
+    # contents preserves fragment checks even when an existing file is replaced.
+    markdown_extensions = {".md", ".markdown", ".mdx", ".mkd", ".mkdn", ".mdown", ".mdwn", ".qmd", ".rmd"}
+    documents = {path: text}
+    targets = []
+    for candidate, data in candidates.items():
+        if candidate == path:
+            continue
+        if candidate.suffix.lower() in markdown_extensions:
+            documents[candidate] = data.decode("utf-8")
+        else:
+            targets.append(str(candidate))
+    records = [part for name, content in documents.items() for part in (str(name), content)]
+    if any("\0" in part for part in (*records, *targets)):
+        raise MarkdownFormatError("Markdown candidates and paths cannot contain NUL characters")
+    # The inventory lives outside the publication root and is closed before
+    # rumdl opens it, including on Windows. Binary writes retain exact framing.
+    with tempfile.TemporaryDirectory(prefix="rrt-markdown-") as temporary:
+        inventory = Path(temporary) / "targets"
+        inventory.write_bytes("".join(target + "\0" for target in targets).encode("utf-8"))
+        run_safe_command(
+            "rumdl",
+            ["check", "--stdin-batch", "--stdin-batch-targets", str(inventory), "--no-cache", "--config", str(config)],
+            input="\0".join(records) + "\0",
+            timeout=30,
+        )
+
+
+def format_markdown(text: str, path: Path, config: Path, *, candidates: Mapping[Path, bytes] | None = None) -> str:
     """Run rumdl with the consumer's explicit policy before publishing anything."""
     if not config.is_file():
         raise MarkdownFormatError(f"Markdown formatter configuration not found: {config}")
     try:
+        # Single-document fixing cannot see planned link targets. Defer link
+        # checks to the full-policy batch check below; never disable them there.
+        deferred_checks = ["--extend-disable", "MD051,MD057"] if candidates else []
         result = run_safe_command(
             "rumdl",
-            ["check", "--fix", "--stdin", "--stdin-filename", str(path), "--no-cache", "--config", str(config)],
+            ["check", "--fix", "--stdin", "--stdin-filename", str(path), "--no-cache", "--config", str(config), *deferred_checks],
             input=text,
             timeout=30,
         )
@@ -1207,12 +1242,15 @@ def format_markdown(text: str, path: Path, config: Path) -> str:
     # Some fixers return success after making only fixable corrections. Check the
     # completed candidate without --fix before replacing the existing artifact.
     try:
-        run_safe_command(
-            "rumdl",
-            ["check", "--stdin", "--stdin-filename", str(path), "--no-cache", "--config", str(config)],
-            input=output,
-            timeout=30,
-        )
+        if candidates:
+            _check_markdown_candidates(output, path, config, candidates)
+        else:
+            run_safe_command(
+                "rumdl",
+                ["check", "--stdin", "--stdin-filename", str(path), "--no-cache", "--config", str(config)],
+                input=output,
+                timeout=30,
+            )
     except subprocess.CalledProcessError as error:
         raise MarkdownFormatError(f"rumdl rejected formatted {path.name}: {error.stderr or error.stdout}") from error
     return output.rstrip("\n") + "\n"

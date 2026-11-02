@@ -433,16 +433,21 @@ def plan_publication(
     if original is None:
         raise FileNotFoundError(f"publication document is missing: {document}")
     outputs = {document: replace_section(original, markers, content), **(figures or {})}
+    if any(not isinstance(data, bytes) for data in outputs.values()):
+        raise TypeError("publication outputs must be bytes")
     if formatter is not None:
         from research_repo_tools.postprocess_changelog import format_markdown
 
         if formatter not in inputs:
             raise ValueError("formatter configuration must be a snapshotted publication input")
-        outputs[document] = format_markdown(outputs[document].decode("utf-8"), _path(root, document), _path(root, formatter)).encode("utf-8")
+        outputs[document] = format_markdown(
+            outputs[document].decode("utf-8"),
+            _path(root, document),
+            _path(root, formatter),
+            candidates={_path(root, name): data for name, data in (figures or {}).items()},
+        ).encode("utf-8")
         # Formatting must retain exactly one valid pair of document markers.
         replace_section(outputs[document], markers, content)
-    if any(not isinstance(data, bytes) for data in outputs.values()):
-        raise TypeError("publication outputs must be bytes")
     for rule in references:
         if rule.value is None:
             raise ValueError("publication references require fixed-value ReleaseRules")

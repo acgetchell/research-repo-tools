@@ -62,6 +62,13 @@ separate each delimiter from the body. Every byte outside the delimiters' interi
 including a BOM, mixed line endings, historical links, and non-UTF-8 bytes.
 The optional [formatter](DECLARING_PERFORMANCE.md#reusable-publication) requires
 UTF-8 and formats the whole candidate document, including content outside markers.
+When publishing figures or CSV alongside it, final validation requires rumdl 0.3.0
+or newer and uses its
+`--stdin-batch` and `--stdin-batch-targets` support to resolve planned outputs
+before they exist. Other links still resolve against the workspace. Markdown
+outputs supplied as figures are checked using their candidate content, including
+fragment targets; they must also satisfy the formatter policy. No candidate
+files or output directories are created during formatting.
 References require their selected files to decode as UTF-8.
 
 Renderers require every selected benchmark in both retained samples and require

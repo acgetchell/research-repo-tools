@@ -8,6 +8,7 @@ import json
 import os
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from contextlib import ExitStack, contextmanager
@@ -16,9 +17,11 @@ from pathlib import Path
 from typing import override
 from unittest.mock import patch
 
+from research_repo_tools.archives import ArchiveLimits, extract_archive
+from research_repo_tools.benchmark_reuse import ReusePolicy, parse_reuse_policy, plan_reuse_archive, serialize_reuse_policy, verify_reuse_archive
 from research_repo_tools.cli import main
 from research_repo_tools.common_measurement import DiscoveredSeries, DiscoveryPolicy, parse_plan, validate_run_policy
-from research_repo_tools.complete_runs import render_run, validate_run_evidence
+from research_repo_tools.complete_runs import render_run, run_identity, validate_run_evidence
 from research_repo_tools.evidence import deterministic_json, parse_evidence, serialize_evidence
 from research_repo_tools.host_metadata import HostMetadata
 from research_repo_tools.measurement import load_measurement, measure_pair
@@ -26,8 +29,9 @@ from research_repo_tools.measurement_checkpoints import open_checkpoint
 from research_repo_tools.performance_acquisition import measure_and_retain
 from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.process import run_command, run_command_live
-from research_repo_tools.publication import publish_publication
+from research_repo_tools.publication import MarkerPair, plan_publication, publish_publication
 from research_repo_tools.publication_config import load_publication
+from research_repo_tools.release_assets import ReleaseTarget
 from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.run_presentation import RunLayout, RunRow, SeriesSelection, render_run_ratios, render_run_table, serialize_run_csv
 from research_repo_tools.source_exports import export_source
@@ -146,6 +150,238 @@ class TestSuiteAcquisition(unittest.TestCase):
         self.stack.enter_context(patch("research_repo_tools.source_exports._git", side_effect=git_model(self.revisions)))
         self.stack.enter_context(patch("research_repo_tools.measurement.capture_host", return_value=HOST))
         self.quiet = ProgressReporter(mode="none")
+
+    def reuse_fixture(self, *, mode="common", working_tree=False):
+        selected = plan(self.log, mode=mode)
+        selected = SuiteMeasurementPlan(
+            tuple(
+                replace(
+                    suite,
+                    measurement=replace(
+                        suite.measurement,
+                        measurement=replace(suite.measurement.measurement, context=(("repository", "example/library"), ("acquisition-owner", "local"))),
+                    ),
+                )
+                for suite in selected.suites
+            )
+        )
+        evidence = measure_pair(self.root, selected, PAIR, working_tree=working_tree, progress=self.quiet)
+        # This fixture is the trusted acquisition owner. Snapshot its handoff
+        # before any candidate corruption; production consumers cannot derive
+        # their acceptance policy from an untrusted candidate archive.
+        run = parse_suite_run(evidence)
+        policy = ReusePolicy(
+            ReleaseTarget("example/library", "v1.1.0", 7, "b" * 40),
+            "local",
+            run_identity(evidence),
+            selected,
+            tuple((suite, phase, source) for suite, phase, _, source in run.observations),
+        )
+        self.write_reuse(evidence, policy)
+        return evidence, policy
+
+    def write_reuse(self, evidence, policy):
+        payload, manifest = serialize_evidence(evidence)
+        (self.root / "run.json").write_bytes(payload)
+        (self.root / "evidence.json").write_bytes(manifest)
+        (self.root / "reuse-policy.json").write_bytes(serialize_reuse_policy(policy))
+
+    def reuse_plan(self, **kwargs):
+        return plan_reuse_archive(self.root, "run.json", "evidence.json", "reuse-policy.json", "archive.tar.gz", **kwargs)
+
+    def test_reuse_renders_and_packages_one_acquisition_with_exact_provenance(self) -> None:
+        evidence, policy = self.reuse_fixture()
+        # Preserve a valid noncanonical envelope, including CRLF and whitespace.
+        payload, manifest = serialize_evidence(evidence)
+        manifest = b" \r\n" + manifest.replace(b"\n", b"\r\n")
+        evidence = parse_evidence(payload, manifest)
+        policy = replace(policy, identity=run_identity(evidence), comparisons=((("baseline", "shared/case"), ("current", "shared/case")),))
+        self.write_reuse(evidence, policy)
+        before = self.log.read_bytes()
+        with (
+            patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("no native rerun")),
+            patch("research_repo_tools.measurement.capture_host", side_effect=AssertionError("no host recapture")),
+            patch("research_repo_tools.source_exports.capture_source", side_effect=AssertionError("no source recapture")),
+        ):
+            candidate = self.reuse_plan()
+            self.assertFalse((self.root / "archive.tar.gz").exists())
+            publish_publication(candidate)
+            retained = verify_reuse_archive(self.root / "archive.tar.gz", parse_reuse_policy(serialize_reuse_policy(policy)))
+            self.assertEqual(serialize_evidence(retained), (payload, manifest))
+            self.assertEqual(publish_publication(self.reuse_plan()), ())
+            report = render_run(retained)
+            self.assertIn(policy.identity.encode(), report)
+            self.assertTrue(report.startswith(b"<!-- research-repo-tools/run-report/v3 -->"))
+            self.assertLessEqual(max(map(len, report.decode().splitlines())), 160)
+            original = b"intro\r\n<!-- begin -->\r\nold\r\n<!-- end -->\r\nend\xff"
+            (self.root / "README.md").write_bytes(original)
+            readme = plan_publication(
+                self.root,
+                "README.md",
+                MarkerPair("<!-- begin -->", "<!-- end -->"),
+                report.decode(),
+                inputs={"run.json": payload, "evidence.json": manifest},
+            )
+            publish_publication(readme)
+            self.assertTrue((self.root / "README.md").read_bytes().endswith(b"<!-- end -->\r\nend\xff"))
+        self.assertEqual(self.log.read_bytes(), before)
+        extract_archive(self.root / "archive.tar.gz", self.root / "extracted")
+        receipt = json.loads((self.root / "extracted/reuse.json").read_bytes())
+        self.assertEqual(receipt["target"]["commit"], "b" * 40)
+        self.assertEqual({item["suite"] for item in receipt["projection"]}, {"shared", "new"})
+        for _, phase, sample, _ in parse_suite_run(evidence).observations:
+            if phase == "current":
+                for case in sample.cases:
+                    for name, content in (
+                        ("benchmark.json", case.benchmark),
+                        ("estimates.json", case.estimates),
+                        ("sample.json", case.sample),
+                        *case.raw_files,
+                    ):
+                        self.assertEqual((self.root / f"extracted/criterion/{case.storage_path}/new/{name}").read_bytes(), content)
+        self.assertFalse((self.root / "extracted/criterion/shared/v1.1.0").exists())
+
+    def test_reuse_rejects_independent_assertion_drift_and_malformed_evidence(self) -> None:
+        evidence, policy = self.reuse_fixture()
+        first = policy.observations[0]
+        context = dict(first[2].context)
+        changed_plan = replace(policy.measurement.suites[0], contract="another-contract")
+        for change in (
+            replace(policy, identity="0" * 64),
+            replace(policy, target=replace(policy.target, commit="c" * 40)),
+            replace(policy, target=replace(policy.target, tag="v1.2.0")),
+            replace(policy, target=replace(policy.target, repository="other/library")),
+            replace(policy, acquisition_owner="github-actions"),
+            replace(policy, observations=policy.observations[1:]),
+            replace(policy, observations=((first[0], first[1], replace(first[2], source_sha256="0" * 64)), *policy.observations[1:])),
+            replace(
+                policy,
+                observations=((first[0], first[1], replace(first[2], context=tuple({**context, "tool.python": '"other"'}.items()))), *policy.observations[1:]),
+            ),
+            replace(policy, measurement=SuiteMeasurementPlan((changed_plan, *policy.measurement.suites[1:]))),
+        ):
+            self.write_reuse(evidence, change)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                self.reuse_plan()
+            self.assertFalse((self.root / "archive.tar.gz").exists())
+        for field, value in (("cases", []), ("policy", {})):
+            raw = json.loads(evidence.payload)
+            raw["units"][0]["observations"]["current"]["sample"][field] = value
+            self.write_reuse(replace(evidence, payload=deterministic_json(raw)), policy)
+            with self.assertRaises(ValueError):
+                self.reuse_plan()
+        for key, value in (("gate-status", "failed"), ("repository", "other/library")):
+            raw = json.loads(evidence.payload)
+            raw["units"][0]["observations"]["current"]["source"]["context"][key] = value
+            self.write_reuse(replace(evidence, payload=deterministic_json(raw)), policy)
+            with self.assertRaises(ValueError):
+                self.reuse_plan()
+        self.write_reuse(replace(evidence, payload_schema="research-repo-tools/complete-run/v3"), policy)
+        with self.assertRaisesRegex(ValueError, "v4"):
+            self.reuse_plan()
+
+    def test_reuse_revalidates_inputs_outputs_limits_and_rolls_back(self) -> None:
+        evidence, policy = self.reuse_fixture()
+        for name in ("run.json", "evidence.json", "reuse-policy.json", "archive.tar.gz"):
+            candidate = self.reuse_plan()
+            path = self.root / name
+            before = path.read_bytes() if path.exists() else None
+            path.write_bytes(b"concurrent replacement")
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "changed"):
+                publish_publication(candidate)
+            self.assertEqual(path.read_bytes(), b"concurrent replacement")
+            if before is None:
+                path.unlink()
+            else:
+                path.write_bytes(before)
+        with patch("research_repo_tools.files._replace_path", side_effect=OSError("interrupted")), self.assertRaises(OSError):
+            publish_publication(self.reuse_plan())
+        self.assertFalse((self.root / "archive.tar.gz").exists())
+        for output in ("run.json", "RUN.JSON", "run.json/nested", "../escaped.tar.gz"):
+            with self.subTest(output=output), self.assertRaises(ValueError):
+                plan_reuse_archive(self.root, "run.json", "evidence.json", "reuse-policy.json", output)
+        for limits in (ArchiveLimits(members=2), ArchiveLimits(content_bytes=20), ArchiveLimits(archive_bytes=20)):
+            with self.subTest(limits=limits), self.assertRaises(ValueError):
+                self.reuse_plan(limits=limits)
+        (self.root / "archive.tar.gz").write_bytes(b"previous immutable archive")
+        with self.assertRaisesRegex(ValueError, "immutable output differs"):
+            self.reuse_plan()
+        self.assertEqual((self.root / "archive.tar.gz").read_bytes(), b"previous immutable archive")
+        self.assertEqual((self.root / "run.json").read_bytes(), evidence.payload)
+        self.assertEqual(serialize_reuse_policy(parse_reuse_policy((self.root / "reuse-policy.json").read_bytes())), serialize_reuse_policy(policy))
+
+    def test_reuse_verifier_rejects_tampering_extra_members_and_unsafe_paths(self) -> None:
+        _, policy = self.reuse_fixture()
+        publish_publication(self.reuse_plan())
+        archive = self.root / "archive.tar.gz"
+        with tarfile.open(archive) as source:
+            files = {}
+            for member in source.getmembers():
+                stream = source.extractfile(member)
+                assert stream is not None
+                files[member.name] = stream.read()
+        for name, content in (
+            ("reuse.json", b"{}"),
+            ("criterion/shared/new/sample.json", b"{}"),
+            ("extra", b"extra"),
+            ("../escape", b"unsafe"),
+            ("EVIDENCE/extra", b"alias"),
+        ):
+            changed = {**files, name: content}
+            candidate = self.root / "changed.tar.gz"
+            with tarfile.open(candidate, "w:gz") as output:
+                for path, data in changed.items():
+                    member = tarfile.TarInfo(path)
+                    member.size = len(data)
+                    output.addfile(member, io.BytesIO(data))
+            with tarfile.open(candidate) as source:
+                self.assertIn(name, source.getnames())
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                verify_reuse_archive(candidate, policy)
+        with self.assertRaises(ValueError):
+            verify_reuse_archive(archive, replace(policy, identity="0" * 64))
+
+    def test_reuse_preserves_absolute_cross_host_results_but_rejects_requested_ratios(self) -> None:
+        evidence, policy = self.reuse_fixture(mode="independent")
+        raw = json.loads(evidence.payload)
+        for unit in raw["units"]:
+            if "current" in unit["observations"]:
+                context = unit["observations"]["current"]["source"]["context"]
+                host = json.loads(context["host"])
+                host["cpu"] = "different collection host"
+                context["host"] = json.dumps(host)
+        evidence = replace(evidence, payload=deterministic_json(raw))
+        policy = replace(
+            policy, identity=run_identity(evidence), observations=tuple((s, p, source) for s, p, _, source in parse_suite_run(evidence).observations)
+        )
+        self.write_reuse(evidence, policy)
+        publish_publication(self.reuse_plan())
+        self.assertEqual(serialize_evidence(verify_reuse_archive(self.root / "archive.tar.gz", policy)), serialize_evidence(evidence))
+        for pair in ((("baseline", "shared/case"), ("current", "shared/case")), (("current", "new/case"), ("current", "shared/case"))):
+            with self.subTest(pair=pair), self.assertRaisesRegex(ValueError, "ineligible"):
+                verify_reuse_archive(self.root / "archive.tar.gz", replace(policy, comparisons=(pair,)))
+
+    def test_reuse_rejects_prospective_source_even_with_matching_release_label(self) -> None:
+        original = self.revisions["v1.1.0"]
+        for name, data in original.items():
+            (self.root / name).write_bytes(data)
+        (self.root / "revision").write_bytes(b"prospective")
+        with patch("research_repo_tools.source_exports.select_files", return_value=tuple(sorted(original))):
+            self.reuse_fixture(working_tree=True)
+        with self.assertRaisesRegex(ValueError, "working-tree"):
+            self.reuse_plan()
+        self.assertFalse((self.root / "archive.tar.gz").exists())
+
+    def test_reuse_rejects_cross_suite_storage_aliases(self) -> None:
+        evidence, policy = self.reuse_fixture()
+        for storage in ("shared", "SHARED"):
+            raw = json.loads(evidence.payload)
+            raw["units"][1]["observations"]["current"]["sample"]["cases"][0]["storage_path"] = storage
+            changed = replace(evidence, payload=deterministic_json(raw))
+            self.write_reuse(changed, replace(policy, identity=run_identity(changed)))
+            with self.subTest(storage=storage), self.assertRaises(ValueError):
+                self.reuse_plan()
+            self.assertFalse((self.root / "archive.tar.gz").exists())
 
     def test_union_ratios_removed_and_advanced_baseline(self) -> None:
         for mode in ("common", "independent"):

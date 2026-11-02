@@ -13,7 +13,7 @@ import unittest
 import urllib.error
 from email.message import Message
 from pathlib import Path
-from typing import override
+from typing import Any, cast, override
 from unittest.mock import patch
 
 from research_repo_tools import changelog, cli, config, registry, release_metadata, toolchain, toolchain_config, update_release
@@ -364,7 +364,7 @@ class TestPublishingConsumer(unittest.TestCase):
             "setuptools [changelog](https://setuptools.pypa.io/en/latest/history.html).\n\n"
             "Use `Vec<T>`.\n\n```rust\nfn value<T>() -> Result<T, E>;\n```"
         )
-        context = [
+        context: list[dict[str, Any]] = [
             {
                 "version": "v1.2.3",
                 "timestamp": 0,
@@ -403,6 +403,41 @@ class TestPublishingConsumer(unittest.TestCase):
                 **{host: {"contributors": []} for host in ("github", "gitlab", "gitea", "bitbucket", "azure_devops")},
             }
         ]
+        description = (
+            "The source fields in\n"
+            "ConversionError::Failed, QualityError::EdgeLength,\n"
+            "RandomError::Vector and\n"
+            "AngleError::Failed now contain Box<LaError>.\n"
+            "Dereference the boxed source or downcast Error::source() to Box<LaError>.\n"
+            "Existing From<LaError> conversions remain available."
+        )
+        # Real git-cliff parsing is covered by the native template suite. Keep
+        # its split-trailer representation here to exercise the packaged
+        # template through the installed CLI without requiring a Git checkout.
+        commits = cast("list[dict[str, Any]]", context[0]["commits"])
+        commits.append(
+            {
+                **context[0]["commits"][0],
+                "id": "b" * 40,
+                "message": "box error sources",
+                "body": None,
+                "raw_message": f"refactor!: box error sources\n\nBREAKING CHANGE: {description}\n\nRefs #42",
+                "breaking_description": "The source fields in",
+                "footers": [
+                    {"token": "BREAKING CHANGE", "separator": ":", "value": "The source fields in", "breaking": True},
+                    {"token": "ConversionError", "separator": ":", "value": ":Failed, QualityError::EdgeLength,", "breaking": False},
+                    {"token": "RandomError", "separator": ":", "value": ":Vector and", "breaking": False},
+                    {
+                        "token": "AngleError",
+                        "separator": ":",
+                        "value": ":Failed now contain Box<LaError>.\nDereference the boxed source or downcast Error::source() to Box<LaError>.\n"
+                        "Existing From<LaError> conversions remain available.",
+                        "breaking": False,
+                    },
+                    {"token": "Refs", "separator": " #", "value": "42", "breaking": False},
+                ],
+            }
+        )
         source = self.root / "context.json"
         source.write_text(json.dumps(context), encoding="utf-8", newline="\n")
         (self.root / "research.toml").write_text(
@@ -432,6 +467,10 @@ class TestPublishingConsumer(unittest.TestCase):
         self.assertIn("Ty [comparison]", result)
         self.assertIn("setuptools [changelog]", result)
         self.assertIn("Return `Result<T>`.\n  Migrate explicitly.", result)
+        summary = result.split("### ⚠️ Breaking Changes\n\n", 1)[1].split("\n### ", 1)[0]
+        expected = description.replace("<", "&lt;").replace(">", "&gt;").replace("\n", "\n  ")
+        self.assertIn("- " + expected, summary)
+        self.assertNotIn("Refs", summary)
         self.assertIn("fn value<T>() -> Result<T, E>;", result)
         self.assertEqual((self.root / "CHANGELOG.md").read_bytes(), before)
 
