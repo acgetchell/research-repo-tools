@@ -10,7 +10,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
-from research_repo_tools.release_validation import ValidationPolicy, download_artifact, select_main_run, validate_jobs, validate_run
+from research_repo_tools.release_validation import ValidationPolicy, api, download_artifact, select_main_run, validate_jobs, validate_run
 
 COMMIT = "a" * 40
 POLICY = ValidationPolicy("example/package", ".github/workflows/package.yml", "Package", (("build", ("Build",)), ("native", ("Install wheel and sdist",))))
@@ -35,6 +35,20 @@ def run():
 
 
 class TestValidationConsumer(unittest.TestCase):
+    def test_repository_api_root_and_nested_endpoints(self):
+        for repository in ("acgetchell/research-repo-tools", "example/package"):
+            for endpoint, expected_path in (
+                ("", f"repos/{repository}"),
+                ("branches/main", f"repos/{repository}/branches/main"),
+                ("actions/runs?per_page=100&page=2", f"repos/{repository}/actions/runs?per_page=100&page=2"),
+            ):
+                with self.subTest(repository=repository, endpoint=endpoint):
+                    with patch("research_repo_tools.release_validation.subprocess.run") as execute:
+                        execute.return_value = subprocess.CompletedProcess([], 0, stdout='{"id": 7}')
+                        result = api(endpoint) if repository == "acgetchell/research-repo-tools" else api(endpoint, repository=repository)
+                        self.assertEqual(result, {"id": 7})
+                        execute.assert_called_once_with(["gh", "api", expected_path], check=True, capture_output=True, text=True, encoding="utf-8", timeout=120)
+
     def test_selection_never_uses_dispatch_pr_or_another_commit(self):
         for field, value in (
             ("event", "workflow_dispatch"),

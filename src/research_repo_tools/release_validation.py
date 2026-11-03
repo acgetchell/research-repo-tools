@@ -213,7 +213,10 @@ def gh(*args: str) -> str:
 
 
 def api(endpoint: str, *, repository: str = REPOSITORY) -> Any:
-    return _json(gh("api", f"repos/{_repository(repository)}/{endpoint}"))
+    path = f"repos/{_repository(repository)}"
+    if endpoint:
+        path = f"{path}/{endpoint}"
+    return _json(gh("api", path))
 
 
 def read_pages(read: Callable[[str], Any], endpoint: str, field: str) -> list[dict[str, Any]]:
