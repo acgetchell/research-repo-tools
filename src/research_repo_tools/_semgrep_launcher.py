@@ -3,7 +3,7 @@
 Semgrep #11979 divides Python 3.15's positive RLIM_INFINITY by three. Give
 the scanner the same maximum finite stack budget its Python 3.14 algorithm
 would select instead. No caller limits or installed dependencies are changed.
-Remove this adapter when the pinned scanner incorporates upstream #11987.
+Remove this adapter when every supported scanner incorporates upstream #11987.
 """
 
 import os
@@ -23,12 +23,16 @@ def stack_limits(soft: int, hard: int, infinity: int) -> tuple[int, int]:
 
 
 def command(binary: Path) -> tuple[str, ...]:
+    return command_for_python(binary, Path(sys.executable))
+
+
+def command_for_python(binary: Path, interpreter: Path) -> tuple[str, ...]:
     if os.name != "nt":
         import resource
 
         soft, hard = resource.getrlimit(resource.RLIMIT_STACK)
         if stack_limits(soft, hard, resource.RLIM_INFINITY) != (soft, hard):
-            return sys.executable, "-I", "-X", "utf8", "-m", "research_repo_tools._semgrep_launcher", str(binary)
+            return str(interpreter), "-I", "-X", "utf8", "-m", "research_repo_tools._semgrep_launcher", str(binary)
     return (str(binary),)
 
 

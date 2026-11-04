@@ -201,9 +201,12 @@ automatically. To adopt this workflow in an existing repository, upgrade its
 shared-package pin, merge the packaged `update-python-dependencies` recipe, and
 declare its extra projects. Installing the package does not rewrite copied recipes.
 
-For v0.2.5 Semgrep adoption, request the shared package's `semgrep` extra in the
-root locked dev environment and adopt its shared compatibility overrides before
-locking. Both scanner and wrapper use the common Python 3.15 baseline. Replace
+For Semgrep adoption, request the shared package's `semgrep` extra in the root
+locked dev environment and adopt its shared compatibility overrides before
+locking. Both scanner and wrapper use the common Python 3.15 baseline. The
+shared extra declares compatible stable versions and the consumer lock selects
+the exact version. Run `just update-python-dependencies` followed by the
+consumer's fixture and production scan recipes to verify a scanner update. Replace
 nested `tooling/semgrep` launches with direct wrapper calls, remove redundant
 scanner projects only when they have no other consumers, and update lockfile
 audit lists accordingly. Merge changed exported Just recipes and run focused

@@ -7,6 +7,7 @@ check exits zero; findings, invalid configuration and missing tools stop the gat
 Scanner policies and scientific acceptance criteria belong to the consumer.
 
 - [Workflow security and complete Python validation](#workflow-security-and-complete-python-validation)
+- [Cargo documentation](#cargo-documentation)
 - [Cargo examples](#cargo-examples)
 - [Dependency and secret scanning](#dependency-and-secret-scanning)
 - [Rust documentation scans](#rust-documentation-scans)
@@ -77,6 +78,26 @@ documents authentication, permissions, Python 3.15 annotations, exact negative
 fixture exceptions, notebook wiring, and consumer CodeRabbit settings. Extract it
 with `templates VALIDATING_WORKFLOWS.md`; `templates python-validation.toml` and
 `templates zizmor.yml` expose the corresponding reusable examples.
+
+## Cargo documentation
+
+Use the packaged `cargo-docs` recipe to check one library from the contents Cargo
+would publish. Declare the exact stable release compiler in `rust-toolchain.toml`
+and provision it through your normal toolchain setup.
+
+```sh
+just cargo-docs my-crate
+just cargo-docs my-crate --no-default-features --features serialization
+just cargo-docs my-crate --all-features
+```
+
+Choose the feature combinations supported by your crate. Keep your existing
+private/default-feature workspace docs check in its current gate. Run the
+packaged public build at the release boundary where it adds coverage, using the
+default packaged build only when it covers a distinct feature set.
+
+The [Cargo documentation contract](cargo-docs-api.md) describes evidence,
+consumer configuration and the boundary with docs.rs.
 
 ## Cargo examples
 
@@ -195,12 +216,17 @@ Declare `cargo-deny = "0.20.2"` in the managed Cargo table to run the exact
 
 Consumers can wrap `semgrep scan --include '*.rs' --include '*.py' --include '*.md'
 --rust-docs` in their own `just semgrep-scan` recipe. Keep rules and scope local.
-The installed shared package owns the Semgrep pin through its optional `semgrep`
-extra. Starting with v0.2.5, request that extra on the shared-package dependency
-in the consumer's locked dev graph. Scans, fixture checks and the wrapper all
-use the same shared Python 3.15 environment. Ambient scanners cannot select it.
-`just semgrep-setup` verifies the installed scanner without installing anything;
-`just setup` synchronizes dev first and then verifies declared Semgrep use.
+Request the shared package's optional `semgrep` extra in the consumer's locked
+dev graph. The extra declares the supported stable range and `uv.lock` selects
+the exact scanner. Use `just update-python-dependencies` to refresh the lock and
+sync the same shared Python 3.15 environment used by fixture and production
+scans. `just semgrep-setup` checks manifest/lock freshness offline and matches
+the active lock version to the selected interpreter's distribution and
+executable. `just setup` synchronizes dev before verifying declared Semgrep use.
+The shared tooling checkout locks 1.182.1 on Intel macOS and 1.183.0 on the
+other native gates. Consumers select wheel availability policy for their own
+targets. Semgrep 1.183.0 has no native Intel macOS wheel.
+See the [Semgrep release files](https://pypi.org/project/semgrep/1.183.0/#files).
 
 Semgrep's published transitive pins need shared temporary overrides. The packaged
 `semgrep-constraints.txt` owns the tested policy: current tomli/jsonschema, patched
@@ -214,7 +240,7 @@ command. Keep the corresponding root `tool.uv.override-dependencies` declaration
 and lock together. Installed wheel/sdist consumers resolve with these same
 constraints. Native Windows execution remains a release gate.
 
-Upgrade the shared package to adopt scanner/override changes. Complete the
+Upgrade the shared package to adopt changes to the compatibility range or overrides. Complete the
 consumer pin/lock, recipe and configuration migration before deleting local
 scanner or Rustdoc adapters. Separate scanner projects are no longer needed for
 this capability; retain any unrelated tools they supply.

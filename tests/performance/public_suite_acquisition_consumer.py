@@ -19,7 +19,7 @@ from unittest.mock import patch
 
 from research_repo_tools.archives import ArchiveLimits, extract_archive
 from research_repo_tools.benchmark_reuse import ReusePolicy, parse_reuse_policy, plan_reuse_archive, serialize_reuse_policy, verify_reuse_archive
-from research_repo_tools.cli import main
+from research_repo_tools.cli import main, parser
 from research_repo_tools.common_measurement import DiscoveredSeries, DiscoveryPolicy, parse_plan, validate_run_policy
 from research_repo_tools.complete_runs import render_run, run_identity, validate_run_evidence
 from research_repo_tools.evidence import deterministic_json, parse_evidence, serialize_evidence
@@ -1089,6 +1089,31 @@ class TestSuiteAcquisition(unittest.TestCase):
 
 
 class TestProgress(unittest.TestCase):
+    def test_default_heartbeat_waits_five_minutes_and_stage_events_are_immediate(self) -> None:
+        now = [0.0]
+        events = []
+        reporter = ProgressReporter(mode="none", observer=events.append, clock=lambda: now[0])
+        reporter.budget({"shared": 1})
+        now[0] = 299
+        reporter.emit("heartbeat")
+        self.assertEqual([event["event"] for event in events], ["budget"])
+        now[0] = 300
+        reporter.emit("heartbeat")
+        self.assertEqual([event["event"] for event in events], ["budget", "heartbeat"])
+        with reporter.stage("acquisition", phase="current"):
+            self.assertEqual(events[-1]["event"], "started")
+        self.assertEqual(events[-1]["event"], "finished")
+        self.assertEqual(events[-1]["elapsed_seconds"], 300)
+
+    def test_cli_heartbeat_defaults_and_shorter_or_longer_overrides(self) -> None:
+        for command in ("measure", "release"):
+            outputs = ["--payload", "run.json", "--manifest", "evidence.json"] if command == "measure" else []
+            for arguments, expected in (([], 300), (["--progress-cadence", "60"], 60), (["--progress-cadence", "600"], 600)):
+                with self.subTest(command=command, arguments=arguments):
+                    options = parser().parse_args(["performance", command, "measurement.toml", *outputs, *arguments])
+                    reporter = ProgressReporter(mode="none", cadence=options.progress_cadence)
+                    self.assertEqual(reporter.cadence, expected)
+
     def test_checkpoint_handle_expires_with_its_exclusive_owner(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary).resolve() / "checkpoint"

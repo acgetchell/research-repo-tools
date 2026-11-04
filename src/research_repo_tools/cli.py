@@ -256,6 +256,14 @@ def parser() -> argparse.ArgumentParser:
         "--dry-run", action="store_true"
     )
     validation = groups.add_parser("validation", help="run configured command and prerequisite checks").add_subparsers(dest="action", required=True)
+    cargo_docs = validation.add_parser("cargo-docs", help="validate public library docs from the packaged crate on declared stable Rust")
+    cargo_docs.add_argument("package", help="exact Cargo workspace package name")
+    cargo_docs.add_argument("--cfg", action="append", default=[], help="explicit stable-compatible rustdoc cfg (repeatable)")
+    feature_mode = cargo_docs.add_mutually_exclusive_group()
+    feature_mode.add_argument("--all-features", action="store_true", help="enable all Cargo features")
+    feature_mode.add_argument("--features", action="append", default=[], help="enable one Cargo feature (repeatable)")
+    cargo_docs.add_argument("--no-default-features", action="store_true", help="disable default Cargo features")
+    cargo_docs.add_argument("--target", help="installed Rust target triple (default: compiler host)")
     validation.add_parser("cargo-examples", help="discover, build and run Cargo examples with consumer policy").add_argument("configuration")
     validation.add_parser("cargo-metadata").add_argument("--package")
     validation.add_parser("require").add_argument("names", nargs="+")
@@ -295,7 +303,23 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
     if args.group == "validation":
         from research_repo_tools.validation import check_cargo_metadata, require_executables, run_checks
 
-        if args.action == "cargo-examples":
+        if args.action == "cargo-docs":
+            import json
+            from dataclasses import asdict
+
+            from research_repo_tools.cargo_docs import check_documentation
+
+            evidence = check_documentation(
+                settings.root,
+                args.package,
+                features=tuple(args.features),
+                default_features=not args.no_default_features,
+                all_features=args.all_features,
+                cfg=tuple(args.cfg),
+                target=args.target,
+            )
+            print(json.dumps(asdict(evidence), sort_keys=True))
+        elif args.action == "cargo-examples":
             from research_repo_tools.cargo_examples import run_examples
 
             run_examples(settings.root, args.configuration)
@@ -618,8 +642,8 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             from research_repo_tools import semgrep_tool
             from research_repo_tools.scanner_output import _print
 
-            binary = semgrep_tool.setup(settings.root)
-            _print(f"Semgrep {semgrep_tool.VERSION}: {binary}")
+            scanner = semgrep_tool.verify(settings.root)
+            _print(f"Semgrep {scanner.version}: {scanner.path}")
             return 0
         from research_repo_tools.semgrep_scan import check_documentation_fixtures, scan
 

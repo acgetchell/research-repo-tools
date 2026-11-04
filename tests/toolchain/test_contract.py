@@ -737,16 +737,16 @@ def test_setup_prepares_declared_semgrep_after_sync_and_reports_failure(runtime,
     monkeypatch.setattr(toolchain, "Runtime", lambda plan: instance)
     calls = []
 
-    def provision(root, *, python):
+    def provision(root, *, python, uv):
         calls.append(root)
         assert python.parent.name in {"bin", "Scripts"}
         assert python.parent.parent == root / ".venv"
         assert fake.calls[-1][1] == ["sync", "--locked", "--managed-python", "--group", "dev"]
         if failure:
             raise RuntimeError("scanner provisioning unavailable")
-        return root / "managed-semgrep"
+        return semgrep_tool.VerifiedScanner(root / "managed-semgrep", "1.183.0")
 
-    monkeypatch.setattr(semgrep_tool, "setup", provision)
+    monkeypatch.setattr(semgrep_tool, "verify", provision)
     assert cli.main(["--root", str(instance.plan.root), "setup"]) == int(failure)
     assert calls == [instance.plan.root]
     captured = capsys.readouterr()
@@ -754,7 +754,7 @@ def test_setup_prepares_declared_semgrep_after_sync_and_reports_failure(runtime,
         assert "scanner provisioning unavailable" in captured.err
         assert "Setup complete" not in captured.out
     else:
-        assert f"Semgrep {semgrep_tool.VERSION}" in captured.out
+        assert "Semgrep 1.183.0" in captured.out
         assert "Setup complete" in captured.out
 
 

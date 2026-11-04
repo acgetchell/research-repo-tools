@@ -126,7 +126,7 @@ def test_local_and_hosted_ci_check_once_after_build_before_retaining_artifacts()
     aggregate = dry_run(ROOT, "ci").stderr
     assert aggregate.count("uv build --no-sources --clear") == 1
     assert aggregate.count("scripts/check_publish.py") == 1
-    assert aggregate.index("uv build") < aggregate.index("scripts/check_publish.py") < aggregate.index("pytest --cov")
+    assert aggregate.index("uv build") < aggregate.index("scripts/check_publish.py") < aggregate.index("scripts/run_coverage.py")
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["build"]["steps"]
     checked = next(index for index, step in enumerate(steps) if step.get("name") == "Build release distributions once")

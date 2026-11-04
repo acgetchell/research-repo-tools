@@ -1,43 +1,50 @@
-"""Verify the pinned Semgrep extra in the caller's shared Python environment."""
+"""Verify the selected Semgrep in the caller's shared Python environment."""
 
 import json
 import subprocess
 import sys
 import tempfile
 import tomllib
+from dataclasses import dataclass
 from importlib.metadata import metadata
 from importlib.resources import files
 from pathlib import Path
 
 from packaging.requirements import Requirement
+from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
+from packaging.version import Version
 
-from research_repo_tools import python_baseline, release_credentials
+from research_repo_tools import python_baseline, python_locks, release_credentials
 from research_repo_tools._semgrep_launcher import command as command
+from research_repo_tools._semgrep_launcher import command_for_python
 from research_repo_tools.process import ExecutableNotFoundError, resolve_executable, run_command_bytes
 from research_repo_tools.toml_source import set_value
 
-__all__ = ["VERSION", "command", "setup"]
+__all__ = ["VerifiedScanner", "command", "setup", "verify"]
 
 
-def _pinned_version() -> str:
-    pins = [Requirement(raw) for raw in metadata(python_baseline.PACKAGE).get_all("Requires-Dist", [])]
-    selected = [item for item in pins if canonicalize_name(item.name) == "semgrep" and item.marker and item.marker.evaluate({"extra": "semgrep"})]
-    if len(selected) != 1 or selected[0].url or len(selected[0].specifier) != 1:
-        raise ValueError("installed semgrep extra must declare one exact scanner pin")
-    pin = next(iter(selected[0].specifier))
-    if pin.operator != "==" or "*" in pin.version:
-        raise ValueError("installed semgrep extra must declare an exact scanner pin")
-    return pin.version
+def _supported_versions() -> SpecifierSet:
+    requirements = [Requirement(raw) for raw in metadata(python_baseline.PACKAGE).get_all("Requires-Dist", [])]
+    selected = [item for item in requirements if canonicalize_name(item.name) == "semgrep" and item.marker and item.marker.evaluate({"extra": "semgrep"})]
+    if len(selected) != 1 or selected[0].url or not selected[0].specifier:
+        raise ValueError("installed semgrep extra must declare a scanner version requirement")
+    return selected[0].specifier
 
 
-VERSION = _pinned_version()
-_QUERY = """import json, os, sys, sysconfig
+_QUERY = """import json, os, sysconfig
 from importlib.metadata import version
 from pathlib import Path
+from packaging.markers import default_environment
 binary = Path(sysconfig.get_path("scripts")) / ("semgrep.exe" if os.name == "nt" else "semgrep")
-print(json.dumps({"path": str(binary), "version": version("semgrep"), "python": f"{sys.version_info.major}.{sys.version_info.minor}"}))
+print(json.dumps({"path": str(binary), "version": version("semgrep"), "markers": default_environment()}))
 """
+
+
+@dataclass(frozen=True, slots=True)
+class VerifiedScanner:
+    path: Path
+    version: str
 
 
 def _environment() -> dict[str, str]:
@@ -79,7 +86,59 @@ def adopt_manifest(text: str) -> str:
     return set_value(text, "tool.uv", "override-dependencies", json.dumps([*existing, *missing])) if missing else text
 
 
+def _check_lock(root: Path, interpreter: Path, selected: Version, markers: dict[str, str], env: dict[str, str], uv: str | Path) -> None:
+    manifest, lock = root / "pyproject.toml", root / "uv.lock"
+    if not manifest.exists() and not lock.exists():
+        return
+    if not manifest.is_file() or not lock.is_file():
+        raise ValueError("managed Semgrep requires both pyproject.toml and uv.lock")
+    manifest_bytes, lock_bytes = manifest.read_bytes(), lock.read_bytes()
+    selector = root / ".python-version"
+    if selector.is_file():
+        request = selector.read_text(encoding="utf-8").strip()
+        expected = SpecifierSet(f"=={request}.*" if request.count(".") == 1 else f"=={request}")
+        if not expected.contains(markers["python_full_version"], prereleases=True):
+            raise ValueError(f"scanner interpreter does not match .python-version ({request})")
+    lock_env = {key: value for key, value in env.items() if key.upper() not in _UV_REDIRECTS}
+    run_command_bytes(
+        uv,
+        ["lock", "--check", "--offline", "--no-python-downloads", "--project", str(root), "--python", str(interpreter)],
+        cwd=root,
+        env=lock_env,
+        timeout=30,
+    )
+    if manifest.read_bytes() != manifest_bytes or lock.read_bytes() != lock_bytes:
+        raise ValueError("pyproject.toml or uv.lock changed while verifying Semgrep")
+    locked = python_locks.active_versions(lock_bytes, "semgrep", markers)
+    if locked != {selected}:
+        expected = ", ".join(map(str, sorted(locked))) or "no scanner"
+        raise ValueError(f"uv.lock selects {expected} for this interpreter; installed Semgrep is {selected}")
+
+
+_UV_REDIRECTS = frozenset(
+    {
+        "UV_CONFIG_FILE",
+        "UV_CONSTRAINT",
+        "UV_ENV_FILE",
+        "UV_LOCKED",
+        "UV_FROZEN",
+        "UV_OVERRIDE",
+        "UV_PROJECT",
+        "UV_PROJECT_ENVIRONMENT",
+        "UV_PYTHON",
+        "UV_WORKING_DIR",
+        "UV_WORKING_DIRECTORY",
+        "VIRTUAL_ENV",
+    }
+)
+
+
 def setup(root: Path, *, python: Path | None = None) -> Path:
+    """Return the absolute executable after verifying the scanner."""
+    return verify(root, python=python).path
+
+
+def verify(root: Path, *, python: Path | None = None, uv: str | Path = "uv") -> VerifiedScanner:
     """Verify Semgrep in this interpreter (or setup's freshly synced project).
 
     Never resolve/install dependencies or select a scanner-specific interpreter.
@@ -93,8 +152,17 @@ def setup(root: Path, *, python: Path | None = None) -> Path:
         result = run_command_bytes(interpreter, ["-I", "-X", "utf8", "-c", _QUERY], cwd=root, env=env, timeout=30)
         data = json.loads(result.stdout)
         baseline = python_baseline.DEVELOPMENT_PYTHON
-        if not isinstance(data, dict) or data.get("version") != VERSION or data.get("python") != baseline:
-            raise ValueError(f"the locked environment must provide Semgrep {VERSION} under shared Python {baseline}")
+        markers = data.get("markers") if isinstance(data, dict) else None
+        if not isinstance(markers, dict) or markers.get("python_version") != baseline or not isinstance(markers.get("python_full_version"), str):
+            raise ValueError(f"Semgrep must use shared Python {baseline}")
+        installed = data.get("version")
+        if not isinstance(installed, str):
+            raise ValueError("the shared environment did not return a Semgrep distribution version")
+        selected = Version(installed)
+        supported = _supported_versions()
+        if selected.is_prerelease or not supported.contains(selected):
+            raise ValueError(f"installed Semgrep {installed} is outside the supported stable range {supported}")
+        _check_lock(root, interpreter, selected, markers, env, uv)
         path = data.get("path")
         if not isinstance(path, str) or not Path(path).is_absolute() or not Path(path).is_file():
             raise ValueError("the shared environment did not return an existing absolute Semgrep executable")
@@ -106,12 +174,23 @@ def setup(root: Path, *, python: Path | None = None) -> Path:
                 SEMGREP_VERSION_CACHE_PATH=str(temporary / "version-cache"),
                 SEMGREP_LOG_FILE=str(temporary / "semgrep.log"),
             )
-            observed = run_command_bytes(binary, ["--disable-version-check", "--version"], cwd=root, env=env, timeout=30).stdout.decode("utf-8").strip()
-        if observed != VERSION:
-            raise ValueError(f"expected Semgrep {VERSION}, executable reported {observed[:200]!r}")
-        return binary
+            executable, *arguments = command_for_python(binary, interpreter)
+            observed = (
+                run_command_bytes(
+                    executable,
+                    [*arguments, "--disable-version-check", "--version"],
+                    cwd=root,
+                    env=env,
+                    timeout=30,
+                )
+                .stdout.decode("utf-8")
+                .strip()
+            )
+        if observed != installed:
+            raise ValueError(f"expected Semgrep {installed}, executable reported {observed[:200]!r}")
+        return VerifiedScanner(binary, installed)
     except (ExecutableNotFoundError, OSError, ValueError, subprocess.SubprocessError) as error:
         raise RuntimeError(
-            f"Semgrep {VERSION} setup failed: {release_credentials.diagnostics(error)}; "
+            f"Semgrep scanner setup failed: {release_credentials.diagnostics(error)}; "
             "request research-repo-tools[semgrep], adopt its shared override, and sync the locked dev environment"
         ) from error

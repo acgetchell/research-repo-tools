@@ -24,7 +24,7 @@ class ProgressReporter:
         self,
         *,
         mode: str = "human",
-        cadence: float = 10.0,
+        cadence: float = 300.0,
         stream: TextIO | None = None,
         observer: Callable[[dict[str, object]], None] | None = None,
         clock: Callable[[], float] = time.monotonic,

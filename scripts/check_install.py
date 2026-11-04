@@ -7,6 +7,7 @@ No user-wide tools, sibling repositories, or project lockfiles are modified.
 import argparse
 import json
 import os
+import platform
 import shutil
 import subprocess
 import sys
@@ -81,6 +82,8 @@ assert main(["--root", str(consumer), "notebooks", "check", str(notebook)]) == 1
 def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, version: str, uv: str, just: Path, env: dict[str, str]) -> None:
     """Prove exact pins, retained constraints, full lock upgrades, and dev sync."""
     consumer.mkdir()
+    # Use the same disposable interpreter store for provisioning and offline updates.
+    env = {**env, "UV_PYTHON_INSTALL_DIR": str(consumer / "managed Python")}
     wheels = consumer / "wheels"
     wheels.mkdir()
     # Retain the tested artifact source mapping; the local registry also supplies
@@ -112,7 +115,7 @@ def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, ve
     )
     (consumer / ".python-version").write_text("3.15\n", encoding="utf-8", newline="\n")
     # The independent scanner deliberately runs an older Python than the CLI.
-    run([uv, "python", "install", "--no-bin", "--no-registry", "3.14"], cwd=consumer, env=env)
+    run([uv, "python", "install", "--no-bin", "--no-registry", "3.14", "3.15"], cwd=consumer, env=env)
     # Dependencies of this exact artifact are already cached by the other checks.
     offline = {**env, "UV_OFFLINE": "1"}
     scanner = consumer / "tooling/scanner project"
@@ -204,6 +207,45 @@ def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, ve
     assert result.returncode == 1, result.stdout + result.stderr
     assert "selected multiple versions for pin-fixture" in result.stderr, result.stderr
     assert (manifest.read_bytes(), (consumer / "uv.lock").read_bytes()) == snapshot
+
+
+def check_semgrep_update(consumer: Path, artifact: Path, version: str, uv: str, env: dict[str, str], constraints: list[str]) -> None:
+    """Run the managed updater from a real prior scanner lock and scan with the installed artifact."""
+    consumer.mkdir()
+    uv_version = run([uv, "--version"], cwd=consumer, env=env).split()[1]
+    manifest = consumer / "pyproject.toml"
+    intel_macos = sys.platform == "darwin" and platform.machine() == "x86_64"
+    expected = "1.182.1" if intel_macos else "1.183.0"
+    policy = (
+        '[project]\nname="scanner-consumer"\nversion="0.1.0"\nrequires-python=">=3.15"\n'
+        f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\n'
+        f'dev=[{{include-group="tooling"}}, "research-repo-tools[semgrep]=={version}"]\n'
+        f'[tool.uv]\npackage=false\nrequired-version="=={uv_version}"\n'
+        f"override-dependencies={json.dumps(constraints)}\n"
+        f'constraint-dependencies=["semgrep<={expected}"]\n'
+        'no-build-package=["semgrep"]\n'
+        f"[tool.uv.sources]\nresearch-repo-tools={{path={json.dumps(str(artifact.resolve()))}}}\n"
+    )
+    manifest.write_text(policy, encoding="utf-8", newline="\n")
+    (consumer / ".python-version").write_bytes(b"3.15\n")
+    run([uv, "lock", "--upgrade-package", "semgrep==1.182.1", "--managed-python"], cwd=consumer, env=env)
+    run([uv, "sync", "--locked", "--managed-python", "--group", "dev"], cwd=consumer, env=env)
+    cli = [uv, "run", "--locked", "--no-sync", "research-repo-tools"]
+    assert "Semgrep 1.182.1" in run([*cli, "semgrep", "setup"], cwd=consumer, env=env)
+    run([*cli, "templates", "justfile", "--output", "justfile"], cwd=consumer, env=env)
+    run([uv, "run", "--locked", "--no-sync", "just", "update-python-dependencies"], cwd=consumer, env=env, capture_output=False)
+    assert manifest.read_bytes() == policy.encode()
+    lock = consumer / "uv.lock"
+    original_lock = lock.read_bytes()
+    locked = {package["version"] for package in tomllib.loads(original_lock.decode())["package"] if package["name"] == "semgrep"}
+    assert locked == {expected}
+    assert f"Semgrep {expected}" in run([*cli, "semgrep", "setup"], cwd=consumer, env=env)
+    scripts = consumer / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+    python = scripts / ("python.exe" if os.name == "nt" else "python")
+    suite = consumer / "public_native_semgrep_consumer.py"
+    suite.write_bytes((ROOT / "tests/semgrep/public_native_semgrep_consumer.py").read_bytes())
+    run_consumer_suite(python, [str(suite)], cwd=consumer, env=env)
+    assert lock.read_bytes() == original_lock
 
 
 def check_update_bootstrap(consumer: Path, uv: str, just: Path, env: dict[str, str]) -> None:
@@ -326,6 +368,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             cargo_suite = consumer / "public_cargo_examples_consumer.py"
             cargo_suite.write_bytes((ROOT / "tests/cargo_examples/public_cargo_examples_consumer.py").read_bytes())
             run_consumer_suite(python, [str(cargo_suite)], cwd=consumer, env=local_env)
+            cargo_docs_suite = consumer / "public_cargo_docs_consumer.py"
+            cargo_docs_suite.write_bytes((ROOT / "tests/cargo_docs/public_cargo_docs_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(cargo_docs_suite)], cwd=consumer, env=local_env)
             timing_suite = consumer / "public_command_timing_consumer.py"
             timing_suite.write_bytes((ROOT / "tests/performance/public_command_timing_consumer.py").read_bytes())
             run_consumer_suite(python, [str(timing_suite)], cwd=consumer, env=local_env)
@@ -408,15 +453,11 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             semgrep_tool_suite = consumer / "public_semgrep_tool_consumer.py"
             semgrep_tool_suite.write_bytes((ROOT / "tests/semgrep/public_semgrep_tool_consumer.py").read_bytes())
             run_consumer_suite(python, [str(semgrep_tool_suite)], cwd=consumer, env=local_env)
-            native_semgrep_suite = consumer / "public_native_semgrep_consumer.py"
-            # Resolve the published extra in this same Python 3.15 environment.
-            # The shared temporary override is required by Semgrep's Windows pin.
-            scanner_constraints = consumer / "semgrep-constraints.txt"
+            # Exercise a real locked update using the installed wheel or sdist.
             with zipfile.ZipFile(wheel) as archive:
-                scanner_constraints.write_bytes(archive.read("research_repo_tools/templates/semgrep-constraints.txt"))
-            run([uv, "pip", "install", "--python", str(python), "--override", str(scanner_constraints), f"{artifact}[semgrep]"], cwd=consumer, env=env)
-            native_semgrep_suite.write_bytes((ROOT / "tests/semgrep/public_native_semgrep_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(native_semgrep_suite)], cwd=consumer, env=local_env)
+                scanner_constraints = archive.read("research_repo_tools/templates/semgrep-constraints.txt").decode("utf-8")
+            overrides = [line for line in scanner_constraints.splitlines() if line and not line.startswith("#")]
+            check_semgrep_update(consumer / "scanner consumer", artifact, version, uv, env, overrides)
             toolchain_suite = consumer / "public_toolchain_consumer.py"
             toolchain_suite.write_bytes((ROOT / "tests/toolchain/public_toolchain_consumer.py").read_bytes())
             run_consumer_suite(python, [str(toolchain_suite)], cwd=consumer, env=local_env)

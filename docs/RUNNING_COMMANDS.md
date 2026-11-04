@@ -24,6 +24,7 @@ arguments in lexicographic order.
 | `just changelog-release TAG [DATE]` | Generate a prospective release from prepared citation metadata or an explicit date |
 | `just check` | Run Python, Semgrep fixture, and zizmor validation; extend with consumer domain gates |
 | `just ci` | Run the same canonical consumer gate as local validation |
+| `just cargo-docs PACKAGE [ARGS...]` | Validate public library docs from a packaged crate on declared stable Rust |
 | `just clean [ARGS...]` | Preview obsolete package-owned installs; `--apply` removes them; repeat `--keep-root PATH` to retain other consumers' pins |
 | `just command-time CONFIG OUTPUT` | Acquire exploratory external-command timings into a new JSON report and print a summary |
 | `just files COMMAND...` | Check raw line limits, list selected files or run a command over them |
@@ -60,7 +61,7 @@ arguments in lexicographic order.
 | `just security-osv LOCKFILE...` | Audit explicitly selected uv.lock/Cargo.lock files |
 | `just security-secrets [ARGS...]` | Scan full reachable history and current tracked/nonignored files |
 | `just semgrep-check` | Validate the consumer's Semgrep rules and fixtures |
-| `just semgrep-setup` | Verify the pinned Semgrep extra in the shared Python environment |
+| `just semgrep-setup` | Verify the locked Semgrep scanner in the shared Python environment |
 | `just setup` | Install and verify declared tools, then synchronize the Python environment |
 | `just shared-python-plan VERSION` | Preview mandatory Python-minimum and optional tool-profile adoption outside the old environment |
 | `just shared-python-update VERSION` | Apply the migration and recreate the locked environment and notebook kernel |
@@ -116,5 +117,5 @@ global root/configuration options before the group; consult
 | Tectonic dependencies | `tectonic discover`, `export` | Read-only pkg-config/vcpkg discovery; consumer-owned provisioning |
 | Templates | `templates NAME` | Shared changelog, release guide/OIDC workflow, just, TOML, and rumdl resources |
 | Toolchain | `toolchain adopt`, `check`, `clean`, `export`, `python-check`, `python-tools-check`, `run`, `sync`, `sync-binaries`, `upgrade` | Exact declarations; managed installations and cleanup; verified execution and checked CI export |
-| Validation | `validation cargo-examples`, `cargo-metadata`, `require`, `run` | Runtime Cargo example discovery, bounded live execution, package preflight and configured assertions |
+| Validation | `validation cargo-docs`, `cargo-examples`, `cargo-metadata`, `require`, `run` | Runtime Cargo example discovery, bounded live execution, package preflight and configured assertions |
 | Workflow security | `zizmor check` | One declared scanner/persona, token discovery, explicit offline or required-online audits |

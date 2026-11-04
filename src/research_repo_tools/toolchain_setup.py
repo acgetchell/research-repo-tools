@@ -70,6 +70,6 @@ def setup(runtime: Runtime, *, semgrep: bool = False) -> None:
         environment = Path(project_env.get("UV_PROJECT_ENVIRONMENT", ".venv"))
         if not environment.is_absolute():
             environment = root / environment
-        binary = semgrep_tool.setup(root, python=executable(environment / ("Scripts" if os.name == "nt" else "bin"), "python"))
-        _print(f"Semgrep {semgrep_tool.VERSION}: {binary}")
+        scanner = semgrep_tool.verify(root, python=executable(environment / ("Scripts" if os.name == "nt" else "bin"), "python"), uv=uv.path)
+        _print(f"Semgrep {scanner.version}: {scanner.path}")
     print("Setup complete. Open a new terminal if PATH changed, then run just help.")

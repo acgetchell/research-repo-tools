@@ -80,6 +80,8 @@ jobs:
           enable-cache: true
       - name: Install locked development environment
         run: uv sync --locked
+      - name: Provision the stable compiler for packaged documentation regressions
+        run: rustup toolchain install 1.99.1 --profile minimal --no-self-update
       - name: Verify native Semgrep startup with synthetic input
         run: uv run --locked pytest tests/semgrep/test_native_semgrep.py -k native_engine_reports --cov --cov-report=term
       - name: Verify native Windows process byte transport

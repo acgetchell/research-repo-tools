@@ -21,6 +21,8 @@ system executables; missing prerequisites fail the tests with setup guidance.
 Cargo and a native Rust toolchain must also be on PATH for the small dependency-free
 example-runner fixtures in source and installed-distribution suites. Hosted package
 jobs use their native Rust toolchains for these fixtures on all three platforms.
+Packaged documentation regressions also require Rust 1.99.1 installed through
+rustup, matching the fixture's declared stable release compiler.
 
 ```sh
 uv run --locked --managed-python research-repo-tools setup
@@ -68,7 +70,7 @@ including changelog and release recipes.
 | `just check-setup` | Exercise real setup on disposable GitHub-hosted runners only |
 | `just ci` | Run checks, tests, builds, and installation checks for final review |
 | `just clean [ARGS...]` | Preview obsolete package-owned installs; pass `--apply` to remove them |
-| `just coverage` | Run tests with branch and subprocess coverage; write `coverage/cobertura.xml` |
+| `just coverage [PYTEST_ARGS...]` | Run tests with branch and subprocess coverage and write `coverage/cobertura.xml` |
 | `just help` | List recipes and arguments in lexicographic order, with arguments |
 | `just install-check` | Build and check isolated installations |
 | `just justfile-check` | Check maintainer and packaged recipes with the pinned Just formatter |
@@ -98,7 +100,7 @@ including changelog and release recipes.
 | `just tag TAG` | Create a local annotated release tag (maintainer only) |
 | `just tag-preview TAG` | Preview the release annotation without changing Git state |
 | `just templates ARGS...` | Export a packaged configuration or workflow template |
-| `just test` | Run the Python test suite |
+| `just test [PYTEST_ARGS...]` | Run the Python test suite or a selected subset |
 | `just update` | Upgrade tools and Python dependencies, synchronize dev, then audit final locks |
 | `just update-dependencies` | Run the Python dependency workflow, then audit the final lock |
 | `just update-python-dependencies` | Update direct dev pins, upgrade the full lock, and synchronize dev |
@@ -117,7 +119,12 @@ Root and consumer `just release-check TAG` use the same final metadata/notes con
 Use `just check` while iterating, with targeted regressions when
 a behavioral change needs verification. Run `just ci` once the
 work is ready for final review.
-It runs checks and tests with coverage, builds wheel and sdist artifacts, and installs both
+The source tests in `just test` and `just coverage` use four pytest workers with
+work stealing by default. Set `RESEARCH_REPO_TOOLS_TEST_WORKERS` to adjust the
+worker count, or set it to `0` for serial execution. For example,
+`just test tests/cargo_docs -n 0` runs that subset serially.
+
+`just ci` runs checks and tests with coverage, builds wheel and sdist artifacts, and installs both
 outside the checkout with uv. Installation checks exercise the console entry
 point, public process/file-publication/release-plan/performance/document-publication consumer contracts,
 imports, packaged templates, runtime dependencies, and the bundled `just` executable.
@@ -129,15 +136,13 @@ sleeps, and jointly check selected paths, index bytes and staged entries. Keep
 their native Linux/macOS/Windows coverage when changing the inspection contract.
 The source suite and both installed distributions also run real Semgrep scans
 for anchored path filters, mixed Rustdoc/Markdown inputs, fixture assertions and
-paired reports. The installed `semgrep` extra owns the exact scanner pin and
-`semgrep-constraints.txt` owns its compatibility overrides. Native suites use the
-same Python 3.15 environment and version checks as consumers. These tests
-require the extra in the synchronized lock and fail on missing/drifted scanners;
-they do not substitute a mocked scanner or skip unsupported native execution.
-Change the extra pin and shared overrides together and validate source and installed
-wheel/sdist suites on Linux, macOS and Windows before releasing them. Consumers
-request the extra and adopt root uv overrides; they do not maintain another
-scanner environment or pin. `just security` combines this checkout's Python audit
+paired reports. The installed `semgrep` extra defines the supported stable
+range and `semgrep-constraints.txt` owns its compatibility overrides. Native
+suites verify the exact scanner selected by the synchronized lock under Python
+3.15. Installed wheel and sdist checks upgrade an earlier real scanner lock
+through the managed updater before running fixture and production scans.
+Validate source and installed suites on Linux, macOS and Windows before
+releasing changes to the range, overrides or native scan contract. `just security` combines this checkout's Python audit
 and shared Gitleaks gate. Consumer templates expose `audit` (OSV) and `security`
 (OSV plus Gitleaks); both scanner implementations live in the shared package.
 See [Validation](docs/VALIDATING.md) for check coverage and agent restrictions.

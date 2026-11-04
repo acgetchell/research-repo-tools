@@ -54,3 +54,13 @@ def require_no_downgrades(original: bytes | None, lock: Path) -> None:
                     f"{', '.join(map(str, sorted(old_versions)))} -> {', '.join(map(str, sorted(new_versions)))}; "
                     "review intentional downgrades or marker changes separately with uv"
                 )
+
+
+def active_versions(payload: bytes, name: str, environment: dict[str, str]) -> set[Version]:
+    """Select the locked versions for the probed interpreter's marker environment."""
+    return {
+        version
+        for branch, versions_in_branch in versions(payload).get(canonicalize_name(name), {}).items()
+        if not branch or any(Marker(marker).evaluate(environment) for marker in branch)
+        for version in versions_in_branch
+    }
