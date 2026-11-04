@@ -35,7 +35,7 @@ def test_failed_child_reports_both_streams_and_case_context(harness):
 
 def test_timeout_preserves_captured_byte_diagnostic(harness, monkeypatch):
     def timeout(*args, **kwargs):
-        raise subprocess.TimeoutExpired(args[0], 1, stderr=b"checker blocked\xff")
+        raise subprocess.TimeoutExpired(args[0], 1, output=b"worker progress\r\n", stderr=b"checker blocked\xff")
 
     monkeypatch.setattr(harness.subprocess, "run", timeout)
     with pytest.raises(
@@ -44,6 +44,7 @@ def test_timeout_preserves_captured_byte_diagnostic(harness, monkeypatch):
     ) as caught:
         harness.execute(["prepared-python"], env={}, label="probe", timeout=1)
     assert "checker blocked\ufffd" in str(caught.value)
+    assert "worker progress\r\n" in str(caught.value)
 
 
 def test_python_child_streams_match_utf8_capture_under_legacy_encoding(harness, tmp_path):

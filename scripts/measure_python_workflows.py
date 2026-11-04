@@ -43,9 +43,10 @@ def execute(command: list[str], *, env: dict[str, str], label: str, cwd: Path | 
         child_env = {**env, "PYTHONUTF8": "1", "PYTHONIOENCODING": "utf-8"}
         result = subprocess.run(command, env=child_env, cwd=cwd, check=False, capture_output=True, encoding="utf-8", timeout=timeout)
     except subprocess.TimeoutExpired as error:
-        detail = error.stderr or error.stdout or b""
-        if isinstance(detail, bytes):
-            detail = detail.decode("utf-8", errors="replace")
+        detail = "\n".join(
+            f"{name}:\n{stream.decode('utf-8', errors='replace') if isinstance(stream, bytes) else stream or ''}"
+            for name, stream in (("stdout", error.stdout), ("stderr", error.stderr))
+        )
         raise RuntimeError(f"{label} timed out after {timeout} seconds: {command!r}\n{detail}") from error
     except OSError as error:
         raise RuntimeError(f"{label} could not launch: {command!r}: {error}") from error

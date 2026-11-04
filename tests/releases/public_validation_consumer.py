@@ -10,6 +10,7 @@ import zipfile
 from pathlib import Path
 from unittest.mock import patch
 
+from research_repo_tools import files
 from research_repo_tools.release_validation import ValidationPolicy, api, download_artifact, select_main_run, validate_jobs, validate_run
 
 COMMIT = "a" * 40
@@ -116,6 +117,23 @@ class TestValidationConsumer(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "SHA-256"):
                 download_artifact(POLICY.repository, {**artifact, "digest": f"sha256:{'0' * 64}"}, Path(temporary) / "bad", tuple(contents))
             self.assertFalse((Path(temporary) / "bad").exists())
+            before = {path.name: path.read_bytes() for path in destination.iterdir()}
+            with self.assertRaises(FileExistsError):
+                download_artifact(POLICY.repository, artifact, destination, tuple(contents))
+            self.assertEqual({path.name: path.read_bytes() for path in destination.iterdir()}, before)
+
+            failed = (Path(temporary) / "failed").resolve()
+            replace = files.os.replace
+
+            def fail_second(source, target):
+                if Path(target) == failed / "source.tar.gz":
+                    raise OSError("injected artifact publication failure")
+                return replace(source, target)
+
+            with patch.object(files.os, "replace", side_effect=fail_second):
+                with self.assertRaisesRegex(OSError, "injected artifact publication"):
+                    download_artifact(POLICY.repository, artifact, failed, tuple(contents))
+            self.assertFalse(failed.exists())
 
     def test_nonportable_names_fail_before_transport(self):
         for names in (("../escape",), ("CON.txt",), ("name.",), ("Case", "case"), ("a/b",), ("x:y",)):

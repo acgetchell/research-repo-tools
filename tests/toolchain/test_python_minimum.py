@@ -26,7 +26,9 @@ def test_owned_python_mirrors_match_installed_authority():
     for workflow in (root / ".github/workflows").glob("*.yml"):
         text = workflow.read_text(encoding="utf-8")
         if "astral-sh/setup-uv@" in text:
-            assert 'python-version-file: ".python-version"' in text
+            # setup-uv provisions uv; uv itself reads .python-version.
+            assert 'version-file: "pyproject.toml"' in text
+            assert "python-version-file:" not in text
             assert "python-version:" not in text
 
 

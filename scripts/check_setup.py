@@ -82,7 +82,11 @@ def release_environment(env: dict[str, str]) -> dict[str, str]:
 
 def run(command: list[str], *, cwd: Path, env: dict[str, str], expected: int = 0, input: str | None = None) -> str:
     print(f"Running: {command}", flush=True)
-    result = subprocess.run(command, cwd=cwd, env=env, input=input, capture_output=True, encoding="utf-8", errors="replace", timeout=3600)
+    try:
+        result = subprocess.run(command, cwd=cwd, env=env, input=input, capture_output=True, encoding="utf-8", errors="replace", timeout=3600)
+    except subprocess.TimeoutExpired as error:
+        print(release_credentials.diagnostics(error), file=sys.stderr, flush=True)
+        raise
     print(result.stdout, end="", flush=True)
     print(result.stderr, end="", file=sys.stderr, flush=True)
     if result.returncode != expected:

@@ -2,6 +2,7 @@
 
 import importlib.util
 import os
+import subprocess
 import sys
 import tomllib
 from pathlib import Path
@@ -27,6 +28,23 @@ def generator_pin(harness, command, cwd, env):
     assert cwd == ROOT
     assert "GITHUB_TOKEN" not in env and "GH_TOKEN" not in env
     return "2.14.2\n"
+
+
+def test_timeout_preserves_both_streams_and_redacts_credentials(harness, tmp_path, monkeypatch, capsys):
+    monkeypatch.setenv("GH_TOKEN", "fixture-secret")
+    failure = subprocess.TimeoutExpired(["fixture-tool"], 3600, output=b"install progress\r\n", stderr=b"blocked fixture-secret\xff")
+
+    def timeout(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(harness.subprocess, "run", timeout)
+    with pytest.raises(subprocess.TimeoutExpired) as caught:
+        harness.run(["fixture-tool"], cwd=tmp_path, env={})
+    assert caught.value is failure
+    output = capsys.readouterr()
+    assert "install progress" in output.err
+    assert "blocked [REDACTED]\ufffd" in output.err
+    assert "fixture-secret" not in output.out + output.err
 
 
 @pytest.mark.parametrize("actions,runner", [(None, None), ("true", None), ("true", "self-hosted"), ("false", "github-hosted")])

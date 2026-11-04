@@ -7,6 +7,7 @@ import tempfile
 from pathlib import Path
 
 from coverage import Coverage
+from research_repo_tools.files import replace_many
 
 
 def main(arguments: list[str]) -> int:
@@ -31,8 +32,9 @@ def main(arguments: list[str]) -> int:
         coverage.combine(strict=True)
         coverage.save()
         coverage.report(show_missing=True)
-        coverage.xml_report(outfile=str(report))
-        data.replace(root / ".coverage")
+        staged_report = Path(directory) / report.name
+        coverage.xml_report(outfile=str(staged_report))
+        replace_many({root / ".coverage": data.read_bytes(), report: staged_report.read_bytes()})
     return result.returncode
 
 

@@ -424,6 +424,15 @@ class TestReleaseConsumer(unittest.TestCase):
             result = published_releases(self.root)
         self.assertEqual([item.tag for item in result], ["v1.2.10", "v1.2.9"])
 
+    def test_discovery_rejects_ambiguous_draft_status(self):
+        import subprocess
+
+        payload = b'[{"tagName":"v1.2.3","isDraft":true,"isDraft":false,"isPrerelease":false,"publishedAt":"2026-09-01T00:00:00Z"}]'
+        response = subprocess.CompletedProcess(["gh"], 0, payload, b"")
+        with patch("shutil.which", return_value=str(Path(__file__).resolve())), patch("subprocess.run", return_value=response):
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                published_releases(self.root)
+
 
 class TestFirstRelease(unittest.TestCase):
     @override

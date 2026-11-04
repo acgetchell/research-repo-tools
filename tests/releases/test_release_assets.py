@@ -5,9 +5,10 @@ import hashlib
 import io
 import json
 import os
+import shlex
+import shutil
 import stat
 import subprocess
-import sys
 import tarfile
 import zipfile
 from pathlib import Path
@@ -383,7 +384,8 @@ def test_maintainer_evidence_recipe_accepts_local_and_shared_commands():
     assert "```bash\njust release-evidence\n```" in guide
 
 
-def test_end_to_end_promotes_exact_original_bytes_and_verifies_both_signatures(remote, tmp_path):
+@pytest.fixture
+def published(remote, tmp_path):
     bundle = prepare(tmp_path)
     release.stage(TAG, tmp_path / "dist", bundle, tmp_path / "promotion.json")
     uploaded = remote["uploaded"]
@@ -398,10 +400,111 @@ def test_end_to_end_promotes_exact_original_bytes_and_verifies_both_signatures(r
     ]
     remote["release"] = {"id": 17, "tag_name": TAG, "draft": False, "prerelease": False, "assets": assets}
     remote["downloads"] = {asset["id"]: uploaded[asset["name"]] for asset in assets}
+    return {"action": "published", "repository": {"full_name": release.REPOSITORY}, "release": remote["release"]}
+
+
+def test_end_to_end_promotes_exact_original_bytes_and_verifies_both_signatures(remote, tmp_path, published):
     output = tmp_path / "published" / "verified-dist"
-    release.verify({"action": "published", "repository": {"full_name": release.REPOSITORY}, "release": remote["release"]}, COMMIT, output)
+    release.verify(published, COMMIT, output)
     assert {path.name: path.read_bytes() for path in output.iterdir()} == remote["contents"]
     assert any(isinstance(call, tuple) and "/actions/artifacts/31/zip" in call[2] for call in remote["calls"] if len(call) > 2)
+
+
+@pytest.mark.parametrize("failure", ["digest", "signature", "publication"])
+def test_failed_verification_keeps_output_and_proof_absent(remote, tmp_path, published, monkeypatch, failure):
+    output = tmp_path / "published" / "verified-dist"
+    output.parent.mkdir()
+    proof = output.parent / release.BUNDLE
+    if failure == "digest":
+        remote["downloads"][1] = b"wrong bytes"
+    elif failure == "signature":
+        remote["signature_defect"] = "predicate"
+    else:
+        replace = os.replace
+
+        def fail_proof(source, target):
+            if Path(target) == proof:
+                raise OSError("injected proof publication failure")
+            return replace(source, target)
+
+        monkeypatch.setattr(os, "replace", fail_proof)
+    with pytest.raises((ValueError, OSError)) as caught:
+        release.verify(published, COMMIT, output)
+    assert ("digest" if failure == "digest" else "predicate" if failure == "signature" else "injected proof publication") in str(caught.value)
+    assert list(output.parent.iterdir()) == []
+
+
+def test_verification_refuses_existing_proof_without_leaving_distributions(tmp_path, published):
+    output = tmp_path / "published" / "verified-dist"
+    output.parent.mkdir()
+    proof = output.parent / release.BUNDLE
+    proof.write_bytes(b"prior proof")
+    with pytest.raises(FileExistsError):
+        release.verify(published, COMMIT, output)
+    assert list(output.parent.iterdir()) == [proof]
+    assert proof.read_bytes() == b"prior proof"
+
+
+def test_failed_promotion_publication_keeps_prior_evidence_and_no_distribution(remote, tmp_path, monkeypatch):
+    evidence = tmp_path / "promotion.json"
+    evidence.write_bytes(b"prior promotion")
+    replace = os.replace
+
+    def fail_evidence(source, target):
+        if Path(target) == evidence and Path(source).read_bytes() != b"prior promotion":
+            raise OSError("injected evidence publication failure")
+        return replace(source, target)
+
+    monkeypatch.setattr(os, "replace", fail_evidence)
+    with pytest.raises(OSError, match="injected evidence publication"):
+        prepare(tmp_path)
+    assert evidence.read_bytes() == b"prior promotion"
+    assert not (tmp_path / "dist").exists()
+
+
+@pytest.mark.parametrize("failure", ["existing", "write"])
+def test_local_attachment_failure_precedes_remote_release_creation(remote, tmp_path, monkeypatch, failure):
+    bundle = prepare(tmp_path)
+    attachment = tmp_path / release.BUNDLE
+    if failure == "existing":
+        attachment.write_bytes(b"prior attachment")
+    else:
+        replace = os.replace
+
+        def fail_attachment(source, target):
+            if Path(target) == attachment:
+                raise OSError("injected attachment publication failure")
+            return replace(source, target)
+
+        monkeypatch.setattr(os, "replace", fail_attachment)
+    with pytest.raises(OSError):
+        release.stage(TAG, tmp_path / "dist", bundle, tmp_path / "promotion.json")
+    assert remote["uploaded"] is None
+    assert not any(isinstance(call, tuple) and call[:2] == ("release", "create") for call in remote["calls"])
+    assert attachment.read_bytes() == b"prior attachment" if failure == "existing" else not attachment.exists()
+
+
+@pytest.mark.parametrize("operation", ["create", "upload"])
+def test_remote_staging_failure_removes_new_attachment_so_it_can_be_retried(remote, tmp_path, monkeypatch, operation):
+    bundle = prepare(tmp_path)
+    gh = release.gh
+    failure = subprocess.CalledProcessError(1, ["gh", "release", operation], stderr="fixture transport failed")
+
+    def fail(*arguments):
+        if arguments[:2] == ("release", operation):
+            raise failure
+        return gh(*arguments)
+
+    monkeypatch.setattr(release, "gh", fail)
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        release.stage(TAG, tmp_path / "dist", bundle, tmp_path / "promotion.json")
+    assert caught.value is failure
+    assert not (tmp_path / release.BUNDLE).exists()
+    monkeypatch.setattr(release, "gh", gh)
+    if operation == "upload":
+        remote["listing"] = [{"tag_name": TAG, "draft": True, "prerelease": False, "assets": []}]
+    release.stage(TAG, tmp_path / "dist", bundle, tmp_path / "promotion.json")
+    assert remote["uploaded"] is not None
 
 
 @pytest.mark.parametrize(
@@ -591,14 +694,65 @@ def test_both_distribution_metadata_contracts(tmp_path, version, package):
         release.verify_distributions(dist, TAG)
 
 
-def test_standard_library_entry_point_loads_without_installed_package(tmp_path, monkeypatch):
+def test_standard_library_entry_point_loads_without_installed_package(tmp_path):
     (tmp_path / "sitecustomize.py").write_bytes(b'print("UNTRUSTED-SITE-STARTUP")\n')
-    monkeypatch.setenv("PYTHONPATH", str(tmp_path))
+    (tmp_path / ".python-version").write_bytes((ROOT / ".python-version").read_bytes())
+    (tmp_path / "pyproject.toml").write_bytes(
+        b'[project]\nname="must-not-install"\nversion="0.0.0"\ndependencies=["rrt-deliberately-unresolvable-fixture==0.0.0"]\n'
+    )
+    commands = set()
+    for filename, job_name in (("ci.yml", "release-evidence"), ("prepare-release.yml", "stage"), ("publish.yml", "verify")):
+        workflow = yaml.load((ROOT / ".github/workflows" / filename).read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+        steps = workflow["jobs"][job_name]["steps"]
+        provision = next(index for index, step in enumerate(steps) if step.get("run") == "uv python install")
+        for index, step in enumerate(steps):
+            arguments = shlex.split(step.get("run", ""))
+            if "scripts/release_assets.py" in arguments:
+                assert provision < index
+                commands.add(tuple(arguments[: arguments.index("scripts/release_assets.py")]))
+    assert len(commands) == 1
+    prefix = list(commands.pop())
+    assert prefix[:2] == ["uv", "run"]
+    uv = shutil.which("uv")
+    assert uv is not None
+    prefix[0] = uv
+    env = {key: value for key, value in os.environ.items() if not key.startswith(("UV_", "PYTHON")) and key not in {"VIRTUAL_ENV", "CONDA_PREFIX"}}
+    env.update(UV_NO_CACHE="1", UV_OFFLINE="1", PYTHONPATH=str(tmp_path))
+    probe = subprocess.run(
+        [
+            *prefix,
+            "-c",
+            "import importlib.util, json, sys; print(json.dumps({"
+            "'version': f'{sys.version_info.major}.{sys.version_info.minor}', "
+            "'isolated': sys.flags.isolated, 'no_site': sys.flags.no_site, "
+            "'package': importlib.util.find_spec('research_repo_tools') is not None}))",
+        ],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        encoding="utf-8",
+        timeout=30,
+    )
+    assert json.loads(probe.stdout) == {
+        "version": (ROOT / ".python-version").read_text(encoding="utf-8").strip(),
+        "isolated": 1,
+        "no_site": 1,
+        "package": False,
+    }
     result = subprocess.run(
-        [sys.executable, "-I", "-S", str(ROOT / "scripts/release_assets.py"), "--help"], check=True, capture_output=True, text=True, timeout=10
+        [*prefix, str(ROOT / "scripts/release_assets.py"), "--help"],
+        cwd=tmp_path,
+        env=env,
+        check=True,
+        capture_output=True,
+        encoding="utf-8",
+        timeout=30,
     )
     assert "promote" in result.stdout and "seal" in result.stdout
     assert "UNTRUSTED-SITE-STARTUP" not in result.stdout
+    assert not (tmp_path / ".venv").exists()
+    assert not (tmp_path / "uv.lock").exists()
 
 
 def test_workflows_preserve_native_gates_and_promote_without_rebuilding():
@@ -675,11 +829,18 @@ def test_malformed_event_cli_diagnostics_have_no_side_effects(tmp_path, monkeypa
     assert list(tmp_path.iterdir()) == [source]
 
 
-@pytest.mark.parametrize("failure", [subprocess.CalledProcessError, OSError, ValueError])
+@pytest.mark.parametrize("failure", [subprocess.CalledProcessError, subprocess.TimeoutExpired, ExceptionGroup, OSError, ValueError])
 def test_cli_retains_transport_diagnostics_but_redacts_signed_urls(monkeypatch, capsys, failure):
     def fail(*args, **kwargs):
         detail = 'Get "https://storage.example/blob?sig=secret&token=private": Forbidden ghp_fixture_token'
-        raise failure(1, ["gh"], stderr=detail.encode()) if failure is subprocess.CalledProcessError else failure(detail)
+        transport = subprocess.CalledProcessError(1, ["gh"], output=b"partial transfer\r\n", stderr=detail.encode())
+        if failure is subprocess.CalledProcessError:
+            raise transport
+        if failure is subprocess.TimeoutExpired:
+            raise subprocess.TimeoutExpired(["gh"], 120, output=transport.output, stderr=transport.stderr)
+        if failure is ExceptionGroup:
+            raise ExceptionGroup("publication and rollback failed", [transport, OSError("backup retained at fixture-backup")])
+        raise failure(detail)
 
     monkeypatch.setattr(release, "promote", fail)
     monkeypatch.setattr(release.sys, "argv", ["release_assets.py", "promote", TAG, "--commit", COMMIT])
@@ -688,6 +849,10 @@ def test_cli_retains_transport_diagnostics_but_redacts_signed_urls(monkeypatch, 
     assert "Forbidden" in detail and "storage.example/blob?<redacted>" in detail
     assert "secret" not in detail and "private" not in detail
     assert "ghp_fixture_token" not in detail
+    if failure in (subprocess.CalledProcessError, subprocess.TimeoutExpired, ExceptionGroup):
+        assert "partial transfer" in detail
+    if failure is ExceptionGroup:
+        assert "backup retained at fixture-backup" in detail
 
 
 @pytest.mark.parametrize("arguments", [["--help"], ["consume", "--help"], ["seal", "--help"]])

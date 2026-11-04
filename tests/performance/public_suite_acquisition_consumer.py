@@ -1339,6 +1339,8 @@ class TestSuiteAcquisition(unittest.TestCase):
         checkout.mkdir()
 
         def git(*arguments):
+            environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
+            environment.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
             return subprocess.run(
                 [
                     "git",
@@ -1356,6 +1358,7 @@ class TestSuiteAcquisition(unittest.TestCase):
                     *arguments,
                 ],
                 cwd=checkout,
+                env=environment,
                 check=True,
                 capture_output=True,
             ).stdout
