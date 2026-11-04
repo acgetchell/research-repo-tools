@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 if TYPE_CHECKING:
+    from research_repo_tools.scheduled_runs import ScheduledRun
     from research_repo_tools.suite_runs import SuiteRun
 
 from research_repo_tools.criterion import Estimate, Statistic, Unit, _format_estimate, _markdown_text, _positive, _statistic, _unit, parse_estimate
@@ -24,6 +25,7 @@ __all__ = [
     "RUN_SCHEMA_V2",
     "RUN_SCHEMA_V3",
     "RUN_SCHEMA_V4",
+    "RUN_SCHEMA_V5",
     "ratio_incompatibilities",
     "CompleteCase",
     "CompletePolicy",
@@ -45,7 +47,8 @@ LEGACY_RUN_SCHEMA = RUN_SCHEMA
 RUN_SCHEMA_V2 = "research-repo-tools/complete-run/v2"
 RUN_SCHEMA_V3 = "research-repo-tools/complete-run/v3"
 RUN_SCHEMA_V4 = "research-repo-tools/complete-run/v4"
-RUN_SCHEMAS = (RUN_SCHEMA, RUN_SCHEMA_V2, RUN_SCHEMA_V3, RUN_SCHEMA_V4)
+RUN_SCHEMA_V5 = "research-repo-tools/complete-run/v5"
+RUN_SCHEMAS = (RUN_SCHEMA, RUN_SCHEMA_V2, RUN_SCHEMA_V3, RUN_SCHEMA_V4, RUN_SCHEMA_V5)
 
 
 def _array(value: object, context: str) -> list[Any]:
@@ -414,7 +417,11 @@ def parse_run(payload: bytes) -> CompleteRun:
     )
 
 
-def validate_run_evidence(evidence: Evidence) -> CompleteRun | SuiteRun:
+def validate_run_evidence(evidence: Evidence) -> CompleteRun | SuiteRun | ScheduledRun:
+    if evidence.payload_schema == RUN_SCHEMA_V5:
+        from research_repo_tools.scheduled_runs import parse_scheduled_run
+
+        return parse_scheduled_run(evidence)
     if evidence.payload_schema == RUN_SCHEMA_V4:
         from research_repo_tools.suite_runs import parse_suite_run
 
@@ -493,7 +500,7 @@ def ratio_incompatibilities(evidence: Evidence) -> tuple[str, ...]:
     Valid v1/v2 evidence returns an empty tuple without assessing ratio eligibility.
     """
     run = validate_run_evidence(evidence)
-    if run.schema == RUN_SCHEMA_V4:
+    if run.schema in {RUN_SCHEMA_V4, RUN_SCHEMA_V5}:
         return ("suite evidence requires observation-level comparison eligibility",)
     if run.schema != RUN_SCHEMA_V3:
         return ()
@@ -531,6 +538,10 @@ def run_identity(evidence: Evidence) -> str:
 def _render_run_v1(evidence: Evidence, *, title: str = "Benchmark timings") -> bytes:
     """Frozen timing presentation for validating immutable renderer-1 histories."""
     run = validate_run_evidence(evidence)
+    from research_repo_tools.scheduled_runs import ScheduledRun
+
+    if isinstance(run, ScheduledRun):
+        raise ValueError("select an explicit trial before using a legacy presentation")
     phases = dict(run.phases)
     cases = {phase: {case.full_id: case for case in sample.cases} for phase, sample in run.phases}
     rows = [(series, dict(series.rows)) for series in run.series]
@@ -717,6 +728,10 @@ def _render_run_v2(
             _publication_name(path)
         payload_link, manifest_link = (_relative_link(report_path, path) for path in (payload_path, manifest_path))
         links = f"Evidence: [run payload]({payload_link}) · [evidence envelope]({manifest_link})."
+    if evidence.payload_schema == RUN_SCHEMA_V5:
+        from research_repo_tools.scheduled_runs import render_scheduled_run
+
+        return render_scheduled_run(evidence, title=title, links=links, identity=run_identity(evidence))
     if evidence.payload_schema == RUN_SCHEMA_V4:
         from research_repo_tools.suite_runs import render_suite_run
 
@@ -724,6 +739,9 @@ def _render_run_v2(
     timings = _render_run_v1(evidence, title=title).decode("utf-8").removesuffix("\n").split("\n")
     timings[4:4] = [links, ""]
     run = validate_run_evidence(evidence)
+    from research_repo_tools.scheduled_runs import ScheduledRun
+
+    assert not isinstance(run, ScheduledRun)
     if run.schema == RUN_SCHEMA_V3:
         reasons = ratio_incompatibilities(evidence)
         timings.extend(

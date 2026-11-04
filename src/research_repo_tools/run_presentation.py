@@ -123,6 +123,8 @@ class RunLayout:
 
 def _select(evidence: Evidence, layout: RunLayout) -> tuple[CompleteRun | SuiteRun, dict[str, dict[str, Estimate]]]:
     run = validate_run_evidence(evidence)
+    if not isinstance(run, (CompleteRun, SuiteRun)):
+        raise ValueError("select an explicit trial before table/plot/CSV presentation")
     phases, views = dict(run.phases), {item.name: item for item in run.series}
     policy = phases["baseline"].policy
     if layout.unit != policy.unit or layout.statistic not in policy.statistics:

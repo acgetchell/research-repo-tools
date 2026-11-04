@@ -37,7 +37,9 @@ def add_command(commands, name: str) -> None:
     if name in {"prepare", "release"}:
         command.add_argument("--allow-git-mutations", action="store_true", help="authorize only requested tag fetching or configured temporary worktrees")
     if name in {"measure", "release"}:
-        command.add_argument("--checkpoint", help="ignored root-relative checkpoint directory; schema 5 only")
+        command.add_argument(
+            "--checkpoint", help="ignored root-relative checkpoint directory; schema 5 or 6; schedule comes from the prepared measurement declaration"
+        )
         command.add_argument("--progress", choices=("human", "json", "none"), default="human", help="advisory status on stderr")
         command.add_argument("--progress-cadence", type=float, default=300.0, help="heartbeat interval in seconds (default: 300, at least 1)")
         command.add_argument("--resume", action="store_true", help="validate and reuse completed units from --checkpoint")

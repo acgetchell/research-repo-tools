@@ -188,6 +188,15 @@ def add_evidence_commands(release) -> None:
     commands = release.add_parser("evidence", help="create or verify exact-commit release evidence and file-based approval handoffs").add_subparsers(
         dest="operation", required=True
     )
+    candidate = commands.add_parser("candidate", help="bind a prepared benchmark acquisition to final native evidence without measuring")
+    candidate.add_argument("configuration", help="native release evidence policy")
+    candidate.add_argument("--acceptance", type=Path, help="frozen Step 2 approval record to revalidate")
+    candidate.add_argument("--acquisition-sha256", required=True, help="independent Step 1 assertion digest from the trusted acquisition owner")
+    candidate.add_argument("--checkout", type=Path, required=True)
+    candidate.add_argument("--manifest", type=Path, required=True)
+    candidate.add_argument("--output", type=Path, required=True)
+    candidate.add_argument("--payload", type=Path, required=True)
+    candidate.add_argument("--policy", type=Path, required=True, help="independently trusted acquisition assertions and final commit")
     for operation in ("create", "verify"):
         command = commands.add_parser(operation)
         command.add_argument("configuration")
@@ -207,6 +216,9 @@ def add_evidence_commands(release) -> None:
 
 
 def run_evidence(args: argparse.Namespace, settings: Config) -> None:
+    if args.operation == "candidate":
+        _run_candidate(args, settings)
+        return
     path = _path(settings.root, args.configuration)
     original = path.read_bytes()
     policy = load_evidence_policy(path)
@@ -249,6 +261,48 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
     values = {"identity": json.dumps(parse_release_json(payload), sort_keys=True, separators=(",", ":")), "commit": args.commit}
     write_release_outputs(args.output, payload, github_output=args.github_output, values=values, verify=observe)
     print("Saved verified release evidence.")
+
+
+def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
+    from research_repo_tools.candidate_reuse import parse_candidate_policy, verify_candidate_release
+    from research_repo_tools.evidence import parse_evidence
+
+    configuration = _path(settings.root, args.configuration)
+    paths = (configuration, args.policy, args.payload, args.manifest, *([args.acceptance] if args.acceptance else []))
+    _validate_distinct_paths((args.output, *paths))
+    inputs = {}
+    from research_repo_tools.archives import ArchiveLimits
+
+    for path in paths:
+        _regular(path)
+        with path.open("rb") as stream:
+            data = stream.read(ArchiveLimits().content_bytes + 1)
+        if len(data) > ArchiveLimits().content_bytes:
+            raise ValueError("candidate handoff exceeds content limit")
+        inputs[path] = data
+    policy = parse_candidate_policy(inputs[args.policy])
+    native = load_evidence_policy(configuration)
+    checkout = args.checkout.resolve(strict=True)
+
+    def unchanged() -> None:
+        for path, data in inputs.items():
+            _regular(path)
+            if path.read_bytes() != data:
+                raise ValueError("candidate handoff changed during verification")
+        _checkout(checkout, native.package, policy.tag.removeprefix("v"), policy.commit, path_in_vcs=native.path_in_vcs)
+
+    unchanged()
+    accepted = verify_candidate_release(
+        checkout,
+        parse_evidence(inputs[args.payload], inputs[args.manifest]),
+        policy,
+        native,
+        partial(api, repository=policy.repository),
+        acquisition_sha256=args.acquisition_sha256,
+        expected=inputs[args.acceptance] if args.acceptance else None,
+    )
+    write_release_outputs(args.output, accepted, verify=unchanged)
+    print("Saved verified candidate and final release evidence.")
 
 
 def run_assets(args: argparse.Namespace, settings: Config) -> None:

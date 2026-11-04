@@ -5,6 +5,7 @@ import os
 import re
 import tempfile
 import time
+import unicodedata
 import uuid
 from collections.abc import Callable
 from contextlib import ExitStack
@@ -22,6 +23,7 @@ from research_repo_tools.publication_config import _table
 from research_repo_tools.release_discovery import _tag_version, normalize_tag
 from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.source_exports import capture_source, export_source
+from research_repo_tools.trial_schedule import TrialSchedule, parse_schedule
 
 __all__ = ["AcquisitionSuite", "SuiteMeasurementPlan", "parse_suite_plan", "measure_suites"]
 
@@ -75,6 +77,8 @@ class SuiteMeasurementPlan:
     """Schema 5: each suite owns a whole paired acquisition/checkpoint unit."""
 
     suites: tuple[AcquisitionSuite, ...]
+    schedule: TrialSchedule | None = None
+    outputs: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         suites = tuple(self.suites)
@@ -89,10 +93,30 @@ class SuiteMeasurementPlan:
         if any((p.statistics, p.confidence_level, p.unit) != (policies[0].statistics, policies[0].confidence_level, policies[0].unit) for p in policies):
             raise ValueError("suites must share statistics, confidence, and units")
         object.__setattr__(self, "suites", suites)
+        from research_repo_tools.source_exports import _names
+
+        outputs = tuple(self.outputs)
+        _names(None, outputs)
+        if outputs and self.schedule is None:
+            raise ValueError("candidate output declarations require a schema-6 schedule")
+        if self.schedule is not None and not isinstance(self.schedule, TrialSchedule):
+            raise ValueError("invalid trial schedule")
+        from pathlib import PurePosixPath
+
+        for name in outputs:
+            if PurePosixPath(name).suffix.casefold() not in {".md", ".rst", ".csv", ".svg"}:
+                raise ValueError("output exceptions require Markdown, reStructuredText, CSV, or SVG report/document files")
+            if any(
+                PurePosixPath(unicodedata.normalize("NFC", name).casefold()).full_match(unicodedata.normalize("NFC", pattern).casefold())
+                for suite in suites
+                for pattern in (*suite.measurement.sources, *suite.measurement.harness, *suite.measurement.measurement.workloads)
+            ):
+                raise ValueError("declared output overlaps measured inputs")
+        object.__setattr__(self, "outputs", tuple(sorted(outputs)))
 
     @property
     def schema(self) -> int:
-        return 5
+        return 6 if self.schedule is not None else 5
 
     @property
     def backend(self) -> str:
@@ -123,7 +147,8 @@ class SuiteMeasurementPlan:
 
     def document(self) -> dict[str, Any]:
         return {
-            "schema": 5,
+            "schema": self.schema,
+            **({"schedule": self.schedule.document(), "outputs": list(self.outputs)} if self.schedule else {}),
             "suites": [
                 {
                     "name": item.name,
@@ -140,9 +165,11 @@ class SuiteMeasurementPlan:
 
 
 def parse_suite_plan(document: dict[str, Any]) -> SuiteMeasurementPlan:
-    raw = _table(document, "suite measurement", {"schema", "suites"})
-    if type(raw["schema"]) is not int or raw["schema"] != 5 or not isinstance(raw["suites"], list):
-        raise ValueError("suite measurement requires schema 5 and a suite array")
+    raw = _table(document, "suite measurement", {"schema", "suites"}, {"schedule", "outputs"})
+    if type(raw["schema"]) is not int or raw["schema"] not in {5, 6} or not isinstance(raw["suites"], list):
+        raise ValueError("suite measurement requires schema 5 or 6 and a suite array")
+    if (raw["schema"] == 6) != ("schedule" in raw) or (raw["schema"] == 5 and "outputs" in raw):
+        raise ValueError("schedule/output declarations require schema 6")
     suites = []
     for value in raw["suites"]:
         item = _table(value, "suite", {"name", "contract", "measurement"}, {"since", "before", "nominal-seconds-per-case", "compilation"})
@@ -159,7 +186,9 @@ def parse_suite_plan(document: dict[str, Any]) -> SuiteMeasurementPlan:
                 tuple((phase, _strings(command, "compilation command")) for phase, command in _object(item.get("compilation", {}), "compilation").items()),
             )
         )
-    return SuiteMeasurementPlan(tuple(suites))
+    return SuiteMeasurementPlan(
+        tuple(suites), parse_schedule(raw["schedule"]) if "schedule" in raw else None, _strings(raw.get("outputs", []), "outputs", nonempty=False)
+    )
 
 
 def _source_record(source: Provenance) -> dict[str, object]:
@@ -201,6 +230,10 @@ def measure_suites(
     """Resolve availability before native commands and resume whole complete units."""
     reporter = progress or ProgressReporter()
     try:
+        if plan.schedule is not None:
+            from research_repo_tools.scheduled_runs import measure_schedule
+
+            return measure_schedule(root, plan, pair, working_tree=working_tree, checkpoint=checkpoint, resume=resume, progress=reporter, verify=verify)
         return _measure_suites(root, plan, pair, working_tree=working_tree, checkpoint=checkpoint, resume=resume, progress=reporter, verify=verify)
     except BaseException as error:
         event = "interrupted" if isinstance(error, KeyboardInterrupt) else "failed"
@@ -219,6 +252,10 @@ def _measure_suites(
     resume: bool = False,
     progress: ProgressReporter | None = None,
     verify: Callable[[], None] | None = None,
+    phase_order: tuple[str, ...] = ("baseline", "current"),
+    on_phase: Callable[[str, str, int, int], None] | None = None,
+    asserted_units: tuple[dict[str, Any], ...] = (),
+    reuse_assertions: bool = False,
 ) -> Evidence:
     """Resolve availability before native commands and resume whole complete units."""
     from research_repo_tools.suite_runs import SUITE_RUN_SCHEMA, parse_suite_run, sample_document, validate_unit
@@ -317,6 +354,8 @@ def _measure_suites(
                 progress=reporter,
                 compilation=dict(suite.compilation),
                 on_sample=accepted_sample,
+                phase_order=phase_order,
+                on_phase=(lambda phase, start, end: on_phase(suite.name, phase, start, end)) if on_phase is not None else None,
             )
 
         # Discover and gate every suite before timing, retaining only metadata.
@@ -340,10 +379,19 @@ def _measure_suites(
                 elif nominal is not None:
                     nominal += len(policy.expected) * suite.nominal_seconds_per_case
         reporter.budget(counts, nominal, inventory=inventory)
+        if asserted_units:
+            if [unit.get("name") for unit in asserted_units] != [suite.name for suite in plan.suites]:
+                raise ValueError("asserted unit inventory differs")
+            for suite, unit in zip(plan.suites, asserted_units, strict=True):
+                validate_unit(unit, suite, decisions[suite.name], prepared.get(suite.name, ({}, {}))[1])
         retained: dict[str, dict[str, object]] = {}
         if journal is not None:
             with reporter.stage("checkpoint"):
                 retained = journal.read()
+        if reuse_assertions:
+            if journal is not None or not asserted_units:
+                raise ValueError("retained assertions require a complete independent unit set without a checkpoint")
+            retained = {unit["name"]: unit for unit in asserted_units}
         # Validate every retained unit before accepting or measuring any work.
         for suite in plan.suites:
             if suite.name in retained:

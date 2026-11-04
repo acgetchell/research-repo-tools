@@ -13,6 +13,12 @@ is pinned and its integration passes. See the
 The APIs on this page continue to require the exact release commit and preserve
 the distinction between source validation and package/archive identity.
 
+The v0.2.6 `release evidence candidate` command composes this exact final-commit
+verification with [pre-tag benchmark acceptance](candidate-reuse-api.md). It
+requires the separately trusted Step 1 assertion digest and freezes the original
+acquisition, full-tree binding, native selection, and exact benchmark archive.
+Later approval uses the original `--acceptance`; no benchmark or preflight runs.
+
 ## Policy and guarantees
 
 The CLI/configuration module is `research_repo_tools.release_interfaces`.

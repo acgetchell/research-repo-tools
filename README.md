@@ -246,11 +246,30 @@ candidate = plan_reuse_archive(
 publish_publication(candidate)
 ```
 
-This requires exact tagged source measurements. If README updates must precede
-the final release commit, retain the existing two-acquisition workflow. The
-derived archive preserves original evidence and does not authenticate CI origin;
+This v1 API requires exact tagged source measurements. The v0.2.6
+[candidate contract](docs/candidate-reuse-api.md) supports a single pre-tag
+acquisition, report/README edits, final-main evidence acceptance, and archive
+reuse. Its schema-6 measurement declaration includes repeated alternating or
+seeded randomized trials, retained separately with observed execution receipts.
+Follow the [Step 1 → Step 2 → publication procedure](docs/REUSING_BENCHMARKS.md).
+The derived archive preserves original evidence and does not authenticate CI origin;
 attachment and approval retain the existing release safeguards. Verify the
 supplying PyPI release before adoption.
+
+For the pre-tag contract, the consumer's Step 2 recipe can compose native evidence
+and independently retained benchmark assertions through the shared CLI:
+
+```sh
+just release-evidence candidate tooling/release-evidence.toml \
+  --checkout . --payload target/run.json --manifest target/evidence.json \
+  --policy target/candidate-policy.json --acquisition-sha256 "$STEP1_ASSERTION_SHA256" \
+  --output target/accepted.json
+```
+
+At approval, pass `--acceptance target/accepted.json` and a new output path to
+revalidate that selection. Obtain `STEP1_ASSERTION_SHA256` from the trusted
+acquisition owner's separate handoff. Never derive it from the candidate being
+checked. These operations perform no benchmark acquisition or preflight.
 
 ### Releases
 

@@ -4,6 +4,32 @@ For exact-tagged v4 evidence, the [reuse API](benchmark-reuse-api.md) derives a
 release archive without acquisition, preserving the original run and separately
 asserted release target. It does not manufacture native saved samples or CI trust.
 
+## Scheduled trials (v0.2.6)
+
+`SuiteMeasurementPlan(suites, schedule=TrialSchedule(...), outputs=())` is schema 6.
+`trial_schedule.TrialSchedule(trials=2, order="alternating", seed=None)` declares
+separate trial pairs; randomized order requires an explicit seed and an even
+trial count. Sequential order is supported without claiming counterbalancing.
+`parse_schedule` verifies any supplied realized schedule against the declared
+algorithm. The [procedure](REUSING_BENCHMARKS.md) specifies ordering and recovery.
+
+`scheduled_runs.parse_scheduled_run(evidence)` and `validate_run_evidence` return
+`ScheduledRun(plan, trials)` for complete-run v5. `trials` contains the exact
+original v4 evidence for each independent trial. The outer payload retains unique
+sessions and observed per-suite/phase timestamps in declared execution order.
+`select_trial(evidence, trial)` validates the entire schedule before selecting a
+one-based trial for table, CSV, or plot APIs. A scheduled run deliberately has no
+pooled `phases` or `series` view: accessing those requires explicit selection.
+The whole v5 evidence remains the authority for trial order and provenance.
+
+The default complete report displays every trial separately. Schema-2 README
+publication requires an explicit `trial` and labels that selection. Historical
+v1–v4 evidence remains sequential evidence without a verified order-control
+receipt. No historical bytes, timestamps, or provenance are synthesized.
+
+The [candidate acceptance API](candidate-reuse-api.md) consumes v5 for pre-tag
+measurement, full-tree final-release binding, and read-only archive derivation.
+
 ## Availability-aware suite APIs (v0.2.5)
 
 `suite_measurement.AcquisitionSuite(name, contract, measurement, since=None,

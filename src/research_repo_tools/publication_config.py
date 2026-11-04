@@ -168,7 +168,7 @@ def load_publication(
         optional |= {"baseline-label", "current-label"}
     else:
         required |= {"statistic", "series"}
-        optional |= {"payload", "manifest", "archive", "missing", "comparisons", "plot", "csv", "table", "measurement", "release"}
+        optional |= {"payload", "manifest", "archive", "missing", "comparisons", "plot", "csv", "table", "measurement", "release", "trial"}
     if artifacts_only:
         if schema != 2:
             raise ValueError("artifacts-only requires complete-run publication schema 2")
@@ -234,6 +234,18 @@ def load_publication(
                     raw.setdefault("current-harness", list(measurement.harness))
         if not artifacts_only and dict(dict(retained.sources)["current"].context)["release"] == dict(dict(retained.sources)["baseline"].context)["release"]:
             raise ValueError("same-release local comparisons cannot be published as release documentation")
+    selected_trial = None
+    from research_repo_tools.scheduled_runs import SCHEDULED_RUN_SCHEMA, select_trial
+
+    if retained.payload_schema == SCHEDULED_RUN_SCHEMA:
+        if "trial" not in raw:
+            raise ValueError("scheduled README publication requires an explicit trial")
+        from research_repo_tools.complete_runs import _integer
+
+        selected_trial = _integer(raw["trial"], "trial")
+        retained = select_trial(retained, selected_trial)
+    elif "trial" in raw:
+        raise ValueError("trial selection requires scheduled evidence")
     pins = _table(raw["provenance"], "provenance", {"baseline", "current"})
     sources = dict(retained.sources)
     tag_policy = raw.get("tag-policy", "existing")
@@ -389,6 +401,8 @@ def load_publication(
         if "csv" in raw:
             path = _string(raw["csv"], "csv")
             artifact(path, serialize_run_csv(retained, run_layout))
+    if selected_trial is not None:
+        content = f"Trial {selected_trial} (separate trial; no pooled significance claim).\n\n" + content
     if artifacts_only:
         if not figures:
             raise ValueError("artifacts-only requires at least one plot, svg or csv output")

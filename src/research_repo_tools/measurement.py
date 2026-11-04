@@ -123,7 +123,7 @@ class MeasurementConfig:
 def load_measurement(root: Path, configuration: str) -> MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan:
     """Read strict measurement TOML; commands are trusted consumer configuration."""
     document = tomllib.loads(_path(root.resolve(), configuration).read_bytes().decode("utf-8"))
-    if type(document.get("schema")) is int and document["schema"] == 5:
+    if type(document.get("schema")) is int and document["schema"] in {5, 6}:
         from research_repo_tools.suite_measurement import parse_suite_plan
 
         return parse_suite_plan(document)
@@ -280,7 +280,7 @@ def measure_pair(
     if isinstance(configuration, SuiteMeasurementPlan):
         return measure_suites(root, configuration, pair, working_tree=working_tree, checkpoint=checkpoint, resume=resume, progress=progress, verify=verify)
     if checkpoint is not None or resume:
-        raise ValueError("checkpoint/resume requires measurement schema 5")
+        raise ValueError("checkpoint/resume requires measurement schema 5 or 6")
     settings = configuration if isinstance(configuration, MeasurementConfig) else configuration.measurement
     settings.validate_release(pair.baseline)
     settings.validate_release(pair.current)
