@@ -1,5 +1,10 @@
 # Verified benchmark acquisition reuse
 
+This page describes the unchanged exact-tag v1 transport. For pre-tag acquisition,
+declared repeated trials, and final-main acceptance, use the v0.2.6
+[candidate contract](candidate-reuse-api.md) and
+[two-step procedure](REUSING_BENCHMARKS.md).
+
 This contract targets v0.2.5. It is a derived transport of an existing acquisition,
 not a new measurement or an authentication mechanism. Consumer adoption requires
 the exact supplying PyPI version and successful normal resolution, tracked by
@@ -47,9 +52,9 @@ after acquisition belong to a later commit or a separate publication location.
 If the new README must be inside the release commit, prospective measurement
 precedes the README edit and final tag. That workflow still needs its existing
 exact-tag acquisition. A matching source subtree cannot turn the earlier commit
-into the final commit. Working-tree-to-tag equivalence is deliberately unsupported;
-retain the safe two-acquisition behavior until a separate policy is implemented
-and verified. Real release ordering and scientific acceptance remain downstream
+into the final commit. Working-tree-to-tag equivalence is unsupported by this v1 API;
+the candidate contract requires new schema-6/v5 acquisition evidence, independent
+assertions and an explicit whole-tree binding. Real release ordering and scientific acceptance remain downstream
 in [la-stack#323](https://github.com/acgetchell/la-stack/issues/323).
 
 Both the envelope's current source and every projected current observation must

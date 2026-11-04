@@ -166,8 +166,10 @@ def test_conflicting_fixture_aliases_are_rejected_before_scanning(tmp_path, monk
         link = tmp_path / "alias.py"
         try:
             link.symlink_to(fixture)
-        except OSError:
-            pytest.skip("symlinks unavailable")
+        except OSError as error:
+            if getattr(error, "winerror", None) == 1314:
+                pytest.skip("symlinks unavailable")
+            raise
         second = link.name
     manifest = tmp_path / "pyproject.toml"
     manifest.write_text(

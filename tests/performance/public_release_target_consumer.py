@@ -125,19 +125,22 @@ class TestReleaseTargetConsumer(unittest.TestCase):
         output = root / "actions-output"
         output.write_bytes(b"")
         common = ["--root", str(root), "release", "assets"]
-        assertions = ["assets.toml", "--checkout", str(root), "--commit", SHA, "--tag", TAG]
+        assertions = ["assets.toml", "--checkout", ".", "--commit", SHA, "--tag", TAG]
+        caller = root / "caller"
+        caller.mkdir()
         with (
+            contextlib.chdir(caller),
             patch("research_repo_tools.release_interfaces.resolve_revision", return_value=SHA),
             patch("research_repo_tools.release_interfaces.require_release_checkout") as observed,
             patch("research_repo_tools.release_assets.require_release_checkout"),
             contextlib.redirect_stdout(io.StringIO()),
         ):
-            self.assertEqual(cli.main([*common, "preflight", *assertions, "--output", str(destination), "--github-output", str(output)]), 0)
+            self.assertEqual(cli.main([*common, "preflight", *assertions, "--output", destination.name, "--github-output", output.name]), 0)
             self.assertGreater(observed.call_count, 0)
             target = parse_release_target(destination.read_bytes())
             self.assertEqual((target.repository, target.tag, target.commit, target.release_id), (REPOSITORY, TAG, SHA, 9))
             self.assertIn(f"commit={SHA}\n".encode(), output.read_bytes())
-            upload = [*common, "upload", *assertions, "--target", str(destination), "--asset", str(self.asset), "--approve"]
+            upload = [*common, "upload", *assertions, "--target", destination.name, "--asset", self.asset.name, "--approve"]
             self.assertEqual(cli.main(upload), 0)
             self.assertEqual(cli.main(upload), 0)  # Identical-byte retry is deliberate.
             self.server.commit = "c" * 40
@@ -145,6 +148,7 @@ class TestReleaseTargetConsumer(unittest.TestCase):
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(cli.main(upload), 1)
             self.assertFalse(any("POST" in call or "PATCH" in call for call in self.server.calls[before:]))
+        self.assertEqual(list(caller.iterdir()), [])
 
     @override
     def setUp(self):
@@ -155,9 +159,8 @@ class TestReleaseTargetConsumer(unittest.TestCase):
         self.asset.write_bytes(PAYLOAD)
         self.server = GitHubFixture()
         self.download_transport = release_assets._download
-        self.addCleanup(patch.stopall)
-        patch("research_repo_tools.release_assets.run_command_bytes", side_effect=self.server.run).start()
-        patch("research_repo_tools.release_assets._download", side_effect=self.server.download).start()
+        self.enterContext(patch("research_repo_tools.release_assets.run_command_bytes", side_effect=self.server.run))
+        self.enterContext(patch("research_repo_tools.release_assets._download", side_effect=self.server.download))
 
     def target(self):
         return preflight_release_target(self.root, REPOSITORY, TAG, SHA, expected_title=TAG)

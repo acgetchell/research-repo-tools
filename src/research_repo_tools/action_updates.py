@@ -1,7 +1,6 @@
 """Resolve explicit Actions targets and publish narrowly scoped YAML edits."""
 
 import base64
-import json
 import re
 import tomllib
 from pathlib import Path
@@ -16,6 +15,7 @@ from research_repo_tools import config
 from research_repo_tools.dependencies import _group_requirements
 from research_repo_tools.files import replace_many
 from research_repo_tools.process import run_safe_command
+from research_repo_tools.release_validation import parse_release_json
 from research_repo_tools.tool_pins import STABLE
 from research_repo_tools.workflow_uses import SHA, identity, references, workflow_paths
 
@@ -25,8 +25,8 @@ TAG = re.compile(r"v?(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){0,2}")
 def _api(endpoint: str, root: Path) -> object:
     output = run_safe_command("gh", ["api", endpoint], cwd=root, timeout=30).stdout
     try:
-        return json.loads(output)
-    except (ValueError, RecursionError) as error:
+        return parse_release_json(output)
+    except ValueError as error:
         raise ValueError(f"GitHub API returned invalid JSON for {endpoint}") from error
 
 

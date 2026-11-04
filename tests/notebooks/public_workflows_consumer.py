@@ -51,7 +51,9 @@ class TestLaunch(Consumer):
         try:
             alias.symlink_to(target)
         except OSError as error:
-            self.skipTest(f"native symlink privilege unavailable: {error}")
+            if getattr(error, "winerror", None) == 1314:
+                self.skipTest(f"native symlink privilege unavailable: {error}")
+            raise
         spelling = alias.readlink()
         with self.assertRaisesRegex(ValueError, "symlink or junction"):
             launch(parse({}, root=self.root), notebook=alias)
@@ -89,7 +91,9 @@ class TestLaunch(Consumer):
         try:
             alias.symlink_to(target, target_is_directory=True)
         except OSError as error:
-            self.skipTest(f"native symlink privilege unavailable: {error}")
+            if getattr(error, "winerror", None) == 1314:
+                self.skipTest(f"native symlink privilege unavailable: {error}")
+            raise
         with patch.dict(os.environ, {"UV_PROJECT_ENVIRONMENT": "alias"}):
             with self.assertRaisesRegex(ValueError, "symlink or junction"):
                 launch(parse({}, root=self.root))

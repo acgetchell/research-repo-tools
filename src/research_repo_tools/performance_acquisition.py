@@ -36,6 +36,8 @@ def measure_and_retain(
     reporter = progress or ProgressReporter()
     configuration_bytes = _path(root, configuration_path).read_bytes()
     configuration = load_measurement(root, configuration_path)
+    if isinstance(configuration, SuiteMeasurementPlan) and configuration_path in configuration.outputs:
+        raise ValueError("measurement declaration cannot be an output exception")
     selected_backend = backend or (configuration.backend if not isinstance(configuration, MeasurementConfig) else "worktree")
     if selected_backend == "worktree" and not allow_git_mutations:
         raise ValueError("measure requires --allow-git-mutations for the worktree backend")

@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING
 from research_repo_tools.criterion import COMPARISON_SCHEMA, Sample, Statistic, Unit, _statistic, _unit, collect_sample, compare_samples, serialize_comparison
 from research_repo_tools.evidence import Evidence, Provenance, _object, _string, compare_provenance, fingerprint_files
 from research_repo_tools.host_metadata import capture_host, serialize_host
+from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.process import run_command_live, run_git_bytes
 from research_repo_tools.publication import _inventory, _path, _publication_name
 from research_repo_tools.publication_config import _table
@@ -24,7 +25,6 @@ from research_repo_tools.worktrees import apply_snapshot, capture_snapshot, temp
 
 if TYPE_CHECKING:
     from research_repo_tools.common_measurement import CompleteMeasurementPlan
-    from research_repo_tools.performance_progress import ProgressReporter
     from research_repo_tools.suite_measurement import SuiteMeasurementPlan
 
 __all__ = ["MeasurementConfig", "capture_provenance", "load_measurement", "measure_checkout", "measure_pair", "resolve_revision"]
@@ -120,10 +120,10 @@ class MeasurementConfig:
             raise ValueError(f"unsupported measurement release {tag}; requires {self.minimum_release} or newer")
 
 
-def load_measurement(root: Path, configuration: str) -> MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan:
+def load_measurement(root: Path, configuration: str) -> "MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan":
     """Read strict measurement TOML; commands are trusted consumer configuration."""
     document = tomllib.loads(_path(root.resolve(), configuration).read_bytes().decode("utf-8"))
-    if type(document.get("schema")) is int and document["schema"] == 5:
+    if type(document.get("schema")) is int and document["schema"] in {5, 6}:
         from research_repo_tools.suite_measurement import parse_suite_plan
 
         return parse_suite_plan(document)
@@ -251,7 +251,7 @@ def measure_checkout(root: Path, configuration: MeasurementConfig, tag: str, *, 
 
 def measure_pair(
     root: Path,
-    configuration: MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan,
+    configuration: "MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan",
     pair: ReleasePair,
     *,
     working_tree: bool = False,
@@ -280,7 +280,7 @@ def measure_pair(
     if isinstance(configuration, SuiteMeasurementPlan):
         return measure_suites(root, configuration, pair, working_tree=working_tree, checkpoint=checkpoint, resume=resume, progress=progress, verify=verify)
     if checkpoint is not None or resume:
-        raise ValueError("checkpoint/resume requires measurement schema 5")
+        raise ValueError("checkpoint/resume requires measurement schema 5 or 6")
     settings = configuration if isinstance(configuration, MeasurementConfig) else configuration.measurement
     settings.validate_release(pair.baseline)
     settings.validate_release(pair.current)

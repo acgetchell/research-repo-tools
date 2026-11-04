@@ -6,15 +6,11 @@ import pytest
 
 from research_repo_tools import cli, release_metadata, releases, update_release
 from research_repo_tools.config import ReleasePolicy
-from tests.releases.test_metadata import _write_project
-
-
-def snapshot(root: Path) -> dict[str, bytes]:
-    return {path.relative_to(root).as_posix(): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+from tests.releases.metadata_support import snapshot, write_project
 
 
 def test_cargo_dry_run_validates_complete_candidate_without_replacing_files(tmp_path: Path, capsys) -> None:
-    _write_project(tmp_path)
+    write_project(tmp_path)
     config = tmp_path / "research-repo-tools.toml"
     config.write_text("[release]\n", newline="\n")
     original = snapshot(tmp_path)
@@ -24,7 +20,7 @@ def test_cargo_dry_run_validates_complete_candidate_without_replacing_files(tmp_
 
 
 def test_canonical_citation_doi_is_used_for_validation(tmp_path: Path, capsys) -> None:
-    _write_project(tmp_path)
+    write_project(tmp_path)
     config = tmp_path / "alternate.toml"
     config.write_text("[release]\n", newline="\n")
     (tmp_path / "CITATION.cff").write_text((tmp_path / "CITATION.cff").read_text().replace("12345", "99999999"), newline="\n")
@@ -36,7 +32,7 @@ def test_canonical_citation_doi_is_used_for_validation(tmp_path: Path, capsys) -
 
 
 def test_final_release_requires_generated_current_heading_before_update(tmp_path: Path, capsys) -> None:
-    _write_project(tmp_path)
+    write_project(tmp_path)
     config = tmp_path / "alternate.toml"
     config.write_text("[release]\n", newline="\n")
     original = snapshot(tmp_path)
@@ -46,7 +42,7 @@ def test_final_release_requires_generated_current_heading_before_update(tmp_path
 
 
 def test_dry_run_and_publication_have_identical_changed_path_inventory(tmp_path: Path) -> None:
-    _write_project(tmp_path)
+    write_project(tmp_path)
     preview = update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3", release_date="2026-09-07", dry_run=True)
     published = update_release.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3", release_date="2026-09-07")
     assert preview == published
@@ -54,7 +50,7 @@ def test_dry_run_and_publication_have_identical_changed_path_inventory(tmp_path:
 
 
 def test_standard_cargo_release_needs_no_release_configuration(tmp_path: Path) -> None:
-    _write_project(tmp_path)
+    write_project(tmp_path)
     project = tmp_path / "pyproject.toml"
     project.write_text(project.read_text().split("[tool.research-repo-tools.release]")[0], newline="\n")
     assert cli.main(["--root", str(tmp_path), "release", "check"]) == 0
@@ -190,7 +186,7 @@ def test_contained_dotdot_workspace_members_stay_inside_validation_tree(tmp_path
 
 @pytest.mark.parametrize("link", ["", "(https://example.org/releases/v1.2.3)"])
 def test_release_update_preserves_heading_links_and_fenced_example_bytes(tmp_path, link):
-    _write_project(tmp_path)
+    write_project(tmp_path)
     changelog = tmp_path / "CHANGELOG.md"
     example = "```markdown\r\n## [1.2.3] - 1999-01-01\r\n```\r\n\r\n"
     text = f"# Changelog\r\n\r\n{example}## [1.2.3]{link} - 2026-09-01\r\n\r\n- Current.\r\n"
@@ -202,7 +198,7 @@ def test_release_update_preserves_heading_links_and_fenced_example_bytes(tmp_pat
 
 
 def test_fenced_target_cannot_satisfy_final_release_or_change_examples(tmp_path):
-    _write_project(tmp_path)
+    write_project(tmp_path)
     changelog = tmp_path / "CHANGELOG.md"
     changelog.write_text("# Changelog\n\n~~~markdown\n## [1.2.4] - 1999-01-01\n~~~\n\n" + changelog.read_text(), newline="\n")
     before = snapshot(tmp_path)
@@ -216,7 +212,7 @@ def test_fenced_target_cannot_satisfy_final_release_or_change_examples(tmp_path)
 
 @pytest.mark.parametrize("quote", ['"', "'"])
 def test_release_update_handles_commented_headers_and_quoted_keys_without_touching_examples(tmp_path, quote):
-    _write_project(tmp_path)
+    write_project(tmp_path)
     examples = f'example = {quote * 3}\n[project]\nversion = "9.9.9"\n[[package]]\nversion = "9.9.9"\n{quote * 3}\n'
     originals = {}
     for name in ("Cargo.toml", "pyproject.toml", "Cargo.lock", "uv.lock"):
@@ -234,7 +230,7 @@ def test_release_update_handles_commented_headers_and_quoted_keys_without_touchi
 
 
 def test_optional_doi_references_do_not_restrict_unrelated_bibliographies(tmp_path):
-    _write_project(tmp_path, readme="# Consumer\n")
+    write_project(tmp_path, readme="# Consumer\n")
     references = tmp_path / "REFERENCES.md"
     references.write_text("- Author. Method. https://doi.org/10.1234/other-paper\n", newline="\n")
     before = references.read_bytes()
@@ -245,7 +241,7 @@ def test_optional_doi_references_do_not_restrict_unrelated_bibliographies(tmp_pa
 
 @pytest.mark.parametrize("filename,text", [("README.md", "[![DOI](badge)](broken)"), ("REFERENCES.md", "- DOI: broken")])
 def test_malformed_optional_doi_references_fail_without_publication(tmp_path, filename, text):
-    _write_project(tmp_path)
+    write_project(tmp_path)
     (tmp_path / filename).write_text(text + "\n", newline="\n")
     before = snapshot(tmp_path)
     assert release_metadata.check(tmp_path) == 1

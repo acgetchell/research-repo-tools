@@ -6,11 +6,12 @@ import re
 import subprocess
 import sys
 import tomllib
+from collections.abc import Sequence
 from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING, TypeGuard, cast
+from typing import TypeGuard, cast
 
 from packaging.utils import canonicalize_name
 
@@ -18,9 +19,6 @@ from research_repo_tools.archive_changelog import ParsedChangelog, parse_changel
 from research_repo_tools.config import ReleasePolicy, load
 from research_repo_tools.release_tags import SEMVER_PATTERN
 from research_repo_tools.toml_source import key_line
-
-if TYPE_CHECKING:
-    from collections.abc import Sequence
 
 SKIP_DIRS = frozenset(
     {

@@ -15,7 +15,19 @@ def main() -> int:
         requirements = Path(directory) / "requirements.txt"
         run_safe_command(
             "uv",
-            ["export", "--locked", "--all-groups", "--no-emit-project", "--no-hashes", "--format", "requirements-txt", "--output-file", str(requirements)],
+            [
+                "export",
+                "--project",
+                str(ROOT),
+                "--locked",
+                "--all-groups",
+                "--no-emit-project",
+                "--no-hashes",
+                "--format",
+                "requirements-txt",
+                "--output-file",
+                str(requirements),
+            ],
             cwd=ROOT,
             timeout=120,
         )

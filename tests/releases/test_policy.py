@@ -8,8 +8,7 @@ import pytest
 from research_repo_tools import cli, config
 from research_repo_tools.release_metadata import python_version_references
 from research_repo_tools.releases import ReleaseAdapter, ReleasePolicy, ReleaseRule, check_release, discover_release, plan_release
-from tests.releases.test_contract import snapshot
-from tests.releases.test_metadata import _write_project
+from tests.releases.metadata_support import snapshot, write_project
 
 
 @pytest.mark.parametrize(
@@ -48,19 +47,19 @@ def test_selected_historical_file_is_not_silently_reactivated():
 
 
 def test_nonpackage_python_environment_is_independent_of_cargo_release(tmp_path: Path) -> None:
-    _write_project(tmp_path)
+    write_project(tmp_path)
     (tmp_path / "pyproject.toml").write_bytes(b'[project]\nname="environment"\nversion="0.0.0"\n[tool.uv]\npackage=false\n')
     assert python_version_references(tmp_path) == []
 
 
 def test_canonical_stable_policy_rejects_bare_version(tmp_path: Path) -> None:
-    _write_project(tmp_path)
+    write_project(tmp_path)
     with pytest.raises(ValueError, match="canonical stable"):
         plan_release(tmp_path, "1.2.4", previous_tag="v1.2.3", policy=ReleasePolicy(tag_policy="canonical-stable"))
 
 
 def test_overlapping_and_optional_captures_fail_check_and_preview(tmp_path):
-    _write_project(tmp_path)
+    write_project(tmp_path)
     rule = ReleaseRule("README.md", r"cargo add consumer@(?P<value>\S+)", source="version")
     for rules, error in [((rule, rule), "overlapping"), ((replace(rule, pattern=r"(?P<value>absent)?cargo add"),), "empty or missing")]:
         policy = ReleasePolicy(rules=rules)
@@ -71,21 +70,23 @@ def test_overlapping_and_optional_captures_fail_check_and_preview(tmp_path):
 
 
 def test_parent_symlinks_cannot_alias_adapter_or_rule_inputs(tmp_path):
-    _write_project(tmp_path)
+    write_project(tmp_path)
     directory = tmp_path / "data"
     directory.mkdir()
     (directory / "report.json").write_bytes(b"{}")
     alias = tmp_path / "alias"
     try:
         alias.symlink_to(directory, target_is_directory=True)
-    except OSError:
-        pytest.skip("symlink creation is unavailable")
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("symlink creation is unavailable")
+        raise
     with pytest.raises(ValueError, match="symbolic link"):
         discover_release(tmp_path, adapter=ReleaseAdapter(("alias/report.json",)))
 
 
 def test_unexpected_active_versions_fail_preview_and_apply_equally(tmp_path, capsys):
-    _write_project(tmp_path)
+    write_project(tmp_path)
     (tmp_path / "selected.md").write_text("target v9.9.9\n", newline="\n")
     config_path = tmp_path / "release.toml"
     config_path.write_text("[[release.rules]]\npath='selected.md'\npattern='target (?P<value>v[^\\s]+)'\nsource='tag'\n", newline="\n")
@@ -102,7 +103,7 @@ def test_unexpected_active_versions_fail_preview_and_apply_equally(tmp_path, cap
 
 @pytest.mark.parametrize("newline", [b"\n", b"\r\n"], ids=["lf", "crlf"])
 def test_explicit_revision_selector_can_promote_main_without_touching_old_evidence(tmp_path, newline):
-    _write_project(tmp_path)
+    write_project(tmp_path)
     (tmp_path / "active.md").write_bytes(b"source main" + newline + b"measured v0.1.0" + newline)
     policy = ReleasePolicy(rules=(ReleaseRule("active.md", r"source (?P<value>main|[0-9a-f]{7,40}|v\d+\.\d+\.\d+)", source="tag"),))
     plan = plan_release(tmp_path, "1.2.4", previous_tag="1.2.3", policy=policy)

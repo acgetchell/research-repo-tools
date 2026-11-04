@@ -8,8 +8,8 @@ import pytest
 
 from research_repo_tools import config, dependencies, python_tools
 from research_repo_tools import python_adoption as adoption
-from tests.toolchain.test_python_adoption import consumer as consumer
-from tests.toolchain.test_python_adoption import snapshot
+from tests.toolchain.adoption_support import consumer as consumer
+from tests.toolchain.adoption_support import snapshot
 
 
 def opt_in(root, *, python=True):

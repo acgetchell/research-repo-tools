@@ -181,6 +181,8 @@ def parse_suite_run(evidence: Evidence) -> SuiteRun:
     if raw["schema"] != SUITE_RUN_SCHEMA or not isinstance(raw["units"], list):
         raise ValueError("invalid suite run schema/units")
     plan = parse_suite_plan(_object(raw["declaration"], "suite declaration"))
+    if plan.schedule is not None:
+        raise ValueError("scheduled declarations require complete-run v5 receipts")
     sources = dict(evidence.sources)
     if set(sources) != {"baseline", "current"}:
         raise ValueError("suite run requires two independent source assertions")

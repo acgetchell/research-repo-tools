@@ -2,6 +2,7 @@
 
 import re
 import tomllib
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, cast
@@ -290,7 +291,7 @@ def prepare_performance(root: Path, settings: PerformanceRelease, *, fetch_tags:
     return record
 
 
-def load_readme_plan(root: Path, settings: PerformanceRelease, *, identities: dict[str, tuple[str, str]] | None = None) -> PublicationPlan:
+def load_readme_plan(root: Path, settings: PerformanceRelease, *, identities: Mapping[str, tuple[str, str]] | None = None) -> PublicationPlan:
     """Plan only README/figure publication from retained evidence; never acquire it."""
     root = root.resolve(strict=True)
     if identities is not None:

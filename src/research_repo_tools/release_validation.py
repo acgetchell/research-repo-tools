@@ -29,6 +29,16 @@ from pathlib import Path
 from typing import Any
 from urllib.parse import quote, urlsplit
 
+if __package__:
+    from research_repo_tools._diagnostics import format_exception_diagnostics
+    from research_repo_tools.files import replace_many
+else:
+    # The install-free runner loads reviewed sibling source, never site packages.
+    import runpy
+
+    format_exception_diagnostics = runpy.run_path(str(Path(__file__).with_name("_diagnostics.py")))["format_exception_diagnostics"]
+    replace_many = runpy.run_path(str(Path(__file__).with_name("files.py")))["replace_many"]
+
 __all__ = [
     "ValidationPolicy",
     "api",
@@ -283,10 +293,12 @@ def validate_run(policy: ValidationPolicy, run: dict[str, Any], commit: str, wor
 def select_main_run(
     policy: ValidationPolicy, commit: str, read: Callable[[str], Any], *, attempts: int = 30, interval: int = 20, sleep: Callable[[float], None] = time.sleep
 ) -> dict[str, Any]:
-    """Wait at most ten minutes by default; require one unambiguous exact run.
+    """Poll one unambiguous exact run, with at most 580s of default retry delay.
 
     read is repository-scoped authenticated JSON transport. Only pending matching
-    main-push runs are waited on. Missing/failed evidence never causes a fallback.
+    main-push runs are waited on. The caller's read/sleep callbacks own their
+    deadlines; time spent in transport is additional to retry delay.
+    Missing/failed evidence never causes a fallback.
     """
     _commit(commit)
     if type(attempts) is not int or not 1 <= attempts <= 120 or type(interval) is not int or not 0 <= interval <= 30:
@@ -393,6 +405,19 @@ def _available_artifact(identifier: int) -> dict[str, Any]:
         ) from error
 
 
+def _publish_distributions(destination: Path, contents: dict[str, bytes], *, evidence: tuple[Path, bytes] | None = None) -> None:
+    """Publish a new distribution directory and its optional proof with rollback."""
+    if destination.exists() or destination.is_symlink() or destination.is_junction():
+        raise FileExistsError(f"distribution destination already exists: {destination}")
+    updates = {destination / name: payload for name, payload in contents.items()}
+    if evidence is not None:
+        path, payload = evidence
+        if path in updates:
+            raise ValueError("evidence must be separate from the distributions")
+        updates[path] = payload
+    replace_many(updates)
+
+
 def download_artifact(repository: str, artifact: dict[str, Any], destination: Path, names: tuple[str, ...]) -> None:
     """Retrieve one immutable ID, verify original ZIP digest, and extract flat files.
 
@@ -427,9 +452,7 @@ def download_artifact(repository: str, artifact: dict[str, Any], destination: Pa
         if any(member.file_size <= 0 for member in members) or sum(member.file_size for member in members) > MAX_BYTES:
             raise ValueError("artifact expanded size exceeds the release bound")
         contents = {member.filename: archive.read(member) for member in members}
-    destination.mkdir(exist_ok=False)
-    for name, content in contents.items():
-        (destination / name).write_bytes(content)
+    _publish_distributions(destination, contents)
 
 
 def verify_distributions(dist: Path, tag: str) -> dict[str, str]:
@@ -619,7 +642,7 @@ def seal(run_id: int, attempt: int, artifact_id: int, output: Path) -> None:
         "version": version,
         "files": files,
     }
-    output.write_bytes(_bytes(manifest))
+    replace_many({output: _bytes(manifest)})
 
 
 def consume(artifact_id: int, dist: Path) -> None:
@@ -633,8 +656,12 @@ def consume(artifact_id: int, dist: Path) -> None:
         raise ValueError("validation attempt changed before artifact retrieval")
     artifact = _artifact(api(f"actions/artifacts/{_integer(artifact_id, 'artifact ID')}", repository=repository), run, f"distributions-{attempt}")
     version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
-    download_artifact(repository, artifact, dist, distribution_names(f"v{version}"))
-    verify_distributions(dist, f"v{version}")
+    names = distribution_names(f"v{version}")
+    with tempfile.TemporaryDirectory() as temporary:
+        candidate = Path(temporary) / "dist"
+        download_artifact(repository, artifact, candidate, names)
+        verify_distributions(candidate, f"v{version}")
+        _publish_distributions(dist, {name: (candidate / name).read_bytes() for name in names})
 
 
 def _validate_evidence(document: dict[str, Any], tag: str, commit: str, dist: Path) -> None:
@@ -742,9 +769,12 @@ def inspect_evidence(root: Path) -> dict[str, Any]:
 def promote(tag: str, commit: str, dist: Path, evidence: Path, *, attempts: int = 30, interval: int = 20) -> None:
     promotion_run = _integer(int(os.environ.get("GITHUB_RUN_ID", "0")), "promotion run")
     promotion_attempt = _integer(int(os.environ.get("GITHUB_RUN_ATTEMPT", "0")), "promotion attempt")
-    document = _retrieve_evidence(tag, commit, dist, attempts=attempts, interval=interval)
-    document.update(promotion_run=promotion_run, promotion_attempt=promotion_attempt)
-    evidence.write_bytes(_bytes(document))
+    with tempfile.TemporaryDirectory() as temporary:
+        candidate = Path(temporary) / "dist"
+        document = _retrieve_evidence(tag, commit, candidate, attempts=attempts, interval=interval)
+        document.update(promotion_run=promotion_run, promotion_attempt=promotion_attempt)
+        contents = {name: (candidate / name).read_bytes() for name in distribution_names(tag)}
+        _publish_distributions(dist, contents, evidence=(evidence, _bytes(document)))
     manifest = _json(document["manifest"])
     artifact, run = manifest["artifact"], manifest["run"]
     print(
@@ -790,12 +820,20 @@ def stage(tag: str, dist: Path, bundle: Path, evidence: Path) -> None:
         if matches[0].get("assets"):
             raise ValueError("draft already has assets; inspect and remove the incomplete draft before retrying; assets are never overwritten")
     _remote_tag(tag, commit)
-    if not matches:
-        gh("release", "create", tag, "--draft", "--verify-tag", "--title", tag, "--notes-from-tag")
     attachment = dist.parent / BUNDLE
-    with attachment.open("xb") as stream:
-        stream.write(_bytes({"schema": PROMOTION, "evidence": document, "promotion_bundle": bundle.read_bytes().decode("utf-8")}))
-    gh("release", "upload", tag, "--repo", REPOSITORY, *(str(dist / name) for name in distribution_names(tag)), str(attachment))
+    if attachment.exists() or attachment.is_symlink() or attachment.is_junction():
+        raise FileExistsError(f"release attachment already exists: {attachment}")
+    replace_many({attachment: _bytes({"schema": PROMOTION, "evidence": document, "promotion_bundle": bundle.read_bytes().decode("utf-8")})})
+    try:
+        if not matches:
+            gh("release", "create", tag, "--draft", "--verify-tag", "--title", tag, "--notes-from-tag")
+        gh("release", "upload", tag, "--repo", REPOSITORY, *(str(dist / name) for name in distribution_names(tag)), str(attachment))
+    except BaseException as error:
+        try:
+            attachment.unlink()
+        except OSError as cleanup:
+            raise BaseExceptionGroup("release staging and attachment cleanup failed", [error, cleanup]) from None
+        raise
     print(f"Draft {tag} contains the same validated wheel/sdist and signed main-validation plus promotion provenance. Review before publishing.")
 
 
@@ -819,30 +857,34 @@ def verify(event: dict[str, Any], commit: str, output: Path) -> None:
     identifiers = [_integer(asset["id"], "release asset ID") for asset in assets]
     if len(set(identifiers)) != 3:
         raise ValueError("release asset IDs must be unique")
-    output.mkdir(parents=True, exist_ok=False)
-    bundle = output.parent / BUNDLE
-    for asset in assets:
-        target = bundle if asset["name"] == BUNDLE else output / asset["name"]
-        with target.open("xb") as stream:
-            subprocess.run(
-                ["gh", "api", f"repos/{REPOSITORY}/releases/assets/{asset['id']}", "-H", "Accept: application/octet-stream"],
-                stdout=stream,
-                stderr=subprocess.PIPE,
-                check=True,
-                timeout=120,
-            )
-        if target.stat().st_size > MAX_BYTES or f"sha256:{_sha(target.read_bytes())}" != asset.get("digest"):
-            raise ValueError("downloaded release asset differs from its authoritative digest")
-    envelope = _object(_json(bundle.read_bytes()), "promotion envelope")
-    if envelope.get("schema") != PROMOTION:
-        raise ValueError("expected signed validation and release-promotion provenance")
-    document = _object(envelope.get("evidence"), "promotion evidence")
+    proof = output.parent / BUNDLE
+    if proof.exists() or proof.is_symlink() or proof.is_junction():
+        raise FileExistsError(f"release proof already exists: {proof}")
     with tempfile.TemporaryDirectory() as temporary:
+        candidate = Path(temporary) / "dist"
+        candidate.mkdir()
+        bundle = Path(temporary) / BUNDLE
+        for asset in assets:
+            target = bundle if asset["name"] == BUNDLE else candidate / asset["name"]
+            with target.open("xb") as stream:
+                subprocess.run(
+                    ["gh", "api", f"repos/{REPOSITORY}/releases/assets/{asset['id']}", "-H", "Accept: application/octet-stream"],
+                    stdout=stream,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                    timeout=120,
+                )
+            if target.stat().st_size > MAX_BYTES or f"sha256:{_sha(target.read_bytes())}" != asset.get("digest"):
+                raise ValueError("downloaded release asset differs from its authoritative digest")
+        envelope = _object(_json(bundle.read_bytes()), "promotion envelope")
+        if envelope.get("schema") != PROMOTION:
+            raise ValueError("expected signed validation and release-promotion provenance")
+        document = _object(envelope.get("evidence"), "promotion evidence")
         signed = Path(temporary) / "promotion.sigstore.json"
         signed.write_bytes(envelope["promotion_bundle"].encode("utf-8"))
         for name in names:
             _signature(
-                output / name,
+                candidate / name,
                 signed,
                 commit,
                 ".github/workflows/prepare-release.yml",
@@ -851,9 +893,10 @@ def verify(event: dict[str, Any], commit: str, output: Path) -> None:
                 document["promotion_attempt"],
                 predicate=document,
             )
-    _validate_evidence(document, tag, commit, output)
-    if _release_identity(api(f"releases/{release_id}")) != _release_identity(current):
-        raise ValueError("release metadata or assets changed during verification; inspect before retrying")
+        _validate_evidence(document, tag, commit, candidate)
+        if _release_identity(api(f"releases/{release_id}")) != _release_identity(current):
+            raise ValueError("release metadata or assets changed during verification; inspect before retrying")
+        _publish_distributions(output, {name: (candidate / name).read_bytes() for name in names}, evidence=(proof, bundle.read_bytes()))
     print(f"Verified main-validation and promotion provenance for {tag} at {commit}; ready for the approval-gated upload.")
 
 
@@ -890,11 +933,6 @@ def main() -> int:
     command.add_argument("--artifact", type=int, required=True)
     command.add_argument("--dist", type=Path, default=Path("dist"))
     commands.add_parser("evidence", help="inspect the clean checkout's retained signed distributions without rebuilding or uploading")
-    command = commands.add_parser("seal")
-    command.add_argument("--run", type=int, default=int(os.environ.get("GITHUB_RUN_ID", "0")))
-    command.add_argument("--attempt", type=int, default=int(os.environ.get("GITHUB_RUN_ATTEMPT", "0")))
-    command.add_argument("--artifact", type=int, required=True)
-    command.add_argument("--output", type=Path, default=Path(MANIFEST))
     command = commands.add_parser("promote")
     command.add_argument("tag")
     command.add_argument("--commit", default=os.environ.get("GITHUB_SHA", ""))
@@ -902,6 +940,11 @@ def main() -> int:
     command.add_argument("--evidence", type=Path, default=Path("promotion.json"))
     command.add_argument("--attempts", type=int, default=30)
     command.add_argument("--interval", type=int, default=20)
+    command = commands.add_parser("seal")
+    command.add_argument("--run", type=int, default=os.environ.get("GITHUB_RUN_ID", "0"))
+    command.add_argument("--attempt", type=int, default=os.environ.get("GITHUB_RUN_ATTEMPT", "0"))
+    command.add_argument("--artifact", type=int, required=True)
+    command.add_argument("--output", type=Path, default=Path(MANIFEST))
     command = commands.add_parser("stage")
     command.add_argument("tag")
     command.add_argument("--dist", type=Path, default=Path("dist"))
@@ -925,11 +968,7 @@ def main() -> int:
             stage(args.tag, args.dist, args.bundle, args.evidence)
         else:
             verify(_json(args.event.read_bytes()), args.commit, args.output)
-    except subprocess.CalledProcessError as error:
-        detail = error.stderr or error.stdout or str(error)
-        print(f"Release assets failed: {_diagnostic(detail)}", file=sys.stderr)
-        return 1
-    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, zipfile.BadZipFile, tarfile.TarError) as error:
-        print(f"Release assets failed: {error}", file=sys.stderr)
+    except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, zipfile.BadZipFile, tarfile.TarError, ExceptionGroup) as error:
+        print(f"Release assets failed: {_diagnostic(format_exception_diagnostics(error))}", file=sys.stderr)
         return 1
     return 0

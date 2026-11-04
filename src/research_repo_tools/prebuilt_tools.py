@@ -1,6 +1,5 @@
 """Checksum-verified upstream binaries in versioned, host-specific installations."""
 
-import json
 import os
 import re
 import tempfile
@@ -11,6 +10,7 @@ from typing import Any, cast
 from research_repo_tools import release_credentials
 from research_repo_tools.archives import ArchiveLimits, download_asset, extract_archive
 from research_repo_tools.process import run_safe_command
+from research_repo_tools.release_validation import parse_release_json
 from research_repo_tools.toolchain_config import BinaryTool
 
 REPOSITORIES = {"dprint": "dprint/dprint", "gitleaks": "gitleaks/gitleaks", "osv-scanner": "google/osv-scanner", "rumdl": "rvben/rumdl"}
@@ -57,7 +57,7 @@ def release_metadata(name: str, tag: str) -> dict[str, Any]:
         raise RuntimeError(f"binary release lookup failed: {release_credentials.diagnostics(error)}") from None
     if len(payload) > 2 * 1024 * 1024:
         raise ValueError("release metadata exceeds size limit")
-    value = json.loads(payload)
+    value = parse_release_json(payload)
     if not isinstance(value, dict) or value.get("draft") is not False or value.get("prerelease") is not False:
         raise ValueError("expected a published stable binary release")
     actual = value.get("tag_name")

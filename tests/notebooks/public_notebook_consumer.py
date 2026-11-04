@@ -127,7 +127,9 @@ class TestExecutionPreflight(Consumer):
         try:
             linked_parent.symlink_to(real_parent, target_is_directory=True)
         except OSError as error:
-            self.skipTest(f"native symlink privilege unavailable: {error}")
+            if getattr(error, "winerror", None) == 1314:
+                self.skipTest(f"native symlink privilege unavailable: {error}")
+            raise
         self.assertTrue(linked_parent.is_symlink())
         self.assertEqual(linked_parent.resolve(), real_parent)
         prior = real_parent / self.path.name

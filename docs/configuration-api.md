@@ -20,6 +20,8 @@ the [packaged template](../src/research_repo_tools/templates/research-repo-tools
 Unknown settings fail. Relative paths and explicit executable paths resolve
 against the consumer root; bare executable names use `PATH`.
 Explicit `ci export --file` and `toolchain export --file` paths follow this rule.
+Release evidence and asset commands also resolve their checkout, input, output,
+and explicit `--github-output` paths against the consumer root.
 The `GITHUB_ENV` fallback keeps the path supplied by the invoking environment.
 
 `actions allowlist --policy PATH INPUT...` checks consumer-owned selected-actions
@@ -158,6 +160,8 @@ see the [worked example](process-api.md#calling-from-python).
 - `research_repo_tools.cli.main(argv: list[str] | None = None) -> int` accepts
   arguments without the executable name. `None` uses the process arguments.
   It writes to the process stdout/stderr and returns the command status.
+  Unsupported output characters are escaped during the call; the streams retain
+  their encodings and their original error policies are restored on exit.
   Argument parsing raises `SystemExit(0)` for help/version and `SystemExit(2)`
   for usage errors. Unexpected programming errors may propagate.
 

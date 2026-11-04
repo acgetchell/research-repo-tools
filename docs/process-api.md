@@ -147,7 +147,7 @@ Type annotations are shipped through `py.typed`.
 | `resolve_executable(command, *, cwd=None, env=None) -> Path` | Resolve a name or explicit `str`/`Path` to an absolute executable path without executing it |
 | `run_command(command, args=(), *, cwd=None, env=None, input=None, encoding="utf-8", errors="strict", timeout=300.0, check=True) -> CompletedProcess[str]` | Encode text stdin and decode captured stdout/stderr with the specified codec; preserve newlines on every platform |
 | `run_command_bytes(command, args=(), *, cwd=None, env=None, input=None, timeout=300.0, check=True) -> CompletedProcess[bytes]` | Capture stdout/stderr and transport stdin without decoding or newline translation |
-| `run_command_live(command, args=(), *, cwd=None, env=None, timeout=300.0, check=True, stdout_markers=(), stderr_markers=()) -> CompletedProcess[bytes]` | Inherit streams by default; independent exact-byte stdout/stderr assertions echo output live; result streams are not captured |
+| `run_command_live(command, args=(), *, cwd=None, env=None, timeout=300.0, check=True, stdout_markers=(), stderr_markers=()) -> CompletedProcess[None]` | Inherit streams by default; independent exact-byte stdout/stderr assertions echo output live; result streams are `None` |
 | `run_git_bytes(args, cwd=None, *, env=None, input=None, timeout=300.0, check=True) -> CompletedProcess[bytes]` | Byte execution with `git` resolved from the selected environment; Git retains responsibility for attributes, clean filters, and all configuration |
 
 `args` is a sequence of strings, without the executable name. `cwd` is a `Path`

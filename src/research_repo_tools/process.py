@@ -20,6 +20,7 @@ from contextlib import ExitStack
 from pathlib import Path
 from typing import Any, cast
 
+from research_repo_tools._diagnostics import format_exception_diagnostics
 from research_repo_tools._stdout_forwarder import open_spool, publish_endpoint
 
 type RunKwargs = dict[str, Any]
@@ -177,11 +178,11 @@ def run_command_live(
     check: bool = True,
     stdout_markers: Sequence[bytes] = (),
     stderr_markers: Sequence[bytes] = (),
-) -> subprocess.CompletedProcess[bytes]:
+) -> subprocess.CompletedProcess[None]:
     """Run an argument vector with inherited stdin/stdout/stderr and no shell.
 
-    Output is visible while the child runs. Results and failures contain no
-    captured output. Each nonempty stdout_markers/stderr_markers sequence spools
+    Output is visible while the child runs. Result stdout/stderr are None;
+    failures contain no captured output. Each nonempty stdout_markers/stderr_markers sequence spools
     that stream and echoes its exact bytes live to the same caller stream, then
     checks literal markers on that stream alone. Other streams stay inherited.
     This opt-in mode changes the selected streams' TTY/buffering behavior and uses
@@ -204,12 +205,13 @@ def run_command_live(
         return _run_with_markers(
             [str(path), *args], cwd=cwd, env=env, timeout=timeout, check=check, streams={"stdout": stdout_markers, "stderr": stderr_markers}
         )
-    return subprocess.run([str(path), *args], cwd=cwd, env=env, check=check, timeout=timeout)
+    result = subprocess.run([str(path), *args], cwd=cwd, env=env, check=check, timeout=timeout)
+    return subprocess.CompletedProcess(result.args, result.returncode, None, None)
 
 
 def _run_with_markers(
     argv: list[str], *, cwd: Path | None, env: Mapping[str, str] | None, timeout: float | None, check: bool, streams: Mapping[str, Sequence[bytes]]
-) -> subprocess.CompletedProcess[bytes]:
+) -> subprocess.CompletedProcess[None]:
     # Forward in a disposable process, not the deadline-owning thread: a caller
     # that stops reading stdout must not prevent timeout cleanup. The spool also
     # avoids pipe readers waiting forever for inherited descendant handles.
@@ -259,7 +261,7 @@ def _run_with_markers(
                 publish_endpoint(Path(directory) / name, endpoint)
             for forwarder in forwarders.values():
                 forwarder.wait(timeout=budget())
-            result = subprocess.CompletedProcess(argv, child.returncode)
+            result = subprocess.CompletedProcess[None](argv, child.returncode)
             if check:
                 result.check_returncode()
             for name, forwarder in forwarders.items():
@@ -296,72 +298,7 @@ def _run_with_markers(
                 if process.poll() is None:
                     process.kill()
                 process.wait()
-    return cast(subprocess.CompletedProcess[bytes], result)
-
-
-def _diagnostic_stream(value: str | bytes | None) -> str:
-    """Return captured subprocess output as stripped, readable text."""
-    if value is None:
-        return ""
-    if isinstance(value, bytes):
-        return value.decode("utf-8", errors="replace").strip()
-    return value.strip()
-
-
-def _diagnostic_command(value: object) -> str:
-    """Render a subprocess command without Python container syntax."""
-    if isinstance(value, (list, tuple)):
-        return " ".join(str(part) for part in value)
-    return str(value)
-
-
-def format_exception_diagnostics(error: BaseException, *, single_line: bool = False) -> str:
-    """Render nested diagnostics, optionally bounded for a terse CLI operation."""
-    result = _format_exception_diagnostics(error)
-    if single_line:
-        # Remove terminal escape sequences before folding control characters.
-        import re
-
-        result = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", result)
-        result = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result)
-        result = re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", result)
-        result = " ".join(result.split())
-        if len(result) > 400:
-            result = result[:399] + "…"
     return result
-
-
-def _format_exception_diagnostics(error: BaseException) -> str:
-    """Render expected CLI failures without discarding nested diagnostics."""
-    if isinstance(error, BaseExceptionGroup):
-        lines = [f"{error.message} ({len(error.exceptions)} sub-exceptions):"]
-        for index, child in enumerate(error.exceptions, start=1):
-            detail_lines = format_exception_diagnostics(child).splitlines() or [child.__class__.__name__]
-            lines.append(f"  {index}. {detail_lines[0]}")
-            lines.extend(f"     {line}" for line in detail_lines[1:])
-        return "\n".join(lines)
-
-    if isinstance(error, subprocess.CalledProcessError):
-        parts = [f"command failed with exit status {error.returncode}: {_diagnostic_command(error.cmd)}"]
-        stdout = _diagnostic_stream(error.stdout)
-        stderr = _diagnostic_stream(error.stderr)
-        if stdout:
-            parts.append(f"stdout:\n{stdout}")
-        if stderr:
-            parts.append(f"stderr:\n{stderr}")
-        return "\n".join(parts)
-
-    if isinstance(error, subprocess.TimeoutExpired):
-        parts = [f"command timed out after {error.timeout} seconds: {_diagnostic_command(error.cmd)}"]
-        stdout = _diagnostic_stream(error.stdout)
-        stderr = _diagnostic_stream(error.stderr)
-        if stdout:
-            parts.append(f"stdout:\n{stdout}")
-        if stderr:
-            parts.append(f"stderr:\n{stderr}")
-        return "\n".join(parts)
-
-    return str(error)
 
 
 def get_safe_executable(command: str) -> str:

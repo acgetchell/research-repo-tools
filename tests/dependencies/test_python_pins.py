@@ -447,8 +447,10 @@ def test_symlinked_lock_is_rejected_before_resolution(tmp_path: Path, monkeypatc
     lock = tmp_path / "uv.lock"
     try:
         lock.symlink_to(retained)
-    except OSError:
-        pytest.skip("symlink creation is unavailable on this runner")
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("symlink creation is unavailable on this runner")
+        raise
     original = manifest.read_bytes()
     monkeypatch.setattr(update_python_dev_pins, "run_safe_command", lambda *_args, **_kwargs: pytest.fail("uv ran before rejecting a symlink"))
     with pytest.raises(ValueError, match="symbolic link"):

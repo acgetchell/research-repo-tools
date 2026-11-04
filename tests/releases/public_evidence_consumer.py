@@ -592,6 +592,23 @@ class TestEvidenceInterfaces(unittest.TestCase):
             self.assertEqual(self.output.read_bytes(), original)
             self.assertEqual(self.command_file.read_bytes(), command)
 
+    def test_relative_evidence_paths_follow_root_from_another_directory(self):
+        caller = self.root / "caller"
+        caller.mkdir()
+        args = [*self.args]
+        for flag in ("--checkout", "--output", "--github-output"):
+            index = args.index(flag) + 1
+            args[index] = str(Path(args[index]).relative_to(self.root))
+        with contextlib.chdir(caller), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(interface_fixture(self.root, args), 0)
+            original = self.output.read_bytes()
+            args += ["--expected", "selection.json"]
+            args[args.index("--output") + 1] = "revalidated.json"
+            self.assertEqual(interface_fixture(self.root, args), 0)
+        self.assertEqual((self.root / "revalidated.json").read_bytes(), original)
+        self.assertIn(b"identity=", self.command_file.read_bytes())
+        self.assertEqual(list(caller.iterdir()), [])
+
     def test_create_requires_executing_push_and_observed_package(self):
         provider = Provider(SOURCE)
         args = [*self.args]

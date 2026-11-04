@@ -9,8 +9,8 @@ from packaging.specifiers import SpecifierSet
 
 from research_repo_tools import cli, config, python_baseline, toolchain_config
 from research_repo_tools import python_adoption as adoption
-from tests.toolchain.test_python_adoption import consumer as consumer
-from tests.toolchain.test_python_adoption import snapshot
+from tests.toolchain.adoption_support import consumer as consumer
+from tests.toolchain.adoption_support import snapshot
 
 
 def test_owned_python_mirrors_match_installed_authority():
@@ -26,7 +26,9 @@ def test_owned_python_mirrors_match_installed_authority():
     for workflow in (root / ".github/workflows").glob("*.yml"):
         text = workflow.read_text(encoding="utf-8")
         if "astral-sh/setup-uv@" in text:
-            assert 'python-version-file: ".python-version"' in text
+            # setup-uv provisions uv; uv itself reads .python-version.
+            assert 'version-file: "pyproject.toml"' in text
+            assert "python-version-file:" not in text
             assert "python-version:" not in text
 
 

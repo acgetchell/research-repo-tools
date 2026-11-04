@@ -235,12 +235,20 @@ class TestActionsConsumer(unittest.TestCase):
 
     def test_failed_lookup_preserves_workflow_and_has_no_completion_report(self):
         before = self.workflow.read_bytes()
-        with patch.object(action_updates, "run_safe_command", return_value=subprocess.CompletedProcess([], 0, "invalid JSON", "")):
-            status, output, error = self.invoke("update", "--policy", str(self.update_policy), str(self.workflow))
-        self.assertEqual(status, 1)
-        self.assertIn("GitHub", error)
-        self.assertNotIn("Applied", output)
-        self.assertEqual(self.workflow.read_bytes(), before)
+        for payload in (
+            "invalid JSON",
+            '{"draft":true,"draft":false,"prerelease":false,"tag_name":"v2.0.0"}',
+            '{"draft":false,"prerelease":false,"tag_name":"v2.0.0","unknown":NaN}',
+            "[" * 2000 + "0" + "]" * 2000,
+        ):
+            with self.subTest(payload=payload[:80]):
+                with patch.object(action_updates, "run_safe_command", return_value=subprocess.CompletedProcess([], 0, payload, "")) as command:
+                    status, output, error = self.invoke("update", "--policy", str(self.update_policy), str(self.workflow))
+                self.assertEqual(status, 1)
+                self.assertIn("GitHub API returned invalid JSON", error)
+                self.assertEqual(command.call_count, 1)
+                self.assertNotIn("Applied", output)
+                self.assertEqual(self.workflow.read_bytes(), before)
 
     def test_decoder_limits_report_policy_path_and_preserve_workflow(self):
         before = self.workflow.read_bytes()

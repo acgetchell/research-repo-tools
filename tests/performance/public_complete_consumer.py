@@ -1481,7 +1481,9 @@ ratio-suffix="×"
             self.assertIn(b"1 phase cases omitted", document)
             self.assertEqual((root / "run.json").read_bytes(), original_payload)
             self.assertEqual((root / "envelope.json").read_bytes(), original_envelope)
-            self.assertIn("current-only", validate_run_evidence(parse_evidence(original_payload, original_envelope)).phases[1][1].policy.expected)
+            retained = validate_run_evidence(parse_evidence(original_payload, original_envelope))
+            assert isinstance(retained, CompleteRun)
+            self.assertIn("current-only", retained.phases[1][1].policy.expected)
 
     def test_presentation_axes_remain_finite_and_missing_rows_break_lines(self):
         from research_repo_tools.run_presentation import _axis
@@ -1568,7 +1570,9 @@ ratio-suffix="×"
             plan = replace(plan, measurement=replace(plan.measurement, probes=(("python", (python.name, "--version")),)), **phases)
             with patch("research_repo_tools.measurement.resolve_revision", return_value="a" * 40), patch.dict(os.environ, {"PATH": str(root / "absent")}):
                 evidence = measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.0.0"))
-            self.assertEqual(len(dict(validate_run_evidence(evidence).phases)["current"].cases), 1)
+            run = validate_run_evidence(evidence)
+            assert isinstance(run, CompleteRun)
+            self.assertEqual(len(dict(run.phases)["current"].cases), 1)
 
     def test_retained_environments_preserve_constructor_invariants(self):
         evidence = retained_fixture()
@@ -2641,7 +2645,9 @@ class TestHeterogeneousConsumer(unittest.TestCase):
                     evidence = measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.0.0"))
                 self.assertEqual([call.args[1][0] for call in live.call_args_list], ["gate.py", "gate.py", "bench.py", "bench.py"])
                 self.assertEqual(evidence.payload_schema, RUN_SCHEMA_V2)
-                for phase, sample in validate_run_evidence(evidence).phases:
+                run = validate_run_evidence(evidence)
+                assert isinstance(run, CompleteRun)
+                for phase, sample in run.phases:
                     self.assertEqual(dict(sample.policy.sample_counts), dict(COUNTS))
                     self.assertEqual(json.loads(dict(dict(evidence.sources)[phase].context)["sampling-policy"])["sample_counts"], dict(COUNTS))
                     for case in sample.cases:

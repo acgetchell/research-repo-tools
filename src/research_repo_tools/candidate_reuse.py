@@ -1,0 +1,380 @@
+"""Pre-tag benchmark acceptance composed with trusted final-commit evidence.
+
+Policies are independent assertions supplied by the trusted acquisition owner.
+Neither a self-authored policy nor this integrity receipt authenticates a run.
+"""
+
+import json
+import tempfile
+import unicodedata
+from collections.abc import Callable, Mapping
+from dataclasses import asdict, dataclass
+from pathlib import Path
+from typing import Any
+
+from research_repo_tools.archives import ArchiveLimits, extract_archive
+from research_repo_tools.complete_runs import _array, _integer, run_identity
+from research_repo_tools.criterion_suites import _archive
+from research_repo_tools.evidence import (
+    Evidence,
+    Provenance,
+    _digest,
+    _load_json,
+    _object,
+    _string,
+    deterministic_json,
+    parse_evidence,
+    serialize_evidence,
+    sha256,
+)
+from research_repo_tools.files import _validate_distinct_paths
+from research_repo_tools.publication import PublicationPlan, _path, plan_outputs
+from research_repo_tools.release_assets import ReleaseTarget, _repository, _sha, _stable_tag, require_release_checkout
+from research_repo_tools.release_evidence import EvidencePolicy, verify_release_evidence
+from research_repo_tools.scheduled_runs import ScheduledRun, validate_scheduled_policy
+from research_repo_tools.source_exports import capture_source, validate_source_record
+from research_repo_tools.suite_measurement import SuiteMeasurementPlan, parse_suite_plan
+from research_repo_tools.suite_runs import _source, parse_suite_run
+
+__all__ = [
+    "CandidatePolicy",
+    "acquisition_assertion_digest",
+    "parse_candidate_policy",
+    "plan_candidate_archive",
+    "serialize_candidate_policy",
+    "verify_candidate_archive",
+    "verify_candidate_release",
+]
+
+POLICY_SCHEMA = "research-repo-tools/candidate-policy/v1"
+ACCEPTANCE_SCHEMA = "research-repo-tools/candidate-acceptance/v1"
+ARCHIVE_SCHEMA = "research-repo-tools/benchmark-reuse/v2"
+
+
+@dataclass(frozen=True, slots=True)
+class CandidatePolicy:
+    """Trusted acquisition assertions and independently selected final commit.
+
+    Observation keys are (one-based trial, suite, phase). No default copies assertions
+    from candidate evidence. The measurement's output exceptions predate acquisition.
+    Use commit=None in Step 1; replace it with the independently selected final
+    commit before release verification or archive operations.
+    """
+
+    repository: str
+    tag: str
+    commit: str | None
+    acquisition_owner: str
+    identity: str
+    measurement: SuiteMeasurementPlan
+    candidate: Provenance
+    observations: tuple[tuple[int, str, str, Provenance], ...]
+
+    def __post_init__(self) -> None:
+        _repository(self.repository)
+        _stable_tag(self.tag)
+        if self.commit is not None:
+            _sha(self.commit)
+        _digest(self.identity, "independent acquisition identity")
+        if (
+            self.acquisition_owner not in {"local", "github-actions"}
+            or not isinstance(self.measurement, SuiteMeasurementPlan)
+            or self.measurement.schedule is None
+        ):
+            raise ValueError("candidate reuse requires an explicit owner and schema-6 measurement")
+        if not isinstance(self.candidate, Provenance):
+            raise ValueError("candidate requires independent original source provenance")
+        receipt = dict(self.candidate.context).get("source-export", "")
+        validate_source_record(receipt, self.candidate.revision)
+        if dict(self.candidate.context).get("release") != self.tag:
+            raise ValueError("candidate label differs from final version")
+        observations = tuple(self.observations)
+        keys = [(trial, suite, phase) for trial, suite, phase, _ in observations]
+        if not keys or len(set(keys)) != len(keys):
+            raise ValueError("candidate assertions must be nonempty and unique")
+        for trial, suite, phase, source in observations:
+            if (
+                type(trial) is not int
+                or not 1 <= trial <= self.measurement.schedule.trials
+                or suite not in {s.name for s in self.measurement.suites}
+                or phase not in {"baseline", "current"}
+                or not isinstance(source, Provenance)
+            ):
+                raise ValueError("invalid candidate observation assertion")
+        object.__setattr__(self, "observations", tuple(sorted(observations)))
+
+
+def _provenance(source: Provenance) -> dict[str, Any]:
+    return {**asdict(source), "context": dict(source.context)}
+
+
+def serialize_candidate_policy(policy: CandidatePolicy) -> bytes:
+    return deterministic_json(
+        {
+            "schema": POLICY_SCHEMA,
+            "repository": policy.repository,
+            "tag": policy.tag,
+            "commit": policy.commit,
+            "acquisition_owner": policy.acquisition_owner,
+            "identity": policy.identity,
+            "measurement": policy.measurement.document(),
+            "candidate": _provenance(policy.candidate),
+            "observations": [
+                {"trial": trial, "suite": suite, "phase": phase, "source": _provenance(source)} for trial, suite, phase, source in policy.observations
+            ],
+        }
+    )
+
+
+def parse_candidate_policy(payload: bytes) -> CandidatePolicy:
+    raw = _object(
+        _load_json(payload, "candidate policy"),
+        "candidate policy",
+        {"schema", "repository", "tag", "commit", "acquisition_owner", "identity", "measurement", "candidate", "observations"},
+    )
+    if raw["schema"] != POLICY_SCHEMA:
+        raise ValueError("unsupported candidate policy")
+    observations = []
+    for value in _array(raw["observations"], "observations"):
+        item = _object(value, "observation", {"trial", "suite", "phase", "source"})
+        observations.append((_integer(item["trial"], "trial"), _string(item["suite"], "suite"), _string(item["phase"], "phase"), _source(item["source"])))
+    # Envelope provenance has no harness digest; it describes the original tree.
+    candidate = _object(raw["candidate"], "candidate", {"revision", "source_sha256", "harness_sha256", "context"})
+    source = Provenance(
+        _string(candidate["revision"], "revision"),
+        _digest(candidate["source_sha256"], "source digest"),
+        _digest(candidate["harness_sha256"], "harness digest") if candidate["harness_sha256"] is not None else None,
+        tuple((key, _string(value, key)) for key, value in _object(candidate["context"], "context").items()),
+    )
+    return CandidatePolicy(
+        _string(raw["repository"], "repository"),
+        _string(raw["tag"], "tag"),
+        _string(raw["commit"], "commit") if raw["commit"] is not None else None,
+        _string(raw["acquisition_owner"], "acquisition_owner"),
+        _string(raw["identity"], "identity"),
+        parse_suite_plan(_object(raw["measurement"], "measurement")),
+        source,
+        tuple(observations),
+    )
+
+
+def acquisition_assertion_digest(policy: CandidatePolicy) -> str:
+    """Capture under acquisition-owner control in Step 1, before final-tree edits.
+
+    Only the independently selected final commit is deferred. Computing this
+    from an untrusted candidate at Step 2 defeats authentication; obtain the
+    expected value through the trusted owner's separate immutable handoff.
+    """
+    document = _object(_load_json(serialize_candidate_policy(policy), "policy"), "policy")
+    del document["commit"]
+    return sha256(deterministic_json(document))
+
+
+def _eligible(evidence: Evidence, policy: CandidatePolicy) -> ScheduledRun:
+    run = validate_scheduled_policy(evidence, policy.measurement)
+    if run_identity(evidence) != policy.identity or dict(evidence.sources)["current"] != policy.candidate:
+        raise ValueError("candidate differs from independent acquisition assertions")
+    actual = []
+    current_count = 0
+    for index, trial in enumerate(run.trials):
+        for suite, phase, _, source in parse_suite_run(trial).observations:
+            actual.append((index + 1, suite, phase, source))
+            context = dict(source.context)
+            if context.get("repository") != policy.repository or context.get("acquisition-owner") != policy.acquisition_owner:
+                raise ValueError("candidate repository/acquisition owner differs")
+            if phase == "current":
+                current_count += 1
+                if context["source-export"] != dict(policy.candidate.context)["source-export"]:
+                    raise ValueError("candidate original capture differs across suites")
+    if tuple(sorted(actual)) != policy.observations or not current_count:
+        raise ValueError("candidate observation inventory/provenance differs from assertions")
+    return run
+
+
+def _binding(policy: CandidatePolicy, final: str) -> dict[str, Any]:
+    validate_source_record(final, _final_commit(policy))
+    original = json.loads(dict(policy.candidate.context)["source-export"])
+    finished = json.loads(final)
+    if finished["mode"] != "revision" or finished["dirty"]:
+        raise ValueError("final binding requires an independently captured commit tree")
+    before = {name: (digest, bool(mode & 0o111)) for name, digest, mode in original["files"]}
+    after = {name: (digest, bool(mode & 0o111)) for name, digest, mode in finished["files"]}
+    outputs = set(policy.measurement.outputs)
+    inputs = set()
+    for _, _, _, source in policy.observations:
+        context = dict(source.context)
+        for key in ("source-inventory", "original-source-inventory", "harness-inventory", "workload-inventory"):
+            if key in context:
+                inputs.update(_string(name, key) for name in _array(_load_json(context[key].encode("utf-8"), key), key))
+
+    def canonical(name: str) -> str:
+        return unicodedata.normalize("NFC", name).casefold()
+
+    if {canonical(name) for name in inputs} & {canonical(name) for name in outputs}:
+        raise ValueError("output exception overlaps independently observed acquisition inputs")
+    for name in outputs:
+        if before.get(name, (None, False))[1] or after.get(name, (None, False))[1]:
+            raise ValueError("executable files cannot be declared report outputs")
+    changed = sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
+    if set(changed) - outputs:
+        raise ValueError(f"performance-relevant or undeclared final-tree differences: {sorted(set(changed) - outputs)}")
+    return {"candidate": original, "final": finished, "outputs": sorted(outputs), "changed": changed, "mode_policy": "git-executable-bit"}
+
+
+def _contents(evidence: Evidence, policy: CandidatePolicy, binding: dict[str, Any]) -> dict[str, bytes]:
+    run = _eligible(evidence, policy)
+    if binding != _binding(policy, json.dumps(binding.get("final"))):
+        raise ValueError("candidate binding differs")
+    payload, manifest = serialize_evidence(evidence)
+    files = {"evidence/run.json": payload, "evidence/evidence.json": manifest}
+    for index, trial in enumerate(run.trials):
+        for suite, phase, sample, _ in parse_suite_run(trial).observations:
+            if phase != "current":
+                continue
+            declaration = next(s for s in policy.measurement.suites if s.name == suite)
+            for case in sample.cases:
+                for name, data in (("benchmark.json", case.benchmark), ("estimates.json", case.estimates), ("sample.json", case.sample), *case.raw_files):
+                    path = f"criterion/trial-{index + 1}/{suite}/{case.storage_path}/{declaration.measurement.measurement.sample}/{name}"
+                    if path in files:
+                        raise ValueError("candidate archive storage collision")
+                    files[path] = data
+    files["reuse.json"] = deterministic_json(
+        {
+            "schema": ARCHIVE_SCHEMA,
+            "policy_sha256": sha256(serialize_candidate_policy(policy)),
+            "binding": binding,
+            "files": {name: sha256(data) for name, data in files.items()},
+        }
+    )
+    return files
+
+
+def _final_commit(policy: CandidatePolicy) -> str:
+    if policy.commit is None:
+        raise ValueError("candidate release requires an independently selected final commit")
+    return policy.commit
+
+
+def _acceptance(payload: bytes, policy: CandidatePolicy) -> dict[str, Any]:
+    _final_commit(policy)
+    raw = _object(
+        _load_json(payload, "candidate acceptance"), "candidate acceptance", {"schema", "policy_sha256", "identity", "binding", "native", "archive_sha256"}
+    )
+    if raw["schema"] != ACCEPTANCE_SCHEMA or raw["policy_sha256"] != sha256(serialize_candidate_policy(policy)) or raw["identity"] != policy.identity:
+        raise ValueError("candidate acceptance policy/identity changed")
+    _digest(raw["archive_sha256"], "accepted archive")
+    return raw
+
+
+def verify_candidate_release(
+    root: Path,
+    evidence: Evidence,
+    policy: CandidatePolicy,
+    native_policy: EvidencePolicy,
+    read: Callable[[str], Any],
+    *,
+    acquisition_sha256: str,
+    expected: bytes | None = None,
+    reproduced_archive: Path | None = None,
+    reproduced_tools: Mapping[str, str] | None = None,
+    limits: ArchiveLimits = ArchiveLimits(),
+) -> bytes:
+    """Step 2 and approval revalidation; never measure, gate, or resolve a new schedule.
+
+    Pass the frozen returned bytes as expected at every later gate. Existing
+    native evidence verifies signer, event, branch, jobs, immutable artifact and
+    run attempt. The consumer must protect these bytes and the original policy.
+    Optional Cargo reproduction uses the same paired archive/tool contract as
+    verify_release_evidence. No files are written to root, and neither index nor
+    working-tree changes are permitted at entry or return.
+    """
+    _digest(acquisition_sha256, "trusted Step 1 assertion digest")
+    if acquisition_assertion_digest(policy) != acquisition_sha256:
+        raise ValueError("candidate assertions differ from trusted Step 1 handoff")
+    commit = _final_commit(policy)
+    _eligible(evidence, policy)
+    if native_policy.validation.repository != policy.repository:
+        raise ValueError("native evidence repository differs")
+    pinned = _acceptance(expected, policy) if expected is not None else None
+    require_release_checkout(root, commit)
+    final = capture_source(root, commit)
+    working = capture_source(root, "HEAD", working_tree=True)
+    if working.revision != commit or working.dirty:
+        raise ValueError("final acceptance requires the selected clean HEAD")
+    binding = _binding(policy, final.provenance())
+    native = verify_release_evidence(
+        native_policy,
+        policy.tag.removeprefix("v"),
+        commit,
+        read,
+        expected=deterministic_json(pinned["native"]) if pinned else None,
+        reproduced_archive=reproduced_archive,
+        reproduced_tools=reproduced_tools,
+    )
+    archive = _archive(_contents(evidence, policy, binding), limits)
+    accepted = deterministic_json(
+        {
+            "schema": ACCEPTANCE_SCHEMA,
+            "policy_sha256": sha256(serialize_candidate_policy(policy)),
+            "identity": policy.identity,
+            "binding": binding,
+            "native": _load_json(native, "native selection"),
+            "archive_sha256": sha256(archive),
+        }
+    )
+    final.verify()
+    working.verify()
+    require_release_checkout(root, commit)
+    if expected is not None and accepted != expected:
+        raise ValueError("approved source, native selection, acquisition, or archive changed")
+    return accepted
+
+
+def verify_candidate_archive(
+    archive: Path, policy: CandidatePolicy, acceptance: bytes, *, target: ReleaseTarget | None = None, limits: ArchiveLimits = ArchiveLimits()
+) -> Evidence:
+    """Verify a private upload copy against the independently frozen Step 2 record."""
+    accepted = _acceptance(acceptance, policy)
+    if target is not None and (target.repository, target.tag, target.commit) != (policy.repository, policy.tag, policy.commit):
+        raise ValueError("draft target differs from accepted final release")
+    with archive.open("rb") as stream:
+        data = stream.read(limits.archive_bytes + 1)
+    if len(data) > limits.archive_bytes or sha256(data) != accepted["archive_sha256"]:
+        raise ValueError("approved benchmark artifact bytes changed")
+    with tempfile.TemporaryDirectory(prefix="candidate-reuse-") as temporary:
+        private = Path(temporary) / "archive.tar.gz"
+        private.write_bytes(data)
+        root = Path(temporary) / "contents"
+        extract_archive(private, root, limits=limits)
+        evidence = parse_evidence((root / "evidence/run.json").read_bytes(), (root / "evidence/evidence.json").read_bytes())
+        actual = {path.relative_to(root).as_posix(): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+        if actual != _contents(evidence, policy, accepted["binding"]):
+            raise ValueError("derived candidate archive differs from original evidence/binding")
+    return evidence
+
+
+def plan_candidate_archive(
+    root: Path, payload: str, manifest: str, policy: str, acceptance: str, output: str, *, limits: ArchiveLimits = ArchiveLimits()
+) -> PublicationPlan:
+    """Retryable offline derivation of the exact archive frozen by Step 2."""
+    root = root.resolve(strict=True)
+    names = (payload, manifest, policy, acceptance, output)
+    _validate_distinct_paths(tuple(_path(root, name) for name in names))
+    inputs = {}
+    for name in names[:-1]:
+        with _path(root, name).open("rb") as stream:
+            data = stream.read(limits.content_bytes + 1)
+        if len(data) > limits.content_bytes:
+            raise ValueError("candidate input exceeds content limit")
+        inputs[name] = data
+    assertions = parse_candidate_policy(inputs[policy])
+    accepted = _acceptance(inputs[acceptance], assertions)
+    evidence = parse_evidence(inputs[payload], inputs[manifest])
+    data = _archive(_contents(evidence, assertions, accepted["binding"]), limits)
+    if sha256(data) != accepted["archive_sha256"]:
+        raise ValueError("derived archive differs from frozen acceptance")
+    with tempfile.TemporaryDirectory(prefix="candidate-plan-") as temporary:
+        archive = Path(temporary) / "archive.tar.gz"
+        archive.write_bytes(data)
+        verify_candidate_archive(archive, assertions, inputs[acceptance], limits=limits)
+    return plan_outputs(root, {output: data}, inputs=inputs, immutable=(output,))

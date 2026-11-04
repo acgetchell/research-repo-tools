@@ -1,6 +1,5 @@
 """Explicit Cargo upgrades: resolve first, verify installations, then publish pins."""
 
-import json
 import sys
 import tomllib
 import urllib.request
@@ -9,6 +8,7 @@ from pathlib import Path
 
 from research_repo_tools import config, files, toolchain, toolchain_config
 from research_repo_tools.prebuilt_tools import release_metadata
+from research_repo_tools.release_validation import parse_release_json
 from research_repo_tools.toml_source import replace_string
 from research_repo_tools.tool_pins import SEMVER
 
@@ -36,8 +36,8 @@ def latest_stable(package: str) -> str:
     if len(payload) > INDEX_LIMIT:
         raise ValueError(f"registry entry for {package} exceeds {INDEX_LIMIT} bytes")
     candidates: list[str] = []
-    for line in payload.decode("utf-8").splitlines():
-        entry = json.loads(line)
+    for line in payload.splitlines():
+        entry = parse_release_json(line)
         if (
             not isinstance(entry, dict)
             or entry.get("name") != package

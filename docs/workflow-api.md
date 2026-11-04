@@ -283,6 +283,9 @@ UTF-16 command size and POSIX byte size. `run_selected` inherits live streams
 and returns the selected file count after all batches succeed. An empty selection
 returns zero without launching a command. A failed batch raises the process
 error and prevents later batches from running.
+Its optional `env` replacement mapping applies to both Git file selection and
+command execution, including executable discovery. Omission inherits the parent
+environment; the supplied mapping and parent environment remain unchanged.
 
 `validation.require_executables(root, names)` resolves prerequisites without
 launching them. `run_checks(root, configuration, names=())` validates all schema-1

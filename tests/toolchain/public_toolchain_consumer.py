@@ -15,12 +15,46 @@ from pathlib import Path
 from typing import override
 from unittest.mock import patch
 
-from research_repo_tools import archives, cli, config, files, prebuilt_tools, process, python_adoption, python_baseline, toolchain, toolchain_clean
+from research_repo_tools import (
+    archives,
+    cli,
+    config,
+    files,
+    prebuilt_tools,
+    process,
+    python_adoption,
+    python_baseline,
+    toolchain,
+    toolchain_clean,
+    toolchain_upgrade,
+)
 from research_repo_tools.toolchain_clean import apply_clean, plan_clean
 from research_repo_tools.toolchain_config import Toolchain, load
 
 
 class TestToolchainConsumer(unittest.TestCase):
+    def test_binary_release_rejects_ambiguous_draft_status(self):
+        payload = b'{"draft":true,"draft":false,"prerelease":false,"tag_name":"v1.0.0"}'
+        with patch.object(prebuilt_tools.urllib.request, "urlopen", return_value=io.BytesIO(payload)):
+            with self.assertRaisesRegex(ValueError, "duplicate"):
+                prebuilt_tools.release_metadata("gitleaks", "latest")
+
+    def test_registry_rejects_ambiguous_or_nonfinite_release_metadata(self):
+        for payload in (
+            b'{"name":"git-cliff","vers":"3.0.0","yanked":true,"yanked":false}',
+            b'{"name":"git-cliff","vers":"3.0.0","yanked":false,"unknown":NaN}',
+            b"[" * 2000 + b"0" + b"]" * 2000,
+        ):
+            with self.subTest(payload=payload[:80]):
+                with patch.object(toolchain_upgrade.urllib.request, "urlopen", return_value=io.BytesIO(payload)):
+                    with self.assertRaises(ValueError):
+                        toolchain_upgrade.latest_stable("git-cliff")
+
+    def test_registry_accepts_unicode_separators_in_future_fields(self):
+        payload = '{"name":"git-cliff","vers":"3.0.0","yanked":false,"future":"before\u2028after"}\n'.encode()
+        with patch.object(toolchain_upgrade.urllib.request, "urlopen", return_value=io.BytesIO(payload)):
+            self.assertEqual(toolchain_upgrade.latest_stable("git-cliff"), "3.0.0")
+
     def test_adoption_preserves_unicode_prose_and_removes_only_real_target_mirrors(self):
         authority = python_baseline.baseline()
         for separator in ("\x85", "\u2028", "\u2029"):

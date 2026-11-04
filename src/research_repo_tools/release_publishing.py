@@ -150,7 +150,7 @@ def validate_event(event: object, repository: str, commit: str, ref: str) -> Rev
     return ReviewedRelease(tag, commit, identifier)
 
 
-def check_metadata(config: Config, tag: str, *, previous_tag: str | None = None) -> None:
+def check_metadata(config: "Config", tag: str, *, previous_tag: str | None = None) -> None:
     """Reuse final metadata, date, and nonempty notes validation for both registries."""
     from research_repo_tools import changelog, release_metadata
 
@@ -247,7 +247,7 @@ def _assets(release: GitHubRelease, settings: PublishingSettings, version: str) 
 
 
 def check_reviewed_release(
-    config: Config, tag: str, *, event: ReviewedRelease | None = None, draft: bool = False, reuse_evidence: bytes | None = None
+    config: "Config", tag: str, *, event: ReviewedRelease | None = None, draft: bool = False, reuse_evidence: bytes | None = None
 ) -> GitHubRelease:
     """Read-only final gate: clean checkout, tag, ancestry, checks, lifecycle/assets.
 
@@ -301,7 +301,7 @@ def check_reviewed_release(
     return release
 
 
-def publish_reviewed_release(config: Config, tag: str, *, reuse_evidence: bytes | None = None) -> None:
+def publish_reviewed_release(config: "Config", tag: str, *, reuse_evidence: bytes | None = None) -> None:
     """Publish a validated draft as the invoking maintainer, triggering its workflow.
 
     Invocation is approval of the draft. This never uploads registry packages,
@@ -328,7 +328,7 @@ def publish_reviewed_release(config: Config, tag: str, *, reuse_evidence: bytes 
         ) from error
 
 
-def verify_publication(config: Config, tag: str, *, attempts: int = 1, interval: int = 10) -> None:
+def verify_publication(config: "Config", tag: str, *, attempts: int = 1, interval: int = 10) -> None:
     """Require the published stable GitHub release/assets and exact registry version."""
     settings = _settings(config)
     version = _tag(tag)

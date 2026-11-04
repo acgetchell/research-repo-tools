@@ -6,7 +6,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, cast
+from typing import TYPE_CHECKING, Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -570,42 +570,25 @@ class TestRunGitCommandWithInput:
         assert result.returncode == 0
         assert result.stdout.strip() == "ce013625030ba8dba906f756967f9e9ca394464a"
 
-    def test_input_data_forwarded_as_raw_utf8(self) -> None:
-        """Verify stdin bytes preserve LF even when subprocess output is text."""
-        observed_input = b""
-
-        def capture_run(*_args: object, **kwargs: object) -> subprocess_utils.subprocess.CompletedProcess[bytes]:
-            nonlocal observed_input
-            observed_input = cast(bytes, kwargs["input"])
-            return subprocess_utils.subprocess.CompletedProcess(args=["git"], returncode=0, stdout=b"", stderr=b"")
-
+    @pytest.mark.parametrize(
+        ("args", "contents", "expected"),
+        [
+            pytest.param(["tag", "-a", "v1.0.0", "-F", "-"], "tag body\n", b"tag body\n", id="text"),
+            pytest.param(["apply", "--binary"], b"line\r\n\x00\xff", b"line\r\n\x00\xff", id="bytes"),
+        ],
+    )
+    def test_input_forwarded_without_newline_or_encoding_changes(self, args: list[str], contents: str | bytes, expected: bytes) -> None:
         with (
             patch("research_repo_tools.process.get_safe_executable", return_value="/usr/bin/git") as mock_executable,
-            patch("research_repo_tools.process.subprocess.run", side_effect=capture_run) as mock_run,
+            patch("research_repo_tools.process.subprocess.run", return_value=subprocess.CompletedProcess(["git"], 0, b"", b"")) as mock_run,
         ):
-            run_git_command_with_input(["tag", "-a", "v1.0.0", "-F", "-"], input_data="tag body\n")
+            run_git_command_with_input(args, input_data=contents)
         mock_executable.assert_called_once_with("git")
         mock_run.assert_called_once()
         _args, kwargs = mock_run.call_args
-        assert observed_input == b"tag body\n"
+        assert kwargs["input"] == expected
         assert "stdin" not in kwargs
         assert kwargs["text"] is False
-
-    def test_binary_input_forwarded_without_newline_or_encoding_changes(self) -> None:
-        observed_input = b""
-
-        def capture_run(*_args: object, **kwargs: object) -> subprocess_utils.subprocess.CompletedProcess[bytes]:
-            nonlocal observed_input
-            observed_input = cast(bytes, kwargs["input"])
-            return subprocess_utils.subprocess.CompletedProcess(args=["git"], returncode=0, stdout=b"", stderr=b"")
-
-        payload = b"line\r\n\x00\xff"
-        with (
-            patch("research_repo_tools.process.get_safe_executable", return_value="/usr/bin/git"),
-            patch("research_repo_tools.process.subprocess.run", side_effect=capture_run),
-        ):
-            run_git_command_with_input(["apply", "--binary"], input_data=payload)
-        assert observed_input == payload
 
     @pytest.mark.parametrize(
         "contents",

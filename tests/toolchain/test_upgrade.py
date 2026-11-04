@@ -2,7 +2,6 @@
 
 import io
 import json
-import os
 import stat
 import tomllib
 
@@ -219,11 +218,15 @@ def test_dotted_keys_preserve_comments_and_other_values(consumer, monkeypatch):
     assert tomllib.loads(consumer.read_text())["tool"]["uv"]["required-version"] == "==0.12.16"
 
 
-@pytest.mark.skipif(os.name == "nt", reason="symlink creation needs elevated Windows privileges")
 def test_pyproject_symlink_keeps_schema_and_target(consumer, monkeypatch):
     target = consumer.with_name("manifest.toml")
     consumer.rename(target)
-    consumer.symlink_to(target)
+    try:
+        consumer.symlink_to(target)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip(f"native symlink privilege unavailable: {error}")
+        raise
     monkeypatch.setattr(toolchain.Runtime, "sync", lambda _: None)
     upgrade.upgrade(config.load(root=consumer.parent))
     assert consumer.is_symlink()

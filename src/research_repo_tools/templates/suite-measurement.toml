@@ -1,6 +1,11 @@
 # Requires a supplying v0.2.5 release. Copy the suites block for independent
 # targets, with per-suite source/harness/input declarations and semantic identity.
 schema = 5
+# With v0.2.6, use schema = 6 and declare these top-level settings before suites:
+# outputs = ["README.md", "docs/performance.md"]
+# schedule = { order = "alternating", trials = 4 }
+# Or schedule = { order = "randomized", trials = 4, seed = 42 }
+# Schema 6 retains each trial and observed phase order; it never pools samples.
 
 [[suites]]
 name = "extended"

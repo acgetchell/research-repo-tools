@@ -11,7 +11,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, chdir, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import override
@@ -19,6 +19,15 @@ from unittest.mock import patch
 
 from research_repo_tools.archives import ArchiveLimits, extract_archive
 from research_repo_tools.benchmark_reuse import ReusePolicy, parse_reuse_policy, plan_reuse_archive, serialize_reuse_policy, verify_reuse_archive
+from research_repo_tools.candidate_reuse import (
+    CandidatePolicy,
+    acquisition_assertion_digest,
+    parse_candidate_policy,
+    plan_candidate_archive,
+    serialize_candidate_policy,
+    verify_candidate_archive,
+    verify_candidate_release,
+)
 from research_repo_tools.cli import main, parser
 from research_repo_tools.common_measurement import DiscoveredSeries, DiscoveryPolicy, parse_plan, validate_run_policy
 from research_repo_tools.complete_runs import render_run, run_identity, validate_run_evidence
@@ -31,12 +40,16 @@ from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.process import run_command, run_command_live
 from research_repo_tools.publication import MarkerPair, plan_publication, publish_publication
 from research_repo_tools.publication_config import load_publication
-from research_repo_tools.release_assets import ReleaseTarget
+from research_repo_tools.release_assets import ReleaseTarget, require_release_checkout
+from research_repo_tools.release_evidence import EvidencePolicy
 from research_repo_tools.release_pairs import ReleasePair
+from research_repo_tools.release_validation import ValidationPolicy
 from research_repo_tools.run_presentation import RunLayout, RunRow, SeriesSelection, render_run_ratios, render_run_table, serialize_run_csv
+from research_repo_tools.scheduled_runs import ScheduledRun, parse_scheduled_run, select_trial
 from research_repo_tools.source_exports import export_source
 from research_repo_tools.suite_measurement import AcquisitionSuite, SuiteMeasurementPlan
-from research_repo_tools.suite_runs import comparison_incompatibilities, parse_suite_run
+from research_repo_tools.suite_runs import SuiteRun, comparison_incompatibilities, parse_suite_run
+from research_repo_tools.trial_schedule import TrialSchedule, parse_schedule
 
 PROGRAM = """import json, sys
 from pathlib import Path
@@ -128,7 +141,7 @@ def git_model(revisions: dict[str, dict[str, bytes]]):
             tag = args[-1].removeprefix("refs/tags/").removesuffix("^{commit}")
             if tag == "HEAD":
                 tag = next(reversed(keys))
-            return (keys[tag] + "\n").encode()
+            return ((tag if tag in keys.values() else keys[tag]) + "\n").encode()
         if args[0] == "ls-tree":
             files = next(files for tag, files in revisions.items() if keys[tag] == args[-1])
             return b"".join(b"100644 blob " + oid(data) + b"\t" + name.encode() + b"\0" for name, data in sorted(files.items()))
@@ -733,6 +746,7 @@ class TestSuiteAcquisition(unittest.TestCase):
         selected = plan(self.log, ("new",))
         evidence = measure_pair(self.root, selected, PAIR, progress=self.quiet)
         run = validate_run_evidence(evidence)
+        assert isinstance(run, SuiteRun)
         self.assertEqual(dict(run.phases)["baseline"].cases, ())
         self.assertIn(b"new/case", render_run(evidence))
         with self.assertRaisesRegex(ValueError, "no eligible"):
@@ -777,6 +791,12 @@ class TestSuiteAcquisition(unittest.TestCase):
             validate_run_policy(evidence, selected, release=True)
 
     def test_cli_checkpoint_offline_promotion_and_readme_retry(self) -> None:
+        self._cli_checkpoint_offline_promotion_and_readme_retry()
+
+    def test_cli_scheduled_measurement_report_and_explicit_trial_readme(self) -> None:
+        self._cli_checkpoint_offline_promotion_and_readme_retry(scheduled=True)
+
+    def _cli_checkpoint_offline_promotion_and_readme_retry(self, *, scheduled=False) -> None:
         def toml(value):
             if isinstance(value, dict):
                 return "{" + ", ".join(json.dumps(key) + "=" + toml(item) for key, item in value.items()) + "}"
@@ -784,11 +804,14 @@ class TestSuiteAcquisition(unittest.TestCase):
                 return "[" + ", ".join(toml(item) for item in value) + "]"
             return json.dumps(value)
 
-        selected = plan(self.log)
+        selected = replace(plan(self.log), schedule=TrialSchedule()) if scheduled else plan(self.log)
         for name, data in self.revisions["v1.1.0"].items():
             (self.root / name).write_bytes(data)
         (self.root / "target").mkdir()
-        (self.root / "measurement.toml").write_text("schema=5\nsuites=" + toml(selected.document()["suites"]) + "\n", encoding="utf-8", newline="\n")
+        configuration = f"schema={selected.schema}\nsuites=" + toml(selected.document()["suites"]) + "\n"
+        if scheduled:
+            configuration += 'schedule={order="alternating",trials=2}\n'
+        (self.root / "measurement.toml").write_text(configuration, encoding="utf-8", newline="\n")
         self.assertEqual(load_measurement(self.root, "measurement.toml"), selected)
         args = ["--root", str(self.root), "performance"]
         acquisition = [
@@ -857,6 +880,8 @@ class TestSuiteAcquisition(unittest.TestCase):
                 'revision="' + "b" * 40 + '"',
             ]
         )
+        if scheduled:
+            publication = "trial=2\n" + publication
         (self.root / "publication.toml").write_text(publication + "\n", encoding="utf-8", newline="\n")
         with patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("README retry must not acquire")):
             self.assertEqual(main([*args, "publish", "publication.toml"]), 0)
@@ -864,6 +889,8 @@ class TestSuiteAcquisition(unittest.TestCase):
         before = (self.root / "README.md").read_bytes()
         self.assertTrue(before.startswith(b"head\r\n"))
         self.assertTrue(before.endswith(b"tail\r\n"))
+        if scheduled:
+            self.assertIn(b"Trial 2", before)
         (self.root / "input-shared.json").write_bytes(b"changed")
         self.assertNotEqual(main([*args, "publish", "publication.toml"]), 0)
         self.assertEqual((self.root / "README.md").read_bytes(), before)
@@ -1004,7 +1031,8 @@ class TestSuiteAcquisition(unittest.TestCase):
         accepted = [event for event in events if event["event"] == "validated"]
         self.assertEqual([(event["phase"], event["completed"], event["remaining"]) for event in accepted], [("baseline", 1, 1), ("current", 2, 0)])
         self.assertIsNone(accepted[0]["eta_seconds"])
-        self.assertEqual(len(validate_run_evidence(evidence).phases), 2)
+        run = validate_run_policy(evidence, selected)
+        self.assertEqual(len(run.phases), 2)
 
     def test_retention_allows_historical_path_changes_but_protects_inputs(self) -> None:
         revisions = {tag: dict(files) for tag, files in self.revisions.items()}
@@ -1086,6 +1114,467 @@ class TestSuiteAcquisition(unittest.TestCase):
         self.assertEqual(len(parse_suite_run(retained).observations), 2)
         with self.assertRaisesRegex(ValueError, "finite"):
             render_run(retained)
+
+    def scheduled_fixture(self, schedule=None, *, outputs=(), working_tree=False, checkpoint=None):
+        selected = plan(self.log, ("shared",))
+        selected = replace(
+            selected,
+            schedule=schedule or TrialSchedule(),
+            outputs=outputs,
+            suites=tuple(
+                replace(
+                    suite,
+                    measurement=replace(
+                        suite.measurement,
+                        measurement=replace(suite.measurement.measurement, context=(("repository", "example/library"), ("acquisition-owner", "local"))),
+                    ),
+                )
+                for suite in selected.suites
+            ),
+        )
+        evidence = measure_pair(self.root, selected, PAIR, working_tree=working_tree, checkpoint=checkpoint, progress=self.quiet)
+        return selected, evidence
+
+    def test_schedules_execute_declared_order_and_keep_original_trial_bytes(self):
+        for schedule in (TrialSchedule(), TrialSchedule(4, "randomized", 42), TrialSchedule(1, "sequential")):
+            self.log.unlink(missing_ok=True)
+            selected, evidence = self.scheduled_fixture(schedule)
+            observed = [line.split()[-1] for line in self.log.read_text().splitlines() if " measure " in line]
+            self.assertEqual(observed, ["old" if phase == "baseline" else "new" for pair in schedule.phases for phase in pair])
+            self.assertEqual(parse_schedule(schedule.document()), schedule)
+            run = validate_run_evidence(evidence)
+            assert isinstance(run, ScheduledRun)
+            self.assertEqual(run.plan.document(), selected.document())
+            # A caller selects a trial explicitly before using phase/series views.
+            self.assertEqual(len(parse_suite_run(select_trial(evidence, 1)).phases), 2)
+            if schedule.seed is None:
+                document = schedule.document()
+                del document["seed"]
+                self.assertEqual(parse_schedule(document), schedule)
+                document["phases"] = [["current", "current"]]
+                with self.assertRaisesRegex(ValueError, "phases differ"):
+                    parse_schedule(document)
+            for index, trial in enumerate(run.trials):
+                self.assertEqual(serialize_evidence(select_trial(evidence, index + 1)), serialize_evidence(trial))
+                for _, _, sample, _ in parse_suite_run(trial).observations:
+                    self.assertTrue(sample.cases[0].sample.endswith(b"\r\n"))
+            with patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("read-only consumer")):
+                report = render_run(evidence, title="Trial <script> & notes")
+                self.assertIn(b"Within-phase samples are not independent trials", report)
+                self.assertIn(b"Trial 1", report)
+                self.assertIn(b"Trial &lt;script&gt; &amp; notes", report)
+        self.assertEqual(TrialSchedule(4, "randomized", 42).phases, TrialSchedule(4, "randomized", 42).phases)
+        self.assertEqual(sum(order[0] == "current" for order in TrialSchedule(10, "randomized", 9).phases), 5)
+        for args in ((3, "alternating"), (2, "randomized"), (2, "sequential", 1), (True, "sequential")):
+            with self.assertRaises(ValueError):
+                TrialSchedule(*args)
+
+    def test_scheduled_report_embeds_trial_bodies_with_one_evidence_header(self):
+        _, evidence = self.scheduled_fixture()
+        before = serialize_evidence(evidence)
+        for directory in ("data/", "data/" + "nested/" * 24):
+            with self.subTest(directory=directory):
+                report = render_run(
+                    evidence,
+                    title="Trial <script> & notes",
+                    report_path="docs/report.md",
+                    payload_path=directory + "run.json",
+                    manifest_path=directory + "evidence.json",
+                ).decode("utf-8")
+                self.assertEqual(report.count("<!-- research-repo-tools/run-report/"), 1)
+                self.assertEqual([line for line in report.splitlines() if line.startswith("# ")], ["# Trial &lt;script&gt; &amp; notes"])
+                self.assertEqual(report.count("Evidence:"), 1)
+                self.assertEqual(report.count("[run payload]"), 1)
+                self.assertEqual(report.count("[evidence envelope]"), 1)
+                for index in (1, 2):
+                    self.assertIn(f"## Trial {index}:", report)
+                self.assertEqual(report.count("Semantic contract: shared-v1."), 2)
+                self.assertEqual(report.count("Ratios are point estimates within one accepted paired suite."), 2)
+                for name in ("run.json", "evidence.json"):
+                    self.assertEqual(report.count("../" + directory + name), 1)
+                if directory != "data/":
+                    self.assertIn("[run payload][rrt-performance-link-1]", report)
+                    self.assertIn("[evidence envelope][rrt-performance-link-2]", report)
+        self.assertEqual(serialize_evidence(evidence), before)
+
+    def test_schedule_rejects_changed_receipts_trials_and_declarations(self):
+        selected, evidence = self.scheduled_fixture()
+        changes = [
+            lambda raw: raw["trials"].pop(),
+            lambda raw: raw["trials"].reverse(),
+            lambda raw: raw["trials"][1].update(session=raw["trials"][0]["session"]),
+            lambda raw: raw["trials"][1].update(started_ns=0),
+            lambda raw: raw["trials"][1]["receipts"].reverse(),
+            lambda raw: raw["trials"][0]["receipts"].pop(),
+            lambda raw: raw["trials"][0]["receipts"][0].update(finished_ns=0),
+            lambda raw: raw["trials"][0].update(identity="0" * 64),
+            lambda raw: raw["declaration"]["schedule"].update(order="sequential"),
+        ]
+        for change in changes:
+            raw = json.loads(evidence.payload)
+            change(raw)
+            with self.subTest(change=change), self.assertRaises(ValueError):
+                parse_scheduled_run(replace(evidence, payload=deterministic_json(raw)))
+        with self.assertRaisesRegex(ValueError, "declaration changed"):
+            validate_run_policy(evidence, replace(selected, schedule=TrialSchedule(2, "randomized", 1)))
+        with self.assertRaisesRegex(ValueError, "explicit trial"):
+            render_run_table(
+                evidence, RunLayout((SeriesSelection("shared/current", "Current", (("row", "shared/case"),)),), (RunRow("row", "Row"),), "median", "ns")
+            )
+
+    def test_schedule_resume_retains_exact_bytes_and_rejects_interrupted_trial(self):
+        checkpoint = self.root / "scheduled"
+        selected, evidence = self.scheduled_fixture(checkpoint=checkpoint)
+        original = {path.name: path.read_bytes() for path in checkpoint.glob("*.json")}
+
+        def no_measure(command, args=(), **kwargs):
+            if "measure" in args:
+                raise AssertionError("completed resume must not measure")
+            return run_command_live(command, args, **kwargs)
+
+        with patch("research_repo_tools.common_measurement.run_command_live", side_effect=no_measure):
+            resumed = measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+            self.assertEqual(serialize_evidence(resumed), serialize_evidence(evidence))
+            with self.assertRaisesRegex(ValueError, "identity changed"):
+                measure_pair(self.root, replace(selected, schedule=TrialSchedule(4)), PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+        self.assertEqual(original, {path.name: path.read_bytes() for path in checkpoint.glob("*.json")})
+        before_calls = self.log.read_bytes()
+        with (
+            patch("research_repo_tools.measurement.capture_host", return_value=replace(HOST, cpu="other CPU")),
+            self.assertRaisesRegex(ValueError, "checkpoint observations"),
+        ):
+            measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+        self.assertEqual(
+            [line for line in self.log.read_bytes().splitlines() if b" measure " in line], [line for line in before_calls.splitlines() if b" measure " in line]
+        )
+        (checkpoint / "unit-trial-2.json").unlink()
+        with (
+            patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("must fail before gate")),
+            self.assertRaisesRegex(ValueError, "interrupted trial"),
+        ):
+            measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+        # A failure after real output exists preserves the started marker and
+        # never invents a completed receipt or repeats the hidden observations.
+        failed = self.root / "failed-schedule"
+
+        def fail(command, args=(), **kwargs):
+            result = run_command_live(command, args, **kwargs)
+            if "measure" in args:
+                raise RuntimeError("after timing output")
+            return result
+
+        with patch("research_repo_tools.common_measurement.run_command_live", side_effect=fail), self.assertRaises(RuntimeError):
+            measure_pair(self.root, selected, PAIR, checkpoint=failed, progress=self.quiet)
+        self.assertTrue((failed / "unit-started-trial-1.json").exists())
+        self.assertFalse((failed / "unit-trial-1.json").exists())
+
+    def candidate_fixture(self):
+        original = {**self.revisions["v1.1.0"], "README.md": b"before\r\n"}
+        for name, data in original.items():
+            (self.root / name).write_bytes(data)
+        (self.root / "revision").write_bytes(b"candidate")
+        self.stack.enter_context(patch("research_repo_tools.source_exports.select_files", side_effect=lambda root, **kwargs: tuple(sorted(original))))
+        selected, evidence = self.scheduled_fixture(outputs=("README.md",), working_tree=True)
+        # This test acts as the acquisition owner: freeze assertions before
+        # final-tree edits or any candidate/archive corruption.
+        policy = CandidatePolicy(
+            "example/library",
+            PAIR.current,
+            None,
+            "local",
+            run_identity(evidence),
+            selected,
+            dict(evidence.sources)["current"],
+            tuple(
+                (index + 1, suite, phase, source)
+                for index, trial in enumerate(parse_scheduled_run(evidence).trials)
+                for suite, phase, _, source in parse_suite_run(trial).observations
+            ),
+        )
+        # Plans retain tuple ordering in memory; canonical JSON sorts context
+        # object keys. The handoff contract is canonical bytes, not dataclass equality.
+        pending_bytes = serialize_candidate_policy(policy)
+        pending = parse_candidate_policy(pending_bytes)
+        self.assertIsNone(pending.commit)
+        self.assertEqual(serialize_candidate_policy(pending), pending_bytes)
+        acquisition_digest = acquisition_assertion_digest(policy)
+        before = self.log.read_bytes()
+        with patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("no read-only acquisition")):
+            report = render_run(evidence)
+            (self.root / "README.md").write_bytes(report)
+        final = {name: (self.root / name).read_bytes() for name in original}
+        mapping = {**self.revisions, "final": final}
+        policy = replace(policy, commit="c" * 40)
+        self.assertEqual(acquisition_assertion_digest(policy), acquisition_digest)
+        self.stack.enter_context(patch("research_repo_tools.source_exports._git", side_effect=git_model(mapping)))
+        self.checkout_guard = self.stack.enter_context(patch("research_repo_tools.candidate_reuse.require_release_checkout"))
+        native = EvidencePolicy(
+            ValidationPolicy("example/library", ".github/workflows/ci.yml", "CI", (("native", ("Checks",)),)),
+            "fixture",
+            "evidence",
+            "signed-source",
+            ("sign", ("Sign",)),
+        )
+        provider = self.stack.enter_context(
+            patch("research_repo_tools.candidate_reuse.verify_release_evidence", return_value=deterministic_json({"artifact": {"id": 123}, "commit": "c" * 40}))
+        )
+        accepted = verify_candidate_release(self.root, evidence, policy, native, lambda endpoint: {}, acquisition_sha256=acquisition_assertion_digest(policy))
+        self.assertEqual(before, self.log.read_bytes())
+        return evidence, policy, native, provider, accepted, mapping
+
+    def test_candidate_requires_final_commit_before_release_or_archive_operations(self):
+        evidence, final, native, provider, accepted, _ = self.candidate_fixture()
+        pending = replace(final, commit=None)
+        provider.reset_mock()
+        with self.assertRaisesRegex(ValueError, "selected final commit"):
+            verify_candidate_release(self.root, evidence, pending, native, lambda endpoint: {}, acquisition_sha256=acquisition_assertion_digest(pending))
+        with self.assertRaisesRegex(ValueError, "selected final commit"):
+            verify_candidate_archive(self.root / "not-opened.tar.gz", pending, accepted)
+        provider.assert_not_called()
+
+    @unittest.skipIf(os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1", "Git-mutating fixture disabled")
+    def test_candidate_public_api_rejects_staged_changes_with_clean_working_bytes(self):
+        evidence, policy, native, provider, _, _ = self.candidate_fixture()
+        checkout = self.root / "index-checkout"
+        checkout.mkdir()
+
+        def git(*arguments):
+            environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
+            environment.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+            return subprocess.run(
+                [
+                    "git",
+                    "--no-pager",
+                    "-c",
+                    "core.autocrlf=false",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    f"core.hooksPath={checkout / 'disabled-hooks'}",
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    *arguments,
+                ],
+                cwd=checkout,
+                env=environment,
+                check=True,
+                capture_output=True,
+            ).stdout
+
+        git("init", "--template=")
+        tracked = checkout / "source.txt"
+        tracked.write_bytes(b"original\r\n")
+        git("add", "source.txt")
+        git("commit", "-m", "fixture")
+        policy = replace(policy, commit=git("rev-parse", "HEAD").decode("ascii").strip())
+        tracked.write_bytes(b"staged\r\n")
+        git("add", "source.txt")
+        tracked.write_bytes(b"original\r\n")
+        self.assertEqual(git("diff", "HEAD", "--", "source.txt"), b"")
+        self.assertTrue(git("diff", "--cached", "--", "source.txt"))
+        provider.reset_mock()
+        with (
+            patch("research_repo_tools.candidate_reuse.require_release_checkout", wraps=require_release_checkout),
+            self.assertRaisesRegex(ValueError, "checkout is dirty"),
+        ):
+            verify_candidate_release(checkout, evidence, policy, native, lambda endpoint: {}, acquisition_sha256=acquisition_assertion_digest(policy))
+        provider.assert_not_called()
+
+    def test_candidate_rechecks_checkout_after_native_verification(self):
+        evidence, policy, native, provider, _, _ = self.candidate_fixture()
+        provider.reset_mock()
+        self.checkout_guard.side_effect = [None, ValueError("checkout changed during verification")]
+        with self.assertRaisesRegex(ValueError, "checkout changed"):
+            verify_candidate_release(self.root, evidence, policy, native, lambda endpoint: {}, acquisition_sha256=acquisition_assertion_digest(policy))
+        provider.assert_called_once()
+
+    def test_candidate_forwards_cargo_reproduction_and_preserves_native_rejection(self):
+        evidence, policy, native, provider, accepted, _ = self.candidate_fixture()
+        archive = self.root / "reproduced.crate"
+        tools = {"cargo": "fixture-cargo", "rustc": "fixture-rustc"}
+        native = replace(native, guarantee="cargo-archive")
+        self.assertEqual(
+            verify_candidate_release(
+                self.root,
+                evidence,
+                policy,
+                native,
+                lambda endpoint: {},
+                acquisition_sha256=acquisition_assertion_digest(policy),
+                expected=accepted,
+                reproduced_archive=archive,
+                reproduced_tools=tools,
+            ),
+            accepted,
+        )
+        self.assertEqual(provider.call_args.args[0], native)
+        self.assertEqual(provider.call_args.kwargs["expected"], deterministic_json(json.loads(accepted)["native"]))
+        self.assertEqual(provider.call_args.kwargs["reproduced_archive"], archive)
+        self.assertEqual(provider.call_args.kwargs["reproduced_tools"], tools)
+        provider.side_effect = ValueError("Cargo reproduction bytes or tools differ from retained validation")
+        with self.assertRaisesRegex(ValueError, "Cargo reproduction"):
+            verify_candidate_release(
+                self.root,
+                evidence,
+                policy,
+                native,
+                lambda endpoint: {},
+                acquisition_sha256=acquisition_assertion_digest(policy),
+                reproduced_archive=archive,
+                reproduced_tools=tools,
+            )
+
+    def test_candidate_binding_reuses_one_acquisition_after_final_merge(self):
+        evidence, policy, native, provider, accepted, mapping = self.candidate_fixture()
+        self.assertEqual(serialize_candidate_policy(parse_candidate_policy(serialize_candidate_policy(policy))), serialize_candidate_policy(policy))
+        receipt = json.loads(accepted)
+        self.assertEqual(receipt["binding"]["changed"], ["README.md"])
+        self.assertEqual(receipt["binding"]["candidate"]["revision"], "b" * 40)
+        self.assertTrue(receipt["binding"]["candidate"]["dirty"])
+        self.assertEqual(receipt["binding"]["final"]["revision"], "c" * 40)
+        payload, manifest = serialize_evidence(evidence)
+        for name, data in (
+            ("run.json", payload),
+            ("evidence.json", manifest),
+            ("policy.json", serialize_candidate_policy(policy)),
+            ("accepted.json", accepted),
+        ):
+            (self.root / name).write_bytes(data)
+        before = self.log.read_bytes()
+        with patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("no acquisition or preflight")):
+            self.assertEqual(
+                verify_candidate_release(
+                    self.root, evidence, policy, native, lambda endpoint: {}, acquisition_sha256=acquisition_assertion_digest(policy), expected=accepted
+                ),
+                accepted,
+            )
+            self.assertEqual(provider.call_args.kwargs["expected"], deterministic_json(receipt["native"]))
+            for _ in range(2):
+                publish_publication(plan_candidate_archive(self.root, "run.json", "evidence.json", "policy.json", "accepted.json", "release.tar.gz"))
+                retained = verify_candidate_archive(
+                    self.root / "release.tar.gz", policy, accepted, target=ReleaseTarget("example/library", PAIR.current, 7, "c" * 40)
+                )
+                self.assertEqual(serialize_evidence(retained), (payload, manifest))
+            (self.root / "release.tar.gz").write_bytes(b"replaced before approval")
+            with self.assertRaisesRegex(ValueError, "artifact bytes changed"):
+                verify_candidate_archive(self.root / "release.tar.gz", policy, accepted)
+        self.assertEqual(before, self.log.read_bytes())
+
+    def test_candidate_cli_freezes_and_revalidates_step_two_without_acquisition(self):
+        evidence, policy, native, provider, accepted, _ = self.candidate_fixture()
+        payload, manifest = serialize_evidence(evidence)
+        for name, data in (("run.json", payload), ("evidence.json", manifest), ("policy.json", serialize_candidate_policy(policy))):
+            (self.root / name).write_bytes(data)
+        (self.root / "native.toml").write_bytes(
+            b'schema=1\nrepository="example/library"\npackage="fixture"\nworkflow=".github/workflows/ci.yml"\nworkflow-name="CI"\nartifact-prefix="evidence"\nguarantee="signed-source"\njobs=[{name="native",steps=["Checks"]}]\n[signing-job]\nname="sign"\nsteps=["Sign"]\n'
+        )
+        args = [
+            "--root",
+            str(self.root),
+            "release",
+            "evidence",
+            "candidate",
+            "native.toml",
+            "--checkout",
+            ".",
+            "--payload",
+            "run.json",
+            "--manifest",
+            "evidence.json",
+            "--policy",
+            "policy.json",
+            "--acquisition-sha256",
+            acquisition_assertion_digest(policy),
+        ]
+        before = self.log.read_bytes()
+        with (
+            tempfile.TemporaryDirectory(prefix="candidate caller ") as caller,
+            chdir(caller),
+            patch("research_repo_tools.release_interfaces.require_release_checkout"),
+            patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("Step 2 must not gate or measure")),
+        ):
+            self.assertEqual(main([*args, "--output", "step-two.json"]), 0)
+            self.assertEqual((self.root / "step-two.json").read_bytes(), accepted)
+            self.assertEqual(main([*args, "--acceptance", "step-two.json", "--output", "approval.json"]), 0)
+            self.assertEqual((self.root / "approval.json").read_bytes(), accepted)
+            self.assertEqual(list(Path(caller).iterdir()), [])
+        self.assertEqual(before, self.log.read_bytes())
+
+    def test_candidate_binding_rejects_final_inputs_and_stale_independent_assertions(self):
+        evidence, policy, native, provider, accepted, mapping = self.candidate_fixture()
+        for name, data in (
+            ("revision", b"changed"),
+            ("bench.py", b"changed"),
+            ("Cargo.toml", b"changed"),
+            ("input-shared.json", b"changed"),
+            ("new-build-input", b"added"),
+            ("input-shared.json", None),
+        ):
+            files = dict(mapping["final"])
+            path = self.root / name
+            original = path.read_bytes() if path.exists() else None
+            if data is None:
+                files.pop(name)
+                path.unlink()
+            else:
+                files[name] = data
+                path.write_bytes(data)
+            changed = {**mapping, "final": files}
+            try:
+                with (
+                    patch("research_repo_tools.source_exports._git", side_effect=git_model(changed)),
+                    patch("research_repo_tools.source_exports.select_files", return_value=tuple(sorted(files))),
+                    self.subTest(name=name, data=data),
+                    self.assertRaisesRegex(ValueError, "undeclared final-tree"),
+                ):
+                    verify_candidate_release(self.root, evidence, policy, native, lambda endpoint: {}, acquisition_sha256=acquisition_assertion_digest(policy))
+            finally:
+                if original is None:
+                    path.unlink(missing_ok=True)
+                else:
+                    path.write_bytes(original)
+        for changed in (
+            replace(policy, identity="0" * 64),
+            replace(policy, commit="d" * 40),
+            replace(policy, observations=policy.observations[:-1]),
+            replace(policy, measurement=replace(policy.measurement, outputs=())),
+            replace(policy, acquisition_owner="github-actions"),
+        ):
+            with self.subTest(changed=changed), self.assertRaises(ValueError):
+                verify_candidate_release(
+                    self.root, evidence, changed, native, lambda endpoint: {}, acquisition_sha256=acquisition_assertion_digest(policy), expected=accepted
+                )
+        provider.return_value = deterministic_json({"artifact": {"id": 124}, "commit": "c" * 40})
+        with self.assertRaisesRegex(ValueError, "approved"):
+            verify_candidate_release(
+                self.root, evidence, policy, native, lambda endpoint: {}, acquisition_sha256=acquisition_assertion_digest(policy), expected=accepted
+            )
+        with self.assertRaisesRegex(ValueError, "report/document"):
+            replace(policy.measurement, outputs=("bench.py",))
+        for name in ("Cargo.toml", "settings.json", "build.py", "CMakeLists.txt"):
+            with self.subTest(name=name), self.assertRaises(ValueError):
+                replace(policy.measurement, outputs=(name,))
+        suite = policy.measurement.suites[0]
+        with self.assertRaisesRegex(ValueError, "overlaps"):
+            replace(
+                policy.measurement,
+                suites=(
+                    replace(
+                        suite,
+                        measurement=replace(
+                            suite.measurement, measurement=replace(suite.measurement.measurement, harness=(*suite.measurement.harness, "readme.md"))
+                        ),
+                    ),
+                ),
+                outputs=("README.md",),
+            )
+        # A candidate cannot substitute its own freshly computed acceptance
+        # assertions for the Step 1 pin retained by the acquisition owner.
+        self_derived = replace(policy, acquisition_owner="github-actions")
+        with self.assertRaisesRegex(ValueError, "trusted Step 1"):
+            verify_candidate_release(self.root, evidence, self_derived, native, lambda endpoint: {}, acquisition_sha256=acquisition_assertion_digest(policy))
 
 
 class TestProgress(unittest.TestCase):

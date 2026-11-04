@@ -22,7 +22,10 @@ The schema-1 workflow declaration is illustrated by the packaged
 `measurement`, `report`, `publication`, `preparation`, `payload`, and `manifest`.
 Optional `mode` selects `infer-release` (default), `explicit`, or
 `current-vs-latest`; explicit mode requires both `current` and `baseline`.
-`order` is `published` by default or explicitly `version`.
+`order` is `published` by default or explicitly `version`; it selects release
+chronology only. Measurement schema 6 adds the predeclared acquisition schedule
+used unchanged by both prepare and release. See
+[scheduled acquisition and candidate reuse](REUSING_BENCHMARKS.md).
 
 Preparation uses the same package/publication chronology as direct measurement.
 Prospective packages resolve HEAD; published and explicit pairs resolve their

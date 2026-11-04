@@ -1,6 +1,7 @@
 """Run the installed consumer contracts in the development environment too."""
 
 from tests.validation.public_python_tools_consumer import TestPythonTools as TestPythonTools
+from tests.validation.public_validation_consumer import TestCommandStreams as TestCommandStreams
 from tests.validation.public_validation_consumer import TestCoverage as TestCoverage
 from tests.validation.public_validation_consumer import TestGitDiscovery as TestGitDiscovery
 from tests.validation.public_validation_consumer import TestOfflineAudit as TestOfflineAudit

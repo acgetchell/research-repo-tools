@@ -7,9 +7,10 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, overload
 
 if TYPE_CHECKING:
+    from research_repo_tools.scheduled_runs import ScheduledRun
     from research_repo_tools.suite_measurement import SuiteMeasurementPlan
     from research_repo_tools.suite_runs import SuiteRun
 
@@ -353,14 +354,32 @@ def _series(plan: CompleteMeasurementPlan, policies: dict[str, CompletePolicy]) 
     return tuple(item.resolve(policies[item.phase].expected) if isinstance(item, DiscoveredSeries) else item for item in plan.series if item.phase in policies)
 
 
+@overload
+def validate_run_policy(evidence: Evidence, plan: CompleteMeasurementPlan, *, release: bool = False) -> CompleteRun: ...
+
+
+@overload
+def validate_run_policy(evidence: Evidence, plan: "SuiteMeasurementPlan", *, release: bool = False) -> "SuiteRun | ScheduledRun": ...
+
+
+@overload
 def validate_run_policy(
-    evidence: Evidence, plan: MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan, *, release: bool = False
-) -> CompleteRun | SuiteRun:
+    evidence: Evidence, plan: "MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan", *, release: bool = False
+) -> "CompleteRun | SuiteRun | ScheduledRun": ...
+
+
+def validate_run_policy(
+    evidence: Evidence, plan: "MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan", *, release: bool = False
+) -> "CompleteRun | SuiteRun | ScheduledRun":
     """Validate acquisition against independent declarations; release adds eligibility."""
     from research_repo_tools.suite_measurement import SuiteMeasurementPlan
     from research_repo_tools.suite_runs import validate_suite_policy
 
     if isinstance(plan, SuiteMeasurementPlan):
+        if plan.schedule is not None:
+            from research_repo_tools.scheduled_runs import validate_scheduled_policy
+
+            return validate_scheduled_policy(evidence, plan, release=release)
         return validate_suite_policy(evidence, plan, release=release)
     if not isinstance(plan, CompleteMeasurementPlan):
         raise ValueError("run eligibility requires a complete measurement policy")
@@ -448,9 +467,13 @@ def _prepare_phases(
     progress: ProgressReporter | None = None,
     compilation: dict[str, tuple[str, ...]] | None = None,
     on_sample: Callable[[str, CompleteSample, float], None] | None = None,
+    phase_order: tuple[str, ...] = ("baseline", "current"),
+    on_phase: Callable[[str, int, int], None] | None = None,
 ) -> tuple[dict[str, CompletePolicy], dict[str, Provenance], Callable[[], tuple[tuple[tuple[str, CompleteSample], ...], tuple[tuple[str, Provenance], ...]]]]:
     """Prepare a complete unit; return the same validated sampler used by v1-v3."""
     reporter = progress or ProgressReporter(mode="none")
+    if len(phase_order) != 2 or set(phase_order) != {"baseline", "current"}:
+        raise ValueError("phase order must contain baseline and current exactly once")
     for phase in active:
         plan.measurement.validate_release(getattr(pair, phase))
     roots = {
@@ -620,14 +643,19 @@ def _prepare_phases(
     def acquire() -> tuple[tuple[tuple[str, CompleteSample], ...], tuple[tuple[str, Provenance], ...]]:
         samples: list[tuple[str, CompleteSample]] = []
         sources: list[tuple[str, Provenance]] = []
-        for phase, root in roots.items():
+        for phase in phase_order:
+            if phase not in roots:
+                continue
+            root = roots[phase]
             selected = getattr(plan, phase)
             unchanged(phase)
             if (root / plan.measurement.criterion_dir).exists():
                 raise ValueError(f"{phase} timing output appeared before its measurement")
             started = time.monotonic()
+            started_ns = time.time_ns()
             with reporter.stage("acquisition", suite=reporter.suite, phase=phase):
                 result = run_command_live(selected.command[0], selected.command[1:], cwd=root, env=environments[phase], timeout=plan.measurement.timeout)
+            finished_ns = time.time_ns()
             if result.returncode:
                 raise ValueError(f"{phase} measurement failed")
             criterion = root / plan.measurement.criterion_dir
@@ -646,6 +674,8 @@ def _prepare_phases(
             source = declared[phase]
             context = {**dict(source.context), "gate-status": "passed", **({"saved-sample": plan.saved_sample or "none"} if plan.schema == 4 else {})}
             sources.append((phase, Provenance(source.revision, source.source_sha256, source.harness_sha256, tuple(context.items()))))
+            if on_phase is not None:
+                on_phase(phase, started_ns, finished_ns)
             if on_sample is not None:
                 on_sample(phase, samples[-1][1], time.monotonic() - started)
         for phase, root in roots.items():

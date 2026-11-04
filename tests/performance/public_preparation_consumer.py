@@ -11,6 +11,7 @@ from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from datetime import UTC, datetime
 from pathlib import Path
+from types import MappingProxyType
 from unittest.mock import patch
 
 from research_repo_tools.cli import main
@@ -189,7 +190,7 @@ class TestPreparation(unittest.TestCase):
                 self.assertEqual((root / "README.md").read_bytes(), first)
                 # Compatibility path never opens a missing preparation record.
                 (root / settings.preparation).unlink()
-                publish_publication(load_readme_plan(root, settings, identities=record.identities))
+                publish_publication(load_readme_plan(root, settings, identities=MappingProxyType(record.identities)))
             self.assertEqual(
                 {path: path.read_bytes() for path in files if path != root / settings.preparation},
                 {path: value for path, value in files.items() if path != root / settings.preparation},
