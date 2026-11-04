@@ -277,11 +277,12 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
         self.assertEqual({name: (self.root / name).read_bytes() for name in project_files}, original)
 
         manifest = self.root / "pyproject.toml"
-        # Keep the active interpreter compatible so uv reaches the stale-lock check.
-        manifest.write_bytes(original["pyproject.toml"].replace(b'">=3.15"', b'">=3.15,<3.16"', 1))
+        manifest.write_bytes(original["pyproject.toml"].replace(b'">=3.15"', b'">=3.16"', 1))
         self.assertNotEqual(manifest.read_bytes(), original["pyproject.toml"])
-        with self.assertRaisesRegex(RuntimeError, "needs to be updated"):
+        # uv rejects the incompatible manifest before dependency resolution.
+        with self.assertRaisesRegex(RuntimeError, "incompatible with the project's Python requirement: `>=3.16`") as failure:
             semgrep.check(settings)
+        self.assertIn("lock --check --offline", str(failure.exception))
         self.assertEqual((self.root / "uv.lock").read_bytes(), original["uv.lock"])
 
     def test_logical_filters_and_independent_blocks_keep_native_prose_and_suppression(self):
