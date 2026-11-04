@@ -6,6 +6,10 @@ set positional-arguments
 # Audit the maintained lockfiles selected here; add independent Python/Cargo roots.
 audit: (security-osv "uv.lock")
 
+# Validate stable public library docs from one packaged Cargo workspace member.
+cargo-docs package *args:
+    uv run --locked --group dev research-repo-tools toolchain run -- research-repo-tools validation cargo-docs "$@"
+
 # Generate, normalize, and rotate completed minor series into docs/archives/changelog.
 changelog:
     uv run --locked --group dev research-repo-tools toolchain run -- research-repo-tools changelog generate
@@ -180,7 +184,7 @@ security-secrets *args:
 semgrep-check:
     uv run --locked --group dev research-repo-tools semgrep check-fixtures
 
-# Verify the pinned Semgrep extra in the shared locked Python environment.
+# Verify the selected Semgrep scanner in the shared locked Python environment.
 semgrep-setup:
     uv run --locked --group dev research-repo-tools semgrep setup
 

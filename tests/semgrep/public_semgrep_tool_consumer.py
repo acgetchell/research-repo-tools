@@ -15,6 +15,7 @@ from pathlib import Path
 from typing import override
 from unittest.mock import patch
 
+from packaging.markers import default_environment
 from packaging.requirements import Requirement
 
 from research_repo_tools import _semgrep_launcher, cli, python_baseline, semgrep_tool
@@ -55,14 +56,31 @@ class TestSemgrepTool(unittest.TestCase):
         self.binary = self.root / ("semgrep.exe" if os.name == "nt" else "semgrep")
         self.binary.write_bytes(b"fixture")
         self.binary.chmod(0o755)
-        self.metadata = {"path": str(self.binary), "version": semgrep_tool.VERSION, "python": python_baseline.DEVELOPMENT_PYTHON}
-        self.actual = semgrep_tool.VERSION
+        self.actual = "1.183.0"
+        self.markers = dict(default_environment()) | {
+            "python_version": python_baseline.DEVELOPMENT_PYTHON,
+            "python_full_version": "3.15.1",
+            "sys_platform": "darwin",
+            "platform_machine": "arm64",
+        }
+        self.metadata = {"path": str(self.binary), "version": self.actual, "markers": self.markers}
+        launch = patch.object(semgrep_tool, "command_for_python", return_value=(str(self.binary),))
+        launch.start()
+        self.addCleanup(launch.stop)
         self.calls = []
         self.python = Path(sys.executable)
 
     def native(self, command, args, **kwargs):
         self.calls.append((command, args, kwargs))
-        if args[0] == "-I":
+        if args[0] == "lock":
+            self.assertEqual(command, "uv")
+            self.assertIn("--check", args)
+            self.assertIn("--offline", args)
+            self.assertEqual(args[args.index("--project") + 1], str(self.root))
+            self.assertEqual(args[args.index("--python") + 1], str(self.python))
+            self.assertNotIn("UV_PROJECT", kwargs["env"])
+            payload = b""
+        elif args[0] == "-I":
             self.assertEqual(Path(command), self.python)
             self.assertNotIn("uv", args)
             self.assertEqual(args[args.index("-X") + 1], "utf8")
@@ -130,7 +148,15 @@ class TestSemgrepTool(unittest.TestCase):
 
     def test_wrong_package_python_path_and_executable_version_fail_without_fallback(self):
         valid = self.metadata.copy()
-        for changed in ({"version": "0.0.0"}, {"python": "3.14"}, {"path": "relative/semgrep"}, {"path": str(self.root / "absent")}, {"path": str(self.root)}):
+        for changed in (
+            {"version": "0.0.0"},
+            {"version": "2.0.0"},
+            {"version": "1.184.0rc1"},
+            {"markers": self.markers | {"python_version": "3.14"}},
+            {"path": "relative/semgrep"},
+            {"path": str(self.root / "absent")},
+            {"path": str(self.root)},
+        ):
             with self.subTest(changed=changed), patch.object(semgrep_tool, "run_command_bytes", side_effect=self.native):
                 self.calls.clear()
                 self.metadata = valid | changed
@@ -141,6 +167,31 @@ class TestSemgrepTool(unittest.TestCase):
         self.actual = "0.0.0"
         with patch.object(semgrep_tool, "run_command_bytes", side_effect=self.native):
             with self.assertRaisesRegex(RuntimeError, "executable reported '0.0.0'"):
+                semgrep_tool.setup(self.root)
+
+    def test_lock_chooses_the_active_branch_and_requires_the_installed_version(self):
+        manifest = self.root / "pyproject.toml"
+        manifest.write_bytes(b'[project]\nname="scanner"\nversion="0.1.0"\n')
+        lock = self.root / "uv.lock"
+        lock.write_bytes(
+            b"version=1\n"
+            b'[[package]]\nname="semgrep"\nversion="1.182.1"\nsource={registry="https://pypi.org/simple"}\n'
+            b"resolution-markers=[\"sys_platform == 'darwin' and platform_machine == 'x86_64'\"]\n"
+            b'[[package]]\nname="semgrep"\nversion="1.183.0"\nsource={registry="https://pypi.org/simple"}\n'
+            b"resolution-markers=[\"sys_platform != 'darwin' or platform_machine != 'x86_64'\"]\n"
+        )
+        original = lock.read_bytes()
+        with patch.dict(os.environ, {"UV_PROJECT": "redirect"}), patch.object(semgrep_tool, "run_command_bytes", side_effect=self.native):
+            self.assertEqual(semgrep_tool.verify(self.root), semgrep_tool.VerifiedScanner(self.binary, "1.183.0"))
+            self.assertEqual([args[0] for _, args, _ in self.calls], ["-I", "lock", "--disable-version-check"])
+            self.assertEqual(lock.read_bytes(), original)
+            self.metadata["version"] = self.actual = "1.182.1"
+            with self.assertRaisesRegex(RuntimeError, "uv.lock selects 1.183.0.*installed Semgrep is 1.182.1"):
+                semgrep_tool.setup(self.root)
+            self.metadata["markers"] = self.markers | {"platform_machine": "x86_64"}
+            self.assertEqual(semgrep_tool.verify(self.root).version, "1.182.1")
+            lock.unlink()
+            with self.assertRaisesRegex(RuntimeError, "requires both pyproject.toml and uv.lock"):
                 semgrep_tool.setup(self.root)
 
     def test_provisioning_failure_and_timeout_are_actionable_and_redact_release_credentials(self):
@@ -154,13 +205,16 @@ class TestSemgrepTool(unittest.TestCase):
                     semgrep_tool.setup(self.root)
                 self.assertNotIn("PRIVATE_TOKEN", str(raised.exception))
 
-    def test_setup_cli_reports_the_pinned_scanner_and_preserves_failure_status(self):
+    def test_setup_cli_reports_the_verified_scanner_and_preserves_failure_status(self):
         out, err = io.StringIO(), io.StringIO()
-        with patch.object(semgrep_tool, "setup", return_value=self.binary) as provision, contextlib.redirect_stdout(out):
+        with (
+            patch.object(semgrep_tool, "verify", return_value=semgrep_tool.VerifiedScanner(self.binary, self.actual)) as provision,
+            contextlib.redirect_stdout(out),
+        ):
             self.assertEqual(cli.main(["--root", str(self.root), "semgrep", "setup"]), 0)
             provision.assert_called_once_with(self.root)
-        self.assertIn(f"Semgrep {semgrep_tool.VERSION}", out.getvalue())
-        with patch.object(semgrep_tool, "setup", side_effect=RuntimeError("setup unavailable")), contextlib.redirect_stderr(err):
+        self.assertIn(f"Semgrep {self.actual}", out.getvalue())
+        with patch.object(semgrep_tool, "verify", side_effect=RuntimeError("setup unavailable")), contextlib.redirect_stderr(err):
             self.assertEqual(cli.main(["--root", str(self.root), "semgrep", "setup"]), 1)
         self.assertIn("setup unavailable", err.getvalue())
 

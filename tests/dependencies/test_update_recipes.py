@@ -43,6 +43,7 @@ def recipes(tmp_path, monkeypatch, request):
     uv.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     monkeypatch.delenv("FAIL_STEP", raising=False)
+    monkeypatch.delenv("RESEARCH_REPO_TOOLS_TEST_WORKERS", raising=False)
     return justfile, consumer
 
 
@@ -192,9 +193,20 @@ def test_maintainer_ci_checks_early_and_coalesces_lock_validation(recipes):
     assert calls == maintainer_checks(justfile) + [
         ["build", "--no-sources", "--clear"],
         ["run", "--locked", "python", "scripts/check_publish.py"],
-        ["run", "--locked", "pytest", "--cov", "--cov-report=term-missing", "--cov-report=xml:coverage/cobertura.xml"],
+        ["run", "--locked", "python", "scripts/run_coverage.py", "-n", "4", "--dist", "worksteal", "--max-worker-restart", "0"],
         ["run", "--locked", "python", "scripts/check_install.py"],
     ]
+
+
+@pytest.mark.parametrize(("recipe", "runner"), [("coverage", ["python", "scripts/run_coverage.py"]), ("test", ["pytest"])])
+def test_maintainer_test_worker_count_can_be_overridden(recipes, monkeypatch, recipe, runner):
+    justfile, consumer = recipes
+    if consumer:
+        pytest.skip("maintainer source testing")
+    monkeypatch.setenv("RESEARCH_REPO_TOOLS_TEST_WORKERS", "0")
+    result, calls = invoke(justfile, recipe)
+    assert result.returncode == 0, result.stderr
+    assert calls == [["run", "--locked", *runner, "-n", "0", "--dist", "worksteal", "--max-worker-restart", "0"]]
 
 
 @pytest.mark.parametrize("recipe", ["ci", "install-check"])

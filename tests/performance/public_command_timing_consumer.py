@@ -32,16 +32,16 @@ class TestCommandTiming(unittest.TestCase):
         )
         self.declare()
 
-    def command(self, label: str) -> list[str]:
-        return [sys.executable, "-I", "-X", "utf8", str(self.script), label, "a b; $(literal)", "", "café"]
+    def command(self, label: str, *, python: str = sys.executable) -> list[str]:
+        return [python, "-I", "-X", "utf8", str(self.script), label, "a b; $(literal)", "", "café"]
 
-    def declare(self, *, warmups: int = 1, repeats: int = 3, timeout: float = 5) -> None:
+    def declare(self, *, warmups: int = 1, repeats: int = 3, timeout: float = 5, preflight_python: str = sys.executable) -> None:
         def literal(value):
             return json.dumps(value, ensure_ascii=False)
 
         (self.root / "timing.toml").write_text(
             f'schema=1\nsources=["work café.py"]\nwarmups={warmups}\nrepeats={repeats}\ntimeout={timeout}\n'
-            f"preflight=[{literal(self.command('prepare'))}]\n"
+            f"preflight=[{literal(self.command('prepare', python=preflight_python))}]\n"
             '[environment]\nTIMING_VAR="café"\n'
             f"[probes]\npython={literal([sys.executable, '--version'])}\n"
             f'[[cases]]\nid="z-last"\ncommand={literal(self.command("last"))}\n'
@@ -130,7 +130,10 @@ class TestCommandTiming(unittest.TestCase):
                 injected = "\ncount=len(pathlib.Path('events').read_text(encoding='utf-8').splitlines())\n"
                 if stage == "timeout":
                     injected += "import time;time.sleep(30)\npathlib.Path('survived').touch()\n"
-                    self.declare(timeout=0.5)
+                    # The Windows venv executable launches a second process.
+                    # The base interpreter makes the workload the direct child.
+                    base_python = sys._base_executable  # ty: ignore[unresolved-attribute]  CPython's base interpreter behind the venv.
+                    self.declare(timeout=0.5, preflight_python=base_python)
                 else:
                     ordinal = {"preflight": 1, "warmup": 2, "sample": 3, "probe": 1}[stage]
                     injected += f"if count=={ordinal}: raise SystemExit(27)\n"

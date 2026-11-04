@@ -1,6 +1,7 @@
 set positional-arguments
 
 git_cliff_version := "2.14.2"
+pytest_parallel := "-n " + quote(env("RESEARCH_REPO_TOOLS_TEST_WORKERS", "4")) + " --dist worksteal --max-worker-restart 0"
 
 # Network-backed advisory checks are separate from routine local validation.
 audit:
@@ -71,8 +72,8 @@ clean *args:
     uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain clean "$@"
 
 # Run tests once with branch/subprocess coverage and write a Cobertura report.
-coverage:
-    uv run --locked pytest --cov --cov-report=term-missing --cov-report=xml:coverage/cobertura.xml
+coverage *args:
+    uv run --locked python scripts/run_coverage.py {{ pytest_parallel }} "$@"
 
 # Show command help when invoked without a recipe.
 [default]
@@ -195,8 +196,8 @@ templates +args:
     uv run --locked research-repo-tools templates "$@"
 
 # Run the Python test suite.
-test:
-    uv run --locked pytest
+test *args:
+    uv run --locked pytest {{ pytest_parallel }} "$@"
 
 # Upgrade tools and Python dependencies, synchronize dev, then audit final locks.
 update: update-tools update-dependencies

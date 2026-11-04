@@ -36,14 +36,18 @@ redacted in addition to native detected-secret redaction. Report directories are
 caller-owned outputs. These commands are not an assurance that unknown secrets,
 ignored inputs or unsupported binary formats are detected.
 
-`semgrep_tool.setup(root, *, python=None)` verifies the exact scanner pin from
-the installed `semgrep` extra in the executing Python environment and returns
-its absolute executable `Path`. It checks the shared `python_baseline.DEVELOPMENT_PYTHON`
-(currently 3.15), distribution version and executable version. `python` is an
-explicit interpreter override used by top-level setup to verify the freshly
-synchronized project environment. It never selects a separate scanner Python,
-resolves dependencies, installs tools or falls back to an ambient scanner.
-Missing extras/version drift raise `RuntimeError` with setup guidance.
+`semgrep_tool.setup(root, *, python=None)` returns the verified scanner's
+absolute executable `Path`. `semgrep_tool.verify(root, *, python=None, uv="uv")`
+returns the executable and exact version as a `VerifiedScanner`. Both check the
+shared `python_baseline.DEVELOPMENT_PYTHON` (currently 3.15), stable compatibility
+range from installed metadata, and equality between distribution and executable
+versions. Managed roots require both `pyproject.toml` and `uv.lock`. An offline
+`uv lock --check` verifies manifest freshness, and the lock branch for the probed
+interpreter selects the exact scanner. A present `.python-version` must match
+that interpreter. Source-only roots without either project file use the same
+interpreter, range and executable checks. Top-level setup passes the freshly
+synchronized project interpreter and the verified uv executable. Missing extras
+or version drift raise `RuntimeError` with setup guidance.
 
 Consumers request `research-repo-tools[semgrep]` in their locked dev graph.
 `semgrep_tool.constraints()` returns the packaged compatibility overrides;

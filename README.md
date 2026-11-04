@@ -87,10 +87,11 @@ Open a new terminal if PATH changed. A failed step stops setup with a diagnostic
 fix that prerequisite and rerun. [Installation and recovery][toolchain] explains
 ownership, native build prerequisites and platform behavior.
 
-Semgrep consumers of v0.2.5 must request the `semgrep` extra on their shared
-package pin, retain the shared Python 3.15 selector, and adopt the package's
+Semgrep consumers request the `semgrep` extra on their shared package pin,
+retain the shared Python 3.15 selector, and adopt the package's
 [shared dependency overrides](docs/RUNNING_CHECKS.md#rust-documentation-scans)
-before locking. Scans and fixture checks use that same environment. A package
+before locking. The consumer lock selects the exact compatible scanner used for
+fixture and production scans. A package
 upgrade does not rewrite copied Just recipes; merge the relevant exported
 recipes as part of each consumer adoption and verify its integration before
 removing temporary adapters.
@@ -215,7 +216,10 @@ just performance-release tooling/performance-release.toml --checkpoint target/pe
 
 Completed paired suites retain their original raw bytes and sessions. An
 incomplete pair is recollected in full. `--progress json` emits versioned status
-events on stderr; `--progress none` disables status. Report and README retries
+events on stderr; `--progress none` disables status. Heartbeats default to 300
+seconds (five minutes); `--progress-cadence 60` or `--progress-cadence 600` selects
+a shorter or longer interval. Stage changes and failures are reported immediately.
+Report and README retries
 continue to use retained evidence without measuring again.
 
 Preparation saves independently selected release tags and full commits. Measurement

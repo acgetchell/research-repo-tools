@@ -1,4 +1,4 @@
-"""Pinned native Semgrep regressions, run from source and installed distributions."""
+"""Locked native Semgrep regressions, run from source and installed distributions."""
 
 import collections
 import contextlib
@@ -257,6 +257,33 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
         original = {item: item.read_bytes() for item in (path, fixed)}
         self.assertEqual(semgrep.check(settings), 0)
         self.assertEqual({item: item.read_bytes() for item in (path, fixed)}, original)
+
+    def test_fixture_and_production_scan_verify_the_managed_lock(self):
+        from research_repo_tools import semgrep
+
+        project_files = ("pyproject.toml", "uv.lock", ".python-version")
+        original = {name: (Path.cwd() / name).read_bytes() for name in project_files}
+        for name, payload in original.items():
+            (self.root / name).write_bytes(payload)
+        settings = self.settings([{"id": "python.print", "languages": ["python"], "pattern": "print(...)", "message": "print", "severity": "WARNING"}])
+        settings = replace(settings, semgrep=replace(settings.semgrep, fixtures="fixtures"))
+        self.write("fixtures/print.py", '# ruleid: python.print\nprint("fixture")\n')
+        source = self.write("production.py", 'print("production")\n')
+        self.assertEqual(semgrep.check(settings), 0)
+        with patch.object(semgrep_scan, "security_inventory", return_value=("production.py",)):
+            self.assertEqual(semgrep_scan.scan(settings, include=("*.py",)), 1)
+        report = json.loads((self.root / "target/security/semgrep/semgrep.json").read_bytes())
+        self.assertEqual([(item["check_id"], Path(item["path"])) for item in report["results"]], [("python.print", source)])
+        self.assertEqual({name: (self.root / name).read_bytes() for name in project_files}, original)
+
+        manifest = self.root / "pyproject.toml"
+        manifest.write_bytes(original["pyproject.toml"].replace(b'">=3.15"', b'">=3.16"', 1))
+        self.assertNotEqual(manifest.read_bytes(), original["pyproject.toml"])
+        # uv rejects the incompatible manifest before dependency resolution.
+        with self.assertRaisesRegex(RuntimeError, "incompatible with the project's Python requirement: `>=3.16`") as failure:
+            semgrep.check(settings)
+        self.assertIn("lock --check --offline", str(failure.exception))
+        self.assertEqual((self.root / "uv.lock").read_bytes(), original["uv.lock"])
 
     def test_logical_filters_and_independent_blocks_keep_native_prose_and_suppression(self):
         rust_scope = {"include": ["/src/**/*.rs", "/docs/**/*.md"]}

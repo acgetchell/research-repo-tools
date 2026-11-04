@@ -39,7 +39,7 @@ def add_command(commands, name: str) -> None:
     if name in {"measure", "release"}:
         command.add_argument("--checkpoint", help="ignored root-relative checkpoint directory; schema 5 only")
         command.add_argument("--progress", choices=("human", "json", "none"), default="human", help="advisory status on stderr")
-        command.add_argument("--progress-cadence", type=float, default=10.0, help="heartbeat interval in seconds, at least 1")
+        command.add_argument("--progress-cadence", type=float, default=300.0, help="heartbeat interval in seconds (default: 300, at least 1)")
         command.add_argument("--resume", action="store_true", help="validate and reuse completed units from --checkpoint")
     if name == "prepare":
         command.add_argument("--fetch-tags", action="store_true", help="fetch repository tags before selection; also requires --allow-git-mutations")

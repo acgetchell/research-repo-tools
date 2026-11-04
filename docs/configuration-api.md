@@ -210,7 +210,7 @@ Rust/Cargo and supported declared Cargo tools, including git-cliff and rumdl.
 See [toolchain setup](INSTALLING.md) for declarations, host support, installation
 ownership, and remaining native validation gates. Git is a system prerequisite;
 Semgrep is supplied by the optional `semgrep` extra in the same locked shared
-Python environment. `just semgrep-setup` verifies its pin and baseline without
+Python environment. `just semgrep-setup` verifies its resolved lock version and baseline without
 provisioning another interpreter. Root uv projects must adopt the packaged
 compatibility overrides; see [Semgrep configuration](RUNNING_CHECKS.md#rust-documentation-scans).
 GitHub CLI is needed for

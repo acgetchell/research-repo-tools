@@ -29,6 +29,7 @@ Use `just help` for the consumer's actual recipes and the
 
 | Capability | Authoritative reference |
 | --- | --- |
+| Cargo documentation | [Stable packaged library docs](cargo-docs-api.md) |
 | Cargo examples | [Discovery, configuration and live streams](cargo-examples-api.md) |
 | Configuration and CLI | [Configuration objects, entry point and platform contract](configuration-api.md) |
 | Files and text | [Selection, line checks and transactional file/directory publication](files-api.md) |
