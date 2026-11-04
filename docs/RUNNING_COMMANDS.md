@@ -17,6 +17,7 @@ arguments in lexicographic order.
 | Consumer recipe | Purpose |
 | --- | --- |
 | `just audit` | Audit every maintained lockfile explicitly selected by the consumer |
+| `just cargo-docs PACKAGE [ARGS...]` | Validate public library docs from a packaged crate on declared stable Rust |
 | `just changelog` | Generate, normalize, and archive completed minor series |
 | `just changelog-archive` | Archive existing notes without regenerating history |
 | `just changelog-check` | Validate the whole root changelog and all archives without writing |
@@ -24,7 +25,6 @@ arguments in lexicographic order.
 | `just changelog-release TAG [DATE]` | Generate a prospective release from prepared citation metadata or an explicit date |
 | `just check` | Run Python, Semgrep fixture, and zizmor validation; extend with consumer domain gates |
 | `just ci` | Run the same canonical consumer gate as local validation |
-| `just cargo-docs PACKAGE [ARGS...]` | Validate public library docs from a packaged crate on declared stable Rust |
 | `just clean [ARGS...]` | Preview obsolete package-owned installs; `--apply` removes them; repeat `--keep-root PATH` to retain other consumers' pins |
 | `just command-time CONFIG OUTPUT` | Acquire exploratory external-command timings into a new JSON report and print a summary |
 | `just files COMMAND...` | Check raw line limits, list selected files or run a command over them |
