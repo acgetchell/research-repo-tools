@@ -12,9 +12,9 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
-from typing import Never
 
-from research_repo_tools.complete_runs import _array, _integer, run_identity
+from research_repo_tools.complete_runs import RUN_SCHEMA_V5, _array, _integer, run_identity
+from research_repo_tools.criterion import _markdown_text
 from research_repo_tools.evidence import Evidence, _load_json, _object, deterministic_json, parse_evidence, serialize_evidence
 from research_repo_tools.measurement_checkpoints import open_checkpoint
 from research_repo_tools.performance_progress import ProgressReporter
@@ -25,25 +25,22 @@ from research_repo_tools.suite_runs import parse_suite_run, validate_suite_polic
 
 __all__ = ["SCHEDULED_RUN_SCHEMA", "ScheduledRun", "parse_scheduled_run", "select_trial"]
 
-SCHEDULED_RUN_SCHEMA = "research-repo-tools/complete-run/v5"
+SCHEDULED_RUN_SCHEMA = RUN_SCHEMA_V5
 
 
 @dataclass(frozen=True, slots=True)
 class ScheduledRun:
+    """Separate trials, with no implicit pooled phase or series view.
+
+    Use ``select_trial`` and ``parse_suite_run`` to inspect a trial's views.
+    """
+
     plan: SuiteMeasurementPlan
     trials: tuple[Evidence, ...]
 
     @property
     def harness_mode(self) -> str:
         return self.plan.harness_mode
-
-    @property
-    def phases(self) -> Never:
-        raise ValueError("select an explicit trial before inspecting phases")
-
-    @property
-    def series(self) -> Never:
-        raise ValueError("select an explicit trial before inspecting series")
 
     @property
     def schema(self) -> str:
@@ -282,7 +279,7 @@ def render_scheduled_run(evidence: Evidence, *, title: str, links: str, identity
     assert run.plan.schedule is not None
     lines = [
         "<!-- research-repo-tools/run-report/v2 -->",
-        f"# {title}",
+        f"# {_markdown_text(title)}",
         "",
         f"Run: `{identity}`",
         "",
@@ -296,5 +293,7 @@ def render_scheduled_run(evidence: Evidence, *, title: str, links: str, identity
         lines.extend(["", f"## Trial {index + 1}: {' → '.join(run.plan.schedule.phases[index])}", ""])
         for receipt in records[index]["receipts"]:
             lines.append(f"- {receipt['suite']}/{receipt['phase']}: {receipt['started_ns']}–{receipt['finished_ns']} (Unix ns).")
-        lines.append(render_suite_run(trial, title=f"Trial {index + 1}", links=links, identity=run_identity(trial)).decode("utf-8"))
+        trial_report = render_suite_run(trial, title=f"Trial {index + 1}", links=links, identity=run_identity(trial)).decode("utf-8").splitlines()
+        # The scheduled report owns the marker, title, identity and evidence links.
+        lines.extend(["", *trial_report[7:]])
     return ("\n".join(lines) + "\n").encode("utf-8")

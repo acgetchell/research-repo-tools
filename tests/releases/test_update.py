@@ -9,8 +9,7 @@ from research_repo_tools import files
 from research_repo_tools import release_discovery as release_discovery
 from research_repo_tools import release_metadata as release_check
 from research_repo_tools import update_release as updater
-
-from .test_metadata import _write_project
+from tests.releases.metadata_support import write_project
 
 if TYPE_CHECKING:
     from pathlib import Path
@@ -22,7 +21,7 @@ def _snapshot(root: Path) -> dict[str, bytes]:
 
 @pytest.mark.parametrize("tag", ["1.2.4", "v1.2", "v01.2.4", "v1.2.4-rc.1", "v1.2.4+build", " v1.2.4"])
 def test_rejects_non_stable_or_noncanonical_tags_before_changes(tmp_path: Path, tag: str) -> None:
-    _write_project(tmp_path)
+    write_project(tmp_path)
     original = _snapshot(tmp_path)
     with pytest.raises(ValueError, match="stable"):
         updater.update_release_version(tmp_path, tag, previous_tag="v1.2.3")
@@ -30,7 +29,7 @@ def test_rejects_non_stable_or_noncanonical_tags_before_changes(tmp_path: Path, 
 
 
 def test_prepares_all_metadata_without_upgrading_dependencies_or_rewriting_evidence(tmp_path: Path) -> None:
-    _write_project(tmp_path)
+    write_project(tmp_path)
     cargo_lock = tmp_path / "Cargo.lock"
     cargo_lock.write_text(cargo_lock.read_text() + '\n[[package]]\nname = "dependency"\nversion = "9.8.7"\n', encoding="utf-8", newline="\n")
     readme = tmp_path / "README.md"
@@ -65,7 +64,7 @@ def test_prepares_all_metadata_without_upgrading_dependencies_or_rewriting_evide
 
 
 def test_utc_midnight_updates_citation_and_existing_changelog_dates_together(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _write_project(tmp_path)
+    write_project(tmp_path)
 
     class Clock:
         @staticmethod
@@ -93,7 +92,7 @@ def test_discovery_excludes_drafts_prereleases_and_handles_published_target(tmp_
 
 
 def test_missing_github_cli_fails_before_discovery_and_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
-    _write_project(tmp_path)
+    write_project(tmp_path)
     original = _snapshot(tmp_path)
 
     def missing_gh(command: str) -> str:
@@ -109,7 +108,7 @@ def test_missing_github_cli_fails_before_discovery_and_writes(tmp_path: Path, mo
 
 
 def test_changelog_generation_sync_uses_prepared_date_without_github(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _write_project(tmp_path)
+    write_project(tmp_path)
     updater.update_release_version(tmp_path, "v1.2.4", previous_tag="v1.2.3", release_date="2026-08-30")
     changelog = tmp_path / "CHANGELOG.md"
     changelog.write_text("## [1.2.4] - 2026-08-31\n\nGenerated notes.\n\n" + changelog.read_text(), encoding="utf-8", newline="\n")
@@ -124,7 +123,7 @@ def test_changelog_generation_sync_uses_prepared_date_without_github(tmp_path: P
 
 @pytest.mark.parametrize("heading", ["## [1.2.4] - 2026-99-99", "## [1.2.4] - 2026-08-30\n\n## [1.2.4] - 2026-08-31"])
 def test_malformed_or_duplicate_target_heading_preserves_all_files(tmp_path: Path, heading: str) -> None:
-    _write_project(tmp_path)
+    write_project(tmp_path)
     changelog = tmp_path / "CHANGELOG.md"
     changelog.write_text(heading + "\n\n" + changelog.read_text(), encoding="utf-8", newline="\n")
     original = _snapshot(tmp_path)
@@ -134,7 +133,7 @@ def test_malformed_or_duplicate_target_heading_preserves_all_files(tmp_path: Pat
 
 
 def test_validation_failure_precedes_repository_replacement(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _write_project(tmp_path, citation_doi="10.5281/zenodo.123456")
+    write_project(tmp_path, citation_doi="10.5281/zenodo.123456")
     original = _snapshot(tmp_path)
     monkeypatch.setattr(updater, "_publish_texts", lambda _outputs: pytest.fail("invalid metadata reached publication"))
     with pytest.raises(ValueError, match="failed validation"):
@@ -144,7 +143,7 @@ def test_validation_failure_precedes_repository_replacement(tmp_path: Path, monk
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
 def test_mid_transaction_failure_restores_original_bytes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, newline: str) -> None:
-    _write_project(tmp_path)
+    write_project(tmp_path)
     for path in tmp_path.iterdir():
         path.write_text(path.read_text(encoding="utf-8"), encoding="utf-8", newline=newline)
     original = _snapshot(tmp_path)
@@ -166,14 +165,16 @@ def test_mid_transaction_failure_restores_original_bytes(tmp_path: Path, monkeyp
 
 
 def test_symlinked_lock_rejected_before_github_or_writes(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
-    _write_project(tmp_path)
+    write_project(tmp_path)
     lock = tmp_path / "uv.lock"
     target = tmp_path / "saved.lock"
     lock.rename(target)
     try:
         lock.symlink_to(target)
-    except OSError:
-        pytest.skip("symlink creation is unavailable on this runner")
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("symlink creation is unavailable on this runner")
+        raise
     original = target.read_bytes()
     monkeypatch.setattr(updater, "infer_previous_release", lambda *_args: pytest.fail("discovery preceded symlink rejection"))
     with pytest.raises(ValueError, match="symbolic link"):

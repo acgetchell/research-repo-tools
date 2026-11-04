@@ -7,7 +7,7 @@ Neither a self-authored policy nor this integrity receipt authenticates a run.
 import json
 import tempfile
 import unicodedata
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
@@ -29,7 +29,7 @@ from research_repo_tools.evidence import (
 )
 from research_repo_tools.files import _validate_distinct_paths
 from research_repo_tools.publication import PublicationPlan, _path, plan_outputs
-from research_repo_tools.release_assets import ReleaseTarget, _repository, _sha, _stable_tag
+from research_repo_tools.release_assets import ReleaseTarget, _repository, _sha, _stable_tag, require_release_checkout
 from research_repo_tools.release_evidence import EvidencePolicy, verify_release_evidence
 from research_repo_tools.scheduled_runs import ScheduledRun, validate_scheduled_policy
 from research_repo_tools.source_exports import capture_source, validate_source_record
@@ -40,10 +40,10 @@ __all__ = [
     "CandidatePolicy",
     "acquisition_assertion_digest",
     "parse_candidate_policy",
-    "serialize_candidate_policy",
-    "verify_candidate_release",
     "plan_candidate_archive",
+    "serialize_candidate_policy",
     "verify_candidate_archive",
+    "verify_candidate_release",
 ]
 
 POLICY_SCHEMA = "research-repo-tools/candidate-policy/v1"
@@ -57,11 +57,13 @@ class CandidatePolicy:
 
     Observation keys are (one-based trial, suite, phase). No default copies assertions
     from candidate evidence. The measurement's output exceptions predate acquisition.
+    Use commit=None in Step 1; replace it with the independently selected final
+    commit before release verification or archive operations.
     """
 
     repository: str
     tag: str
-    commit: str
+    commit: str | None
     acquisition_owner: str
     identity: str
     measurement: SuiteMeasurementPlan
@@ -71,7 +73,8 @@ class CandidatePolicy:
     def __post_init__(self) -> None:
         _repository(self.repository)
         _stable_tag(self.tag)
-        _sha(self.commit)
+        if self.commit is not None:
+            _sha(self.commit)
         _digest(self.identity, "independent acquisition identity")
         if (
             self.acquisition_owner not in {"local", "github-actions"}
@@ -146,7 +149,7 @@ def parse_candidate_policy(payload: bytes) -> CandidatePolicy:
     return CandidatePolicy(
         _string(raw["repository"], "repository"),
         _string(raw["tag"], "tag"),
-        _string(raw["commit"], "commit"),
+        _string(raw["commit"], "commit") if raw["commit"] is not None else None,
         _string(raw["acquisition_owner"], "acquisition_owner"),
         _string(raw["identity"], "identity"),
         parse_suite_plan(_object(raw["measurement"], "measurement")),
@@ -189,7 +192,7 @@ def _eligible(evidence: Evidence, policy: CandidatePolicy) -> ScheduledRun:
 
 
 def _binding(policy: CandidatePolicy, final: str) -> dict[str, Any]:
-    validate_source_record(final, policy.commit)
+    validate_source_record(final, _final_commit(policy))
     original = json.loads(dict(policy.candidate.context)["source-export"])
     finished = json.loads(final)
     if finished["mode"] != "revision" or finished["dirty"]:
@@ -246,7 +249,14 @@ def _contents(evidence: Evidence, policy: CandidatePolicy, binding: dict[str, An
     return files
 
 
+def _final_commit(policy: CandidatePolicy) -> str:
+    if policy.commit is None:
+        raise ValueError("candidate release requires an independently selected final commit")
+    return policy.commit
+
+
 def _acceptance(payload: bytes, policy: CandidatePolicy) -> dict[str, Any]:
+    _final_commit(policy)
     raw = _object(
         _load_json(payload, "candidate acceptance"), "candidate acceptance", {"schema", "policy_sha256", "identity", "binding", "native", "archive_sha256"}
     )
@@ -265,6 +275,8 @@ def verify_candidate_release(
     *,
     acquisition_sha256: str,
     expected: bytes | None = None,
+    reproduced_archive: Path | None = None,
+    reproduced_tools: Mapping[str, str] | None = None,
     limits: ArchiveLimits = ArchiveLimits(),
 ) -> bytes:
     """Step 2 and approval revalidation; never measure, gate, or resolve a new schedule.
@@ -272,21 +284,32 @@ def verify_candidate_release(
     Pass the frozen returned bytes as expected at every later gate. Existing
     native evidence verifies signer, event, branch, jobs, immutable artifact and
     run attempt. The consumer must protect these bytes and the original policy.
+    Optional Cargo reproduction uses the same paired archive/tool contract as
+    verify_release_evidence. No files are written to root, and neither index nor
+    working-tree changes are permitted at entry or return.
     """
     _digest(acquisition_sha256, "trusted Step 1 assertion digest")
     if acquisition_assertion_digest(policy) != acquisition_sha256:
         raise ValueError("candidate assertions differ from trusted Step 1 handoff")
+    commit = _final_commit(policy)
     _eligible(evidence, policy)
     if native_policy.validation.repository != policy.repository:
         raise ValueError("native evidence repository differs")
     pinned = _acceptance(expected, policy) if expected is not None else None
-    final = capture_source(root, policy.commit)
+    require_release_checkout(root, commit)
+    final = capture_source(root, commit)
     working = capture_source(root, "HEAD", working_tree=True)
-    if working.revision != policy.commit or working.dirty:
+    if working.revision != commit or working.dirty:
         raise ValueError("final acceptance requires the selected clean HEAD")
     binding = _binding(policy, final.provenance())
     native = verify_release_evidence(
-        native_policy, policy.tag.removeprefix("v"), policy.commit, read, expected=deterministic_json(pinned["native"]) if pinned else None
+        native_policy,
+        policy.tag.removeprefix("v"),
+        commit,
+        read,
+        expected=deterministic_json(pinned["native"]) if pinned else None,
+        reproduced_archive=reproduced_archive,
+        reproduced_tools=reproduced_tools,
     )
     archive = _archive(_contents(evidence, policy, binding), limits)
     accepted = deterministic_json(
@@ -301,6 +324,7 @@ def verify_candidate_release(
     )
     final.verify()
     working.verify()
+    require_release_checkout(root, commit)
     if expected is not None and accepted != expected:
         raise ValueError("approved source, native selection, acquisition, or archive changed")
     return accepted

@@ -281,6 +281,9 @@ def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
             raise ValueError("candidate handoff exceeds content limit")
         inputs[path] = data
     policy = parse_candidate_policy(inputs[args.policy])
+    commit = policy.commit
+    if commit is None:
+        raise ValueError("candidate release requires an independently selected final commit")
     native = load_evidence_policy(configuration)
     checkout = args.checkout.resolve(strict=True)
 
@@ -289,7 +292,7 @@ def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
             _regular(path)
             if path.read_bytes() != data:
                 raise ValueError("candidate handoff changed during verification")
-        _checkout(checkout, native.package, policy.tag.removeprefix("v"), policy.commit, path_in_vcs=native.path_in_vcs)
+        _checkout(checkout, native.package, policy.tag.removeprefix("v"), commit, path_in_vcs=native.path_in_vcs)
 
     unchanged()
     accepted = verify_candidate_release(
@@ -341,6 +344,9 @@ def run_assets(args: argparse.Namespace, settings: Config) -> None:
 
 def run(args: argparse.Namespace, settings: Config) -> int:
     try:
+        # Every Path-valued option in these commands names a consumer file or
+        # checkout. Keep the parser namespace reusable and apply --root once.
+        args = argparse.Namespace(**{name: settings.path(str(value)) if isinstance(value, Path) else value for name, value in vars(args).items()})
         (run_evidence if args.action == "evidence" else run_assets)(args, settings)
     except Exception as error:
         raise ValueError(redact_release_diagnostic(format_exception_diagnostics(error))) from error

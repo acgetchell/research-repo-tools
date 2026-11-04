@@ -48,11 +48,15 @@ def _array(value: object, context: str) -> list[object]:
 
 
 def _run_layout(raw: dict[str, object], retained: Evidence):
-    from research_repo_tools.complete_runs import validate_run_evidence
+    from research_repo_tools.complete_runs import CompleteRun, validate_run_evidence
     from research_repo_tools.criterion import _statistic
     from research_repo_tools.run_presentation import RunLayout, RunRow, SeriesSelection
+    from research_repo_tools.suite_runs import SuiteRun
 
-    recorded_series = {series.name: series for series in validate_run_evidence(retained).series}
+    run = validate_run_evidence(retained)
+    if not isinstance(run, (CompleteRun, SuiteRun)):
+        raise ValueError("select an explicit trial before inspecting series")
+    recorded_series = {series.name: series for series in run.series}
     recorded_sources = {phase: dict(source.context) for phase, source in retained.sources}
     series = []
     for value in _array(raw["series"], "series"):

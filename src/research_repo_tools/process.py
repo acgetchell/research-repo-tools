@@ -177,11 +177,11 @@ def run_command_live(
     check: bool = True,
     stdout_markers: Sequence[bytes] = (),
     stderr_markers: Sequence[bytes] = (),
-) -> subprocess.CompletedProcess[bytes]:
+) -> subprocess.CompletedProcess[None]:
     """Run an argument vector with inherited stdin/stdout/stderr and no shell.
 
-    Output is visible while the child runs. Results and failures contain no
-    captured output. Each nonempty stdout_markers/stderr_markers sequence spools
+    Output is visible while the child runs. Result stdout/stderr are None;
+    failures contain no captured output. Each nonempty stdout_markers/stderr_markers sequence spools
     that stream and echoes its exact bytes live to the same caller stream, then
     checks literal markers on that stream alone. Other streams stay inherited.
     This opt-in mode changes the selected streams' TTY/buffering behavior and uses
@@ -204,12 +204,13 @@ def run_command_live(
         return _run_with_markers(
             [str(path), *args], cwd=cwd, env=env, timeout=timeout, check=check, streams={"stdout": stdout_markers, "stderr": stderr_markers}
         )
-    return subprocess.run([str(path), *args], cwd=cwd, env=env, check=check, timeout=timeout)
+    result = subprocess.run([str(path), *args], cwd=cwd, env=env, check=check, timeout=timeout)
+    return subprocess.CompletedProcess(result.args, result.returncode, None, None)
 
 
 def _run_with_markers(
     argv: list[str], *, cwd: Path | None, env: Mapping[str, str] | None, timeout: float | None, check: bool, streams: Mapping[str, Sequence[bytes]]
-) -> subprocess.CompletedProcess[bytes]:
+) -> subprocess.CompletedProcess[None]:
     # Forward in a disposable process, not the deadline-owning thread: a caller
     # that stops reading stdout must not prevent timeout cleanup. The spool also
     # avoids pipe readers waiting forever for inherited descendant handles.
@@ -259,7 +260,7 @@ def _run_with_markers(
                 publish_endpoint(Path(directory) / name, endpoint)
             for forwarder in forwarders.values():
                 forwarder.wait(timeout=budget())
-            result = subprocess.CompletedProcess(argv, child.returncode)
+            result = subprocess.CompletedProcess[None](argv, child.returncode)
             if check:
                 result.check_returncode()
             for name, forwarder in forwarders.items():
@@ -296,7 +297,7 @@ def _run_with_markers(
                 if process.poll() is None:
                     process.kill()
                 process.wait()
-    return cast(subprocess.CompletedProcess[bytes], result)
+    return result
 
 
 def _diagnostic_stream(value: str | bytes | None) -> str:

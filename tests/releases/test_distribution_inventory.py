@@ -6,7 +6,9 @@ import subprocess
 import sys
 import tarfile
 import tomllib
+import unittest
 import zipfile
+from collections import Counter
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -22,6 +24,25 @@ def install_checker():
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+@pytest.mark.parametrize(
+    ("suite", "prefix", "base_classes"),
+    [
+        ("tests.notebooks.public_notebook_consumer", "NOTEBOOK", ("TestInspection",)),
+        ("tests.papers.public_paper_consumer", "PAPER", ("TestDates", "TestMissingExtra")),
+    ],
+)
+def test_optional_consumer_selections_cover_each_class_once(install_checker, suite: str, prefix: str, base_classes: tuple[str, ...]) -> None:
+    module = importlib.import_module(suite)
+    loader = unittest.TestLoader()
+    classes = {
+        name for name, value in vars(module).items() if isinstance(value, type) and issubclass(value, unittest.TestCase) and loader.getTestCaseNames(value)
+    }
+    base = getattr(install_checker, f"{prefix}_BASE_TESTS")
+    extra = getattr(install_checker, f"{prefix}_EXTRA_TESTS")
+    assert base == base_classes, "base-install contracts must run before optional dependencies are installed"
+    assert Counter((*base, *extra)) == Counter(classes)
 
 
 @pytest.mark.parametrize("utf8_setting", ["0", "1"])

@@ -69,10 +69,9 @@ class TestScanConsumer(unittest.TestCase):
         self.calls = []
         self.behavior = "findings"
         self.invocation_index = 0
-        self.addCleanup(patch.stopall)
-        self.inventory = patch.object(semgrep_scan, "security_inventory", return_value=self.names).start()
-        patch.object(semgrep_scan.semgrep_tool, "setup", return_value=self.root / "semgrep").start()
-        patch.object(security, "run_command_bytes", side_effect=self.native).start()
+        self.inventory = self.enterContext(patch.object(semgrep_scan, "security_inventory", return_value=self.names))
+        self.enterContext(patch.object(semgrep_scan.semgrep_tool, "setup", return_value=self.root / "semgrep"))
+        self.enterContext(patch.object(security, "run_command_bytes", side_effect=self.native))
 
     def native(self, binary, args, **kwargs):
         self.calls.append(args)

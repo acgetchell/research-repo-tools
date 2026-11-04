@@ -9,8 +9,8 @@ from packaging.specifiers import SpecifierSet
 
 from research_repo_tools import cli, config, python_baseline, toolchain_config
 from research_repo_tools import python_adoption as adoption
-from tests.toolchain.test_python_adoption import consumer as consumer
-from tests.toolchain.test_python_adoption import snapshot
+from tests.toolchain.adoption_support import consumer as consumer
+from tests.toolchain.adoption_support import snapshot
 
 
 def test_owned_python_mirrors_match_installed_authority():

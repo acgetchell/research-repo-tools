@@ -675,9 +675,11 @@ def test_malformed_event_cli_diagnostics_have_no_side_effects(tmp_path, monkeypa
     assert list(tmp_path.iterdir()) == [source]
 
 
-def test_cli_retains_transport_diagnostics_but_redacts_signed_urls(monkeypatch, capsys):
+@pytest.mark.parametrize("failure", [subprocess.CalledProcessError, OSError, ValueError])
+def test_cli_retains_transport_diagnostics_but_redacts_signed_urls(monkeypatch, capsys, failure):
     def fail(*args, **kwargs):
-        raise subprocess.CalledProcessError(1, ["gh"], stderr=b'Get "https://storage.example/blob?sig=secret&token=private": Forbidden')
+        detail = 'Get "https://storage.example/blob?sig=secret&token=private": Forbidden ghp_fixture_token'
+        raise failure(1, ["gh"], stderr=detail.encode()) if failure is subprocess.CalledProcessError else failure(detail)
 
     monkeypatch.setattr(release, "promote", fail)
     monkeypatch.setattr(release.sys, "argv", ["release_assets.py", "promote", TAG, "--commit", COMMIT])
@@ -685,6 +687,34 @@ def test_cli_retains_transport_diagnostics_but_redacts_signed_urls(monkeypatch, 
     detail = capsys.readouterr().err
     assert "Forbidden" in detail and "storage.example/blob?<redacted>" in detail
     assert "secret" not in detail and "private" not in detail
+    assert "ghp_fixture_token" not in detail
+
+
+@pytest.mark.parametrize("arguments", [["--help"], ["consume", "--help"], ["seal", "--help"]])
+def test_release_help_ignores_unrelated_invalid_run_environment(monkeypatch, capsys, arguments):
+    monkeypatch.setenv("GITHUB_RUN_ID", "not-an-integer")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "not-an-integer")
+    monkeypatch.setattr(release.sys, "argv", ["release_assets.py", *arguments])
+    with pytest.raises(SystemExit) as exit_status:
+        release.main()
+    assert exit_status.value.code == 0
+    captured = capsys.readouterr()
+    assert "usage:" in captured.out and captured.err == ""
+
+
+def test_seal_validates_environment_defaults_and_allows_explicit_overrides(monkeypatch, capsys):
+    monkeypatch.setenv("GITHUB_RUN_ID", "not-an-integer")
+    monkeypatch.setenv("GITHUB_RUN_ATTEMPT", "not-an-integer")
+    monkeypatch.setattr(release.sys, "argv", ["release_assets.py", "seal", "--artifact", "31"])
+    with pytest.raises(SystemExit) as exit_status:
+        release.main()
+    assert exit_status.value.code == 2
+    assert "--run" in capsys.readouterr().err
+    calls = []
+    monkeypatch.setattr(release, "seal", lambda *args: calls.append(args))
+    monkeypatch.setattr(release.sys, "argv", ["release_assets.py", "seal", "--artifact", "31", "--run", "123", "--attempt", "2"])
+    assert release.main() == 0
+    assert calls == [(123, 2, 31, Path(release.MANIFEST))]
 
 
 def test_seal_records_original_producer_and_every_required_validator(remote, tmp_path, monkeypatch):

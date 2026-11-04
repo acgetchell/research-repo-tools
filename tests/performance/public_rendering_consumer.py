@@ -162,7 +162,9 @@ class TestRenderingConsumer(unittest.TestCase):
             counts = []
             for size in (8, 64):
                 evidence = fixture(size, schema=schema, disjoint=disjoint)
-                rows = {item.rows for item in validate_run_evidence(evidence).series}
+                run = validate_run_evidence(evidence)
+                assert isinstance(run, CompleteRun)
+                rows = {item.rows for item in run.series}
                 decoded = 0
 
                 def profile(frame, event, argument):

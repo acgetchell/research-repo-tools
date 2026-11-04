@@ -103,13 +103,14 @@ def run_selected(
 ) -> int:
     """Return the selected file count after successful bounded batch execution.
 
+    env replaces the environment for both Git selection and command execution.
     An empty selection returns zero. A failed batch raises the process error
     and prevents later batches from running.
     """
     if not command:
         raise ValueError("files run requires a command after --")
     argument_batches(command, (), batch_size=batch_size)
-    files = select_files(root, include=include, exclude=exclude)
+    files = select_files(root, include=include, exclude=exclude, env=env)
     if not files:
         return 0
     executable = resolve_executable(command[0], cwd=root, env=env)

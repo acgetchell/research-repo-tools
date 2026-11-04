@@ -44,7 +44,7 @@ class TrialSchedule:
 
 def parse_schedule(value: object) -> TrialSchedule:
     raw = _object(value, "schedule")
-    if set(raw) not in ({"trials", "order"}, {"trials", "order", "seed"}, {"trials", "order", "seed", "phases"}):
+    if {"trials", "order"} - raw.keys() or raw.keys() - {"trials", "order", "seed", "phases"}:
         raise ValueError("invalid schedule fields")
     schedule = TrialSchedule(
         _integer(raw["trials"], "trials"), _string(raw["order"], "order"), _integer(raw["seed"], "seed") if raw.get("seed") is not None else None

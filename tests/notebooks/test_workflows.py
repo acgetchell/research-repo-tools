@@ -246,7 +246,9 @@ def test_existing_symlink_source_or_cleanup_is_rejected_when_privileges_allow(tm
     try:
         alias.symlink_to(path)
     except OSError as error:
-        pytest.skip(f"native symlink privilege unavailable: {error}")
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip(f"native symlink privilege unavailable: {error}")
+        raise
     with pytest.raises(ValueError, match="symlink or junction"):
         workflows.reset(settings(tmp_path, scratch=["scratch"]), apply=True)
     assert alias.is_symlink() and path.read_bytes() == b"local notebook\r\n"

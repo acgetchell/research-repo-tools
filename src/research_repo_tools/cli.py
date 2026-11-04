@@ -4,6 +4,7 @@ import argparse
 import os
 import subprocess
 import sys
+from contextlib import ExitStack
 from dataclasses import replace
 from io import TextIOWrapper
 from pathlib import Path
@@ -846,24 +847,26 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
 
 def main(argv: list[str] | None = None) -> int:
     # Reporting a completed mutation must not fail on an unencodable path.
-    # Preserve the selected encoding while escaping unsupported characters.
-    for stream in (sys.stdout, sys.stderr):
-        if isinstance(stream, TextIOWrapper):
-            stream.reconfigure(errors="backslashreplace")
-    args = parser().parse_args(argv)
-    expected_errors = (ExecutableNotFoundError, OSError, ValueError, TypeError, RuntimeError, subprocess.SubprocessError)
-    try:
-        return run(args, config.load(args.config, args.root))
-    except ExceptionGroup as error:
-        expected, unexpected = error.split(expected_errors)
-        if expected is not None:
-            print(f"research-repo-tools: {format_exception_diagnostics(expected)}", file=sys.stderr)
-        if unexpected is not None:
-            raise unexpected from None
-        return 1
-    except expected_errors as error:
-        print(f"research-repo-tools: {format_exception_diagnostics(error, single_line=args.group == 'deps')}", file=sys.stderr)
-        return 1
+    # Preserve the encoding and restore caller-owned stream policies on exit.
+    with ExitStack() as streams:
+        for stream in (sys.stdout, sys.stderr):
+            if isinstance(stream, TextIOWrapper):
+                streams.callback(stream.reconfigure, errors=stream.errors)
+                stream.reconfigure(errors="backslashreplace")
+        args = parser().parse_args(argv)
+        expected_errors = (ExecutableNotFoundError, OSError, ValueError, TypeError, RuntimeError, subprocess.SubprocessError)
+        try:
+            return run(args, config.load(args.config, args.root))
+        except ExceptionGroup as error:
+            expected, unexpected = error.split(expected_errors)
+            if expected is not None:
+                print(f"research-repo-tools: {format_exception_diagnostics(expected)}", file=sys.stderr)
+            if unexpected is not None:
+                raise unexpected from None
+            return 1
+        except expected_errors as error:
+            print(f"research-repo-tools: {format_exception_diagnostics(error, single_line=args.group == 'deps')}", file=sys.stderr)
+            return 1
 
 
 if __name__ == "__main__":

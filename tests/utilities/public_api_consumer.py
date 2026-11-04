@@ -13,11 +13,20 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from typing import override
+from types import MappingProxyType
+from typing import assert_type, override
 from unittest.mock import patch
 
 from research_repo_tools.files import RecoveryError, publish_directory, replace_many
-from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics, resolve_executable, run_command, run_command_bytes, run_git_bytes
+from research_repo_tools.process import (
+    ExecutableNotFoundError,
+    format_exception_diagnostics,
+    resolve_executable,
+    run_command,
+    run_command_bytes,
+    run_command_live,
+    run_git_bytes,
+)
 from research_repo_tools.selection import run_selected
 
 
@@ -31,6 +40,59 @@ class ConsumerCase(unittest.TestCase):
 
 
 class TestProcess(ConsumerCase):
+    def test_public_signatures_are_inspectable_without_loading_optional_dependencies(self) -> None:
+        script = """import importlib, inspect, sys
+names = {
+    'archive_changelog': ('group_by_minor', 'plan_archives'),
+    'common_measurement': ('validate_run_policy',),
+    'complete_runs': ('validate_run_evidence',),
+    'coverage': ('coverage_entries', 'filter_entries'),
+    'measurement': ('load_measurement', 'measure_pair'),
+    'notebooks': ('Notebook', 'generated_state', 'clear_node', 'serialize'),
+    'release_metadata': ('main',),
+    'release_publishing': ('check_metadata', 'check_reviewed_release', 'publish_reviewed_release', 'verify_publication'),
+}
+count = 0
+for name, functions in names.items():
+    module = importlib.import_module('research_repo_tools.' + name)
+    for name in functions:
+        signature = inspect.signature(getattr(module, name))
+        assert signature.parameters, name
+        count += 1
+assert 'nbformat' not in sys.modules and 'pypdf' not in sys.modules
+print(count)
+"""
+        result = run_command(sys.executable, ["-I", "-c", script], cwd=self.root)
+        self.assertEqual(result.stdout.strip(), "17")
+
+    def test_live_results_have_no_captured_streams(self) -> None:
+        for markers in ((), (b"marker",)):
+            with self.subTest(markers=markers):
+                result = run_command_live(sys.executable, ["-I", "-c", "print('marker')"], stdout_markers=markers)
+                assert_type(result, subprocess.CompletedProcess[None])
+                assert_type(result.stdout, None)
+                assert_type(result.stderr, None)
+                self.assertIsNone(result.stdout)
+                self.assertIsNone(result.stderr)
+                self.assertEqual(result.returncode, 0)
+
+    @unittest.skipIf(os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1", "Git-mutating fixture disabled")
+    def test_selected_files_and_child_share_the_replacement_environment(self) -> None:
+        # Select tracked files from a separate index. Ambient selection would
+        # miss the ignored input retained only in that caller-selected index.
+        git_env = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+        run_git_bytes(["init", "--template="], cwd=self.root, env=git_env)
+        (self.root / ".gitignore").write_bytes(b"*.txt\n")
+        (self.root / "ambient.txt").write_bytes(b"ambient")
+        (self.root / "selected.txt").write_bytes(b"selected")
+        run_git_bytes(["add", "-f", "ambient.txt"], cwd=self.root, env=git_env)
+        alternate = {**git_env, "GIT_INDEX_FILE": str(self.root / ".git" / "selected-index"), "API_SELECTION": "replacement"}
+        run_git_bytes(["add", "-f", "selected.txt"], cwd=self.root, env=alternate)
+        original = dict(alternate)
+        script = "import os,sys; assert os.environ['API_SELECTION']=='replacement'; assert sys.argv[1:]==['./selected.txt']"
+        self.assertEqual(run_selected(self.root, [sys.executable, "-I", "-c", script], include=("*.txt",), env=MappingProxyType(alternate)), 1)
+        self.assertEqual(alternate, original)
+
     def test_selected_file_commands_reject_scalar_strings_before_resolution(self) -> None:
         for files in ((), ("input.txt",)):
             for command in ("echo", b"echo"):
@@ -249,11 +311,15 @@ class TestPublication(ConsumerCase):
         self.assertEqual(first.read_bytes(), b"one")
         self.assertEqual(second.read_bytes(), b"two")
 
-    @unittest.skipIf(os.name == "nt", "Windows symlinks require privileges; Windows CI exercises ordinary paths")
     def test_symlinks_and_resolved_parent_aliases(self) -> None:
         target, link = self.root / "original", self.root / "link"
         target.write_bytes(b"original")
-        link.symlink_to(target)
+        try:
+            link.symlink_to(target)
+        except OSError as error:
+            if getattr(error, "winerror", None) == 1314:
+                self.skipTest(f"native symlink privilege unavailable: {error}")
+            raise
         with self.assertRaisesRegex(ValueError, "symlink"):
             replace_many({link: b"candidate"})
         link.unlink()

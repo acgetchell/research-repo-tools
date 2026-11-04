@@ -39,12 +39,16 @@ def test_publication_preserves_posix_permissions(tmp_path: Path) -> None:
     assert stat.S_IMODE(path.stat().st_mode) == 0o640
 
 
-@pytest.mark.skipif(os.name == "nt", reason="symlink creation needs elevated Windows privileges")
 def test_guarded_publication_rejects_retargeted_symlink(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
     first, second, link = (tmp_path / name for name in ("first", "second", "link"))
     first.write_bytes(b"original")
     second.write_bytes(b"original")
-    link.symlink_to(first)
+    try:
+        link.symlink_to(first)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip(f"native symlink privilege unavailable: {error}")
+        raise
     stage_bytes = files._stage_bytes
 
     def stage(path: Path, payload: bytes) -> Path:
@@ -57,7 +61,7 @@ def test_guarded_publication_rejects_retargeted_symlink(tmp_path: Path, monkeypa
     with pytest.raises(ValueError, match="changed before publication"):
         files.replace_if_unchanged(link, b"original", b"replacement")
     assert link.is_symlink()
-    assert link.resolve() == second
+    assert link.samefile(second)
     assert first.read_bytes() == second.read_bytes() == b"original"
     assert set(tmp_path.iterdir()) == {first, second, link}
 

@@ -21,6 +21,12 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 TIMEOUT = 300
 CONSUMER_TIMEOUT = 900
+# Each class runs once per artifact, in the smallest dependency environment
+# that can prove its contract. Keep both selections complete and disjoint.
+NOTEBOOK_BASE_TESTS = ("TestInspection",)
+NOTEBOOK_EXTRA_TESTS = ("TestAdvice", "TestExecutionPreflight", "TestIdPattern", "TestInstallPolicy")
+PAPER_BASE_TESTS = ("TestDates", "TestMissingExtra")
+PAPER_EXTRA_TESTS = ("TestPdf",)
 
 
 def run(command: list[str], *, cwd: Path, env: dict[str, str], timeout: int = TIMEOUT, capture_output: bool = True) -> str:
@@ -353,7 +359,7 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             run_consumer_suite(python, [str(import_suite)], cwd=consumer, env=local_env)
             notebook_suite = consumer / "public_notebook_consumer.py"
             notebook_suite.write_bytes((ROOT / "tests/notebooks/public_notebook_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(notebook_suite), "TestInspection"], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(notebook_suite), *NOTEBOOK_BASE_TESTS], cwd=consumer, env=local_env)
             workflows_suite = consumer / "public_workflows_consumer.py"
             workflows_suite.write_bytes((ROOT / "tests/notebooks/public_workflows_consumer.py").read_bytes())
             run_consumer_suite(python, [str(workflows_suite)], cwd=consumer, env=local_env)
@@ -471,9 +477,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             # clearly until the opt-in extra from the same distribution resolves.
             paper_suite = consumer / "public_paper_consumer.py"
             paper_suite.write_bytes((ROOT / "tests/papers/public_paper_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(paper_suite), "TestDates", "TestMissingExtra"], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(paper_suite), *PAPER_BASE_TESTS], cwd=consumer, env=local_env)
             run([uv, "pip", "install", "--python", str(python), f"{artifact}[papers]"], cwd=consumer, env=env)
-            run_consumer_suite(python, [str(paper_suite), "TestDates", "TestPdf"], cwd=consumer, env=local_env)
+            run_consumer_suite(python, [str(paper_suite), *PAPER_EXTRA_TESTS], cwd=consumer, env=local_env)
             command = scripts / ("research-repo-tools.exe" if os.name == "nt" else "research-repo-tools")
             assert run([str(command), "--version"], cwd=consumer, env=local_env).strip() == version
             assert "changelog" in run([str(command), "--help"], cwd=consumer, env=local_env)
@@ -512,7 +518,7 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             # and a real project kernel without touching the user's kernels.
             run([str(just), "notebook-sync"], cwd=recipe_consumer, env=env)
             recipe_python = recipe_consumer / ".venv" / scripts.name / python.name
-            run_consumer_suite(recipe_python, [str(notebook_suite)], cwd=recipe_consumer, env=env)
+            run_consumer_suite(recipe_python, [str(notebook_suite), *NOTEBOOK_EXTRA_TESTS], cwd=recipe_consumer, env=env)
             testing_suite = consumer / "public_testing_consumer.py"
             testing_suite.write_bytes((ROOT / "tests/notebooks/public_testing_consumer.py").read_bytes())
             run_consumer_suite(recipe_python, [str(testing_suite)], cwd=recipe_consumer, env=env)

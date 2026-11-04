@@ -47,8 +47,8 @@ retains the resulting entire schedule. No consumer chooses a fresh seed later.
 
 The acquisition owner freezes the independent Step 1 assertion digest and original
 payload/envelope through the trusted handoff before report edits or final merge.
-Use `CandidatePolicy` and `acquisition_assertion_digest` under that owner's
-control. Keep original raw evidence in ignored scratch or immutable artifact
+Use `CandidatePolicy(commit=None, ...)` and `acquisition_assertion_digest` under
+that owner's control. Keep original raw evidence in ignored scratch or immutable artifact
 storage; report paths declared as exceptions may be committed in the release PR.
 After report/README generation, review and merge the release-preparation PR.
 

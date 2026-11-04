@@ -237,9 +237,9 @@ def test_generation_keeps_unicode_prose_when_applying_prospective_and_declared_d
 
 def test_regenerated_declared_date_still_passes_release_metadata_check(tmp_path, monkeypatch):
     from research_repo_tools import release_metadata
-    from tests.releases.test_metadata import _write_project
+    from tests.releases.metadata_support import write_project
 
-    _write_project(tmp_path)
+    write_project(tmp_path)
     path = tmp_path / "CHANGELOG.md"
     generated = path.read_text().replace("2026-08-04", "2026-08-05")
     monkeypatch.setattr(changelog, "run_safe_command", lambda *args, **kwargs: subprocess.CompletedProcess([], 0, generated, ""))

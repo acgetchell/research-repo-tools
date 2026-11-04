@@ -11,7 +11,9 @@ asserted release target. It does not manufacture native saved samples or CI trus
 separate trial pairs; randomized order requires an explicit seed and an even
 trial count. Sequential order is supported without claiming counterbalancing.
 `parse_schedule` verifies any supplied realized schedule against the declared
-algorithm. The [procedure](REUSING_BENCHMARKS.md) specifies ordering and recovery.
+algorithm; `seed` and `phases` are independently optional in the input document
+when the order needs no seed. The [procedure](REUSING_BENCHMARKS.md) specifies
+ordering and recovery.
 
 `scheduled_runs.parse_scheduled_run(evidence)` and `validate_run_evidence` return
 `ScheduledRun(plan, trials)` for complete-run v5. `trials` contains the exact
@@ -19,7 +21,24 @@ original v4 evidence for each independent trial. The outer payload retains uniqu
 sessions and observed per-suite/phase timestamps in declared execution order.
 `select_trial(evidence, trial)` validates the entire schedule before selecting a
 one-based trial for table, CSV, or plot APIs. A scheduled run deliberately has no
-pooled `phases` or `series` view: accessing those requires explicit selection.
+pooled `phases` or `series` attribute. Narrow the general validator's result by
+type, then explicitly select a trial before using those views:
+
+```python
+from research_repo_tools.complete_runs import validate_run_evidence
+from research_repo_tools.scheduled_runs import ScheduledRun, select_trial
+from research_repo_tools.suite_runs import parse_suite_run
+
+run = validate_run_evidence(evidence)
+if isinstance(run, ScheduledRun):
+    run = parse_suite_run(select_trial(evidence, trial=1))
+phase_views = run.phases
+```
+
+`validate_run_policy` preserves a `CompleteRun` result type for a
+`CompleteMeasurementPlan`; a `SuiteMeasurementPlan` returns `SuiteRun` or
+`ScheduledRun` according to its schedule. Runtime schema/policy mismatches raise
+`ValueError`.
 The whole v5 evidence remains the authority for trial order and provenance.
 
 The default complete report displays every trial separately. Schema-2 README
@@ -60,7 +79,7 @@ eligibility. `validate_run_policy` checks independently supplied suite policy;
 immutable history and transactional README publication use the same public APIs.
 Current document-input checks derive from each suite's recorded declarations.
 
-`performance_progress.ProgressReporter(*, mode="human", cadence=10, stream=None,
+`performance_progress.ProgressReporter(*, mode="human", cadence=300, stream=None,
 observer=None, clock=time.monotonic)` exposes the documented event contract.
 The default stream is stderr. An observer receives event dictionaries; heartbeats
 invoke it on a background thread. Keep custom observers fast and nonblocking.
@@ -170,10 +189,11 @@ The supported names in `complete_runs` are:
 | --- | --- |
 | `LEGACY_RUN_SCHEMA` | Alias of `RUN_SCHEMA` |
 | `RUN_SCHEMA` | `research-repo-tools/complete-run/v1`; original uniform policy and provenance rules |
-| `RUN_SCHEMAS` | All four supported schemas, in version order |
+| `RUN_SCHEMAS` | All five supported schemas, in version order |
 | `RUN_SCHEMA_V2` | `research-repo-tools/complete-run/v2`; explicit phase-owned policy and provenance rules |
 | `RUN_SCHEMA_V3` | `research-repo-tools/complete-run/v3`; common or independent acquisition and supplemental raw JSON files |
 | `RUN_SCHEMA_V4` | `research-repo-tools/complete-run/v4`; suite availability, complete acquisition units and observation-level comparisons |
+| `RUN_SCHEMA_V5` | `research-repo-tools/complete-run/v5`; separately retained trials, declared schedule and observed execution receipts |
 | `CompleteCase(storage_path, benchmark, estimates, sample, *, raw_files=())` | Portable relative path plus original immutable bytes for Criterion's three core JSON files and optional `(filename, bytes)` pairs |
 | `CompletePolicy(expected, sample_count=100, statistics=("mean", "median"), confidence_level=0.95, unit="ns", *, sample_counts=())` | Exact unique semantic IDs; select uniform counts or exhaustive immutable ID/count pairs with `sample_count=None` |
 | `CompleteRun(phases, series, compatible=("harness_sha256",), *, schema=RUN_SCHEMA, harness_mode="common")` | Exactly baseline/current complete samples, named views and required provenance selection; defaults to v1, with v2 for independent phase counts and v3 for independent acquisition |

@@ -50,8 +50,10 @@ class TestSarifConsumer(unittest.TestCase):
                 alias = output / "alias"
                 try:
                     alias.symlink_to(external if directory_link else source, target_is_directory=directory_link)
-                except OSError:
-                    self.skipTest("symlinks are unavailable")
+                except OSError as error:
+                    if getattr(error, "winerror", None) == 1314:
+                        self.skipTest("symlinks are unavailable")
+                    raise
                 selected = alias / source.name if directory_link else alias
                 self.assertEqual(selected.resolve(), source)
                 with self.assertRaisesRegex(ValueError, "source must be outside"):
@@ -85,8 +87,10 @@ class TestSarifConsumer(unittest.TestCase):
             alias = root / "alias.sarif"
             try:
                 alias.symlink_to(source)
-            except OSError:
-                self.skipTest("file symlinks are unavailable")
+            except OSError as error:
+                if getattr(error, "winerror", None) == 1314:
+                    self.skipTest("file symlinks are unavailable")
+                raise
             self.assertEqual(alias.resolve(), source)
             with self.assertRaisesRegex(ValueError, "source must be outside"):
                 sarif.split(alias, output, sarif.SarifPolicy({"Scanner": ()}))

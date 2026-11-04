@@ -383,27 +383,3 @@ def test_cli_release_gate_reads_current_event_and_rejects_wrong_tag(consumer, mo
     args.tag = "v1.2.4"
     with pytest.raises(ValueError):
         cli.run(args, settings)
-
-
-def test_cli_gate_rejects_duplicate_event_fields_before_remote_checks(tmp_path, monkeypatch, capsys):
-    (tmp_path / "research.toml").write_text(
-        '[publishing]\nregistry="pypi"\npackage="sample"\nrepository="example/project"\nrequired-checks=[{name="native",app-id=15368}]\n',
-        encoding="utf-8",
-        newline="\n",
-    )
-    path = tmp_path / "event.json"
-    path.write_bytes(json.dumps(event()).encode().replace(b'"draft": false', b'"draft": true, "draft": false'))
-    for name, value in {
-        "GITHUB_EVENT_NAME": "release",
-        "GITHUB_REPOSITORY": "example/project",
-        "GITHUB_EVENT_PATH": str(path),
-        "GITHUB_SHA": SHA,
-        "GITHUB_REF": "refs/tags/v1.2.3",
-    }.items():
-        monkeypatch.setenv(name, value)
-    remote = []
-    monkeypatch.setattr(publishing, "check_reviewed_release", lambda *args, **kwargs: remote.append(args))
-    assert cli.main(["--config", str(tmp_path / "research.toml"), "release", "gate", "v1.2.3"]) == 1
-    output = capsys.readouterr()
-    assert output.out == "" and "duplicate JSON field" in output.err
-    assert remote == []

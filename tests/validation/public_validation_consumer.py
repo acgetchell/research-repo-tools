@@ -23,6 +23,48 @@ def template(name: str) -> str:
     return output.getvalue()
 
 
+class TestCommandStreams(unittest.TestCase):
+    def test_main_restores_stream_policies_after_help_parse_errors_and_handlers(self):
+        for arguments in (["--help"], ["--unknown"], ["templates", "justfile"], ["templates", "missing-template"]):
+            with (
+                self.subTest(arguments=arguments),
+                io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict", newline="\n") as output,
+                io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="replace", newline="\n") as error,
+                contextlib.redirect_stdout(output),
+                contextlib.redirect_stderr(error),
+            ):
+                try:
+                    main(arguments)
+                except SystemExit as exit_status:
+                    self.assertIn(exit_status.code, (0, 2))
+                self.assertEqual((output.encoding, output.errors), ("ascii", "strict"))
+                self.assertEqual((error.encoding, error.errors), ("ascii", "replace"))
+
+    def test_interruption_propagates_without_changing_caller_streams(self):
+        with (
+            io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict", newline="\n") as error,
+            patch("research_repo_tools.cli.run", side_effect=KeyboardInterrupt),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+            contextlib.redirect_stderr(error),
+        ):
+            with self.assertRaises(KeyboardInterrupt):
+                main(["templates", "justfile"])
+            self.assertEqual(error.errors, "strict")
+            self.assertEqual(error.buffer.getvalue(), b"")
+        self.assertEqual(output.getvalue(), "")
+
+    def test_non_ascii_failure_remains_readable_on_a_restricted_stream(self):
+        with (
+            io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict", newline="\n") as error,
+            patch("research_repo_tools.cli.run", side_effect=OSError("cannot write café/測定")),
+            contextlib.redirect_stderr(error),
+        ):
+            self.assertEqual(main(["templates", "justfile"]), 1)
+            error.flush()
+            self.assertEqual(error.buffer.getvalue(), b"research-repo-tools: cannot write caf\\xe9/\\u6e2c\\u5b9a\n")
+            self.assertEqual(error.errors, "strict")
+
+
 class TestCoverage(unittest.TestCase):
     def test_prefix_starting_with_dash_survives_cli_forwarding(self):
         with tempfile.TemporaryDirectory() as directory:

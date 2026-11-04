@@ -42,7 +42,7 @@ def dependency(name: str):
 class Notebook:
     path: Path
     original: bytes
-    node: NotebookNode
+    node: "NotebookNode"
 
 
 @dataclass(frozen=True)
@@ -154,13 +154,13 @@ def selected(paths: list[Path]) -> list[Notebook]:
     return [load(path) for path in selected_paths(paths)]
 
 
-def generated_state(node: NotebookNode) -> bool:
+def generated_state(node: "NotebookNode") -> bool:
     return "widgets" in node.metadata or any(
         cell.cell_type == "code" and (cell.outputs or cell.execution_count is not None or "execution" in cell.metadata) for cell in node.cells
     )
 
 
-def clear_node(node: NotebookNode) -> None:
+def clear_node(node: "NotebookNode") -> None:
     node.metadata.pop("widgets", None)
     for cell in node.cells:
         if cell.cell_type == "code":
@@ -169,7 +169,7 @@ def clear_node(node: NotebookNode) -> None:
             cell.metadata.pop("execution", None)
 
 
-def serialize(node: NotebookNode) -> bytes:
+def serialize(node: "NotebookNode") -> bytes:
     return (json.dumps(node, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
 
 

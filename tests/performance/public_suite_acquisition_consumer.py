@@ -11,7 +11,7 @@ import sys
 import tarfile
 import tempfile
 import unittest
-from contextlib import ExitStack, contextmanager
+from contextlib import ExitStack, chdir, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from typing import override
@@ -40,15 +40,15 @@ from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.process import run_command, run_command_live
 from research_repo_tools.publication import MarkerPair, plan_publication, publish_publication
 from research_repo_tools.publication_config import load_publication
-from research_repo_tools.release_assets import ReleaseTarget
+from research_repo_tools.release_assets import ReleaseTarget, require_release_checkout
 from research_repo_tools.release_evidence import EvidencePolicy
 from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.release_validation import ValidationPolicy
 from research_repo_tools.run_presentation import RunLayout, RunRow, SeriesSelection, render_run_ratios, render_run_table, serialize_run_csv
-from research_repo_tools.scheduled_runs import parse_scheduled_run, select_trial
+from research_repo_tools.scheduled_runs import ScheduledRun, parse_scheduled_run, select_trial
 from research_repo_tools.source_exports import export_source
 from research_repo_tools.suite_measurement import AcquisitionSuite, SuiteMeasurementPlan
-from research_repo_tools.suite_runs import comparison_incompatibilities, parse_suite_run
+from research_repo_tools.suite_runs import SuiteRun, comparison_incompatibilities, parse_suite_run
 from research_repo_tools.trial_schedule import TrialSchedule, parse_schedule
 
 PROGRAM = """import json, sys
@@ -746,6 +746,7 @@ class TestSuiteAcquisition(unittest.TestCase):
         selected = plan(self.log, ("new",))
         evidence = measure_pair(self.root, selected, PAIR, progress=self.quiet)
         run = validate_run_evidence(evidence)
+        assert isinstance(run, SuiteRun)
         self.assertEqual(dict(run.phases)["baseline"].cases, ())
         self.assertIn(b"new/case", render_run(evidence))
         with self.assertRaisesRegex(ValueError, "no eligible"):
@@ -1030,7 +1031,8 @@ class TestSuiteAcquisition(unittest.TestCase):
         accepted = [event for event in events if event["event"] == "validated"]
         self.assertEqual([(event["phase"], event["completed"], event["remaining"]) for event in accepted], [("baseline", 1, 1), ("current", 2, 0)])
         self.assertIsNone(accepted[0]["eta_seconds"])
-        self.assertEqual(len(validate_run_evidence(evidence).phases), 2)
+        run = validate_run_policy(evidence, selected)
+        self.assertEqual(len(run.phases), 2)
 
     def test_retention_allows_historical_path_changes_but_protects_inputs(self) -> None:
         revisions = {tag: dict(files) for tag, files in self.revisions.items()}
@@ -1140,21 +1142,60 @@ class TestSuiteAcquisition(unittest.TestCase):
             observed = [line.split()[-1] for line in self.log.read_text().splitlines() if " measure " in line]
             self.assertEqual(observed, ["old" if phase == "baseline" else "new" for pair in schedule.phases for phase in pair])
             self.assertEqual(parse_schedule(schedule.document()), schedule)
-            run = parse_scheduled_run(evidence)
+            run = validate_run_evidence(evidence)
+            assert isinstance(run, ScheduledRun)
             self.assertEqual(run.plan.document(), selected.document())
+            # A caller selects a trial explicitly before using phase/series views.
+            self.assertEqual(len(parse_suite_run(select_trial(evidence, 1)).phases), 2)
+            if schedule.seed is None:
+                document = schedule.document()
+                del document["seed"]
+                self.assertEqual(parse_schedule(document), schedule)
+                document["phases"] = [["current", "current"]]
+                with self.assertRaisesRegex(ValueError, "phases differ"):
+                    parse_schedule(document)
             for index, trial in enumerate(run.trials):
                 self.assertEqual(serialize_evidence(select_trial(evidence, index + 1)), serialize_evidence(trial))
                 for _, _, sample, _ in parse_suite_run(trial).observations:
                     self.assertTrue(sample.cases[0].sample.endswith(b"\r\n"))
             with patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("read-only consumer")):
-                report = render_run(evidence)
+                report = render_run(evidence, title="Trial <script> & notes")
                 self.assertIn(b"Within-phase samples are not independent trials", report)
                 self.assertIn(b"Trial 1", report)
+                self.assertIn(b"Trial &lt;script&gt; &amp; notes", report)
         self.assertEqual(TrialSchedule(4, "randomized", 42).phases, TrialSchedule(4, "randomized", 42).phases)
         self.assertEqual(sum(order[0] == "current" for order in TrialSchedule(10, "randomized", 9).phases), 5)
         for args in ((3, "alternating"), (2, "randomized"), (2, "sequential", 1), (True, "sequential")):
             with self.assertRaises(ValueError):
                 TrialSchedule(*args)
+
+    def test_scheduled_report_embeds_trial_bodies_with_one_evidence_header(self):
+        _, evidence = self.scheduled_fixture()
+        before = serialize_evidence(evidence)
+        for directory in ("data/", "data/" + "nested/" * 24):
+            with self.subTest(directory=directory):
+                report = render_run(
+                    evidence,
+                    title="Trial <script> & notes",
+                    report_path="docs/report.md",
+                    payload_path=directory + "run.json",
+                    manifest_path=directory + "evidence.json",
+                ).decode("utf-8")
+                self.assertEqual(report.count("<!-- research-repo-tools/run-report/"), 1)
+                self.assertEqual([line for line in report.splitlines() if line.startswith("# ")], ["# Trial &lt;script&gt; &amp; notes"])
+                self.assertEqual(report.count("Evidence:"), 1)
+                self.assertEqual(report.count("[run payload]"), 1)
+                self.assertEqual(report.count("[evidence envelope]"), 1)
+                for index in (1, 2):
+                    self.assertIn(f"## Trial {index}:", report)
+                self.assertEqual(report.count("Semantic contract: shared-v1."), 2)
+                self.assertEqual(report.count("Ratios are point estimates within one accepted paired suite."), 2)
+                for name in ("run.json", "evidence.json"):
+                    self.assertEqual(report.count("../" + directory + name), 1)
+                if directory != "data/":
+                    self.assertIn("[run payload][rrt-performance-link-1]", report)
+                    self.assertIn("[evidence envelope][rrt-performance-link-2]", report)
+        self.assertEqual(serialize_evidence(evidence), before)
 
     def test_schedule_rejects_changed_receipts_trials_and_declarations(self):
         selected, evidence = self.scheduled_fixture()
@@ -1239,7 +1280,7 @@ class TestSuiteAcquisition(unittest.TestCase):
         policy = CandidatePolicy(
             "example/library",
             PAIR.current,
-            "c" * 40,
+            None,
             "local",
             run_identity(evidence),
             selected,
@@ -1250,13 +1291,23 @@ class TestSuiteAcquisition(unittest.TestCase):
                 for suite, phase, _, source in parse_suite_run(trial).observations
             ),
         )
+        # Plans retain tuple ordering in memory; canonical JSON sorts context
+        # object keys. The handoff contract is canonical bytes, not dataclass equality.
+        pending_bytes = serialize_candidate_policy(policy)
+        pending = parse_candidate_policy(pending_bytes)
+        self.assertIsNone(pending.commit)
+        self.assertEqual(serialize_candidate_policy(pending), pending_bytes)
+        acquisition_digest = acquisition_assertion_digest(policy)
         before = self.log.read_bytes()
         with patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("no read-only acquisition")):
             report = render_run(evidence)
             (self.root / "README.md").write_bytes(report)
         final = {name: (self.root / name).read_bytes() for name in original}
         mapping = {**self.revisions, "final": final}
+        policy = replace(policy, commit="c" * 40)
+        self.assertEqual(acquisition_assertion_digest(policy), acquisition_digest)
         self.stack.enter_context(patch("research_repo_tools.source_exports._git", side_effect=git_model(mapping)))
+        self.checkout_guard = self.stack.enter_context(patch("research_repo_tools.candidate_reuse.require_release_checkout"))
         native = EvidencePolicy(
             ValidationPolicy("example/library", ".github/workflows/ci.yml", "CI", (("native", ("Checks",)),)),
             "fixture",
@@ -1270,6 +1321,107 @@ class TestSuiteAcquisition(unittest.TestCase):
         accepted = verify_candidate_release(self.root, evidence, policy, native, lambda endpoint: {}, acquisition_sha256=acquisition_assertion_digest(policy))
         self.assertEqual(before, self.log.read_bytes())
         return evidence, policy, native, provider, accepted, mapping
+
+    def test_candidate_requires_final_commit_before_release_or_archive_operations(self):
+        evidence, final, native, provider, accepted, _ = self.candidate_fixture()
+        pending = replace(final, commit=None)
+        provider.reset_mock()
+        with self.assertRaisesRegex(ValueError, "selected final commit"):
+            verify_candidate_release(self.root, evidence, pending, native, lambda endpoint: {}, acquisition_sha256=acquisition_assertion_digest(pending))
+        with self.assertRaisesRegex(ValueError, "selected final commit"):
+            verify_candidate_archive(self.root / "not-opened.tar.gz", pending, accepted)
+        provider.assert_not_called()
+
+    @unittest.skipIf(os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1", "Git-mutating fixture disabled")
+    def test_candidate_public_api_rejects_staged_changes_with_clean_working_bytes(self):
+        evidence, policy, native, provider, _, _ = self.candidate_fixture()
+        checkout = self.root / "index-checkout"
+        checkout.mkdir()
+
+        def git(*arguments):
+            return subprocess.run(
+                [
+                    "git",
+                    "--no-pager",
+                    "-c",
+                    "core.autocrlf=false",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    f"core.hooksPath={checkout / 'disabled-hooks'}",
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    *arguments,
+                ],
+                cwd=checkout,
+                check=True,
+                capture_output=True,
+            ).stdout
+
+        git("init", "--template=")
+        tracked = checkout / "source.txt"
+        tracked.write_bytes(b"original\r\n")
+        git("add", "source.txt")
+        git("commit", "-m", "fixture")
+        policy = replace(policy, commit=git("rev-parse", "HEAD").decode("ascii").strip())
+        tracked.write_bytes(b"staged\r\n")
+        git("add", "source.txt")
+        tracked.write_bytes(b"original\r\n")
+        self.assertEqual(git("diff", "HEAD", "--", "source.txt"), b"")
+        self.assertTrue(git("diff", "--cached", "--", "source.txt"))
+        provider.reset_mock()
+        with (
+            patch("research_repo_tools.candidate_reuse.require_release_checkout", wraps=require_release_checkout),
+            self.assertRaisesRegex(ValueError, "checkout is dirty"),
+        ):
+            verify_candidate_release(checkout, evidence, policy, native, lambda endpoint: {}, acquisition_sha256=acquisition_assertion_digest(policy))
+        provider.assert_not_called()
+
+    def test_candidate_rechecks_checkout_after_native_verification(self):
+        evidence, policy, native, provider, _, _ = self.candidate_fixture()
+        provider.reset_mock()
+        self.checkout_guard.side_effect = [None, ValueError("checkout changed during verification")]
+        with self.assertRaisesRegex(ValueError, "checkout changed"):
+            verify_candidate_release(self.root, evidence, policy, native, lambda endpoint: {}, acquisition_sha256=acquisition_assertion_digest(policy))
+        provider.assert_called_once()
+
+    def test_candidate_forwards_cargo_reproduction_and_preserves_native_rejection(self):
+        evidence, policy, native, provider, accepted, _ = self.candidate_fixture()
+        archive = self.root / "reproduced.crate"
+        tools = {"cargo": "fixture-cargo", "rustc": "fixture-rustc"}
+        native = replace(native, guarantee="cargo-archive")
+        self.assertEqual(
+            verify_candidate_release(
+                self.root,
+                evidence,
+                policy,
+                native,
+                lambda endpoint: {},
+                acquisition_sha256=acquisition_assertion_digest(policy),
+                expected=accepted,
+                reproduced_archive=archive,
+                reproduced_tools=tools,
+            ),
+            accepted,
+        )
+        self.assertEqual(provider.call_args.args[0], native)
+        self.assertEqual(provider.call_args.kwargs["expected"], deterministic_json(json.loads(accepted)["native"]))
+        self.assertEqual(provider.call_args.kwargs["reproduced_archive"], archive)
+        self.assertEqual(provider.call_args.kwargs["reproduced_tools"], tools)
+        provider.side_effect = ValueError("Cargo reproduction bytes or tools differ from retained validation")
+        with self.assertRaisesRegex(ValueError, "Cargo reproduction"):
+            verify_candidate_release(
+                self.root,
+                evidence,
+                policy,
+                native,
+                lambda endpoint: {},
+                acquisition_sha256=acquisition_assertion_digest(policy),
+                reproduced_archive=archive,
+                reproduced_tools=tools,
+            )
 
     def test_candidate_binding_reuses_one_acquisition_after_final_merge(self):
         evidence, policy, native, provider, accepted, mapping = self.candidate_fixture()
@@ -1323,25 +1475,28 @@ class TestSuiteAcquisition(unittest.TestCase):
             "candidate",
             "native.toml",
             "--checkout",
-            str(self.root),
+            ".",
             "--payload",
-            str(self.root / "run.json"),
+            "run.json",
             "--manifest",
-            str(self.root / "evidence.json"),
+            "evidence.json",
             "--policy",
-            str(self.root / "policy.json"),
+            "policy.json",
             "--acquisition-sha256",
             acquisition_assertion_digest(policy),
         ]
         before = self.log.read_bytes()
         with (
+            tempfile.TemporaryDirectory(prefix="candidate caller ") as caller,
+            chdir(caller),
             patch("research_repo_tools.release_interfaces.require_release_checkout"),
             patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("Step 2 must not gate or measure")),
         ):
-            self.assertEqual(main([*args, "--output", str(self.root / "step-two.json")]), 0)
+            self.assertEqual(main([*args, "--output", "step-two.json"]), 0)
             self.assertEqual((self.root / "step-two.json").read_bytes(), accepted)
-            self.assertEqual(main([*args, "--acceptance", str(self.root / "step-two.json"), "--output", str(self.root / "approval.json")]), 0)
+            self.assertEqual(main([*args, "--acceptance", "step-two.json", "--output", "approval.json"]), 0)
             self.assertEqual((self.root / "approval.json").read_bytes(), accepted)
+            self.assertEqual(list(Path(caller).iterdir()), [])
         self.assertEqual(before, self.log.read_bytes())
 
     def test_candidate_binding_rejects_final_inputs_and_stale_independent_assertions(self):

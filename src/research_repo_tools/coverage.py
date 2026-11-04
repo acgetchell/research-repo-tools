@@ -7,13 +7,10 @@ Use the shared CLI's ``coverage report`` command from the consumer root.
 """
 
 import argparse
+from collections.abc import Iterable
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
 from xml.etree import ElementTree as ET
-
-if TYPE_CHECKING:
-    from collections.abc import Iterable
 
 DEFAULT_REPORT = Path("coverage/cobertura.xml")
 

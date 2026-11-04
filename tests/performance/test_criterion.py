@@ -110,8 +110,10 @@ def test_collection_rejects_symlinked_entries(tmp_path: Path) -> None:
     link = tmp_path / "linked"
     try:
         link.symlink_to(target)
-    except OSError:
-        pytest.skip("symlink creation requires host privileges")
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("symlink creation requires host privileges")
+        raise
     with pytest.raises(ValueError, match="symlink"):
         collect_sample(tmp_path, "new")
 

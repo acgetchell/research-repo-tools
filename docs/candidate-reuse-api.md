@@ -18,8 +18,9 @@ The acquisition owner retains the original payload/envelope and independent
 assertions. `acquisition_assertion_digest(policy)` covers the repository, version,
 owner, entire measurement declaration including output exceptions, run identity,
 original candidate and every trial/suite/phase provenance assertion. Only the
-future final commit is omitted. The Step 1 policy can use the candidate commit
-temporarily; substituting the reviewed final commit does not change this digest.
+future final commit is omitted. Set `commit=None` in the Step 1 policy; assigning
+the reviewed final commit with `dataclasses.replace` does not change this digest.
+Existing policies that supply a commit in Step 1 remain supported.
 The consumer must retain the digest through a separately trusted immutable
 handoff. A policy, embedded checksum, or re-signed upload cannot authenticate
 itself. Computing the trusted digest from the candidate being checked defeats
@@ -27,8 +28,10 @@ this boundary. Hosted acquisition requires verification of the original permitte
 producer, signer, event, ref, run, attempt, and immutable artifact upstream of
 this API; local acquisition remains labeled local.
 
-Step 2 independently captures the selected final commit and requires clean HEAD
-at that commit. It compares **all** original candidate and final file names,
+Step 2 requires a non-null final commit, independently captures it, and requires
+clean HEAD at that commit, including the index, working tree and submodules.
+It checks checkout cleanliness before and after native verification and rejects
+assume-unchanged or skip-worktree entries. It compares **all** original candidate and final file names,
 bytes, and executable bits. Additions, deletions, renames, and input changes
 invalidate reuse unless they are exact predeclared output paths. Output exceptions
 are limited to nonexecutable Markdown, reStructuredText, CSV, and SVG files. They
@@ -59,7 +62,7 @@ Import from `research_repo_tools.candidate_reuse`:
 
 | Interface | Contract |
 | --- | --- |
-| `CandidatePolicy` | Repository, canonical tag, full final commit, original owner/run identity, schema-6 measurement, original current envelope provenance, and `(trial, suite, phase, Provenance)` assertions |
+| `CandidatePolicy` | Repository, canonical tag, final commit (`None` until selected), original owner/run identity, schema-6 measurement, original current envelope provenance, and `(trial, suite, phase, Provenance)` assertions |
 | `acquisition_assertion_digest(policy)` | Step 1 digest captured by the trusted acquisition owner; excludes only the future final commit |
 | `parse_candidate_policy`, `serialize_candidate_policy` | Strict versioned JSON handoff; serialization does not authenticate the assertions |
 | `verify_candidate_release(root, evidence, policy, native_policy, read, *, acquisition_sha256, expected=None)` | Step 2 whole-tree binding plus existing native release verification; returns frozen acceptance bytes |
@@ -72,6 +75,39 @@ must be distinct. Original payload/envelope bytes and current raw samples from
 every trial remain exact, including CRLF and supplemental binary data. Projection
 paths include trial and suite identifiers; repeated measurements never overwrite
 one another or become a synthetic pooled sample.
+
+Use keyword arguments to distinguish the policy's independent assertions. The
+owner's Step 1 code supplies the observed values below through its trusted handoff:
+
+```python
+from dataclasses import replace
+
+from research_repo_tools.candidate_reuse import CandidatePolicy, acquisition_assertion_digest
+
+step_one = CandidatePolicy(
+    repository=repository,
+    tag=prospective_tag,
+    commit=None,
+    acquisition_owner=owner,
+    identity=original_run_identity,
+    measurement=predeclared_measurement,
+    candidate=original_candidate,
+    observations=original_observations,
+)
+trusted_digest = acquisition_assertion_digest(step_one)
+# Later, after independently selecting the reviewed final commit:
+final_policy = replace(step_one, commit=reviewed_commit)
+assert acquisition_assertion_digest(final_policy) == trusted_digest
+```
+
+`verify_candidate_release` also accepts keyword-only `reproduced_archive` and
+`reproduced_tools`, forwarding them to `release_evidence.verify_release_evidence`.
+Supply both for a `cargo-archive` policy to compare independently reproduced bytes
+and tool identities. Native verification failures propagate as `ValueError`;
+the candidate adapter neither bypasses rejection nor invokes a reproduction.
+The verifier returns immutable acceptance bytes and does not write output files
+or modify the observed checkout. Missing files and process failures retain the
+underlying I/O/process exceptions.
 
 The acceptance record freezes the canonical policy digest, acquisition identity,
 whole-tree binding, native evidence selection and exact derived archive digest.

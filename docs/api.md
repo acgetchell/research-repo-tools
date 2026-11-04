@@ -27,6 +27,12 @@ Use `just help` for the consumer's actual recipes and the
 
 ## Capability references
 
+Public function and dataclass signatures can be inspected with
+`inspect.signature` without loading optional dependencies. Annotations involving
+optional dependencies or cyclic module references remain forward-reference
+strings. Tools that evaluate those annotations must supply the corresponding
+type namespace; signature display does not require resolving them.
+
 | Capability | Authoritative reference |
 | --- | --- |
 | Cargo documentation | [Stable packaged library docs](cargo-docs-api.md) |

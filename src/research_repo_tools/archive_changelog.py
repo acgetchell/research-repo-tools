@@ -22,19 +22,16 @@ import logging
 import os
 import re
 import sys
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from research_repo_tools.files import _write_text_atomic, _write_texts_transactionally
 from research_repo_tools.markdown import relocate_links
 from research_repo_tools.postprocess_changelog import _closes_code_fence, _opening_code_fence, normalize_entry_headings_text, postprocess_text
 from research_repo_tools.process import format_exception_diagnostics
 from research_repo_tools.release_tags import SEMVER_PATTERN
-
-if TYPE_CHECKING:
-    from collections.abc import Callable, Sequence
 
 # Includes malformed version-like headings so they cannot become silent prose.
 _VERSION_HEADING_CANDIDATE_RE = re.compile(r"^##\s+(?:\[|v?[0-9])")

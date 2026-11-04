@@ -7,7 +7,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from fnmatch import fnmatchcase
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, overload
 
 if TYPE_CHECKING:
     from research_repo_tools.scheduled_runs import ScheduledRun
@@ -354,9 +354,23 @@ def _series(plan: CompleteMeasurementPlan, policies: dict[str, CompletePolicy]) 
     return tuple(item.resolve(policies[item.phase].expected) if isinstance(item, DiscoveredSeries) else item for item in plan.series if item.phase in policies)
 
 
+@overload
+def validate_run_policy(evidence: Evidence, plan: CompleteMeasurementPlan, *, release: bool = False) -> CompleteRun: ...
+
+
+@overload
+def validate_run_policy(evidence: Evidence, plan: "SuiteMeasurementPlan", *, release: bool = False) -> "SuiteRun | ScheduledRun": ...
+
+
+@overload
 def validate_run_policy(
-    evidence: Evidence, plan: MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan, *, release: bool = False
-) -> CompleteRun | SuiteRun | ScheduledRun:
+    evidence: Evidence, plan: "MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan", *, release: bool = False
+) -> "CompleteRun | SuiteRun | ScheduledRun": ...
+
+
+def validate_run_policy(
+    evidence: Evidence, plan: "MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan", *, release: bool = False
+) -> "CompleteRun | SuiteRun | ScheduledRun":
     """Validate acquisition against independent declarations; release adds eligibility."""
     from research_repo_tools.suite_measurement import SuiteMeasurementPlan
     from research_repo_tools.suite_runs import validate_suite_policy

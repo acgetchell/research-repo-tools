@@ -417,7 +417,12 @@ def parse_run(payload: bytes) -> CompleteRun:
     )
 
 
-def validate_run_evidence(evidence: Evidence) -> CompleteRun | SuiteRun | ScheduledRun:
+def validate_run_evidence(evidence: Evidence) -> "CompleteRun | SuiteRun | ScheduledRun":
+    """Validate evidence and return its schema-specific view.
+
+    Narrow the result by type before accessing phase/series views: ScheduledRun
+    retains separate trials and requires explicit selection with select_trial.
+    """
     if evidence.payload_schema == RUN_SCHEMA_V5:
         from research_repo_tools.scheduled_runs import parse_scheduled_run
 

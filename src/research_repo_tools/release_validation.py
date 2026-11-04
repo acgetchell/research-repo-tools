@@ -283,10 +283,12 @@ def validate_run(policy: ValidationPolicy, run: dict[str, Any], commit: str, wor
 def select_main_run(
     policy: ValidationPolicy, commit: str, read: Callable[[str], Any], *, attempts: int = 30, interval: int = 20, sleep: Callable[[float], None] = time.sleep
 ) -> dict[str, Any]:
-    """Wait at most ten minutes by default; require one unambiguous exact run.
+    """Poll one unambiguous exact run, with at most 580s of default retry delay.
 
     read is repository-scoped authenticated JSON transport. Only pending matching
-    main-push runs are waited on. Missing/failed evidence never causes a fallback.
+    main-push runs are waited on. The caller's read/sleep callbacks own their
+    deadlines; time spent in transport is additional to retry delay.
+    Missing/failed evidence never causes a fallback.
     """
     _commit(commit)
     if type(attempts) is not int or not 1 <= attempts <= 120 or type(interval) is not int or not 0 <= interval <= 30:
@@ -890,11 +892,6 @@ def main() -> int:
     command.add_argument("--artifact", type=int, required=True)
     command.add_argument("--dist", type=Path, default=Path("dist"))
     commands.add_parser("evidence", help="inspect the clean checkout's retained signed distributions without rebuilding or uploading")
-    command = commands.add_parser("seal")
-    command.add_argument("--run", type=int, default=int(os.environ.get("GITHUB_RUN_ID", "0")))
-    command.add_argument("--attempt", type=int, default=int(os.environ.get("GITHUB_RUN_ATTEMPT", "0")))
-    command.add_argument("--artifact", type=int, required=True)
-    command.add_argument("--output", type=Path, default=Path(MANIFEST))
     command = commands.add_parser("promote")
     command.add_argument("tag")
     command.add_argument("--commit", default=os.environ.get("GITHUB_SHA", ""))
@@ -902,6 +899,11 @@ def main() -> int:
     command.add_argument("--evidence", type=Path, default=Path("promotion.json"))
     command.add_argument("--attempts", type=int, default=30)
     command.add_argument("--interval", type=int, default=20)
+    command = commands.add_parser("seal")
+    command.add_argument("--run", type=int, default=os.environ.get("GITHUB_RUN_ID", "0"))
+    command.add_argument("--attempt", type=int, default=os.environ.get("GITHUB_RUN_ATTEMPT", "0"))
+    command.add_argument("--artifact", type=int, required=True)
+    command.add_argument("--output", type=Path, default=Path(MANIFEST))
     command = commands.add_parser("stage")
     command.add_argument("tag")
     command.add_argument("--dist", type=Path, default=Path("dist"))
@@ -930,6 +932,6 @@ def main() -> int:
         print(f"Release assets failed: {_diagnostic(detail)}", file=sys.stderr)
         return 1
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, zipfile.BadZipFile, tarfile.TarError) as error:
-        print(f"Release assets failed: {error}", file=sys.stderr)
+        print(f"Release assets failed: {_diagnostic(str(error))}", file=sys.stderr)
         return 1
     return 0

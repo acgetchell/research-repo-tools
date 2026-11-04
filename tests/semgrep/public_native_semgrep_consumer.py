@@ -30,7 +30,6 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
         self.temporary = tempfile.TemporaryDirectory(prefix="native semgrep café ")
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name).resolve()
-        self.addCleanup(patch.stopall)
 
     def test_shared_scanner_runs_offline_and_ignores_ambient_scanner_and_project_redirects(self):
         self.assertEqual(sys.version_info[:2], (3, 15))
