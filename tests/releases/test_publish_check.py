@@ -133,3 +133,13 @@ def test_local_and_hosted_ci_check_once_after_build_before_retaining_artifacts()
     uploaded = next(index for index, step in enumerate(steps) if step.get("id") == "distributions")
     assert steps[checked]["run"] == "uv run --locked just build publish-check"
     assert checked < uploaded
+
+
+def test_hosted_package_checks_run_variadic_source_recipe_separately():
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    steps = workflow["jobs"]["check"]["steps"]
+    assert [step["run"] for step in steps if step.get("run", "").startswith("uv run --locked just ")] == [
+        "uv run --locked just check",
+        "uv run --locked just ${{ matrix.test-recipe }}",
+        "uv run --locked just check-dist",
+    ]

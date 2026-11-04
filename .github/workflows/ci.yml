@@ -106,8 +106,13 @@ jobs:
           DISTRIBUTION_ARTIFACT: ${{ needs.build.outputs.artifact-id }}
         run: uv run --locked --no-sync python scripts/release_assets.py consume --artifact "$DISTRIBUTION_ARTIFACT"
         shell: bash
-      - name: Validate, test, and install the shared distributions
-        run: uv run --locked just check ${{ matrix.test-recipe }} check-dist
+      - name: Validate source policy
+        run: uv run --locked just check
+      # The source test recipes forward trailing arguments to pytest.
+      - name: Run source tests
+        run: uv run --locked just ${{ matrix.test-recipe }}
+      - name: Validate installed distributions
+        run: uv run --locked just check-dist
       - name: Retain coverage even when later checks fail
         if: ${{ !cancelled() && runner.os == 'Linux' && hashFiles('coverage/cobertura.xml') != '' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
