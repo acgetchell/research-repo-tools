@@ -234,19 +234,19 @@ def test_real_kernel_uses_project_interpreter_cwd_and_fresh_state(consumer):
 
 
 @pytest.mark.parametrize(
-    "source,metadata,error",
+    "source,metadata,error,timeout",
     [
-        ("raise ValueError('synthetic failure')", {"tags": ["raises-exception"]}, "CellExecutionError"),
-        ("import time\ntime.sleep(10)", {}, "CellTimeoutError"),
-        ("raise ValueError('skip tag cannot conceal errors')", {"tags": ["skip-execution"]}, "CellExecutionError"),
-        ("raise ValueError('sentinel tag cannot conceal errors')", {"tags": ["research-repo-tools-never-skip"]}, "CellExecutionError"),
+        ("raise ValueError('synthetic failure')", {"tags": ["raises-exception"]}, "CellExecutionError", 30),
+        ("import time\ntime.sleep(10)", {}, "CellTimeoutError", 1),
+        ("raise ValueError('skip tag cannot conceal errors')", {"tags": ["skip-execution"]}, "CellExecutionError", 30),
+        ("raise ValueError('sentinel tag cannot conceal errors')", {"tags": ["research-repo-tools-never-skip"]}, "CellExecutionError", 30),
     ],
 )
-def test_real_cell_failure_and_timeout_publish_failed_report_and_stop(consumer, source, metadata, error):
+def test_real_cell_failure_and_timeout_publish_failed_report_and_stop(consumer, source, metadata, error, timeout):
     path = write(consumer.root / "notebooks" / "failure.ipynb", source, cell_id="fail-here", metadata=metadata)
     next_path = write(consumer.root / "notebooks" / "not-run.ipynb")
     original = path.read_bytes()
-    assert notebooks.execute(consumer, [path, next_path], timeout=1) == 1
+    assert notebooks.execute(consumer, [path, next_path], timeout=timeout) == 1
     output = consumer.root / "target/notebooks/notebooks/failure.ipynb"
     report = json.loads(output.with_suffix(".report.json").read_bytes())
     assert report["status"] == "failed" and report["error"]["type"] == error

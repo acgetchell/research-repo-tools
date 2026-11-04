@@ -194,7 +194,9 @@ POLICY = ValidationPolicy(
                 f"check ({platform})",
                 (
                     "Retrieve distributions by immutable ID",
-                    "Validate, test, and install the shared distributions",
+                    "Validate source policy",
+                    "Run source tests",
+                    "Validate installed distributions",
                     "Exercise native setup and Cargo updates from the built wheel",
                 ),
             )

@@ -277,9 +277,10 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
         self.assertEqual({name: (self.root / name).read_bytes() for name in project_files}, original)
 
         manifest = self.root / "pyproject.toml"
-        manifest.write_bytes(original["pyproject.toml"].replace(b'">=3.15"', b'">=3.16"', 1))
+        # Keep the active interpreter compatible so uv reaches the stale-lock check.
+        manifest.write_bytes(original["pyproject.toml"].replace(b'">=3.15"', b'">=3.15,<3.16"', 1))
         self.assertNotEqual(manifest.read_bytes(), original["pyproject.toml"])
-        with self.assertRaisesRegex(RuntimeError, "uv lock --check|needs to be updated"):
+        with self.assertRaisesRegex(RuntimeError, "needs to be updated"):
             semgrep.check(settings)
         self.assertEqual((self.root / "uv.lock").read_bytes(), original["uv.lock"])
 

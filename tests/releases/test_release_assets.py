@@ -606,6 +606,12 @@ def test_workflows_preserve_native_gates_and_promote_without_rebuilding():
     prepare = yaml.load((ROOT / ".github/workflows/prepare-release.yml").read_text(), Loader=yaml.BaseLoader)
     publish = yaml.load((ROOT / ".github/workflows/publish.yml").read_text(), Loader=yaml.BaseLoader)
     assert "pull_request" in ci["on"] and ci["on"]["push"]["branches"] == ["main"]
+    native = ci["jobs"]["check"]
+    native_steps = {step["name"] for step in native["steps"] if "name" in step and "if" not in step}
+    check_steps = {step["name"] for step in native["steps"] if step.get("run", "").startswith("uv run --locked just ")}
+    required = dict(release.POLICY.required_steps)
+    for host in native["strategy"]["matrix"]["os"]:
+        assert check_steps <= set(required[f"check ({host})"]) <= native_steps
     evidence = ci["jobs"]["release-evidence"]
     assert set(evidence["needs"]) == {"build", "check", "changelog-integration"}
     assert "github.event_name == 'push'" in evidence["if"] and "refs/heads/main" in evidence["if"]
