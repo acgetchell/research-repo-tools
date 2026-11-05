@@ -4,6 +4,7 @@ import asyncio
 import threading
 import warnings
 from concurrent.futures import Future, ThreadPoolExecutor
+from unittest.mock import Mock
 
 import nbformat
 import pytest
@@ -95,25 +96,15 @@ def test_caller_warning_policy_reaches_execution_worker(tmp_path, monkeypatch):
             notebooks._execute(nbformat.v4.new_notebook(), cwd=tmp_path, timeout=1, env={}, progress=[])
 
 
-def test_failed_submission_does_not_leave_an_open_loop(tmp_path, monkeypatch):
-    runners = []
-    real_runner = asyncio.Runner
-
-    def runner(**kwargs):
-        result = real_runner(**kwargs)
-        runners.append((result, result.get_loop()))
-        return result
+def test_failed_submission_does_not_create_a_loop(tmp_path, monkeypatch):
+    runner = Mock(side_effect=AssertionError("rejected submission created an event-loop runner"))
 
     def rejected(*args, **kwargs):
         raise RuntimeError("worker submission rejected")
 
     monkeypatch.setattr(asyncio, "Runner", runner)
     monkeypatch.setattr(ThreadPoolExecutor, "submit", rejected)
-    try:
-        with pytest.raises(RuntimeError, match="worker submission rejected"):
-            notebooks._execute(nbformat.v4.new_notebook(), cwd=tmp_path, timeout=1, env={}, progress=[])
-        assert all(loop.is_closed() for _, loop in runners)
-        assert not any(thread.name.startswith("notebook-execution") for thread in threading.enumerate())
-    finally:
-        for instance, _ in runners:
-            instance.close()
+    with pytest.raises(RuntimeError, match="worker submission rejected"):
+        notebooks._execute(nbformat.v4.new_notebook(), cwd=tmp_path, timeout=1, env={}, progress=[])
+    runner.assert_not_called()
+    assert not any(thread.name.startswith("notebook-execution") for thread in threading.enumerate())
