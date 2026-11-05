@@ -494,8 +494,8 @@ class TestReuseConsumer(unittest.TestCase):
                     side_effect=lambda args, **kwargs: subprocess.CompletedProcess([], 0, "" if "status" in args else RELEASE),
                 ),
                 patch(
-                    "research_repo_tools.release_assets.run_git_bytes",
-                    side_effect=lambda args, **kwargs: subprocess.CompletedProcess([], 0, RELEASE.encode("ascii") if "rev-parse" in args else b""),
+                    "research_repo_tools.release_assets.run_command_bytes",
+                    side_effect=lambda command, args, **kwargs: subprocess.CompletedProcess([], 0, RELEASE.encode("ascii") if "rev-parse" in args else b""),
                 ),
                 patch("research_repo_tools.release_publishing._remote_commit", return_value=RELEASE),
                 patch("research_repo_tools.release_publishing._api", read),

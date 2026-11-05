@@ -34,7 +34,7 @@ from urllib.parse import quote, urlsplit
 if __package__:
     from research_repo_tools._archive_paths import ArchivePaths
     from research_repo_tools._diagnostics import format_exception_diagnostics
-    from research_repo_tools._git_checkout import READ_ONLY_OPTIONS, require_checkout
+    from research_repo_tools._git_checkout import READ_ONLY_OPTIONS, git_context, require_checkout
     from research_repo_tools.files import replace_many
 else:
     # The install-free runner loads reviewed sibling source, never site packages.
@@ -44,6 +44,7 @@ else:
     format_exception_diagnostics = runpy.run_path(str(Path(__file__).with_name("_diagnostics.py")))["format_exception_diagnostics"]
     _checkout_helpers = runpy.run_path(str(Path(__file__).with_name("_git_checkout.py")))
     READ_ONLY_OPTIONS, require_checkout = _checkout_helpers["READ_ONLY_OPTIONS"], _checkout_helpers["require_checkout"]
+    git_context = _checkout_helpers["git_context"]
     replace_many = runpy.run_path(str(Path(__file__).with_name("files.py")))["replace_many"]
 
 __all__ = [
@@ -807,8 +808,10 @@ def _retrieve_evidence(tag: str, commit: str, dist: Path, *, attempts: int, inte
 
 
 def _checkout_identity(root: Path) -> tuple[str, str]:
+    executable, environment = git_context(root)
+
     def git_bytes(args: list[str]) -> bytes:
-        return subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, timeout=30).stdout
+        return subprocess.run([str(executable), *args], cwd=root, env=environment, check=True, capture_output=True, timeout=30).stdout
 
     def git(*args: str) -> str:
         return git_bytes([*READ_ONLY_OPTIONS, *args]).decode("utf-8").strip()
@@ -817,7 +820,7 @@ def _checkout_identity(root: Path) -> tuple[str, str]:
         raise ValueError("release evidence requires the repository root")
     commit = _commit(git("rev-parse", "HEAD"))
     try:
-        require_checkout(commit, git_bytes)
+        require_checkout(commit, git_bytes, executable=executable)
     except ValueError as error:
         raise ValueError(f"release evidence requires a clean checkout: {error}") from error
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]

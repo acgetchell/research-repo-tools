@@ -285,6 +285,9 @@ separate from the trusted installed runtime's working directory. The exported
 It rejects assume-unchanged and skip-worktree index entries, including those in
 checked-out submodules, and checks submodule changes regardless of ignore settings.
 It leaves index flags and checkout contents unchanged.
+Git is selected from absolute `PATH` entries outside the observed checkout.
+The same absolute executable and filtered `PATH` are used for recursive submodule
+checks; relative, empty, and checkout-owned entries cannot supply executables.
 Run trusted installed tooling outside consumer source; these helpers execute no
 consumer build commands, but cannot secure an interpreter already importing
 untrusted code. Checkout observation also requires trusted Git configuration

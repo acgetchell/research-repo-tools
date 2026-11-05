@@ -7,6 +7,7 @@ import hashlib
 import io
 import json
 import os
+import shlex
 import shutil
 import subprocess
 import sys
@@ -523,22 +524,26 @@ class TestEvidenceConsumer(unittest.TestCase):
 
     def test_clean_checkout_assertion_is_observed_and_read_only(self):
         commands = []
+        executables = []
 
-        def execute(args, **kwargs):
+        def execute(command, args, **kwargs):
+            self.assertTrue(Path(command).is_absolute())
+            executables.append(Path(command))
             commands.append(args)
             if "ls-files" in args or "submodule" in args:
                 return subprocess.CompletedProcess(args, 0, b"H tracked\0", b"")
             return subprocess.CompletedProcess(args, 0, b"" if "status" in args else COMMIT.encode(), b"")
 
-        with patch("research_repo_tools.release_assets.run_git_bytes", execute):
+        with patch("research_repo_tools.release_assets.run_command_bytes", execute):
             require_release_checkout(Path("source"), COMMIT)
         prefix = ["--no-pager", "--no-optional-locks", "--no-replace-objects", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"]
+        self.assertEqual(len(set(executables)), 1)
         self.assertEqual(
             commands,
             [
                 [*prefix, "rev-parse", "HEAD"],
                 [*prefix, "ls-files", "-v", "-z"],
-                [*prefix, "submodule", "foreach", "--quiet", "--recursive", "git --no-pager --no-optional-locks ls-files -v -z"],
+                [*prefix, "submodule", "foreach", "--quiet", "--recursive", shlex.join([executables[0].as_posix(), *prefix, "ls-files", "-v", "-z"])],
                 [
                     *prefix,
                     "status",
@@ -552,7 +557,7 @@ class TestEvidenceConsumer(unittest.TestCase):
         )
         for outputs in ((COMMIT, "?? dirty", COMMIT), (COMMIT, "", "b" * 40)):
             responses = [subprocess.CompletedProcess([], 0, value.encode(), b"") for value in (outputs[0], "", "", *outputs[1:])]
-            with patch("research_repo_tools.release_assets.run_git_bytes", side_effect=responses):
+            with patch("research_repo_tools.release_assets.run_command_bytes", side_effect=responses):
                 with self.assertRaisesRegex(ValueError, "observed release checkout"):
                     require_release_checkout(Path("source"), COMMIT)
 
@@ -567,7 +572,7 @@ class TestEvidenceConsumer(unittest.TestCase):
             for hidden in (None, b"h tracked\0", b"S tracked\0"):
 
                 def git(args, **kwargs):
-                    self.assertEqual(args[0], "git")
+                    self.assertTrue(Path(args[0]).is_absolute())
                     self.assertIn("--no-optional-locks", args)
                     self.assertIn("core.fsmonitor=false", args)
                     if "--show-toplevel" in args:
@@ -588,6 +593,23 @@ class TestEvidenceConsumer(unittest.TestCase):
                             observe(root)
                 self.assertEqual((root / "pyproject.toml").read_bytes(), project)
                 self.assertEqual([path.name for path in root.iterdir()], ["pyproject.toml"])
+
+    def test_checkout_rejects_untrusted_only_path_before_launching_git(self):
+        import runpy
+
+        standalone = runpy.run_path(release_validation.__file__)["_checkout_identity"]
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            for path in ("", "bin", str(root / "bin")):
+                with (
+                    self.subTest(path=path),
+                    patch.dict(os.environ, {"PATH": path}),
+                    patch("subprocess.run", side_effect=AssertionError("untrusted executable launched")),
+                ):
+                    with self.assertRaisesRegex(ValueError, "absolute PATH entry outside the checkout"):
+                        require_release_checkout(root, COMMIT)
+                    with self.assertRaisesRegex(ValueError, "absolute PATH entry outside the checkout"):
+                        standalone(root)
 
 
 class TestEvidenceInterfaces(unittest.TestCase):
@@ -1327,6 +1349,38 @@ class TestReleaseCheckoutConsumer(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "observed release checkout"):
             self.observe()
         self.observe(self.git("rev-parse", "HEAD").stdout.decode("ascii").strip())
+
+    def test_checkout_and_submodule_cannot_supply_git_through_path(self):
+        import runpy
+
+        child = self.submodule()
+        (self.root / "pyproject.toml").write_bytes(b'[project]\nname="research-repo-tools"\nversion="0.2.5"\n')
+        name = "git.cmd" if os.name == "nt" else "git"
+        for commands in (self.root, self.root / "bin", child, child / "bin"):
+            commands.mkdir(exist_ok=True)
+            executable = commands / name
+            executable.write_bytes(
+                b"@echo off\r\necho injected>git-hijacked\r\nexit /b 99\r\n" if os.name == "nt" else b"#!/bin/sh\n: > git-hijacked\nexit 99\n"
+            )
+            executable.chmod(0o700)
+        self.git("add", "bin", name, cwd=child)
+        self.git("commit", "-m", "untrusted submodule executable", cwd=child)
+        child_commit = self.git("rev-parse", "HEAD", cwd=child).stdout.decode("ascii").strip()
+        self.git("update-index", "--cacheinfo", f"160000,{child_commit},child module")
+        self.git("add", "bin", name, "pyproject.toml")
+        self.git("commit", "-m", "untrusted checkout executable")
+        self.commit = self.git("rev-parse", "HEAD").stdout.decode("ascii").strip()
+        standalone = runpy.run_path(release_validation.__file__)["_checkout_identity"]
+        original_path = os.environ.get("PATH", os.defpath)
+        for prefix in ("bin", "", str(self.root / "bin"), str(child / "bin")):
+            for directory in (self.root, child):
+                (directory / "git-hijacked").unlink(missing_ok=True)
+            self.assertEqual(self.git("status", "--porcelain", "--ignore-submodules=none").stdout, b"")
+            with self.subTest(prefix=prefix), patch.dict(os.environ, {"PATH": prefix + os.pathsep + original_path}):
+                self.observe()
+                self.assertEqual(standalone(self.root), ("v0.2.5", self.commit))
+                self.assertFalse((self.root / "git-hijacked").exists())
+                self.assertFalse((child / "git-hijacked").exists())
 
     def hidden_change(self, flag, tag):
         self.git("update-index", flag, "--", self.path.name)

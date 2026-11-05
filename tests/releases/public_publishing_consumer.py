@@ -115,7 +115,8 @@ class TestPublishingConsumer(unittest.TestCase):
         for damage in (None, "assume-unchanged", "skip-worktree", "child-index", "submodule", "head"):
             heads = []
 
-            def git(args, **kwargs):
+            def git(command, args, **kwargs):
+                self.assertTrue(Path(command).is_absolute())
                 self.assertIn("--no-optional-locks", args)
                 self.assertIn("core.fsmonitor=false", args)
                 if "rev-parse" in args:
@@ -135,7 +136,7 @@ class TestPublishingConsumer(unittest.TestCase):
             with (
                 self.subTest(damage=damage),
                 patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, sha, "")),
-                patch("research_repo_tools.release_assets.run_git_bytes", git),
+                patch("research_repo_tools.release_assets.run_command_bytes", git),
                 patch("research_repo_tools.release_publishing._remote_commit", return_value=sha) as remote_commit,
                 patch("research_repo_tools.release_publishing._api", side_effect=lambda root, repo, endpoint, **kwargs: remote[endpoint]),
                 patch("research_repo_tools.release_publishing.lookup_release", return_value=release),

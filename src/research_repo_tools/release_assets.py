@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import quote
 
-from research_repo_tools._git_checkout import require_checkout
+from research_repo_tools._git_checkout import git_context, require_checkout
 from research_repo_tools.archives import ArchiveLimits, extract_archive
 from research_repo_tools.criterion import SAMPLE_SCHEMA, Sample, parse_sample, serialize_sample
 from research_repo_tools.evidence import (
@@ -28,7 +28,7 @@ from research_repo_tools.evidence import (
     verify_sha256,
 )
 from research_repo_tools.files import replace_many
-from research_repo_tools.process import resolve_executable, run_command_bytes, run_git_bytes
+from research_repo_tools.process import resolve_executable, run_command_bytes
 from research_repo_tools.release_discovery import normalize_tag
 
 __all__ = [
@@ -265,7 +265,8 @@ def require_release_checkout(checkout: Path, commit: str) -> None:
     for publication. This does not authenticate the checkout's repository remote.
     """
     commit = _sha(commit)
-    require_checkout(commit, lambda args: run_git_bytes(args, cwd=checkout, timeout=30).stdout)
+    executable, environment = git_context(checkout)
+    require_checkout(commit, lambda args: run_command_bytes(executable, args, cwd=checkout, env=environment, timeout=30).stdout, executable=executable)
 
 
 def preflight_release_target(

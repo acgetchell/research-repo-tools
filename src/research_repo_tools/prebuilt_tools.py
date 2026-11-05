@@ -55,9 +55,13 @@ def release_metadata(name: str, tag: str) -> dict[str, Any]:
         with urllib.request.urlopen(request, timeout=30) as response:
             payload = response.read(2 * 1024 * 1024 + 1)
     except (OSError, ValueError) as error:
+        failure: Exception = error
         if isinstance(error, urllib.error.HTTPError):
-            error.close()
-        raise RuntimeError(f"binary release lookup failed: {release_credentials.diagnostics(error)}") from None
+            try:
+                error.close()
+            except Exception as cleanup_error:
+                failure = ExceptionGroup("binary release lookup and response cleanup failed", [error, cleanup_error])
+        raise RuntimeError(f"binary release lookup failed: {release_credentials.diagnostics(failure)}") from None
     if len(payload) > 2 * 1024 * 1024:
         raise ValueError("release metadata exceeds size limit")
     value = parse_release_json(payload)
