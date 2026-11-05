@@ -5,6 +5,73 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.6] - 2026-11-05
+
+### ⚠️ Breaking Changes
+
+- Read the selected scanner version from
+  semgrep_tool.verify(root).version in place of semgrep_tool.VERSION.
+
+### Merged Pull Requests
+
+- Add consumer Python release evidence and harden shared tooling [#187](https://github.com/acgetchell/research-repo-tools/pull/187)
+- Add scheduled benchmark reuse and harden shared tooling [#186](https://github.com/acgetchell/research-repo-tools/pull/186)
+- Validate packaged Cargo docs and verify locked Semgrep [#184](https://github.com/acgetchell/research-repo-tools/pull/184)
+- Preserve repository root API endpoints [#181](https://github.com/acgetchell/research-repo-tools/pull/181)
+
+### Added
+
+- [**breaking**] Validate packaged Cargo docs and verify locked Semgrep [#184](https://github.com/acgetchell/research-repo-tools/pull/184)
+  [`0ac0791`](https://github.com/acgetchell/research-repo-tools/commit/0ac07912ca4c5e5766dd15bd5fa0d72383b6fb9f)
+
+#### feat!: validate packaged Cargo docs and verify locked Semgrep
+  - Build public docs from the packaged Cargo crate with the declared stable
+    compiler, selected features, and warnings denied.
+  - Let the consumer lockfile select a supported Semgrep version and verify
+    it against the installed scanner and Python interpreter.
+  - Run tests and subprocess coverage with four workers by default.
+  - Default performance progress heartbeats to five minutes.
+  - Refresh locked development tools and give offline update fixtures a
+    shared temporary interpreter store.
+
+- Add scheduled benchmark reuse and harden shared tooling [#186](https://github.com/acgetchell/research-repo-tools/pull/186)
+  [`39b56e6`](https://github.com/acgetchell/research-repo-tools/commit/39b56e60442122bdc13105f2f257d1e8574c4abb)
+
+#### feat(performance): reuse candidate benchmarks with scheduled trials
+
+  Bind pre-tag benchmark acquisitions to reviewed release commits and freeze
+  the accepted native evidence and archive bytes for publication retries.
+
+  - Declare alternating or seeded randomized trials and retain actual phase
+    order, collection intervals, raw samples, and original provenance.
+  - Verify independent acquisition assertions and whole-tree source bindings
+    while allowing only declared report and documentation output changes.
+  - Keep report rendering, archive derivation, and approval revalidation free
+    of benchmark acquisition, with strict checkpoint and trial validation.
+  - Refresh the typing-inspection lock to 0.4.5.
+- Add consumer Python release evidence and harden shared tooling [#187](https://github.com/acgetchell/research-repo-tools/pull/187)
+  [`c04f61b`](https://github.com/acgetchell/research-repo-tools/commit/c04f61b0cb89b08a1a72521e7ad1bdca5f8ac549)
+
+#### feat: add consumer Python release evidence and harden shared tooling
+  - Select explicit Python identities in mixed workspaces while preserving
+    Cargo-first automatic selection.
+  - Bind consumer wheel/sdist inventories and exact bytes to trusted workflow
+    evidence, approval handoffs, freshness, and configurable PyPI destinations.
+  - Reject nonportable archive aliases and hidden dirty checkouts, and preserve
+    immutable parsed evidence and policy assertions.
+  - Retain acquisition, notebook, and scanner failures through interruption
+    and cleanup, and publish workflow timing output atomically.
+  - Preserve plot spacing and distinct labels for nearby or extreme values.
+  - Refresh locked development dependencies.
+
+### Fixed
+
+- Preserve repository root API endpoints [#181](https://github.com/acgetchell/research-repo-tools/pull/181)
+  [`f6b8665`](https://github.com/acgetchell/research-repo-tools/commit/f6b8665610095a57a11039d454192493e4c9ebfb)
+
+  Avoid a trailing slash when release validation requests repository metadata. Cover empty and nested endpoints for default and caller-selected repositories in
+  the source and installed consumer suite.
+
 ## [0.2.5] - 2026-11-02
 
 ### Merged Pull Requests
@@ -113,6 +180,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - [Release notes](https://github.com/github/codeql-action/releases)
   - [Changelog](https://github.com/github/codeql-action/blob/main/CHANGELOG.md)
   - [Commits](https://github.com/github/codeql-action/compare/6f2ac81f5cd81fe351a197ba0b00d91d03cd2aee...9b3254085494b55a0f7c4c2b3d2d52cc712ce370)
+- Extend package validation timeout [`a66f34c`](https://github.com/acgetchell/research-repo-tools/commit/a66f34ceb62258ec3ad02658be00b4940429674d)
 
 ## [0.2.4] - 2026-10-28
 
@@ -531,6 +599,7 @@ Older releases are archived by minor series:
 
 - [0.1.x](docs/archives/changelog/0.1.md)
 
+[0.2.6]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.3...v0.2.4
 [0.2.3]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.2...v0.2.3
