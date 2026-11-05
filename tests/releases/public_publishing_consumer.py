@@ -301,7 +301,7 @@ class TestPublishingConsumer(unittest.TestCase):
                     self.assertEqual(request.full_url, Response.url)
                     return Response(b"{" + extra + version + b"}")
 
-                with patch("urllib.request.urlopen", response):
+                with patch("research_repo_tools.registry._OPENER.open", response):
                     with self.assertRaises(registry.RegistryLookupError):
                         registry.lookup_version("crates-io", "sample", "1.2.3")
 
@@ -348,13 +348,13 @@ class TestPublishingConsumer(unittest.TestCase):
         def absent(request, **kwargs):
             raise urllib.error.HTTPError(request.full_url, 404, "missing", Message(), None)
 
-        with patch("urllib.request.urlopen", absent):
+        with patch("research_repo_tools.registry._OPENER.open", absent):
             self.assertFalse(registry.lookup_version("crates-io", "sample", "1.2.3").present)
 
         def unavailable(request, **kwargs):
             raise urllib.error.HTTPError(request.full_url, 429, "rate limited", Message(), None)
 
-        with patch("urllib.request.urlopen", unavailable):
+        with patch("research_repo_tools.registry._OPENER.open", unavailable):
             with self.assertRaises(registry.RegistryLookupError):
                 registry.lookup_version("crates-io", "sample", "1.2.3")
         release = GitHubRelease("example/project", "v1.2.3", 9, False, False, False, ())
@@ -376,7 +376,7 @@ class TestPublishingConsumer(unittest.TestCase):
                 def failed(*args, **kwargs):
                     raise error
 
-                with patch("urllib.request.urlopen", failed):
+                with patch("research_repo_tools.registry._OPENER.open", failed):
                     if code == 404:
                         self.assertFalse(registry.lookup_version("crates-io", "sample", "1.2.3").present)
                     else:

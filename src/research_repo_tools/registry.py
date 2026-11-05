@@ -7,7 +7,7 @@ import urllib.error
 import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal
+from typing import Literal, override
 from urllib.parse import urlsplit
 
 from packaging.utils import canonicalize_name
@@ -17,6 +17,17 @@ from research_repo_tools.release_validation import MAX_BYTES, distribution_names
 
 LIMIT = 1024 * 1024
 _NOT_FOUND = object()
+
+
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects before any request is made to a second endpoint."""
+
+    @override
+    def redirect_request(self, req, fp, code, msg, headers, newurl) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(_NoRedirectHandler())
 
 
 def pypi_destination(url: str) -> str:
@@ -81,7 +92,7 @@ def verify_published_distributions(package: str, version: str, files: Mapping[st
             raise RegistryLookupError("published distribution is yanked or differs from expected bytes")
         download = pypi_destination(upload["url"])
         try:
-            with urllib.request.urlopen(download, timeout=30) as response:
+            with _OPENER.open(download, timeout=30) as response:
                 payload = response.read(MAX_BYTES + 1)
                 if response.status != 200 or response.url != download:
                     raise RegistryLookupError("published distribution returned an unexpected status or redirect")
@@ -124,7 +135,7 @@ def _json(url: str) -> object:
         url, headers={"Accept": "application/json", "User-Agent": "research-repo-tools (https://github.com/acgetchell/research-repo-tools)"}
     )
     try:
-        with urllib.request.urlopen(request, timeout=15) as response:
+        with _OPENER.open(request, timeout=15) as response:
             payload = response.read(LIMIT + 1)
             if response.status != 200 or response.url != url:
                 raise RegistryLookupError("registry returned an unexpected status or redirect")

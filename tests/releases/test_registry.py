@@ -21,13 +21,13 @@ class Response(io.BytesIO):
 
 
 def test_exact_lookup_and_proven_absence(monkeypatch):
-    monkeypatch.setattr(registry.urllib.request, "urlopen", lambda *args, **kwargs: Response(json.dumps(crate()).encode()))
+    monkeypatch.setattr(registry._OPENER, "open", lambda *args, **kwargs: Response(json.dumps(crate()).encode()))
     assert registry.lookup_version("crates-io", "sample", "1.2.3").present
 
     def absent(request, **kwargs):
         raise urllib.error.HTTPError(request.full_url, 404, "missing", Message(), None)
 
-    monkeypatch.setattr(registry.urllib.request, "urlopen", absent)
+    monkeypatch.setattr(registry._OPENER, "open", absent)
     assert not registry.lookup_version("crates-io", "sample", "1.2.3").present
 
 
@@ -36,7 +36,7 @@ def test_http_failure_is_not_absence(monkeypatch, code):
     def failed(request, **kwargs):
         raise urllib.error.HTTPError(request.full_url, code, "unavailable", Message(), None)
 
-    monkeypatch.setattr(registry.urllib.request, "urlopen", failed)
+    monkeypatch.setattr(registry._OPENER, "open", failed)
     with pytest.raises(registry.RegistryLookupError, match=f"HTTP {code}"):
         registry.wait_for_version("crates-io", "sample", "1.2.3", attempts=3)
 
@@ -45,7 +45,7 @@ def test_http_failure_is_not_absence(monkeypatch, code):
     "payload", [b"null", b"[]", b"{", b"\xff", b"x" * (registry.LIMIT + 1)], ids=["null", "array", "truncated", "invalid-utf8", "oversized"]
 )
 def test_malformed_and_oversized_json_are_not_absence(monkeypatch, payload):
-    monkeypatch.setattr(registry.urllib.request, "urlopen", lambda *args, **kwargs: Response(payload))
+    monkeypatch.setattr(registry._OPENER, "open", lambda *args, **kwargs: Response(payload))
     with pytest.raises(registry.RegistryLookupError):
         registry.lookup_version("crates-io", "sample", "1.2.3")
 
@@ -60,7 +60,7 @@ def test_ambiguous_or_nonfinite_registry_json_is_not_publication_evidence(monkey
     else:
         depth = sys.getrecursionlimit() + 100
         payload = payload[:-1] + b', "extra": ' + b"[" * depth + b"0" + b"]" * depth + b"}"
-    monkeypatch.setattr(registry.urllib.request, "urlopen", lambda *args, **kwargs: Response(payload))
+    monkeypatch.setattr(registry._OPENER, "open", lambda *args, **kwargs: Response(payload))
     with pytest.raises(registry.RegistryLookupError, match="malformed JSON"):
         registry.lookup_version("crates-io", "sample", "1.2.3")
 
@@ -74,7 +74,7 @@ def test_http_error_response_is_closed_on_absence_and_failure(monkeypatch, code)
         assert request.full_url == error.url
         raise error
 
-    monkeypatch.setattr(registry.urllib.request, "urlopen", failed)
+    monkeypatch.setattr(registry._OPENER, "open", failed)
     if code == 404:
         assert not registry.lookup_version("crates-io", "sample", "1.2.3").present
     else:
@@ -87,7 +87,7 @@ def test_transport_and_redirect_failures_are_not_absence(monkeypatch):
     def failed(*args, **kwargs):
         raise urllib.error.URLError("offline")
 
-    monkeypatch.setattr(registry.urllib.request, "urlopen", failed)
+    monkeypatch.setattr(registry._OPENER, "open", failed)
     with pytest.raises(registry.RegistryLookupError):
         registry.lookup_version("crates-io", "sample", "1.2.3")
 
@@ -96,7 +96,7 @@ def test_transport_and_redirect_failures_are_not_absence(monkeypatch):
         response.url = "https://other.invalid"
         return response
 
-    monkeypatch.setattr(registry.urllib.request, "urlopen", redirect)
+    monkeypatch.setattr(registry._OPENER, "open", redirect)
     with pytest.raises(registry.RegistryLookupError):
         registry.lookup_version("crates-io", "sample", "1.2.3")
 

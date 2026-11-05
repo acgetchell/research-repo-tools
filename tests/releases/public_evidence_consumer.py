@@ -16,6 +16,8 @@ import tempfile
 import unicodedata
 import unittest
 import urllib.error
+import urllib.request
+import urllib.response
 import zipfile
 import zlib
 from dataclasses import replace
@@ -1207,7 +1209,7 @@ class TestPythonDistributionEvidence(unittest.TestCase):
                 payload = (self.files if downloads is None else downloads)[url.rsplit("/", 1)[1]]
             return Response(payload, url)
 
-        return patch("research_repo_tools.registry.urllib.request.urlopen", open_url)
+        return patch("research_repo_tools.registry._OPENER.open", open_url)
 
     def test_published_bytes_are_distinct_from_version_presence(self):
         with self.registry_transport(self.registry()):
@@ -1244,12 +1246,45 @@ class TestPythonDistributionEvidence(unittest.TestCase):
         error = urllib.error.HTTPError("https://files.example.org/package.whl", 503, "unavailable", Message(), body)
         with (
             patch("research_repo_tools.registry._json", return_value=self.registry()),
-            patch("research_repo_tools.registry.urllib.request.urlopen", side_effect=error),
+            patch("research_repo_tools.registry._OPENER.open", side_effect=error),
             self.assertRaisesRegex(ValueError, "download failed") as caught,
         ):
             verify_published_distributions(PYTHON.package, "1.2.3", self.hashes, index_url="https://test.pypi.org")
         self.assertTrue(body.closed)
         self.assertIs(caught.exception.__cause__, error)
+
+    def test_registry_redirects_never_request_the_target_or_read_its_body(self):
+        class RedirectResponse(urllib.response.addinfourl):
+            msg = "Redirect"
+
+        for operation in ("pypi", "crates-io", "download"):
+            for code in (301, 302, 303, 307, 308):
+                for destination in ("http://127.0.0.1/private", "https://other.invalid/private", "/redirected"):
+                    with self.subTest(operation=operation, code=code, destination=destination):
+                        requests = []
+                        body = io.BytesIO(b"redirect body must not be consumed")
+                        headers = Message()
+                        headers["Location"] = destination
+
+                        def transport(handler, request):
+                            requests.append(request.full_url)
+                            self.assertEqual(len(requests), 1, "redirect destination was requested")
+                            return RedirectResponse(body, headers, request.full_url, code)
+
+                        with (
+                            patch.object(urllib.request.HTTPSHandler, "https_open", transport),
+                            patch.object(urllib.request.HTTPHandler, "http_open", transport),
+                            patch.object(body, "read", wraps=body.read) as read,
+                        ):
+                            with self.assertRaisesRegex(ValueError, "download failed|registry lookup failed with HTTP"):
+                                if operation == "download":
+                                    with patch("research_repo_tools.registry._json", return_value=self.registry()):
+                                        verify_published_distributions(PYTHON.package, "1.2.3", self.hashes)
+                                else:
+                                    lookup_version(operation, "example-app", "1.2.3")
+                            self.assertEqual(len(requests), 1)
+                            read.assert_not_called()
+                            self.assertTrue(body.closed)
 
     def test_installed_cli_create_verify_approval_and_published_in_mixed_workspace(self):
         checkout = self.root / "source café"

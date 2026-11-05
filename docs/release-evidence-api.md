@@ -200,9 +200,10 @@ file/directory overlaps regardless of member order.
 index_url="https://pypi.org")` requires hashes from verified evidence. It checks
 the exact non-yanked inventory and package metadata through the destination's
 [PyPI JSON API](https://docs.pypi.org/api/json/), then downloads each HTTPS file
-and compares its size and SHA-256 with the assertions. It rejects redirects,
-credentials in URLs, missing/extra files and changed bytes. The endpoint must
-implement PyPI's JSON contract; arbitrary Simple API indexes and authenticated
+and compares its size and SHA-256 with the assertions. Metadata and distribution
+requests reject redirects before requesting their targets or consuming their
+bodies. It also rejects credentials in URLs, missing/extra files and changed bytes.
+The endpoint must implement PyPI's JSON contract; arbitrary Simple API indexes and authenticated
 private registries are not supported. `registry.lookup_version(..., index_url=...)`
 separately checks presence and metadata, without proving byte identity.
 
