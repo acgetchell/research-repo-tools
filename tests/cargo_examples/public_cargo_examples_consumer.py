@@ -340,6 +340,10 @@ class TestLiveProcess(unittest.TestCase):
                         " deadline=time.monotonic()+8\n"
                         f" while not pathlib.Path({str(closed)!r}).exists() and time.monotonic()<deadline: time.sleep(0.01)\n"
                         f" assert pathlib.Path({str(closed)!r}).exists(), 'descendant did not close stdout'\n"
+                        # Windows venv launchers retain duplicate standard handles
+                        # until interpreter exit. The marker proves close(1), not
+                        # the last handle's closure; observe deletion itself.
+                        f" while any(pathlib.Path({str(spools)!r}).iterdir()) and time.monotonic()<deadline: time.sleep(0.01)\n"
                     )
                     result = self.probe(body)
                     self.assertEqual(result.returncode, 0, result.stderr)
@@ -439,9 +443,13 @@ class TestLiveProcess(unittest.TestCase):
                         " deadline=time.monotonic()+8\n"
                         f" while not pathlib.Path({str(closed)!r}).exists() and time.monotonic()<deadline: time.sleep(0.01)\n"
                         f" assert pathlib.Path({str(closed)!r}).exists(), 'descendant did not close stderr'\n"
+                        # As with stdout, close(2) does not close the Windows venv
+                        # launcher's duplicate. Keep the same bounded deadline and
+                        # require an empty spool directory after actual cleanup.
+                        f" while any(pathlib.Path({str(spools)!r}).iterdir()) and time.monotonic()<deadline: time.sleep(0.01)\n"
                     )
                     result = self.probe(body)
-                    self.assertEqual(result.returncode, 0, result.stdout)
+                    self.assertEqual(result.returncode, 0, (result.stdout, result.stderr))
                     self.assertEqual(list(spools.iterdir()), [])
 
 
