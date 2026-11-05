@@ -14,6 +14,7 @@ import unittest
 from contextlib import ExitStack, chdir, contextmanager
 from dataclasses import replace
 from pathlib import Path
+from threading import Event
 from typing import override
 from unittest.mock import patch
 
@@ -37,7 +38,7 @@ from research_repo_tools.measurement import load_measurement, measure_pair
 from research_repo_tools.measurement_checkpoints import open_checkpoint
 from research_repo_tools.performance_acquisition import measure_and_retain
 from research_repo_tools.performance_progress import ProgressReporter
-from research_repo_tools.process import run_command, run_command_live
+from research_repo_tools.process import format_exception_diagnostics, run_command, run_command_live
 from research_repo_tools.publication import MarkerPair, plan_publication, publish_publication
 from research_repo_tools.publication_config import load_publication
 from research_repo_tools.release_assets import ReleaseTarget, require_release_checkout
@@ -1135,6 +1136,24 @@ class TestSuiteAcquisition(unittest.TestCase):
         evidence = measure_pair(self.root, selected, PAIR, working_tree=working_tree, checkpoint=checkpoint, progress=self.quiet)
         return selected, evidence
 
+    def test_versioned_schedule_vectors_and_counterbalance(self):
+        # Fixed version-1 rank vectors, independently checked using OpenSSL's
+        # SHA-256 command over the ASCII schedule records (no ambient RNG).
+        for seed, expected in ((0, "CBCCBB"), (42, "BBCCCB"), (2**64 - 1, "CBBCCB")):
+            with self.subTest(seed=seed):
+                schedule = TrialSchedule(6, "randomized", seed)
+                phases = tuple(("current", "baseline") if first == "C" else ("baseline", "current") for first in expected)
+                self.assertEqual(schedule.phases, phases)
+                self.assertEqual(parse_schedule(schedule.document()).phases, phases)
+        for count in (2, 6, 1000):
+            with self.subTest(count=count):
+                self.assertEqual(TrialSchedule(count).phases, (("baseline", "current"), ("current", "baseline")) * (count // 2))
+                for seed in (0, 42, 2**64 - 1):
+                    phases = TrialSchedule(count, "randomized", seed).phases
+                    self.assertEqual(len(phases), count)
+                    self.assertEqual(phases.count(("baseline", "current")), count // 2)
+                    self.assertEqual(phases.count(("current", "baseline")), count // 2)
+
     def test_schedules_execute_declared_order_and_keep_original_trial_bytes(self):
         for schedule in (TrialSchedule(), TrialSchedule(4, "randomized", 42), TrialSchedule(1, "sequential")):
             self.log.unlink(missing_ok=True)
@@ -1322,6 +1341,19 @@ class TestSuiteAcquisition(unittest.TestCase):
         self.assertEqual(before, self.log.read_bytes())
         return evidence, policy, native, provider, accepted, mapping
 
+    def test_candidate_assertions_remain_frozen_after_caller_mutates_observations(self):
+        _, original, _, _, _, _ = self.candidate_fixture()
+        observations = [list(item) for item in original.observations]
+        policy = replace(original, observations=observations)
+        retained = serialize_candidate_policy(policy)
+        digest = acquisition_assertion_digest(policy)
+        observations[0][0] = 0
+        observations[0][2] = "invalid phase"
+        observations.clear()
+        self.assertEqual(serialize_candidate_policy(policy), retained)
+        self.assertEqual(acquisition_assertion_digest(policy), digest)
+        self.assertEqual(policy.observations, original.observations)
+
     def test_candidate_requires_final_commit_before_release_or_archive_operations(self):
         evidence, final, native, provider, accepted, _ = self.candidate_fixture()
         pending = replace(final, commit=None)
@@ -1499,6 +1531,16 @@ class TestSuiteAcquisition(unittest.TestCase):
             self.assertEqual((self.root / "step-two.json").read_bytes(), accepted)
             self.assertEqual(main([*args, "--acceptance", "step-two.json", "--output", "approval.json"]), 0)
             self.assertEqual((self.root / "approval.json").read_bytes(), accepted)
+            # Explicit Python identity must also reach the candidate command,
+            # even while the benchmark source retains its Cargo package.
+            (self.root / "pyproject.toml").write_text(
+                f'[project]\nname="python-fixture"\nversion="{policy.tag.removeprefix("v")}"\n', encoding="utf-8", newline="\n"
+            )
+            configuration = self.root / "native.toml"
+            configuration.write_bytes(b'package-kind="python"\n' + configuration.read_bytes().replace(b'package="fixture"', b'package="python-fixture"'))
+            self.assertEqual(main([*args, "--output", "python-step-two.json"]), 0)
+            self.assertEqual(provider.call_args.args[0].package_kind, "python")
+            self.assertEqual(provider.call_args.args[0].package, "python-fixture")
             self.assertEqual(list(Path(caller).iterdir()), [])
         self.assertEqual(before, self.log.read_bytes())
 
@@ -1578,6 +1620,110 @@ class TestSuiteAcquisition(unittest.TestCase):
 
 
 class TestProgress(unittest.TestCase):
+    def test_preparation_failure_survives_failed_terminal_reporting(self) -> None:
+        reporting = OSError("progress stream failed")
+
+        def observer(event):
+            if event["event"] == "failed":
+                raise reporting
+
+        reporter = ProgressReporter(mode="none", observer=observer)
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            with self.assertRaises(ExceptionGroup) as caught:
+                measure_pair(root, plan(root / "calls.log"), PAIR, resume=True, progress=reporter)
+            original, secondary = caught.exception.exceptions
+            self.assertIsInstance(original, ValueError)
+            self.assertIn("resume requires an explicit checkpoint", str(original))
+            self.assertIs(secondary, reporting)
+            self.assertEqual(list(root.iterdir()), [])
+
+    def test_failed_progress_reporting_preserves_failure_and_interruption(self) -> None:
+        for original in (ValueError("acquisition failed"), KeyboardInterrupt("acquisition interrupted")):
+            reporting = OSError("progress stream failed")
+
+            def observer(event):
+                if event["event"] in {"failed", "interrupted"}:
+                    raise reporting
+
+            reporter = ProgressReporter(mode="none", observer=observer)
+            with self.subTest(original=original), self.assertRaises(BaseExceptionGroup) as caught:
+                with reporter.stage("acquisition"):
+                    raise original
+            self.assertEqual(caught.exception.exceptions, (original, reporting))
+
+    def test_heartbeat_errors_reach_the_caller_after_the_worker_stops(self) -> None:
+        for original in (None, ValueError("native command failed"), KeyboardInterrupt("native command interrupted")):
+            observed = Event()
+            events = []
+            reporting = OSError("heartbeat observer failed")
+
+            def observer(event):
+                events.append(event["event"])
+                if event["event"] == "heartbeat":
+                    observed.set()
+                    raise reporting
+
+            reporter = ProgressReporter(mode="none", cadence=1, observer=observer)
+            with (
+                self.subTest(original=original),
+                patch("threading.excepthook") as uncaught,
+                self.assertRaises(OSError if original is None else BaseExceptionGroup) as caught,
+            ):
+                with reporter.stage("acquisition"):
+                    self.assertTrue(observed.wait(10), "heartbeat did not run")
+                    if original is not None:
+                        raise original
+            if original is None:
+                self.assertIs(caught.exception, reporting)
+            else:
+                assert isinstance(caught.exception, BaseExceptionGroup)
+                self.assertEqual(caught.exception.exceptions, (original, reporting))
+            uncaught.assert_not_called()
+            self.assertEqual(events[-1], "interrupted" if isinstance(original, KeyboardInterrupt) else "failed")
+            self.assertNotIn("finished", events)
+
+    def test_checkpoint_cleanup_preserves_errors_and_retained_recovery_state(self) -> None:
+        for original in (None, ValueError("acquisition failed"), KeyboardInterrupt("interrupted")):
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve() / "checkpoint"
+                lock = root / ".writer"
+                rmdir = Path.rmdir
+                cleanup_error = OSError("lock removal failed")
+                journal = None
+
+                def fail_cleanup(path):
+                    if path == lock:
+                        raise cleanup_error
+                    return rmdir(path)
+
+                with (
+                    patch.object(Path, "rmdir", fail_cleanup),
+                    self.assertRaises(OSError if original is None else BaseExceptionGroup) as caught,
+                ):
+                    with open_checkpoint(root, {"fixture": "one"}, ("shared",), resume=False) as journal:
+                        journal.accept("shared", {"complete": True})
+                        if original is not None:
+                            raise original
+                if original is not None:
+                    assert isinstance(caught.exception, BaseExceptionGroup)
+                    self.assertIs(caught.exception.exceptions[0], original)
+                    recovery = caught.exception.exceptions[1]
+                else:
+                    recovery = caught.exception
+                self.assertIs(recovery, cleanup_error)
+                self.assertIn(str(lock), " ".join(cleanup_error.__notes__))
+                self.assertIn(str(lock), format_exception_diagnostics(caught.exception))
+                self.assertTrue(lock.is_dir())
+                assert journal is not None
+                with self.assertRaisesRegex(ValueError, "closed"):
+                    journal.read()
+                with self.assertRaisesRegex(ValueError, "unresolved writer"), open_checkpoint(root, {"fixture": "one"}, ("shared",), resume=True):
+                    self.fail("cleanup failure silently released ownership")
+                lock.rmdir()  # Explicit owner recovery retains the completed unit.
+                with open_checkpoint(root, {"fixture": "one"}, ("shared",), resume=True) as resumed:
+                    self.assertEqual(resumed.read(), {"shared": {"complete": True}})
+
     def test_default_heartbeat_waits_five_minutes_and_stage_events_are_immediate(self) -> None:
         now = [0.0]
         events = []

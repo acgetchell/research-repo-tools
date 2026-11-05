@@ -42,7 +42,7 @@ from research_repo_tools.criterion_inventory import (
     parse_inventory,
     serialize_inventory,
 )
-from research_repo_tools.evidence import Evidence, Provenance, _digest, _object, _string, compare_provenance, fingerprint_files
+from research_repo_tools.evidence import Evidence, Provenance, _digest, _load_json, _object, _string, compare_provenance, fingerprint_files
 from research_repo_tools.measurement import MeasurementConfig, _strings, capture_provenance
 from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.process import run_command_live
@@ -806,7 +806,7 @@ def validate_acquisition(evidence: Evidence, run: CompleteRun) -> None:
     declarations = [dict(sources[phase].context).get("measurement-declaration") for phase in ("baseline", "current")]
     if declarations[0] is None or declarations[0] != declarations[1]:
         raise ValueError("complete acquisition requires matching phase declarations")
-    plan = parse_plan(_object(json.loads(declarations[0]), "acquisition declaration"))
+    plan = parse_plan(_object(_load_json(declarations[0].encode("utf-8"), "acquisition declaration"), "acquisition declaration"))
     if plan.schema != 4:
         raise ValueError("v3 evidence requires a schema-4 acquisition declaration")
     if plan.backend == "export":

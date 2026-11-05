@@ -110,6 +110,9 @@ support. Synchronous calls from a running caller loop are supported and preserve
 that loop and its subprocess capabilities. Kernel cleanup completes on success,
 cell errors, and timeouts; caller interruptions cancel execution and wait for
 cleanup before propagating. No warnings are suppressed.
+If execution and kernel cleanup both fail, an exception group retains both
+errors. Failed execution reports include their individual diagnostics; cancellation
+and interruption still propagate to the caller, including when cleanup fails.
 
 Notebook code is trusted executable code, not sandboxed. Consumer tests own any
 files that code writes, its domain environment variables, scientific assertions,

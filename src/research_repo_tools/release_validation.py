@@ -8,6 +8,7 @@ registry upload, Rust packaging and scientific gates remain their responsibility
 """
 
 import argparse
+import gzip
 import hashlib
 import io
 import json
@@ -22,27 +23,35 @@ import tempfile
 import time
 import tomllib
 import zipfile
+import zlib
 from collections.abc import Callable
 from dataclasses import dataclass
 from email.parser import BytesParser
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import quote, urlsplit
 
 if __package__:
+    from research_repo_tools._archive_paths import ArchivePaths
     from research_repo_tools._diagnostics import format_exception_diagnostics
+    from research_repo_tools._git_checkout import READ_ONLY_OPTIONS, git_context, require_checkout
     from research_repo_tools.files import replace_many
 else:
     # The install-free runner loads reviewed sibling source, never site packages.
     import runpy
 
+    ArchivePaths = runpy.run_path(str(Path(__file__).with_name("_archive_paths.py")))["ArchivePaths"]
     format_exception_diagnostics = runpy.run_path(str(Path(__file__).with_name("_diagnostics.py")))["format_exception_diagnostics"]
+    _checkout_helpers = runpy.run_path(str(Path(__file__).with_name("_git_checkout.py")))
+    READ_ONLY_OPTIONS, require_checkout = _checkout_helpers["READ_ONLY_OPTIONS"], _checkout_helpers["require_checkout"]
+    git_context = _checkout_helpers["git_context"]
     replace_many = runpy.run_path(str(Path(__file__).with_name("files.py")))["replace_many"]
 
 __all__ = [
     "ValidationPolicy",
     "api",
     "artifact_identity",
+    "distribution_names",
     "download_artifact",
     "parse_release_json",
     "read_pages",
@@ -145,10 +154,31 @@ def _repository(value: str) -> str:
     return value
 
 
-def distribution_names(tag: str) -> tuple[str, str]:
+def _python_package(package: str) -> str:
+    if not isinstance(package, str) or re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9._-]*[A-Za-z0-9])?", package) is None:
+        raise ValueError("expected a Python distribution package name")
+    return re.sub(r"[-_.]+", "_", package).lower()
+
+
+def distribution_names(tag: str, *, package: str = "research-repo-tools", filenames: tuple[str, ...] | None = None) -> tuple[str, ...]:
+    """Validate a stable version's explicit wheel/sdist inventory, without a tag lookup.
+
+    Omitted filenames select one universal wheel and sdist. Native wheels and
+    multiple wheel tags require an explicit inventory; no globbing is performed.
+    """
     if re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag) is None:
         raise ValueError("release assets require a canonical stable vX.Y.Z tag")
-    return f"research_repo_tools-{tag[1:]}-py3-none-any.whl", f"research_repo_tools-{tag[1:]}.tar.gz"
+    prefix = f"{_python_package(package)}-{tag[1:]}"
+    names = tuple(filenames) if filenames is not None else (f"{prefix}-py3-none-any.whl", f"{prefix}.tar.gz")
+    wheel = re.escape(prefix) + r"-(?:[0-9][A-Za-z0-9_]*-)?[A-Za-z0-9_.]+-[A-Za-z0-9_.]+-[A-Za-z0-9_.]+\.whl"
+    if (
+        not 2 <= len(names) <= 64
+        or len({name.casefold() for name in names}) != len(names)
+        or names.count(f"{prefix}.tar.gz") != 1
+        or any(name != f"{prefix}.tar.gz" and re.fullmatch(wheel, name) is None for name in names)
+    ):
+        raise ValueError("distribution inventory requires one matching sdist and distinct matching wheel filenames")
+    return tuple(sorted(names))
 
 
 @dataclass(frozen=True)
@@ -356,12 +386,14 @@ def validate_jobs(policy: ValidationPolicy, run: dict[str, Any], jobs: list[dict
     return result
 
 
-def artifact_identity(data: dict[str, Any], run: dict[str, Any], name: str) -> dict[str, Any]:
+def artifact_identity(data: dict[str, Any], run: dict[str, Any], name: str, *, max_bytes: int = MAX_BYTES) -> dict[str, Any]:
     """Bind an immutable artifact ID/digest to its exact repository/run/ref/SHA.
 
     GitHub does not report an artifact's attempt. Callers must use an
     attempt-specific name and verify the attempt inside its retained manifest.
+    max_bytes bounds the original ZIP; pass the same bound to download_artifact.
     """
+    _integer(max_bytes, "artifact byte limit")
     identity = _object(data.get("workflow_run"), "artifact.workflow_run")
     if data.get("name") != name or data.get("expired") is not False:
         raise ValueError(f"missing, expired or mismatched {name}; {RECOVERY}")
@@ -380,7 +412,7 @@ def artifact_identity(data: dict[str, Any], run: dict[str, Any], name: str) -> d
     digest = data.get("digest")
     if not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
         raise ValueError("artifact lacks an authoritative SHA-256 digest")
-    if type(data.get("size_in_bytes")) is not int or not 0 < data["size_in_bytes"] <= MAX_BYTES:
+    if type(data.get("size_in_bytes")) is not int or not 0 < data["size_in_bytes"] <= max_bytes:
         raise ValueError("artifact size exceeds the release bound")
     return {"id": identifier, "name": name, "digest": digest, "size_in_bytes": data["size_in_bytes"]}
 
@@ -418,13 +450,24 @@ def _publish_distributions(destination: Path, contents: dict[str, bytes], *, evi
     replace_many(updates)
 
 
-def download_artifact(repository: str, artifact: dict[str, Any], destination: Path, names: tuple[str, ...]) -> None:
+def download_artifact(
+    repository: str,
+    artifact: dict[str, Any],
+    destination: Path,
+    names: tuple[str, ...],
+    *,
+    max_bytes: int = MAX_BYTES,
+    max_expanded_bytes: int | None = None,
+) -> None:
     """Retrieve one immutable ID, verify original ZIP digest, and extract flat files.
 
     Refuse links, directory entries, duplicates, aliases, extras and resource
     excesses before creating the destination. Never call extractall on input.
+    max_bytes bounds the ZIP; max_expanded_bytes defaults to that same limit.
     """
     _repository(repository)
+    _integer(max_bytes, "artifact byte limit")
+    expanded_limit = max_bytes if max_expanded_bytes is None else _integer(max_expanded_bytes, "expanded artifact byte limit")
     if (
         not names
         or len({name.casefold() for name in names}) != len(names)
@@ -437,11 +480,14 @@ def download_artifact(repository: str, artifact: dict[str, Any], destination: Pa
     ):
         raise ValueError("expected artifact names must be distinct portable plain filenames")
     identifier = _integer(artifact.get("id"), "artifact ID")
+    expected_size = _integer(artifact.get("size_in_bytes"), "artifact size")
+    if expected_size > max_bytes:
+        raise ValueError("artifact size exceeds the release bound")
     with tempfile.TemporaryFile() as stream:
         subprocess.run(["gh", "api", f"repos/{repository}/actions/artifacts/{identifier}/zip"], stdout=stream, stderr=subprocess.PIPE, check=True, timeout=120)
         stream.seek(0)
-        payload = stream.read(MAX_BYTES + 1)
-    if len(payload) != artifact.get("size_in_bytes") or len(payload) > MAX_BYTES or f"sha256:{_sha(payload)}" != artifact.get("digest"):
+        payload = stream.read(expected_size + 1)
+    if len(payload) != expected_size or f"sha256:{_sha(payload)}" != artifact.get("digest"):
         raise ValueError("downloaded artifact ZIP size or SHA-256 differs from immutable API identity")
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         members = archive.infolist()
@@ -449,51 +495,106 @@ def download_artifact(repository: str, artifact: dict[str, Any], destination: Pa
             raise ValueError(f"artifact must contain exactly {names}")
         if any(member.is_dir() or member.flag_bits & 1 or stat.S_IFMT(member.external_attr >> 16) not in (0, stat.S_IFREG) for member in members):
             raise ValueError("artifact entries must be regular, unencrypted files")
-        if any(member.file_size <= 0 for member in members) or sum(member.file_size for member in members) > MAX_BYTES:
+        if any(member.file_size <= 0 for member in members) or sum(member.file_size for member in members) > expanded_limit:
             raise ValueError("artifact expanded size exceeds the release bound")
         contents = {member.filename: archive.read(member) for member in members}
     _publish_distributions(destination, contents)
 
 
-def verify_distributions(dist: Path, tag: str) -> dict[str, str]:
-    """Check exact inventory and independent wheel/sdist core package metadata."""
-    names = distribution_names(tag)
+def _distribution_member(name: str, paths: ArchivePaths, *, directory: bool) -> None:
+    # Distribution inventories use canonical paths for their metadata locations.
+    canonical = name.removesuffix("/") if directory else name
+    if str(PurePosixPath(canonical)) != canonical:
+        raise ValueError("distribution contains noncanonical member paths")
+    paths.add(name, directory=directory)
+
+
+def _distribution_metadata(payload: bytes, name: str, prefix: str) -> bytes:
+    paths = ArchivePaths()
+    content = None
+    if name.endswith(".whl"):
+        metadata_name = f"{prefix}.dist-info/METADATA"
+        with zipfile.ZipFile(io.BytesIO(payload)) as wheel:
+            members = wheel.infolist()
+            if len(members) > 10000 or sum(entry.file_size for entry in members) > MAX_BYTES * 8:
+                raise ValueError("wheel scan exceeds the release bound")
+            for entry in members:
+                _distribution_member(entry.orig_filename, paths, directory=entry.is_dir())
+                if (
+                    entry.orig_filename != entry.filename
+                    or entry.flag_bits & 1
+                    or stat.S_IFMT(entry.external_attr >> 16) not in (0, stat.S_IFREG, stat.S_IFDIR)
+                ):
+                    raise ValueError("wheel members must be regular unencrypted files or directories")
+                if entry.filename.endswith(".dist-info/METADATA"):
+                    if entry.filename != metadata_name or not 0 < entry.file_size <= 1024 * 1024:
+                        raise ValueError("wheel metadata inventory differs")
+                    content = wheel.read(entry)
+    else:
+        with gzip.GzipFile(fileobj=io.BytesIO(payload)) as compressed:
+            expanded = compressed.read(MAX_BYTES * 8 + 1)
+        if len(expanded) > MAX_BYTES * 8:
+            raise ValueError("sdist scan exceeds the release bound")
+        with tarfile.open(fileobj=io.BytesIO(expanded), mode="r:") as sdist:
+            for index, entry in enumerate(sdist):
+                if index >= 10000:
+                    raise ValueError("sdist scan exceeds the release bound")
+                _distribution_member(entry.name, paths, directory=entry.isdir())
+                if (
+                    entry.sparse is not None
+                    or not (entry.isfile() or entry.isdir())
+                    or PurePosixPath(entry.name).parts[0] != prefix
+                    or not 0 <= entry.size <= len(expanded) - entry.offset_data
+                ):
+                    raise ValueError("sdist must contain regular package files or directories")
+                if entry.name == f"{prefix}/PKG-INFO":
+                    if not entry.isfile() or not 0 < entry.size <= 1024 * 1024:
+                        raise ValueError("sdist metadata inventory differs")
+                    source = sdist.extractfile(entry)
+                    if source is not None:
+                        with source:
+                            content = source.read()
+    if content is None:
+        raise ValueError("distribution package metadata is missing")
+    return content
+
+
+def verify_distributions(
+    dist: Path, tag: str, *, package: str = "research-repo-tools", filenames: tuple[str, ...] | None = None, max_total_bytes: int | None = None
+) -> dict[str, str]:
+    """Check exact inventory, safe bounded archives and core package metadata.
+
+    Return hashes of the very bytes inspected. This is an integrity check, not
+    CI provenance. The default preserves this tooling package's original API.
+    max_total_bytes optionally bounds the sum of the inspected distribution bytes.
+    """
+    if max_total_bytes is not None:
+        _integer(max_total_bytes, "total distribution byte limit")
+    names = distribution_names(tag, package=package, filenames=filenames)
     if {path.name for path in dist.iterdir()} != set(names):
         raise ValueError(f"expected exactly these distributions: {', '.join(names)}")
     result = {}
+    total = 0
+    prefix = f"{_python_package(package)}-{tag[1:]}"
     for name in names:
         path = dist / name
-        if path.is_symlink() or not path.is_file() or not 0 < path.stat().st_size <= MAX_BYTES:
+        if path.is_symlink() or not path.is_file():
             raise ValueError("distributions must be bounded nonempty regular files")
-        if name.endswith(".whl"):
-            metadata_name = f"research_repo_tools-{tag[1:]}.dist-info/METADATA"
-            with zipfile.ZipFile(path) as wheel:
-                matches = [entry for entry in wheel.infolist() if entry.filename.endswith(".dist-info/METADATA")]
-                if len(matches) != 1 or matches[0].filename != metadata_name or matches[0].file_size > 1024 * 1024:
-                    raise ValueError("wheel metadata inventory differs")
-                content = wheel.read(matches[0])
-        else:
-            metadata_name = f"research_repo_tools-{tag[1:]}/PKG-INFO"
-            with tarfile.open(path, mode="r:gz") as sdist:
-                matches = []
-                size = 0
-                for index, entry in enumerate(sdist):
-                    size += entry.size
-                    if index >= 10000 or size > MAX_BYTES * 8:
-                        raise ValueError("sdist metadata scan exceeds the release bound")
-                    if entry.name == metadata_name:
-                        matches.append(entry)
-                if len(matches) != 1 or not matches[0].isfile() or not 0 < matches[0].size <= 1024 * 1024:
-                    raise ValueError("sdist metadata inventory differs")
-                source = sdist.extractfile(matches[0])
-                if source is None:
-                    raise ValueError("sdist package metadata is missing")
-                with source:
-                    content = source.read()
-        metadata = BytesParser().parsebytes(content)
-        if metadata.get_all("Name") != ["research-repo-tools"] or metadata.get_all("Version") != [tag[1:]]:
+        with path.open("rb") as source:
+            payload = source.read(MAX_BYTES + 1)
+        if not 0 < len(payload) <= MAX_BYTES:
+            raise ValueError("distributions must be bounded nonempty regular files")
+        total += len(payload)
+        if max_total_bytes is not None and total > max_total_bytes:
+            raise ValueError("distribution inventory exceeds the total byte bound")
+        try:
+            metadata = BytesParser().parsebytes(_distribution_metadata(payload, name, prefix))
+        except (OSError, EOFError, zlib.error, tarfile.TarError, zipfile.BadZipFile) as error:
+            raise ValueError("distribution is not a readable wheel or sdist") from error
+        package_names = metadata.get_all("Name", [])
+        if len(package_names) != 1 or _python_package(package_names[0]) != _python_package(package) or metadata.get_all("Version") != [tag[1:]]:
             raise ValueError("distribution package name or version differs from the release tag")
-        result[name] = _sha(path.read_bytes())
+        result[name] = _sha(payload)
     return result
 
 
@@ -732,14 +833,21 @@ def _retrieve_evidence(tag: str, commit: str, dist: Path, *, attempts: int, inte
 
 
 def _checkout_identity(root: Path) -> tuple[str, str]:
+    executable, environment = git_context(root)
+
+    def git_bytes(args: list[str]) -> bytes:
+        return subprocess.run([str(executable), *args], cwd=root, env=environment, check=True, capture_output=True, timeout=30).stdout
+
     def git(*args: str) -> str:
-        return subprocess.run(["git", "--no-pager", *args], cwd=root, check=True, capture_output=True, encoding="utf-8", timeout=30).stdout.strip()
+        return git_bytes([*READ_ONLY_OPTIONS, *args]).decode("utf-8").strip()
 
     if Path(git("rev-parse", "--show-toplevel")).resolve() != root.resolve():
         raise ValueError("release evidence requires the repository root")
     commit = _commit(git("rev-parse", "HEAD"))
-    if git("status", "--porcelain", "--untracked-files=all"):
-        raise ValueError("release evidence requires a clean checkout, including untracked files")
+    try:
+        require_checkout(commit, git_bytes, executable=executable)
+    except ValueError as error:
+        raise ValueError(f"release evidence requires a clean checkout: {error}") from error
     project = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))["project"]
     if project["name"] != "research-repo-tools":
         raise ValueError("release evidence requires the research-repo-tools package")

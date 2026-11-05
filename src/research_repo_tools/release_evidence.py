@@ -1,6 +1,7 @@
 """Exact-commit release evidence and immutable approval handoffs.
 
-Signed source validation and retained Cargo archives are different guarantees.
+Signed source validation, retained Cargo archives and Python distributions are
+different guarantees.
 This module never obtains publishing credentials, executes consumer code, builds
 packages, signs documents, or uploads to a registry. Consumers own those gates.
 """
@@ -15,13 +16,17 @@ import tomllib
 import zlib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
 from research_repo_tools.evidence import deterministic_json
+from research_repo_tools.registry import pypi_destination
 from research_repo_tools.release_validation import (
+    MAX_BYTES,
     ValidationPolicy,
     artifact_identity,
+    distribution_names,
     download_artifact,
     parse_release_json,
     read_pages,
@@ -29,9 +34,10 @@ from research_repo_tools.release_validation import (
     validate_jobs,
     validate_run,
     verify_attestation,
+    verify_distributions,
 )
 
-__all__ = ["EvidencePolicy", "create_evidence_manifest", "verify_cargo_archive", "verify_release_evidence"]
+__all__ = ["EvidencePolicy", "PythonDistributionPolicy", "create_evidence_manifest", "verify_cargo_archive", "verify_release_evidence"]
 
 MANIFEST = "validation.json"
 BUNDLE = "validation.sigstore.json"
@@ -84,30 +90,76 @@ def _relative(value: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class PythonDistributionPolicy:
+    """Exact filename templates and destination, frozen into Python evidence.
+
+    Only {version} substitution is supported. Freshness bounds the original
+    push run and artifact creation; a rerun cannot refresh an old source run.
+    max_distribution_bytes bounds payloads separately from the artifact envelope.
+    """
+
+    files: tuple[str, ...]
+    index_url: str = "https://pypi.org"
+    max_age_seconds: int = 30 * 24 * 60 * 60
+    max_distribution_bytes: int = 256 * 1024 * 1024
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "files", tuple(self.files))
+        if not self.files or any(not isinstance(name, str) or "{version}" not in name for name in self.files):  # ty: ignore[redundant-condition-strict]  Validate untyped policy input.
+            raise ValueError("Python distribution files require explicit {version} filename templates")
+        pypi_destination(self.index_url)
+        if type(self.max_age_seconds) is not int or self.max_age_seconds <= 0:
+            raise ValueError("Python evidence max_age_seconds must be a positive integer")
+        if type(self.max_distribution_bytes) is not int or not 0 < self.max_distribution_bytes <= 2 * 1024 * 1024 * 1024:
+            raise ValueError("Python evidence max_distribution_bytes must be an integer from 1 byte through 2 GiB")
+
+    @property
+    def max_artifact_bytes(self) -> int:
+        """Allow evidence and ZIP framing beyond the distribution payload budget."""
+        return self.max_distribution_bytes + 64 * 1024 * 1024
+
+    def filenames(self, package: str, version: str) -> tuple[str, ...]:
+        return distribution_names(f"v{version}", package=package, filenames=tuple(name.replace("{version}", version) for name in self.files))
+
+
+@dataclass(frozen=True, slots=True)
 class EvidencePolicy:
     """Consumer-owned gates and artifact/signature policy, captured in each record.
 
     Artifact names are PREFIX-RUN_ID-ATTEMPT. Signed source evidence requires a
     separate signing job; its successful steps are checked only when consuming
-    the completed run. Cargo gates must describe the actual retained archive.
+    the completed run. Cargo and Python gates must describe the retained artifacts.
     """
 
     validation: ValidationPolicy
     package: str
     artifact_prefix: str
-    guarantee: Literal["signed-source", "cargo-archive"]
+    guarantee: Literal["signed-source", "cargo-archive", "python-distributions"]
     signing_job: tuple[str, tuple[str, ...]] | None = None
     path_in_vcs: str = ""
+    package_kind: Literal["auto", "cargo", "python"] = "auto"
+    distributions: PythonDistributionPolicy | None = None
 
     def __post_init__(self) -> None:
         if not isinstance(self.validation, ValidationPolicy):
             raise TypeError("validation must be a ValidationPolicy")
-        _package(self.package)
+        if self.package_kind not in ("auto", "cargo", "python"):
+            raise ValueError("package kind must be auto, cargo or python")
+        if self.package_kind == "python":
+            distribution_names("v0.0.0", package=self.package)
+        else:
+            _package(self.package)
         _relative(self.path_in_vcs)
         if not isinstance(self.artifact_prefix, str) or re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", self.artifact_prefix) is None:
             raise ValueError("artifact prefix must contain portable letters, digits, hyphens or underscores")
-        if self.guarantee not in ("signed-source", "cargo-archive"):
+        if self.guarantee not in ("signed-source", "cargo-archive", "python-distributions"):
             raise ValueError("unknown release evidence guarantee")
+        if self.guarantee == "python-distributions":
+            if self.package_kind != "python" or not isinstance(self.distributions, PythonDistributionPolicy):
+                raise ValueError("Python distribution evidence requires explicit python package kind and distribution policy")
+            self.distributions.filenames(self.package, "0.0.0")
+        elif self.distributions is not None or (self.guarantee == "cargo-archive" and self.package_kind == "python"):
+            raise ValueError("distribution policy/package kind differs from evidence guarantee")
         if self.guarantee == "signed-source" and self.signing_job is None:
             raise ValueError("signed source validation requires a signing job")
         if self.signing_job is not None:
@@ -120,7 +172,7 @@ class EvidencePolicy:
 
 def _policy(policy: EvidencePolicy) -> dict[str, Any]:
     validation = policy.validation
-    return {
+    result = {
         "repository": validation.repository,
         "workflow": validation.workflow,
         "workflow_name": validation.workflow_name,
@@ -133,6 +185,17 @@ def _policy(policy: EvidencePolicy) -> dict[str, Any]:
         "signing_job": None if policy.signing_job is None else {policy.signing_job[0]: list(policy.signing_job[1])},
         "path_in_vcs": policy.path_in_vcs,
     }
+    # Preserve existing Cargo/source records when callers keep automatic identity.
+    if policy.package_kind != "auto":
+        result["package_kind"] = policy.package_kind
+    if policy.distributions is not None:
+        result["distributions"] = {
+            "files": list(policy.distributions.files),
+            "index_url": policy.distributions.index_url,
+            "max_age_seconds": policy.distributions.max_age_seconds,
+            "max_distribution_bytes": policy.distributions.max_distribution_bytes,
+        }
+    return result
 
 
 def _run_identity(run: dict[str, Any]) -> dict[str, Any]:
@@ -252,6 +315,7 @@ def create_evidence_manifest(
     *,
     archive: Path | None = None,
     tools: Mapping[str, str] | None = None,
+    distributions: Path | None = None,
 ) -> bytes:
     """Create bytes to retain/sign in the executing trusted push attempt.
 
@@ -261,11 +325,25 @@ def create_evidence_manifest(
     Cargo gates; completed gates are required when consuming the finished run.
     """
     _version(version)
+    if distributions is not None and policy.guarantee != "python-distributions":
+        raise ValueError("distribution inputs require Python distribution evidence")
     run = _current(policy, commit, run_id, attempt, read, completed=False)
     document = _manifest(policy, version, run)
     if policy.guarantee == "signed-source":
         if archive is not None or tools is not None:
             raise ValueError("signed source evidence does not establish Cargo archive identity")
+        document["jobs"] = _jobs(policy, run, read, signing=False)
+    elif policy.guarantee == "python-distributions":
+        if distributions is None or archive is not None or tools is not None:
+            raise ValueError("Python evidence requires retained distributions without Cargo archive/tools")
+        assert policy.distributions is not None
+        document["files"] = verify_distributions(
+            distributions,
+            f"v{version}",
+            package=policy.package,
+            filenames=policy.distributions.filenames(policy.package, version),
+            max_total_bytes=policy.distributions.max_distribution_bytes,
+        )
         document["jobs"] = _jobs(policy, run, read, signing=False)
     else:
         if archive is None or tools is None:
@@ -277,7 +355,34 @@ def create_evidence_manifest(
         }
     if _run_identity(_current(policy, commit, run_id, attempt, read, completed=False)) != document["run"]:
         raise ValueError("run identity changed while creating evidence")
-    return deterministic_json(document)
+    payload = deterministic_json(document)
+    if policy.distributions is not None and len(payload) > MAX_METADATA_BYTES:
+        raise ValueError("Python evidence manifest exceeds the metadata byte bound")
+    return payload
+
+
+def _freshness(policy: PythonDistributionPolicy, run: dict[str, Any], artifact: dict[str, Any]) -> dict[str, str]:
+    values = {"run_created_at": run.get("created_at"), "artifact_created_at": artifact.get("created_at"), "expires_at": artifact.get("expires_at")}
+    dates = {}
+    validated: dict[str, str] = {}
+    for key, value in values.items():
+        if not isinstance(value, str):
+            raise ValueError("Python evidence requires provider creation and expiration timestamps")
+        try:
+            parsed = datetime.fromisoformat(value)
+        except ValueError as error:
+            raise ValueError("invalid evidence timestamp") from error
+        if parsed.tzinfo is None:
+            raise ValueError("evidence timestamps require a timezone")
+        validated[key] = value
+        dates[key] = parsed
+    now = datetime.now(UTC)
+    if (
+        not dates["run_created_at"] <= dates["artifact_created_at"] <= now < dates["expires_at"]
+        or (now - dates["run_created_at"]).total_seconds() > policy.max_age_seconds
+    ):
+        raise ValueError("Python evidence is stale, expired or has inconsistent timestamps; require a fresh complete push run")
+    return validated
 
 
 def _snapshot(policy: EvidencePolicy, version: str, run: dict[str, Any], read: Callable[[str], Any], pinned: dict[str, Any] | None) -> dict[str, Any]:
@@ -286,12 +391,19 @@ def _snapshot(policy: EvidencePolicy, version: str, run: dict[str, Any], read: C
     matches = [entry for entry in artifacts if entry.get("name") == name]
     if len(matches) != 1:
         raise ValueError("missing or ambiguous evidence artifact; inspect retention and the complete original attempt")
-    artifact = artifact_identity(matches[0], run, name)
+    max_bytes = MAX_BYTES if policy.distributions is None else policy.distributions.max_artifact_bytes
+    artifact = artifact_identity(matches[0], run, name, max_bytes=max_bytes)
     if pinned is not None and artifact != _object(pinned.get("artifact")):
         raise ValueError("approved artifact identity changed")
-    if artifact_identity(_object(read(f"actions/artifacts/{artifact['id']}")), run, name) != artifact:
+    detail = _object(read(f"actions/artifacts/{artifact['id']}"))
+    if artifact_identity(detail, run, name, max_bytes=max_bytes) != artifact:
         raise ValueError("artifact identity changed during verification")
-    return {**_manifest(policy, version, run), "schema": SELECTION_SCHEMA, "jobs": _jobs(policy, run, read, signing=True), "artifact": artifact}
+    result = {**_manifest(policy, version, run), "schema": SELECTION_SCHEMA, "jobs": _jobs(policy, run, read, signing=True), "artifact": artifact}
+    if policy.distributions is not None:
+        result["freshness"] = _freshness(policy.distributions, run, matches[0])
+        if _freshness(policy.distributions, run, detail) != result["freshness"]:
+            raise ValueError("artifact retention changed during verification")
+    return result
 
 
 def verify_release_evidence(
@@ -303,6 +415,7 @@ def verify_release_evidence(
     expected: bytes | None = None,
     reproduced_archive: Path | None = None,
     reproduced_tools: Mapping[str, str] | None = None,
+    distributions: Path | None = None,
 ) -> bytes:
     """Verify one exact complete push; return a deterministic JSON approval record.
 
@@ -314,6 +427,8 @@ def verify_release_evidence(
     """
     _commit(commit)
     _version(version)
+    if distributions is not None and policy.guarantee != "python-distributions":
+        raise ValueError("distribution inputs require Python distribution evidence")
     if (reproduced_archive is None) != (reproduced_tools is None) or (reproduced_archive is not None and policy.guarantee != "cargo-archive"):
         raise ValueError("Cargo reproduction requires both an archive and tool identities")
     pinned = _object(parse_release_json(expected)) if expected is not None else None
@@ -323,22 +438,46 @@ def verify_release_evidence(
         identity = _object(pinned.get("run"))
         run = _current(policy, commit, _positive(identity.get("id")), _positive(identity.get("run_attempt")), read)
     selected = _snapshot(policy, version, run, read, pinned)
-    if pinned is not None and deterministic_json({key: value for key, value in pinned.items() if key != "manifest_sha256"}) != deterministic_json(selected):
+    computed = {"manifest_sha256"}
+    if policy.distributions is not None:
+        computed.add("files")
+    if pinned is not None and deterministic_json({key: value for key, value in pinned.items() if key not in computed}) != deterministic_json(selected):
         raise ValueError("approved evidence policy, source, jobs or run identity changed")
     names = (MANIFEST,)
     if policy.signing_job is not None:
         names += (BUNDLE,)
     if policy.guarantee == "cargo-archive":
         names += (f"{policy.package}-{version}.crate",)
+    if policy.distributions is not None:
+        names += policy.distributions.filenames(policy.package, version)
     with tempfile.TemporaryDirectory(prefix="research-release-evidence-") as temporary:
         directory = Path(temporary) / "retained"
-        download_artifact(policy.validation.repository, selected["artifact"], directory, names)
+        max_bytes = MAX_BYTES if policy.distributions is None else policy.distributions.max_artifact_bytes
+        expanded = MAX_BYTES if policy.distributions is None else policy.distributions.max_distribution_bytes + 2 * MAX_METADATA_BYTES
+        download_artifact(policy.validation.repository, selected["artifact"], directory, names, max_bytes=max_bytes, max_expanded_bytes=expanded)
         manifest_bytes = _bounded_file(directory / MANIFEST, MAX_METADATA_BYTES)
         document = _object(parse_release_json(manifest_bytes))
         wanted = _manifest(policy, version, run)
-        if policy.guarantee == "signed-source":
+        if policy.guarantee in ("signed-source", "python-distributions"):
             wanted["jobs"] = {name: selected["jobs"][name] for name, _ in policy.validation.required_steps}
-        else:
+        if policy.distributions is not None:
+            filenames = policy.distributions.filenames(policy.package, version)
+            retained = Path(temporary) / "distributions"
+            retained.mkdir()
+            for name in filenames:
+                (directory / name).rename(retained / name)
+            wanted["files"] = verify_distributions(
+                retained, f"v{version}", package=policy.package, filenames=filenames, max_total_bytes=policy.distributions.max_distribution_bytes
+            )
+            if (
+                distributions is not None
+                and verify_distributions(
+                    distributions, f"v{version}", package=policy.package, filenames=filenames, max_total_bytes=policy.distributions.max_distribution_bytes
+                )
+                != wanted["files"]
+            ):
+                raise ValueError("publication distribution bytes differ from retained validation")
+        elif policy.guarantee == "cargo-archive":
             archive = _object(document.get("archive"))
             recorded_tools = _tools(_object(archive.get("tools")))
             digest = verify_cargo_archive(directory / names[-1], policy.package, version, commit, path_in_vcs=policy.path_in_vcs)
@@ -350,6 +489,8 @@ def verify_release_evidence(
         if deterministic_json(document) != deterministic_json(wanted):
             raise ValueError("retained evidence differs from current exact source, policy, archive or job identities")
         if policy.signing_job is not None:
+            if policy.distributions is not None:
+                _bounded_file(directory / BUNDLE, MAX_METADATA_BYTES)
             verify_attestation(
                 directory / MANIFEST,
                 directory / BUNDLE,
@@ -364,6 +505,8 @@ def verify_release_evidence(
         if _snapshot(policy, version, current, read, selected) != selected:
             raise ValueError("evidence changed during verification")
         selected["manifest_sha256"] = hashlib.sha256(manifest_bytes).hexdigest()
+        if policy.distributions is not None:
+            selected["files"] = wanted["files"]
     if pinned is not None and deterministic_json(pinned) != deterministic_json(selected):
         raise ValueError("approved evidence manifest changed")
     return deterministic_json(selected)

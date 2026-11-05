@@ -3,13 +3,11 @@
 import io
 import logging
 import math
-import ntpath
 import os
 import shutil
 import stat
 import tarfile
 import tempfile
-import unicodedata
 import urllib.parse
 import urllib.request
 import zipfile
@@ -18,6 +16,7 @@ from dataclasses import dataclass
 from pathlib import Path, PurePosixPath
 from typing import IO, override
 
+from research_repo_tools._archive_paths import ArchivePaths
 from research_repo_tools.evidence import _digest, verify_sha256
 from research_repo_tools.files import replace_many
 
@@ -90,33 +89,6 @@ def download_asset(url: str, destination: Path, *, expected_sha256: str, limits:
     replace_many({destination: payload})
 
 
-def _member_path(name: str, *, directory: bool) -> PurePosixPath:
-    # Common tar producers prefix relative entries with './'. It is harmless,
-    # unlike an internal traversal component. A root directory entry is handled
-    # separately by the caller.
-    while name.startswith("./"):
-        name = name[2:]
-    if directory:
-        name = name.removesuffix("/")
-    if not name or name.startswith("/") or "\\" in name or ":" in name:
-        raise ValueError(f"unsafe archive path: {name!r}")
-    parts = name.split("/")
-    for part in parts:
-        if (
-            part in {"", ".", ".."}
-            or part.endswith((".", " "))
-            or "\x7f" in part
-            or ntpath.isreserved(part)
-            or any(unicodedata.category(char) == "Cs" for char in part)
-        ):
-            raise ValueError(f"unsafe or nonportable archive path: {name!r}")
-    return PurePosixPath(*parts)
-
-
-def _portable_key(path: PurePosixPath) -> str:
-    return unicodedata.normalize("NFC", path.as_posix()).casefold()
-
-
 def _copy_member(source: IO[bytes], target: Path, size: int) -> None:
     target.parent.mkdir(parents=True, exist_ok=True)
     descriptor = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0), 0o600)
@@ -134,10 +106,7 @@ def _copy_member(source: IO[bytes], target: Path, size: int) -> None:
 
 def _extract(archive: tarfile.TarFile | zipfile.ZipFile, stage: Path, limits: ArchiveLimits) -> None:
     entries: list[tuple[PurePosixPath, tarfile.TarInfo | zipfile.ZipInfo, bool, int]] = []
-    names: dict[str, bool] = {}
-    # Include implicit directories to catch portable aliases even when an
-    # archive omits explicit directory entries (A/x and a/y, for example).
-    spellings: dict[str, str] = {}
+    paths = ArchivePaths()
     total = 0
     members = archive if isinstance(archive, tarfile.TarFile) else archive.infolist()
     for count, member in enumerate(members, 1):
@@ -155,19 +124,7 @@ def _extract(archive: tarfile.TarFile | zipfile.ZipFile, stage: Path, limits: Ar
                 raise ValueError(f"unsupported archive entry (links/special/encrypted files): {name}")
         if directory and name in {".", "./"}:
             continue
-        path = _member_path(name, directory=directory)
-        key = _portable_key(path)
-        if key in names:
-            raise ValueError(f"duplicate archive path: {name}")
-        for component in (path, *path.parents):
-            if component == PurePosixPath("."):
-                continue
-            portable = _portable_key(component)
-            spelling = component.as_posix()
-            if portable in spellings and spellings[portable] != spelling:
-                raise ValueError(f"archive paths alias on supported platforms: {name}")
-            spellings[portable] = spelling
-        names[key] = directory
+        path = paths.add(name, directory=directory)
         if size < 0:
             raise ValueError(f"archive member has a negative size: {name}")
         if not directory:
@@ -175,9 +132,6 @@ def _extract(archive: tarfile.TarFile | zipfile.ZipFile, stage: Path, limits: Ar
             if total > limits.content_bytes:
                 raise ValueError("archive expands beyond the content byte limit")
         entries.append((path, member, directory, size))
-    for path, _, _, _ in entries:
-        if any(names.get(_portable_key(parent)) is False for parent in path.parents):
-            raise ValueError(f"archive file overlaps a directory: {path}")
     for path, member, directory, size in entries:
         target = stage.joinpath(*path.parts)
         if directory:

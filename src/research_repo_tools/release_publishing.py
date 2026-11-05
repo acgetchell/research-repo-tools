@@ -21,6 +21,7 @@ from research_repo_tools.release_assets import (
     _stable_tag,
     lookup_release,
     require_draft,
+    require_release_checkout,
     revalidate_release_target,
 )
 from research_repo_tools.release_reuse import ReusePolicy, parse_reuse_policy, verify_ci_reuse
@@ -257,8 +258,7 @@ def check_reviewed_release(
     settings = _settings(config)
     check_metadata(config, tag)
     head = _sha(run_git_command(["--no-pager", "rev-parse", "HEAD"], cwd=config.root).stdout.strip())
-    if run_git_command(["--no-pager", "status", "--porcelain", "--untracked-files=all"], cwd=config.root).stdout.strip():
-        raise ValueError("publication requires a clean reviewed checkout")
+    require_release_checkout(config.root, head)
     if event is not None and (event.tag != tag or event.commit != head):
         raise ValueError("release event and checkout tag/commit differ")
     if _remote_commit(config.root, settings.repository, tag) != head:

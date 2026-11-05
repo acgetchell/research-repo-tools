@@ -96,6 +96,7 @@ def open_checkpoint(path: Path, identity: dict[str, object], units: tuple[str, .
         lock.mkdir(mode=0o700)
     except FileExistsError as error:
         raise ValueError("checkpoint has an active or unresolved writer; verify exclusive ownership before manual lock recovery") from error
+    body_error = None
     try:
         header = path / "header.json"
         if header.is_symlink() or header.is_junction():
@@ -117,5 +118,14 @@ def open_checkpoint(path: Path, identity: dict[str, object], units: tuple[str, .
             yield journal
         finally:
             journal._active = False
+    except BaseException as error:
+        body_error = error
+        raise
     finally:
-        lock.rmdir()
+        try:
+            lock.rmdir()
+        except BaseException as error:
+            error.add_note(f"checkpoint lock cleanup failed at {lock}; inspect before resuming")
+            if body_error is not None:
+                raise BaseExceptionGroup("checkpoint operation and lock cleanup failed", [body_error, error]) from None
+            raise

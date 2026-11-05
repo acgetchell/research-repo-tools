@@ -364,21 +364,35 @@ def _xml(value: str) -> str:
 def _axis(values: list[float], scale: str):
     if scale == "log" and any(value <= 0 for value in values):
         raise ValueError("log axes require positive coordinates and timing bounds")
-    transformed = [math.log10(value) if scale == "log" else value for value in values]
-    low, high = min(transformed), max(transformed)
-    # Normalize before subtraction to keep geometry finite even for extreme inputs.
-    divisor = max(abs(low), abs(high), 1.0)
-    lo, hi = low / divisor, high / divisor
+    low, high = min(values), max(values)
+    span = high - low
+    # A relative logarithm retains nearby values whose rounded logarithms
+    # would be identical. Wide domains use log differences to avoid overflow.
+    narrow_log = scale == "log" and span <= low
+    log_low = log_span = 0.0
+    if scale == "log":
+        log_low = math.log(low)
+        log_span = math.log1p(span / low) if narrow_log else math.log(high) - log_low
 
     def position(value: float) -> float:
-        transformed_value = math.log10(value) if scale == "log" else value
         if low == high:
             return 0.5
-        if lo == hi:
-            return (transformed_value - low) / (high - low)
-        return (transformed_value / divisor - lo) / (hi - lo)
+        if scale == "log":
+            return (math.log1p((value - low) / low) if narrow_log else math.log(value) - log_low) / log_span
+        if math.isfinite(span):
+            return (value - low) / span
+        # Only opposite-sign extreme endpoints can overflow their span.
+        # Scale before subtracting to bound this wide-domain interpolation.
+        return (value / 2 - low / 2) / (high / 2 - low / 2)
 
     return position
+
+
+def _axis_labels(values: list[float]) -> dict[float, str]:
+    labels = {value: f"{value:.6g}" for value in values}
+    if len(set(labels.values())) != len(labels):
+        return {value: repr(value) for value in labels}
+    return labels
 
 
 def render_coordinate_svg(evidence: Evidence, layout: RunLayout, plot: CoordinatePlot) -> bytes:
@@ -413,12 +427,12 @@ def render_coordinate_svg(evidence: Evidence, layout: RunLayout, plot: Coordinat
         f'<text x="490" y="475" text-anchor="middle">{_xml(plot.x_label)} ({plot.x_scale})</text>',
         f'<text transform="translate(18 240) rotate(-90)" text-anchor="middle">{_xml(plot.y_label)} ({layout.unit}, {plot.y_scale})</text>',
     ]
-    for value in sorted(set(xs)):
+    for value, label in sorted(_axis_labels(xs).items()):
         px = 80 + 820 * x(value)
-        lines.append(f'<text x="{px:.6f}" y="444" text-anchor="middle">{value:.6g}</text>')
-    for value in sorted({min(ys), max(ys)}):
+        lines.append(f'<text x="{px:.6f}" y="444" text-anchor="middle">{label}</text>')
+    for value, label in sorted(_axis_labels([min(ys), max(ys)]).items()):
         py = 420 - 360 * y(value)
-        lines.extend([f'<path d="M 80 {py:.6f} H 900" stroke="#dddddd"/>', f'<text x="72" y="{py:.6f}" text-anchor="end">{value:.6g}</text>'])
+        lines.extend([f'<path d="M 80 {py:.6f} H 900" stroke="#dddddd"/>', f'<text x="72" y="{py:.6f}" text-anchor="end">{label}</text>'])
     colors = ("#267394", "#9c4420", "#527a28", "#7955a1", "#a52d62")
     for index, item in enumerate(layout.series):
         color = colors[index % len(colors)]

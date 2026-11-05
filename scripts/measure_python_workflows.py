@@ -56,17 +56,16 @@ def execute(command: list[str], *, env: dict[str, str], label: str, cwd: Path | 
 
 
 def write_output(output: Path, document: dict[str, object]) -> None:
-    """Replace evidence only after a complete UTF-8/LF sibling write."""
-    payload = json.dumps(document, indent=2) + "\n"
+    """Publish complete UTF-8/LF evidence through the shared atomic writer."""
+    # Only the current controller publishes output. Historical workers do not
+    # import this release's implementation or its newer Python syntax.
+    from research_repo_tools.files import replace
+
+    payload = (json.dumps(document, indent=2) + "\n").encode("utf-8")
     output = output.resolve()
-    descriptor, name = tempfile.mkstemp(prefix=f".{output.name}.", suffix=".tmp", dir=output.parent)
-    candidate = Path(name)
-    try:
-        with os.fdopen(descriptor, "w", encoding="utf-8", newline="\n") as stream:
-            stream.write(payload)
-        candidate.replace(output)
-    finally:
-        candidate.unlink(missing_ok=True)
+    if not output.parent.is_dir():
+        raise FileNotFoundError(f"measurement output parent does not exist: {output.parent}")
+    replace(output, payload)
 
 
 def check_origin(source: Path) -> None:

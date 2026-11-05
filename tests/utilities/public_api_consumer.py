@@ -194,6 +194,21 @@ print(count)
         self.assertIn(b"waiting", raised.exception.stderr or b"")
         self.assertIn("timed out", format_exception_diagnostics(raised.exception))
 
+    def test_nested_diagnostics_preserve_recovery_notes(self) -> None:
+        command = subprocess.CalledProcessError(3, ["native", "measure"], stderr=b"partial\xff")
+        command.add_note("native output retained")
+        cleanup = OSError("lock removal failed")
+        cleanup.add_note("inspect retained checkpoint before resuming")
+        failure = ExceptionGroup("acquisition and cleanup failed", [command, cleanup])
+        failure.add_note("owner must verify exclusive access\n\x1b[31mrecovery required\x1b[0m")
+        rendered = format_exception_diagnostics(failure)
+        for expected in ("partial�", "native output retained", "inspect retained checkpoint before resuming", "owner must verify exclusive access"):
+            self.assertIn(expected, rendered)
+        single_line = format_exception_diagnostics(failure, single_line=True)
+        self.assertIn("recovery required", single_line)
+        self.assertNotIn("\n", single_line)
+        self.assertNotIn("\x1b", single_line)
+
     def test_invalid_options_do_not_launch(self) -> None:
         marker = self.root / "launched"
         args = ["-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).touch()", str(marker)]

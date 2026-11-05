@@ -14,7 +14,7 @@ def versions(payload: bytes | None) -> dict[str, dict[tuple[str, ...], set[Versi
         return {}
     data = tomllib.loads(payload.decode("utf-8"))
     packages = data.get("package")
-    if data.get("version") != 1 or not isinstance(packages, list):
+    if type(data.get("version")) is not int or data["version"] != 1 or not isinstance(packages, list):
         raise ValueError("downgrade protection requires a valid version 1 uv.lock with package entries")
     result: dict[str, dict[tuple[str, ...], set[Version]]] = {}
     for package in packages:

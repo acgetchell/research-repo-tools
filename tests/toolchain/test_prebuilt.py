@@ -5,7 +5,9 @@ import io
 import json
 import os
 import tarfile
+import urllib.error
 import zipfile
+from email.message import Message
 from unittest.mock import patch
 
 import pytest
@@ -13,6 +15,35 @@ import pytest
 from research_repo_tools import config, release_credentials, toolchain_config
 from research_repo_tools import prebuilt_tools as prebuilt
 from research_repo_tools.toolchain_config import BinaryTool
+
+
+def test_failed_release_lookup_closes_response_before_wrapping():
+    body = io.BytesIO(b"service unavailable")
+    error = urllib.error.HTTPError("https://api.github.com/", 503, "unavailable", Message(), body)
+    with patch.object(prebuilt.urllib.request, "urlopen", side_effect=error):
+        with pytest.raises(RuntimeError, match="binary release lookup failed"):
+            prebuilt.release_metadata("osv-scanner", "v2.6.0")
+    assert body.closed
+
+
+def test_release_lookup_preserves_and_redacts_http_and_close_failures(monkeypatch):
+    monkeypatch.setenv("GITHUB_TOKEN", "lookup-secret")
+    monkeypatch.setenv("GH_TOKEN", "cleanup-secret")
+    with io.BytesIO(b"service unavailable") as body:
+        error = urllib.error.HTTPError("https://api.github.com/", 503, "unavailable lookup-secret", Message(), body)
+        with (
+            patch.object(prebuilt.urllib.request, "urlopen", side_effect=error),
+            patch.object(error, "close", side_effect=OSError("close failed cleanup-secret")) as close,
+            pytest.raises(RuntimeError, match="binary release lookup failed") as caught,
+        ):
+            prebuilt.release_metadata("osv-scanner", "v2.6.0")
+        close.assert_called_once_with()
+    message = str(caught.value)
+    assert "HTTP Error 503" in message
+    assert "close failed" in message
+    assert message.count("[REDACTED]") == 2
+    assert "lookup-secret" not in message
+    assert "cleanup-secret" not in message
 
 
 @pytest.mark.parametrize(

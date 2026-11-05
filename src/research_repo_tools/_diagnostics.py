@@ -22,6 +22,7 @@ def _diagnostic_command(value: object) -> str:
 def format_exception_diagnostics(error: BaseException, *, single_line: bool = False) -> str:
     """Render nested diagnostics, optionally bounded for a terse CLI operation."""
     result = _format_exception_diagnostics(error)
+    result += "".join(f"\n{note}" for note in getattr(error, "__notes__", ()))
     if single_line:
         # Remove terminal escape sequences before folding control characters.
         import re

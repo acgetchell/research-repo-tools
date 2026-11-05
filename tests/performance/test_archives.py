@@ -9,6 +9,7 @@ from pathlib import Path
 import pytest
 
 from research_repo_tools import archives
+from research_repo_tools._archive_paths import _member_path
 from research_repo_tools.archives import ArchiveLimits, download_asset, extract_archive
 from research_repo_tools.evidence import sha256
 from tests.performance.public_performance_consumer import zip_asset
@@ -64,7 +65,7 @@ def test_archive_rejects_unsafe_paths_without_partial_destination(tmp_path: Path
 @pytest.mark.parametrize("name", ["parent/\ud800/file", "parent/\udfff/file"])
 def test_member_paths_reject_surrogates_before_filesystem_use(name: str) -> None:
     with pytest.raises(ValueError, match="unsafe.*path"):
-        archives._member_path(name, directory=False)
+        _member_path(name, directory=False)
 
 
 @pytest.mark.parametrize("kind", ["symlink", "hardlink", "fifo"])

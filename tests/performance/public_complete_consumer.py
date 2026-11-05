@@ -2222,6 +2222,16 @@ if '--list' in sys.argv:
                 with self.assertRaises(ValueError):
                     collect_complete_sample(Path.cwd(), "new", policy, raw_files=names)
 
+    def test_supplemental_bytes_remain_valid_after_caller_mutates_input_pairs(self):
+        retained = b"[1, 2, 3, 4]\r\n"
+        raw_files = [["tukey.json", retained]]
+        case = replace(mixed_case("case", 3), raw_files=raw_files)
+        raw_files[0][:] = ["../escape.json", b"not JSON"]
+        raw_files.clear()
+        self.assertEqual(case.raw_files, (("tukey.json", retained),))
+        self.assertEqual(case.full_id, "case")
+        self.assertEqual(case.sample_count, 3)
+
     def test_supplemental_json_bytes_and_regular_file_preflight(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

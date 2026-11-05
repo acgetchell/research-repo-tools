@@ -153,24 +153,41 @@ class ProgressReporter:
         self.state, self.suite, self.phase = state, suite, phase
         self.emit("started", force=True)
         stopped = Event()
+        reporting_errors: list[BaseException] = []
 
         def heartbeat() -> None:
-            while not stopped.wait(self.cadence):
-                self.emit("heartbeat")
+            try:
+                while not stopped.wait(self.cadence):
+                    self.emit("heartbeat")
+            except BaseException as error:
+                reporting_errors.append(error)
+                stopped.set()
 
         worker = Thread(target=heartbeat, name="performance-progress", daemon=True)
         if self.mode != "none" or self.observer is not None:
             worker.start()
+        body_error = None
         try:
             yield
         except BaseException as error:
+            body_error = error
+        finally:
             stopped.set()
             if worker.ident is not None:
                 worker.join()
-            self.emit("interrupted" if isinstance(error, KeyboardInterrupt) else "failed", force=True)
-            raise
-        else:
-            stopped.set()
-            if worker.ident is not None:
-                worker.join()
-            self.emit("finished", force=True)
+        failures = ([body_error] if body_error is not None else []) + reporting_errors
+        if failures:
+            failure = failures[0] if len(failures) == 1 else BaseExceptionGroup("acquisition and heartbeat reporting failed", failures)
+            self._failed(failure)
+            raise failure
+        self.emit("finished", force=True)
+
+    def _failed(self, error: BaseException) -> None:
+        """Report once without replacing an acquisition failure or interruption."""
+        if self.last_event in {"failed", "interrupted"}:
+            return
+        try:
+            interrupted = isinstance(error, KeyboardInterrupt) or isinstance(error, BaseExceptionGroup) and error.subgroup(KeyboardInterrupt) is not None
+            self.emit("interrupted" if interrupted else "failed", force=True)
+        except BaseException as reporting_error:
+            raise BaseExceptionGroup("acquisition and progress reporting failed", [error, reporting_error]) from None
