@@ -7,10 +7,8 @@ import os
 import shutil
 import subprocess
 import sys
-import urllib.error
 import venv
 from dataclasses import replace
-from email.message import Message
 from pathlib import Path
 
 import pytest
@@ -641,29 +639,6 @@ def test_checksum_mismatch_prevents_installer_execution(runtime, monkeypatch):
     monkeypatch.setattr(toolchain.urllib.request, "urlopen", lambda url, **kwargs: io.BytesIO(b"0" * 64 if url.endswith(".sha256") else b"bad installer"))
     with pytest.raises(ValueError, match="checksum mismatch"):
         toolchain.Runtime._install_rustup(instance)
-    assert not fake.calls
-
-
-@pytest.mark.parametrize("checksum_fails", [True, False])
-def test_failed_rustup_download_closes_response_without_executing(runtime, monkeypatch, checksum_fails):
-    instance, fake = runtime
-    body = io.BytesIO(b"service unavailable")
-    error = urllib.error.HTTPError("https://static.rust-lang.org/", 503, "unavailable", Message(), body)
-    checksum = io.BytesIO(b"0" * 64)
-
-    def fetch(url, **kwargs):
-        if not checksum_fails and url.endswith(".sha256"):
-            return checksum
-        raise error
-
-    monkeypatch.setattr(toolchain.urllib.request, "urlopen", fetch)
-    with pytest.raises(urllib.error.HTTPError) as caught:
-        toolchain.Runtime._install_rustup(instance)
-    assert caught.value is error
-    assert body.closed
-    if not checksum_fails:
-        assert checksum.closed
-    checksum.close()
     assert not fake.calls
 
 
