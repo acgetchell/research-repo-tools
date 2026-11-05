@@ -172,7 +172,7 @@ except RuntimeError as error:
     )
     assert result.returncode == 1, result.stdout + result.stderr
     assert result.stdout == ""
-    assert "Incomplete coverage" in result.stderr and "previous report preserved" in result.stderr
+    assert "Incomplete coverage" in result.stderr and "previous report preserved" in result.stderr, result.stderr
     assert {path: path.read_bytes() for path in before} == before
     (retained,) = report.parent.glob("failed-*")
     assert str(retained) in result.stderr
