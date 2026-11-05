@@ -18,6 +18,17 @@ class TestLiveProcess(unittest.TestCase):
     def probe(self, body: str, *, stdin: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run([sys.executable, "-I", "-X", "utf8", "-c", body], input=stdin, capture_output=True, timeout=20, check=False)
 
+    def timeout_probe(self, body: str) -> subprocess.CompletedProcess[bytes]:
+        # The deadline includes interpreter and forwarder startup, so output may
+        # not arrive before timeout. Observe actual process cleanup instead.
+        return self.probe(
+            "import subprocess\npopen = subprocess.Popen\nspawned = []\n"
+            "def track(*args, **kwargs):\n"
+            " child = popen(*args, **kwargs)\n spawned.append(child)\n return child\n"
+            "subprocess.Popen = track\n" + body + "assert spawned, 'command was never launched'\n"
+            "assert all(child.returncode is not None for child in spawned), 'timeout left a running process'\n"
+        )
+
     def test_inherited_and_asserted_streams_preserve_exact_bytes_and_stdin(self) -> None:
         payload = b"caf\xc3\xa9\r\nline\n\xff"
         child = "import sys; data=sys.stdin.buffer.read(); sys.stdout.buffer.write(data); sys.stderr.buffer.write(b'err\\xff\\r\\n')"
@@ -163,9 +174,8 @@ class TestLiveProcess(unittest.TestCase):
                 "except subprocess.TimeoutExpired as e:\n assert e.timeout == 1 and e.stdout is None\n"
                 "else: raise AssertionError('timeout was lost')\n"
             )
-            result = self.probe(body)
-            self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertIn(b"started", result.stdout)
+            result = self.timeout_probe(body)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(list(root.iterdir()), [])
             # A later real command gives the killed child enough time to expose
             # an incorrect timeout implementation without a separate sleep test.
@@ -184,9 +194,8 @@ class TestLiveProcess(unittest.TestCase):
                 "except subprocess.TimeoutExpired as e:\n assert e.timeout == 1 and e.stderr is None\n"
                 "else: raise AssertionError('timeout was lost')\n"
             )
-            result = self.probe(body)
-            self.assertEqual(result.returncode, 0, result.stdout)
-            self.assertIn(b"started", result.stderr)
+            result = self.timeout_probe(body)
+            self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(list(root.iterdir()), [])
             # A later real command gives the killed child enough time to expose
             # an incorrect timeout implementation without a separate sleep test.
