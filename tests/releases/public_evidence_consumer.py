@@ -111,6 +111,7 @@ def interface_policy(root, policy=SOURCE):
         text += (
             f"\n[distributions]\nfiles={json.dumps(policy.distributions.files)}\n"
             f"index-url={json.dumps(policy.distributions.index_url)}\nmax-age-seconds={policy.distributions.max_age_seconds}\n"
+            f"max-distribution-bytes={policy.distributions.max_distribution_bytes}\n"
         )
     path = root / "evidence.toml"
     path.write_text(text, encoding="utf-8", newline="\n")
@@ -939,6 +940,78 @@ class TestPythonDistributionEvidence(unittest.TestCase):
         self.assertEqual(json.loads(replacement)["run"]["run_attempt"], 3)
         self.assertEqual(json.loads(replacement)["files"], self.hashes)
         self.assertEqual(self.verify(provider, expected=replacement), replacement)
+
+    def test_multiple_wheels_above_the_old_artifact_limit_verify_and_publish(self):
+        assert PYTHON.distributions is not None
+        self.files = python_distributions(members=(("example_app/payload.bin", b"x" * (17 * 1024 * 1024)),))
+        self.write_distributions(self.files)
+        self.hashes = {name: hashlib.sha256(payload).hexdigest() for name, payload in self.files.items()}
+        self.assertTrue(all(len(payload) < 32 * 1024 * 1024 for payload in self.files.values()))
+        self.assertGreater(sum(map(len, self.files.values())), 32 * 1024 * 1024)
+        policy = replace(PYTHON, distributions=replace(PYTHON.distributions, max_distribution_bytes=36 * 1024 * 1024))
+        self.assertEqual(load_evidence_policy(interface_policy(self.root, policy)), policy)
+        provider = self.provider(policy)
+        self.assertGreater(provider.artifact["size_in_bytes"], 32 * 1024 * 1024)
+        selected = self.verify(provider, distributions=self.dist)
+        self.assertEqual(json.loads(selected)["files"], self.hashes)
+        self.assertEqual(self.verify(provider, expected=selected, distributions=self.dist), selected)
+        with self.registry_transport(self.registry()):
+            self.assertEqual(verify_published_distributions(PYTHON.package, "1.2.3", self.hashes, index_url="https://test.pypi.org"), self.hashes)
+        # The original default artifact contract used by Cargo remains 32 MiB.
+        with self.assertRaisesRegex(ValueError, "artifact size exceeds"):
+            release_validation.artifact_identity(provider.artifact, provider.run, provider.artifact["name"])
+        with (
+            patch("research_repo_tools.release_validation.subprocess.run", side_effect=AssertionError("oversized default artifact was downloaded")),
+            self.assertRaisesRegex(ValueError, "artifact size exceeds"),
+        ):
+            release_validation.download_artifact(policy.validation.repository, provider.artifact, self.root / "oversized", tuple(provider.files))
+        self.assertFalse((self.root / "oversized").exists())
+
+    def test_total_distribution_budget_is_enforced_at_creation_and_after_approval(self):
+        assert PYTHON.distributions is not None
+        total = sum(map(len, self.files.values()))
+        policy = replace(PYTHON, distributions=replace(PYTHON.distributions, max_distribution_bytes=total))
+        provider = self.provider(policy)
+        selected = self.verify(provider, distributions=self.dist)
+        self.assertEqual(json.loads(selected)["policy"]["distributions"]["max_distribution_bytes"], total)
+        for value in (True, 0, -1, 1.5, "1024", 2 * 1024 * 1024 * 1024 + 1):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "max_distribution_bytes"):
+                replace(PYTHON.distributions, max_distribution_bytes=value)
+        reduced = replace(PYTHON, distributions=replace(PYTHON.distributions, max_distribution_bytes=total - 1))
+        with self.assertRaisesRegex(ValueError, "total byte bound"):
+            create_evidence_manifest(reduced, "1.2.3", COMMIT, 123, 2, provider.read, distributions=self.dist)
+        provider.policy = reduced
+        with self.assertRaisesRegex(ValueError, "total byte bound"):
+            self.verify(provider)
+        provider.policy = replace(PYTHON, distributions=replace(PYTHON.distributions, max_distribution_bytes=total + 1))
+        provider.commands.clear()
+        with self.assertRaisesRegex(ValueError, "approved evidence policy"):
+            self.verify(provider, expected=selected)
+        self.assertEqual(provider.commands, [])
+        self.assertEqual({name: (self.dist / name).read_bytes() for name in self.files}, self.files)
+
+    def test_python_artifact_and_metadata_bounds_remain_independent_of_the_payload_budget(self):
+        assert PYTHON.distributions is not None
+        policy = replace(PYTHON, distributions=replace(PYTHON.distributions, max_distribution_bytes=sum(map(len, self.files.values()))))
+        assert policy.distributions is not None
+        provider = self.provider(policy)
+        provider.artifact["size_in_bytes"] = policy.distributions.max_artifact_bytes + 1
+        with self.assertRaisesRegex(ValueError, "artifact size exceeds"):
+            self.verify(provider)
+        self.assertEqual(provider.commands, [])
+        for size, message in ((1024 * 1024 + 1, "evidence file exceeds"), (2 * 1024 * 1024 + 1, "artifact expanded size")):
+            with self.subTest(size=size):
+                provider = self.provider(policy)
+                provider.files["validation.json"] = b" " * size
+                provider.repack()
+                with self.assertRaisesRegex(ValueError, message):
+                    self.verify(provider)
+        provider = self.provider(replace(policy, signing_job=SOURCE.signing_job))
+        provider.files["validation.sigstore.json"] = b"x" * (1024 * 1024 + 1)
+        provider.repack()
+        with self.assertRaisesRegex(ValueError, "evidence file exceeds"):
+            self.verify(provider)
+        self.assertFalse(any("attestation" in command for command in provider.commands))
 
     def test_python_signed_source_remains_a_separate_guarantee(self):
         policy = replace(SOURCE, package="Example.App", package_kind="python")

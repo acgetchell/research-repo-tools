@@ -78,11 +78,12 @@ def load_evidence_policy(path: Path) -> EvidencePolicy:
         signing = (_string(signer["name"], "signing job"), _strings(signer["steps"], "signing steps"))
     distributions = None
     if "distributions" in raw:
-        options = _table(raw["distributions"], "distributions", {"files"}, {"index-url", "max-age-seconds"})
+        options = _table(raw["distributions"], "distributions", {"files"}, {"index-url", "max-age-seconds", "max-distribution-bytes"})
         distributions = PythonDistributionPolicy(
             _strings(options["files"], "distribution files"),
             _string(options.get("index-url", "https://pypi.org"), "PyPI index URL"),
             cast(int, options.get("max-age-seconds", 30 * 24 * 60 * 60)),
+            cast(int, options.get("max-distribution-bytes", 256 * 1024 * 1024)),
         )
     return EvidencePolicy(
         ValidationPolicy(

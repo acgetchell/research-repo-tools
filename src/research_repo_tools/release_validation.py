@@ -386,12 +386,14 @@ def validate_jobs(policy: ValidationPolicy, run: dict[str, Any], jobs: list[dict
     return result
 
 
-def artifact_identity(data: dict[str, Any], run: dict[str, Any], name: str) -> dict[str, Any]:
+def artifact_identity(data: dict[str, Any], run: dict[str, Any], name: str, *, max_bytes: int = MAX_BYTES) -> dict[str, Any]:
     """Bind an immutable artifact ID/digest to its exact repository/run/ref/SHA.
 
     GitHub does not report an artifact's attempt. Callers must use an
     attempt-specific name and verify the attempt inside its retained manifest.
+    max_bytes bounds the original ZIP; pass the same bound to download_artifact.
     """
+    _integer(max_bytes, "artifact byte limit")
     identity = _object(data.get("workflow_run"), "artifact.workflow_run")
     if data.get("name") != name or data.get("expired") is not False:
         raise ValueError(f"missing, expired or mismatched {name}; {RECOVERY}")
@@ -410,7 +412,7 @@ def artifact_identity(data: dict[str, Any], run: dict[str, Any], name: str) -> d
     digest = data.get("digest")
     if not isinstance(digest, str) or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None:
         raise ValueError("artifact lacks an authoritative SHA-256 digest")
-    if type(data.get("size_in_bytes")) is not int or not 0 < data["size_in_bytes"] <= MAX_BYTES:
+    if type(data.get("size_in_bytes")) is not int or not 0 < data["size_in_bytes"] <= max_bytes:
         raise ValueError("artifact size exceeds the release bound")
     return {"id": identifier, "name": name, "digest": digest, "size_in_bytes": data["size_in_bytes"]}
 
@@ -448,13 +450,24 @@ def _publish_distributions(destination: Path, contents: dict[str, bytes], *, evi
     replace_many(updates)
 
 
-def download_artifact(repository: str, artifact: dict[str, Any], destination: Path, names: tuple[str, ...]) -> None:
+def download_artifact(
+    repository: str,
+    artifact: dict[str, Any],
+    destination: Path,
+    names: tuple[str, ...],
+    *,
+    max_bytes: int = MAX_BYTES,
+    max_expanded_bytes: int | None = None,
+) -> None:
     """Retrieve one immutable ID, verify original ZIP digest, and extract flat files.
 
     Refuse links, directory entries, duplicates, aliases, extras and resource
     excesses before creating the destination. Never call extractall on input.
+    max_bytes bounds the ZIP; max_expanded_bytes defaults to that same limit.
     """
     _repository(repository)
+    _integer(max_bytes, "artifact byte limit")
+    expanded_limit = max_bytes if max_expanded_bytes is None else _integer(max_expanded_bytes, "expanded artifact byte limit")
     if (
         not names
         or len({name.casefold() for name in names}) != len(names)
@@ -467,11 +480,14 @@ def download_artifact(repository: str, artifact: dict[str, Any], destination: Pa
     ):
         raise ValueError("expected artifact names must be distinct portable plain filenames")
     identifier = _integer(artifact.get("id"), "artifact ID")
+    expected_size = _integer(artifact.get("size_in_bytes"), "artifact size")
+    if expected_size > max_bytes:
+        raise ValueError("artifact size exceeds the release bound")
     with tempfile.TemporaryFile() as stream:
         subprocess.run(["gh", "api", f"repos/{repository}/actions/artifacts/{identifier}/zip"], stdout=stream, stderr=subprocess.PIPE, check=True, timeout=120)
         stream.seek(0)
-        payload = stream.read(MAX_BYTES + 1)
-    if len(payload) != artifact.get("size_in_bytes") or len(payload) > MAX_BYTES or f"sha256:{_sha(payload)}" != artifact.get("digest"):
+        payload = stream.read(expected_size + 1)
+    if len(payload) != expected_size or f"sha256:{_sha(payload)}" != artifact.get("digest"):
         raise ValueError("downloaded artifact ZIP size or SHA-256 differs from immutable API identity")
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
         members = archive.infolist()
@@ -479,7 +495,7 @@ def download_artifact(repository: str, artifact: dict[str, Any], destination: Pa
             raise ValueError(f"artifact must contain exactly {names}")
         if any(member.is_dir() or member.flag_bits & 1 or stat.S_IFMT(member.external_attr >> 16) not in (0, stat.S_IFREG) for member in members):
             raise ValueError("artifact entries must be regular, unencrypted files")
-        if any(member.file_size <= 0 for member in members) or sum(member.file_size for member in members) > MAX_BYTES:
+        if any(member.file_size <= 0 for member in members) or sum(member.file_size for member in members) > expanded_limit:
             raise ValueError("artifact expanded size exceeds the release bound")
         contents = {member.filename: archive.read(member) for member in members}
     _publish_distributions(destination, contents)
@@ -543,16 +559,22 @@ def _distribution_metadata(payload: bytes, name: str, prefix: str) -> bytes:
     return content
 
 
-def verify_distributions(dist: Path, tag: str, *, package: str = "research-repo-tools", filenames: tuple[str, ...] | None = None) -> dict[str, str]:
+def verify_distributions(
+    dist: Path, tag: str, *, package: str = "research-repo-tools", filenames: tuple[str, ...] | None = None, max_total_bytes: int | None = None
+) -> dict[str, str]:
     """Check exact inventory, safe bounded archives and core package metadata.
 
     Return hashes of the very bytes inspected. This is an integrity check, not
     CI provenance. The default preserves this tooling package's original API.
+    max_total_bytes optionally bounds the sum of the inspected distribution bytes.
     """
+    if max_total_bytes is not None:
+        _integer(max_total_bytes, "total distribution byte limit")
     names = distribution_names(tag, package=package, filenames=filenames)
     if {path.name for path in dist.iterdir()} != set(names):
         raise ValueError(f"expected exactly these distributions: {', '.join(names)}")
     result = {}
+    total = 0
     prefix = f"{_python_package(package)}-{tag[1:]}"
     for name in names:
         path = dist / name
@@ -562,6 +584,9 @@ def verify_distributions(dist: Path, tag: str, *, package: str = "research-repo-
             payload = source.read(MAX_BYTES + 1)
         if not 0 < len(payload) <= MAX_BYTES:
             raise ValueError("distributions must be bounded nonempty regular files")
+        total += len(payload)
+        if max_total_bytes is not None and total > max_total_bytes:
+            raise ValueError("distribution inventory exceeds the total byte bound")
         try:
             metadata = BytesParser().parsebytes(_distribution_metadata(payload, name, prefix))
         except (OSError, EOFError, zlib.error, tarfile.TarError, zipfile.BadZipFile) as error:

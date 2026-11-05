@@ -134,8 +134,9 @@ exact portable flat-file inventory and provider ZIP digest.
 
 Use `package_kind="python"` with `guarantee="python-distributions"` and
 `distributions=PythonDistributionPolicy(files, index_url="https://pypi.org",
-max_age_seconds=2592000)`. In TOML these are `package-kind` and a `[distributions]`
-table with `files`, optional `index-url` and optional `max-age-seconds`.
+max_age_seconds=2592000, max_distribution_bytes=268435456)`. In TOML these are
+`package-kind` and a `[distributions]` table with `files`, optional `index-url`,
+`max-age-seconds` and `max-distribution-bytes`.
 `files` is an explicit list of filename templates with only `{version}`
 substitution: exactly one normalized `.tar.gz` sdist and one or more wheels,
 including consumer-selected native wheel tags. There are no filename globs.
@@ -168,6 +169,16 @@ Verification rechecks live state after download/signature work. Extending
 retention, changing policy, attempts, jobs or artifact bytes requires new review
 and a new handoff; it never updates an approved selection implicitly.
 
+`max-distribution-bytes` bounds the combined retained distribution bytes, defaults
+to 256 MiB, and accepts positive integers up to 2 GiB. Creation rejects an inventory
+over this budget before returning a manifest; verification enforces the same
+budget, which is frozen into approval records. Each wheel/sdist still has a 32 MiB
+per-file bound. Python artifacts have a separate compressed ZIP bound equal to
+the distribution budget plus 64 MiB for evidence and ZIP overhead; their expanded
+contents may exceed the distribution budget only by the two 1 MiB evidence-file
+allowances. The manifest and optional signature bundle are each bounded to 1 MiB.
+The signed-source and Cargo artifact bounds remain 32 MiB.
+
 With no signing job, Python mode uses authenticated GitHub Actions APIs and the
 provider's immutable artifact ID/digest. It does not invoke attestation APIs,
 claim a signature, or accept caller-provided JSON as authority. This supports
@@ -186,7 +197,8 @@ remain consumer-owned. For GitHub attachments, compose the separately captured
 release-target handoff; evidence never recaptures or substitutes a draft ID.
 
 `release_validation.verify_distributions(dist, tag, *, package="research-repo-tools",
-filenames=None)` is the generic local integrity API. `tag` is a version assertion
+filenames=None, max_total_bytes=None)` is the generic local integrity API. Set
+`max_total_bytes` to require a combined distribution byte budget. `tag` is a version assertion
 and does not require an existing Git tag. Omitting `filenames` selects a universal
 wheel and sdist for that package; explicit filenames support multiple/native
 wheels. The original two-argument tooling-package contract remains supported.

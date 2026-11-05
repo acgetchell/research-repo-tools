@@ -23,6 +23,7 @@ from typing import Any, Literal
 from research_repo_tools.evidence import deterministic_json
 from research_repo_tools.registry import pypi_destination
 from research_repo_tools.release_validation import (
+    MAX_BYTES,
     ValidationPolicy,
     artifact_identity,
     distribution_names,
@@ -94,11 +95,13 @@ class PythonDistributionPolicy:
 
     Only {version} substitution is supported. Freshness bounds the original
     push run and artifact creation; a rerun cannot refresh an old source run.
+    max_distribution_bytes bounds payloads separately from the artifact envelope.
     """
 
     files: tuple[str, ...]
     index_url: str = "https://pypi.org"
     max_age_seconds: int = 30 * 24 * 60 * 60
+    max_distribution_bytes: int = 256 * 1024 * 1024
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "files", tuple(self.files))
@@ -107,6 +110,13 @@ class PythonDistributionPolicy:
         pypi_destination(self.index_url)
         if type(self.max_age_seconds) is not int or self.max_age_seconds <= 0:
             raise ValueError("Python evidence max_age_seconds must be a positive integer")
+        if type(self.max_distribution_bytes) is not int or not 0 < self.max_distribution_bytes <= 2 * 1024 * 1024 * 1024:
+            raise ValueError("Python evidence max_distribution_bytes must be an integer from 1 byte through 2 GiB")
+
+    @property
+    def max_artifact_bytes(self) -> int:
+        """Allow evidence and ZIP framing beyond the distribution payload budget."""
+        return self.max_distribution_bytes + 64 * 1024 * 1024
 
     def filenames(self, package: str, version: str) -> tuple[str, ...]:
         return distribution_names(f"v{version}", package=package, filenames=tuple(name.replace("{version}", version) for name in self.files))
@@ -183,6 +193,7 @@ def _policy(policy: EvidencePolicy) -> dict[str, Any]:
             "files": list(policy.distributions.files),
             "index_url": policy.distributions.index_url,
             "max_age_seconds": policy.distributions.max_age_seconds,
+            "max_distribution_bytes": policy.distributions.max_distribution_bytes,
         }
     return result
 
@@ -327,7 +338,11 @@ def create_evidence_manifest(
             raise ValueError("Python evidence requires retained distributions without Cargo archive/tools")
         assert policy.distributions is not None
         document["files"] = verify_distributions(
-            distributions, f"v{version}", package=policy.package, filenames=policy.distributions.filenames(policy.package, version)
+            distributions,
+            f"v{version}",
+            package=policy.package,
+            filenames=policy.distributions.filenames(policy.package, version),
+            max_total_bytes=policy.distributions.max_distribution_bytes,
         )
         document["jobs"] = _jobs(policy, run, read, signing=False)
     else:
@@ -340,7 +355,10 @@ def create_evidence_manifest(
         }
     if _run_identity(_current(policy, commit, run_id, attempt, read, completed=False)) != document["run"]:
         raise ValueError("run identity changed while creating evidence")
-    return deterministic_json(document)
+    payload = deterministic_json(document)
+    if policy.distributions is not None and len(payload) > MAX_METADATA_BYTES:
+        raise ValueError("Python evidence manifest exceeds the metadata byte bound")
+    return payload
 
 
 def _freshness(policy: PythonDistributionPolicy, run: dict[str, Any], artifact: dict[str, Any]) -> dict[str, str]:
@@ -373,11 +391,12 @@ def _snapshot(policy: EvidencePolicy, version: str, run: dict[str, Any], read: C
     matches = [entry for entry in artifacts if entry.get("name") == name]
     if len(matches) != 1:
         raise ValueError("missing or ambiguous evidence artifact; inspect retention and the complete original attempt")
-    artifact = artifact_identity(matches[0], run, name)
+    max_bytes = MAX_BYTES if policy.distributions is None else policy.distributions.max_artifact_bytes
+    artifact = artifact_identity(matches[0], run, name, max_bytes=max_bytes)
     if pinned is not None and artifact != _object(pinned.get("artifact")):
         raise ValueError("approved artifact identity changed")
     detail = _object(read(f"actions/artifacts/{artifact['id']}"))
-    if artifact_identity(detail, run, name) != artifact:
+    if artifact_identity(detail, run, name, max_bytes=max_bytes) != artifact:
         raise ValueError("artifact identity changed during verification")
     result = {**_manifest(policy, version, run), "schema": SELECTION_SCHEMA, "jobs": _jobs(policy, run, read, signing=True), "artifact": artifact}
     if policy.distributions is not None:
@@ -433,7 +452,9 @@ def verify_release_evidence(
         names += policy.distributions.filenames(policy.package, version)
     with tempfile.TemporaryDirectory(prefix="research-release-evidence-") as temporary:
         directory = Path(temporary) / "retained"
-        download_artifact(policy.validation.repository, selected["artifact"], directory, names)
+        max_bytes = MAX_BYTES if policy.distributions is None else policy.distributions.max_artifact_bytes
+        expanded = MAX_BYTES if policy.distributions is None else policy.distributions.max_distribution_bytes + 2 * MAX_METADATA_BYTES
+        download_artifact(policy.validation.repository, selected["artifact"], directory, names, max_bytes=max_bytes, max_expanded_bytes=expanded)
         manifest_bytes = _bounded_file(directory / MANIFEST, MAX_METADATA_BYTES)
         document = _object(parse_release_json(manifest_bytes))
         wanted = _manifest(policy, version, run)
@@ -445,8 +466,16 @@ def verify_release_evidence(
             retained.mkdir()
             for name in filenames:
                 (directory / name).rename(retained / name)
-            wanted["files"] = verify_distributions(retained, f"v{version}", package=policy.package, filenames=filenames)
-            if distributions is not None and verify_distributions(distributions, f"v{version}", package=policy.package, filenames=filenames) != wanted["files"]:
+            wanted["files"] = verify_distributions(
+                retained, f"v{version}", package=policy.package, filenames=filenames, max_total_bytes=policy.distributions.max_distribution_bytes
+            )
+            if (
+                distributions is not None
+                and verify_distributions(
+                    distributions, f"v{version}", package=policy.package, filenames=filenames, max_total_bytes=policy.distributions.max_distribution_bytes
+                )
+                != wanted["files"]
+            ):
                 raise ValueError("publication distribution bytes differ from retained validation")
         elif policy.guarantee == "cargo-archive":
             archive = _object(document.get("archive"))
@@ -460,6 +489,8 @@ def verify_release_evidence(
         if deterministic_json(document) != deterministic_json(wanted):
             raise ValueError("retained evidence differs from current exact source, policy, archive or job identities")
         if policy.signing_job is not None:
+            if policy.distributions is not None:
+                _bounded_file(directory / BUNDLE, MAX_METADATA_BYTES)
             verify_attestation(
                 directory / MANIFEST,
                 directory / BUNDLE,

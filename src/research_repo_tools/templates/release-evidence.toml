@@ -21,6 +21,7 @@ path-in-vcs = ""
 # files = ["your_package-{version}-py3-none-any.whl", "your_package-{version}.tar.gz"]
 # index-url = "https://pypi.org"
 # max-age-seconds = 2592000
+# max-distribution-bytes = 268435456
 # Declare every build/native installed/security gate below. Retain the exact
 # distributions with validation.json only after those gates succeed.
 
