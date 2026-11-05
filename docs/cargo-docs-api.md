@@ -25,10 +25,6 @@ unsupported options and unstable crate features as errors. The check rejects
 `RUSTC_BOOTSTRAP`. Enable a `docsrs` cfg only by explicit configuration when the
 crate supports it on the selected stable compiler.
 
-Python callers may pass sequences such as lists or tuples for `features` and
-`cfg`; scalar strings are rejected. Options are checked before tool execution,
-and the returned evidence retains immutable snapshots of those sequences.
-
 Success returns `DocumentationEvidence` in Python and emits a JSON object in the
 CLI. It includes the package name and version, SHA-256 digests of the source
 manifest, workspace lock and exact crate archive, the declared toolchain and

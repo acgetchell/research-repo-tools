@@ -18,21 +18,6 @@ from research_repo_tools.toolchain_config import load
 
 
 class TestSharedCapabilities(unittest.TestCase):
-    def test_inventory_rejects_scalar_exclusions_before_selection(self):
-        with tempfile.TemporaryDirectory() as directory:
-            root = Path(directory).resolve()
-            for name in ("a", "b"):
-                (root / name).write_bytes(b"scan this file\n")
-            # Model the read-only Git inventory and exercise real selection.
-            listing = subprocess.CompletedProcess(["git"], 0, b"a\0b\0", b"")
-            with patch("research_repo_tools.selection.run_git_bytes", return_value=listing) as read:
-                for exclude in ("ab", b"ab"):
-                    with self.subTest(exclude=exclude), self.assertRaisesRegex(ValueError, "exclusions must be a sequence"):
-                        security.security_inventory(root, exclude=exclude)  # ty: ignore[invalid-argument-type] -- malformed public boundary input
-                read.assert_not_called()
-                self.assertEqual(security.security_inventory(root, exclude=("a",)), ("b",))
-            self.assertEqual({path.name: path.read_bytes() for path in root.iterdir()}, {"a": b"scan this file\n", "b": b"scan this file\n"})
-
     def test_cli_findings_are_actionable_once_per_scan_and_never_echo_matches(self):
         for scanner in ("osv", "secrets", "semgrep"):
             for behavior, expected in (

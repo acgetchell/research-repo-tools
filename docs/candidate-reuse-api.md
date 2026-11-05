@@ -117,7 +117,7 @@ Import from `research_repo_tools.candidate_reuse`:
 | `CandidatePolicy` | Repository, canonical tag, final commit (`None` until selected), original owner/run identity, schema-6 measurement, original current envelope provenance, `(trial, suite, phase, Provenance)` assertions, and optional original `report` configuration |
 | `acquisition_assertion_digest(policy)` | Step 1 digest captured by the trusted acquisition owner; excludes only the future final commit |
 | `parse_candidate_policy`, `serialize_candidate_policy` | Strict versioned JSON handoff; serialization does not authenticate the assertions |
-| `verify_candidate_release(root, evidence, policy, native_policy, read, *, acquisition_sha256, expected=None)` | Step 2 whole-tree binding plus existing native release verification; returns frozen acceptance bytes |
+| `verify_candidate_release(root, evidence, policy, native_policy, read, *, acquisition_sha256, publication_receipt=None, publication_sha256=None, expected=None)` | Step 2 whole-tree binding plus existing native release verification; returns frozen acceptance bytes. When `policy.report` is set, both publication arguments are required as a pair, and `publication_sha256` must be independently trusted |
 | `plan_candidate_archive(root, payload, manifest, policy, acceptance, output)` | Offline immutable archive planning with stale-input checks and shared publication transactions |
 | `verify_candidate_archive(archive, policy, acceptance, *, target=None)` | Bounded verification of the exact frozen archive and every member, optionally bound to the independently captured draft target |
 

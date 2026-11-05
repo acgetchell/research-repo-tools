@@ -26,8 +26,6 @@ def security_inventory(root: Path, *, include: tuple[str, ...] = (), exclude: tu
     Standard environment/build directories are excluded even if tracked.
     Consumers supply additional exclusions; ignored untracked files stay out.
     """
-    if isinstance(exclude, (str, bytes)):
-        raise ValueError("security exclusions must be a sequence of patterns, not a scalar string")
     return select_files(root, include=include, exclude=(*GENERATED, *exclude))
 
 

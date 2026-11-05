@@ -6,7 +6,6 @@ import os
 import re
 import tempfile
 import tomllib
-from collections.abc import Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -61,31 +60,14 @@ def _configuration_digest(root: Path, env: dict[str, str]) -> str:
     return hashlib.sha256(json.dumps([files, flags], sort_keys=True).encode("utf-8")).hexdigest()
 
 
-def _options(values: object, context: str) -> tuple[str, ...]:
-    if not isinstance(values, Sequence) or isinstance(values, (str, bytes)):
-        raise ValueError(f"Cargo documentation {context} must be a sequence of nonempty strings without NUL")
-    result = []
-    for value in values:
-        if not isinstance(value, str) or not value or "\0" in value:
-            raise ValueError(f"Cargo documentation {context} must be a sequence of nonempty strings without NUL")
-        result.append(value)
-    return tuple(result)
-
-
-def _target(value: str) -> str:
-    if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)+", value) is None:
-        raise ValueError("Cargo documentation requires a Rust target triple")
-    return value
-
-
 def check_documentation(
     root: Path,
     package: str,
     *,
-    features: Sequence[str] = (),
+    features: tuple[str, ...] = (),
     default_features: bool = True,
     all_features: bool = False,
-    cfg: Sequence[str] = (),
+    cfg: tuple[str, ...] = (),
     target: str | None = None,
 ) -> DocumentationEvidence:
     """Package one workspace member and build its library docs with warnings denied.
@@ -94,13 +76,8 @@ def check_documentation(
     Cargo reads consumer configuration from root. Builds and unpacked sources
     live in a disposable directory. Cargo diagnostics propagate on failure.
     """
-    if not isinstance(package, str) or not re.fullmatch(r"[A-Za-z0-9_-]+", package):
+    if not re.fullmatch(r"[A-Za-z0-9_-]+", package):
         raise ValueError("Cargo documentation requires an exact package name")
-    features, cfg = _options(features, "features"), _options(cfg, "cfg")
-    if type(default_features) is not bool or type(all_features) is not bool:
-        raise ValueError("Cargo documentation feature switches must be boolean")
-    if target is not None:
-        _target(target)
     if all_features and (features or not default_features):
         raise ValueError("--all-features cannot be combined with explicit features or --no-default-features")
     if any(not name or name.startswith("-") or re.search(r"[\s,]", name) for name in features):
@@ -125,7 +102,8 @@ def check_documentation(
         raise ValueError(f"rustc does not report the declared stable release {channel}: {compiler}")
     if target is None:
         target = next((line.removeprefix("host: ") for line in compiler.splitlines() if line.startswith("host: ")), "")
-    _target(target)
+    if not re.fullmatch(r"[A-Za-z0-9_]+(?:-[A-Za-z0-9_]+)+", target):
+        raise ValueError("Cargo documentation requires a Rust target triple")
     env.update(RUSTC=str(tools["rustc"]), RUSTDOC=str(tools["rustdoc"]), RUSTC_WRAPPER="", RUSTC_WORKSPACE_WRAPPER="")
     configuration = _configuration_digest(root, env)
     flags = ["--all-features"] if all_features else [arg for name in features for arg in ("--features", name)]
