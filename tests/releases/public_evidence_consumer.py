@@ -529,13 +529,18 @@ class TestEvidenceConsumer(unittest.TestCase):
 
         def execute(command, args, **kwargs):
             self.assertTrue(Path(command).is_absolute())
+            self.assertFalse(any(key.upper().startswith("GIT_") for key in kwargs["env"]))
+            self.assertEqual(kwargs["env"]["CHECKOUT_FIXTURE"], "preserved")
             executables.append(Path(command))
             commands.append(args)
             if "ls-files" in args or "submodule" in args:
                 return subprocess.CompletedProcess(args, 0, b"H tracked\0", b"")
             return subprocess.CompletedProcess(args, 0, b"" if "status" in args else COMMIT.encode(), b"")
 
-        with patch("research_repo_tools.release_assets.run_command_bytes", execute):
+        with (
+            patch.dict(os.environ, {"GIT_DIR": "elsewhere", "git_work_tree": "elsewhere", "Git_Index_File": "elsewhere", "CHECKOUT_FIXTURE": "preserved"}),
+            patch("research_repo_tools.release_assets.run_command_bytes", execute),
+        ):
             require_release_checkout(Path("source"), COMMIT)
         prefix = ["--no-pager", "--no-optional-locks", "--no-replace-objects", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false"]
         self.assertEqual(len(set(executables)), 1)
@@ -1388,6 +1393,38 @@ class TestReleaseCheckoutConsumer(unittest.TestCase):
                 self.assertEqual(standalone(self.root), ("v0.2.5", self.commit))
                 self.assertFalse((self.root / "git-hijacked").exists())
                 self.assertFalse((child / "git-hijacked").exists())
+
+    def test_git_environment_cannot_redirect_checkout_observation(self):
+        import runpy
+
+        project = b'[project]\nname="research-repo-tools"\nversion="0.2.5"\n'
+        (self.root / "pyproject.toml").write_bytes(project)
+        self.git("add", "pyproject.toml")
+        self.git("commit", "-m", "Python package fixture")
+        self.commit = self.git("rev-parse", "HEAD").stdout.decode("ascii").strip()
+        standalone = runpy.run_path(release_validation.__file__)["_checkout_identity"]
+        with tempfile.TemporaryDirectory(prefix="alternate checkout café ") as temporary:
+            alternate = Path(temporary).resolve()
+            self.git("init", "--template=", cwd=alternate)
+            (alternate / "pyproject.toml").write_bytes(project)
+            self.git("add", "pyproject.toml", cwd=alternate)
+            self.git("commit", "-m", "alternate repository", cwd=alternate)
+            alternate_commit = self.git("rev-parse", "HEAD", cwd=alternate).stdout.decode("ascii").strip()
+            self.assertNotEqual(alternate_commit, self.commit)
+            self.assertEqual(self.git("status", "--porcelain", cwd=alternate).stdout, b"")
+            overrides = {"GIT_DIR": str(alternate / ".git"), "GIT_WORK_TREE": str(alternate), "GIT_INDEX_FILE": str(alternate / ".git/index")}
+            with patch.dict(os.environ, overrides):
+                # Prove the inherited environment would select the other repository.
+                self.assertEqual(self.git("rev-parse", "HEAD").stdout.decode("ascii").strip(), alternate_commit)
+                self.observe()
+                self.assertEqual(standalone(self.root), ("v0.2.5", self.commit))
+                self.path.write_bytes(b"dirty source\n")
+                for commit in (self.commit, alternate_commit):
+                    with self.subTest(commit=commit), self.assertRaisesRegex(ValueError, "observed release checkout"):
+                        self.observe(commit)
+                with self.assertRaisesRegex(ValueError, "requires a clean checkout"):
+                    standalone(self.root)
+                self.assertEqual(self.path.read_bytes(), b"dirty source\n")
 
     def hidden_change(self, flag, tag):
         self.git("update-index", flag, "--", self.path.name)

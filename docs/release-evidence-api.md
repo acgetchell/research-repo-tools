@@ -288,6 +288,8 @@ It leaves index flags and checkout contents unchanged.
 Git is selected from absolute `PATH` entries outside the observed checkout.
 The same absolute executable and filtered `PATH` are used for recursive submodule
 checks; relative, empty, and checkout-owned entries cannot supply executables.
+Inherited `GIT_*` environment overrides are removed so these observations use the
+supplied checkout's repository, working tree, and index.
 Run trusted installed tooling outside consumer source; these helpers execute no
 consumer build commands, but cannot secure an interpreter already importing
 untrusted code. Checkout observation also requires trusted Git configuration

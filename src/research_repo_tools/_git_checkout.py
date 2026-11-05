@@ -23,7 +23,7 @@ def git_context(checkout: Path) -> tuple[Path, dict[str, str]]:
     """Pin Git and its child PATH outside the source being inspected."""
     root = checkout.resolve()
     paths = [entry for entry in os.get_exec_path() if Path(entry).is_absolute() and not _in_checkout(Path(entry), root)]
-    environment = {key: value for key, value in os.environ.items() if key.upper() != "PATH"}
+    environment = {key: value for key, value in os.environ.items() if key.upper() != "PATH" and not key.upper().startswith("GIT_")}
     environment["PATH"] = os.pathsep.join(paths)
     # An explicit absolute candidate prevents Windows' implicit cwd search.
     for entry in paths:
