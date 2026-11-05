@@ -48,8 +48,21 @@ retains the resulting entire schedule. No consumer chooses a fresh seed later.
 The acquisition owner freezes the independent Step 1 assertion digest and original
 payload/envelope through the trusted handoff before report edits or final merge.
 Use `CandidatePolicy(commit=None, ...)` and `acquisition_assertion_digest` under
-that owner's control. Keep original raw evidence in ignored scratch or immutable artifact
-storage; report paths declared as exceptions may be committed in the release PR.
+that owner's control. Retain original raw evidence in ignored scratch or immutable
+artifact storage. To commit the shared publisher's generated evidence, declare
+`report="tooling/performance-report.toml"` in that policy before freezing its
+digest. The schema-2 report declaration must be present before acquisition.
+Use `plan_candidate_publication` to freeze a separate exact-byte publication
+receipt **before** promotion, then publish its returned plan. Independently retain
+both the receipt and its SHA-256. The existing content-addressed run files,
+indexes, pointer and reports may then be committed in the release PR.
+
+For existing `measure_release` adapters, use its `before_promotion` callback to
+capture the handoffs without changing the acquire/retain/promote order. The
+default CLI does not capture trusted assertions on the consumer's behalf; wire
+the callback in the trusted acquisition owner's thin adapter, or use the staged
+public APIs. Never rerun acquisition merely because capture or promotion failed.
+See the [committed publisher contract](candidate-reuse-api.md#committed-publisher-evidence).
 After report/README generation, review and merge the release-preparation PR.
 
 Complete-run v5 retains original v4 payload/envelope bytes per trial, unique trial
@@ -68,7 +81,10 @@ candidate policy. The separately retained Step 1 digest must remain unchanged.
 The consumer's `just release-evidence` invokes the shared `release evidence
 candidate` command, supplying its native evidence configuration, clean checkout,
 original payload/envelope, independent candidate policy, trusted
-`--acquisition-sha256`, and a new `--output` acceptance file. This may run before
+`--acquisition-sha256`, and a new `--output` acceptance file. When committing
+publisher evidence, also supply the original `--publication-receipt` and separately
+trusted `--publication-sha256`. Add `--format summary` for a concise verification
+result; the acceptance bytes are unchanged. This may run before
 tag creation; it does not require a GitHub draft or perform measurement/preflight.
 
 Only after Step 2 succeeds, create/push the release tag and follow the consumer's
@@ -100,6 +116,12 @@ If a selected artifact expires, is replaced, or a native run/attempt changes,
 approval fails. Explicitly review a new selection into a new acceptance file;
 never replace the approved file silently. If only publication failed, retry from
 the original accepted evidence without acquisition or preflight benchmarks.
+
+Keep final acceptance, native attestations and derived archive receipts outside
+committed source; they bind the final commit and cannot be committed into that
+same commit. Implementation, maintainer-approved patch publication, and consumer
+adoption are separate gates. Verify the supplying published package before
+adoption; consumer migrations do not block upstream publication.
 
 ## Interrupted acquisition and limitations
 

@@ -17,6 +17,7 @@ from typing import Literal, cast
 
 from packaging.utils import canonicalize_name
 
+from research_repo_tools._console import write_stdout
 from research_repo_tools.process import format_exception_diagnostics
 lazy from research_repo_tools.ci import export_environment
 lazy from research_repo_tools.config import Config
@@ -213,29 +214,35 @@ def add_evidence_commands(release) -> None:
     candidate.add_argument("--acceptance", type=Path, help="frozen Step 2 approval record to revalidate")
     candidate.add_argument("--acquisition-sha256", required=True, help="independent Step 1 assertion digest from the trusted acquisition owner")
     candidate.add_argument("--checkout", type=Path, required=True)
+    candidate.add_argument("--format", choices=("json", "status", "summary"), default="status")
     candidate.add_argument("--manifest", type=Path, required=True)
     candidate.add_argument("--output", type=Path, required=True)
     candidate.add_argument("--payload", type=Path, required=True)
     candidate.add_argument("--policy", type=Path, required=True, help="independently trusted acquisition assertions and final commit")
+    candidate.add_argument("--publication-receipt", type=Path, help="original shared-publisher receipt captured before promotion")
+    candidate.add_argument("--publication-sha256", help="independent Step 1 publication digest from the trusted owner")
     for operation in ("create", "published", "verify"):
         command = commands.add_parser(operation)
         command.add_argument("configuration")
-        command.add_argument("--checkout", type=Path, required=True)
-        command.add_argument("--commit", required=True)
-        command.add_argument("--version", required=True, help="independent stable package version without v")
-        command.add_argument("--output", type=Path, required=True)
-        command.add_argument("--github-output", type=Path)
-        command.add_argument("--tools", type=Path, help="JSON object containing independently observed cargo and rustc producer identities")
-        command.add_argument("--distributions", type=Path, help="exact Python wheel/sdist directory; verify compares publication bytes with retained evidence")
         if operation == "create":
             command.add_argument("--archive", type=Path)
             command.add_argument("--attempt", type=int, required=True)
-            command.add_argument("--run-id", type=int, required=True)
-        else:
+        command.add_argument("--checkout", type=Path, required=True)
+        command.add_argument("--commit", required=True)
+        command.add_argument("--distributions", type=Path, help="exact Python wheel/sdist directory; verify compares publication bytes with retained evidence")
+        if operation != "create":
             command.add_argument(
                 "--expected", type=Path, required=operation == "published", help="frozen approval selection to revalidate before acquiring credentials"
             )
+        command.add_argument("--format", choices=("json", "status", "summary"), default="status", help="presentation only; handoff bytes stay unchanged")
+        command.add_argument("--github-output", type=Path)
+        command.add_argument("--output", type=Path, required=True)
+        if operation != "create":
             command.add_argument("--reproduced-archive", type=Path)
+        else:
+            command.add_argument("--run-id", type=int, required=True)
+        command.add_argument("--tools", type=Path, help="JSON object containing independently observed cargo and rustc producer identities")
+        command.add_argument("--version", required=True, help="independent stable package version without v")
 
 
 def run_evidence(args: argparse.Namespace, settings: Config) -> None:
@@ -305,7 +312,36 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
     observe()
     values = {"identity": json.dumps(parse_release_json(payload), sort_keys=True, separators=(",", ":")), "commit": args.commit}
     write_release_outputs(args.output, payload, github_output=args.github_output, values=values, verify=observe)
-    print("Saved verified release evidence.")
+    if args.operation == "create":
+        if args.format == "json":
+            write_stdout(payload)
+        else:
+            print("Saved release evidence manifest; verification remains required.")
+    else:
+        _present_evidence(payload, args.format, cargo_reproduced=args.reproduced_archive is not None, published=args.operation == "published")
+
+
+def _present_evidence(
+    payload: bytes, presentation: str, *, candidate: bool = False, acquisition_owner: str | None = None, cargo_reproduced: bool = False, published: bool = False
+) -> None:
+    if presentation == "json":
+        write_stdout(payload)
+    elif presentation == "summary":
+        from research_repo_tools.release_summary import render_release_summary
+
+        result = parse_release_json(payload)
+        print(
+            render_release_summary(
+                result["native"] if candidate else result,
+                candidate=result if candidate else None,
+                acquisition_owner=acquisition_owner,
+                cargo_reproduced=cargo_reproduced,
+                published=published,
+            ),
+            end="",
+        )
+    else:
+        print("Saved verified candidate and final release evidence." if candidate else "Saved verified release evidence.")
 
 
 def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
@@ -313,7 +349,14 @@ def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
     from research_repo_tools.evidence import parse_evidence
 
     configuration = _path(settings.root, args.configuration)
-    paths = (configuration, args.policy, args.payload, args.manifest, *([args.acceptance] if args.acceptance else []))
+    paths = (
+        configuration,
+        args.policy,
+        args.payload,
+        args.manifest,
+        *([args.acceptance] if args.acceptance else []),
+        *([args.publication_receipt] if args.publication_receipt else []),
+    )
     _validate_distinct_paths((args.output, *paths))
     inputs = {}
     from research_repo_tools.archives import ArchiveLimits
@@ -347,10 +390,12 @@ def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
         native,
         partial(api, repository=policy.repository),
         acquisition_sha256=args.acquisition_sha256,
+        publication_receipt=inputs[args.publication_receipt] if args.publication_receipt else None,
+        publication_sha256=args.publication_sha256,
         expected=inputs[args.acceptance] if args.acceptance else None,
     )
     write_release_outputs(args.output, accepted, verify=unchanged)
-    print("Saved verified candidate and final release evidence.")
+    _present_evidence(accepted, args.format, candidate=True, acquisition_owner=policy.acquisition_owner)
 
 
 def run_assets(args: argparse.Namespace, settings: Config) -> None:
@@ -394,5 +439,12 @@ def run(args: argparse.Namespace, settings: Config) -> int:
         args = argparse.Namespace(**{name: settings.path(str(value)) if isinstance(value, Path) else value for name, value in vars(args).items()})
         (run_evidence if args.action == "evidence" else run_assets)(args, settings)
     except Exception as error:
-        raise ValueError(redact_release_diagnostic(format_exception_diagnostics(error))) from error
+        diagnostic = redact_release_diagnostic(format_exception_diagnostics(error))
+        if args.action == "evidence" and getattr(args, "format", None) == "summary":
+            diagnostic += (
+                "\nRelease evidence was not accepted. Check the reported paths, exact commit and original trusted handoffs. "
+                "Wait for pending CI; resolve missing/expired artifacts through the complete-run recovery procedure. "
+                "Changed measured inputs require a new acquisition; changed approval selections require explicit review."
+            )
+        raise ValueError(diagnostic) from error
     return 0

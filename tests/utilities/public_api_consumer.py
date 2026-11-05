@@ -27,7 +27,7 @@ from research_repo_tools.process import (
     run_command_live,
     run_git_bytes,
 )
-from research_repo_tools.selection import run_selected
+from research_repo_tools.selection import argument_batches, run_selected
 
 
 class ConsumerCase(unittest.TestCase):
@@ -212,9 +212,11 @@ print(count)
     def test_invalid_options_do_not_launch(self) -> None:
         marker = self.root / "launched"
         args = ["-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).touch()", str(marker)]
-        for timeout in (0, -1, float("inf"), float("nan")):
-            with self.assertRaises(ValueError):
-                run_command_bytes(sys.executable, args, timeout=timeout)
+        for timeout in (True, False, 0, -1, 10**1000, float("inf"), float("nan")):
+            for runner in (run_command_bytes, run_command, run_command_live):
+                with self.subTest(timeout=timeout, runner=runner.__name__), self.assertRaisesRegex(ValueError, "timeout must be positive and finite"):
+                    runner(sys.executable, args, timeout=timeout)
+                self.assertFalse(marker.exists())
         with self.assertRaises(LookupError):
             run_command(sys.executable, args, encoding="missing-codec")
         with self.assertRaises(LookupError):
@@ -224,6 +226,17 @@ print(count)
         with self.assertRaises(TypeError):
             run_command_bytes(sys.executable, "--version")
         self.assertFalse(marker.exists())
+
+    def test_filename_batches_reject_scalar_inventory_and_consume_iterables_once(self) -> None:
+        for filenames in ("ab", b"ab"):
+            with self.subTest(filenames=filenames), self.assertRaisesRegex(ValueError, "file arguments must be an iterable"):
+                argument_batches(["tool"], filenames)  # ty: ignore[invalid-argument-type] -- malformed public boundary input
+        filenames = iter(("café.txt", "-option.txt", "last.txt"))
+        self.assertEqual(
+            argument_batches(["tool"], filenames, batch_size=2),
+            (("tool", "./café.txt", "./-option.txt"), ("tool", "./last.txt")),
+        )
+        self.assertEqual(tuple(filenames), ())
 
     def test_git_bytes_and_clean_filters(self) -> None:
         # hash-object without -w can apply configured filters outside a Git

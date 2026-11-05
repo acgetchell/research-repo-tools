@@ -4,6 +4,7 @@ import hashlib
 import io
 import json
 import os
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -11,6 +12,7 @@ import tomllib
 import unittest
 import urllib.error
 from contextlib import redirect_stderr, redirect_stdout
+from email.message import Message
 from pathlib import Path
 from typing import override
 from unittest.mock import patch
@@ -28,11 +30,59 @@ from research_repo_tools import (
     toolchain_clean,
     toolchain_upgrade,
 )
+from research_repo_tools.changelog import template
 from research_repo_tools.toolchain_clean import apply_clean, plan_clean
 from research_repo_tools.toolchain_config import Toolchain, load
 
 
 class TestToolchainConsumer(unittest.TestCase):
+    def test_bootstrap_closes_http_failure_without_launching_uvx(self):
+        with tempfile.TemporaryDirectory() as directory:
+            script = Path(directory) / "python-bootstrap.py"
+            script.write_bytes(template("python-bootstrap.py").encode("utf-8"))
+            main = runpy.run_path(str(script))["main"]
+            for cleanup_fails in (False, True):
+                for encoding in ("utf-8", "cp1252"):
+                    with (
+                        self.subTest(cleanup_fails=cleanup_fails, encoding=encoding),
+                        io.BytesIO(b"unavailable") as body,
+                        io.BytesIO() as encoded,
+                        io.TextIOWrapper(encoded, encoding=encoding, newline="\r\n") as errors,
+                    ):
+                        error = urllib.error.HTTPError("https://pypi.org/", 503, "unavailable \U0001f9ea", Message(), body)
+                        output = io.StringIO()
+                        with (
+                            patch("urllib.request.urlopen", side_effect=error),
+                            patch("subprocess.run", side_effect=AssertionError("failed metadata request must not launch uvx")),
+                            patch.object(error, "close", side_effect=OSError("close failed") if cleanup_fails else error.close) as close,
+                            redirect_stdout(output),
+                            redirect_stderr(errors),
+                        ):
+                            self.assertEqual(main(["0.9.1", "--dry-run"]), 1)
+                        close.assert_called_once_with()
+                        if not cleanup_fails:
+                            self.assertTrue(body.closed)
+                        errors.flush()
+                        detail = encoded.getvalue().decode(encoding)
+                        self.assertEqual(output.getvalue(), "")
+                        self.assertIn("HTTP Error 503", detail)
+                        self.assertIn("\\U0001f9ea" if encoding == "cp1252" else "\U0001f9ea", detail)
+                        self.assertEqual("HTTP response cleanup failed: close failed" in detail, cleanup_fails)
+
+    def test_cargo_registry_closes_failed_response_before_retry(self):
+        body = io.BytesIO(b"service unavailable")
+        error = urllib.error.HTTPError("https://index.crates.io/gi/t-/git-cliff", 503, "unavailable", Message(), body)
+        response = io.BytesIO(b'{"name":"git-cliff","vers":"3.0.0","yanked":false}\n')
+        with patch("urllib.request.urlopen", side_effect=[error, response]) as transport:
+            with self.assertRaises(urllib.error.HTTPError) as caught:
+                toolchain_upgrade.latest_stable("git-cliff")
+            self.assertIs(caught.exception, error)
+            self.assertTrue(body.closed)
+            self.assertEqual(transport.call_count, 1)
+            self.assertEqual(toolchain_upgrade.latest_stable("git-cliff"), "3.0.0")
+            self.assertEqual(transport.call_count, 2)
+        self.assertTrue(response.closed)
+
     def test_binary_release_rejects_ambiguous_draft_status(self):
         payload = b'{"draft":true,"draft":false,"prerelease":false,"tag_name":"v1.0.0"}'
         with patch.object(prebuilt_tools.urllib.request, "urlopen", return_value=io.BytesIO(payload)):

@@ -1,22 +1,13 @@
 """Composable CLI operations for comparison data and retained evidence."""
 
 import argparse
-import sys
 from os.path import commonpath
 from pathlib import Path
 
+from research_repo_tools._console import write_stdout as _write_stdout
 lazy from research_repo_tools import archives, criterion, evidence
 lazy from research_repo_tools.config import Config
 lazy from research_repo_tools.files import _paths_alias, replace_many
-
-
-def _write_stdout(output: bytes) -> None:
-    # Real stdout preserves UTF-8 bytes even on Windows. Tests or callers
-    # may provide text-only streams, which receive the decoded text.
-    if hasattr(sys.stdout, "buffer"):
-        sys.stdout.buffer.write(output)
-    else:
-        sys.stdout.write(output.decode("utf-8"))
 
 
 def _run_report_paths(settings: Config, payload: str, manifest: str, output: str | None) -> dict[str, str]:

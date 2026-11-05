@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from research_repo_tools.archives import ArchiveLimits, extract_archive
+from research_repo_tools.candidate_publication import _parse_publication, _PublicationReceipt
 from research_repo_tools.complete_runs import _array, _integer, run_identity
 from research_repo_tools.criterion_suites import _archive
 from research_repo_tools.evidence import (
@@ -69,6 +70,7 @@ class CandidatePolicy:
     measurement: SuiteMeasurementPlan
     candidate: Provenance
     observations: tuple[tuple[int, str, str, Provenance], ...]
+    report: str | None = None
 
     def __post_init__(self) -> None:
         _repository(self.repository)
@@ -86,6 +88,12 @@ class CandidatePolicy:
             raise ValueError("candidate requires independent original source provenance")
         receipt = dict(self.candidate.context).get("source-export", "")
         validate_source_record(receipt, self.candidate.revision)
+        if self.report is not None:
+            from research_repo_tools.source_exports import _names
+
+            _names(None, (self.report,))
+            if self.report not in {name for name, _, _ in json.loads(receipt)["files"]}:
+                raise ValueError("candidate report configuration must be captured before acquisition")
         if dict(self.candidate.context).get("release") != self.tag:
             raise ValueError("candidate label differs from final version")
         observations = tuple((trial, suite, phase, source) for trial, suite, phase, source in self.observations)
@@ -111,7 +119,8 @@ def _provenance(source: Provenance) -> dict[str, Any]:
 def serialize_candidate_policy(policy: CandidatePolicy) -> bytes:
     return deterministic_json(
         {
-            "schema": POLICY_SCHEMA,
+            "schema": POLICY_SCHEMA if policy.report is None else "research-repo-tools/candidate-policy/v2",
+            **({"report": policy.report} if policy.report is not None else {}),
             "repository": policy.repository,
             "tag": policy.tag,
             "commit": policy.commit,
@@ -130,10 +139,13 @@ def parse_candidate_policy(payload: bytes) -> CandidatePolicy:
     raw = _object(
         _load_json(payload, "candidate policy"),
         "candidate policy",
-        {"schema", "repository", "tag", "commit", "acquisition_owner", "identity", "measurement", "candidate", "observations"},
     )
-    if raw["schema"] != POLICY_SCHEMA:
+    fields = {"schema", "repository", "tag", "commit", "acquisition_owner", "identity", "measurement", "candidate", "observations"}
+    if raw.get("schema") == "research-repo-tools/candidate-policy/v2":
+        fields.add("report")
+    elif raw.get("schema") != POLICY_SCHEMA:
         raise ValueError("unsupported candidate policy")
+    _object(raw, "candidate policy", fields)
     observations = []
     for value in _array(raw["observations"], "observations"):
         item = _object(value, "observation", {"trial", "suite", "phase", "source"})
@@ -155,6 +167,7 @@ def parse_candidate_policy(payload: bytes) -> CandidatePolicy:
         parse_suite_plan(_object(raw["measurement"], "measurement")),
         source,
         tuple(observations),
+        _string(raw["report"], "report") if "report" in raw else None,
     )
 
 
@@ -191,7 +204,7 @@ def _eligible(evidence: Evidence, policy: CandidatePolicy) -> ScheduledRun:
     return run
 
 
-def _binding(policy: CandidatePolicy, final: str) -> dict[str, Any]:
+def _binding(policy: CandidatePolicy, final: str, publication: _PublicationReceipt | None = None) -> dict[str, Any]:
     validate_source_record(final, _final_commit(policy))
     original = json.loads(dict(policy.candidate.context)["source-export"])
     finished = json.loads(final)
@@ -200,6 +213,24 @@ def _binding(policy: CandidatePolicy, final: str) -> dict[str, Any]:
     before = {name: (digest, bool(mode & 0o111)) for name, digest, mode in original["files"]}
     after = {name: (digest, bool(mode & 0o111)) for name, digest, mode in finished["files"]}
     outputs = set(policy.measurement.outputs)
+    if policy.report is not None:
+        if publication is None:
+            raise ValueError("committed evidence requires a parsed publication receipt")
+        generated = dict(publication.outputs)
+        for name, digest in publication.outputs:
+            if after.get(name) != (digest, False):
+                raise ValueError(f"committed generated output differs from trusted publication: {name}")
+        archive = publication.archive
+        # Legacy document exceptions cannot authorize edits to old history.
+        historical = {name for name in before if name.startswith(f"{archive}/runs/")}
+        if any(before[name] != after.get(name) for name in historical):
+            raise ValueError("historical benchmark run bytes or modes changed")
+        # Reserve the complete history namespace. A legacy Markdown exception
+        # must not introduce an unindexed partial run beside the new run trio.
+        outputs = {name for name in outputs if not name.startswith(f"{archive}/")}
+        outputs.update(generated)
+    elif publication is not None:
+        raise ValueError("publication receipt requires a declared candidate report")
     inputs = set()
     for _, _, _, source in policy.observations:
         context = dict(source.context)
@@ -218,12 +249,20 @@ def _binding(policy: CandidatePolicy, final: str) -> dict[str, Any]:
     changed = sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
     if set(changed) - outputs:
         raise ValueError(f"performance-relevant or undeclared final-tree differences: {sorted(set(changed) - outputs)}")
-    return {"candidate": original, "final": finished, "outputs": sorted(outputs), "changed": changed, "mode_policy": "git-executable-bit"}
+    return {
+        "candidate": original,
+        "final": finished,
+        "outputs": sorted(outputs),
+        "changed": changed,
+        "mode_policy": "git-executable-bit",
+        **({"publication": publication.document(), "publication_sha256": sha256(publication.payload)} if publication is not None else {}),
+    }
 
 
 def _contents(evidence: Evidence, policy: CandidatePolicy, binding: dict[str, Any]) -> dict[str, bytes]:
     run = _eligible(evidence, policy)
-    if binding != _binding(policy, json.dumps(binding.get("final"))):
+    publication = _parse_publication(deterministic_json(binding["publication"]), policy) if "publication" in binding else None
+    if binding != _binding(policy, json.dumps(binding.get("final")), publication):
         raise ValueError("candidate binding differs")
     payload, manifest = serialize_evidence(evidence)
     files = {"evidence/run.json": payload, "evidence/evidence.json": manifest}
@@ -274,6 +313,8 @@ def verify_candidate_release(
     read: Callable[[str], Any],
     *,
     acquisition_sha256: str,
+    publication_receipt: bytes | None = None,
+    publication_sha256: str | None = None,
     expected: bytes | None = None,
     reproduced_archive: Path | None = None,
     reproduced_tools: Mapping[str, str] | None = None,
@@ -296,12 +337,24 @@ def verify_candidate_release(
     if native_policy.validation.repository != policy.repository:
         raise ValueError("native evidence repository differs")
     pinned = _acceptance(expected, policy) if expected is not None else None
+    publication = None
+    if policy.report is not None:
+        if publication_receipt is None or publication_sha256 is None:
+            raise ValueError("committed evidence requires a publication receipt and independently trusted publication SHA-256")
+        if not isinstance(publication_receipt, bytes):
+            raise TypeError("publication receipt must be immutable bytes")
+        _digest(publication_sha256, "trusted publication digest")
+        if sha256(publication_receipt) != publication_sha256:
+            raise ValueError("publication receipt differs from trusted Step 1 handoff")
+        publication = _parse_publication(publication_receipt, policy)
+    elif publication_receipt is not None or publication_sha256 is not None:
+        raise ValueError("publication receipt requires a declared candidate report")
     require_release_checkout(root, commit)
     final = capture_source(root, commit)
     working = capture_source(root, "HEAD", working_tree=True)
     if working.revision != commit or working.dirty:
         raise ValueError("final acceptance requires the selected clean HEAD")
-    binding = _binding(policy, final.provenance())
+    binding = _binding(policy, final.provenance(), publication)
     native = verify_release_evidence(
         native_policy,
         policy.tag.removeprefix("v"),

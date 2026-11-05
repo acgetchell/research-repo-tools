@@ -12,7 +12,7 @@ acceptance, interpretation and deployment remain consumer decisions.
 | `load_performance_release(root, configuration)` | Strict schema-1 declaration with root-relative portable paths; rejects unknown fields and path aliases |
 | `load_preparation(root, settings)` | Require a complete supported record and recheck local package/declaration/reference identity; never reads evidence to supply assertions |
 | `load_readme_plan(root, settings, *, identities=None)` | Use preparation or all four explicit assertions with the existing retained-evidence publisher; no acquisition, promotion, network or Git mutation |
-| `measure_release(root, settings, *, allow_git_mutations=False)` | Acquire the prepared pair, retain raw evidence, then promote the report; README is independent |
+| `measure_release(root, settings, *, allow_git_mutations=False, before_promotion=None, ...)` | Acquire the prepared pair, retain raw evidence, optionally capture trusted handoffs, then promote the report; README is independent |
 | `parse_preparation(payload)`, `serialize_preparation(record)` | Strict deterministic UTF-8 JSON using `research-repo-tools/performance-preparation/v1`; reject unsupported schemas, missing/extra/duplicate fields and invalid identities |
 | `prepare_performance(root, settings, *, fetch_tags=False, allow_git_mutations=False)` | Independently select/resolve and atomically save all assertions; no acquisition or README publication |
 | `select_measurement_pair(root, configuration, *, repository=None, mode="infer-release", order="published", current=None, baseline=None)` | Common direct/prepared selection, returning `(ReleasePair, working_tree)` with the measurement release floor enforced |

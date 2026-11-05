@@ -271,7 +271,41 @@ revalidate that selection. Obtain `STEP1_ASSERTION_SHA256` from the trusted
 acquisition owner's separate handoff. Never derive it from the candidate being
 checked. These operations perform no benchmark acquisition or preflight.
 
+For committed schema-2 publisher histories, declare the original report
+configuration in `CandidatePolicy(report="tooling/performance-report.toml", ...)`.
+Before promotion, freeze the shared publisher's exact outputs under acquisition-owner
+control:
+
+```python
+from research_repo_tools.candidate_publication import plan_candidate_publication
+
+plan, receipt = plan_candidate_publication(
+    root, "target/run.json", "target/evidence.json", step_one_policy,
+    acquisition_sha256=trusted_acquisition_digest,
+)
+# Save receipt and its SHA-256 through the separate trusted handoff.
+publish_publication(plan)
+```
+
+The report configuration must predate acquisition. Existing prepared-release
+adapters can capture this receipt in `measure_release(before_promotion=...)`;
+the callback saves the handoffs and leaves promotion to `measure_release`.
+Commit the generated run trio, index/latest files and reports with the release PR.
+Step 2 adds `--publication-receipt /trusted/publication.json`,
+`--publication-sha256 "$STEP1_PUBLICATION_SHA256"`, and `--format summary` to the
+candidate command above. Keep final acceptance and attestations outside committed
+history. [The contract](docs/candidate-reuse-api.md#committed-publisher-evidence)
+preserves exact old history and rejects arbitrary JSON/output paths. This follow-up
+requires a verified supplying patch release; a v0.2.6 pin alone does not supply it.
+
 ### Releases
+
+Add `--format summary` to shared evidence verification commands for release/commit,
+native run/attempt, actual package guarantee, optional benchmark acquisition,
+signature and artifact-integrity results. `--format json` prints the same verified
+record saved by `--output`; default shared CLI status messages remain compatible.
+Checks that are not configured are labeled explicitly. Failures print diagnostics
+and a nonzero status, without a success summary or replacement acceptance.
 
 Follow the [ordered release procedure][publishing] and matching installed
 `RELEASING.md` template. Exact-commit checks are the default. [CI reuse][reuse-guide]

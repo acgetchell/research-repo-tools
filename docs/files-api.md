@@ -50,7 +50,7 @@ is best effort. Ownership/ACL metadata is not preserved. Callers must own the
 whole destination exclusively: the two renames can briefly leave it absent,
 and neither concurrent-writer serialization nor crash atomicity is promised.
 
-`research_repo_tools.files.replace_many(updates: Mapping[Path, bytes], *, expected: Mapping[Path, bytes] | None = None) -> None`
+`research_repo_tools.files.replace_many(updates: Mapping[Path, bytes], *, expected: Mapping[Path, bytes] | None = None, verify: Callable[[], None] | None = None) -> None`
 publishes a mapping in iteration order. An empty mapping is a no-op. It is the
 supported named-file publication entry point; pass one entry for one file.
 
@@ -71,6 +71,11 @@ supported named-file publication entry point; pass one entry for one file.
   must be bytes. After staging, changed path resolutions or source bytes reject
   before the first replacement, preserving current files and cleaning staged
   artifacts. This optimistic guard does not serialize writers with the renames.
+- Optional `verify` runs synchronously once after staging and snapshot checks,
+  before the first replacement. It receives no arguments and may raise to abort
+  publication; staged files and newly created empty parents are then cleaned up.
+  It does not run for an empty update mapping. Keep the callback read-only:
+  publication rollback does not undo effects performed by the callback itself.
 - New files use mode `0600` subject to the platform/umask. Existing permission bits
   are retained where supported; Windows only supports a subset of POSIX modes.
   Publication creates new inodes: ownership, ACLs, extended attributes, timestamps,

@@ -348,8 +348,12 @@ binds its required checks to GitHub Actions app ID `15368`. PR review remains a
 protected-branch requirement; it does not replace merged `main` evidence.
 Missing, pending, cancelled or failed required jobs block preparation.
 
-Record the printed JSON's full commit, run ID/attempt, artifact identities, and
-file hashes in the release PR or review notes. Pending checks cause an immediate
+The recipe prints a concise verified summary with the full commit, run/attempt,
+package-byte guarantee, signature and artifact integrity. Benchmark evidence is
+explicitly not configured for this package. The existing
+`scripts/release_assets.py evidence` interface still defaults to JSON; its
+`--format summary` option changes presentation only. Record the verified identity
+in the release PR or review notes. Pending checks cause an immediate
 failure; wait for main CI to finish, then rerun `just release-evidence`.
 The preparation workflow independently requires exactly one successful matching
 run from this repository's active `ci.yml`. Manual dispatch and partial reruns

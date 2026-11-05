@@ -62,7 +62,9 @@ class TestCargoDocumentation(unittest.TestCase):
         self.assertEqual(default.source_lock_sha256, hashlib.sha256(original[self.root / "Cargo.lock"]).hexdigest())
         self.assertRegex(default.archive_sha256, r"^[a-f0-9]{64}$")
         self.assertTrue(default.default_features)
-        explicit = check_documentation(self.root, "docs-fixture", features=("extra",), default_features=False)
+        features = ["extra"]
+        explicit = check_documentation(self.root, "docs-fixture", features=features, default_features=False)
+        features.append("later-edit")
         self.assertEqual(explicit.features, ("extra",))
         self.assertFalse(explicit.default_features)
         output = io.StringIO()
@@ -119,6 +121,28 @@ class TestCargoDocumentation(unittest.TestCase):
         with patch.dict("os.environ", {"RUSTC_BOOTSTRAP": "1"}):
             with self.assertRaisesRegex(ValueError, "requires RUSTC_BOOTSTRAP to be unset"):
                 check_documentation(self.root, "docs-fixture")
+
+
+class TestCargoDocumentationInputs(unittest.TestCase):
+    def test_malformed_options_fail_before_filesystem_or_tool_access(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for options, diagnostic in (
+                ({"features": "extra"}, "features"),
+                ({"cfg": "docsrs"}, "cfg"),
+                ({"features": ("a\0b",)}, "features"),
+                ({"cfg": ("",)}, "cfg"),
+                ({"all_features": "false"}, "boolean"),
+                ({"default_features": 1}, "boolean"),
+                ({"target": "--bad"}, "target triple"),
+            ):
+                with (
+                    self.subTest(options=options),
+                    patch("research_repo_tools.cargo_docs.run_command", side_effect=AssertionError("invalid options launched a tool")),
+                    self.assertRaisesRegex(ValueError, diagnostic),
+                ):
+                    check_documentation(root, "docs-fixture", **options)  # ty: ignore[invalid-argument-type] -- malformed public boundary input
+                self.assertEqual(list(root.iterdir()), [])
 
 
 if __name__ == "__main__":

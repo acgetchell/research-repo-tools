@@ -108,7 +108,7 @@ def test_oversized_last_argument_fails_before_any_validator(gate, monkeypatch):
         python_checks.run(gate, "check")
 
 
-@pytest.mark.parametrize("timeout", [0, -1, float("inf"), float("nan")])
+@pytest.mark.parametrize("timeout", [True, False, None, 0, -1, 10**1000, float("inf"), float("nan")])
 def test_invalid_timeout_fails_before_discovery(gate, monkeypatch, timeout):
     monkeypatch.setattr(python_checks, "select_files", lambda *a, **kw: pytest.fail("discovered before validation"))
     with pytest.raises(ValueError, match="positive and finite"):

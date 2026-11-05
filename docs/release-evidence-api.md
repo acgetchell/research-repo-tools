@@ -19,6 +19,29 @@ requires the separately trusted Step 1 assertion digest and freezes the original
 acquisition, full-tree binding, native selection, and exact benchmark archive.
 Later approval uses the original `--acceptance`; no benchmark or preflight runs.
 
+Committed schema-2 publisher outputs additionally require `--publication-receipt`
+and the acquisition owner's independent `--publication-sha256`. The receipt is
+captured before promotion with `candidate_publication.plan_candidate_publication`;
+it cannot be reconstructed as trusted evidence from the final candidate.
+
+## Verification presentation
+
+`candidate`, `verify` and `published` accept `--format summary` to render the
+existing verifier's completed result, after any requested handoff writes succeed.
+The summary identifies release/version/full commit, native run/attempt, actual
+package guarantee, optional benchmark identity and original source, signature and
+artifact integrity. Absent benchmark/signature/reproduction checks are explicitly
+not configured or not requested. Cargo reproduction is reported only when supplied
+and verified; retained Cargo evidence does not establish registry-byte equality.
+
+`--format json` emits the same canonical record saved to `--output`. The shared
+CLI default remains `--format status`; output files, `GITHUB_OUTPUT`, return
+statuses and approval revalidation are unchanged. Creation reports an unverified
+manifest, never verified success. Failure diagnostics identify missing, stale or
+incompatible evidence and do not produce a success summary. The public pure
+`release_summary.render_release_summary` formats just-returned verifier selections;
+it does not authenticate arbitrary JSON or select/check evidence itself.
+
 ## Policy and guarantees
 
 The CLI/configuration module is `research_repo_tools.release_interfaces`.
@@ -285,6 +308,10 @@ arbitrary consumer Python into the trusted runtime.
 `validate_run` and `validate_jobs`. Pagination is bounded to 100 pages and checks
 provider totals when present. `artifact_identity` alone does not prove an attempt
 or a signature. Prefer the complete evidence verifier for approval handoffs.
+Policies snapshot job, step and runner-label sequences into immutable tuples;
+scalar strings do not stand in for sequences. Workflow metadata must have a
+positive integer ID and match the declared active workflow before run discovery.
+Malformed workflow identities and hosted runner labels raise `ValueError`.
 `redact_release_diagnostic(text_or_bytes)` removes URL user information, queries,
 fragments and recognizable GitHub token forms from rendered diagnostics before
 logging. It cannot recognize arbitrary secrets in free text.

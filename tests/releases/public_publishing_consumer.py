@@ -384,6 +384,21 @@ class TestPublishingConsumer(unittest.TestCase):
                             registry.lookup_version("crates-io", "sample", "1.2.3")
                 self.assertTrue(body.closed)
 
+    def test_registry_cleanup_failure_preserves_request_error_and_never_proves_absence(self):
+        for code in (404, 429):
+            with self.subTest(code=code), io.BytesIO(b"registry response") as body:
+                error = urllib.error.HTTPError("https://crates.io/api/v1/crates/sample/1.2.3", code, "unavailable", Message(), body)
+                cleanup = OSError("close failed")
+                with (
+                    patch("research_repo_tools.registry._OPENER.open", side_effect=error) as transport,
+                    patch.object(error, "close", side_effect=cleanup) as close,
+                    self.assertRaisesRegex(ExceptionGroup, "HTTP request and response cleanup failed") as caught,
+                ):
+                    registry.wait_for_version("crates-io", "sample", "1.2.3", attempts=3)
+                self.assertEqual(caught.exception.exceptions, (error, cleanup))
+                transport.assert_called_once()
+                close.assert_called_once_with()
+
     def test_installed_resources_and_bounded_dependency_policy(self):
         for name in ["RELEASING.md", "publish-crates.yml", "publishing.toml"]:
             rendered = changelog.template(name, owner="example", repository="project")

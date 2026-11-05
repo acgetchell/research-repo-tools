@@ -19,6 +19,7 @@ from pathlib import Path
 from packaging.specifiers import SpecifierSet
 
 from research_repo_tools import release_credentials
+from research_repo_tools._http import closing_http_errors
 from research_repo_tools.process import ExecutableNotFoundError, resolve_executable, run_safe_command
 from research_repo_tools.tool_pins import SEMVER
 from research_repo_tools.toolchain_config import RUSTUP_VERSION, BinaryTool, CargoTool, Toolchain, executable, home, host_target
@@ -412,12 +413,12 @@ class Runtime:
         url = f"https://static.rust-lang.org/rustup/archive/{RUSTUP_VERSION}/{self.host}/rustup-init{suffix}"
         with tempfile.TemporaryDirectory(prefix="research-repo-tools-rustup-") as temporary:
             installer = Path(temporary) / f"rustup-init{suffix}"
-            with urllib.request.urlopen(url + ".sha256", timeout=30) as response:
+            with closing_http_errors(), urllib.request.urlopen(url + ".sha256", timeout=30) as response:
                 fields = response.read(1024).decode("ascii").split()
                 checksum = fields[0] if fields else ""
             if re.fullmatch(r"[a-fA-F0-9]{64}", checksum) is None:
                 raise ValueError("rustup checksum response must contain a SHA-256 digest")
-            with urllib.request.urlopen(url, timeout=60) as response:
+            with closing_http_errors(), urllib.request.urlopen(url, timeout=60) as response:
                 payload = response.read(64 * 1024 * 1024 + 1)
             if len(payload) > 64 * 1024 * 1024 or hashlib.sha256(payload).hexdigest() != checksum.lower():
                 raise ValueError("rustup installer checksum mismatch; installer was not executed")

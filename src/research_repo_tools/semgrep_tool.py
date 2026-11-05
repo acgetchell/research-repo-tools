@@ -49,8 +49,12 @@ class VerifiedScanner:
 
 def _environment() -> dict[str, str]:
     """Keep the project environment, withholding credentials and Python injection."""
+    # Coverage belongs to our wrapper, not the external scanner's worker pool.
+    # Pool shutdown can interrupt coverage SQLite writes in those workers.
     env = {
-        key: value for key, value in release_credentials.environment().items() if not key.upper().startswith("PYTHON") and key.upper() != "__PYVENV_LAUNCHER__"
+        key: value
+        for key, value in release_credentials.environment().items()
+        if not key.upper().startswith(("PYTHON", "COVERAGE_")) and key.upper() != "__PYVENV_LAUNCHER__"
     }
     env.update(PYTHONNOUSERSITE="1", PYTHONSAFEPATH="1", PYTHONUTF8="1", SEMGREP_SEND_METRICS="off", OTEL_SDK_DISABLED="true")
     return env

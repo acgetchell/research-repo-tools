@@ -33,19 +33,24 @@ from urllib.parse import quote, urlsplit
 
 if __package__:
     from research_repo_tools._archive_paths import ArchivePaths
+    from research_repo_tools._console import console_text, write_stdout
     from research_repo_tools._diagnostics import format_exception_diagnostics
     from research_repo_tools._git_checkout import READ_ONLY_OPTIONS, git_context, require_checkout
     from research_repo_tools.files import replace_many
+    from research_repo_tools.release_summary import render_distribution_summary
 else:
     # The install-free runner loads reviewed sibling source, never site packages.
     import runpy
 
     ArchivePaths = runpy.run_path(str(Path(__file__).with_name("_archive_paths.py")))["ArchivePaths"]
+    _console_helpers = runpy.run_path(str(Path(__file__).with_name("_console.py")))
+    console_text, write_stdout = _console_helpers["console_text"], _console_helpers["write_stdout"]
     format_exception_diagnostics = runpy.run_path(str(Path(__file__).with_name("_diagnostics.py")))["format_exception_diagnostics"]
     _checkout_helpers = runpy.run_path(str(Path(__file__).with_name("_git_checkout.py")))
     READ_ONLY_OPTIONS, require_checkout = _checkout_helpers["READ_ONLY_OPTIONS"], _checkout_helpers["require_checkout"]
     git_context = _checkout_helpers["git_context"]
     replace_many = runpy.run_path(str(Path(__file__).with_name("files.py")))["replace_many"]
+    render_distribution_summary = runpy.run_path(str(Path(__file__).with_name("release_summary.py")))["render_distribution_summary"]
 
 __all__ = [
     "ValidationPolicy",
@@ -143,13 +148,13 @@ def _integer(value: Any, context: str) -> int:
 
 
 def _commit(value: str) -> str:
-    if re.fullmatch(r"[0-9a-f]{40}", value) is None:
+    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
         raise ValueError("expected a full lowercase commit SHA")
     return value
 
 
 def _repository(value: str) -> str:
-    if re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value) is None or any(part in {".", ".."} for part in value.split("/")):
+    if not isinstance(value, str) or re.fullmatch(r"[A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+", value) is None or any(part in {".", ".."} for part in value.split("/")):
         raise ValueError("repository must be owner/name")
     return value
 
@@ -181,6 +186,33 @@ def distribution_names(tag: str, *, package: str = "research-repo-tools", filena
     return tuple(sorted(names))
 
 
+def _policy_name(value: object, context: str) -> str:
+    if not isinstance(value, str) or not value.strip() or any(ord(character) < 32 or ord(character) == 127 for character in value):
+        raise ValueError(f"{context} requires nonempty single-line names")
+    value.encode("utf-8")
+    return value
+
+
+def _requirements(value: object, context: str, *, unique_values: bool = True) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    if not isinstance(value, (tuple, list)):
+        raise ValueError(f"{context} requires a sequence of job/requirement pairs")
+    result = []
+    for pair in value:
+        if not isinstance(pair, (tuple, list)) or len(pair) != 2:
+            raise ValueError(f"{context} requires job/requirement pairs")
+        name = _policy_name(pair[0], context)
+        values = pair[1]
+        if not isinstance(values, (tuple, list)) or not values:
+            raise ValueError(f"{context} requires a nonempty sequence for each job")
+        requirements = tuple(_policy_name(item, context) for item in values)
+        if unique_values and len(set(requirements)) != len(requirements):
+            raise ValueError(f"{context} requires distinct names for each job")
+        result.append((name, requirements))
+    if len(dict(result)) != len(result):
+        raise ValueError(f"{context} requires unique job names")
+    return tuple(result)
+
+
 @dataclass(frozen=True)
 class ValidationPolicy:
     """Trusted repository/workflow and named gates, independent of registry policy."""
@@ -194,32 +226,17 @@ class ValidationPolicy:
 
     def __post_init__(self) -> None:
         _repository(self.repository)
-        object.__setattr__(self, "required_steps", tuple((name, tuple(steps)) for name, steps in self.required_steps))
-        object.__setattr__(self, "runner_labels", tuple((name, tuple(labels)) for name, labels in self.runner_labels))
-        if re.fullmatch(r"\.github/workflows/[A-Za-z0-9_-]+\.yml", self.workflow) is None:
+        object.__setattr__(self, "required_steps", _requirements(self.required_steps, "step requirements"))
+        object.__setattr__(self, "runner_labels", _requirements(self.runner_labels, "runner labels", unique_values=False))
+        if not isinstance(self.workflow, str) or re.fullmatch(r"\.github/workflows/[A-Za-z0-9_-]+\.yml", self.workflow) is None:
             raise ValueError("workflow must be an explicit .github/workflows/*.yml path")
         if not isinstance(self.branch, str) or re.fullmatch(r"[A-Za-z0-9_/-]+", self.branch) is None or any(not part for part in self.branch.split("/")):
             raise ValueError("branch must be an explicit portable branch name")
-        names = [name for name, _ in self.required_steps]
-        if (
-            not self.workflow_name
-            or not names
-            or len(set(names)) != len(names)
-            or any(
-                not isinstance(name, str)  # ty: ignore[redundant-condition-strict]  Validate untyped policy callers.
-                or not name
-                or not steps
-                or len(set(steps)) != len(steps)
-                or any(not isinstance(step, str) or not step for step in steps)  # ty: ignore[redundant-condition-strict]  Validate untyped policy callers.
-                for name, steps in self.required_steps
-            )
-        ):
+        _policy_name(self.workflow_name, "workflow name")
+        names = {name for name, _ in self.required_steps}
+        if not names:
             raise ValueError("validation policy requires unique named jobs and nonempty step requirements")
-        hosts = [name for name, _ in self.runner_labels]
-        if len(set(hosts)) != len(hosts) or any(
-            name not in names or not labels or any(not isinstance(label, str) or not label for label in labels)  # ty: ignore[redundant-condition-strict]  Validate untyped policy callers.
-            for name, labels in self.runner_labels
-        ):
+        if any(name not in names for name, _ in self.runner_labels):
             raise ValueError("runner labels require unique required-job names and nonempty labels")
 
 
@@ -291,6 +308,13 @@ def read_pages(read: Callable[[str], Any], endpoint: str, field: str) -> list[di
 _pages = read_pages
 
 
+def _workflow_id(policy: ValidationPolicy, workflow: dict[str, Any]) -> int:
+    identifier = _integer(workflow.get("id"), "workflow ID")
+    if workflow.get("path") != policy.workflow or workflow.get("name") != policy.workflow_name or workflow.get("state") != "active":
+        raise ValueError("expected active workflow identity matching the validation policy")
+    return identifier
+
+
 def validate_run(policy: ValidationPolicy, run: dict[str, Any], commit: str, workflow: dict[str, Any], *, completed: bool = True) -> None:
     """Reject PRs, forks, dispatches and workflow/ref/commit/attempt mismatches."""
     _commit(commit)
@@ -304,10 +328,9 @@ def validate_run(policy: ValidationPolicy, run: dict[str, Any], commit: str, wor
         raise ValueError("validation run repository or head repository differs")
     _integer(run.get("id"), "run ID")
     _integer(run.get("run_attempt"), "run attempt")
-    if workflow.get("path") != policy.workflow or workflow.get("name") != policy.workflow_name or workflow.get("state") != "active":
-        raise ValueError("expected active Package checks workflow identity")
+    workflow_id = _workflow_id(policy, workflow)
     if (
-        _integer(run.get("workflow_id"), "run workflow ID") != _integer(workflow.get("id"), "workflow ID")
+        _integer(run.get("workflow_id"), "run workflow ID") != workflow_id
         or run.get("path") != policy.workflow
         or run.get("name") != policy.workflow_name
         or run.get("event") != "push"
@@ -334,8 +357,9 @@ def select_main_run(
     if type(attempts) is not int or not 1 <= attempts <= 120 or type(interval) is not int or not 0 <= interval <= 30:
         raise ValueError("wait requires 1..120 attempts and an interval of 0..30 seconds")
     workflow = _object(read(f"actions/workflows/{Path(policy.workflow).name}"), "workflow")
+    workflow_id = _workflow_id(policy, workflow)
     for index in range(attempts):
-        runs = read_pages(read, f"actions/workflows/{workflow['id']}/runs?event=push&branch={quote(policy.branch, safe='')}&head_sha={commit}", "workflow_runs")
+        runs = read_pages(read, f"actions/workflows/{workflow_id}/runs?event=push&branch={quote(policy.branch, safe='')}&head_sha={commit}", "workflow_runs")
         for run in runs:
             validate_run(policy, run, commit, workflow, completed=False)
         pending = [run for run in runs if run.get("status") != "completed"]
@@ -372,7 +396,12 @@ def validate_jobs(policy: ValidationPolicy, run: dict[str, Any], jobs: list[dict
         if job.get("status") != "completed" or job.get("conclusion") != "success":
             raise ValueError(f"{name} did not succeed; {RECOVERY}")
         labels = dict(policy.runner_labels).get(name)
-        if labels is not None and (not isinstance(job.get("labels"), list) or not set(labels).issubset(job["labels"]) or "self-hosted" in job["labels"]):
+        if labels is not None and (
+            not isinstance(job.get("labels"), list)
+            or any(not isinstance(label, str) or not label for label in job["labels"])
+            or not set(labels).issubset(job["labels"])
+            or "self-hosted" in job["labels"]
+        ):
             raise ValueError(f"{name} did not run on the required hosted platform")
         if not isinstance(job.get("steps"), list) or any(not isinstance(step, dict) for step in job["steps"]):
             raise ValueError(f"{name} has malformed step evidence")
@@ -1040,7 +1069,8 @@ def main() -> int:
     command = commands.add_parser("consume")
     command.add_argument("--artifact", type=int, required=True)
     command.add_argument("--dist", type=Path, default=Path("dist"))
-    commands.add_parser("evidence", help="inspect the clean checkout's retained signed distributions without rebuilding or uploading")
+    command = commands.add_parser("evidence", help="inspect the clean checkout's retained signed distributions without rebuilding or uploading")
+    command.add_argument("--format", choices=("json", "summary"), default="json", help="presentation only; JSON remains the automation default")
     command = commands.add_parser("promote")
     command.add_argument("tag")
     command.add_argument("--commit", default=os.environ.get("GITHUB_SHA", ""))
@@ -1067,7 +1097,11 @@ def main() -> int:
         if args.command == "consume":
             consume(args.artifact, args.dist)
         elif args.command == "evidence":
-            print(_bytes(inspect_evidence(Path.cwd())).decode("utf-8"), end="")
+            result = inspect_evidence(Path.cwd())
+            if args.format == "summary":
+                print(console_text(render_distribution_summary(result), sys.stdout), end="")
+            else:
+                write_stdout(_bytes(result))
         elif args.command == "seal":
             seal(args.run, args.attempt, args.artifact, args.output)
         elif args.command == "promote":
@@ -1077,6 +1111,6 @@ def main() -> int:
         else:
             verify(_json(args.event.read_bytes()), args.commit, args.output)
     except (OSError, ValueError, KeyError, TypeError, subprocess.SubprocessError, zipfile.BadZipFile, tarfile.TarError, ExceptionGroup) as error:
-        print(f"Release assets failed: {_diagnostic(format_exception_diagnostics(error))}", file=sys.stderr)
+        print(console_text(f"Release assets failed: {_diagnostic(format_exception_diagnostics(error))}", sys.stderr), file=sys.stderr)
         return 1
     return 0

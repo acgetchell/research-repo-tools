@@ -1,9 +1,7 @@
 """Canonical Python gates over the complete tracked/nonignored source inventory."""
 
-import math
-
 from research_repo_tools import config, python_baseline
-from research_repo_tools.process import resolve_executable, run_command_live
+from research_repo_tools.process import _validate_timeout, resolve_executable, run_command_live
 from research_repo_tools.selection import argument_batches, select_files
 
 
@@ -16,8 +14,9 @@ def run(settings: config.Config, action: str, *, timeout: float = 300) -> int:
     """
     if action not in {"check", "fix", "typecheck"}:
         raise ValueError(f"unknown Python action: {action}")
-    if not math.isfinite(timeout) or timeout <= 0:
+    if timeout is None:
         raise ValueError("Python validator timeout must be positive and finite")
+    _validate_timeout(timeout)
     python_baseline.check_minimum(settings.root)
     if settings.toolchain.inherit_python:
         python_baseline.check(settings.root)

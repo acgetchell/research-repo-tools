@@ -95,7 +95,7 @@ addopts = ["--import-mode=importlib", "--strict-markers"]
 
 [tool.coverage.run]
 branch = true
-source = ["."]
+source = ["src/research_repo_tools", "scripts"]
 omit = ["*/tests/*", "*/.venv/*"]
 relative_files = true
 patch = ["subprocess"]

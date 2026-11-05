@@ -14,6 +14,7 @@ import json
 import re
 import subprocess
 import sys
+import urllib.error
 import urllib.request
 from pathlib import Path
 
@@ -64,7 +65,19 @@ def main(argv=None):
             timeout=7200,
         ).returncode
     except (OSError, ValueError, subprocess.TimeoutExpired) as error:
-        print("Python adoption bootstrap: " + str(error), file=sys.stderr)
+        messages = ["Python adoption bootstrap: " + str(error)]
+        # A failed urlopen never enters its response context. HTTPError owns
+        # that response even though it is delivered through the exception path.
+        if isinstance(error, urllib.error.HTTPError):
+            try:
+                error.close()
+            except OSError as cleanup:
+                messages.append("HTTP response cleanup failed: " + str(cleanup))
+        # This install-free script can run on older Python under legacy Windows
+        # code pages. Escape unsupported characters without changing the stream.
+        encoding = sys.stderr.encoding or "utf-8"
+        for message in messages:
+            print(message.encode(encoding, errors="backslashreplace").decode(encoding), file=sys.stderr)
         return 1
 
 

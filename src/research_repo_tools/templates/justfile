@@ -133,7 +133,7 @@ release-assets +args:
 release-check tag:
     uv run --locked --group dev research-repo-tools release check "$1"
 
-# Create or verify CI evidence and retain its approval handoff in explicit files.
+# Create or verify evidence; add --format summary for human-readable verification.
 release-evidence +args:
     uv run --locked --group dev research-repo-tools release evidence "$@"
 

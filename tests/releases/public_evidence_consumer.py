@@ -43,6 +43,7 @@ from research_repo_tools.release_evidence import (
 )
 from research_repo_tools.release_interfaces import load_evidence_policy, write_release_outputs
 from research_repo_tools.release_metadata import PackageInfo, read_package_info
+from research_repo_tools.release_summary import render_distribution_summary, render_release_summary
 from research_repo_tools.release_validation import (
     ValidationPolicy,
     parse_release_json,
@@ -169,7 +170,7 @@ class Provider:
             "repository": {"id": 7, "full_name": "example/package"},
             "head_repository": {"id": 7, "full_name": "example/package"},
         }
-        self.workflow = {"id": 13, "path": ".github/workflows/ci.yml", "name": "CI", "state": "active"}
+        self.workflow: dict[str, object] = {"id": 13, "path": ".github/workflows/ci.yml", "name": "CI", "state": "active"}
         requirements = (*VALIDATION.required_steps, *((policy.signing_job,) if policy.signing_job is not None else ()))
         self.jobs = [
             {
@@ -249,6 +250,51 @@ class Provider:
 
 
 class TestEvidenceConsumer(unittest.TestCase):
+    def test_policy_rejects_scalar_requirements_and_freezes_caller_sequences(self):
+        for changes, diagnostic in (
+            ({"workflow_name": 7}, "workflow name"),
+            ({"required_steps": (("build", "Test"),)}, "step requirements"),
+            ({"required_steps": (("build", (["Test"],)),)}, "step requirements"),
+            ({"runner_labels": (("linux", "ubuntu-latest"),)}, "runner labels"),
+            ({"runner_labels": (("linux", (["ubuntu-latest"],)),)}, "runner labels"),
+        ):
+            with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, diagnostic):
+                replace(VALIDATION, **changes)
+        steps, labels = ["Test"], ["ubuntu-latest"]
+        # Untyped configuration callers may supply mutable sequences; the
+        # resulting public policy must own an immutable snapshot.
+        policy = ValidationPolicy("example/package", ".github/workflows/ci.yml", "CI", [("build", steps)], runner_labels=[("build", labels)])  # ty: ignore[invalid-argument-type]
+        steps.append("Changed")
+        labels.clear()
+        self.assertEqual(policy.required_steps, (("build", ("Test",)),))
+        self.assertEqual(policy.runner_labels, (("build", ("ubuntu-latest",)),))
+        # Repeated labels were already supported and do not change the hosted
+        # platform assertion. Preserve their original policy representation.
+        repeated = (("build", ("ubuntu-latest", "ubuntu-latest")),)
+        self.assertEqual(replace(policy, runner_labels=repeated).runner_labels, repeated)
+
+    def test_malformed_workflow_is_rejected_before_run_discovery_and_can_be_retried(self):
+        for change in ({"id": None}, {"id": True}, {"path": "other.yml"}, {"name": []}, {"state": "disabled_manually"}):
+            provider = Provider(SOURCE)
+            original = dict(provider.workflow)
+            provider.workflow.update(change)
+            if change == {"id": None}:
+                del provider.workflow["id"]
+            with self.subTest(change=change), self.assertRaisesRegex(ValueError, "workflow (ID|identity)"):
+                release_validation.select_main_run(VALIDATION, COMMIT, provider.read, attempts=1)
+            self.assertEqual(provider.requests, ["actions/workflows/ci.yml"])
+            self.assertEqual(provider.commands, [])
+            provider.workflow = original
+            selected = release_validation.select_main_run(VALIDATION, COMMIT, provider.read, attempts=1)
+            self.assertEqual((selected["id"], selected["run_attempt"]), (123, 2))
+
+    def test_malformed_hosted_runner_labels_have_a_contextual_rejection(self):
+        provider = Provider(SOURCE)
+        for labels in ([{}], ["ubuntu-latest", ["nested"]], "ubuntu-latest"):
+            provider.jobs[0]["labels"] = labels
+            with self.subTest(labels=labels), self.assertRaisesRegex(ValueError, "linux.*hosted platform"):
+                release_validation.validate_jobs(VALIDATION, provider.run, provider.jobs)
+
     def source(self):
         provider = Provider(SOURCE)
         manifest = create_evidence_manifest(SOURCE, "1.2.3", COMMIT, 123, 2, provider.read)
@@ -689,6 +735,258 @@ class TestEvidenceInterfaces(unittest.TestCase):
             self.assertFalse((self.root / "revalidated.json").exists())
             self.assertEqual(self.output.read_bytes(), original)
             self.assertEqual(self.command_file.read_bytes(), command)
+
+    def test_cli_malformed_workflow_preserves_handoffs_and_reports_only_to_stderr(self):
+        provider = Provider(SOURCE)
+        del provider.workflow["id"]
+        self.output.write_bytes(b"previous approval\n")
+        for presentation in ("status", "json", "summary"):
+            provider.requests.clear()
+            with (
+                self.subTest(presentation=presentation),
+                patch("research_repo_tools.release_interfaces.api", side_effect=lambda endpoint, **kwargs: provider.read(endpoint)),
+                patch("research_repo_tools.release_interfaces.require_release_checkout"),
+                patch("research_repo_tools.release_validation.subprocess.run", provider.execute),
+                contextlib.redirect_stdout(io.StringIO()) as output,
+                contextlib.redirect_stderr(io.StringIO()) as diagnostic,
+            ):
+                self.assertEqual(cli.main(["--root", str(self.root), *self.args, "--format", presentation]), 1)
+            self.assertEqual(output.getvalue(), "")
+            self.assertIn("workflow ID must be a positive integer", diagnostic.getvalue())
+            self.assertNotIn("Traceback", diagnostic.getvalue())
+            self.assertEqual(self.output.read_bytes(), b"previous approval\n")
+            self.assertEqual(self.command_file.read_bytes(), b"prior=value\n")
+            self.assertEqual(provider.requests, ["actions/workflows/ci.yml"])
+            self.assertEqual(provider.commands, [])
+
+    def test_summary_and_json_preserve_handoffs_and_never_accept_failed_evidence(self):
+        provider = Provider(SOURCE)
+        provider.retain(create_evidence_manifest(SOURCE, "1.2.3", COMMIT, 123, 2, provider.read))
+        with (
+            patch("research_repo_tools.release_interfaces.api", side_effect=lambda endpoint, **kwargs: provider.read(endpoint)),
+            patch("research_repo_tools.release_interfaces.require_release_checkout"),
+            # This transport accepts only inert artifact/signature operations;
+            # any build, test, acquisition or unexpected process is a failure.
+            patch("research_repo_tools.release_validation.subprocess.run", provider.execute),
+        ):
+            records = []
+            commands = []
+            for presentation in ("status", "summary", "json"):
+                self.command_file.write_bytes(b"prior=value\n")
+                with contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as diagnostic:
+                    self.assertEqual(cli.main(["--root", str(self.root), *self.args, "--format", presentation]), 0)
+                self.assertEqual(diagnostic.getvalue(), "")
+                records.append(self.output.read_bytes())
+                commands.append(self.command_file.read_bytes())
+                if presentation == "summary":
+                    summary = output.getvalue()
+                    for expected in (
+                        "v1.2.3",
+                        COMMIT,
+                        "run 123, attempt 2",
+                        "Package evidence: passed (signed-source)",
+                        "package-byte equivalence is not established",
+                        "Benchmark evidence: not configured",
+                        "Signature: passed",
+                        "Artifact integrity: passed",
+                    ):
+                        self.assertIn(expected, summary)
+                elif presentation == "json":
+                    self.assertEqual(output.getvalue().encode(), records[-1])
+            self.assertEqual(records, [records[0]] * 3)
+            self.assertEqual(commands, [commands[0]] * 3)
+            provider.run["run_attempt"] = 3
+            args = [*self.args, "--format", "summary", "--expected", str(self.output)]
+            args[args.index("--output") + 1] = str(self.root / "failed.json")
+            with contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as diagnostic:
+                self.assertEqual(cli.main(["--root", str(self.root), *args]), 1)
+            self.assertEqual(output.getvalue(), "")
+            self.assertIn("attempt changed", diagnostic.getvalue())
+            self.assertFalse((self.root / "failed.json").exists())
+            self.assertEqual(self.output.read_bytes(), records[-1])
+            self.assertEqual(self.command_file.read_bytes(), commands[-1])
+
+    def test_summary_waits_for_handoff_transaction_and_retry_preserves_identity(self):
+        from research_repo_tools.files import _replace_path
+
+        provider = Provider(SOURCE)
+        provider.retain(create_evidence_manifest(SOURCE, "1.2.3", COMMIT, 123, 2, provider.read))
+        prior = {path.relative_to(self.root): path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
+        attempted = []
+
+        def fail_command(source, destination):
+            if source.suffix == ".tmp" and destination in (self.output, self.command_file):
+                attempted.append(destination)
+                if destination == self.command_file:
+                    self.assertTrue(self.output.exists(), "exercise rollback after the selection was written")
+                    raise OSError("Actions output replacement denied")
+            _replace_path(source, destination)
+
+        with (
+            patch("research_repo_tools.release_interfaces.api", side_effect=lambda endpoint, **kwargs: provider.read(endpoint)),
+            patch("research_repo_tools.release_interfaces.require_release_checkout"),
+            patch("research_repo_tools.release_validation.subprocess.run", provider.execute),
+        ):
+            with (
+                patch("research_repo_tools.files._replace_path", side_effect=fail_command),
+                contextlib.redirect_stdout(io.StringIO()) as output,
+                contextlib.redirect_stderr(io.StringIO()) as diagnostic,
+            ):
+                self.assertEqual(cli.main(["--root", str(self.root), *self.args, "--format", "summary"]), 1)
+            self.assertEqual(attempted, [self.output, self.command_file])
+            self.assertEqual(output.getvalue(), "")
+            self.assertIn("Actions output replacement denied", diagnostic.getvalue())
+            self.assertEqual({path.relative_to(self.root): path.read_bytes() for path in self.root.rglob("*") if path.is_file()}, prior)
+            with contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as diagnostic:
+                self.assertEqual(cli.main(["--root", str(self.root), *self.args, "--format", "summary"]), 0)
+            self.assertIn("Release evidence verified", output.getvalue())
+            self.assertEqual(diagnostic.getvalue(), "")
+            selected = self.output.read_bytes()
+            self.assertEqual(json.loads(selected)["run"]["run_attempt"], 2)
+            command = self.command_file.read_bytes()
+            self.assertTrue(command.startswith(prior[self.command_file.relative_to(self.root)]))
+            identity_lines = [line.split(b"=", 1)[1] for line in command.splitlines() if line.startswith(b"identity=")]
+            self.assertEqual([json.loads(line) for line in identity_lines], [json.loads(selected)])
+
+    def test_summary_states_optional_signature_and_actual_archive_guarantee(self):
+        provider = Provider(CARGO)
+        with tempfile.TemporaryDirectory() as temporary:
+            archive = Path(temporary) / "sample.crate"
+            archive.write_bytes(crate())
+            provider.retain(create_evidence_manifest(CARGO, "1.2.3", COMMIT, 123, 2, provider.read, archive=archive, tools=TOOLS), archive.read_bytes())
+            with patch("research_repo_tools.release_validation.subprocess.run", provider.execute):
+                selected = verify_release_evidence(CARGO, "1.2.3", COMMIT, provider.read)
+            summary = render_release_summary(json.loads(selected))
+            self.assertIn("Package evidence: passed (cargo-archive)", summary)
+            self.assertIn("registry bytes are not established", summary)
+            self.assertIn("Cargo reproduction: not requested", summary)
+            self.assertIn("Signature: not configured", summary)
+
+    def test_json_stdout_preserves_handoff_bytes_under_legacy_encoding_and_crlf(self):
+        policy = replace(SOURCE, validation=replace(VALIDATION, workflow_name="CI café β → γ"))
+        interface_policy(self.root, policy)
+        provider = Provider(policy)
+        provider.run["name"] = provider.workflow["name"] = policy.validation.workflow_name
+        provider.retain(create_evidence_manifest(policy, "1.2.3", COMMIT, 123, 2, provider.read))
+        environment = {
+            "GITHUB_REPOSITORY": policy.validation.repository,
+            "GITHUB_EVENT_NAME": "push",
+            "GITHUB_REF": "refs/heads/main",
+            "GITHUB_SHA": COMMIT,
+            "GITHUB_RUN_ID": "123",
+            "GITHUB_RUN_ATTEMPT": "2",
+        }
+        with (
+            patch("research_repo_tools.release_interfaces.api", side_effect=lambda endpoint, **kwargs: provider.read(endpoint)),
+            patch("research_repo_tools.release_interfaces.require_release_checkout"),
+            patch("research_repo_tools.release_validation.subprocess.run", provider.execute),
+            patch.dict(os.environ, environment),
+        ):
+            for operation in ("create", "verify"):
+                args = [*self.args, "--format", "json"]
+                args[2] = operation
+                if operation == "create":
+                    args.extend(("--attempt", "2", "--run-id", "123"))
+                target = self.root / f"{operation}.json"
+                args[args.index("--output") + 1] = str(target)
+                for encoding in ("utf-8", "cp1252"):
+                    for newline in ("\n", "\r\n"):
+                        with self.subTest(operation=operation, encoding=encoding, newline=newline):
+                            self.command_file.write_bytes(b"prior=value\n")
+                            with io.BytesIO() as buffer, io.TextIOWrapper(buffer, encoding=encoding, errors="strict", newline=newline) as stdout:
+                                with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(io.StringIO()) as diagnostic:
+                                    self.assertEqual(cli.main(["--root", str(self.root), *args]), 0)
+                                stdout.flush()
+                                self.assertEqual(stdout.errors, "strict", "restore the caller's stream policy")
+                                self.assertEqual(diagnostic.getvalue(), "")
+                                self.assertEqual(buffer.getvalue(), target.read_bytes())
+                                self.assertIn("café β → γ".encode(), buffer.getvalue())
+                            identities = [line.split(b"=", 1)[1] for line in self.command_file.read_bytes().splitlines() if line.startswith(b"identity=")]
+                            self.assertEqual([json.loads(line) for line in identities], [json.loads(target.read_bytes())])
+        # Exercise a real pipe as well as the deterministic Windows text model.
+        payload = b'{"label":"caf\xc3\xa9 \xce\xb2"}\r\n'
+        child = (
+            "import sys; from research_repo_tools.release_interfaces import _present_evidence; "
+            "sys.stdout.reconfigure(encoding='cp1252', errors='strict', newline='\\r\\n'); "
+            "_present_evidence(bytes.fromhex(sys.argv[1]), 'json')"
+        )
+        result = subprocess.run([sys.executable, "-I", "-c", child, payload.hex()], capture_output=True, timeout=30, check=False)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertEqual(result.stderr, b"")
+        self.assertEqual(result.stdout, payload)
+
+    def test_maintainer_distribution_summary_uses_existing_inspection_result(self):
+        result = {
+            "tag": "v1.2.3",
+            "commit": COMMIT,
+            "run": {"head_sha": COMMIT, "id": 123, "run_attempt": 2, "path": ".github/workflows/ci.yml"},
+            "artifact": {"id": 42, "digest": "sha256:" + "a" * 64},
+        }
+        summary = render_distribution_summary(result)
+        for expected in (
+            "research-repo-tools v1.2.3",
+            COMMIT,
+            "run 123, attempt 2",
+            "exact retained wheel/sdist bytes",
+            "Signature: passed",
+            "Benchmark evidence: not configured",
+            "immutable artifact 42",
+        ):
+            self.assertIn(expected, summary)
+
+    def test_maintainer_output_and_diagnostics_respect_console_boundaries(self):
+        import runpy
+
+        result = {
+            "tag": "v1.2.3",
+            "commit": COMMIT,
+            "run": {"head_sha": COMMIT, "id": 123, "run_attempt": 2, "path": ".github/workflows/ci.yml", "name": "CI café β"},
+            "artifact": {"id": 42, "digest": "sha256:" + "a" * 64},
+        }
+        for entry in (release_validation.main, runpy.run_path(release_validation.__file__)["main"]):
+            for presentation in ("summary", "json", "failure"):
+                with self.subTest(source_runner=entry is not release_validation.main, presentation=presentation):
+                    with (
+                        io.BytesIO() as output,
+                        io.BytesIO() as errors,
+                        io.TextIOWrapper(output, encoding="cp1252", errors="strict", newline="\r\n") as stdout,
+                        io.TextIOWrapper(errors, encoding="cp1252", errors="strict", newline="\r\n") as stderr,
+                        patch("sys.stdout", stdout),
+                        patch("sys.stderr", stderr),
+                        patch("sys.argv", ["release_assets.py", "evidence", "--format", "json" if presentation == "json" else "summary"]),
+                    ):
+                        inspections = []
+
+                        def inspect(root):
+                            inspections.append(root)
+                            if presentation == "failure":
+                                raise OSError(13, "access denied", "測定.json")
+                            return result
+
+                        with patch.dict(entry.__globals__, {"inspect_evidence": inspect}):
+                            self.assertEqual(entry(), 1 if presentation == "failure" else 0)
+                        stdout.flush()
+                        stderr.flush()
+                        self.assertEqual(inspections, [Path.cwd()])
+                        self.assertEqual((stdout.errors, stderr.errors), ("strict", "strict"))
+                        if presentation == "failure":
+                            self.assertEqual(output.getvalue(), b"")
+                            self.assertIn(b"access denied", errors.getvalue())
+                            self.assertIn(b"\\u6e2c\\u5b9a.json", errors.getvalue())
+                        else:
+                            self.assertEqual(errors.getvalue(), b"")
+                            if presentation == "summary":
+                                self.assertIn(b"CI caf\xe9 \\u03b2", output.getvalue())
+                                self.assertIn(b"Signature: passed", output.getvalue())
+                            else:
+                                expected = (json.dumps(result, sort_keys=True, indent=2, allow_nan=False) + "\n").encode()
+                                self.assertEqual(output.getvalue(), expected)
+        # The direct source entry point must remain stdlib-only under -I -S.
+        script = "import runpy,sys; path=sys.argv[1]; sys.argv=['release_assets.py','evidence','--help']; runpy.run_path(path)['main']()"
+        probe = subprocess.run([sys.executable, "-I", "-S", "-c", script, release_validation.__file__], capture_output=True, timeout=30, check=False)
+        self.assertEqual(probe.returncode, 0, probe.stderr)
+        self.assertIn(b"--format", probe.stdout)
+        self.assertEqual(probe.stderr, b"")
 
     def test_relative_evidence_paths_follow_root_from_another_directory(self):
         caller = self.root / "caller"

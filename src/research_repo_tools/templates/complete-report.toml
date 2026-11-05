@@ -1,6 +1,9 @@
 schema = 2
 current = "docs/complete-performance.md"
 archive = "docs/performance-runs"
+# For committed candidate evidence, declare this configuration in CandidatePolicy.report.
+# Freeze plan_candidate_publication's receipt and independent digest before promotion;
+# keep final acceptance outside the committed archive. See docs/REUSING_BENCHMARKS.md.
 title = "Benchmark timings"
 # Enable the independent consumer policy before release promotion:
 # measurement = "tooling/measurement-full.toml"

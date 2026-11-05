@@ -304,6 +304,32 @@ def test_local_evidence_verifies_retained_bytes_without_writing_checkout(checkou
     assert not any(isinstance(call, tuple) and call[0] == "release" for call in remote["calls"])
 
 
+def test_maintainer_summary_invokes_the_existing_inspector_once(monkeypatch, capsys):
+    result = {"tag": TAG, "commit": COMMIT, "run": release._identity(run()), "artifact": {"id": 42, "digest": "sha256:" + "a" * 64}}
+    calls = []
+
+    def inspect(root):
+        calls.append(root)
+        return result
+
+    monkeypatch.setattr(release, "inspect_evidence", inspect)
+    monkeypatch.setattr(release.sys, "argv", ["release_assets.py", "evidence", "--format", "summary"])
+    assert release.main() == 0
+    summary = capsys.readouterr().out
+    assert COMMIT in summary and "Signature: passed" in summary
+    assert "Benchmark evidence: not configured" in summary
+    assert calls == [Path.cwd()]
+
+    def failure(root):
+        raise ValueError("missing retained evidence; inspect the complete original attempt")
+
+    monkeypatch.setattr(release, "inspect_evidence", failure)
+    assert release.main() == 1
+    output = capsys.readouterr()
+    assert output.out == ""
+    assert "missing retained evidence" in output.err
+
+
 @pytest.mark.parametrize(
     ("damage", "diagnostic"),
     [

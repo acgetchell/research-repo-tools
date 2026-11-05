@@ -40,7 +40,8 @@ inventories, including portable case/Unicode aliases. The measurement controller
 cannot exempt its own configuration. Build files, lockfiles, scripts, and arbitrary
 configuration files are not output exceptions. Consumers must truthfully declare
 all inputs: a document read by a build or workload is an input, regardless of its
-extension. Unrecognized output formats require an upstream contract extension.
+extension. Committed shared-publisher evidence uses the separate exact-byte
+contract below; JSON is not an ordinary output exception.
 
 Permission comparison projects native permissions onto Git's executable bit;
 ordinary writable/read-only differences are not Git tree differences. The
@@ -56,13 +57,64 @@ Candidate acceptance does not weaken its source or Cargo archive guarantee.
 Acquisition provenance is never rewritten to the final commit or packaging host.
 The independent binding describes final release acceptance separately.
 
+## Committed publisher evidence
+
+Declare `CandidatePolicy(report="tooling/performance-report.toml", ...)` before
+freezing the acquisition assertion digest. The report configuration must already
+exist in the original measured tree. This selects the existing **schema-2 complete
+run publisher**, including configurable archive locations such as
+`docs/performance-runs` and `docs/performance/runs`. Schema-1 comparison histories
+require explicit adoption of schema 2; existing history is never rewritten or
+assigned missing acquisition receipts. The optional declaration serializes as
+candidate-policy v2. Policies without it retain their v1 bytes and behavior.
+
+After acquisition and before promotion, call
+`candidate_publication.plan_candidate_publication(root, payload, manifest, policy,
+acquisition_sha256=trusted_digest)`. It returns `(PublicationPlan, receipt_bytes)`
+from the existing validated run publisher. It verifies the original acquisition,
+report configuration, prior output states and complete history against the
+independent acquisition assertions. Publish the plan through
+`publication.publish_publication`. Keep the canonical receipt and its SHA-256 in
+the acquisition owner's separately trusted immutable handoff. Never create trusted
+expectations by scanning the final candidate or accepting its embedded checksum.
+
+The receipt binds the original acquisition digest/identity, publisher version,
+original configuration and input digests, and exact roles, paths, lengths, hashes
+and nonexecutable modes for seven outputs: the content-addressed
+`runs/<identity>/{run.json,evidence.json,report.md}`, current report,
+`index.json`, `latest.json`, and history `README.md`. Content-addressed names are
+resolved after acquisition. No directory or JSON suffix is exempted. Inputs,
+configuration, portable path aliases, executable files, and unrelated additions
+remain prohibited. Historical runs and their original renderer bytes remain exact,
+even if a legacy document exception names them. A generated output also named in
+`measurement.outputs` must satisfy the stricter exact-byte receipt.
+
+Step 2 passes paired `publication_receipt=receipt_bytes` and
+`publication_sha256=trusted_publication_digest` to `verify_candidate_release`.
+Every generated file must be present with its frozen bytes and mode, whether or
+not it changed. The binding retains the publication receipt and digest; approval
+revalidation and offline archive verification use that same binding. The receipt
+does not authenticate acquisition ownership or replace signed native evidence.
+Keep final-commit acceptance and attestations as release assets or trusted scratch
+handoffs, outside committed history, to avoid self-referential records.
+
+`performance_release.measure_release(..., before_promotion=callback)` provides a
+trusted-owner hook after raw retention and before report writes. The callback can
+freeze the independent candidate policy and publication receipt; it must not
+publish the returned plan itself. A failed callback leaves raw evidence available
+and prevents promotion. Retry capture/promotion directly from retained bytes;
+calling `measure_release` again is a new acquisition. The standalone
+`measure_and_retain` → `plan_candidate_publication` → `publish_publication` APIs
+also support explicit staged orchestration. README publication remains separate
+and uses the existing exact declared document exceptions.
+
 ## Public interfaces
 
 Import from `research_repo_tools.candidate_reuse`:
 
 | Interface | Contract |
 | --- | --- |
-| `CandidatePolicy` | Repository, canonical tag, final commit (`None` until selected), original owner/run identity, schema-6 measurement, original current envelope provenance, and `(trial, suite, phase, Provenance)` assertions |
+| `CandidatePolicy` | Repository, canonical tag, final commit (`None` until selected), original owner/run identity, schema-6 measurement, original current envelope provenance, `(trial, suite, phase, Provenance)` assertions, and optional original `report` configuration |
 | `acquisition_assertion_digest(policy)` | Step 1 digest captured by the trusted acquisition owner; excludes only the future final commit |
 | `parse_candidate_policy`, `serialize_candidate_policy` | Strict versioned JSON handoff; serialization does not authenticate the assertions |
 | `verify_candidate_release(root, evidence, policy, native_policy, read, *, acquisition_sha256, expected=None)` | Step 2 whole-tree binding plus existing native release verification; returns frozen acceptance bytes |
@@ -125,6 +177,6 @@ protected environments, and publication approval remain consumer responsibilitie
 
 The full operational sequence and recovery rules are in
 [Reusing benchmark acquisitions](REUSING_BENCHMARKS.md). Upstream implementation,
-merge, verified exact 0.2.6 PyPI publication, and downstream normal-resolution
+merge, verified supplying PyPI publication, and downstream normal-resolution
 verification are separate completion gates. Local wheels and version edits do
 not establish published availability or unblock downstream adoption.

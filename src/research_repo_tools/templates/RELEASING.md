@@ -90,6 +90,14 @@ commands are `just performance-prepare tooling/performance-release.toml`,
 `just performance-release tooling/performance-release.toml`, and
 `just performance-readme tooling/performance-release.toml`, in that order.
 README retries consume retained results without repeating measurements.
+For candidate reuse with committed schema-2 histories, the trusted acquisition
+adapter declares the original report configuration in `CandidatePolicy.report`
+and freezes `plan_candidate_publication`'s receipt and SHA-256 before promotion.
+Use the `measure_release(before_promotion=...)` hook or the staged APIs. Retain
+the acquisition and publication digests through separate trusted handoffs; commit
+only the generated run files, index/latest and reports. Final-commit acceptance
+and attestations remain release assets or trusted scratch files. The exact
+supplying package must be published and normally resolvable before adoption.
 Fetching tags requires explicit `--fetch-tags --allow-git-mutations` during
 preparation.
 
@@ -167,6 +175,14 @@ git pull --ff-only
 
 Use a clean checkout of the reviewed release commit. Require its configured
 native checks and trusted main-push evidence before any tag-triggered promotion.
+For consumers adopting candidate reuse, run the configured `just release-evidence`
+composition here, before tagging. Pass the original policy, acquisition digest,
+publication receipt/digest and `--format summary` to the shared candidate verifier.
+Save its acceptance outside committed history. Step 2 and publication retries
+derive and verify archives from that acquisition without measuring or repeating
+build/test gates. At approval, pass the original `--acceptance` and revalidate the
+same native selection before acquiring publication credentials. Missing or changed
+evidence blocks continuation; never silently select a replacement acquisition.
 
 ### 2. Create and verify the annotated tag
 

@@ -4,9 +4,11 @@ import os
 import subprocess
 import sys
 import tempfile
+import warnings
 from pathlib import Path
 
 from coverage import Coverage
+from coverage.exceptions import CoverageException, CoverageWarning
 
 from research_repo_tools.files import replace_many
 
@@ -30,7 +32,18 @@ def main(arguments: list[str]) -> int:
             if shard.stat().st_size == 0:
                 shard.unlink()
         coverage = Coverage(data_file=str(data))
-        coverage.combine(strict=True)
+        # strict=True only requires one usable shard; unreadable siblings would
+        # otherwise be warned about and silently omitted from the new report.
+        # Keep every shard until aggregation succeeds so a failed run remains
+        # diagnosable without replacing the prior valid database/report pair.
+        try:
+            with warnings.catch_warnings():
+                warnings.simplefilter("error", CoverageWarning)
+                coverage.combine(strict=True, keep=True)
+        except (CoverageException, CoverageWarning) as error:
+            retained = data.parent.with_name("failed-" + data.parent.name.removeprefix(".run-"))
+            data.parent.rename(retained)
+            raise RuntimeError(f"Incomplete coverage: {error}. Raw shards retained at {retained}; previous report preserved.") from error
         coverage.save()
         coverage.report(show_missing=True)
         staged_report = Path(directory) / report.name

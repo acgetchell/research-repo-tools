@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 
 from research_repo_tools.files import _validate_distinct_paths
-from research_repo_tools.process import resolve_executable, run_command_live, run_git_bytes
+from research_repo_tools.process import _validate_timeout, resolve_executable, run_command_live, run_git_bytes
 from research_repo_tools.publication import _path
 
 __all__ = ["argument_batches", "run_selected", "select_files"]
@@ -63,6 +63,8 @@ def argument_batches(command: Sequence[str], files: Iterable[str], *, batch_size
     """
     if not command or isinstance(command, (str, bytes)) or any(not isinstance(arg, str) or "\0" in arg for arg in command):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
         raise ValueError("command must be a nonempty argument vector without NUL")
+    if isinstance(files, (str, bytes)):
+        raise ValueError("file arguments must be an iterable of filenames, not a scalar string")
     if type(batch_size) is not int or batch_size < 1 or type(argument_limit) is not int or argument_limit < 1:
         raise ValueError("batch size and argument limit must be positive integers")
     base_windows, base_posix = _argument_sizes(command)
@@ -109,6 +111,7 @@ def run_selected(
     """
     if not command:
         raise ValueError("files run requires a command after --")
+    _validate_timeout(timeout)
     argument_batches(command, (), batch_size=batch_size)
     files = select_files(root, include=include, exclude=exclude, env=env)
     if not files:

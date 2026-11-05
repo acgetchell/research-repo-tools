@@ -16,7 +16,7 @@ from unittest.mock import patch
 
 from research_repo_tools.cli import main
 from research_repo_tools.criterion import COMPARISON_SCHEMA, Estimate, Sample, compare_samples, serialize_comparison
-from research_repo_tools.evidence import Evidence, Provenance, fingerprint_files
+from research_repo_tools.evidence import Evidence, Provenance, fingerprint_files, serialize_evidence
 from research_repo_tools.performance_release import (
     load_performance_release,
     load_preparation,
@@ -26,6 +26,7 @@ from research_repo_tools.performance_release import (
     prepare_performance,
     select_measurement_pair,
 )
+from research_repo_tools.performance_reports import load_report_plan
 from research_repo_tools.publication import publish_publication
 from research_repo_tools.release_discovery import PublishedRelease
 
@@ -170,9 +171,16 @@ class TestPreparation(unittest.TestCase):
                 [sys.executable, "-I", "-X", "utf8", "-c", script, str(root / settings.preparation)], check=True, capture_output=True, encoding="utf-8"
             )
             self.assertEqual(result.stdout.strip(), f"{CURRENT} {BASELINE}")
+            captures = []
+
+            def capture():
+                captures.append(((root / settings.payload).read_bytes(), (root / settings.manifest).read_bytes()))
+                self.assertFalse((root / "history").exists())
+
             with patch("research_repo_tools.performance_acquisition.measure_pair", return_value=retained) as acquire:
-                measure_release(root, settings, allow_git_mutations=True)
+                measure_release(root, settings, allow_git_mutations=True, before_promotion=capture)
                 self.assertEqual(acquire.call_count, 1)
+            self.assertEqual(captures, [serialize_evidence(retained)])
             original_readme = (root / "README.md").read_bytes()
             files = {path: path.read_bytes() for folder in ("history", "scratch") for path in (root / folder).rglob("*") if path.is_file()}
             with (
@@ -195,6 +203,41 @@ class TestPreparation(unittest.TestCase):
                 {path: path.read_bytes() for path in files if path != root / settings.preparation},
                 {path: value for path, value in files.items() if path != root / settings.preparation},
             )
+
+    def test_failed_handoff_capture_preserves_raw_evidence_for_offline_promotion_retry(self):
+        self.models()
+        with tempfile.TemporaryDirectory(prefix="capture retry café ") as temporary:
+            root = Path(temporary).resolve()
+            settings = fixture(root)
+            prepare_performance(root, settings)
+            original = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+            retained = evidence(root)
+            raw = dict(zip((Path(settings.payload), Path(settings.manifest)), serialize_evidence(retained), strict=True))
+            captures = []
+
+            def capture():
+                captures.append({name: (root / name).read_bytes() for name in raw})
+                self.assertFalse((root / "report.md").exists())
+                self.assertFalse((root / "history").exists())
+                raise OSError("trusted receipt storage unavailable")
+
+            with patch("research_repo_tools.performance_acquisition.measure_pair", return_value=retained) as acquire:
+                with self.assertRaisesRegex(OSError, "trusted receipt storage unavailable"):
+                    measure_release(root, settings, allow_git_mutations=True, before_promotion=capture)
+                acquire.assert_called_once()
+            self.assertEqual(captures, [raw])
+            self.assertEqual({path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}, original | raw)
+            with (
+                patch("research_repo_tools.performance_acquisition.measure_pair", side_effect=AssertionError("retry reacquired")),
+                patch("research_repo_tools.performance_release.published_releases", side_effect=AssertionError("retry queried provider")),
+            ):
+                retry = load_report_plan(root, settings.report, payload=settings.payload, manifest=settings.manifest)
+                publish_publication(retry)
+                self.assertEqual((root / "history/v1.1.0-vs-v1.0.0.comparison.json").read_bytes(), raw[Path(settings.payload)])
+                self.assertEqual((root / "history/v1.1.0-vs-v1.0.0.evidence.json").read_bytes(), raw[Path(settings.manifest)])
+                self.assertIn(b"current=v1.1.0 baseline=v1.0.0", (root / "report.md").read_bytes())
+                self.assertEqual(publish_publication(load_report_plan(root, settings.report)), ())
+            self.assertEqual({name: (root / name).read_bytes() for name in original | raw}, original | raw)
 
     def test_publication_chronology_and_published_vs_prospective_selection(self):
         self.models()
