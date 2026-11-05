@@ -178,15 +178,15 @@ class TestReleaseTargetConsumer(unittest.TestCase):
 
                 def observe(args, **kwargs):
                     self.assertEqual(kwargs["cwd"], self.root / "source")
-                    return subprocess.CompletedProcess(args, 0, "" if "status" in args else state["commit"], "")
+                    output = b"H tracked\0" if "ls-files" in args or "submodule" in args else b"" if "status" in args else state["commit"].encode()
+                    return subprocess.CompletedProcess(args, 0, output, b"")
 
                 def changed():
                     state["commit"] = "b" * 40
 
                 self.server.on_download = changed
                 with (
-                    patch("research_repo_tools.release_assets.run_git_command", observe),
-                    patch("research_repo_tools.release_assets.run_git_bytes", return_value=subprocess.CompletedProcess([], 0, b"H tracked\0", b"")),
+                    patch("research_repo_tools.release_assets.run_git_bytes", observe),
                 ):
                     with self.assertRaisesRegex(ValueError, "observed release checkout"):
                         publish_release_asset(self.root, REPOSITORY, TAG, self.asset, target=target, checkout=self.root / "source", publish=True)

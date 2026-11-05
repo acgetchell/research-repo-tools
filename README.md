@@ -279,6 +279,58 @@ is an explicit reviewed option with its own eligibility and revalidation;
 package and artifact checks still apply. Approval, registry publication,
 attachment uploads and downstream adoption remain distinct actions.
 
+For Python releases, set `package-kind = "python"` and
+`guarantee = "python-distributions"` in the evidence policy. Explicit selection
+reads the Python project even beside a virtual Cargo workspace; existing
+automatic selection remains Cargo-first. Declare the exact wheel/sdist filename
+templates and PyPI destination:
+
+```toml
+[distributions]
+files = ["example_app-{version}-py3-none-any.whl", "example_app-{version}.tar.gz"]
+index-url = "https://test.pypi.org"
+max-age-seconds = 86400
+```
+
+The consumer builds once and runs its native installed-package, scientific and
+security checks against those files. In a subsequent evidence job of the same
+trusted push attempt, capture the manifest before any tag exists:
+
+```sh
+just release-evidence create tooling/release-evidence.toml \
+  --checkout /path/to/source --commit FULL_COMMIT --version 1.2.3 \
+  --run-id RUN_ID --attempt ATTEMPT --distributions /path/to/dist \
+  --output /trusted/validation.json
+```
+
+Retain the manifest and exact distributions in the attempt-specific artifact
+declared by the policy. Add a signature bundle only when a signing job is
+configured. After the complete run succeeds, select and approve that evidence,
+then revalidate the original selection and publication files before credentials:
+
+```sh
+just release-evidence verify tooling/release-evidence.toml \
+  --checkout /path/to/source --commit FULL_COMMIT --version 1.2.3 \
+  --distributions /path/to/dist --output /trusted/selection.json
+# After approval, immediately before the consumer's publication step:
+just release-evidence verify tooling/release-evidence.toml \
+  --checkout /path/to/source --commit FULL_COMMIT --version 1.2.3 \
+  --distributions /path/to/dist --expected /trusted/selection.json \
+  --output /trusted/revalidated.json
+# After the consumer uploads those exact files to the configured destination:
+just release-evidence published tooling/release-evidence.toml \
+  --checkout /path/to/source --commit FULL_COMMIT --version 1.2.3 \
+  --expected /trusted/selection.json --output /trusted/published.json
+```
+
+`published` checks registry inventory, metadata, hashes and downloaded bytes;
+version presence alone does not prove byte identity. It performs no upload.
+See the [evidence guarantees](docs/release-evidence-api.md#python-distribution-evidence)
+and [complete-run recovery](docs/VERIFYING_RELEASE_EVIDENCE.md#complete-run-recovery).
+These Python interfaces require an exact published supplying version containing
+this contract, verified through ordinary wheel/sdist and locked consumer installs
+before adoption; a merged source change or editable checkout is insufficient.
+
 ## Contributing
 
 See [CONTRIBUTING.md][contributing] for package development, tests and maintainer

@@ -240,6 +240,29 @@ class TestAcquisitionConsumer(unittest.TestCase):
             self.assertEqual(dict(retained.sources)["baseline"].revision, "a" * 40)
             self.assertIn("source-export", dict(dict(retained.sources)["current"].context))
             current_source = dict(retained.sources)["current"]
+            # Retained JSON strings must be unambiguous at every nesting level.
+            for field, key in (("measurement-declaration", "schema"), ("source-export", "mode")):
+                with self.subTest(duplicate=field):
+                    changed_sources = []
+                    for phase, source in retained.sources:
+                        context = dict(source.context)
+                        payload = context[field]
+                        self.assertTrue(payload.startswith("{"))
+                        duplicate = "{" + json.dumps(key) + ': "discarded",' + payload[1:]
+                        self.assertEqual(json.loads(duplicate), json.loads(payload))
+                        context[field] = duplicate
+                        changed_sources.append((phase, replace(source, context=tuple(context.items()))))
+                    with self.assertRaisesRegex(ValueError, "duplicate JSON field"):
+                        validate_run_evidence(replace(retained, sources=tuple(changed_sources)))
+            for mode in ([], {}):
+                with self.subTest(invalid_mode=mode):
+                    context = dict(current_source.context)
+                    receipt = json.loads(context["source-export"])
+                    receipt["mode"] = mode
+                    context["source-export"] = json.dumps(receipt)
+                    changed = replace(current_source, context=tuple(context.items()))
+                    with self.assertRaisesRegex(ValueError, "invalid source export mode"):
+                        validate_run_evidence(replace(retained, sources=(("baseline", dict(retained.sources)["baseline"]), ("current", changed))))
             for missing in ("measurement-declaration", "tool.python", "harness-modes", "workload-sha256", "source-export"):
                 with self.subTest(missing=missing):
                     changed = replace(current_source, context=tuple((key, value) for key, value in current_source.context if key != missing))

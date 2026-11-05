@@ -93,3 +93,27 @@ def test_caller_warning_policy_reaches_execution_worker(tmp_path, monkeypatch):
         warnings.filterwarnings("error", message="Proactor event loop does not implement add_reader", category=RuntimeWarning)
         with pytest.raises(RuntimeWarning, match="Proactor"):
             notebooks._execute(nbformat.v4.new_notebook(), cwd=tmp_path, timeout=1, env={}, progress=[])
+
+
+def test_failed_submission_does_not_leave_an_open_loop(tmp_path, monkeypatch):
+    runners = []
+    real_runner = asyncio.Runner
+
+    def runner(**kwargs):
+        result = real_runner(**kwargs)
+        runners.append((result, result.get_loop()))
+        return result
+
+    def rejected(*args, **kwargs):
+        raise RuntimeError("worker submission rejected")
+
+    monkeypatch.setattr(asyncio, "Runner", runner)
+    monkeypatch.setattr(ThreadPoolExecutor, "submit", rejected)
+    try:
+        with pytest.raises(RuntimeError, match="worker submission rejected"):
+            notebooks._execute(nbformat.v4.new_notebook(), cwd=tmp_path, timeout=1, env={}, progress=[])
+        assert all(loop.is_closed() for _, loop in runners)
+        assert not any(thread.name.startswith("notebook-execution") for thread in threading.enumerate())
+    finally:
+        for instance, _ in runners:
+            instance.close()

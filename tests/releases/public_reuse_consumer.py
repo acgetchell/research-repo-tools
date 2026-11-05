@@ -247,6 +247,19 @@ class TestReuseConsumer(unittest.TestCase):
             self.assertEqual(command[command.index(option) + 1], value)
         self.assertIn("--deny-self-hosted-runners", command)
 
+    def test_reuse_contracts_remain_frozen_after_caller_mutates_digest_pairs(self):
+        contracts = [(name, [list(item) for item in values]) for name, values in POLICY.contracts]
+        policy = replace(POLICY, contracts=contracts)
+        provider = self.provider()
+        expected = self.verify(provider)
+        contracts[0][1][0][1] = "0" * 64
+        contracts[0][1].clear()
+        contracts.clear()
+        with patch("research_repo_tools.release_validation.subprocess.run", provider.execute):
+            actual = verify_ci_reuse(policy, RELEASE, provider.read, now=NOW, expected=expected)
+        self.assertEqual(actual, expected)
+        self.assertEqual(policy.contracts, POLICY.contracts)
+
     def test_rejects_observed_context_checkout_or_external_input_differences(self):
         for key, value in (
             ("checkout", HEAD),
@@ -479,6 +492,10 @@ class TestReuseConsumer(unittest.TestCase):
                 patch(
                     "research_repo_tools.release_publishing.run_git_command",
                     side_effect=lambda args, **kwargs: subprocess.CompletedProcess([], 0, "" if "status" in args else RELEASE),
+                ),
+                patch(
+                    "research_repo_tools.release_assets.run_git_bytes",
+                    side_effect=lambda args, **kwargs: subprocess.CompletedProcess([], 0, RELEASE.encode("ascii") if "rev-parse" in args else b""),
                 ),
                 patch("research_repo_tools.release_publishing._remote_commit", return_value=RELEASE),
                 patch("research_repo_tools.release_publishing._api", read),

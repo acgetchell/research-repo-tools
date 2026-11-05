@@ -3,6 +3,7 @@
 import importlib
 import io
 import json
+import math
 import os
 import random
 import subprocess
@@ -58,6 +59,19 @@ def zip_asset(path: Path, entries: list[tuple[str, bytes]]) -> None:
 
 
 class TestPerformanceConsumer(unittest.TestCase):
+    def test_descriptive_comparisons_are_invariant_under_exact_unit_scaling(self) -> None:
+        # Hand-derived times: 100 -> 80 is a 20% reduction and a 1.25 ratio;
+        # reversing them is a 25% increase and a 0.8 ratio. Powers of two
+        # preserve these inputs exactly, including subnormal timing values.
+        for exponent in (-1070, -500, 0, 500, 1000):
+            for baseline, current, ratio, reduction in ((100, 80, 1.25, 20.0), (80, 100, 0.8, -25.0), (100, 100, 1.0, 0.0)):
+                with self.subTest(exponent=exponent, baseline=baseline, current=current):
+                    samples = [Sample((("case", Estimate(math.ldexp(point, exponent))),)) for point in (baseline, current)]
+                    comparison = compare_samples(*samples)
+                    (row,) = comparison.comparisons
+                    self.assertEqual((row.speedup, row.percent_reduction), (ratio, reduction))
+                    self.assertEqual(parse_comparison(serialize_comparison(comparison)), comparison)
+
     def test_comparison_and_retained_rendering(self) -> None:
         # Reduced Criterion median shapes used by MCMC and la-stack:
         # complete intervals, optional standard error, plus incomplete coverage.

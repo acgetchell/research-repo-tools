@@ -20,11 +20,12 @@ from research_repo_tools.cli import main
 from research_repo_tools.criterion import COMPARISON_SCHEMA, Estimate, Sample, compare_samples, parse_comparison, serialize_comparison
 from research_repo_tools.evidence import Evidence, Provenance, deterministic_json, publish_evidence, sha256
 from research_repo_tools.legacy_evidence import convert_csv
-from research_repo_tools.measurement import MeasurementConfig, measure_checkout
+from research_repo_tools.measurement import MeasurementConfig, measure_checkout, measure_pair
 from research_repo_tools.performance_reports import load_report_plan
-from research_repo_tools.process import ExecutableNotFoundError
+from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics
 from research_repo_tools.publication import preview_publication, publish_publication
 from research_repo_tools.release_assets import GitHubRelease, download_release_asset, package_baseline, read_baseline
+from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.selection import argument_batches
 from research_repo_tools.validation import run_checks
 from research_repo_tools.worktrees import apply_snapshot, capture_snapshot, temporary_worktree
@@ -87,6 +88,69 @@ def retained(current: str = "v1.1.0", baseline: str = "v1.0.0", point: float = 5
 
 
 class TestWorkflowConsumer(unittest.TestCase):
+    def test_measurement_cleanup_retains_original_failure_and_workspace(self) -> None:
+        for original in (ValueError("source capture failed"), KeyboardInterrupt("measurement interrupted")):
+            with self.subTest(original=original), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                cleanup = OSError("workspace removal failed")
+                retained = []
+                rmdir = Path.rmdir
+
+                def remove(path):
+                    if path.name.startswith("research-measurement-"):
+                        retained.append(path)
+                        self.addCleanup(rmdir, path)
+                        raise cleanup
+                    return rmdir(path)
+
+                with (
+                    patch("research_repo_tools.measurement.capture_source", side_effect=original),
+                    patch.object(Path, "rmdir", remove),
+                    self.assertRaises(BaseExceptionGroup) as caught,
+                ):
+                    measure_pair(
+                        root, MeasurementConfig((sys.executable, "bench.py"), ("src",), ("bench.py",)), ReleasePair("v1.1.0", "v1.0.0"), backend="export"
+                    )
+                self.assertEqual(caught.exception.exceptions, (original, cleanup))
+                self.assertEqual(len(retained), 1)
+                self.assertTrue(retained[0].is_dir())
+                self.assertIn(str(retained[0]), format_exception_diagnostics(caught.exception))
+                self.assertEqual(list(root.iterdir()), [])
+
+    def test_snapshot_capture_disables_index_refresh_and_fsmonitor(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve() / "source"
+            root.mkdir()
+            (root / "new.bin").write_bytes(b"new\r\n\xff")
+            index = Path(temporary) / "index-model"
+            index.write_bytes(b"original index")
+            hooks = []
+
+            def git(args, **kwargs):
+                if "--show-prefix" in args:
+                    payload = b""
+                elif "rev-parse" in args:
+                    payload = b"a" * 40
+                elif "diff" in args:
+                    # Model Git's optional stat-cache refresh and fsmonitor hook.
+                    if "--no-optional-locks" not in args or "diff.autoRefreshIndex=false" not in args:
+                        index.write_bytes(b"refreshed index")
+                    if "core.fsmonitor=false" not in args:
+                        hooks.append("fsmonitor")
+                    payload = b"binary patch\r\n"
+                elif "ls-files" in args:
+                    payload = b"new.bin\0"
+                else:
+                    self.fail(f"unexpected Git command: {args}")
+                return subprocess.CompletedProcess(args, 0, payload, b"")
+
+            with patch("research_repo_tools.worktrees.run_git_bytes", git), patch("research_repo_tools.worktrees.select_files", return_value=("new.bin",)):
+                snapshot = capture_snapshot(root)
+            self.assertEqual(snapshot.patch, b"binary patch\r\n")
+            self.assertEqual(snapshot.untracked[0][:2], ("new.bin", b"new\r\n\xff"))
+            self.assertEqual(index.read_bytes(), b"original index")
+            self.assertEqual(hooks, [])
+
     def test_measurement_vectors_reject_strings_and_freeze_lists(self):
         for field in ("command", "sources", "harness", "compatible", "probes"):
             for invalid in ("echo", b"echo"):

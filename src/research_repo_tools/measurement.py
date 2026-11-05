@@ -2,7 +2,6 @@
 
 import json
 import re
-import shutil
 import tempfile
 import tomllib
 from collections.abc import Callable, Mapping
@@ -287,6 +286,7 @@ def measure_pair(
     root = root.resolve(strict=True)
     snapshot = None
     parent = Path(tempfile.mkdtemp(prefix="research-measurement-")).resolve()
+    measurement_error = None
     try:
         with ExitStack() as stack:
             captures = None
@@ -336,7 +336,16 @@ def measure_pair(
         if verify is not None:
             verify()
         return retained
+    except BaseException as error:
+        measurement_error = error
+        raise
     finally:
         # Never erase recovery checkouts when Git removal failed.
-        if not any(parent.iterdir()):
-            shutil.rmtree(parent)
+        try:
+            if not any(parent.iterdir()):
+                parent.rmdir()
+        except BaseException as error:
+            error.add_note(f"measurement workspace cleanup failed at {parent}; inspect before removing")
+            if measurement_error is not None:
+                raise BaseExceptionGroup("measurement and workspace cleanup failed", [measurement_error, error]) from None
+            raise

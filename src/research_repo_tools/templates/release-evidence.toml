@@ -11,6 +11,18 @@ guarantee = "signed-source"
 # and PACKAGE-VERSION.crate, with independently observed cargo/rustc tool strings.
 # Signing remains optional for Cargo archives and mandatory for signed-source.
 path-in-vcs = ""
+# Optional explicit identity: "python" ignores a colocated Cargo workspace;
+# "cargo" requires Cargo metadata. Omission preserves Cargo-first detection.
+# package-kind = "python"
+# For Python wheel/sdist evidence set guarantee = "python-distributions",
+# package-kind = "python", remove [signing-job] if signatures are not required,
+# and add this table (the package must match the configured filename prefix):
+# [distributions]
+# files = ["your_package-{version}-py3-none-any.whl", "your_package-{version}.tar.gz"]
+# index-url = "https://pypi.org"
+# max-age-seconds = 2592000
+# Declare every build/native installed/security gate below. Retain the exact
+# distributions with validation.json only after those gates succeed.
 
 [[jobs]]
 name = "linux"

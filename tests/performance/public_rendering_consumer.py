@@ -3,9 +3,13 @@
 import base64
 import hashlib
 import json
+import math
 import sys
 import unittest
+import xml.etree.ElementTree as ET
 from dataclasses import replace
+from decimal import Decimal, localcontext
+from typing import Literal
 from unittest.mock import patch
 
 from research_repo_tools.complete_runs import (
@@ -25,6 +29,7 @@ from research_repo_tools.complete_runs import (
 )
 from research_repo_tools.evidence import Evidence, Provenance, serialize_evidence
 from research_repo_tools.host_metadata import HostMetadata, serialize_host
+from research_repo_tools.run_presentation import CoordinatePlot, RunLayout, RunRow, SeriesSelection, render_coordinate_svg
 
 
 def encoded(value):
@@ -128,6 +133,79 @@ def report(evidence):
 
 
 class TestRenderingConsumer(unittest.TestCase):
+    def test_coordinate_geometry_agrees_with_high_precision_oracle(self):
+        nearby = []
+        for start in (1e-300, 1.0, 1e100, 1e308):
+            values = [start]
+            for _ in range(4):
+                values.append(math.nextafter(values[-1], math.inf))
+            nearby.append(values)
+        domains: list[tuple[Literal["linear", "log"], list[float]]] = [(scale, values) for scale in ("linear", "log") for values in nearby]
+        domains.extend(
+            [
+                ("linear", [-1e308, -5e307, 0.0, 5e307, 1e308]),
+                ("linear", [-value for value in reversed(nearby[-1])]),
+                ("linear", [5e-324 * index for index in range(1, 6)]),
+                ("log", [5e-324, 1e-200, 1e-50, 1e100, 1e308]),
+            ]
+        )
+        for scale, values in domains:
+            for timing_axis in (False, True):
+                if timing_axis and min(values) <= 0:
+                    continue
+                with self.subTest(scale=scale, values=values, timing_axis=timing_axis):
+                    evidence = fixture(len(values))
+                    run = validate_run_evidence(evidence)
+                    assert isinstance(run, CompleteRun)
+                    if timing_axis:
+                        phases = []
+                        for phase, sample in run.phases:
+                            cases = []
+                            for case, point in zip(sample.cases, values, strict=True):
+                                # Constant raw observations have both mean and
+                                # median equal to the independently chosen point.
+                                estimates = {
+                                    statistic: {
+                                        "point_estimate": point,
+                                        "confidence_interval": {"lower_bound": point, "upper_bound": point, "confidence_level": 0.95},
+                                    }
+                                    for statistic in ("mean", "median")
+                                }
+                                cases.append(replace(case, estimates=encoded(estimates), sample=encoded({"iters": [1, 1, 1], "times": [point] * 3})))
+                            phases.append((phase, replace(sample, cases=tuple(cases))))
+                        evidence = replace(evidence, payload=serialize_run(replace(run, phases=tuple(phases))))
+                    series = run.series[0]
+                    layout = RunLayout(
+                        (SeriesSelection(series.name, "Measured", series.rows),),
+                        tuple(RunRow(key, key, float(index) if timing_axis else values[index]) for index, (key, _) in enumerate(series.rows)),
+                        "median",
+                        "ns",
+                    )
+                    plot = CoordinatePlot("Timings", "Workload", "Timing", "linear" if timing_axis else scale, scale if timing_axis else "linear")
+                    before = serialize_evidence(evidence)
+                    svg = render_coordinate_svg(evidence, layout, plot)
+                    document = ET.fromstring(svg)
+                    circles = document.findall(".//{http://www.w3.org/2000/svg}circle")
+                    self.assertEqual(len(circles), len(values))
+                    ticks = [
+                        item.text
+                        for item in document.findall(".//{http://www.w3.org/2000/svg}text")
+                        if item.attrib.get("x" if timing_axis else "y") == ("72" if timing_axis else "444")
+                    ]
+                    self.assertEqual(len(set(ticks)), 2 if timing_axis else len(values))
+                    with localcontext() as context:
+                        context.prec = 100
+                        exact = [Decimal.from_float(value) for value in values]
+                        transformed = [value.ln() for value in exact] if scale == "log" else exact
+                        low, high = min(transformed), max(transformed)
+                        expected = [(value - low) / (high - low) for value in transformed]
+                    for circle, position in zip(circles, expected, strict=True):
+                        actual = float(circle.attrib["cy" if timing_axis else "cx"])
+                        target = 420 - 360 * float(position) if timing_axis else 80 + 820 * float(position)
+                        # SVG geometry is serialized to six decimal pixel places.
+                        self.assertAlmostEqual(actual, target, delta=1e-6)
+                    self.assertEqual(serialize_evidence(evidence), before)
+
     def test_exact_historical_bytes_and_unchanged_raw_evidence(self):
         # SHA-256 of complete reports from the original renderer, before the
         # lookup optimization. Fixtures use fixed provenance on every platform.

@@ -19,7 +19,15 @@ from unittest.mock import patch
 from research_repo_tools import changelog, cli, config, registry, release_metadata, toolchain, toolchain_config, update_release
 from research_repo_tools.just_inspect import dry_run, inspect_justfile
 from research_repo_tools.release_assets import GitHubRelease
-from research_repo_tools.release_publishing import RequiredCheck, check_metadata, publish_reviewed_release, require_checks, validate_event, verify_publication
+from research_repo_tools.release_publishing import (
+    RequiredCheck,
+    check_metadata,
+    check_reviewed_release,
+    publish_reviewed_release,
+    require_checks,
+    validate_event,
+    verify_publication,
+)
 
 
 class TestPublishingConsumer(unittest.TestCase):
@@ -87,6 +95,57 @@ class TestPublishingConsumer(unittest.TestCase):
             },
             root=self.root,
         )
+
+    def test_release_gate_rejects_hidden_checkout_changes_before_remote_queries(self):
+        sha = "a" * 40
+        (self.root / "pyproject.toml").write_bytes(b'[project]\nname="sample"\nversion="1.2.3"\n')
+        (self.root / "CHANGELOG.md").write_bytes(b"# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Authored notes.\n")
+        release = GitHubRelease("example/project", "v1.2.3", 9, False, False, False, ())
+        remote = {
+            "": {"full_name": "example/project", "default_branch": "main"},
+            "branches/main": {"name": "main", "protected": True},
+            f"compare/{sha}...main": {"status": "identical"},
+            f"commits/{sha}/check-runs?filter=latest&per_page=100": [
+                {
+                    "total_count": 1,
+                    "check_runs": [{"id": 7, "name": "native", "app": {"id": 15368}, "head_sha": sha, "status": "completed", "conclusion": "success"}],
+                }
+            ],
+        }
+        for damage in (None, "assume-unchanged", "skip-worktree", "child-index", "submodule", "head"):
+            heads = []
+
+            def git(args, **kwargs):
+                self.assertIn("--no-optional-locks", args)
+                self.assertIn("core.fsmonitor=false", args)
+                if "rev-parse" in args:
+                    heads.append(True)
+                    output = ("b" * 40 if damage == "head" and len(heads) > 1 else sha).encode()
+                elif "ls-files" in args:
+                    output = {"assume-unchanged": b"h tracked\0", "skip-worktree": b"S tracked\0"}.get(damage, b"H tracked\0")
+                elif "submodule" in args:
+                    output = b"h child\0" if damage == "child-index" else b"H child\0"
+                elif "status" in args:
+                    self.assertIn("--ignore-submodules=none", args)
+                    output = b" M child\0" if damage == "submodule" else b""
+                else:
+                    self.fail(f"unexpected Git command: {args}")
+                return subprocess.CompletedProcess(args, 0, output, b"")
+
+            with (
+                self.subTest(damage=damage),
+                patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, sha, "")),
+                patch("research_repo_tools.release_assets.run_git_bytes", git),
+                patch("research_repo_tools.release_publishing._remote_commit", return_value=sha) as remote_commit,
+                patch("research_repo_tools.release_publishing._api", side_effect=lambda root, repo, endpoint, **kwargs: remote[endpoint]),
+                patch("research_repo_tools.release_publishing.lookup_release", return_value=release),
+            ):
+                if damage is None:
+                    self.assertEqual(check_reviewed_release(self.settings("pypi"), "v1.2.3"), release)
+                else:
+                    with self.assertRaisesRegex(ValueError, "observed release checkout"):
+                        check_reviewed_release(self.settings("pypi"), "v1.2.3")
+                    remote_commit.assert_not_called()
 
     def test_normalize_interrupt_restores_original_changelog(self):
         path = self.root.resolve() / "CHANGELOG.md"

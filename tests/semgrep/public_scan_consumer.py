@@ -17,6 +17,36 @@ from research_repo_tools.selection import argument_batches
 
 
 class TestScanConsumer(unittest.TestCase):
+    def test_final_status_write_preserves_scan_failure_and_interruption(self):
+        marker = self.root / "reports.attempt.json"
+        original_write = semgrep_scan.replace_many
+        for original in (None, ValueError("original scan failure"), KeyboardInterrupt("scan interrupted")):
+            marker.unlink(missing_ok=True)
+            finalization = OSError("attempt marker write failure")
+
+            def write(payloads):
+                if marker.exists():
+                    raise finalization
+                original_write(payloads)
+
+            with (
+                self.subTest(original=original),
+                patch.object(semgrep_scan, "_scan", return_value=0, side_effect=original),
+                patch.object(semgrep_scan, "replace_many", side_effect=write),
+                self.assertRaises(OSError if original is None else BaseExceptionGroup) as caught,
+            ):
+                semgrep_scan.scan(self.settings, include=("*.rs",), output="reports")
+            if original is None:
+                self.assertIs(caught.exception, finalization)
+            else:
+                assert isinstance(caught.exception, BaseExceptionGroup)
+                self.assertEqual(caught.exception.exceptions, (original, finalization))
+            self.assertIn(str(marker), " ".join(finalization.__notes__))
+            pending = json.loads(marker.read_bytes())
+            self.assertIs(pending["published"], False)
+            self.assertIsNone(pending["exit_code"])
+            self.assertFalse((self.root / "reports").exists())
+
     def test_fixture_cli_rejects_duplicate_json_fields(self):
         (self.root / "fixture.py").write_bytes(b"# ruleid: example.rule\nbad()\n")
         (self.root / "rules.yml").write_bytes(
@@ -271,6 +301,26 @@ class TestScanConsumer(unittest.TestCase):
         current[0].write_bytes(b"changed bytes")
         with self.assertRaisesRegex(ValueError, "digest differs"):
             semgrep_scan.require_current_reports(output)
+
+    def test_currentness_rejects_boolean_or_float_schema_without_changing_reports(self):
+        output = self.root / "target/security/semgrep"
+        self.behavior = "clean"
+        self.assertEqual(semgrep_scan.scan(self.settings, include=("*.rs",)), 0)
+        reports = {path: path.read_bytes() for path in semgrep_scan.require_current_reports(output)}
+        marker = output.with_name(output.name + ".attempt.json")
+        original = marker.read_bytes()
+        for schema in (True, 1.0):
+            with self.subTest(schema=schema):
+                changed = json.loads(original)
+                changed["schema"] = schema
+                payload = json.dumps(changed).encode("utf-8")
+                marker.write_bytes(payload)
+                with self.assertRaisesRegex(ValueError, "not current"):
+                    semgrep_scan.require_current_reports(output)
+                self.assertEqual(marker.read_bytes(), payload)
+                self.assertEqual({path: path.read_bytes() for path in output.iterdir()}, reports)
+        marker.write_bytes(original)
+        self.assertEqual({path: path.read_bytes() for path in semgrep_scan.require_current_reports(output)}, reports)
 
     def test_exception_invalidates_currentness_and_retains_prior_reports(self):
         output = self.root / "target/security/semgrep"

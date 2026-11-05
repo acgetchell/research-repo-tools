@@ -236,9 +236,7 @@ def measure_suites(
             return measure_schedule(root, plan, pair, working_tree=working_tree, checkpoint=checkpoint, resume=resume, progress=reporter, verify=verify)
         return _measure_suites(root, plan, pair, working_tree=working_tree, checkpoint=checkpoint, resume=resume, progress=reporter, verify=verify)
     except BaseException as error:
-        event = "interrupted" if isinstance(error, KeyboardInterrupt) else "failed"
-        if reporter.last_event != event:
-            reporter.emit(event, force=True)
+        reporter._failed(error)
         raise
 
 

@@ -70,10 +70,13 @@ def test_python_child_streams_match_utf8_capture_under_legacy_encoding(harness, 
     assert environment == before
 
 
-def test_failed_output_write_preserves_evidence_and_cleans_candidate(harness, tmp_path, monkeypatch):
+@pytest.mark.parametrize("cleanup_failure", [False, True])
+def test_failed_output_write_preserves_evidence_and_cleans_candidate(harness, tmp_path, monkeypatch, caplog, cleanup_failure):
     output = tmp_path / "evidence.json"
     output.write_bytes(b"retained evidence")
     native_fdopen = harness.os.fdopen
+    native_unlink = Path.unlink
+    partial = OSError("injected partial write")
 
     class FailedWrite:
         def __init__(self, stream):
@@ -87,13 +90,30 @@ def test_failed_output_write_preserves_evidence_and_cleans_candidate(harness, tm
 
         def write(self, payload):
             self.stream.write(payload[:3])
-            raise OSError("injected partial write")
+            raise partial
 
     monkeypatch.setattr(harness.os, "fdopen", lambda *args, **kwargs: FailedWrite(native_fdopen(*args, **kwargs)))
-    with pytest.raises(OSError, match="injected partial write"):
+    if cleanup_failure:
+
+        def unlink(path, **kwargs):
+            if path.parent == tmp_path and path.name.startswith(f".{output.name}."):
+                raise OSError("injected candidate cleanup failure")
+            return native_unlink(path, **kwargs)
+
+        monkeypatch.setattr(Path, "unlink", unlink)
+    with pytest.raises(OSError, match="injected partial write") as caught:
         harness.write_output(output, {"complete": True})
+    assert caught.value is partial
     assert output.read_bytes() == b"retained evidence"
-    assert list(tmp_path.iterdir()) == [output]
+    leftovers = set(tmp_path.iterdir()) - {output}
+    if cleanup_failure:
+        assert len(leftovers) == 1
+        candidate = leftovers.pop()
+        assert candidate.read_bytes() == b"{\n "
+        assert str(candidate) in caplog.text
+        assert "injected candidate cleanup failure" in caplog.text
+    else:
+        assert not leftovers
 
 
 def test_atomic_output_has_exact_utf8_lf_bytes(harness, tmp_path):

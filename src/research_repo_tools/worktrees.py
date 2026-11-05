@@ -8,6 +8,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
 
+from research_repo_tools._git_checkout import READ_ONLY_OPTIONS
 from research_repo_tools.files import _validate_distinct_paths
 from research_repo_tools.process import run_git_bytes
 from research_repo_tools.publication import _path, _publication_name
@@ -39,7 +40,7 @@ class TreeSnapshot:
 
 
 def _git(root: Path, args: list[str], **kwargs):
-    return run_git_bytes(["--no-pager", "--no-replace-objects", *args], cwd=root, **kwargs)
+    return run_git_bytes([*READ_ONLY_OPTIONS, *args], cwd=root, **kwargs)
 
 
 def capture_snapshot(root: Path) -> TreeSnapshot:

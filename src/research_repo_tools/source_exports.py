@@ -260,12 +260,12 @@ def export_source(source: CapturedSource, destination: Path) -> Iterator[Path]:
 
 def validate_source_record(payload: str, revision: str) -> None:
     """Check retained source receipt structure and its content-addressed manifest."""
-    from research_repo_tools.evidence import _digest, _object, _string
+    from research_repo_tools.evidence import _digest, _load_json, _object, _string
 
-    record = _object(json.loads(payload), "source export", {"schema", "revision", "mode", "dirty", "sha256", "files"})
+    record = _object(_load_json(payload.encode("utf-8"), "source export"), "source export", {"schema", "revision", "mode", "dirty", "sha256", "files"})
     if record["schema"] != "research-repo-tools/source-export/v1" or record["revision"] != revision:
         raise ValueError("source export revision/schema differs from provenance")
-    if record["mode"] not in {"revision", "working-tree"} or type(record["dirty"]) is not bool:
+    if record["mode"] not in ("revision", "working-tree") or type(record["dirty"]) is not bool:
         raise ValueError("invalid source export mode/dirty state")
     if record["mode"] == "revision" and record["dirty"]:
         raise ValueError("committed export cannot be dirty")

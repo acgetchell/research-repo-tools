@@ -15,6 +15,8 @@ from functools import partial
 from pathlib import Path
 from typing import Literal, cast
 
+from packaging.utils import canonicalize_name
+
 from research_repo_tools.process import format_exception_diagnostics
 lazy from research_repo_tools.ci import export_environment
 lazy from research_repo_tools.config import Config
@@ -23,6 +25,7 @@ lazy from research_repo_tools.files import _validate_distinct_paths, replace_man
 lazy from research_repo_tools.measurement import resolve_revision
 lazy from research_repo_tools.publication import _path
 lazy from research_repo_tools.publication_config import _table
+lazy from research_repo_tools.registry import verify_published_distributions
 lazy from research_repo_tools.release_assets import (
     _repository,
     parse_release_target,
@@ -32,7 +35,7 @@ lazy from research_repo_tools.release_assets import (
     revalidate_release_target,
     serialize_release_target,
 )
-lazy from research_repo_tools.release_evidence import EvidencePolicy, create_evidence_manifest, verify_release_evidence
+lazy from research_repo_tools.release_evidence import EvidencePolicy, PythonDistributionPolicy, create_evidence_manifest, verify_release_evidence
 lazy from research_repo_tools.release_metadata import read_package_info
 lazy from research_repo_tools.release_validation import ValidationPolicy, api, parse_release_json, redact_release_diagnostic
 
@@ -55,7 +58,9 @@ def _strings(value: object, context: str) -> tuple[str, ...]:
 def load_evidence_policy(path: Path) -> EvidencePolicy:
     """Load exact repository/workflow, job/step/platform and signer requirements."""
     raw = _document(
-        path, {"repository", "package", "workflow", "workflow-name", "artifact-prefix", "guarantee", "jobs"}, {"branch", "path-in-vcs", "signing-job"}
+        path,
+        {"repository", "package", "workflow", "workflow-name", "artifact-prefix", "guarantee", "jobs"},
+        {"branch", "distributions", "package-kind", "path-in-vcs", "signing-job"},
     )
     jobs = raw["jobs"]
     if not isinstance(jobs, list):
@@ -71,6 +76,14 @@ def load_evidence_policy(path: Path) -> EvidencePolicy:
     if "signing-job" in raw:
         signer = _table(raw["signing-job"], "signing-job", {"name", "steps"})
         signing = (_string(signer["name"], "signing job"), _strings(signer["steps"], "signing steps"))
+    distributions = None
+    if "distributions" in raw:
+        options = _table(raw["distributions"], "distributions", {"files"}, {"index-url", "max-age-seconds"})
+        distributions = PythonDistributionPolicy(
+            _strings(options["files"], "distribution files"),
+            _string(options.get("index-url", "https://pypi.org"), "PyPI index URL"),
+            cast(int, options.get("max-age-seconds", 30 * 24 * 60 * 60)),
+        )
     return EvidencePolicy(
         ValidationPolicy(
             _string(raw["repository"], "repository"),
@@ -82,9 +95,11 @@ def load_evidence_policy(path: Path) -> EvidencePolicy:
         ),
         _string(raw["package"], "package"),
         _string(raw["artifact-prefix"], "artifact-prefix"),
-        cast(Literal["signed-source", "cargo-archive"], _string(raw["guarantee"], "guarantee")),
+        cast(Literal["signed-source", "cargo-archive", "python-distributions"], _string(raw["guarantee"], "guarantee")),
         signing,
         cast(str, raw.get("path-in-vcs", "")),
+        cast(Literal["auto", "cargo", "python"], raw.get("package-kind", "auto")),
+        distributions,
     )
 
 
@@ -153,12 +168,16 @@ def write_release_outputs(
     replace_many(outputs, verify=unchanged)
 
 
-def _checkout(checkout: Path, package: str, version: str, commit: str, *, path_in_vcs: str = "") -> None:
+def _checkout(
+    checkout: Path, package: str, version: str, commit: str, *, path_in_vcs: str = "", package_kind: Literal["auto", "cargo", "python"] = "auto"
+) -> None:
     if Path(__file__).resolve().is_relative_to(checkout.resolve()):
         raise ValueError("release verification requires a trusted installed runtime outside the observed checkout")
     require_release_checkout(checkout, commit)
-    observed = read_package_info(checkout / path_in_vcs)
-    if (observed.name, observed.version) != (package, version):
+    observed = read_package_info(checkout / path_in_vcs, kind=package_kind)
+    name = canonicalize_name(observed.name) if package_kind == "python" and observed.name is not None else observed.name
+    expected = canonicalize_name(package) if package_kind == "python" else package
+    if (name, observed.version) != (expected, version):
         raise ValueError("observed checkout package/version differs from release assertions")
 
 
@@ -197,7 +216,7 @@ def add_evidence_commands(release) -> None:
     candidate.add_argument("--output", type=Path, required=True)
     candidate.add_argument("--payload", type=Path, required=True)
     candidate.add_argument("--policy", type=Path, required=True, help="independently trusted acquisition assertions and final commit")
-    for operation in ("create", "verify"):
+    for operation in ("create", "published", "verify"):
         command = commands.add_parser(operation)
         command.add_argument("configuration")
         command.add_argument("--checkout", type=Path, required=True)
@@ -206,12 +225,15 @@ def add_evidence_commands(release) -> None:
         command.add_argument("--output", type=Path, required=True)
         command.add_argument("--github-output", type=Path)
         command.add_argument("--tools", type=Path, help="JSON object containing independently observed cargo and rustc producer identities")
+        command.add_argument("--distributions", type=Path, help="exact Python wheel/sdist directory; verify compares publication bytes with retained evidence")
         if operation == "create":
             command.add_argument("--archive", type=Path)
             command.add_argument("--attempt", type=int, required=True)
             command.add_argument("--run-id", type=int, required=True)
         else:
-            command.add_argument("--expected", type=Path, help="frozen approval selection to revalidate before acquiring credentials")
+            command.add_argument(
+                "--expected", type=Path, required=operation == "published", help="frozen approval selection to revalidate before acquiring credentials"
+            )
             command.add_argument("--reproduced-archive", type=Path)
 
 
@@ -222,6 +244,8 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
     path = _path(settings.root, args.configuration)
     original = path.read_bytes()
     policy = load_evidence_policy(path)
+    if args.operation == "published" and policy.distributions is None:
+        raise ValueError("published evidence verification requires Python distribution policy")
     checkout = args.checkout.resolve(strict=True)
     inputs = [
         path,
@@ -229,6 +253,11 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
         *([args.expected] if getattr(args, "expected", None) else []),
         *([args.archive] if getattr(args, "archive", None) else []),
         *([args.reproduced_archive] if getattr(args, "reproduced_archive", None) else []),
+        *(
+            [args.distributions / name for name in policy.distributions.filenames(policy.package, args.version)]
+            if args.distributions and policy.distributions
+            else []
+        ),
     ]
     _validate_distinct_paths((args.output, *([args.github_output] if args.github_output else []), *inputs))
     read = partial(api, repository=policy.validation.repository)
@@ -236,7 +265,7 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
     def observe() -> None:
         if path.read_bytes() != original:
             raise ValueError("release evidence policy changed")
-        _checkout(checkout, policy.package, args.version, args.commit, path_in_vcs=policy.path_in_vcs)
+        _checkout(checkout, policy.package, args.version, args.commit, path_in_vcs=policy.path_in_vcs, package_kind=policy.package_kind)
 
     observe()
     tools = parse_release_json(args.tools.read_bytes()) if args.tools else None
@@ -251,12 +280,27 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
         }
         if any(os.environ.get(key) != value for key, value in expected.items()):
             raise ValueError("evidence creation requires the exact executing trusted push/run/attempt")
-        payload = create_evidence_manifest(policy, args.version, args.commit, args.run_id, args.attempt, read, archive=args.archive, tools=tools)
+        payload = create_evidence_manifest(
+            policy, args.version, args.commit, args.run_id, args.attempt, read, archive=args.archive, tools=tools, distributions=args.distributions
+        )
     else:
         frozen = args.expected.read_bytes() if args.expected else None
         payload = verify_release_evidence(
-            policy, args.version, args.commit, read, expected=frozen, reproduced_archive=args.reproduced_archive, reproduced_tools=tools
+            policy,
+            args.version,
+            args.commit,
+            read,
+            expected=frozen,
+            reproduced_archive=args.reproduced_archive,
+            reproduced_tools=tools,
+            distributions=args.distributions,
         )
+        if args.operation == "published":
+            assert policy.distributions is not None
+            verify_published_distributions(policy.package, args.version, parse_release_json(payload)["files"], index_url=policy.distributions.index_url)
+            # Network downloads may outlast gates/retention. Revalidate the same
+            # selection once more before saving a published-byte receipt.
+            verify_release_evidence(policy, args.version, args.commit, read, expected=payload, distributions=args.distributions)
     observe()
     values = {"identity": json.dumps(parse_release_json(payload), sort_keys=True, separators=(",", ":")), "commit": args.commit}
     write_release_outputs(args.output, payload, github_output=args.github_output, values=values, verify=observe)
@@ -292,7 +336,7 @@ def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
             _regular(path)
             if path.read_bytes() != data:
                 raise ValueError("candidate handoff changed during verification")
-        _checkout(checkout, native.package, policy.tag.removeprefix("v"), commit, path_in_vcs=native.path_in_vcs)
+        _checkout(checkout, native.package, policy.tag.removeprefix("v"), commit, path_in_vcs=native.path_in_vcs, package_kind=native.package_kind)
 
     unchanged()
     accepted = verify_candidate_release(

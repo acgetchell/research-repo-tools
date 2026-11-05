@@ -48,7 +48,7 @@ arguments in lexicographic order.
 | `just python-typecheck` | Run native ty without modifying source |
 | `just release-assets COMMAND...` | Capture/revalidate release targets or explicitly upload verified attachments |
 | `just release-check TAG` | Check final release metadata and generated notes |
-| `just release-evidence COMMAND...` | Create or verify exact-commit CI evidence and save file-based handoffs |
+| `just release-evidence COMMAND...` | Create/verify exact-commit evidence, check published Python bytes, and save handoffs |
 | `just release-first TAG DATE` | Prepare a first release after checking published stable history |
 | `just release-notes TAG` | Print release notes from the root changelog or an archive |
 | `just release-publish TAG [ARGS...]` | Approve a validated draft GitHub Release and trigger its registry workflow |

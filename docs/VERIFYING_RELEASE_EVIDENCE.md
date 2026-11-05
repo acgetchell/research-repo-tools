@@ -50,6 +50,27 @@ Neither interface acquires a registry token or runs scientific workloads. See th
 [release evidence API](release-evidence-api.md) and
 [migration map](performance-migration.md#release-interface-reconciliation).
 
+## Complete-run recovery
+
+Pending evidence requires waiting for the selected run to complete and then
+retrying. Failed, cancelled, incomplete, expired or ambiguous evidence rejects;
+no PR, dispatch, local rebuild or different commit is selected as a fallback.
+For a recoverable exact push within the provider's rerun window and the policy's
+age limit, rerun **all jobs**, including the original distribution producer and
+every required native/security gate. A failed-jobs-only rerun cannot supply a
+complete attempt. The new complete attempt must create a new attempt-specific
+artifact and manifest, followed by a new selection and approval. An existing
+approved handoff intentionally rejects the changed attempt.
+
+When the original push is stale, unavailable or outside the rerun window, follow
+the consumer's reviewed new-commit procedure and obtain fresh complete push
+evidence. Never change a published release or silently refresh a selected
+artifact/draft identity. Diagnose duplicate runs/artifacts and failed required
+steps before retrying. Python distribution policy, private-repository provenance
+limits and published-byte verification are described in the
+[API contract](release-evidence-api.md#python-distribution-evidence), with
+[consumer commands](../README.md#releases) in the README.
+
 ## Trusted release target handoff
 
 Install the same exact published pin in trusted preflight and writer jobs. With the installed console command

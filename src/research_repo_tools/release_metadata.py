@@ -11,7 +11,7 @@ from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
-from typing import TypeGuard, cast
+from typing import Literal, TypeGuard, cast
 
 from packaging.utils import canonicalize_name
 
@@ -168,10 +168,16 @@ def _read_python_project_info(pyproject_toml: Path) -> PythonProjectInfo:
     )
 
 
-def read_package_info(root: Path) -> PackageInfo:
-    """Infer the release identity from existing Cargo or Python project metadata."""
+def read_package_info(root: Path, *, kind: Literal["auto", "cargo", "python"] = "auto") -> PackageInfo:
+    """Read an explicit ecosystem, or preserve Cargo-first automatic selection.
+
+    Python selection reads static PEP 621 name/version even beside a virtual
+    Cargo workspace. It never executes a backend to resolve dynamic metadata.
+    """
+    if kind not in ("auto", "cargo", "python"):
+        raise ValueError("package kind must be auto, cargo or python")
     cargo = root / "Cargo.toml"
-    if cargo.is_file():
+    if kind == "cargo" or (kind == "auto" and cargo.is_file()):
         data = _read_toml(cargo)
         if "package" in data:
             package = _require_table(data, "package", cargo)

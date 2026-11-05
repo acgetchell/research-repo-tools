@@ -94,7 +94,7 @@ class ReusePolicy:
             raise ValueError("reuse freshness must be between one second and seven days")
         if not isinstance(self.artifact_prefix, str) or re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", self.artifact_prefix) is None:
             raise ValueError("reuse artifact prefix must be a portable name")
-        contracts = tuple((name, tuple(sorted(values))) for name, values in self.contracts)
+        contracts = tuple((name, tuple(sorted((field, digest) for field, digest in values))) for name, values in self.contracts)
         object.__setattr__(self, "contracts", tuple(sorted(contracts)))
         names = set(dict(self.validation.required_steps))
         if len(contracts) != len(names) or set(dict(contracts)) != names:

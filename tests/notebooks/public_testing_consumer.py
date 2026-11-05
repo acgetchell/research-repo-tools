@@ -13,7 +13,7 @@ import warnings
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import override
-from unittest.mock import patch
+from unittest.mock import AsyncMock, patch
 
 import psutil
 
@@ -199,6 +199,104 @@ class TestNotebookProject(unittest.TestCase):
             self.assertEqual(result.source.read_bytes(), original)
             result = project.execute(self.relative)
             self.assertEqual(result.returncode, 0, result.report)
+
+    def test_execution_and_cleanup_errors_are_both_retained_in_the_report(self):
+        original = self.write_notebook("print('not executed')\n")
+        startup = ValueError("original notebook startup failure")
+        cleanup = OSError("kernel cleanup failure")
+        with self.project() as project:
+            with (
+                patch("nbclient.NotebookClient.async_execute", AsyncMock(side_effect=startup)),
+                patch("nbclient.NotebookClient._async_cleanup_kernel", AsyncMock(side_effect=cleanup)),
+            ):
+                result = project.execute(self.relative)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.report["error"]["type"], "ExceptionGroup")
+            self.assertIn(str(startup), result.report["error"]["message"])
+            self.assertIn(str(cleanup), result.report["error"]["message"])
+            self.assertEqual(json.loads(result.report_path.read_bytes()), result.report)
+            self.assertEqual(result.source.read_bytes(), original)
+            self.assertEqual(list(project.artifacts.glob("research-notebook-*")), [])
+
+    def test_real_cell_failure_survives_kernel_cleanup_failure(self):
+        from nbclient import NotebookClient
+
+        original = self.write_notebook(
+            "import os\nfrom pathlib import Path\nPath('kernel.pid').write_bytes(str(os.getpid()).encode('ascii'))\nraise ValueError('original cell failure')\n"
+        )
+        native_cleanup = NotebookClient._async_cleanup_kernel
+        cleanups = []
+
+        async def cleanup(client):
+            await native_cleanup(client)
+            cleanups.append(True)
+            raise OSError("failure after native kernel cleanup")
+
+        with self.project() as project:
+            with patch.object(NotebookClient, "_async_cleanup_kernel", cleanup):
+                result = project.execute(self.relative)
+            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.report["error"]["type"], "ExceptionGroup")
+            self.assertIn("original cell failure", result.report["error"]["message"])
+            self.assertIn("failure after native kernel cleanup", result.report["error"]["message"])
+            self.assertEqual(cleanups, [True])
+            self.assertEqual(result.report["failed_cell"], {"index": 1, "id": "integration-cell"})
+            self.assertFalse(psutil.pid_exists(int((project.root / "kernel.pid").read_bytes())))
+            self.assertEqual(result.source.read_bytes(), original)
+
+    def test_cancellation_is_not_converted_to_an_ordinary_cleanup_failure(self):
+        original = self.write_notebook("print('not executed')\n")
+        cancellation = asyncio.CancelledError("execution cancelled")
+        cleanup = OSError("kernel cleanup failure")
+        with self.project() as project:
+            with (
+                patch("nbclient.NotebookClient.async_execute", AsyncMock(side_effect=cancellation)),
+                patch("nbclient.NotebookClient._async_cleanup_kernel", AsyncMock(side_effect=cleanup)),
+                self.assertRaises(BaseExceptionGroup) as caught,
+            ):
+                project.execute(self.relative)
+            self.assertEqual(caught.exception.exceptions, (cancellation, cleanup))
+            self.assertEqual((project.root / self.relative).read_bytes(), original)
+            self.assertEqual(list(project.artifacts.rglob("*.report.json")), [])
+            self.assertEqual(list(project.artifacts.glob("research-notebook-*")), [])
+
+    def test_caller_interruption_preserves_worker_cleanup_failure(self):
+        original = self.write_notebook("print('not executed')\n")
+        started = threading.Event()
+        loops = []
+        interrupted = KeyboardInterrupt("caller interrupted")
+        cleanup = OSError("worker kernel cleanup failed")
+
+        async def execute(**kwargs):
+            loops.append(asyncio.get_running_loop())
+            started.set()
+            await asyncio.sleep(10)
+
+        class InterruptedSubmission(ThreadPoolExecutor):
+            @override
+            def submit(self, fn, /, *args, **kwargs):
+                super().submit(fn, *args, **kwargs)
+                if not started.wait(10):
+                    raise AssertionError("notebook worker did not start")
+                raise interrupted
+
+        with self.project() as project:
+            with (
+                patch("research_repo_tools.notebooks.ThreadPoolExecutor", InterruptedSubmission),
+                patch("nbclient.NotebookClient.async_execute", AsyncMock(side_effect=execute)),
+                patch("nbclient.NotebookClient._async_cleanup_kernel", AsyncMock(side_effect=cleanup)),
+                self.assertRaises(BaseExceptionGroup) as caught,
+            ):
+                project.execute(self.relative)
+            self.assertIs(caught.exception.exceptions[0], interrupted)
+            worker = caught.exception.exceptions[1]
+            assert isinstance(worker, BaseExceptionGroup)
+            self.assertIsInstance(worker.exceptions[0], asyncio.CancelledError)
+            self.assertIs(worker.exceptions[1], cleanup)
+            self.assertTrue(loops[0].is_closed())
+            self.assertFalse(any(thread.name.startswith("notebook-execution") for thread in threading.enumerate()))
+            self.assertEqual((project.root / self.relative).read_bytes(), original)
+            self.assertEqual(list(project.artifacts.rglob("*.report.json")), [])
 
     def test_interrupted_submission_cleans_the_real_kernel_and_workspace(self):
         from jupyter_client import AsyncKernelManager

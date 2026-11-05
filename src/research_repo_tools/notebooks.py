@@ -16,11 +16,12 @@ from dataclasses import dataclass
 from importlib import import_module
 from importlib.metadata import version
 from pathlib import Path
+from threading import Event
 from typing import TYPE_CHECKING, Any, Literal
 
 from research_repo_tools import files, toolchain, toolchain_config
 from research_repo_tools.config import Config
-from research_repo_tools.process import run_safe_command
+from research_repo_tools.process import format_exception_diagnostics, run_safe_command
 
 if TYPE_CHECKING:
     from nbformat import NotebookNode
@@ -244,24 +245,47 @@ def _execute(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str]
     # Jupyter provisioner starts the kernel via Popen, not asyncio subprocesses.
     # A worker also supports synchronous callers already running an event loop
     # and keeps nbclient's signal registration away from the main thread.
-    with ThreadPoolExecutor(max_workers=1, thread_name_prefix="notebook-execution") as worker:
-        runner = asyncio.Runner(loop_factory=asyncio.SelectorEventLoop)
-        loop = runner.get_loop()
-        task = loop.create_task(_execute_async(node, cwd=cwd, timeout=timeout, env=env, progress=progress))
+    cancelled = Event()
+    active: list[tuple[asyncio.AbstractEventLoop, asyncio.Task[None]]] = []
+    failures: list[BaseException] = []
 
-        def run():
-            with runner:
-                runner.run(task)
-
+    def run():
         try:
-            result = worker.submit(run)
-            result.result()
-        except BaseException:
-            if not task.done():
-                loop.call_soon_threadsafe(task.cancel)
-            # The executor waits for kernel cleanup and loop shutdown in the
-            # worker, including when the caller interrupts execution.
+            # Acquire the loop only after submission succeeds, on its owner thread.
+            with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
+                loop = runner.get_loop()
+                task = loop.create_task(_execute_async(node, cwd=cwd, timeout=timeout, env=env, progress=progress))
+                active.append((loop, task))
+                # Publishing the handles before checking closes the startup race:
+                # the caller either schedules cancellation or this check sees it.
+                if cancelled.is_set():
+                    task.cancel()
+                runner.run(task)
+        except BaseException as error:
+            failures.append(error)
             raise
+
+    try:
+        with ThreadPoolExecutor(max_workers=1, thread_name_prefix="notebook-execution") as worker:
+            try:
+                result = worker.submit(run)
+                result.result()
+            except BaseException:
+                cancelled.set()
+                if active:
+                    loop, task = active[0]
+                    if not task.done():
+                        try:
+                            loop.call_soon_threadsafe(task.cancel)
+                        except RuntimeError:
+                            if not loop.is_closed():
+                                raise
+                # Executor exit waits for cleanup, even if submit was interrupted.
+                raise
+    except BaseException as error:
+        if failures and failures[0] is not error and not isinstance(failures[0], asyncio.CancelledError):
+            raise BaseExceptionGroup("notebook caller and worker cleanup failed", [error, failures[0]]) from None
+        raise
 
 
 async def _execute_async(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str], progress: list[int]) -> None:
@@ -307,15 +331,26 @@ async def _execute_async(node: NotebookNode, *, cwd: Path, timeout: int, env: di
         on_cell_start=starting,
     )
     # A caller-supplied manager requires explicit cleanup ownership.
+    execution_error = None
     try:
-        await client.async_execute(cwd=str(cwd), env=env, cleanup_kc=True)
+        # Keep shutdown outside nbclient's context so it cannot replace a cell
+        # failure before we can retain both the execution and cleanup errors.
+        await client.async_execute(cwd=str(cwd), env=env, cleanup_kc=False)
+    except BaseException as error:
+        execution_error = error
+        raise
     finally:
-        # nbclient registers an atexit fallback before startup, but its context
-        # cleanup begins only after startup completes. Close partial startup in
-        # this same loop too; never leave a callback targeting a closed loop.
+        # nbclient registers an atexit fallback before startup. Own shutdown in
+        # this loop, including partial startup, without leaving a callback that
+        # targets the loop after its owner closes it.
         atexit.unregister(client._cleanup_kernel)
         if client.km is not None:
-            await client._async_cleanup_kernel()
+            try:
+                await client._async_cleanup_kernel()
+            except BaseException as error:
+                if execution_error is not None:
+                    raise BaseExceptionGroup("notebook execution and kernel cleanup failed", [execution_error, error]) from None
+                raise
 
 
 def execute(settings: Config, paths: list[Path], *, cwd: str | None = None, output_dir: str | None = None, timeout: int | None = None) -> int:
@@ -418,12 +453,15 @@ def _execute_reports(
             "timeout": limit,
             "status": "failed" if failure else "passed",
             "failed_cell": None if failure is None or cell_index is None else {"index": cell_index + 1, "id": notebook.node.cells[cell_index].id},
-            "error": None if failure is None else {"type": type(failure).__name__, "message": str(failure)},
+            "error": None if failure is None else {"type": type(failure).__name__, "message": format_exception_diagnostics(failure)},
         }
         files.replace_many({target: serialize(notebook.node), report: (json.dumps(result, indent=2) + "\n").encode("utf-8")})
         results.append(NotebookExecution(notebook.path, target, report, result))
         if failure is not None:
-            print(f"{notebook.path}: cell {result['failed_cell']}: {type(failure).__name__}: {failure}\nExecution report: {report}", file=sys.stderr)
+            print(
+                f"{notebook.path}: cell {result['failed_cell']}: {type(failure).__name__}: {format_exception_diagnostics(failure)}\nExecution report: {report}",
+                file=sys.stderr,
+            )
             break
         print(f"OK executed {notebook.path} -> {target}; report {report}")
     return tuple(results)

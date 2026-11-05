@@ -3,6 +3,7 @@
 import os
 import re
 import tempfile
+import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, cast
@@ -54,6 +55,8 @@ def release_metadata(name: str, tag: str) -> dict[str, Any]:
         with urllib.request.urlopen(request, timeout=30) as response:
             payload = response.read(2 * 1024 * 1024 + 1)
     except (OSError, ValueError) as error:
+        if isinstance(error, urllib.error.HTTPError):
+            error.close()
         raise RuntimeError(f"binary release lookup failed: {release_credentials.diagnostics(error)}") from None
     if len(payload) > 2 * 1024 * 1024:
         raise ValueError("release metadata exceeds size limit")

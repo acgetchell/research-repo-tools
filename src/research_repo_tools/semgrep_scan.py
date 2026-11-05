@@ -105,7 +105,7 @@ def require_current_reports(destination: Path) -> tuple[Path, ...]:
     if marker.is_symlink() or marker.is_junction() or destination.is_symlink() or destination.is_junction():
         raise ValueError("Semgrep report/currentness paths must not be links")
     data = _object(_load_json(marker.read_bytes(), "Semgrep attempt"), "Semgrep attempt")
-    if data.get("schema") != 1 or data.get("published") is not True or not isinstance(data.get("attempt"), str):
+    if type(data.get("schema")) is not int or data["schema"] != 1 or data.get("published") is not True or not isinstance(data.get("attempt"), str):
         raise ValueError("Semgrep reports are not current: latest attempt did not publish")
     hashes = _object(data.get("reports"), "Semgrep report hashes")
     if not hashes or set(hashes) != {path.name for path in destination.iterdir()}:
@@ -520,15 +520,23 @@ def scan(
         raise ValueError("Semgrep attempt marker must not be a link")
     attempt: dict[str, Any] = {"schema": 1, "attempt": str(uuid.uuid4()), "published": False, "exit_code": None, "reports": {}}
     replace_many({marker: deterministic_json(attempt)})
+    scan_error = None
     try:
         code = _scan(settings, names, destination, policy, rust_docs, attempt)
         attempt["exit_code"] = code
         return code
-    except BaseException:
+    except BaseException as error:
+        scan_error = error
         attempt["published"] = False
         raise
     finally:
-        replace_many({marker: deterministic_json(attempt)})
+        try:
+            replace_many({marker: deterministic_json(attempt)})
+        except BaseException as error:
+            error.add_note(f"Semgrep attempt status could not be finalized at {marker}")
+            if scan_error is not None:
+                raise BaseExceptionGroup("Semgrep scan and final status write failed", [scan_error, error]) from None
+            raise
 
 
 def _scan(settings: config.Config, names: tuple[str, ...], destination: Path, policy: config.SemgrepSettings, rust_docs: bool, attempt: dict[str, Any]) -> int:

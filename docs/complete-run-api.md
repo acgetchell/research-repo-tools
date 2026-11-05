@@ -83,6 +83,10 @@ Current document-input checks derive from each suite's recorded declarations.
 observer=None, clock=time.monotonic)` exposes the documented event contract.
 The default stream is stderr. An observer receives event dictionaries; heartbeats
 invoke it on a background thread. Keep custom observers fast and nonblocking.
+Heartbeat errors propagate when the stage ends, after its worker stops. If
+acquisition and reporting both fail, an exception group preserves both errors.
+Checkpoint cleanup failures likewise preserve the acquisition error and identify
+the unresolved writer lock for explicit recovery.
 The [schema-5 guide](DECLARING_PERFORMANCE.md#availability-progress-and-resume-schema-5)
 defines availability, comparison, checkpoint, cadence and recovery semantics.
 
@@ -395,7 +399,10 @@ series then row order. Plots sort rows by numeric coordinate and require a finit
 unique coordinate for every row. Linear coordinates can be zero or negative;
 log coordinates must be strictly positive. The timing axis includes point values
 and both recorded bounds, even when a bootstrap interval does not contain its
-point. Constant domains are centered; geometry is normalized to avoid overflow.
+point. Constant domains are centered; geometry avoids overflow and preserves
+spacing between nearby floating-point values on both linear and logarithmic axes.
+Tick labels use additional precision when six significant digits would give
+distinct values the same label.
 Lines connect adjacent available points and break at unavailable rows. Legends,
 tooltips and accessible descriptions preserve originating phase/release/revision;
 the root SVG carries the complete-run identity. XML text is escaped and invalid

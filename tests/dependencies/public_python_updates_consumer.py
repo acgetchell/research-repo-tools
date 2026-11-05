@@ -170,6 +170,22 @@ class TestPythonUpdates(unittest.TestCase):
         self.uv("sync", "--locked", "--group", "dev")
         self.assertEqual(self.installed_version(self.project, "fixed-tool"), "1.0")
 
+    def test_invalid_lock_schema_fails_before_resolution_and_preserves_inputs(self):
+        lock = self.project / "uv.lock"
+        original = self.manifest.read_bytes()
+        for schema in ("true", "1.0"):
+            with self.subTest(schema=schema):
+                payload = (f'version={schema}\n[[package]]\nname="fixture-tool"\nversion="1.0"\nsource={{registry="https://example.invalid"}}\n').encode(
+                    "utf-8"
+                )
+                lock.write_bytes(payload)
+                with patch.object(dependencies, "resolve_latest_pins", side_effect=AssertionError("invalid lock reached resolution")):
+                    with self.assertRaisesRegex(ValueError, "valid version 1 uv.lock"):
+                        dependencies.update_dev_pins(self.manifest, env=self.env)
+                self.assertEqual(self.manifest.read_bytes(), original)
+                self.assertEqual(lock.read_bytes(), payload)
+                self.assertFalse((self.project / ".venv").exists())
+
     def test_transitive_downgrade_restores_manifest_and_lock(self):
         wheel(self.wheels, "fixture-lib", "2.0")
         wheel(self.wheels, "fixture-lib", "1.0")

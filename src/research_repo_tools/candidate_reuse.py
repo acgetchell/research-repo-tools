@@ -88,7 +88,7 @@ class CandidatePolicy:
         validate_source_record(receipt, self.candidate.revision)
         if dict(self.candidate.context).get("release") != self.tag:
             raise ValueError("candidate label differs from final version")
-        observations = tuple(self.observations)
+        observations = tuple((trial, suite, phase, source) for trial, suite, phase, source in self.observations)
         keys = [(trial, suite, phase) for trial, suite, phase, _ in observations]
         if not keys or len(set(keys)) != len(keys):
             raise ValueError("candidate assertions must be nonempty and unique")

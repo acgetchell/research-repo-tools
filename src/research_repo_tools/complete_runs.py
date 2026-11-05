@@ -188,13 +188,14 @@ class CompleteCase:
             raise TypeError("Criterion files must be immutable bytes")
         from research_repo_tools.criterion_baselines import _raw_files
 
-        names = tuple(name for name, _ in self.raw_files)
+        raw_files = tuple((name, payload) for name, payload in self.raw_files)
+        names = tuple(name for name, _ in raw_files)
         _raw_files(("benchmark.json", "estimates.json", "sample.json", *names))
-        for name, payload in self.raw_files:
+        for name, payload in raw_files:
             if not isinstance(payload, bytes):
                 raise TypeError("Criterion raw files require immutable bytes")
             _load_json(payload, name)
-        object.__setattr__(self, "raw_files", tuple(sorted(self.raw_files)))
+        object.__setattr__(self, "raw_files", tuple(sorted(raw_files)))
         _ = self.full_id
         raw = _object(_load_json(self.sample, "Criterion raw sample"), "Criterion raw sample")
         iters, times = (_array(raw.get(key), key) for key in ("iters", "times"))
