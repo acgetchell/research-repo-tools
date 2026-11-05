@@ -269,7 +269,12 @@ def checkout(tmp_path, monkeypatch, git_mutations_allowed):
     git("commit", "--quiet", "-m", "Release fixture")
     assert git("status", "--porcelain", "--untracked-files=all") == ""
     remote = mock_remote(monkeypatch, tmp_path, commit=git("rev-parse", "HEAD"))
-    monkeypatch.setattr(release.time, "sleep", lambda _: pytest.fail("local inspection must not wait for pending CI"))
+    select_run = release.select_main_run
+
+    def select_without_waiting(*args, **kwargs):
+        return select_run(*args, **kwargs, sleep=lambda _: pytest.fail("local inspection must not wait for pending CI"))
+
+    monkeypatch.setattr(release, "select_main_run", select_without_waiting)
     monkeypatch.chdir(root)
     for name in ("GITHUB_RUN_ID", "GITHUB_RUN_ATTEMPT", "GITHUB_SHA"):
         monkeypatch.delenv(name, raising=False)
