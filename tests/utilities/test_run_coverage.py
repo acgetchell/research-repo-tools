@@ -124,10 +124,12 @@ def test_coverage_keeps_child_branch_data_and_reports_test_status(tmp_path, test
     assert report.find(".//class[@filename='application.py']/lines/line[@number='3'][@hits='1']") is not None
     branch = report.find(".//class[@filename='application.py']/lines/line[@number='2'][@branch='true']")
     assert branch is not None and branch.get("condition-coverage") == "50% (1/2)"
+    assert list((tmp_path / "coverage").iterdir()) == [tmp_path / "coverage" / "cobertura.xml"]
 
 
 @pytest.mark.parametrize("damage", [b"not a coverage database\n", b"SQLite format 3\0" + b"\0" * 100])
-def test_corrupt_shard_preserves_prior_report_and_all_raw_measurements(tmp_path, damage):
+@pytest.mark.parametrize("block_rename", [False, True], ids=["native", "sharing-violation-model"])
+def test_corrupt_shard_preserves_prior_report_and_all_raw_measurements(tmp_path, damage, block_rename):
     (tmp_path / "pyproject.toml").write_bytes(b'[tool.coverage.run]\nsource=["."]\n')
     source = tmp_path / "application.py"
     source.write_bytes(b"answer = 42\n")
@@ -145,9 +147,16 @@ def test_corrupt_shard_preserves_prior_report_and_all_raw_measurements(tmp_path,
     # A real Coverage() controller disables automatic coverage in its process.
     # Keep it out of the pytest worker so this fixture cannot discard that
     # worker's measurements for unrelated tests.
-    child = """import runpy, subprocess, sys
+    child = """import os, runpy, subprocess, sys
 from pathlib import Path
 runner = runpy.run_path(sys.argv[1])
+if sys.argv[3] == "True":
+    rename = os.rename
+    def rename_without_open_shards(source, destination, *args, **kwargs):
+        if (Path(source) / ".coverage.z-broken").is_file():
+            raise PermissionError("injected Windows sharing violation")
+        return rename(source, destination, *args, **kwargs)
+    os.rename = rename_without_open_shards
 def completed_tests(args, *, env, **kwargs):
     base = Path(env["COVERAGE_FILE"])
     base.with_name(base.name + ".a-complete").write_bytes(Path("complete.sqlite").read_bytes())
@@ -162,7 +171,7 @@ except RuntimeError as error:
 """
     environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("COVERAGE_")}
     result = subprocess.run(
-        [sys.executable, "-I", "-X", "utf8", "-c", child, str(RUNNER), damage.hex()],
+        [sys.executable, "-I", "-X", "utf8", "-c", child, str(RUNNER), damage.hex(), str(block_rename)],
         cwd=tmp_path,
         env=environment,
         capture_output=True,
