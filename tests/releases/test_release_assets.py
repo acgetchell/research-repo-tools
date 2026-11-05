@@ -194,7 +194,8 @@ def mock_remote(monkeypatch, tmp_path, *, commit=COMMIT):
         pytest.fail(f"unexpected gh args {args}")
 
     def execute(args, **kwargs):
-        if args[0] == "git":
+        if Path(args[0]).name.lower() in {"git", "git.exe"}:
+            assert Path(args[0]).is_absolute()
             return run_command(args, **kwargs)
         state["calls"].append(tuple(args))
         assert args[:2] == ["gh", "api"] and kwargs["timeout"] == 120 and kwargs["check"]

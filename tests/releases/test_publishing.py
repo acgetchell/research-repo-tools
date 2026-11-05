@@ -53,7 +53,12 @@ def consumer(tmp_path, monkeypatch):
         root=tmp_path,
     )
     monkeypatch.setattr(publishing, "run_git_command", lambda args, **kwargs: subprocess.CompletedProcess(args, 0, "" if "status" in args else SHA + "\n", ""))
-    monkeypatch.setattr(assets, "run_git_bytes", lambda args, **kwargs: subprocess.CompletedProcess(args, 0, SHA.encode() if "rev-parse" in args else b"", b""))
+
+    def checkout_git(command, args, **kwargs):
+        assert Path(command).is_absolute()
+        return subprocess.CompletedProcess([str(command), *args], 0, SHA.encode() if "rev-parse" in args else b"", b"")
+
+    monkeypatch.setattr(assets, "run_command_bytes", checkout_git)
     evidence = {
         "": {"full_name": "example/project", "default_branch": "main"},
         "git/ref/tags/v1.2.3": {"ref": "refs/tags/v1.2.3", "object": {"type": "tag", "sha": "b" * 40}},
@@ -193,9 +198,9 @@ def test_gate_rejects_checkout_event_lifecycle_and_package_mismatches(consumer, 
     if damage == "dirty":
         monkeypatch.setattr(
             assets,
-            "run_git_bytes",
-            lambda args, **kwargs: subprocess.CompletedProcess(
-                args, 0, b"?? unexpected\0" if "status" in args else SHA.encode() if "rev-parse" in args else b"", b""
+            "run_command_bytes",
+            lambda command, args, **kwargs: subprocess.CompletedProcess(
+                [str(command), *args], 0, b"?? unexpected\0" if "status" in args else SHA.encode() if "rev-parse" in args else b"", b""
             ),
         )
     elif damage in {"event-commit", "event-tag"}:
