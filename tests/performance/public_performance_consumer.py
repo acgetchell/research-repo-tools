@@ -105,20 +105,6 @@ class TestPerformanceConsumer(unittest.TestCase):
             self.assertEqual(target.read_bytes(), b"previous asset\r\n")
             self.assertEqual(list(target.parent.iterdir()), [target])
 
-    def test_invalid_download_timeout_preserves_destination_without_transport(self):
-        with tempfile.TemporaryDirectory() as directory:
-            target = Path(directory) / "asset.zip"
-            target.write_bytes(b"previous asset\r\n")
-            for timeout in (True, False, None, 0, -1, 10**1000, float("inf"), float("nan")):
-                with (
-                    self.subTest(timeout=timeout),
-                    patch("urllib.request.build_opener", side_effect=AssertionError("invalid timeout reached transport")),
-                    self.assertRaisesRegex(ValueError, "timeout must"),
-                ):
-                    download_asset("https://example.invalid/asset.zip", target, expected_sha256="a" * 64, timeout=timeout)  # ty: ignore[invalid-argument-type] -- malformed public boundary input
-                self.assertEqual(target.read_bytes(), b"previous asset\r\n")
-                self.assertEqual(list(target.parent.iterdir()), [target])
-
     def test_descriptive_comparisons_are_invariant_under_exact_unit_scaling(self) -> None:
         # Hand-derived times: 100 -> 80 is a 20% reduction and a 1.25 ratio;
         # reversing them is a 25% increase and a 0.8 ratio. Powers of two

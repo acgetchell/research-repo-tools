@@ -167,9 +167,6 @@ for literal argument transport.
 The runners request no shell. Capturing runners keep both output streams in memory;
 the live runner inherits them by default and returns `None` for stdout/stderr. They do not
 provide pipelines, redirection, or detached processes.
-Timeouts accept positive finite integers or floats, or `None` for no deadline.
-Booleans and numbers outside the finite floating-point range are rejected before
-executable discovery or launch.
 `input=None` inherits stdin; an empty string/byte string supplies an empty pipe.
 Text input is encoded once, without platform newline conversion. Binary input
 must be `bytes`; use `run_git_bytes` for Git blobs and filter-sensitive data.

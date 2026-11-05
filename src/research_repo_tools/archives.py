@@ -2,6 +2,7 @@
 
 import io
 import logging
+import math
 import os
 import shutil
 import stat
@@ -19,7 +20,6 @@ from research_repo_tools._archive_paths import ArchivePaths
 from research_repo_tools._http import closing_http_errors
 from research_repo_tools.evidence import _digest, verify_sha256
 from research_repo_tools.files import replace_many
-from research_repo_tools.process import _validate_timeout
 
 __all__ = ["ArchiveLimits", "download_asset", "extract_archive"]
 LOGGER = logging.getLogger(__name__)
@@ -78,9 +78,8 @@ def download_asset(url: str, destination: Path, *, expected_sha256: str, limits:
     """
     _https(url)
     _digest(expected_sha256, "expected digest")
-    if timeout is None:
+    if isinstance(timeout, bool) or not isinstance(timeout, int | float) or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("asset timeout must be finite and positive")
-    _validate_timeout(timeout)
     opener = urllib.request.build_opener(_HTTPSRedirect())
     with closing_http_errors(), opener.open(url, timeout=timeout) as response:
         _https(response.geturl())

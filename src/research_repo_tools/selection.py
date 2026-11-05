@@ -6,7 +6,7 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 
 from research_repo_tools.files import _validate_distinct_paths
-from research_repo_tools.process import _validate_timeout, resolve_executable, run_command_live, run_git_bytes
+from research_repo_tools.process import resolve_executable, run_command_live, run_git_bytes
 from research_repo_tools.publication import _path
 
 __all__ = ["argument_batches", "run_selected", "select_files"]
@@ -109,7 +109,6 @@ def run_selected(
     """
     if not command:
         raise ValueError("files run requires a command after --")
-    _validate_timeout(timeout)
     argument_batches(command, (), batch_size=batch_size)
     files = select_files(root, include=include, exclude=exclude, env=env)
     if not files:

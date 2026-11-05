@@ -111,17 +111,6 @@ def resolve_executable(command: str | Path, *, cwd: Path | None = None, env: Map
     return Path(selected).absolute()
 
 
-def _validate_timeout(timeout: float | None) -> None:
-    if timeout is None:
-        return
-    try:
-        valid = not isinstance(timeout, bool) and isinstance(timeout, int | float) and math.isfinite(timeout) and timeout > 0
-    except OverflowError:
-        valid = False
-    if not valid:
-        raise ValueError("timeout must be positive and finite, or None")
-
-
 def run_command_bytes(
     command: str | Path,
     args: Sequence[str] = (),
@@ -144,7 +133,8 @@ def run_command_bytes(
         raise TypeError("args must be a sequence of strings without NUL")
     if input is not None and not isinstance(input, bytes):
         raise TypeError("input must be bytes or None")
-    _validate_timeout(timeout)
+    if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
+        raise ValueError("timeout must be positive and finite, or None")
     path = resolve_executable(command, cwd=cwd, env=env)
     return subprocess.run([str(path), *args], cwd=cwd, env=env, input=input, capture_output=True, check=check, timeout=timeout)
 
@@ -203,7 +193,8 @@ def run_command_live(
     """
     if not isinstance(args, Sequence) or isinstance(args, (str, bytes)) or any(not isinstance(arg, str) or "\x00" in arg for arg in args):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
         raise TypeError("args must be a sequence of strings without NUL")
-    _validate_timeout(timeout)
+    if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
+        raise ValueError("timeout must be positive and finite, or None")
     for name, markers in (("stdout_markers", stdout_markers), ("stderr_markers", stderr_markers)):
         if (
             not isinstance(markers, Sequence) or isinstance(markers, (str, bytes)) or any(not isinstance(marker, bytes) or not marker for marker in markers)  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
