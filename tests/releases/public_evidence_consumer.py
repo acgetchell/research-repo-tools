@@ -13,6 +13,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import unicodedata
 import unittest
 import urllib.error
 import zipfile
@@ -1372,7 +1373,13 @@ class TestReleaseCheckoutConsumer(unittest.TestCase):
         self.commit = self.git("rev-parse", "HEAD").stdout.decode("ascii").strip()
         standalone = runpy.run_path(release_validation.__file__)["_checkout_identity"]
         original_path = os.environ.get("PATH", os.defpath)
-        for prefix in ("bin", "", str(self.root / "bin"), str(child / "bin")):
+        prefixes = ["bin", "", str(self.root / "bin"), str(child / "bin")]
+        for basename in (self.root.name.swapcase(), unicodedata.normalize("NFD", self.root.name)):
+            alias = self.root.with_name(basename) / "bin"
+            if str(alias) != str(self.root / "bin") and alias.is_dir():
+                self.assertTrue(alias.samefile(self.root / "bin"))
+                prefixes.append(str(alias))
+        for prefix in prefixes:
             for directory in (self.root, child):
                 (directory / "git-hijacked").unlink(missing_ok=True)
             self.assertEqual(self.git("status", "--porcelain", "--ignore-submodules=none").stdout, b"")

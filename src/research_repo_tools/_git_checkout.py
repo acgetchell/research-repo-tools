@@ -9,16 +9,26 @@ from pathlib import Path
 READ_ONLY_OPTIONS = ("--no-pager", "--no-optional-locks", "--no-replace-objects", "-c", "core.fsmonitor=false", "-c", "diff.autoRefreshIndex=false")
 
 
+def _in_checkout(path: Path, root: Path) -> bool:
+    resolved = path.resolve()
+    if resolved.is_relative_to(root):
+        return True
+    if not root.exists():
+        return False
+    # macOS can alias case/Unicode spellings that PosixPath compares differently.
+    return any(parent.exists() and parent.samefile(root) for parent in (resolved, *resolved.parents))
+
+
 def git_context(checkout: Path) -> tuple[Path, dict[str, str]]:
     """Pin Git and its child PATH outside the source being inspected."""
     root = checkout.resolve()
-    paths = [entry for entry in os.get_exec_path() if Path(entry).is_absolute() and not Path(entry).resolve().is_relative_to(root)]
+    paths = [entry for entry in os.get_exec_path() if Path(entry).is_absolute() and not _in_checkout(Path(entry), root)]
     environment = {key: value for key, value in os.environ.items() if key.upper() != "PATH"}
     environment["PATH"] = os.pathsep.join(paths)
     # An explicit absolute candidate prevents Windows' implicit cwd search.
     for entry in paths:
         executable = shutil.which(str(Path(entry) / "git"))
-        if executable is not None and not Path(executable).resolve().is_relative_to(root):
+        if executable is not None and not _in_checkout(Path(executable), root):
             return Path(executable), environment
     raise ValueError("release checkout requires Git on an absolute PATH entry outside the checkout")
 
