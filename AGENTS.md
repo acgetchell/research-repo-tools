@@ -76,6 +76,19 @@
   Keep documentation focused on current guidance. Link to the generated
   [CHANGELOG.md](CHANGELOG.md) for fixes and release history; do not maintain
   parallel fix or validation logs in other documents.
+- Before a corrective push to an existing PR, collect the complete results for
+  its current remote head: workflow jobs, check runs and commit statuses,
+  security findings and annotations, and unresolved review threads. Wait for
+  running checks and reviews to finish; do not push a fix for the first failure
+  while other results are pending, unless the user explicitly requests it.
+- A successful security-analysis workflow does not establish that its separate
+  security-results check passed. Inspect both, including reported findings.
+- Verify every finding against current code, fix all valid findings together,
+  and record a brief reason for anything not changed. Complete final local
+  validation, inspect the intended diff, and refresh the full result set before
+  one corrective push. Report unavailable checks explicitly; do not treat them
+  as passed. After pushing, verify required checks against the new commit before
+  reporting merge readiness.
 
 ## Cross-platform changes and fixtures
 

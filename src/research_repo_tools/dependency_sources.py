@@ -260,11 +260,13 @@ def verify_source(source: Source, *, provider: SourceProvider | None = None, rel
             for raw in entries:
                 entry = table(raw, "Git tree entry")
                 member = string(entry.get("path"), "Git tree path")
-                relative_directory(member)
+                if "\0" in member or any(part in {"", ".", ".."} for part in member.split("/")):
+                    raise ValueError("Git tree paths must be normalized relative paths without traversal")
                 if member in seen:
                     raise ValueError("Git tree contains duplicate paths")
                 seen.add(member)
                 if PurePosixPath(member).name == "Cargo.toml":
+                    relative_directory(member)
                     if entry.get("type") != "blob" or entry.get("mode") not in {"100644", "100755"}:
                         raise ValueError("Cargo manifest must be a regular Git blob")
                     manifests.append((member, entry.get("sha")))

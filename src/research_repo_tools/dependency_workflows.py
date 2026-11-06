@@ -215,12 +215,17 @@ def _resolve_candidate(root: Path, verified: VerifiedSource, *, checkout: Path) 
     from research_repo_tools.process import resolve_executable, run_command
     from research_repo_tools.release_credentials import environment as without_credentials
 
+    source = verified.source
     environment = {
         key: value
         for key, value in without_credentials().items()
-        if (key.upper() in {"CARGO_HOME", "RUSTUP_HOME"} or not key.upper().startswith(("UV_", "CARGO_", "RUST"))) and key.upper() != "RRT_GITHUB_LOOKUP_TOKEN"
+        if (
+            key.upper() in {"CARGO_HOME", "RUSTUP_HOME"}
+            or (source.ecosystem == "cargo" and key.upper() == "RUSTUP_TOOLCHAIN")
+            or not key.upper().startswith(("UV_", "CARGO_", "RUST"))
+        )
+        and key.upper() != "RRT_GITHUB_LOOKUP_TOKEN"
     }
-    source = verified.source
     environment["PATH"] = os.pathsep.join(
         entry
         for entry in os.get_exec_path()
@@ -439,13 +444,16 @@ def _require_dependency_free(root: Path) -> None:
             raise ValueError("workspace members must be an array")
         configured |= bool(members)
         if lock.exists():
+            version = project.get("version")
+            if ecosystem == "cargo" and version == {"workspace": True}:
+                version = table(workspace.get("package", {}), "workspace.package").get("version")
             packages = table(tomllib.loads(lock.read_text(encoding="utf-8")), "lock").get("package")
             if not isinstance(packages, list):
                 raise ValueError("release dependency graph requires dependency-sources.toml")
             for raw in packages:
                 item = table(raw, "locked package")
                 local = item.get("source") in ({"editable": "."}, {"virtual": "."}) if ecosystem == "python" else item.get("source") is None
-                configured |= not local or (item.get("name"), item.get("version")) != (owned_name, project.get("version"))
+                configured |= not local or (item.get("name"), item.get("version")) != (owned_name, version)
         if configured:
             raise ValueError("release dependency graph requires dependency-sources.toml; declare projects and release-owned boundaries")
     snapshot.verify()

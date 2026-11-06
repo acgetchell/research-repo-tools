@@ -157,7 +157,7 @@ class InputSnapshot:
             seen.add(path)
             try:
                 metadata = path.lstat()
-            except FileNotFoundError:
+            except FileNotFoundError, NotADirectoryError:
                 files.append((path, None))
                 continue
             if not stat.S_ISREG(metadata.st_mode):

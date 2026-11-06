@@ -16,6 +16,7 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import override
 from unittest.mock import patch
+from urllib.parse import urlsplit
 
 from research_repo_tools import (
     cli,
@@ -121,6 +122,7 @@ class TestSources(unittest.TestCase):
             {"branch": "main"},
             {"github": "https://github.com/example/upstream"},
             {"directory": "../escape"},
+            {"directory": "fixtures:old"},
             {"registry": "private"},
         ):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
@@ -226,8 +228,23 @@ class TestSources(unittest.TestCase):
                 self.provider.calls.clear()
                 proof = verify_source(GitCommit("cargo", "sample-crate", "example/upstream", COMMIT, directory), provider=self.provider)
                 self.assertEqual(proof.version, expected)
-                raw_calls = [url for url in self.provider.calls if "raw.githubusercontent.com" in url]
+                raw_calls = [url for url in self.provider.calls if urlsplit(url).hostname == "raw.githubusercontent.com"]
                 self.assertEqual(len(raw_calls), len(manifests))
+
+    def test_cargo_tree_allows_unrelated_git_filenames_but_rejects_malformed_paths(self) -> None:
+        self.provider.git("cargo")
+        source = GitCommit("cargo", "sample-crate", "example/upstream", COMMIT)
+        url = f"https://api.github.com/repos/example/upstream/git/trees/{'c' * 40}?recursive=1"
+        original = json.loads(self.provider.responses[url])
+        entry = {"path": "fixtures/input:1.txt", "type": "blob", "mode": "100644", "sha": "d" * 40}
+        self.provider.put(url, {**original, "tree": [*original["tree"], entry]})
+        self.assertEqual(verify_source(source, provider=self.provider).version, "1.2.3")
+        self.assertEqual(len(self.provider.calls), 4)
+        for path in ("", ".", "../input", "/input", "nested//input", "nested/./input", "nested/../input", "input\0.txt", "Cargo.toml", "old:1/Cargo.toml"):
+            with self.subTest(path=path):
+                self.provider.put(url, {**original, "tree": [*original["tree"], {**entry, "path": path}]})
+                with self.assertRaises(ValueError):
+                    verify_source(source, provider=self.provider)
 
 
 class TestSourceWorkflows(unittest.TestCase):
@@ -382,6 +399,30 @@ class TestSourceWorkflows(unittest.TestCase):
         self.assertEqual([(item.name, item.version) for item in identities], [("sample-pkg", "1.2.3")])
         self.assertEqual(self.provider.calls, [PYTHON_API, PYTHON_API])
         self.assertEqual(self.native.call_count, 2)
+
+    def test_missing_policy_accepts_dependency_free_root_with_inherited_cargo_version(self) -> None:
+        (self.root / "Cargo.toml").write_bytes(b'[package]\nname="consumer"\nversion.workspace=true\n[workspace.package]\nversion="1.2.3"\n')
+        lock = self.root / "Cargo.lock"
+        lock.write_bytes(b'version=4\n[[package]]\nname="consumer"\nversion="1.2.3"\n')
+        before = self.snapshot()
+        self.assertEqual(check_release_dependencies(self.root), ())
+        self.assertEqual(self.snapshot(), before)
+        lock.write_bytes(b'version=4\n[[package]]\nname="consumer"\nversion="1.2.4"\n')
+        with self.assertRaisesRegex(ValueError, "requires dependency-sources.toml"):
+            check_release_dependencies(self.root)
+
+    def test_non_directory_configuration_ancestor_is_absent_and_still_checked_for_staleness(self) -> None:
+        cargo = self.root / ".cargo"
+        cargo.write_bytes(b"not a configuration directory\n")
+        config = cargo / "config.toml"
+        snapshot = dependency_policy.InputSnapshot.capture((config,))
+        self.assertEqual(snapshot.files, ((config, None),))
+        self.assertEqual(check_release_dependencies(self.root), ())
+        cargo.unlink()
+        cargo.mkdir()
+        config.write_bytes(b"[net]\noffline=true\n")
+        with self.assertRaisesRegex(ValueError, "inputs changed"):
+            snapshot.verify()
 
     def test_registry_provider_rejections_start_no_process_and_mutate_nothing(self) -> None:
         self.python()
@@ -604,7 +645,7 @@ class TestSourceWorkflows(unittest.TestCase):
         settings = {
             "CARGO_HOME": str(self.root / "managed cargo"),
             "RUSTUP_HOME": str(self.root / "managed rustup"),
-            "RUSTUP_TOOLCHAIN": "untrusted-selector",
+            "RUSTUP_TOOLCHAIN": "managed-toolchain",
             "CARGO_BUILD_RUSTC_WRAPPER": "untrusted-wrapper",
             "RUSTFLAGS": "untrusted-flags",
             "GITHUB_TOKEN": "secret",
@@ -622,7 +663,8 @@ class TestSourceWorkflows(unittest.TestCase):
         environment = run.call_args.kwargs["env"]
         self.assertEqual(environment["CARGO_HOME"], settings["CARGO_HOME"])
         self.assertEqual(environment["RUSTUP_HOME"], settings["RUSTUP_HOME"])
-        self.assertFalse(set(settings) - {"CARGO_HOME", "RUSTUP_HOME", "PATH"} & environment.keys())
+        self.assertEqual(environment["RUSTUP_TOOLCHAIN"], settings["RUSTUP_TOOLCHAIN"])
+        self.assertFalse(set(settings) - {"CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "PATH"} & environment.keys())
         self.assertNotIn(str(self.root), environment["PATH"].split(os.pathsep))
 
     def test_cli_preview_and_release_gate_share_the_public_policy(self) -> None:
@@ -883,6 +925,7 @@ class TestSourceWorkflows(unittest.TestCase):
         git_config.write_bytes((f'[url "{upstream.as_uri()}"]\n\tinsteadOf = https://github.com/example/upstream.git\n').encode())
         environment = {
             "CARGO_HOME": str(cargo_home),
+            "RUSTUP_TOOLCHAIN": process.run_command("rustup", ["show", "active-toolchain"], cwd=self.root.parent).stdout.strip().split(" (", 1)[0],
             "GIT_CONFIG_GLOBAL": str(git_config),
             "GIT_CONFIG_NOSYSTEM": "1",
             "GIT_CONFIG_COUNT": "0",
