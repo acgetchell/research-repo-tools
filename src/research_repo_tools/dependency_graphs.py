@@ -94,6 +94,8 @@ def _check_configuration(root: Path, ecosystem: str) -> None:
         "UV_PYTHON_DOWNLOADS",
         "UV_NO_PROGRESS",
         "UV_RUN_RECURSION_DEPTH",
+        "UV_TOOL_BIN_DIR",
+        "UV_TOOL_DIR",
         "CARGO_HOME",
         "CARGO_TARGET_DIR",
         "CARGO_TERM_COLOR",

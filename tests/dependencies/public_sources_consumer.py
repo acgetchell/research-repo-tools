@@ -245,7 +245,7 @@ class TestSourceWorkflows(unittest.TestCase):
                 {
                     key: value
                     for key, value in os.environ.items()
-                    if key in {"UV_RUN_RECURSION_DEPTH", "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"}
+                    if key in {"UV_RUN_RECURSION_DEPTH", "UV_TOOL_BIN_DIR", "UV_TOOL_DIR", "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"}
                     or not key.upper().startswith(("UV_", "CARGO_", "RUST"))
                 },
                 clear=True,
@@ -667,7 +667,13 @@ class TestSourceWorkflows(unittest.TestCase):
         (self.root / "build.rs").write_bytes(b'compile_error!("inspection must not build");\n')
         (self.root / "rust-toolchain.toml").write_bytes(b'[toolchain]\nchannel="must-not-select-checkout-toolchain"\n')
         toolchain = process.run_command("rustup", ["show", "active-toolchain"], cwd=self.root.parent).stdout.strip().split(" (", 1)[0]
-        launcher = {"UV_RUN_RECURSION_DEPTH": "2", "RUSTUP_TOOLCHAIN": toolchain, "RUSTUP_HOME": os.environ.get("RUSTUP_HOME", str(Path.home() / ".rustup"))}
+        launcher = {
+            "UV_RUN_RECURSION_DEPTH": "2",
+            "UV_TOOL_BIN_DIR": str(self.root / "tool launchers"),
+            "UV_TOOL_DIR": str(self.root / "tool environments"),
+            "RUSTUP_TOOLCHAIN": toolchain,
+            "RUSTUP_HOME": os.environ.get("RUSTUP_HOME", str(Path.home() / ".rustup")),
+        }
         before = self.snapshot()
         for ecosystem in ("python", "cargo"):
             with self.subTest(ecosystem=ecosystem), patch.dict(os.environ, launcher), patch.object(process, "run_command", wraps=process.run_command) as run:
