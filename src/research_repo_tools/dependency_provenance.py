@@ -6,6 +6,7 @@ Neither operation resolves, installs, changes pins, or mutates the checkout.
 """
 
 import hashlib
+import http.client
 import io
 import os
 import re
@@ -422,5 +423,5 @@ def check_release_dependencies(root: Path, *, packages: tuple[str, ...] | None =
             if _installations(root, name) != installed:
                 raise ValueError(f"{name}: runtime changed during verification")
         return tuple(DependencyIdentity(name, version, INDEX) for name, version, _, _ in pending)
-    except (ValueError, OSError, TypeError, subprocess.SubprocessError, zipfile.BadZipFile) as error:
+    except (ValueError, OSError, TypeError, subprocess.SubprocessError, zipfile.BadZipFile, http.client.HTTPException) as error:
         raise ValueError(f"release dependency provenance: {error}. {RECOVERY}") from error

@@ -28,6 +28,7 @@ runs:
     - name: Verify and run selected tooling
       shell: bash
       env:
+        GITHUB_TOKEN: ${{ github.token }}
         RRT_WRAPPER: ${{ github.action_path }}/../../../src/research_repo_tools/tooling_runtime.py
         RRT_VERSION: ${{ inputs.version }}
         RRT_GITHUB: ${{ inputs.github }}

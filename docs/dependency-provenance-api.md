@@ -107,8 +107,11 @@ Arguments and extras are tuples; the subprocess receives literal argument string
 The return value is the child exit status. Failures raise `ValueError`, invalid
 source types raise `TypeError`, and process launch/timeouts propagate.
 
-GitHub selection supports public repositories and requires Python 3.11+ for TOML;
-the Just and Actions wrappers select managed Python 3.15 for bootstrap. The target
+GitHub selection supports public repositories and requires Python 3.11+ for TOML.
+`GITHUB_TOKEN` (or `GH_TOKEN` when unset) authenticates only `api.github.com`
+lookups. Credentials are never sent to PyPI or raw content, and redirects remain
+disabled. The composite Action supplies its available GitHub token automatically.
+The Just and Actions wrappers select managed Python 3.15 for bootstrap. The target
 package's metadata selects its own runtime Python. Release intent rejects Git
 before lookup. A verified release cannot be redirected by ambient uv source/index
 configuration. This existence check complements the subsequent checkout, lock and
@@ -121,8 +124,9 @@ Configured checks run at pre-tag `release evidence` creation/verification,
 candidate acceptance and approval revalidation, asset preflight/revalidation/upload,
 and reviewed release gate/publication/verification. Checkout-taking APIs inspect
 the observed checkout, even when the controller runtime lives elsewhere.
-Asset APIs accept `dependencies=()` to carry additional explicit selections
-through every revalidation, including the final upload/publication checks.
+Asset and `verify_candidate_release` APIs accept `dependencies=()` to carry
+additional explicit selections through every revalidation, including the final
+upload/publication checks.
 Low-level rootless evidence functions still verify their explicit provider and
 artifact inputs; callers composing those primitives must call the dependency gate
 with the observed root before effects.
@@ -130,8 +134,9 @@ with the observed root before effects.
 `performance prepare`, `performance measure`, and `performance release` accept
 `--release-intent` to expose pin transitions before source fetches, campaign reads,
 measurement or output writes. The `prepare_performance` and `measure_release`
-Python APIs accept `release_intent=True`. Ordinary acquisition defaults remain
-available with exact development pins. The flag does not turn rehearsal evidence
+Python APIs accept `release_intent=True` and `dependencies=()` for selections
+loaded from standalone controller configuration. Ordinary acquisition defaults
+remain available with exact development pins. The flag does not turn rehearsal evidence
 into release evidence or waive later source/freshness checks.
 
 Changing a Git pin to a published pin changes manifest/lock and often harness

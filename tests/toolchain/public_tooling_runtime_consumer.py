@@ -2,6 +2,7 @@
 
 import ast
 import contextlib
+import http.client
 import io
 import json
 import os
@@ -9,6 +10,7 @@ import subprocess
 import tempfile
 import unittest
 import urllib.error
+import urllib.response
 from email.message import Message
 from pathlib import Path
 from typing import Any, override
@@ -28,6 +30,10 @@ class Response(io.BytesIO):
     def __init__(self, url, data):
         super().__init__(data)
         self.url = url
+
+
+class RedirectResponse(urllib.response.addinfourl):
+    msg = "Found"
 
 
 class TestToolingRuntime(unittest.TestCase):
@@ -58,6 +64,7 @@ class TestToolingRuntime(unittest.TestCase):
                 raise urllib.error.HTTPError(url, 404, "Not Found", Message(), None)
             return Response(url, self.responses[url])
 
+        self.http_open = runtime.urllib.request.OpenerDirector.open
         self.opener = self.enterContext(patch.object(runtime.urllib.request.OpenerDirector, "open", side_effect=open_request))
         self.launch = self.enterContext(patch.object(runtime.subprocess, "run", return_value=subprocess.CompletedProcess([], 7)))
 
@@ -99,11 +106,47 @@ class TestToolingRuntime(unittest.TestCase):
                 arguments = self.launch.call_args.args[0]
                 self.assertEqual(arguments[arguments.index("--from") + 1], requirement)
 
+    def test_optional_github_credentials_are_sent_only_to_the_api(self):
+        for primary, fallback, expected in (
+            ("primary-fixture", "fallback-fixture", "Bearer primary-fixture"),
+            ("", "fallback-fixture", "Bearer fallback-fixture"),
+            ("", "", None),
+        ):
+            with self.subTest(primary=primary, fallback=fallback), patch.dict(os.environ, {"GITHUB_TOKEN": primary, "GH_TOKEN": fallback}):
+                self.opener.reset_mock()
+                for source in (runtime.GitHubPin(REPOSITORY, SHA), runtime.ReleasePin(VERSION)):
+                    self.assertEqual(runtime.run_tooling(source, ("toolchain", "check"), root=self.root), 7)
+                requests = [call.args[0] for call in self.opener.call_args_list]
+                self.assertEqual(len(requests), 3)
+                self.assertEqual(requests[0].full_url, f"https://api.github.com/repos/{REPOSITORY}/git/commits/{SHA}")
+                self.assertEqual(requests[0].get_header("Authorization"), expected)
+                self.assertIsNone(requests[1].get_header("Authorization"))
+                self.assertIsNone(requests[2].get_header("Authorization"))
+
     def test_invalid_arguments_and_extras_fail_before_lookup(self):
         for arguments, extras in (((), ()), (("check\x00",), ()), (("check",), ("python-tools", "python-tools")), (("check",), ("x] @ bad",))):
             with self.subTest(arguments=arguments, extras=extras), self.assertRaises(ValueError):
                 runtime.run_tooling(runtime.ReleasePin(VERSION), arguments, root=self.root, extras=extras)
         self.opener.assert_not_called()
+        self.launch.assert_not_called()
+
+    def test_authenticated_redirect_is_rejected_before_contacting_a_second_host(self):
+        headers = Message()
+        headers["Location"] = "https://other.example.invalid/collect"
+        url = f"https://api.github.com/repos/{REPOSITORY}/git/commits/{SHA}"
+        response = RedirectResponse(io.BytesIO(b""), headers, url, 302)
+        with (
+            patch.dict(os.environ, {"GITHUB_TOKEN": "fixture-token"}),
+            patch.object(runtime.urllib.request.OpenerDirector, "open", new=self.http_open),
+            patch.object(runtime.urllib.request.HTTPSHandler, "https_open", return_value=response) as transport,
+            self.assertRaisesRegex(ValueError, "HTTP 302"),
+        ):
+            runtime.run_tooling(runtime.GitHubPin(REPOSITORY, SHA), ("toolchain", "check"), root=self.root)
+        transport.assert_called_once()
+        request = transport.call_args.args[0]
+        self.assertEqual(request.full_url, url)
+        self.assertEqual(request.get_header("Authorization"), "Bearer fixture-token")
+        self.assertTrue(response.closed)
         self.launch.assert_not_called()
 
     def test_nonexistent_version_and_commit_never_launch_or_fall_back(self):
@@ -174,6 +217,13 @@ class TestToolingRuntime(unittest.TestCase):
         with patch.object(runtime.urllib.request.OpenerDirector, "open", side_effect=urllib.error.URLError("offline")):
             with self.assertRaisesRegex(ValueError, "lookup failed"):
                 runtime.run_tooling(runtime.ReleasePin(VERSION), ("toolchain", "check"), root=self.root)
+        self.launch.assert_not_called()
+
+    def test_truncated_lookup_is_a_clean_cli_failure_without_launch(self):
+        with patch.object(Response, "read", side_effect=http.client.IncompleteRead(b"partial", 42)), contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(runtime.main(["--version", VERSION, "--root", str(self.root), "--arguments-json", '["toolchain","check"]']), 1)
+        self.assertIn("lookup failed", errors.getvalue())
+        self.assertNotIn("Traceback", errors.getvalue())
         self.launch.assert_not_called()
 
     def test_cli_json_arguments_are_literal_and_missing_sources_are_clean_errors(self):

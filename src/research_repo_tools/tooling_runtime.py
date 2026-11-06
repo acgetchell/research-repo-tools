@@ -11,6 +11,7 @@ before installing research-repo-tools; Git metadata parsing requires Python 3.11
 from __future__ import annotations
 
 import argparse
+import http.client
 import json
 import os
 import re
@@ -73,7 +74,11 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 
 def _read(url: str) -> bytes:
-    request = urllib.request.Request(url, headers={"User-Agent": "research-repo-tools-bootstrap"})
+    headers = {"User-Agent": "research-repo-tools-bootstrap"}
+    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    if token and url.startswith("https://api.github.com/"):
+        headers["Authorization"] = "Bearer " + token
+    request = urllib.request.Request(url, headers=headers)
     try:
         with urllib.request.build_opener(_NoRedirect()).open(request, timeout=30) as response:
             if response.status != 200 or response.url != url:
@@ -87,7 +92,7 @@ def _read(url: str) -> bytes:
     except urllib.error.HTTPError as error:
         error.close()
         raise ValueError(f"requested source does not exist or is unavailable (HTTP {error.code})") from error
-    except (OSError, urllib.error.URLError) as error:
+    except (OSError, urllib.error.URLError, http.client.HTTPException) as error:
         raise ValueError("source lookup failed; no tooling was started") from error
 
 

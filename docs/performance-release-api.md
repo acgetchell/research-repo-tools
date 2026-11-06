@@ -14,12 +14,14 @@ acceptance, interpretation and deployment remain consumer decisions.
 | `load_readme_plan(root, settings, *, identities=None)` | Use preparation or all four explicit assertions with the existing retained-evidence publisher; no acquisition, promotion, network or Git mutation |
 | `measure_release(root, settings, *, allow_git_mutations=False, before_promotion=None, ...)` | Acquire the prepared pair, retain raw evidence, optionally capture trusted handoffs, then promote the report; README is independent |
 | `parse_preparation(payload)`, `serialize_preparation(record)` | Strict deterministic UTF-8 JSON using `research-repo-tools/performance-preparation/v1`; reject unsupported schemas, missing/extra/duplicate fields and invalid identities |
-| `prepare_performance(root, settings, *, fetch_tags=False, allow_git_mutations=False, release_intent=False)` | Independently select/resolve and atomically save all assertions; no acquisition or README publication |
+| `prepare_performance(root, settings, *, fetch_tags=False, allow_git_mutations=False, release_intent=False, dependencies=())` | Independently select/resolve and atomically save all assertions; no acquisition or README publication |
 | `select_measurement_pair(root, configuration, *, repository=None, mode="infer-release", order="published", current=None, baseline=None)` | Common direct/prepared selection, returning `(ReleasePair, working_tree)` with the measurement release floor enforced |
 
 `prepare_performance` and `measure_release` accept `release_intent=True` to
 verify [published upstream dependencies](dependency-provenance-api.md) before
-acquisition effects. The default permits development rehearsals.
+acquisition effects. Pass `dependencies=settings.release.published_dependencies`
+to carry selections from standalone controller configuration; these are combined
+with the checkout's manifest policy. The default permits development rehearsals.
 
 The schema-1 workflow declaration is illustrated by the packaged
 `performance-release.toml`. Required fields are `schema`, `repository`,

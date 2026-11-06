@@ -172,6 +172,9 @@ This example requires the supplying release; pin the action itself to its
 reviewed supplying commit under your Actions policy. For development, substitute
 the `github` and `commit` inputs for `version`. `root` selects the observed
 consumer/configuration root and `extras` selects optional package extras.
+The Action supplies its GitHub token for commit lookups. Outside Actions, set
+`GITHUB_TOKEN` or `GH_TOKEN` to authenticate those API requests and avoid the
+lower unauthenticated rate limit; tokens are not sent to PyPI or raw content.
 The wrapper centralizes availability checks and isolated uv invocation;
 normal dependency pins remain in the manifest/lock, and release gates verify
 both installations. It never rewrites a consumer's pins or upgrades tooling.

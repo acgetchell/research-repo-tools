@@ -2,6 +2,7 @@
 
 import contextlib
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -249,6 +250,21 @@ class TestDependencyProvenance(unittest.TestCase):
             check_release_dependencies(self.root)
         self.network.assert_not_called()
 
+    def test_truncated_registry_responses_preserve_recovery_and_cli_errors(self):
+        before = self.snapshot()
+        for stage in ("metadata", "wheel"):
+            failure = http.client.IncompleteRead(b"partial", 42)
+            self.network.side_effect = failure if stage == "metadata" else None
+            with self.subTest(stage=stage), patch.object(Response, "read", side_effect=failure):
+                with self.assertRaisesRegex(ValueError, "resolve and sync uv.lock") as caught:
+                    check_release_dependencies(self.root)
+                self.assertIs(caught.exception.__cause__, failure)
+                with contextlib.redirect_stderr(io.StringIO()) as errors:
+                    self.assertEqual(cli.main(["--root", str(self.root), "release", "dependencies"]), 1)
+                self.assertIn("resolve and sync uv.lock", errors.getvalue())
+                self.assertNotIn("Traceback", errors.getvalue())
+        self.assertEqual(self.snapshot(), before)
+
     def test_changed_manifest_during_proof_is_rejected(self):
         def download(*_args, **_kwargs):
             (self.root / "pyproject.toml").write_bytes(self.manifest.replace("==0.2.6", "==0.2.7").encode())
@@ -350,6 +366,34 @@ class TestDependencyProvenance(unittest.TestCase):
             self.assertEqual(cli.main(["--root", str(self.root), "performance", "prepare", "missing.toml"]), 1)
         self.assertNotIn("published registry dependency", errors.getvalue())
         self.assertIn("missing.toml", errors.getvalue())
+        self.network.assert_not_called()
+
+    def test_public_performance_and_candidate_apis_enforce_standalone_dependency_policy(self):
+        from research_repo_tools import candidate_reuse, performance_release
+
+        self.git()
+        manifest = self.root / "pyproject.toml"
+        manifest.write_bytes(manifest.read_bytes().replace(b'published-dependencies=["research-repo-tools"]', b"published-dependencies=[]"))
+        policy = self.root / "policy.toml"
+        policy.write_bytes(b'[release]\npublished-dependencies=["research-repo-tools"]\n')
+        dependencies = config.load(policy, root=self.root).release.published_dependencies
+        self.assertEqual(check_release_dependencies(self.root), ())
+        # The gate must reject the Git dependency before inspecting campaign or
+        # candidate inputs. No external policy selection lives in the manifest.
+        untrusted: Any = None
+        callbacks = (
+            lambda: performance_release.prepare_performance(self.root, untrusted, release_intent=True, dependencies=dependencies),
+            lambda: performance_release.measure_release(self.root, untrusted, release_intent=True, dependencies=dependencies),
+            lambda: candidate_reuse.verify_candidate_release(
+                self.root, untrusted, untrusted, untrusted, untrusted, acquisition_sha256="b" * 64, dependencies=dependencies
+            ),
+        )
+        before = self.snapshot()
+        for callback in callbacks:
+            with self.assertRaisesRegex(ValueError, "published registry dependency"):
+                callback()
+        self.assertEqual(self.snapshot(), before)
+        self.command.assert_not_called()
         self.network.assert_not_called()
 
     def test_mandatory_python_minimum_preserves_non_inheriting_local_artifact_consumers(self):

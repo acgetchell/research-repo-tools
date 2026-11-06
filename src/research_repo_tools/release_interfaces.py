@@ -400,6 +400,7 @@ def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
         publication_receipt=inputs[args.publication_receipt] if args.publication_receipt else None,
         publication_sha256=args.publication_sha256,
         expected=inputs[args.acceptance] if args.acceptance else None,
+        dependencies=settings.release.published_dependencies,
     )
     write_release_outputs(args.output, accepted, verify=unchanged)
     _present_evidence(accepted, args.format, candidate=True, acquisition_owner=policy.acquisition_owner)
