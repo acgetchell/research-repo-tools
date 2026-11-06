@@ -17,7 +17,18 @@ from pathlib import Path
 from typing import override
 from unittest.mock import patch
 
-from research_repo_tools import cli, dependency_artifacts, dependency_graphs, dependency_sources, dependency_workflows, files, process, registry
+from research_repo_tools import (
+    cli,
+    dependency_artifacts,
+    dependency_graphs,
+    dependency_policy,
+    dependency_sources,
+    dependency_workflows,
+    files,
+    process,
+    registry,
+    tooling_runtime,
+)
 from research_repo_tools.dependency_policy import DependencyProject, load_policy, parse_policy
 from research_repo_tools.dependency_provenance import check_release_dependencies
 from research_repo_tools.dependency_sources import GitCommit, RegistryRelease, VerifiedSource, parse_source, verify_source
@@ -61,15 +72,15 @@ class Provider:
         data.update(changes)
         self.put(CARGO_API, {"version": data})
 
-    def git(self, ecosystem: str, *, directory: str = ".") -> None:
+    def git(self, ecosystem: str, *, directory: str = ".", commit: str = COMMIT) -> None:
         self.put("https://api.github.com/repos/example/upstream", {"full_name": "example/upstream"})
-        self.put(f"https://api.github.com/repos/example/upstream/git/commits/{COMMIT}", {"sha": COMMIT, "tree": {"sha": "c" * 40}})
+        self.put(f"https://api.github.com/repos/example/upstream/git/commits/{commit}", {"sha": commit, "tree": {"sha": "c" * 40}})
         manifest = "project" if ecosystem == "python" else "package"
         name = "sample-pkg" if ecosystem == "python" else "sample-crate"
         filename = "pyproject.toml" if ecosystem == "python" else "Cargo.toml"
         path = filename if directory == "." else f"{directory}/{filename}"
         payload = f'[{manifest}]\nname="{name}"\nversion="1.2.3"\n'.encode()
-        self.responses[f"https://raw.githubusercontent.com/example/upstream/{COMMIT}/{path}"] = payload
+        self.responses[f"https://raw.githubusercontent.com/example/upstream/{commit}/{path}"] = payload
         self.put(
             f"https://api.github.com/repos/example/upstream/git/trees/{'c' * 40}?recursive=1",
             {
@@ -187,6 +198,37 @@ class TestSources(unittest.TestCase):
         self.provider.put("https://api.github.com/repos/example/upstream", {"full_name": "example/upstream", "stargazers_count": 42, "pushed_at": "changed"})
         self.assertEqual(verify_source(git, provider=self.provider), before)
 
+    def test_cargo_workspace_versions_use_only_verified_nearest_manifests(self) -> None:
+        for directory, parents, expected in (
+            (".", {}, "1.2.3"),
+            ("crates/member", {"Cargo.toml": b'[workspace.package]\nversion="2.0.0"\n'}, "2.0.0"),
+            (
+                "crates/member",
+                {"Cargo.toml": b'[workspace.package]\nversion="3.0.0"\n', "crates/Cargo.toml": b'[workspace.package]\nversion="2.0.0"\n'},
+                "2.0.0",
+            ),
+        ):
+            with self.subTest(directory=directory, parents=parents):
+                self.provider.git("cargo", directory=directory)
+                path = "Cargo.toml" if directory == "." else f"{directory}/Cargo.toml"
+                manifests = {**parents, path: b'[package]\nname="sample-crate"\nversion.workspace=true\n'}
+                if directory == ".":
+                    manifests[path] += b'[workspace.package]\nversion="1.2.3"\n'
+                tree = []
+                for member, payload in manifests.items():
+                    self.provider.responses[f"https://raw.githubusercontent.com/example/upstream/{COMMIT}/{member}"] = payload
+                    tree.append(
+                        {"path": member, "type": "blob", "mode": "100644", "sha": hashlib.sha1(f"blob {len(payload)}\0".encode() + payload).hexdigest()}
+                    )
+                self.provider.put(
+                    f"https://api.github.com/repos/example/upstream/git/trees/{'c' * 40}?recursive=1", {"sha": "c" * 40, "truncated": False, "tree": tree}
+                )
+                self.provider.calls.clear()
+                proof = verify_source(GitCommit("cargo", "sample-crate", "example/upstream", COMMIT, directory), provider=self.provider)
+                self.assertEqual(proof.version, expected)
+                raw_calls = [url for url in self.provider.calls if "raw.githubusercontent.com" in url]
+                self.assertEqual(len(raw_calls), len(manifests))
+
 
 class TestSourceWorkflows(unittest.TestCase):
     @override
@@ -198,7 +240,16 @@ class TestSourceWorkflows(unittest.TestCase):
         self.provider.python()
         self.provider.cargo()
         self.enterContext(
-            patch.dict(os.environ, {key: value for key, value in os.environ.items() if not key.upper().startswith(("UV_", "CARGO_", "RUST"))}, clear=True)
+            patch.dict(
+                os.environ,
+                {
+                    key: value
+                    for key, value in os.environ.items()
+                    if key in {"UV_RUN_RECURSION_DEPTH", "CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"}
+                    or not key.upper().startswith(("UV_", "CARGO_", "RUST"))
+                },
+                clear=True,
+            )
         )
         self.native = self.enterContext(patch.object(dependency_workflows, "check_native_graph"))
 
@@ -260,6 +311,77 @@ class TestSourceWorkflows(unittest.TestCase):
                 )
                 self.assertEqual(self.snapshot(), before)
                 self.native.assert_called()
+
+    def test_crates_metadata_is_fresh_and_paced_across_graphs_and_providers_only(self) -> None:
+        self.cargo()
+        graph = dependency_graphs.inspect_project(self.root, DependencyProject("cargo"))
+        now = [0.0]
+        requests = []
+
+        def read(url: str) -> bytes:
+            requests.append((url, now[0]))
+            return self.provider.read(url)
+
+        def sleep(seconds: float) -> None:
+            now[0] += seconds
+
+        class Response(io.BytesIO):
+            status = 200
+            url = "https://static.crates.io/crates/sample-crate/sample-crate-1.2.3.crate"
+
+        with (
+            patch.object(dependency_sources, "_crates_io_requested_at", None),
+            patch.object(dependency_sources.time, "monotonic", side_effect=lambda: now[0]),
+            patch.object(dependency_sources.time, "sleep", side_effect=sleep),
+            patch.object(tooling_runtime, "_read", side_effect=read),
+            patch.object(registry._OPENER, "open", side_effect=lambda *_args, **_kwargs: Response(b"archive")),
+        ):
+            dependency_graphs.verify_graph(graph)
+            dependency_graphs.verify_graph(graph)
+            verify_source(RegistryRelease("cargo", "sample-crate", "1.2.3"))
+            self.assertEqual(requests, [(CARGO_API, 0.0), (CARGO_API, 1.0), (CARGO_API, 2.0)])
+            self.assertEqual(dependency_sources.HttpSourceProvider().read(Response.url), b"archive")
+            verify_source(RegistryRelease("python", "sample-pkg", "1.2.3"))
+            self.assertEqual(requests[-1], (PYTHON_API, 2.0))
+            self.assertEqual(now[0], 2.0)
+
+    def test_missing_policy_rejects_declarations_and_hidden_lock_dependencies_before_effects(self) -> None:
+        for ecosystem in ("python", "cargo"):
+            with self.subTest(ecosystem=ecosystem):
+                (self.python if ecosystem == "python" else self.cargo)()
+                (self.root / "dependency-sources.toml").unlink()
+                before = self.snapshot()
+                with self.assertRaisesRegex(ValueError, "requires dependency-sources.toml"):
+                    check_dependency_policy(self.root, provider=self.provider)
+                with self.assertRaisesRegex(ValueError, "requires dependency-sources.toml"):
+                    check_release_dependencies(self.root)
+                self.assertEqual(self.snapshot(), before)
+                self.assertEqual(self.provider.calls, [])
+                self.native.assert_not_called()
+                for filename in ("pyproject.toml", "uv.lock", "Cargo.toml", "Cargo.lock"):
+                    (self.root / filename).unlink(missing_ok=True)
+        (self.root / "Cargo.toml").write_bytes(b'[package]\nname="consumer"\nversion="0.1.0"\n')
+        self.cargo_lock()
+        with self.assertRaisesRegex(ValueError, "requires dependency-sources.toml"):
+            check_dependency_policy(self.root, provider=self.provider)
+        (self.root / "Cargo.lock").unlink()
+        self.assertEqual(check_dependency_policy(self.root, provider=self.provider), ())
+        (self.root / "Cargo.toml").write_bytes(b'[workspace]\nmembers=[]\n[workspace.package]\nversion="9.8.7"\n')
+        self.assertEqual(check_dependency_policy(self.root, provider=self.provider), ())
+
+    def test_release_identity_results_deduplicate_shared_packages_across_policy_projects(self) -> None:
+        self.python()
+        second = self.root / "second"
+        second.mkdir()
+        for name in ("pyproject.toml", "uv.lock"):
+            (second / name).write_bytes((self.root / name).read_bytes())
+        policy = self.root / "dependency-sources.toml"
+        policy.write_bytes(policy.read_bytes() + b'[projects.second]\necosystem="python"\ndirectory="second"\n')
+        with patch.object(dependency_sources, "HttpSourceProvider", return_value=self.provider):
+            identities = check_release_dependencies(self.root)
+        self.assertEqual([(item.name, item.version) for item in identities], [("sample-pkg", "1.2.3")])
+        self.assertEqual(self.provider.calls, [PYTHON_API, PYTHON_API])
+        self.assertEqual(self.native.call_count, 2)
 
     def test_registry_provider_rejections_start_no_process_and_mutate_nothing(self) -> None:
         self.python()
@@ -424,6 +546,85 @@ class TestSourceWorkflows(unittest.TestCase):
         apply_source(plan, provider=self.provider)
         self.assertIn(COMMIT.encode(), (self.root / "uv.lock").read_bytes())
 
+    def test_snapshot_limits_reject_oversized_and_aggregate_inputs_before_copying(self) -> None:
+        self.python()
+        self.policy("python", git=True)
+        data = self.root / "untracked.data"
+        data.write_bytes(b"x" * 2049)
+        (self.root / ".gitignore").write_bytes(b"*.data\n")
+        before = self.snapshot()
+        with patch.object(dependency_policy, "MAX_SNAPSHOT_FILE_BYTES", 2048), patch.object(dependency_workflows, "_resolve_candidate") as resolve:
+            with self.assertRaisesRegex(ValueError, "byte limit"):
+                plan_source(self.root, "upstream", provider=self.provider)
+            resolve.assert_not_called()
+        self.assertEqual(self.snapshot(), before)
+        data.write_bytes(b"x" * 128)
+        aggregate = sum(len(content) for content in self.snapshot().values())
+        with patch.object(dependency_policy, "MAX_SNAPSHOT_BYTES", aggregate - 1), patch.object(dependency_workflows, "_resolve_candidate") as resolve:
+            with self.assertRaisesRegex(ValueError, "byte limit"):
+                plan_source(self.root, "upstream", provider=self.provider)
+            resolve.assert_not_called()
+        with patch.object(dependency_workflows, "MAX_SNAPSHOT_FILES", 2):
+            with self.assertRaisesRegex(ValueError, "entry-count limit"):
+                plan_source(self.root, "upstream", provider=self.provider)
+
+        def resolve(root: Path, _verified: VerifiedSource, **_kwargs: object) -> None:
+            self.assertEqual((root / "untracked.data").read_bytes(), b"x" * 128)
+            self.python_lock(root=root, git=True)
+
+        with patch.object(dependency_workflows, "_resolve_candidate", side_effect=resolve):
+            plan = plan_source(self.root, "upstream", provider=self.provider)
+        data.write_bytes(b"y" * 128)
+        before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, "inputs changed"):
+            apply_source(plan, provider=self.provider)
+        self.assertEqual(self.snapshot(), before)
+
+    def test_source_copy_keeps_declared_workspaces_inside_normally_excluded_directories(self) -> None:
+        self.cargo()
+        self.policy("cargo", git=True)
+        manifest = self.root / "Cargo.toml"
+        manifest.write_bytes(manifest.read_bytes() + b'[workspace]\nmembers=["target/support"]\n')
+        member = self.root / "target/support"
+        member.mkdir(parents=True)
+        (member / "Cargo.toml").write_bytes(b'[package]\nname="support"\nversion="0.1.0"\n')
+        (member / "source.rs").write_bytes(b"// resolver input\r\n")
+
+        def resolve(root: Path, _verified: VerifiedSource, **_kwargs: object) -> None:
+            self.assertEqual((root / "target/support/source.rs").read_bytes(), b"// resolver input\r\n")
+            self.cargo_lock(root=root, git=True)
+
+        with patch.object(dependency_workflows, "_resolve_candidate", side_effect=resolve):
+            plan = plan_source(self.root, "upstream", provider=self.provider)
+        self.assertIn(member / "source.rs", dict(plan.snapshot.files))
+
+    def test_resolver_preserves_managed_homes_but_excludes_overrides_and_credentials(self) -> None:
+        self.provider.git("cargo")
+        proof = verify_source(GitCommit("cargo", "sample-crate", "example/upstream", COMMIT), provider=self.provider)
+        settings = {
+            "CARGO_HOME": str(self.root / "managed cargo"),
+            "RUSTUP_HOME": str(self.root / "managed rustup"),
+            "RUSTUP_TOOLCHAIN": "untrusted-selector",
+            "CARGO_BUILD_RUSTC_WRAPPER": "untrusted-wrapper",
+            "RUSTFLAGS": "untrusted-flags",
+            "GITHUB_TOKEN": "secret",
+            "GH_TOKEN": "secret",
+            "RRT_GITHUB_LOOKUP_TOKEN": "secret",
+            "UV_INDEX_URL": "https://example.invalid",
+            "PATH": str(self.root) + os.pathsep + os.environ.get("PATH", ""),
+        }
+        with (
+            patch.dict(os.environ, settings),
+            patch.object(process, "resolve_executable", return_value=Path(sys.executable)),
+            patch.object(process, "run_command") as run,
+        ):
+            dependency_workflows._resolve_candidate(self.root, proof, checkout=self.root)
+        environment = run.call_args.kwargs["env"]
+        self.assertEqual(environment["CARGO_HOME"], settings["CARGO_HOME"])
+        self.assertEqual(environment["RUSTUP_HOME"], settings["RUSTUP_HOME"])
+        self.assertFalse(set(settings) - {"CARGO_HOME", "RUSTUP_HOME", "PATH"} & environment.keys())
+        self.assertNotIn(str(self.root), environment["PATH"].split(os.pathsep))
+
     def test_cli_preview_and_release_gate_share_the_public_policy(self) -> None:
         self.python()
         self.policy("python", git=True)
@@ -464,12 +665,23 @@ class TestSourceWorkflows(unittest.TestCase):
         (self.root / "src").mkdir()
         (self.root / "src/lib.rs").write_bytes(b'compile_error!("inspection must not compile");\n')
         (self.root / "build.rs").write_bytes(b'compile_error!("inspection must not build");\n')
+        (self.root / "rust-toolchain.toml").write_bytes(b'[toolchain]\nchannel="must-not-select-checkout-toolchain"\n')
+        toolchain = process.run_command("rustup", ["show", "active-toolchain"], cwd=self.root.parent).stdout.strip().split(" (", 1)[0]
+        launcher = {"UV_RUN_RECURSION_DEPTH": "2", "RUSTUP_TOOLCHAIN": toolchain, "RUSTUP_HOME": os.environ.get("RUSTUP_HOME", str(Path.home() / ".rustup"))}
         before = self.snapshot()
         for ecosystem in ("python", "cargo"):
-            with self.subTest(ecosystem=ecosystem):
+            with self.subTest(ecosystem=ecosystem), patch.dict(os.environ, launcher), patch.object(process, "run_command", wraps=process.run_command) as run:
                 graph = dependency_graphs.inspect_project(self.root, DependencyProject(ecosystem))
                 dependency_graphs.check_native_graph(graph)
                 self.assertEqual(self.snapshot(), before)
+                if ecosystem == "cargo":
+                    self.assertEqual(run.call_args.kwargs["env"]["RUSTUP_HOME"], launcher["RUSTUP_HOME"])
+                    self.assertEqual(run.call_args.kwargs["env"]["RUSTUP_TOOLCHAIN"], toolchain)
+                override = (
+                    {"UV_INDEX_URL": "https://example.invalid"} if ecosystem == "python" else {"CARGO_REGISTRIES_CRATES_IO_INDEX": "https://example.invalid"}
+                )
+                with patch.dict(os.environ, override), self.assertRaisesRegex(ValueError, "environment override"):
+                    dependency_graphs.inspect_project(self.root, DependencyProject(ecosystem))
 
     def test_native_cargo_graph_and_published_archive_detect_cache_tampering(self) -> None:
         self.cargo()
@@ -585,6 +797,21 @@ class TestSourceWorkflows(unittest.TestCase):
             before = self.snapshot()
             dependency_artifacts.verify_python_environment(graph)
             self.assertEqual(self.snapshot(), before)
+            legacy = (Path(__file__).parent / "fixtures/uv-0.8.0-virtualenv.txt").read_bytes()
+            (site / "_virtualenv.py").write_bytes(legacy)
+            (site / "_virtualenv.pth").write_bytes(b"import _virtualenv")
+            before = self.snapshot()
+            dependency_artifacts.verify_python_environment(graph)
+            self.assertEqual(self.snapshot(), before)
+            for filename, unsafe in (("_virtualenv.py", legacy + b'\nraise RuntimeError("injected")\n'), ("_virtualenv.pth", b"import arbitrary_hook\n")):
+                target = site / filename
+                original = target.read_bytes()
+                target.write_bytes(unsafe)
+                before = self.snapshot()
+                with self.subTest(filename=filename), self.assertRaisesRegex(ValueError, "unrecognized legacy uv startup hooks"):
+                    dependency_artifacts.verify_python_environment(graph)
+                self.assertEqual(self.snapshot(), before)
+                target.write_bytes(original)
             hook = site / "injected.pth"
             hook.write_bytes(b"import unpublished_hook\n")
             with self.assertRaisesRegex(ValueError, "startup hooks"):
@@ -615,6 +842,75 @@ class TestSourceWorkflows(unittest.TestCase):
         apply_source(plan, provider=self.provider)
         self.assertEqual(tomllib.loads(manifest.read_text(encoding="utf-8"))["patch"]["crates-io"], {})
         check_dependency_policy(self.root, provider=self.provider)
+
+    @unittest.skipIf(os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1", "disposable Git mutations disabled")
+    def test_native_cargo_resolves_registry_to_git_and_git_to_registry(self) -> None:
+        upstream = self.root / "upstream"
+        vendor = self.root / "vendor/sample-crate"
+        consumer = self.root / "consumer"
+        cargo_home = self.root / "cargo home"
+        payloads = {"Cargo.toml": b'[package]\nname="sample-crate"\nversion="1.2.3"\nedition="2021"\n', "src/lib.rs": b'compile_error!("must not build");\n'}
+        for directory in (upstream, vendor):
+            for name, content in payloads.items():
+                target = directory / name
+                target.parent.mkdir(parents=True, exist_ok=True)
+                target.write_bytes(content)
+        (vendor / ".cargo-checksum.json").write_bytes(
+            json.dumps({"package": DIGEST, "files": {name: hashlib.sha256(value).hexdigest() for name, value in payloads.items()}}).encode()
+        )
+        consumer.mkdir()
+        (consumer / "src").mkdir()
+        (consumer / "src/lib.rs").write_bytes(b'compile_error!("must not build consumer");\n')
+        manifest = consumer / "Cargo.toml"
+        manifest.write_bytes(b'[package]\nname="consumer"\nversion="0.1.0"\nedition="2021"\n[dependencies]\nsample-crate="=1.2.3"\n')
+        cargo_home.mkdir()
+        # Hermetic registry transport for the native resolver; release-policy
+        # tests separately reject this source replacement in real consumers.
+        (cargo_home / "config.toml").write_bytes(
+            (
+                '[net]\ngit-fetch-with-cli=true\n[source.crates-io]\nreplace-with="fixture"\n[source.fixture]\ndirectory='
+                + json.dumps(str(vendor.parent))
+                + "\n"
+            ).encode()
+        )
+        git_config = self.root / "gitconfig"
+        git_config.write_bytes((f'[url "{upstream.as_uri()}"]\n\tinsteadOf = https://github.com/example/upstream.git\n').encode())
+        environment = {
+            "CARGO_HOME": str(cargo_home),
+            "GIT_CONFIG_GLOBAL": str(git_config),
+            "GIT_CONFIG_NOSYSTEM": "1",
+            "GIT_CONFIG_COUNT": "0",
+            "GIT_TERMINAL_PROMPT": "0",
+            "GIT_ALLOW_PROTOCOL": "file",
+        }
+        with patch.dict(os.environ, environment):
+            process.run_command("git", ["init", "--quiet"], cwd=upstream)
+            process.run_command("git", ["add", "."], cwd=upstream)
+            process.run_command(
+                "git",
+                ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--quiet", "-m", "fixture"],
+                cwd=upstream,
+            )
+            commit = process.run_command("git", ["--no-pager", "rev-parse", "HEAD"], cwd=upstream).stdout.strip()
+            process.run_command("cargo", ["generate-lockfile", "--manifest-path", str(manifest), "--offline"], cwd=self.root.parent)
+            self.provider.git("cargo", commit=commit)
+            selections = (GitCommit("cargo", "sample-crate", "example/upstream", commit), RegistryRelease("cargo", "sample-crate", "1.2.3"))
+            for source in selections:
+                with self.subTest(source=source):
+                    proof = verify_source(source, provider=self.provider)
+                    manifest.write_text(dependency_workflows._cargo_selection(manifest.read_text(encoding="utf-8"), proof), encoding="utf-8", newline="\n")
+                    try:
+                        dependency_workflows._resolve_candidate(consumer, proof, checkout=consumer)
+                    except subprocess.CalledProcessError as error:
+                        self.fail(f"native Cargo transition failed: {error.stderr!r}")
+                    packages = tomllib.loads((consumer / "Cargo.lock").read_text(encoding="utf-8"))["package"]
+                    locked = next(item for item in packages if item["name"] == "sample-crate")
+                    self.assertEqual(locked["version"], "1.2.3")
+                    if isinstance(source, GitCommit):
+                        self.assertEqual(locked["source"], f"git+{source.url}?rev={commit}#{commit}")
+                    else:
+                        self.assertEqual(locked["source"], dependency_graphs.CRATES_IO)
+                        self.assertEqual(locked["checksum"], DIGEST)
 
 
 if __name__ == "__main__":

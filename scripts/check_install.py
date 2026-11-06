@@ -407,6 +407,7 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             run_consumer_suite(python, [str(dependency_suite)], cwd=consumer, env=local_env)
             source_suite = consumer / "public_sources_consumer.py"
             source_suite.write_bytes((ROOT / "tests/dependencies/public_sources_consumer.py").read_bytes())
+            shutil.copytree(ROOT / "tests/dependencies/fixtures", consumer / "fixtures")
             run_consumer_suite(python, [str(source_suite)], cwd=consumer, env=local_env)
             runtime_suite = consumer / "public_tooling_runtime_consumer.py"
             runtime_suite.write_bytes((ROOT / "tests/toolchain/public_tooling_runtime_consumer.py").read_bytes())

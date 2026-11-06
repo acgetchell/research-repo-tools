@@ -93,11 +93,13 @@ def _check_configuration(root: Path, ecosystem: str) -> None:
         "UV_PYTHON",
         "UV_PYTHON_DOWNLOADS",
         "UV_NO_PROGRESS",
+        "UV_RUN_RECURSION_DEPTH",
         "CARGO_HOME",
         "CARGO_TARGET_DIR",
         "CARGO_TERM_COLOR",
         "CARGO_NET_OFFLINE",
         "CARGO_BUILD_JOBS",
+        "RUSTUP_TOOLCHAIN",
     }
     for key, value in os.environ.items():
         if value and key.upper().startswith(prefixes) and key.upper() not in allowed:
@@ -277,8 +279,9 @@ def check_native_graph(graph: DependencyGraph, *, sources: tuple[VerifiedSource,
 
         environment = {key: value for key, value in os.environ.items() if not key.upper().startswith(("CARGO_", "RUST"))}
         environment["PATH"] = os.pathsep.join(p for p in os.get_exec_path() if Path(p).is_absolute() and not Path(p).resolve().is_relative_to(graph.root))
-        if "CARGO_HOME" in os.environ:
-            environment["CARGO_HOME"] = os.environ["CARGO_HOME"]
+        for key in ("CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"):
+            if key in os.environ:
+                environment[key] = os.environ[key]
         # Run rustup proxies outside the inert checkout, so rust-toolchain files
         # and local .cargo configuration cannot select a consumer executable.
         with tempfile.TemporaryDirectory(prefix="dependency-graph-") as directory:

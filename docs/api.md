@@ -106,7 +106,7 @@ from research_repo_tools.dependency_workflows import (
 root = Path("/path/to/consumer")
 plan = plan_source(root, "upstream")  # verifies and resolves in a temporary copy
 print(plan.diff())
-apply_source(plan)                   # reverifies; atomic manifest/lock update
+apply_source(plan)                   # reverifies; recoverable multi-file publication
 # After transitioning to a published source and rerunning downstream checks:
 check_dependency_policy(root)        # read-only, all configured projects
 ```
@@ -115,8 +115,8 @@ check_dependency_policy(root)        # read-only, all configured projects
 environments and retained evidence unchanged. `SourcePlan` cannot be constructed
 or deserialized directly. `apply_source` rejects stale inputs/provider metadata;
 file-publication failures use the existing recoverable rollback contract.
-`check_dependency_policy` returns verified external sources and is a no-op when
-the canonical policy file is absent. Existing `check_release_dependencies`
+`check_dependency_policy` returns verified external sources. Without the canonical
+policy, only dependency-free checkouts pass. Existing `check_release_dependencies`
 entry points also enforce this policy, preserving the earlier selected-tooling
 checks. Invalid input/proof raises `ValueError`; native process and filesystem
 failures retain their existing exception categories. See the

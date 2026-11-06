@@ -3,7 +3,6 @@
 import difflib
 import json
 import os
-import shutil
 import sys
 import tempfile
 import tomllib
@@ -15,8 +14,17 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
 from research_repo_tools import toml_source
-from research_repo_tools.dependency_graphs import check_native_graph, inspect_project, verify_graph
-from research_repo_tools.dependency_policy import InputSnapshot, SourceSelection, configuration_paths, inside, load_policy, project_manifests
+from research_repo_tools.dependency_graphs import CRATES_IO, check_native_graph, inspect_project, verify_graph
+from research_repo_tools.dependency_policy import (
+    MAX_SNAPSHOT_FILES,
+    POLICY_FILE,
+    InputSnapshot,
+    SourceSelection,
+    configuration_paths,
+    inside,
+    load_policy,
+    project_manifests,
+)
 from research_repo_tools.dependency_sources import GitCommit, RegistryRelease, Source, SourceProvider, VerifiedSource, table, verify_source
 from research_repo_tools.files import replace_many
 
@@ -176,16 +184,30 @@ def _cargo_selection(text: str, verified: VerifiedSource) -> str:
     return text
 
 
-def _source_files(root: Path) -> tuple[Path, ...]:
+def _source_files(root: Path, manifests: tuple[Path, ...]) -> tuple[Path, ...]:
     paths = []
-    for directory, directories, filenames in os.walk(root, followlinks=False):
-        directories[:] = [
-            name for name in directories if name not in {".git", ".venv", "target", "dist", "coverage", "__pycache__", ".pytest_cache", ".ruff_cache"}
-        ]
-        for name in directories:
-            if (Path(directory) / name).is_symlink():
-                raise ValueError("source transitions require an unlinked candidate checkout")
-        paths.extend(Path(directory) / name for name in filenames if name != ".git")
+    pending = [root]
+    entries = 0
+    while pending:
+        with os.scandir(pending.pop()) as directory:
+            for entry in directory:
+                path = Path(entry.path)
+                if entry.name == ".git":
+                    continue
+                excluded = entry.name in {".venv", "target", "dist", "coverage", "__pycache__", ".pytest_cache", ".ruff_cache"}
+                if excluded and entry.is_dir(follow_symlinks=False) and not any(manifest.is_relative_to(path) for manifest in manifests):
+                    continue
+                entries += 1
+                if entries > MAX_SNAPSHOT_FILES:
+                    raise ValueError("dependency source inventory exceeds the entry-count limit")
+                if entry.is_symlink():
+                    raise ValueError("source transitions require an unlinked candidate checkout")
+                if entry.is_dir(follow_symlinks=False):
+                    pending.append(path)
+                elif entry.is_file(follow_symlinks=False):
+                    paths.append(path)
+                else:
+                    raise ValueError("source transitions require regular files")
     return tuple(sorted(paths, key=str))
 
 
@@ -196,7 +218,7 @@ def _resolve_candidate(root: Path, verified: VerifiedSource, *, checkout: Path) 
     environment = {
         key: value
         for key, value in without_credentials().items()
-        if not key.upper().startswith(("UV_", "CARGO_", "RUST")) and key.upper() != "RRT_GITHUB_LOOKUP_TOKEN"
+        if (key.upper() in {"CARGO_HOME", "RUSTUP_HOME"} or not key.upper().startswith(("UV_", "CARGO_", "RUST"))) and key.upper() != "RRT_GITHUB_LOOKUP_TOKEN"
     }
     source = verified.source
     environment["PATH"] = os.pathsep.join(
@@ -217,9 +239,16 @@ def _resolve_candidate(root: Path, verified: VerifiedSource, *, checkout: Path) 
             str(root / "Cargo.toml"),
             "--package",
             source.package,
-            "--precise",
-            source.commit if isinstance(source, GitCommit) else source.version,
         ]
+        # --precise is interpreted using the OLD locked source. A commit is
+        # invalid for a registry entry, and a version is a Git revision for a
+        # Git entry. The manifest already pins Git rev; reconcile a changed
+        # origin before selecting an exact registry version (also for patches).
+        if isinstance(source, RegistryRelease):
+            locked = tomllib.loads((root / "Cargo.lock").read_text(encoding="utf-8"))
+            if any(item.get("name") == source.package and item.get("source") != CRATES_IO for item in locked.get("package", [])):
+                run_command(executable, arguments, cwd=root.parent, env=environment, timeout=300)
+            arguments.extend(("--precise", source.version))
     run_command(executable, arguments, cwd=root.parent, env=environment, timeout=300)
 
 
@@ -255,17 +284,20 @@ def plan_source(root: Path, name: str, *, provider: SourceProvider | None = None
     project_root = inside(root, selection.project.directory)
     # Capture all copied source/harness bytes so a plan cannot publish a lock
     # resolved against a different workspace or silently preserve old evidence.
-    files = _source_files(root)
+    manifests = project_manifests(project_root, selection.project.ecosystem)
+    files = _source_files(root, manifests)
     snapshot = InputSnapshot.capture((*files, *configuration_paths(project_root, selection.project.ecosystem)))
+    originals = dict(snapshot.files)
     from research_repo_tools.dependency_graphs import _check_configuration
 
     _check_configuration(project_root, selection.project.ecosystem)
-    manifests = project_manifests(project_root, selection.project.ecosystem)
     changes: dict[Path, bytes] = {}
     declared = False
     transform = _python_selection if selection.project.ecosystem == "python" else _cargo_selection
     for path in manifests:
-        original = path.read_bytes()
+        original = originals[path]
+        if original is None:
+            raise ValueError("source transition requires captured workspace manifests")
         if selection.project.ecosystem == "cargo":
             for _, dependencies in _cargo_tables(table(tomllib.loads(original.decode("utf-8")), "Cargo manifest")):
                 declared |= any((raw.get("package", key) if isinstance(raw, dict) else key) == selection.source.package for key, raw in dependencies.items())
@@ -276,20 +308,27 @@ def plan_source(root: Path, name: str, *, provider: SourceProvider | None = None
         # Cargo's native patch mechanism also supports an exact upstream fix
         # selected transitively; no consumer-owned source string is needed.
         manifest = project_root / "Cargo.toml"
-        text = manifest.read_bytes().decode("utf-8")
+        original = originals[manifest]
+        if original is None:
+            raise ValueError("source transition requires a captured root manifest")
+        text = original.decode("utf-8")
         value = {"git": verified.source.url, "rev": verified.source.commit, "version": "=" + verified.version}
         candidate = toml_source.set_value(text, "patch.crates-io", verified.source.package, _literal(value)).encode("utf-8")
-        if candidate != manifest.read_bytes():
+        if candidate != original:
             changes[manifest] = candidate
     lock = project_root / ("uv.lock" if selection.project.ecosystem == "python" else "Cargo.lock")
-    if not lock.is_file():
+    original_lock = originals.get(lock)
+    if original_lock is None:
         raise ValueError("source transition requires an existing native lock")
     with tempfile.TemporaryDirectory(prefix="dependency-candidate-") as directory:
         candidate_root = Path(directory) / "checkout"
-        for path in files:
+        source_files = set(files)
+        for path, original in snapshot.files:
+            if path not in source_files or original is None:
+                continue
             target = candidate_root / path.relative_to(root)
             target.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(path, target)
+            target.write_bytes(original)
         for path, content in changes.items():
             (candidate_root / path.relative_to(root)).write_bytes(content)
         _resolve_candidate(inside(candidate_root, selection.project.directory), verified, checkout=root)
@@ -305,10 +344,10 @@ def plan_source(root: Path, name: str, *, provider: SourceProvider | None = None
             ):
                 raise ValueError("resolved artifact identity differs from the verified published source")
         content = (candidate_root / lock.relative_to(root)).read_bytes()
-        if content != lock.read_bytes():
+        if content != original_lock:
             changes[lock] = content
     snapshot.verify()
-    if files != _source_files(root):
+    if files != _source_files(root, manifests):
         raise ValueError("source inventory changed during dependency planning")
     result = object.__new__(SourcePlan)
     for key, value in (("root", root), ("selection", selection), ("verified", verified), ("snapshot", snapshot), ("writes", tuple(changes.items()))):
@@ -317,7 +356,7 @@ def plan_source(root: Path, name: str, *, provider: SourceProvider | None = None
 
 
 def apply_source(plan: SourcePlan, *, provider: SourceProvider | None = None) -> None:
-    """Reverify availability and inputs, then atomically publish manifest + lock.
+    """Reverify source and inputs for recoverable multi-file publication of manifest + lock.
 
     Failure preserves the prior valid files; incomplete rollback reports retained
     recovery backups through the shared file-publication exception contract.
@@ -330,7 +369,8 @@ def apply_source(plan: SourcePlan, *, provider: SourceProvider | None = None) ->
         raise ValueError("upstream source evidence changed; preview the transition again")
     expected = tuple(sorted((path for path, content in plan.snapshot.files if path.is_relative_to(plan.root) and content is not None), key=str))
 
-    if _source_files(plan.root) != expected:
+    manifests = project_manifests(inside(plan.root, plan.selection.project.directory), plan.selection.project.ecosystem)
+    if _source_files(plan.root, manifests) != expected:
         raise ValueError("source inventory changed; preview the transition again")
     # File publication creates its own temporary siblings while staging. Check
     # the source inventory before staging and exact original inputs afterwards.
@@ -341,6 +381,7 @@ def check_dependency_policy(root: Path, *, provider: SourceProvider | None = Non
     """Recheck every configured project before release effects, without mutation."""
     policy = load_policy(root)
     if policy is None:
+        _require_dependency_free(root)
         return ()
     # Reject a development selection even if the native manifest happens to
     # look registry-only; source, declaration and lock are separate obligations.
@@ -365,3 +406,46 @@ def check_dependency_policy(root: Path, *, provider: SourceProvider | None = Non
     for graph in graphs:
         graph.snapshot.verify()
     return tuple(results)
+
+
+def _require_dependency_free(root: Path) -> None:
+    """An absent policy can only release a checkout with no dependency graph."""
+    from research_repo_tools.dependency_graphs import _cargo_dependencies, _check_configuration, _requirements
+
+    paths = (root / POLICY_FILE, root / "pyproject.toml", root / "uv.lock", root / "Cargo.toml", root / "Cargo.lock")
+    snapshot = InputSnapshot.capture((*paths, *configuration_paths(root, "python"), *configuration_paths(root, "cargo")))
+    for ecosystem, manifest, lock in (("python", paths[1], paths[2]), ("cargo", paths[3], paths[4])):
+        if not manifest.exists():
+            if lock.exists():
+                raise ValueError("release dependency graph requires dependency-sources.toml")
+            continue
+        _check_configuration(root, ecosystem)
+        data = table(tomllib.loads(manifest.read_text(encoding="utf-8")), "dependency manifest")
+        project = table(data.get("project" if ecosystem == "python" else "package", {}), "project")
+        owned_name = project.get("name")
+        if ecosystem == "python" and isinstance(owned_name, str):
+            owned_name = canonicalize_name(owned_name)
+        if ecosystem == "python":
+            uv = table(table(data.get("tool", {}), "tool").get("uv", {}), "uv")
+            configured = bool(tuple(_requirements(data))) or bool(
+                set(uv) & {"sources", "index", "index-url", "extra-index-url", "find-links", "no-index", "dependency-metadata"}
+            )
+            workspace = table(uv.get("workspace", {}), "uv workspace")
+        else:
+            configured = bool(tuple(_cargo_dependencies(data))) or bool(set(data) & {"patch", "replace"})
+            workspace = table(data.get("workspace", {}), "Cargo workspace")
+        members = workspace.get("members", [])
+        if not isinstance(members, list):
+            raise ValueError("workspace members must be an array")
+        configured |= bool(members)
+        if lock.exists():
+            packages = table(tomllib.loads(lock.read_text(encoding="utf-8")), "lock").get("package")
+            if not isinstance(packages, list):
+                raise ValueError("release dependency graph requires dependency-sources.toml")
+            for raw in packages:
+                item = table(raw, "locked package")
+                local = item.get("source") in ({"editable": "."}, {"virtual": "."}) if ecosystem == "python" else item.get("source") is None
+                configured |= not local or (item.get("name"), item.get("version")) != (owned_name, project.get("version"))
+        if configured:
+            raise ValueError("release dependency graph requires dependency-sources.toml; declare projects and release-owned boundaries")
+    snapshot.verify()

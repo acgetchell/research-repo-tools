@@ -368,23 +368,28 @@ def _published_wheel(name: str, version: str, locked: dict[str, Any], installed:
                     raise ValueError(f"{name}: installed or isolated runtime bytes differ from the published wheel: {member.filename}")
 
 
+def _policy_identities(root: Path) -> tuple[DependencyIdentity, ...]:
+    from research_repo_tools.dependency_workflows import check_dependency_policy
+
+    verified = check_dependency_policy(root)
+    return tuple(
+        dict.fromkeys(
+            DependencyIdentity(item.source.package, item.version, INDEX if item.source.ecosystem == "python" else "https://crates.io") for item in verified
+        )
+    )
+
+
 def check_release_dependencies(root: Path, *, packages: tuple[str, ...] | None = None) -> tuple[DependencyIdentity, ...]:
     """Enforce configured upstream dependencies before release effects.
 
     With no explicit packages, read release.published-dependencies from the
-    observed checkout. Empty policy is a no-op, including this package's own
-    source release. A selected dependency may never name the project itself.
+    observed checkout. Projects with dependencies also require the canonical
+    source policy. A selected dependency may never name the project itself.
     """
     try:
-        from research_repo_tools.dependency_workflows import check_dependency_policy
-
-        verified = check_dependency_policy(root)
-        generic = tuple(
-            DependencyIdentity(item.source.package, item.version, INDEX if item.source.ecosystem == "python" else "https://crates.io") for item in verified
-        )
         manifest = root / "pyproject.toml"
         if not manifest.is_file() and not packages:
-            return generic
+            return _policy_identities(root)
         original = manifest.read_bytes()
         document = tomllib.loads(original.decode("utf-8"))
         release = _table(_table(_table(document.get("tool", {}), "tool").get(PACKAGE, {}), PACKAGE).get("release", {}), "release")
@@ -392,7 +397,7 @@ def check_release_dependencies(root: Path, *, packages: tuple[str, ...] | None =
         for values in (release.get("published-dependencies", ()), packages if packages is not None else ()):
             names.update(dependency_names(values))
         if not names:
-            return generic
+            return _policy_identities(root)
         if (root / "uv.toml").exists():
             raise ValueError("published dependency proof requires uv configuration in pyproject.toml, not uv.toml")
         project = _table(document.get("project", {}), "project")
@@ -428,6 +433,7 @@ def check_release_dependencies(root: Path, *, packages: tuple[str, ...] | None =
         for name, _, _, installed in pending:
             if _installations(root, name) != installed:
                 raise ValueError(f"{name}: runtime changed during verification")
-        return tuple(DependencyIdentity(name, version, INDEX) for name, version, _, _ in pending) + generic
+        generic = _policy_identities(root)
+        return tuple(dict.fromkeys((*[DependencyIdentity(name, version, INDEX) for name, version, _, _ in pending], *generic)))
     except (ValueError, OSError, TypeError, subprocess.SubprocessError, zipfile.BadZipFile, http.client.HTTPException) as error:
         raise ValueError(f"release dependency provenance: {error}. {RECOVERY}") from error

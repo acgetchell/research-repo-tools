@@ -16,6 +16,26 @@ if TYPE_CHECKING:
     from research_repo_tools.dependency_graphs import DependencyGraph
 
 
+def _legacy_uv_hooks(site: Path) -> InputSnapshot:
+    """Recognize the exact uv 0.8.0 pair, never names or executable imports.
+
+    https://github.com/astral-sh/uv/blob/0.8.0/crates/uv-virtualenv/src/_virtualenv.py
+    uv writes both files byte-for-byte on every platform. Unknown versions must
+    be recreated with the supported uv instead of receiving a blanket exemption.
+    """
+    snapshot = InputSnapshot.capture((site / "_virtualenv.py", site / "_virtualenv.pth"))
+    module, hook = (content for _, content in snapshot.files)
+    if module is None and hook is None:
+        return snapshot
+    if (
+        module is None
+        or hashlib.sha256(module).hexdigest() != "6cf30c56faf2a55228914dbbd17f8088ed371ebb08f5e7fa6fd931f913fcaf1d"
+        or hook != b"import _virtualenv"
+    ):
+        raise ValueError("dependency environment contains unrecognized legacy uv startup hooks; recreate the environment")
+    return snapshot
+
+
 def verify_cargo_input(path: Path, verified: VerifiedSource, *, provider: SourceProvider | None = None) -> InputSnapshot:
     try:
         return _cargo_input(path, verified, provider=provider)
@@ -127,7 +147,9 @@ def verify_python_environment(graph: DependencyGraph) -> None:
         for record in records:
             if record.parts and ".." not in record.parts:
                 roots.add(record.parts[0])
-    if {path.name for path in sites[0].iterdir()} - roots - {"__pycache__"}:
+    legacy = _legacy_uv_hooks(sites[0])
+    recognized = {path.name for path, content in legacy.files if content is not None}
+    if {path.name for path in sites[0].iterdir()} - roots - {"__pycache__"} - recognized:
         raise ValueError("dependency environment contains unpublished files or startup hooks")
     import tomllib
 
@@ -144,3 +166,4 @@ def verify_python_environment(graph: DependencyGraph) -> None:
     for name, observed in observations:
         if inspect_installation(name, paths=tuple(sites)) != observed:
             raise ValueError("installed dependency changed during verification")
+    legacy.verify()

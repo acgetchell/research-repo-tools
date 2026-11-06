@@ -27,7 +27,7 @@ arguments in lexicographic order.
 | `just ci` | Run the same canonical consumer gate as local validation |
 | `just clean [ARGS...]` | Preview obsolete package-owned installs; `--apply` removes them; repeat `--keep-root PATH` to retain other consumers' pins |
 | `just command-time CONFIG OUTPUT` | Acquire exploratory external-command timings into a new JSON report and print a summary |
-| `just dependency-source NAME [--apply]` | Preview or atomically apply a verified Python/Cargo source and lock transition |
+| `just dependency-source NAME [--apply]` | Preview or apply a verified Python/Cargo source and lock transition with recoverable multi-file publication |
 | `just files COMMAND...` | Check raw line limits, list selected files or run a command over them |
 | `just help` | List recipes and arguments in lexicographic order, with arguments |
 | `just notebook-advise FILE... [--strict]` | Report configured review warnings, optionally failing on them |

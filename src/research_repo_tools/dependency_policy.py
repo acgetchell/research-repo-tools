@@ -6,6 +6,7 @@ It is read by every release boundary, including when no pyproject.toml exists.
 
 import hashlib
 import os
+import stat
 import tomllib
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,6 +14,9 @@ from pathlib import Path
 from research_repo_tools.dependency_sources import Ecosystem, Source, parse_source, relative_directory, string, table
 
 POLICY_FILE = "dependency-sources.toml"
+MAX_SNAPSHOT_FILES = 10000
+MAX_SNAPSHOT_FILE_BYTES = 32 * 1024 * 1024
+MAX_SNAPSHOT_BYTES = 128 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,10 +147,30 @@ class InputSnapshot:
     @classmethod
     def capture(cls, paths: tuple[Path, ...]) -> InputSnapshot:
         files = []
-        for path in dict.fromkeys(paths):
-            if path.is_symlink():
-                raise ValueError(f"dependency input must not be a symlink: {path}")
-            files.append((path, path.read_bytes() if path.exists() else None))
+        seen = set()
+        remaining = MAX_SNAPSHOT_BYTES
+        for path in paths:
+            if path in seen:
+                continue
+            if len(seen) >= MAX_SNAPSHOT_FILES:
+                raise ValueError("dependency snapshot exceeds the file-count limit")
+            seen.add(path)
+            try:
+                metadata = path.lstat()
+            except FileNotFoundError:
+                files.append((path, None))
+                continue
+            if not stat.S_ISREG(metadata.st_mode):
+                raise ValueError(f"dependency input must be a regular file, not a symlink: {path}")
+            limit = min(MAX_SNAPSHOT_FILE_BYTES, remaining)
+            if metadata.st_size > limit:
+                raise ValueError(f"dependency snapshot exceeds the per-file or aggregate byte limit: {path}")
+            with path.open("rb") as stream:
+                content = stream.read(limit + 1)
+            if len(content) > limit:
+                raise ValueError(f"dependency snapshot exceeds the per-file or aggregate byte limit: {path}")
+            remaining -= len(content)
+            files.append((path, content))
         return cls(tuple(files), _environment())
 
     @property

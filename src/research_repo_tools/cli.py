@@ -66,7 +66,7 @@ def parser() -> argparse.ArgumentParser:
     uv.add_argument("--output", help="validate captured output without running an executable")
     source = deps.add_parser("source", help="preview/apply a verified dependency-sources.toml selection")
     source.add_argument("name", help="configured source selection name")
-    source.add_argument("--apply", action="store_true", help="atomically apply the resolved manifest/lock candidate")
+    source.add_argument("--apply", action="store_true", help="apply the resolved manifest/lock candidate with recoverable multi-file publication")
     deps.add_parser("update-python").add_argument(
         "--all-projects", action="store_true", help="also upgrade locks and sync the main and declared independent Python projects"
     )

@@ -492,6 +492,10 @@ and optional named source selections. The same file is inspected at release
 acquisition, candidate revalidation, evidence, tag and publication boundaries.
 A source selection never changes release policy: GitHub commits are development
 inputs, while release dependencies must come from PyPI or crates.io.
+Without this file, only checkouts without declared or locked dependencies pass;
+workspace membership and source overrides also require an explicit policy.
+The older `published-dependencies` selection adds checks and cannot bypass this
+requirement.
 
 The first `release-owned` directory identifies the package being released;
 additional directories must be declared workspace members that are private
@@ -512,6 +516,12 @@ multi-file publication. Failed resolution leaves the checkout unchanged; a
 publication failure rolls back, and an incomplete rollback reports retained
 backup paths. Inspect those backups before retrying. Concurrent edits require a
 new preview. No source transition upgrades tooling or publishes a package.
+Snapshots retain ignored and untracked inputs, with limits of 10,000 inventory
+entries, 32 MiB per file and 128 MiB in aggregate. Oversized inputs fail before
+copying or resolution; move unrelated large data outside the checkout before
+retrying. Generated/cache directories are omitted unless they contain declared
+workspace manifests. Required workspace inputs are never omitted just to meet
+these limits.
 
 Release inspection reads all declared requirements and universal lock entries,
 including development/build dependencies, optional features and alternate
@@ -536,6 +546,9 @@ Current installed Python byte proof requires ordinary wheels without relocated
 `.data` files; locally built sdists cannot substitute for this proof. Universal
 lock checks cover variants not installed on the current host; they do not claim
 that those variants were tested there.
+The exact legacy uv 0.8.0 `_virtualenv.py`/`_virtualenv.pth` pair is recognized
+by content without executing or changing it. Modified or unknown startup hooks
+are rejected; recreate such environments with the supported uv.
 
 GitHub proof requires an exact full lowercase commit SHA, matching repository
 identity, and static package metadata at the selected directory. Cargo additionally

@@ -7,6 +7,8 @@ The provider boundary transports bytes, never executable consumer metadata.
 import hashlib
 import json
 import re
+import threading
+import time
 import tomllib
 from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
@@ -25,6 +27,8 @@ type Ecosystem = Literal["python", "cargo"]
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _REPOSITORY = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*")
+_CRATES_IO_LOCK = threading.Lock()
+_crates_io_requested_at: float | None = None
 
 
 def package_name(ecosystem: Ecosystem, name: str) -> str:
@@ -142,6 +146,16 @@ class HttpSourceProvider:
                 if not isinstance(payload, bytes) or response.status != 200 or response.url != url or len(payload) > registry.MAX_BYTES:
                     raise ValueError("dependency artifact returned an unexpected status, redirect or oversized payload")
             return payload
+        parsed = urlsplit(url)
+        if parsed.netloc == "crates.io" and parsed.path.startswith("/api/"):
+            # Share pacing across providers, graphs and repeated verifications.
+            # Do not cache observations or delay static.crates.io downloads.
+            global _crates_io_requested_at
+            with _CRATES_IO_LOCK:
+                while _crates_io_requested_at is not None and (remaining := 1 - (time.monotonic() - _crates_io_requested_at)) > 0:
+                    time.sleep(remaining)
+                _crates_io_requested_at = time.monotonic()
+                return _read(url)
         return _read(url)
 
 
@@ -229,6 +243,7 @@ def verify_source(source: Source, *, provider: SourceProvider | None = None, rel
         manifest_bytes = read(prefix + quote(path))
         manifest = tomllib.loads(manifest_bytes.decode("utf-8"))
         project = table(manifest.get("project" if source.ecosystem == "python" else "package"), "upstream package")
+        verified_manifests: dict[str, dict[str, object]] = {}
         if package_name(source.ecosystem, string(project.get("name"), "upstream package name")) != source.package:
             raise ValueError("commit manifest identifies a different package")
         if source.ecosystem == "cargo":
@@ -259,7 +274,8 @@ def verify_source(source: Source, *, provider: SourceProvider | None = None, rel
                 payload = manifest_bytes if member == path else read(prefix + quote(member))
                 if hashlib.sha1(f"blob {len(payload)}\0".encode() + payload).hexdigest() != blob:
                     raise ValueError("Cargo manifest bytes differ from the verified commit tree")
-                package = table(tomllib.loads(payload.decode("utf-8")).get("package", {}), "Cargo package")
+                verified_manifests[member] = tomllib.loads(payload.decode("utf-8"))
+                package = table(verified_manifests[member].get("package", {}), "Cargo package")
                 if package.get("name") == source.package:
                     matches.append(member)
             if matches != [path]:
@@ -268,9 +284,10 @@ def verify_source(source: Source, *, provider: SourceProvider | None = None, rel
         if source.ecosystem == "cargo" and version == {"workspace": True}:
             # Find the nearest ancestor workspace; never infer inheritance from
             # a repository root unrelated to this package.
-            for parent in PurePosixPath(source.directory).parents:
-                ancestor = tomllib.loads(read(prefix + quote((parent / "Cargo.toml").as_posix())).decode("utf-8"))
-                if "workspace" in ancestor:
+            directory = PurePosixPath(source.directory)
+            for parent in (directory, *directory.parents):
+                ancestor = verified_manifests.get((parent / "Cargo.toml").as_posix())
+                if ancestor is not None and "workspace" in ancestor:
                     version = table(table(ancestor["workspace"], "workspace").get("package"), "workspace.package").get("version")
                     break
         dynamic = project.get("dynamic", [])
