@@ -64,6 +64,9 @@ def parser() -> argparse.ArgumentParser:
     uv = deps.add_parser("check-uv")
     uv.add_argument("--uv-executable")
     uv.add_argument("--output", help="validate captured output without running an executable")
+    source = deps.add_parser("source", help="preview/apply a verified dependency-sources.toml selection")
+    source.add_argument("name", help="configured source selection name")
+    source.add_argument("--apply", action="store_true", help="atomically apply the resolved manifest/lock candidate")
     deps.add_parser("update-python").add_argument(
         "--all-projects", action="store_true", help="also upgrade locks and sync the main and declared independent Python projects"
     )
@@ -673,6 +676,15 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         return check(settings)
     if args.group == "deps":
         deps = settings.deps
+        if args.action == "source":
+            from research_repo_tools.dependency_workflows import apply_source, plan_source
+
+            plan = plan_source(settings.root, args.name)
+            print(plan.diff(), end="")
+            if args.apply:
+                apply_source(plan)
+                print("Applied verified dependency source and lock. Revalidate downstream checks and release evidence.")
+            return 0
         if args.action == "update-uv":
             from research_repo_tools.uv_update import update
 

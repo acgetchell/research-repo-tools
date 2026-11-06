@@ -69,7 +69,7 @@ def key_line(text: str, table: str, key: str, *, index: int | None = None) -> in
     are tracked; values remain owned by tomllib and retain their original bytes.
     """
     tomllib.loads(text)
-    target = tuple(table.split("."))
+    target = _key_path(tomllib.loads(f"[{table}]"))
     current: tuple[str, ...] = ()
     array_indices: dict[tuple[str, ...], int] = {}
     current_index = None
@@ -131,7 +131,7 @@ def set_value(text: str, table: str, key: str, value: str) -> str:
         line = key_line(text, table, key)
     except ValueError:
         for number, statement in _statements(text):
-            if statement.startswith("[") and not statement.startswith("[[") and _key_path(tomllib.loads(statement)) == tuple(table.split(".")):
+            if statement.startswith("[") and not statement.startswith("[[") and _key_path(tomllib.loads(statement)) == _key_path(tomllib.loads(f"[{table}]")):
                 if not lines[number - 1].endswith("\n"):
                     lines[number - 1] += newline
                 lines.insert(number, f"{encoded_key} = {value}{newline}")
@@ -223,3 +223,18 @@ def replace_array_strings(text: str, table: str, key: str, replacements: dict[st
         text = text[:start] + value + text[end:]
     tomllib.loads(text)
     return text
+
+
+def remove_value(text: str, table: str, key: str) -> str:
+    """Remove one standalone assignment while preserving its trailing comment."""
+    marker = '"research-repo-tools-remove-value"'
+    candidate = set_value(text, table, key, marker)
+    line = key_line(candidate, table, key)
+    lines = StringIO(candidate, newline="\n").readlines()
+    declaration = lines[line - 1]
+    offset = declaration.index(marker) + len(marker)
+    remainder = declaration[offset:]
+    lines[line - 1] = remainder.lstrip(" \t")
+    result = "".join(lines)
+    tomllib.loads(result)
+    return result

@@ -200,6 +200,53 @@ Use `just ...` for routine work; no environment activation is needed. Recipes
 select the locked package internally. The underlying CLI and [Python APIs][api]
 remain available for integrations.
 
+## Verified Python and Cargo dependency sources
+
+Use `dependency-sources.toml` at the checkout root to select arbitrary upstream
+Python packages or Cargo crates. Releases accept **PyPI and crates.io only**;
+exact GitHub commits are available for development checks and rehearsal.
+
+```toml
+schema = 1
+
+[projects.rust]
+ecosystem = "cargo"
+directory = "."
+release-owned = ["."]
+
+[sources.upstream]
+project = "rust"
+package = "upstream-crate"
+github = "owner/repository"
+commit = "0123456789abcdef0123456789abcdef01234567"
+```
+
+For Python, use `ecosystem = "python"` and a Python package name. Project
+`directory` selects a project within the checkout; an optional source `directory`
+selects the package within the upstream repository. Export the annotated template
+with `just templates dependency-sources.toml --output dependency-sources.toml`.
+
+```sh
+just dependency-source upstream
+just dependency-source upstream --apply
+# Synchronize the native environment and run your downstream checks/rehearsal.
+```
+
+After upstream publication, replace `github`, `commit` and the source `directory`
+with `version = "1.2.3"`. Preview/apply again, synchronize and revalidate against
+the published dependency, then run `just release-dependencies`. Existing rehearsal
+files remain available, but changed source/lock identities require fresh evidence.
+The preview verifies availability before asking the native resolver to produce
+a candidate; apply publishes the manifest and lock together.
+
+The reusable `run-tooling` Action accepts the same command arguments: use
+`["deps", "source", "upstream", "--apply"]` for an explicit development transition
+and `["release", "dependencies"]` with `release-intent: 'true'` before release work.
+Use the pinned Action and exact published tooling version shown above; consumers
+do not assemble Git URLs or implement their own dependency guard. Workspace
+ownership, registry proof limits and recovery are described in the
+[dependency source guide](docs/UPDATING_DEPENDENCIES.md#verified-dependency-sources).
+
 ## Common workflows
 
 These are independent commands; run only the workflow you intend. Some require

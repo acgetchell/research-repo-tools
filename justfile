@@ -80,6 +80,10 @@ coverage *args:
 [private]
 default: help
 
+# Preview a configured Python/Cargo source transition; pass --apply to publish it.
+dependency-source name *args:
+    uv run --locked research-repo-tools deps source "$@"
+
 # List recipes and arguments in lexicographic order.
 help:
     @just --justfile {{ quote(justfile()) }} --list

@@ -30,6 +30,7 @@ TEMPLATES = (
     "complete-report.toml",
     "criterion-inventory.toml",
     "criterion-saved.toml",
+    "dependency-sources.toml",
     "examples.toml",
     "justfile",
     "performance-release.toml",
@@ -259,6 +260,9 @@ def tag(config: Config, version: str, *, force: bool = False, dry_run: bool = Fa
     the previous tag is not deleted before the replacement object exists.
     """
     validate_semver(version)
+    from research_repo_tools.dependency_workflows import check_dependency_policy
+
+    check_dependency_policy(config.root)
     check(config)
     policy = config.release
     from research_repo_tools.release_metadata import read_package_info

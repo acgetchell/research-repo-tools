@@ -139,11 +139,11 @@ def _locked(root: Path, name: str, version: str) -> dict[str, Any]:
     return selected[0]
 
 
-def _artifacts(locked: dict[str, Any]) -> tuple[dict[str, Any], ...]:
+def _artifacts(locked: dict[str, Any], *, require_sdist: bool = True) -> tuple[dict[str, Any], ...]:
     wheels, sdist = locked.get("wheels"), locked.get("sdist")
-    if not isinstance(wheels, list) or not wheels or not isinstance(sdist, dict):
+    if not isinstance(wheels, list) or not wheels or (require_sdist or sdist is not None) and not isinstance(sdist, dict):
         raise ValueError("published dependency proof requires locked wheel and sdist artifacts")
-    artifacts = (sdist, *wheels)
+    artifacts = (*((sdist,) if sdist is not None else ()), *wheels)
     seen = set()
     for artifact in artifacts:
         if not isinstance(artifact, dict):
@@ -283,7 +283,7 @@ def check_development_dependency(root: Path, name: str = PACKAGE, *, document: d
     return DependencyIdentity(name, version, url, revision)
 
 
-def _published_wheel(name: str, version: str, locked: dict[str, Any], installed: tuple[dict[str, Any], ...]) -> None:
+def _published_wheel(name: str, version: str, locked: dict[str, Any], installed: tuple[dict[str, Any], ...], *, require_sdist: bool = True) -> None:
     from research_repo_tools import registry
 
     data = registry._json(f"https://pypi.org/pypi/{name}/{version}/json")
@@ -292,7 +292,7 @@ def _published_wheel(name: str, version: str, locked: dict[str, Any], installed:
     if not isinstance(info.get("name"), str) or canonicalize_name(info["name"]) != name or info.get("version") != version:
         raise ValueError(f"{name}: published identity differs")
     uploads = data.get("urls")
-    artifacts = _artifacts(locked)
+    artifacts = _artifacts(locked, require_sdist=require_sdist)
     if not isinstance(uploads, list) or not uploads or any(not isinstance(item, dict) for item in uploads):
         raise ValueError(f"{name}: missing or malformed registry/locked artifacts")
     by_url = {}
@@ -376,9 +376,15 @@ def check_release_dependencies(root: Path, *, packages: tuple[str, ...] | None =
     source release. A selected dependency may never name the project itself.
     """
     try:
+        from research_repo_tools.dependency_workflows import check_dependency_policy
+
+        verified = check_dependency_policy(root)
+        generic = tuple(
+            DependencyIdentity(item.source.package, item.version, INDEX if item.source.ecosystem == "python" else "https://crates.io") for item in verified
+        )
         manifest = root / "pyproject.toml"
         if not manifest.is_file() and not packages:
-            return ()
+            return generic
         original = manifest.read_bytes()
         document = tomllib.loads(original.decode("utf-8"))
         release = _table(_table(_table(document.get("tool", {}), "tool").get(PACKAGE, {}), PACKAGE).get("release", {}), "release")
@@ -386,7 +392,7 @@ def check_release_dependencies(root: Path, *, packages: tuple[str, ...] | None =
         for values in (release.get("published-dependencies", ()), packages if packages is not None else ()):
             names.update(dependency_names(values))
         if not names:
-            return ()
+            return generic
         if (root / "uv.toml").exists():
             raise ValueError("published dependency proof requires uv configuration in pyproject.toml, not uv.toml")
         project = _table(document.get("project", {}), "project")
@@ -422,6 +428,6 @@ def check_release_dependencies(root: Path, *, packages: tuple[str, ...] | None =
         for name, _, _, installed in pending:
             if _installations(root, name) != installed:
                 raise ValueError(f"{name}: runtime changed during verification")
-        return tuple(DependencyIdentity(name, version, INDEX) for name, version, _, _ in pending)
+        return tuple(DependencyIdentity(name, version, INDEX) for name, version, _, _ in pending) + generic
     except (ValueError, OSError, TypeError, subprocess.SubprocessError, zipfile.BadZipFile, http.client.HTTPException) as error:
         raise ValueError(f"release dependency provenance: {error}. {RECOVERY}") from error
