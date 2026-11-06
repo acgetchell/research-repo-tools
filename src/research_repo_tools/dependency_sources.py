@@ -266,7 +266,6 @@ def verify_source(source: Source, *, provider: SourceProvider | None = None, rel
                     raise ValueError("Git tree contains duplicate paths")
                 seen.add(member)
                 if PurePosixPath(member).name == "Cargo.toml":
-                    relative_directory(member)
                     if entry.get("type") != "blob" or entry.get("mode") not in {"100644", "100755"}:
                         raise ValueError("Cargo manifest must be a regular Git blob")
                     manifests.append((member, entry.get("sha")))

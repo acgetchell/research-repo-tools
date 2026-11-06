@@ -1,5 +1,6 @@
 """Inert uv/Cargo source inspection and native locked graph verification."""
 
+import filecmp
 import os
 import re
 import tempfile
@@ -267,6 +268,36 @@ def inspect_project(checkout: Path, project: DependencyProject, *, release: bool
     return DependencyGraph(project, root, snapshot, manifests, tuple(dependencies), tuple(owned))
 
 
+def _resolve_cargo(*, cwd: Path, environment: dict[str, str], checkouts: tuple[Path, ...]) -> Path:
+    """Check both a Cargo launcher and the executable a rustup proxy selects."""
+    from research_repo_tools.process import ExecutableNotFoundError, resolve_executable, run_command
+
+    def outside(executable: Path) -> Path:
+        if any(executable.resolve().is_relative_to(root.resolve()) for root in checkouts):
+            raise ValueError("Cargo executable must be outside dependency checkouts")
+        return executable
+
+    cargo = outside(resolve_executable("cargo", cwd=cwd, env=environment))
+    rustup = cargo.with_name("rustup" + cargo.suffix)
+    if not rustup.is_file():
+        try:
+            rustup = resolve_executable("rustup", cwd=cwd, env=environment)
+        except ExecutableNotFoundError as error:
+            if environment.get("RUSTUP_TOOLCHAIN") or environment.get("RUSTUP_HOME"):
+                raise ValueError("cannot verify the selected Rust toolchain without rustup") from error
+            return cargo
+    # Rustup installs linked proxies. Compare bytes as well for copied proxies;
+    # a standalone Cargo binary does not delegate to rustup.
+    if not cargo.samefile(rustup) and not filecmp.cmp(cargo, rustup, shallow=False):
+        return cargo
+    rustup = outside(resolve_executable(rustup, cwd=cwd, env=environment))
+    selected = Path(run_command(rustup, ["which", "cargo"], cwd=cwd, env={**environment, "RUSTUP_AUTO_INSTALL": "0"}, timeout=30).stdout.strip())
+    if not selected.is_absolute():
+        raise ValueError("rustup must identify an absolute Cargo executable")
+    outside(resolve_executable(selected, cwd=cwd, env=environment))
+    return cargo
+
+
 def check_native_graph(graph: DependencyGraph, *, sources: tuple[VerifiedSource, ...] = (), provider: SourceProvider | None = None) -> None:
     """Use uv/Cargo freshness semantics; never update a lock, fetch or build."""
     if graph.project.ecosystem == "python":
@@ -277,7 +308,7 @@ def check_native_graph(graph: DependencyGraph, *, sources: tuple[VerifiedSource,
 
         verify_python_environment(graph)
     else:
-        from research_repo_tools.process import resolve_executable, run_command
+        from research_repo_tools.process import run_command
 
         environment = {key: value for key, value in os.environ.items() if not key.upper().startswith(("CARGO_", "RUST"))}
         environment["PATH"] = os.pathsep.join(p for p in os.get_exec_path() if Path(p).is_absolute() and not Path(p).resolve().is_relative_to(graph.root))
@@ -288,9 +319,7 @@ def check_native_graph(graph: DependencyGraph, *, sources: tuple[VerifiedSource,
         # and local .cargo configuration cannot select a consumer executable.
         with tempfile.TemporaryDirectory(prefix="dependency-graph-") as directory:
             cwd = Path(directory)
-            cargo = resolve_executable("cargo", cwd=cwd, env=environment)
-            if cargo.resolve().is_relative_to(graph.root):
-                raise ValueError("Cargo inspector must be outside the consumer checkout")
+            cargo = _resolve_cargo(cwd=cwd, environment=environment, checkouts=(graph.root,))
             result = run_command(
                 cargo,
                 ["metadata", "--manifest-path", str(graph.root / "Cargo.toml"), "--format-version", "1", "--all-features", "--locked", "--offline"],

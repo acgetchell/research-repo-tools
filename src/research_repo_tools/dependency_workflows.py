@@ -14,7 +14,7 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
 from research_repo_tools import toml_source
-from research_repo_tools.dependency_graphs import CRATES_IO, check_native_graph, inspect_project, verify_graph
+from research_repo_tools.dependency_graphs import CRATES_IO, _resolve_cargo, check_native_graph, inspect_project, verify_graph
 from research_repo_tools.dependency_policy import (
     MAX_SNAPSHOT_FILES,
     POLICY_FILE,
@@ -211,11 +211,12 @@ def _source_files(root: Path, manifests: tuple[Path, ...]) -> tuple[Path, ...]:
     return tuple(sorted(paths, key=str))
 
 
-def _resolve_candidate(root: Path, verified: VerifiedSource, *, checkout: Path) -> None:
+def _resolve_candidate(root: Path, verified: VerifiedSource, *, checkout: Path, candidate_checkout: Path) -> None:
     from research_repo_tools.process import resolve_executable, run_command
     from research_repo_tools.release_credentials import environment as without_credentials
 
     source = verified.source
+    cwd = candidate_checkout.parent
     environment = {
         key: value
         for key, value in without_credentials().items()
@@ -229,10 +230,14 @@ def _resolve_candidate(root: Path, verified: VerifiedSource, *, checkout: Path) 
     environment["PATH"] = os.pathsep.join(
         entry
         for entry in os.get_exec_path()
-        if Path(entry).is_absolute() and not Path(entry).resolve().is_relative_to(checkout) and not Path(entry).resolve().is_relative_to(root)
+        if Path(entry).is_absolute() and not Path(entry).resolve().is_relative_to(checkout) and not Path(entry).resolve().is_relative_to(candidate_checkout)
     )
-    executable = resolve_executable("uv" if source.ecosystem == "python" else "cargo", cwd=root.parent, env=environment)
-    if executable.resolve().is_relative_to(root) or executable.resolve().is_relative_to(checkout):
+    executable = (
+        resolve_executable("uv", cwd=cwd, env=environment)
+        if source.ecosystem == "python"
+        else _resolve_cargo(cwd=cwd, environment=environment, checkouts=(checkout, candidate_checkout))
+    )
+    if executable.resolve().is_relative_to(candidate_checkout) or executable.resolve().is_relative_to(checkout):
         raise ValueError("dependency resolver must be outside the candidate checkout")
     if source.ecosystem == "python":
         environment["UV_PROJECT_ENVIRONMENT"] = str(root.parent / "uncreated-environment")
@@ -252,9 +257,9 @@ def _resolve_candidate(root: Path, verified: VerifiedSource, *, checkout: Path) 
         if isinstance(source, RegistryRelease):
             locked = tomllib.loads((root / "Cargo.lock").read_text(encoding="utf-8"))
             if any(item.get("name") == source.package and item.get("source") != CRATES_IO for item in locked.get("package", [])):
-                run_command(executable, arguments, cwd=root.parent, env=environment, timeout=300)
+                run_command(executable, arguments, cwd=cwd, env=environment, timeout=300)
             arguments.extend(("--precise", source.version))
-    run_command(executable, arguments, cwd=root.parent, env=environment, timeout=300)
+    run_command(executable, arguments, cwd=cwd, env=environment, timeout=300)
 
 
 def _matches(verified: VerifiedSource, locked: Source, version: str) -> bool:
@@ -336,7 +341,7 @@ def plan_source(root: Path, name: str, *, provider: SourceProvider | None = None
             target.write_bytes(original)
         for path, content in changes.items():
             (candidate_root / path.relative_to(root)).write_bytes(content)
-        _resolve_candidate(inside(candidate_root, selection.project.directory), verified, checkout=root)
+        _resolve_candidate(inside(candidate_root, selection.project.directory), verified, checkout=root, candidate_checkout=candidate_root)
         graph = inspect_project(candidate_root, selection.project, release=False)
         matches = [dependency for dependency in graph.dependencies if dependency.source.package == selection.source.package]
         if not matches or any(not _matches(verified, item.source, item.version) for item in matches):

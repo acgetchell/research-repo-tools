@@ -5,6 +5,7 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tarfile
@@ -240,11 +241,23 @@ class TestSources(unittest.TestCase):
         self.provider.put(url, {**original, "tree": [*original["tree"], entry]})
         self.assertEqual(verify_source(source, provider=self.provider).version, "1.2.3")
         self.assertEqual(len(self.provider.calls), 4)
-        for path in ("", ".", "../input", "/input", "nested//input", "nested/./input", "nested/../input", "input\0.txt", "Cargo.toml", "old:1/Cargo.toml"):
+        for path in ("", ".", "../input", "/input", "nested//input", "nested/./input", "nested/../input", "input\0.txt", "Cargo.toml"):
             with self.subTest(path=path):
                 self.provider.put(url, {**original, "tree": [*original["tree"], {**entry, "path": path}]})
                 with self.assertRaises(ValueError):
                     verify_source(source, provider=self.provider)
+
+        manifest = b'[package]\nname="unrelated"\nversion="2.0.0"\n'
+        member = "old:1/Cargo.toml"
+        blob = {**entry, "path": member, "sha": hashlib.sha1(f"blob {len(manifest)}\0".encode() + manifest).hexdigest()}
+        raw_url = f"https://raw.githubusercontent.com/example/upstream/{COMMIT}/old%3A1/Cargo.toml"
+        self.provider.responses[raw_url] = manifest
+        self.provider.put(url, {**original, "tree": [*original["tree"], blob]})
+        self.assertEqual(verify_source(source, provider=self.provider).version, "1.2.3")
+        self.assertIn(raw_url, self.provider.calls)
+        self.provider.responses[raw_url] = manifest + b"# changed\n"
+        with self.assertRaisesRegex(ValueError, "bytes differ"):
+            verify_source(source, provider=self.provider)
 
 
 class TestSourceWorkflows(unittest.TestCase):
@@ -269,6 +282,12 @@ class TestSourceWorkflows(unittest.TestCase):
             )
         )
         self.native = self.enterContext(patch.object(dependency_workflows, "check_native_graph"))
+
+        def fixture_configuration_paths(root: Path, ecosystem: dependency_sources.Ecosystem) -> tuple[Path, ...]:
+            return tuple(path for path in dependency_policy.configuration_paths(root, ecosystem) if path.is_relative_to(self.root))
+
+        for module in (dependency_graphs, dependency_workflows):
+            self.enterContext(patch.object(module, "configuration_paths", side_effect=fixture_configuration_paths))
 
     def snapshot(self) -> dict[str, bytes]:
         return {path.relative_to(self.root).as_posix(): path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
@@ -417,7 +436,9 @@ class TestSourceWorkflows(unittest.TestCase):
         config = cargo / "config.toml"
         snapshot = dependency_policy.InputSnapshot.capture((config,))
         self.assertEqual(snapshot.files, ((config, None),))
-        self.assertEqual(check_release_dependencies(self.root), ())
+        with patch.object(dependency_policy.InputSnapshot, "capture", wraps=dependency_policy.InputSnapshot.capture) as capture:
+            self.assertEqual(check_release_dependencies(self.root), ())
+        self.assertTrue(all(path.is_relative_to(self.root) for call in capture.call_args_list for path in call.args[0]))
         cargo.unlink()
         cargo.mkdir()
         config.write_bytes(b"[net]\noffline=true\n")
@@ -516,7 +537,9 @@ class TestSourceWorkflows(unittest.TestCase):
                 evidence.write_bytes(b'{"old":"retained"}\r\n')
                 original = self.snapshot()
 
-                def resolve(root: Path, verified: VerifiedSource, *, checkout: Path) -> None:
+                def resolve(root: Path, verified: VerifiedSource, *, checkout: Path, candidate_checkout: Path) -> None:
+                    self.assertEqual(checkout, self.root)
+                    self.assertTrue(root.is_relative_to(candidate_checkout))
                     (self.python_lock if ecosystem == "python" else self.cargo_lock)(root=root, git=isinstance(verified.source, GitCommit))
 
                 with patch.object(dependency_workflows, "_resolve_candidate", side_effect=resolve):
@@ -657,15 +680,51 @@ class TestSourceWorkflows(unittest.TestCase):
         with (
             patch.dict(os.environ, settings),
             patch.object(process, "resolve_executable", return_value=Path(sys.executable)),
-            patch.object(process, "run_command") as run,
+            patch.object(process, "run_command", return_value=subprocess.CompletedProcess([], 0, str(Path(sys.executable)), "")) as run,
         ):
-            dependency_workflows._resolve_candidate(self.root, proof, checkout=self.root)
+            dependency_workflows._resolve_candidate(self.root, proof, checkout=self.root, candidate_checkout=self.root)
         environment = run.call_args.kwargs["env"]
         self.assertEqual(environment["CARGO_HOME"], settings["CARGO_HOME"])
         self.assertEqual(environment["RUSTUP_HOME"], settings["RUSTUP_HOME"])
         self.assertEqual(environment["RUSTUP_TOOLCHAIN"], settings["RUSTUP_TOOLCHAIN"])
         self.assertFalse(set(settings) - {"CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "PATH"} & environment.keys())
         self.assertNotIn(str(self.root), environment["PATH"].split(os.pathsep))
+
+    def test_native_rustup_cargo_selection_rejects_both_checkouts_and_accepts_external_toolchains(self) -> None:
+        self.cargo()
+        proof = verify_source(GitCommit("cargo", "sample-crate", "example/upstream", COMMIT), provider=self.provider)
+        marker = self.root / "cargo-ran"
+        with tempfile.TemporaryDirectory(prefix="cargo selection café ") as directory:
+            arena = Path(directory).resolve()
+            candidate = arena / "checkout"
+            project = candidate / "project"
+            project.mkdir(parents=True)
+            (project / "Cargo.toml").write_bytes(b'[package]\nname="consumer"\nversion="0.1.0"\n')
+            trusted = arena / "trusted"
+            (trusted / "bin").mkdir(parents=True)
+            binary_name = "cargo.exe" if sys.platform == "win32" else "cargo"
+            binary = trusted / "bin" / binary_name
+            program = arena / "probe.rs"
+            program.write_bytes(b'fn main() { std::fs::write(std::env::var("RRT_CARGO_PROBE_MARKER").unwrap(), b"selected").unwrap(); }\n')
+            process.run_command("rustc", [str(program), "-o", str(binary)], cwd=arena)
+            for toolchain in (self.root / "toolchain", candidate / "toolchain", trusted):
+                if toolchain != trusted:
+                    (toolchain / "bin").mkdir(parents=True)
+                    shutil.copy2(binary, toolchain / "bin" / binary_name)
+                with self.subTest(toolchain=toolchain), patch.dict(os.environ, {"RUSTUP_TOOLCHAIN": str(toolchain), "RRT_CARGO_PROBE_MARKER": str(marker)}):
+                    if toolchain == trusted:
+                        dependency_workflows._resolve_candidate(project, proof, checkout=self.root, candidate_checkout=candidate)
+                        self.assertEqual(marker.read_bytes(), b"selected")
+                        marker.unlink()
+                    else:
+                        with self.assertRaisesRegex(ValueError, "outside dependency checkouts"):
+                            dependency_workflows._resolve_candidate(project, proof, checkout=self.root, candidate_checkout=candidate)
+                        self.assertFalse(marker.exists())
+                        if toolchain.is_relative_to(self.root):
+                            graph = dependency_graphs.inspect_project(self.root, DependencyProject("cargo"))
+                            with self.assertRaisesRegex(ValueError, "outside dependency checkouts"):
+                                dependency_graphs.check_native_graph(graph)
+                            self.assertFalse(marker.exists())
 
     def test_cli_preview_and_release_gate_share_the_public_policy(self) -> None:
         self.python()
@@ -768,7 +827,7 @@ class TestSourceWorkflows(unittest.TestCase):
             "resolve": {"nodes": [{"id": "consumer", "dependencies": ["upstream"]}, {"id": "upstream", "dependencies": []}]},
         }
         with (
-            patch.object(process, "resolve_executable", return_value=Path(sys.executable)),
+            patch.object(dependency_graphs, "_resolve_cargo", return_value=Path(sys.executable)),
             patch.object(process, "run_command", return_value=subprocess.CompletedProcess([], 0, json.dumps(metadata), "")) as command,
         ):
             dependency_graphs.check_native_graph(graph, sources=verified, provider=self.provider)
@@ -949,7 +1008,7 @@ class TestSourceWorkflows(unittest.TestCase):
                     proof = verify_source(source, provider=self.provider)
                     manifest.write_text(dependency_workflows._cargo_selection(manifest.read_text(encoding="utf-8"), proof), encoding="utf-8", newline="\n")
                     try:
-                        dependency_workflows._resolve_candidate(consumer, proof, checkout=consumer)
+                        dependency_workflows._resolve_candidate(consumer, proof, checkout=consumer, candidate_checkout=consumer)
                     except subprocess.CalledProcessError as error:
                         self.fail(f"native Cargo transition failed: {error.stderr!r}")
                     packages = tomllib.loads((consumer / "Cargo.lock").read_text(encoding="utf-8"))["package"]
