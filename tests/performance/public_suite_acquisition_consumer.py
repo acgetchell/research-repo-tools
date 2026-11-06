@@ -15,11 +15,12 @@ from contextlib import ExitStack, chdir, contextmanager
 from dataclasses import replace
 from pathlib import Path
 from threading import Event
-from typing import override
+from typing import Any, get_type_hints, override
 from unittest.mock import patch
 
 from research_repo_tools.archives import ArchiveLimits, extract_archive
 from research_repo_tools.benchmark_reuse import ReusePolicy, parse_reuse_policy, plan_reuse_archive, serialize_reuse_policy, verify_reuse_archive
+from research_repo_tools.candidate_publication import plan_candidate_publication
 from research_repo_tools.candidate_reuse import (
     CandidatePolicy,
     acquisition_assertion_digest,
@@ -46,6 +47,7 @@ from research_repo_tools.release_evidence import EvidencePolicy
 from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.release_validation import ValidationPolicy
 from research_repo_tools.run_presentation import RunLayout, RunRow, SeriesSelection, render_run_ratios, render_run_table, serialize_run_csv
+from research_repo_tools.run_reports import load_run_report_plan
 from research_repo_tools.scheduled_runs import ScheduledRun, parse_scheduled_run, select_trial
 from research_repo_tools.source_exports import export_source
 from research_repo_tools.suite_measurement import AcquisitionSuite, SuiteMeasurementPlan
@@ -1287,13 +1289,35 @@ class TestSuiteAcquisition(unittest.TestCase):
         self.assertTrue((failed / "unit-started-trial-1.json").exists())
         self.assertFalse((failed / "unit-trial-1.json").exists())
 
-    def candidate_fixture(self):
+    def candidate_fixture(self, *, generated=False):
         original = {**self.revisions["v1.1.0"], "README.md": b"before\r\n"}
+        if generated:
+            # A previous independently retained run establishes a nonempty
+            # history before this release's single acquisition begins.
+            _, historical = self.scheduled_fixture()
+            for name, data in zip(("prior-run.json", "prior-evidence.json"), serialize_evidence(historical), strict=True):
+                (self.root / name).write_bytes(data)
+            (self.root / "report.toml").write_bytes(
+                b'schema=2\ncurrent="docs/performance.md"\narchive="docs/performance-runs"\ntitle="Complete measurements"\n'
+            )
+            publish_publication(load_run_report_plan(self.root, "report.toml", payload="prior-run.json", manifest="prior-evidence.json"))
+            original.update({path.relative_to(self.root).as_posix(): path.read_bytes() for path in (self.root / "docs").rglob("*") if path.is_file()})
+            original["report.toml"] = (self.root / "report.toml").read_bytes()
         for name, data in original.items():
             (self.root / name).write_bytes(data)
         (self.root / "revision").write_bytes(b"candidate")
-        self.stack.enter_context(patch("research_repo_tools.source_exports.select_files", side_effect=lambda root, **kwargs: tuple(sorted(original))))
-        selected, evidence = self.scheduled_fixture(outputs=("README.md",), working_tree=True)
+        self.acquisition_tree = {name: (self.root / name).read_bytes() for name in original}
+        inventory = set(original)
+        self.stack.enter_context(patch("research_repo_tools.source_exports.select_files", side_effect=lambda root, **kwargs: tuple(sorted(inventory))))
+        exceptions = ("README.md",)
+        if generated:
+            exceptions += ("docs/performance-runs/runs/unindexed/report.md",)
+            exceptions += tuple(name for name in original if "/runs/" in name and name.endswith("report.md"))
+        selected, evidence = self.scheduled_fixture(outputs=exceptions, working_tree=True)
+        if generated:
+            payload, envelope = serialize_evidence(evidence)
+            self.original_evidence_bytes = (payload, b" \r\n" + envelope.replace(b"\n", b"\r\n"))
+            evidence = parse_evidence(*self.original_evidence_bytes)
         # This test acts as the acquisition owner: freeze assertions before
         # final-tree edits or any candidate/archive corruption.
         policy = CandidatePolicy(
@@ -1309,6 +1333,7 @@ class TestSuiteAcquisition(unittest.TestCase):
                 for index, trial in enumerate(parse_scheduled_run(evidence).trials)
                 for suite, phase, _, source in parse_suite_run(trial).observations
             ),
+            report="report.toml" if generated else None,
         )
         # Plans retain tuple ordering in memory; canonical JSON sorts context
         # object keys. The handoff contract is canonical bytes, not dataclass equality.
@@ -1319,9 +1344,19 @@ class TestSuiteAcquisition(unittest.TestCase):
         acquisition_digest = acquisition_assertion_digest(policy)
         before = self.log.read_bytes()
         with patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("no read-only acquisition")):
+            if generated:
+                for name, data in zip(("run.json", "evidence.json"), serialize_evidence(evidence), strict=True):
+                    (self.root / name).write_bytes(data)
+                publication, receipt = plan_candidate_publication(self.root, "run.json", "evidence.json", policy, acquisition_sha256=acquisition_digest)
+                self.publication_receipt = receipt
+                self.publication_digest = hashlib.sha256(receipt).hexdigest()
+                self.prior_publication = dict(publication.originals)
+                self.prior_history = {name: data for name, data in original.items() if "/runs/" in name}
+                publish_publication(publication)
+                inventory.update(name for name, _ in publication.outputs)
             report = render_run(evidence)
             (self.root / "README.md").write_bytes(report)
-        final = {name: (self.root / name).read_bytes() for name in original}
+        final = {name: (self.root / name).read_bytes() for name in inventory}
         mapping = {**self.revisions, "final": final}
         policy = replace(policy, commit="c" * 40)
         self.assertEqual(acquisition_assertion_digest(policy), acquisition_digest)
@@ -1335,11 +1370,382 @@ class TestSuiteAcquisition(unittest.TestCase):
             ("sign", ("Sign",)),
         )
         provider = self.stack.enter_context(
-            patch("research_repo_tools.candidate_reuse.verify_release_evidence", return_value=deterministic_json({"artifact": {"id": 123}, "commit": "c" * 40}))
+            patch(
+                "research_repo_tools.candidate_reuse.verify_release_evidence",
+                return_value=deterministic_json(
+                    {
+                        "artifact": {"id": 123, "digest": "sha256:" + "a" * 64},
+                        "commit": "c" * 40,
+                        "package": {"name": "fixture", "version": "1.1.0"},
+                        "run": {"id": 123, "run_attempt": 2, "head_sha": "c" * 40, "name": "CI", "path": ".github/workflows/ci.yml"},
+                        "policy": {
+                            "repository": "example/library",
+                            "event": "push",
+                            "ref": "refs/heads/main",
+                            "guarantee": "signed-source",
+                            "signing_job": {"sign": ["Sign"]},
+                        },
+                    }
+                ),
+            )
         )
-        accepted = verify_candidate_release(self.root, evidence, policy, native, lambda endpoint: {}, acquisition_sha256=acquisition_assertion_digest(policy))
+        accepted = verify_candidate_release(
+            self.root,
+            evidence,
+            policy,
+            native,
+            lambda endpoint: {},
+            acquisition_sha256=acquisition_assertion_digest(policy),
+            **({"publication_receipt": self.publication_receipt, "publication_sha256": self.publication_digest} if generated else {}),
+        )
         self.assertEqual(before, self.log.read_bytes())
         return evidence, policy, native, provider, accepted, mapping
+
+    def test_committed_publisher_evidence_reuses_one_acquisition_and_preserves_history(self):
+        evidence, policy, native, provider, accepted, _ = self.candidate_fixture(generated=True)
+        receipt = json.loads(self.publication_receipt)
+        run_directory = f"docs/performance-runs/runs/{policy.identity}"
+        self.assertEqual(
+            {name: output["role"] for name, output in receipt["outputs"].items()},
+            {
+                f"{run_directory}/run.json": "payload",
+                f"{run_directory}/evidence.json": "envelope",
+                f"{run_directory}/report.md": "report",
+                "docs/performance.md": "current",
+                "docs/performance-runs/index.json": "index",
+                "docs/performance-runs/latest.json": "latest",
+                "docs/performance-runs/README.md": "history",
+            },
+        )
+        for name, raw in zip(("run.json", "evidence.json"), self.original_evidence_bytes, strict=True):
+            self.assertEqual((self.root / run_directory / name).read_bytes(), raw)
+        for name, output in receipt["outputs"].items():
+            raw = (self.root / name).read_bytes()
+            self.assertEqual((output["sha256"], output["size"], output["executable"]), (hashlib.sha256(raw).hexdigest(), len(raw), False))
+        self.assertEqual(json.loads(accepted)["binding"]["publication_sha256"], self.publication_digest)
+        self.assertEqual(receipt["identity"], run_identity(evidence))
+        for name, data in self.prior_history.items():
+            self.assertEqual((self.root / name).read_bytes(), data)
+        for name, data in (("policy.json", serialize_candidate_policy(policy)), ("accepted.json", accepted)):
+            (self.root / name).write_bytes(data)
+        before = self.log.read_bytes()
+        with patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("inspection/retry must not build, gate or measure")):
+            for _ in range(2):
+                self.assertEqual(
+                    verify_candidate_release(
+                        self.root,
+                        evidence,
+                        policy,
+                        native,
+                        lambda endpoint: {},
+                        acquisition_sha256=acquisition_assertion_digest(policy),
+                        publication_receipt=self.publication_receipt,
+                        publication_sha256=self.publication_digest,
+                        expected=accepted,
+                    ),
+                    accepted,
+                )
+                self.assertEqual(provider.call_args.kwargs["expected"], deterministic_json(json.loads(accepted)["native"]))
+                # A rendering retry uses the existing publisher and retained
+                # history, never captures a replacement trusted receipt.
+                self.assertEqual(publish_publication(load_run_report_plan(self.root, "report.toml")), ())
+                publish_publication(plan_candidate_archive(self.root, "run.json", "evidence.json", "policy.json", "accepted.json", "release.tar.gz"))
+                retained = verify_candidate_archive(self.root / "release.tar.gz", policy, accepted)
+                self.assertEqual(serialize_evidence(retained), self.original_evidence_bytes)
+                with tarfile.open(self.root / "release.tar.gz", "r:gz") as archive:
+                    for name, raw in zip(("run.json", "evidence.json"), self.original_evidence_bytes, strict=True):
+                        member = archive.extractfile(f"evidence/{name}")
+                        assert member is not None
+                        self.assertEqual(member.read(), raw)
+        for name, data in self.prior_history.items():
+            self.assertEqual((self.root / name).read_bytes(), data)
+        self.assertEqual(before, self.log.read_bytes())
+
+    def test_candidate_publication_public_annotations_resolve_at_runtime(self):
+        hints = get_type_hints(plan_candidate_publication)
+        self.assertIs(hints["policy"], CandidatePolicy)
+        self.assertIs(hints["root"], Path)
+        self.assertEqual(hints["acquisition_sha256"], str)
+
+    def test_publication_receipt_parses_before_checkout_or_provider_effects(self):
+        evidence, policy, native, provider, _, _ = self.candidate_fixture(generated=True)
+        changes = (
+            ("schema", lambda d: d.update(schema="unknown"), "differs from independent acquisition"),
+            ("extra field", lambda d: d.update(extra="unknown"), "publication receipt fields"),
+            ("missing outputs", lambda d: d.pop("outputs"), "publication receipt fields"),
+            ("configuration type", lambda d: d.update(configuration=42), "configuration must be UTF-8 text"),
+            ("prior type", lambda d: d.update(prior=[]), "original publication inputs must be a JSON object"),
+            ("publisher", lambda d: d.update(publisher={"name": "other", "version": "1"}), "unsupported generated-evidence publisher"),
+            ("boolean size", lambda d: d["outputs"]["docs/performance.md"].update(size=True), "invalid generated output role, size or mode"),
+            ("executable", lambda d: d["outputs"]["docs/performance.md"].update(executable=True), "invalid generated output role, size or mode"),
+            ("digest", lambda d: d["outputs"]["docs/performance.md"].update(sha256="bad"), "generated output digest must be a lowercase SHA-256"),
+        )
+        for scenario, change, diagnostic in changes:
+            document = json.loads(self.publication_receipt)
+            change(document)
+            payload = deterministic_json(document)
+            provider.reset_mock()
+            with (
+                self.subTest(scenario=scenario),
+                patch("research_repo_tools.candidate_reuse.require_release_checkout", side_effect=AssertionError("not parsed")),
+                self.assertRaisesRegex(ValueError, diagnostic),
+            ):
+                verify_candidate_release(
+                    self.root,
+                    evidence,
+                    policy,
+                    native,
+                    lambda endpoint: {},
+                    acquisition_sha256=acquisition_assertion_digest(policy),
+                    publication_receipt=payload,
+                    publication_sha256=hashlib.sha256(payload).hexdigest(),
+                )
+            provider.assert_not_called()
+        mutable_receipt: Any = bytearray(self.publication_receipt)
+        with (
+            patch("research_repo_tools.candidate_reuse.require_release_checkout", side_effect=AssertionError("mutable receipt reached checkout")),
+            self.assertRaisesRegex(TypeError, "immutable bytes"),
+        ):
+            verify_candidate_release(
+                self.root,
+                evidence,
+                policy,
+                native,
+                lambda endpoint: {},
+                acquisition_sha256=acquisition_assertion_digest(policy),
+                publication_receipt=mutable_receipt,
+                publication_sha256=self.publication_digest,
+            )
+        provider.assert_not_called()
+
+    def test_committed_candidate_cli_summary_uses_frozen_verification_without_acquisition(self):
+        evidence, policy, _, _, accepted, _ = self.candidate_fixture(generated=True)
+        (self.root / "policy.json").write_bytes(serialize_candidate_policy(policy))
+        (self.root / "publication.json").write_bytes(self.publication_receipt)
+        (self.root / "native.toml").write_bytes(
+            b'schema=1\nrepository="example/library"\npackage="fixture"\nworkflow=".github/workflows/ci.yml"\nworkflow-name="CI"\nartifact-prefix="evidence"\nguarantee="signed-source"\njobs=[{name="native",steps=["Checks"]}]\n[signing-job]\nname="sign"\nsteps=["Sign"]\n'
+        )
+        args = [
+            "--root",
+            str(self.root),
+            "release",
+            "evidence",
+            "candidate",
+            "native.toml",
+            "--checkout",
+            ".",
+            "--payload",
+            "run.json",
+            "--manifest",
+            "evidence.json",
+            "--policy",
+            "policy.json",
+            "--acquisition-sha256",
+            acquisition_assertion_digest(policy),
+            "--publication-receipt",
+            "publication.json",
+            "--publication-sha256",
+            self.publication_digest,
+        ]
+        with (
+            patch("research_repo_tools.release_interfaces.require_release_checkout"),
+            patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("no acquisition or build/test")),
+            patch("sys.stdout", new_callable=io.StringIO) as output,
+            patch("sys.stderr", new_callable=io.StringIO) as diagnostic,
+        ):
+            self.assertEqual(main([*args, "--output", "step-two.json", "--format", "summary"]), 0)
+            self.assertEqual((self.root / "step-two.json").read_bytes(), accepted)
+            for expected in (policy.identity, "c" * 40, "b" * 40, "Benchmark evidence: passed", "Acquisition owner: local", "7 exact publisher outputs"):
+                self.assertIn(expected, output.getvalue())
+            output.seek(0)
+            output.truncate()
+            self.assertEqual(main([*args, "--output", "approval.json", "--acceptance", "step-two.json", "--format", "json"]), 0)
+            self.assertEqual(output.getvalue().encode(), accepted)
+            self.assertEqual((self.root / "approval.json").read_bytes(), accepted)
+            self.assertEqual(serialize_evidence(evidence)[1], (self.root / "evidence.json").read_bytes())
+            self.assertEqual(diagnostic.getvalue(), "")
+
+    def test_committed_evidence_rejects_tampering_inputs_history_indexes_and_approval_drift(self):
+        evidence, policy, native, provider, accepted, mapping = self.candidate_fixture(generated=True)
+        options: dict[str, Any] = {
+            "acquisition_sha256": acquisition_assertion_digest(policy),
+            "publication_receipt": self.publication_receipt,
+            "publication_sha256": self.publication_digest,
+            "expected": accepted,
+        }
+        generated = json.loads(self.publication_receipt)["outputs"]
+        generated_diagnostic = "committed generated output differs from trusted publication"
+        undeclared_diagnostic = "performance-relevant or undeclared final-tree differences"
+        damages = [(name, mapping["final"][name] + b" ", generated_diagnostic) for name in generated]
+        damages += [(name, b"changed", undeclared_diagnostic) for name in ("bench.py", "Cargo.toml", "input-shared.json", "report.toml", "revision")]
+        damages += [(name, b"changed history", "historical benchmark run bytes or modes changed") for name in self.prior_history]
+        damages += [("docs/performance-runs/unapproved.json", b"{}", undeclared_diagnostic)]
+        damages += [("docs/Performance-Runs/extra.json", b"{}", "portable directory aliases")]
+        damages += [("docs/performance-runs/runs/unindexed/report.md", b"unindexed report", undeclared_diagnostic)]
+        damages += [("docs/performance.md", None, generated_diagnostic)]
+        with patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("must not reacquire or build")):
+            for name, data, diagnostic in damages:
+                files = dict(mapping["final"])
+                path = self.root / name
+                original = path.read_bytes() if path.exists() else None
+                path.parent.mkdir(parents=True, exist_ok=True)
+                if data is None:
+                    files.pop(name)
+                    path.unlink()
+                else:
+                    files[name] = data
+                    path.write_bytes(data)
+                provider.reset_mock()
+                damaged_tree = {path.relative_to(self.root): path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
+                try:
+                    with (
+                        self.subTest(path=name),
+                        patch("research_repo_tools.source_exports._git", side_effect=git_model({**mapping, "final": files})),
+                        patch("research_repo_tools.source_exports.select_files", return_value=tuple(sorted(files))),
+                        self.assertRaisesRegex(ValueError, diagnostic),
+                    ):
+                        verify_candidate_release(self.root, evidence, policy, native, lambda endpoint: {}, **options)
+                    provider.assert_not_called()
+                    self.assertEqual({path.relative_to(self.root): path.read_bytes() for path in self.root.rglob("*") if path.is_file()}, damaged_tree)
+                finally:
+                    if original is None:
+                        path.unlink(missing_ok=True)
+                    else:
+                        path.write_bytes(original)
+            for changes, diagnostic in (
+                ({"publication_receipt": self.publication_receipt + b" "}, "publication receipt differs from trusted Step 1"),
+                ({"publication_sha256": "0" * 64}, "publication receipt differs from trusted Step 1"),
+                ({"publication_receipt": None}, "requires a publication receipt and independently trusted"),
+            ):
+                changed_options: dict[str, Any] = {**options, **changes}
+                with self.subTest(changes=changes), self.assertRaisesRegex(ValueError, diagnostic):
+                    verify_candidate_release(self.root, evidence, policy, native, lambda endpoint: {}, **changed_options)
+            # Even a newly asserted digest cannot turn an arbitrary JSON path
+            # into a supported publisher role or redefine its configuration.
+            forged = json.loads(self.publication_receipt)
+            forged["outputs"]["tooling/settings.json"] = next(iter(forged["outputs"].values()))
+            data = deterministic_json(forged)
+            forged_options: dict[str, Any] = {**options, "publication_receipt": data, "publication_sha256": hashlib.sha256(data).hexdigest()}
+            with self.assertRaisesRegex(ValueError, "generated outputs fields"):
+                verify_candidate_release(
+                    self.root,
+                    evidence,
+                    policy,
+                    native,
+                    lambda endpoint: {},
+                    **forged_options,
+                )
+            provider.assert_not_called()
+            # Every rejected case leaves the original approved state usable.
+            self.assertEqual(verify_candidate_release(self.root, evidence, policy, native, lambda endpoint: {}, **options), accepted)
+            provider.return_value = deterministic_json({"artifact": {"id": 124}, "commit": "c" * 40})
+            with self.assertRaisesRegex(ValueError, "approved"):
+                verify_candidate_release(self.root, evidence, policy, native, lambda endpoint: {}, **options)
+
+    @unittest.skipIf(os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1", "Git-mutating fixture disabled")
+    def test_committed_evidence_native_commit_and_merge(self):
+        from research_repo_tools.process import run_git_bytes
+        from research_repo_tools.selection import select_files
+
+        evidence, policy, native, provider, _, mapping = self.candidate_fixture(generated=True)
+        checkout = self.root / "native merge café"
+        checkout.mkdir()
+        environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
+        environment.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+
+        def git(*args):
+            return run_git_bytes(
+                [
+                    "--no-pager",
+                    "-c",
+                    "core.autocrlf=false",
+                    "-c",
+                    "commit.gpgsign=false",
+                    "-c",
+                    f"core.hooksPath={checkout / 'disabled-hooks'}",
+                    "-c",
+                    "user.name=Fixture",
+                    "-c",
+                    "user.email=fixture@example.invalid",
+                    *args,
+                ],
+                cwd=checkout,
+                env=environment,
+            ).stdout
+
+        def write_tree(files):
+            for name, data in files.items():
+                path = checkout / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(data)
+
+        git("init", "--template=", "-b", "main")
+        write_tree(self.acquisition_tree)
+        git("add", ".")
+        git("commit", "-m", "original source and history")
+        git("switch", "-c", "test/release-preparation")
+        write_tree(mapping["final"])
+        git("add", ".")
+        git("commit", "-m", "generated evidence and reports")
+        git("switch", "main")
+        git("merge", "--no-ff", "test/release-preparation", "-m", "merge release outputs")
+        final = git("rev-parse", "HEAD").decode("ascii").strip()
+        policy = replace(policy, commit=final)
+        provider.return_value = deterministic_json({"artifact": {"id": 123}, "commit": final})
+        before = self.log.read_bytes()
+        with (
+            patch(
+                "research_repo_tools.source_exports._git",
+                side_effect=lambda root, *args, input=None: (
+                    run_git_bytes(["--no-pager", "--no-replace-objects", *args], cwd=root, env=environment, input=input).stdout
+                ),
+            ),
+            patch("research_repo_tools.source_exports.select_files", side_effect=select_files),
+            patch("research_repo_tools.candidate_reuse.require_release_checkout", side_effect=require_release_checkout),
+            patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("no acquisition or native gate retry")),
+        ):
+            accepted = verify_candidate_release(
+                checkout,
+                evidence,
+                policy,
+                native,
+                lambda endpoint: {},
+                acquisition_sha256=acquisition_assertion_digest(policy),
+                publication_receipt=self.publication_receipt,
+                publication_sha256=self.publication_digest,
+            )
+            self.assertEqual(json.loads(accepted)["binding"]["final"]["revision"], final)
+        self.assertEqual(before, self.log.read_bytes())
+
+    def test_publication_capture_rejects_changed_original_history_and_self_derived_evidence(self):
+        evidence, policy, _, _, _, _ = self.candidate_fixture(generated=True)
+        # Restore the exact pre-promotion output states from the independently
+        # captured original tree, while keeping the acquired scratch bytes.
+        for name, prior in self.prior_publication.items():
+            path = self.root / name
+            if prior is None:
+                path.unlink()
+            else:
+                path.write_bytes(prior)
+        history_index = self.root / "docs/performance-runs/README.md"
+        original_index = history_index.read_bytes()
+        history_index.write_bytes(original_index + b"altered original history\r\n")
+        # Even structurally valid history must retain the acquisition tree's
+        # original bytes; it cannot become a new trusted publication baseline.
+        with self.assertRaisesRegex(ValueError, "publication input"):
+            plan_candidate_publication(self.root, "run.json", "evidence.json", policy, acquisition_sha256=acquisition_assertion_digest(policy))
+        history_index.write_bytes(original_index)
+        with self.assertRaisesRegex(ValueError, "trusted Step 1"):
+            plan_candidate_publication(self.root, "run.json", "evidence.json", policy, acquisition_sha256="0" * 64)
+        payload, _ = self.original_evidence_bytes
+        (self.root / "run.json").write_bytes(payload + b" ")
+        with self.assertRaisesRegex(ValueError, "payload does not match its recorded SHA-256 digest"):
+            plan_candidate_publication(self.root, "run.json", "evidence.json", policy, acquisition_sha256=acquisition_assertion_digest(policy))
+        (self.root / "run.json").write_bytes(payload)
+        before = {path.relative_to(self.root): path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
+        _, receipt = plan_candidate_publication(self.root, "run.json", "evidence.json", policy, acquisition_sha256=acquisition_assertion_digest(policy))
+        self.assertEqual(receipt, self.publication_receipt)
+        self.assertEqual({path.relative_to(self.root): path.read_bytes() for path in self.root.rglob("*") if path.is_file()}, before)
 
     def test_candidate_assertions_remain_frozen_after_caller_mutates_observations(self):
         _, original, _, _, _, _ = self.candidate_fixture()

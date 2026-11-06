@@ -169,6 +169,14 @@ These generic fixtures do not replace consumer coverage or scientific assertions
 
 The Linux test pass collects coverage of package code and repository scripts,
 including Python subprocesses, and omits tests and the development environment.
+Collection is limited to `src/research_repo_tools` and `scripts`, so generated
+cache copies do not enter the source inventory.
+External Semgrep processes do not inherit coverage instrumentation; their wrapper
+code remains measured. If aggregation finds unreadable subprocess data, the
+command fails, preserves the previous report/database, and reports a
+`coverage/failed-*` directory containing the raw shards for diagnosis. Investigate
+the failed writer before rerunning; a preserved older report is not evidence for
+the failed run.
 Linux retains its Cobertura report as a seven-day Actions artifact. A
 reusable `codecov.yml` workflow uploads the report using OIDC; forks
 and Dependabot use public-repository tokenless uploads. No additional test run is
@@ -234,7 +242,14 @@ source and executable drift, stale outputs, deterministic summaries, public CLI/
 consumption and staged publication failures. It does not run consumer benchmarks.
 
 Shared regressions cover unsafe paths and links, resource limits, malformed and
-non-finite estimates, stale provenance, and publication/rollback failures. HTTP
+non-finite estimates, stale provenance, and publication/rollback failures.
+Candidate-publication consumers also exercise committed content-addressed runs,
+exact prior history, generated index/latest consistency, independently frozen
+receipts, and final-source/approval rejection. The same suites run from source,
+wheel and sdist; failure sentinels prohibit acquisition and build/test commands
+during inspection and retries. Native commit/merge fixtures honor the Git-mutation
+opt-out. Summary consumers verify actual guarantees and unchanged machine handoffs.
+HTTP
 transport failure tests use synthetic responses; release selection and access
 to a particular published asset remain consumer integration checks. The existing
 native platform matrix runs these suites against both distribution formats.

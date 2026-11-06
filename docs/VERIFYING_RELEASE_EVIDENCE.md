@@ -35,6 +35,14 @@ just release-assets upload tooling/release-assets.toml \
   --target /trusted/target.json --asset /path/to/baseline.tar.gz --approve
 ```
 
+Add `--format summary` for a concise human-readable result after verification.
+The summary states the actual package guarantee and labels absent benchmark or
+signature checks explicitly. JSON handoff bytes and approval selections remain
+unchanged; `--format json` also emits those bytes on stdout. For committed benchmark
+histories, follow [the two-step handoff](REUSING_BENCHMARKS.md), including its
+independently pinned publication receipt. Verification never acquires benchmarks
+or repeats build/test validation.
+
 For Actions, append `--github-output "$GITHUB_OUTPUT"` to evidence verification
 or asset preflight. It requires an existing writable command file; normal and
 quiet Just execution produce the same evidence. Evidence records bind the exact

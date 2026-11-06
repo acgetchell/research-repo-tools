@@ -12,6 +12,7 @@ from urllib.parse import urlsplit
 
 from packaging.utils import canonicalize_name
 
+from research_repo_tools._http import closing_http_errors
 from research_repo_tools.evidence import _load_json
 from research_repo_tools.release_validation import MAX_BYTES, distribution_names
 
@@ -92,13 +93,11 @@ def verify_published_distributions(package: str, version: str, files: Mapping[st
             raise RegistryLookupError("published distribution is yanked or differs from expected bytes")
         download = pypi_destination(upload["url"])
         try:
-            with _OPENER.open(download, timeout=30) as response:
+            with closing_http_errors(), _OPENER.open(download, timeout=30) as response:
                 payload = response.read(MAX_BYTES + 1)
                 if response.status != 200 or response.url != download:
                     raise RegistryLookupError("published distribution returned an unexpected status or redirect")
         except (OSError, urllib.error.URLError) as error:
-            if isinstance(error, urllib.error.HTTPError):
-                error.close()
             raise RegistryLookupError("published distribution download failed") from error
         if len(payload) != upload["size"] or hashlib.sha256(payload).hexdigest() != digest:
             raise RegistryLookupError("published distribution bytes differ from verified evidence")
@@ -135,15 +134,14 @@ def _json(url: str) -> object:
         url, headers={"Accept": "application/json", "User-Agent": "research-repo-tools (https://github.com/acgetchell/research-repo-tools)"}
     )
     try:
-        with _OPENER.open(request, timeout=15) as response:
+        with closing_http_errors(), _OPENER.open(request, timeout=15) as response:
             payload = response.read(LIMIT + 1)
             if response.status != 200 or response.url != url:
                 raise RegistryLookupError("registry returned an unexpected status or redirect")
     except urllib.error.HTTPError as error:
-        with error:
-            if error.code == 404 and error.url == url:
-                return _NOT_FOUND
-            raise RegistryLookupError(f"registry lookup failed with HTTP {error.code}; absence is unproven") from error
+        if error.code == 404 and error.url == url:
+            return _NOT_FOUND
+        raise RegistryLookupError(f"registry lookup failed with HTTP {error.code}; absence is unproven") from error
     except (OSError, urllib.error.URLError) as error:
         raise RegistryLookupError("registry lookup failed; absence is unproven") from error
     if len(payload) > LIMIT:

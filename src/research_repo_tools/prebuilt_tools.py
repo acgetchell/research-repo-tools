@@ -3,12 +3,12 @@
 import os
 import re
 import tempfile
-import urllib.error
 import urllib.request
 from pathlib import Path
 from typing import Any, cast
 
 from research_repo_tools import release_credentials
+from research_repo_tools._http import closing_http_errors
 from research_repo_tools.archives import ArchiveLimits, download_asset, extract_archive
 from research_repo_tools.process import run_safe_command
 from research_repo_tools.release_validation import parse_release_json
@@ -52,16 +52,10 @@ def release_metadata(name: str, tag: str) -> dict[str, Any]:
         headers["Authorization"] = f"Bearer {token}"
     request = urllib.request.Request(f"https://api.github.com/repos/{REPOSITORIES[name]}/releases/{suffix}", headers=headers)
     try:
-        with urllib.request.urlopen(request, timeout=30) as response:
+        with closing_http_errors(), urllib.request.urlopen(request, timeout=30) as response:
             payload = response.read(2 * 1024 * 1024 + 1)
-    except (OSError, ValueError) as error:
-        failure: Exception = error
-        if isinstance(error, urllib.error.HTTPError):
-            try:
-                error.close()
-            except Exception as cleanup_error:
-                failure = ExceptionGroup("binary release lookup and response cleanup failed", [error, cleanup_error])
-        raise RuntimeError(f"binary release lookup failed: {release_credentials.diagnostics(failure)}") from None
+    except (OSError, ValueError, ExceptionGroup) as error:
+        raise RuntimeError(f"binary release lookup failed: {release_credentials.diagnostics(error)}") from None
     if len(payload) > 2 * 1024 * 1024:
         raise ValueError("release metadata exceeds size limit")
     value = parse_release_json(payload)

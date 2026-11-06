@@ -17,6 +17,7 @@ from pathlib import Path, PurePosixPath
 from typing import IO, override
 
 from research_repo_tools._archive_paths import ArchivePaths
+from research_repo_tools._http import closing_http_errors
 from research_repo_tools.evidence import _digest, verify_sha256
 from research_repo_tools.files import replace_many
 
@@ -80,7 +81,7 @@ def download_asset(url: str, destination: Path, *, expected_sha256: str, limits:
     if isinstance(timeout, bool) or not isinstance(timeout, int | float) or not math.isfinite(timeout) or timeout <= 0:
         raise ValueError("asset timeout must be finite and positive")
     opener = urllib.request.build_opener(_HTTPSRedirect())
-    with opener.open(url, timeout=timeout) as response:
+    with closing_http_errors(), opener.open(url, timeout=timeout) as response:
         _https(response.geturl())
         payload = response.read(limits.archive_bytes + 1)
     if len(payload) > limits.archive_bytes:

@@ -2,7 +2,7 @@
 
 import re
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Literal, cast
@@ -325,9 +325,14 @@ def measure_release(
     checkpoint: str | None = None,
     resume: bool = False,
     progress: ProgressReporter | None = None,
+    before_promotion: Callable[[], None] | None = None,
 ) -> tuple[Path, ...]:
     """Measure a prepared pair, retain the raw evidence, then promote its report.
 
+    before_promotion runs after retention, before any report writes, allowing the
+    trusted acquisition owner to freeze candidate/publication handoffs. A hook
+    failure preserves raw evidence and prevents promotion. Never retry this
+    acquisition function solely to retry handoff capture or report publication.
     A report failure preserves successful raw acquisition. Retry promotion with
     the retained paths; README publication is an independent later operation.
     """
@@ -351,5 +356,7 @@ def measure_release(
         resume=resume,
         progress=reporter,
     )
+    if before_promotion is not None:
+        before_promotion()
     with reporter.stage("publication"):
         return publish_publication(load_report_plan(root, settings.report, payload=settings.payload, manifest=settings.manifest))

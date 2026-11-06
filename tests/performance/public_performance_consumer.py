@@ -11,12 +11,14 @@ import sys
 import tarfile
 import tempfile
 import unittest
+import urllib.error
 import zipfile
+from email.message import Message
 from pathlib import Path
 from typing import cast
 from unittest.mock import patch
 
-from research_repo_tools.archives import ArchiveLimits, extract_archive
+from research_repo_tools.archives import ArchiveLimits, download_asset, extract_archive
 from research_repo_tools.criterion import (
     COMPARISON_SCHEMA,
     Estimate,
@@ -59,6 +61,50 @@ def zip_asset(path: Path, entries: list[tuple[str, bytes]]) -> None:
 
 
 class TestPerformanceConsumer(unittest.TestCase):
+    def test_failed_download_closes_error_response_and_can_retry(self):
+        url = "https://example.invalid/asset.zip"
+        payload = b"verified asset\r\n"
+
+        class Response(io.BytesIO):
+            def geturl(self):
+                return url
+
+        with tempfile.TemporaryDirectory() as directory:
+            target = Path(directory) / "asset.zip"
+            target.write_bytes(b"previous asset\r\n")
+            body = io.BytesIO(b"service unavailable")
+            error = urllib.error.HTTPError(url, 503, "unavailable", Message(), body)
+            response = Response(payload)
+            with patch("urllib.request.OpenerDirector.open", side_effect=[error, response]) as transport:
+                with self.assertRaises(urllib.error.HTTPError) as caught:
+                    download_asset(url, target, expected_sha256=sha256(payload))
+                self.assertIs(caught.exception, error)
+                self.assertTrue(body.closed)
+                self.assertEqual(target.read_bytes(), b"previous asset\r\n")
+                self.assertEqual(transport.call_count, 1)
+                download_asset(url, target, expected_sha256=sha256(payload))
+                self.assertEqual(transport.call_count, 2)
+            self.assertTrue(response.closed)
+            self.assertEqual(target.read_bytes(), payload)
+            self.assertEqual(list(target.parent.iterdir()), [target])
+
+    def test_download_preserves_http_and_cleanup_failures(self):
+        with tempfile.TemporaryDirectory() as directory, io.BytesIO(b"unavailable") as body:
+            target = Path(directory) / "asset.zip"
+            target.write_bytes(b"previous asset\r\n")
+            error = urllib.error.HTTPError("https://example.invalid/asset.zip", 503, "unavailable", Message(), body)
+            cleanup = OSError("response close failed")
+            with (
+                patch("urllib.request.OpenerDirector.open", side_effect=error),
+                patch.object(error, "close", side_effect=cleanup) as close,
+                self.assertRaisesRegex(ExceptionGroup, "HTTP request and response cleanup failed") as caught,
+            ):
+                download_asset(error.url, target, expected_sha256="0" * 64)
+            self.assertEqual(caught.exception.exceptions, (error, cleanup))
+            close.assert_called_once_with()
+            self.assertEqual(target.read_bytes(), b"previous asset\r\n")
+            self.assertEqual(list(target.parent.iterdir()), [target])
+
     def test_descriptive_comparisons_are_invariant_under_exact_unit_scaling(self) -> None:
         # Hand-derived times: 100 -> 80 is a 20% reduction and a 1.25 ratio;
         # reversing them is a 25% increase and a 0.8 ratio. Powers of two

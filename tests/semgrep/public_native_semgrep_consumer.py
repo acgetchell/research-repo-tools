@@ -54,17 +54,27 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
                 "UV_OVERRIDE": str(self.root / "missing-overrides.txt"),
                 "VIRTUAL_ENV": str(self.root / "missing-environment"),
                 "PYTHONPATH": str(self.root),
+                "COVERAGE_PROCESS_CONFIG": "scanner must not deserialize caller instrumentation",
+                "COVERAGE_FILE": str(self.root / ".coverage.unwanted"),
+                "coverage_process_start": str(self.root / "missing-coverage.ini"),
             },
         ):
             # uv's disposable tool environments can change paths, including on
             # Windows. Offline native execution proves warm-cache reuse without
             # depending on the cache's internal environment identity.
-            with patch.object(semgrep_scan, "security_inventory", return_value=("example.py",)):
+            with (
+                patch.object(semgrep_scan, "security_inventory", return_value=("example.py",)),
+                patch.object(security, "run_command_bytes", wraps=security.run_command_bytes) as native,
+            ):
                 self.assertEqual(semgrep_scan.scan(settings, include=("*.py",)), 1)
+            native.assert_called_once()
+            self.assertEqual([key for key in native.call_args.kwargs["env"] if key.upper().startswith("COVERAGE_")], [])
+            self.assertEqual(os.environ["COVERAGE_PROCESS_CONFIG"], "scanner must not deserialize caller instrumentation")
         report = json.loads((self.root / "target/security/semgrep/semgrep.json").read_bytes())
         self.assertEqual([(item["check_id"], Path(item["path"]), item["start"]["line"]) for item in report["results"]], [("python.print", source, 1)])
         self.assertFalse((self.root / "uv.lock").exists())
         self.assertFalse((self.root / ".venv").exists())
+        self.assertEqual(list(self.root.glob(".coverage*")), [])
 
     def write(self, name, text):
         path = self.root / name
