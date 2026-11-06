@@ -51,6 +51,7 @@ from research_repo_tools.criterion_inventory import DiscoveryCommand, DiscoveryP
 from research_repo_tools.evidence import Evidence, Provenance, deterministic_json, parse_evidence, publish_evidence, serialize_evidence
 from research_repo_tools.host_metadata import HostMetadata, capture_host, capture_profile, parse_host, serialize_host
 from research_repo_tools.measurement import MeasurementConfig, load_measurement, measure_checkout, measure_pair
+from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.publication import preview_publication, publish_publication
 from research_repo_tools.publication_config import load_publication
 from research_repo_tools.release_pairs import ReleasePair
@@ -2135,6 +2136,71 @@ if '--list' in sys.argv:
             (path / "estimates.json").write_bytes(estimates)
             with self.assertRaisesRegex(ValueError, "incomplete"):
                 collect_complete_sample(root, "new", policy)
+
+    def test_prepared_gate_progress_includes_post_command_validation(self):
+        for phase in ("baseline", "current"):
+            for outcome in ("exit", "source", "harness", "timing", "other-timing", "freshness", "interrupt", "success"):
+                with self.subTest(phase=phase, outcome=outcome), tempfile.TemporaryDirectory() as directory:
+                    root = Path(directory)
+                    current, baseline = root / "current", root / "baseline"
+                    plan = fixture(current)
+                    shutil.copytree(current, baseline)
+                    other = current if phase == "baseline" else baseline
+                    marker = root / "gate-complete"
+                    actions = {
+                        "exit": "raise SystemExit(7)",
+                        "source": f"Path({str(other / 'src/point.txt')!r}).write_bytes(b'changed')",
+                        "harness": "Path('Cargo.lock').write_bytes(b'changed')",
+                        "timing": "Path('target/criterion').mkdir(parents=True)",
+                        "other-timing": f"Path({str(other / 'target/criterion')!r}).mkdir(parents=True)",
+                        "freshness": f"Path({str(marker)!r}).touch()",
+                        "interrupt": f"Path({str(marker)!r}).touch()",
+                        "success": "pass",
+                    }
+                    selected = replace(getattr(plan, phase), gate=(sys.executable, "-c", GATE.replace("\n", "; ") + actions[outcome]))
+                    plan = replace(plan, **{phase: selected})
+                    output = io.StringIO()
+                    reporter = ProgressReporter(mode="json", stream=output)
+
+                    def verify():
+                        if marker.exists():
+                            if outcome == "interrupt":
+                                raise KeyboardInterrupt("gate verification interrupted")
+                            raise ValueError("controller inputs changed")
+
+                    errors = {
+                        "exit": f"{phase} preflight gate failed",
+                        "source": "measurement inputs or host/tool identity changed",
+                        "harness": "Expected '=' after a key",
+                        "timing": "preflight gate produced timing output before measurement",
+                        "other-timing": "preflight gate produced timing output before measurement",
+                        "freshness": "controller inputs changed",
+                        "interrupt": "gate verification interrupted",
+                    }
+                    with (
+                        patch("research_repo_tools.measurement.resolve_revision", return_value="a" * 40),
+                        patch("research_repo_tools.common_measurement.run_command_live", wraps=process.run_command_live) as native,
+                    ):
+                        if outcome == "success":
+                            evidence = measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.0.0"), verify=verify, progress=reporter)
+                            validate_run_policy(evidence, plan)
+                        else:
+                            with self.assertRaisesRegex(KeyboardInterrupt if outcome == "interrupt" else ValueError, errors[outcome]):
+                                measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.0.0"), verify=verify, progress=reporter)
+                            self.assertFalse(any(call.args[1] == ("bench.py",) for call in native.call_args_list))
+                    events = [json.loads(line) for line in output.getvalue().splitlines()]
+                    gates = [event for event in events if event["state"] == "gate" and event["event"] != "budget"]
+                    terminal = "finished" if outcome == "success" else "interrupted" if outcome == "interrupt" else "failed"
+                    expected = [("baseline", "started"), ("baseline", "finished")]
+                    if phase == "current" or outcome == "success":
+                        expected.extend([("current", "started"), ("current", "finished")])
+                    if outcome != "success":
+                        expected[-1] = (phase, terminal)
+                    self.assertEqual([(event["phase"], event["event"]) for event in gates], expected)
+                    self.assertTrue(all(event["completed"] == 0 and event["remaining"] is None and event["suite"] is None for event in gates))
+                    if outcome != "success":
+                        self.assertEqual(events[-1]["event"], terminal)
+                        self.assertFalse(any(event["event"] == "validated" or event["state"] in {"acquisition", "retention"} for event in events))
 
     def test_failed_gate_runs_no_timing_and_source_mutation_rejects(self):
         for failure in ("baseline-gate", "current-gate", "source", "harness", "scratch", "other-scratch"):
