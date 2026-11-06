@@ -633,12 +633,13 @@ def _prepare_phases(
         gate = getattr(plan, phase).gate
         with reporter.stage("gate", suite=reporter.suite, phase=phase):
             result = run_command_live(gate[0], gate[1:], cwd=root, env=environments[phase], timeout=plan.measurement.timeout, check=False)
-        if result.returncode:
-            raise ValueError(f"{phase} preflight gate failed")
-        for checked in roots:
-            unchanged(checked)
-        if any((directory / plan.measurement.criterion_dir).exists() for directory in roots.values()):
-            raise ValueError("preflight gate produced timing output before measurement")
+            # A gate finishes only after its command and evidence checks pass.
+            if result.returncode:
+                raise ValueError(f"{phase} preflight gate failed")
+            for checked in roots:
+                unchanged(checked)
+            if any((directory / plan.measurement.criterion_dir).exists() for directory in roots.values()):
+                raise ValueError("preflight gate produced timing output before measurement")
 
     def acquire() -> tuple[tuple[tuple[str, CompleteSample], ...], tuple[tuple[str, Provenance], ...]]:
         samples: list[tuple[str, CompleteSample]] = []

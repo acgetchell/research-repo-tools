@@ -479,11 +479,114 @@ class TestSuiteAcquisition(unittest.TestCase):
             with export_source(capture, destination) as directory:
                 yield directory
 
+        events = []
         with patch("research_repo_tools.suite_measurement.export_source", side_effect=tracked_export), self.assertRaisesRegex(ValueError, "gate failed"):
-            measure_pair(self.root, selected, PAIR, progress=self.quiet)
+            measure_pair(self.root, selected, PAIR, progress=ProgressReporter(mode="none", observer=events.append))
+        rejected = [event for event in events if event["suite"] == "later" and event["phase"] == "current" and event["state"] == "gate"]
+        self.assertEqual([event["event"] for event in rejected], ["started", "failed"])
+        self.assertEqual(events[-1], rejected[-1])
+        self.assertTrue(all(event["completed"] == 0 and event["remaining"] is None for event in events))
         self.assertIn("shared gate new", self.log.read_text())
         self.assertNotIn(" measure ", self.log.read_text())
         self.assertTrue(all(not path.exists() for path in exports))
+
+    def test_gate_interruption_preserves_discovered_budget_and_empty_checkpoint(self) -> None:
+        selected = plan(self.log, ("shared",))
+        for phase in ("baseline", "current"):
+            with self.subTest(phase=phase):
+                self.log.write_bytes(b"")
+                events = []
+                reporter = ProgressReporter(mode="none", observer=events.append)
+                checkpoint = self.root / f"checkpoint-{phase}"
+                interruption = KeyboardInterrupt("gate interrupted")
+
+                def interrupt(command, args=(), **kwargs):
+                    result = run_command_live(command, args, **kwargs)
+                    # The second preparation has a discovered budget but has
+                    # not accepted a sample or checkpoint unit yet.
+                    if "gate" in args and reporter.total is not None and reporter.phase == phase:
+                        raise interruption
+                    return result
+
+                with patch("research_repo_tools.common_measurement.run_command_live", side_effect=interrupt), self.assertRaises(KeyboardInterrupt) as caught:
+                    measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, progress=reporter)
+                self.assertIs(caught.exception, interruption)
+                last = events[-1]
+                self.assertEqual((last["event"], last["state"], last["suite"], last["phase"]), ("interrupted", "gate", "shared", phase))
+                self.assertEqual((last["completed"], last["remaining"], last["total"]), (0, 2, 2))
+                self.assertEqual([item["remaining"] for item in last["inventory"]], [1, 1])
+                rejected = [
+                    event["event"]
+                    for event in events
+                    if event["state"] == "gate" and event["phase"] == phase and event["total"] is not None and event["event"] != "budget"
+                ]
+                self.assertEqual(rejected, ["started", "interrupted"])
+                self.assertNotIn(" measure ", self.log.read_text())
+                self.assertEqual(list(checkpoint.glob("unit-*.json")), [])
+                self.assertFalse((checkpoint / ".writer").exists())
+
+    def test_cli_rejected_gates_preserve_native_diagnostics_and_existing_evidence(self) -> None:
+        # Run the CLI in a child so native inherited stdout/stderr are captured
+        # at the real process boundary in source, wheel and sdist consumers.
+        program = r"""import json, sys
+from pathlib import Path
+from unittest.mock import patch
+sys.path.insert(0, sys.argv[1])
+from public_suite_acquisition_consumer import HOST, PAIR, git_model, main, plan, sources
+
+root, kind, phase = Path(sys.argv[2]), sys.argv[3], sys.argv[4]
+revisions = {PAIR.baseline: sources(('shared',), 'old'), PAIR.current: sources(('shared',), 'new')}
+for name, data in revisions[PAIR.current].items():
+    (root / name).write_bytes(data)
+document = plan(root / 'calls.log', ('shared',)).document()
+measurement = document['suites'][0]['measurement']
+measurement['phases'][phase]['gate'] = [sys.executable, '-c',
+    "import sys; sys.stdout.buffer.write(b'gate stdout\\r\\n\\xff\\n'); sys.stdout.buffer.flush(); "
+    "sys.stderr.buffer.write(b'gate stderr\\r\\n\\xfe\\n'); sys.stderr.buffer.flush(); raise SystemExit(7)"]
+if kind == 'pair':
+    document = measurement
+def toml(value):
+    if isinstance(value, dict):
+        return '{' + ', '.join(json.dumps(key) + '=' + toml(item) for key, item in value.items()) + '}'
+    if isinstance(value, (list, tuple)):
+        return '[' + ', '.join(toml(item) for item in value) + ']'
+    return json.dumps(value)
+(root / 'measurement.toml').write_text(''.join(key + '=' + toml(value) + '\n' for key, value in document.items()), encoding='utf-8', newline='\n')
+with patch('research_repo_tools.source_exports._git', side_effect=git_model(revisions)), patch('research_repo_tools.measurement.capture_host', return_value=HOST):
+    status = main(['--root', str(root), 'performance', 'measure', 'measurement.toml', PAIR.current, PAIR.baseline,
+                   '--payload', 'run.json', '--manifest', 'evidence.json', '--report', 'report.md', '--progress', 'json'])
+sys.exit(status)
+"""
+        for kind in ("pair", "suite"):
+            for phase in ("baseline", "current"):
+                with self.subTest(kind=kind, phase=phase), tempfile.TemporaryDirectory() as temporary:
+                    root = Path(temporary).resolve()
+                    original = {"run.json": b"retained payload\r\n", "evidence.json": b"retained manifest\r\n"}
+                    for name, data in original.items():
+                        (root / name).write_bytes(data)
+                    result = subprocess.run(
+                        [sys.executable, "-I", "-X", "utf8", "-c", program, str(Path(__file__).resolve().parent), str(root), kind, phase],
+                        capture_output=True,
+                        check=False,
+                        timeout=60,
+                    )
+                    self.assertEqual(result.returncode, 1, result.stderr)
+                    self.assertEqual(result.stdout, b"gate stdout\r\n\xff\n", result.stderr)
+                    self.assertIn(b"gate stderr\r\n\xfe\n", result.stderr)
+                    self.assertIn(f"{phase} preflight gate failed".encode(), result.stderr)
+                    events = [json.loads(line) for line in result.stderr.splitlines() if line.startswith(b"{")]
+                    last = events[-1]
+                    self.assertEqual(
+                        (last["event"], last["state"], last["suite"], last["phase"]), ("failed", "gate", "shared" if kind == "suite" else None, phase)
+                    )
+                    rejected = [event["event"] for event in events if event["state"] == "gate" and event["phase"] == phase]
+                    self.assertEqual(rejected, ["started", "failed"])
+                    self.assertTrue(all(event["completed"] == 0 and event["remaining"] is None for event in events))
+                    self.assertFalse(any(event["state"] in {"acquisition", "retention"} for event in events))
+                    self.assertNotIn(" measure ", (root / "calls.log").read_text())
+                    for name, data in original.items():
+                        self.assertEqual((root / name).read_bytes(), data)
+                    self.assertFalse((root / "report.md").exists())
 
     def test_recreated_exports_reject_changed_host_or_discovery_before_timing(self) -> None:
         for changed in ("host", "discovery"):
