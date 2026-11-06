@@ -1,6 +1,12 @@
 # Merge this policy into [tool.research-repo-tools.publishing] in pyproject.toml,
 # or into [publishing] in an explicit research-repo-tools.toml configuration.
 # Consumer required check names/provider IDs must match actual exact-commit CI.
+[release]
+# v0.2.7: development may use a full Git commit, releases require PyPI artifacts.
+# Merge this under [tool.research-repo-tools.release] in pyproject.toml.
+# Replace normal and isolated pins and revalidate evidence before release work.
+published-dependencies = ["research-repo-tools"]
+
 [publishing]
 registry = "crates-io"
 package = "example-crate"

@@ -9,6 +9,13 @@ evidence is the default; [CI reuse](REUSING_CI.md) is a separate explicit policy
 
 ## Release evidence and attachment handoffs
 
+For v0.2.7 consumers, declare selected tooling under
+`release.published-dependencies`. Pre-tag evidence and later approval/asset gates
+check the observed checkout's dependency declarations and lock against the
+executing runtime and published artifact bytes before provider operations or
+handoff writes. Use `just release-dependencies` before an expensive campaign;
+see [development-pin transitions and proof limitations](dependency-provenance-api.md).
+
 Local builds and merged source do not establish package availability.
 Install the verified supplying release before composing these jobs.
 

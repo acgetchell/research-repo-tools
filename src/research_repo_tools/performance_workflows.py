@@ -36,6 +36,8 @@ def add_command(commands, name: str) -> None:
         command.add_argument("configuration")
     if name in {"prepare", "release"}:
         command.add_argument("--allow-git-mutations", action="store_true", help="authorize only requested tag fetching or configured temporary worktrees")
+    if name in {"measure", "prepare", "release"}:
+        command.add_argument("--release-intent", action="store_true", help="require published upstream tooling before acquisition effects")
     if name in {"measure", "release"}:
         command.add_argument(
             "--checkpoint", help="ignored root-relative checkpoint directory; schema 5 or 6; schedule comes from the prepared measurement declaration"
@@ -152,6 +154,10 @@ def _asset_pair(args: argparse.Namespace, settings: Config) -> evidence.Evidence
 
 def run(args: argparse.Namespace, settings: Config) -> int:
     root = settings.root
+    if getattr(args, "release_intent", False):
+        from research_repo_tools.dependency_provenance import check_release_dependencies
+
+        check_release_dependencies(root, packages=settings.release.published_dependencies)
     if args.action in {"prepare", "readme", "release"}:
         from research_repo_tools.performance import _write_stdout
         from research_repo_tools.performance_release import load_performance_release, load_readme_plan, measure_release, prepare_performance

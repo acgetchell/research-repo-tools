@@ -48,6 +48,7 @@ arguments in lexicographic order.
 | `just python-typecheck` | Run native ty without modifying source |
 | `just release-assets COMMAND...` | Capture/revalidate release targets or explicitly upload verified attachments |
 | `just release-check TAG` | Check final release metadata and generated notes |
+| `just release-dependencies` | Verify selected upstream published pins, lock and executing runtime bytes |
 | `just release-evidence COMMAND...` | Create/verify exact-commit evidence, check published Python bytes, and save handoffs |
 | `just release-first TAG DATE` | Prepare a first release after checking published stable history |
 | `just release-notes TAG` | Print release notes from the root changelog or an archive |
@@ -69,6 +70,7 @@ arguments in lexicographic order.
 | `just tag-preview TAG` | Inspect the release annotation without changing Git state |
 | `just tectonic COMMAND...` | Discover or export existing native dependency environments |
 | `just templates ARGS...` | Export a packaged configuration or workflow template |
+| `just tooling-run ARGS...` | Verify a released version or GitHub commit and run isolated tooling |
 | `just tools-check` | Check installed tools and versions without installing them |
 | `just tools-export` | Verify tools and append their environment to `GITHUB_ENV` |
 | `just tools-python-check` | Check inherited Python tool declarations, lock, and executable versions without changes |

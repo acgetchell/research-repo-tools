@@ -10,7 +10,7 @@ from typing import Literal, TypeIs, cast
 
 from research_repo_tools.paper_pdf import PdfPolicy
 from research_repo_tools.release_policy import ReleasePolicy as ReleasePolicy
-from research_repo_tools.release_policy import ReleaseRule
+from research_repo_tools.release_policy import ReleaseRule, dependency_names
 from research_repo_tools.release_publishing import PublishingSettings, parse_publishing
 from research_repo_tools.sarif import SarifPolicy
 
@@ -40,7 +40,7 @@ FIELDS = {
         "cwd",
         "counts",
     },
-    "release": {"date-policy", "final-changelog", "required-files", "exclude", "rules", "tag-policy"},
+    "release": {"date-policy", "final-changelog", "required-files", "exclude", "rules", "tag-policy", "published-dependencies"},
     "changelog": {"formatter", "cliff-config", "owner", "repository", "dependency-bodies", "date-source", "citation"},
     "publishing": {"registry", "package", "repository", "required-checks", "required-assets", "reuse"},
     "zizmor": {"persona", "timeout"},
@@ -518,6 +518,7 @@ def parse(value: object, *, root: Path) -> Config:
             exclude=_release_paths(release.get("exclude", []), "release.exclude"),
             rules=_release_rules(release.get("rules", [])),
             tag_policy=cast(Literal["normalized-stable", "canonical-stable"], release.get("tag-policy", "normalized-stable")),
+            published_dependencies=dependency_names(release.get("published-dependencies", ())),
         ),
         changelog=ChangelogSettings(
             formatter=_optional_string(changelog, "formatter", "changelog"),

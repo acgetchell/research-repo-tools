@@ -83,6 +83,7 @@ including changelog and release recipes.
 | `just python-check` | Check formatting, lint, and strict types for the complete Python inventory |
 | `just release-assets COMMAND...` | Capture/revalidate release targets or explicitly upload attachments |
 | `just release-check TAG` | Check final release metadata and generated notes |
+| `just release-dependencies` | Verify configured upstream tooling provenance before release work |
 | `just release-evidence [COMMAND...]` | Inspect this checkout's signed CI evidence; explicit commands create/verify shared handoffs |
 | `just release-first TAG DATE` | Prepare a first release after checking stable published history |
 | `just release-notes TAG` | Print reviewed generated release notes |
@@ -101,6 +102,7 @@ including changelog and release recipes.
 | `just tag-preview TAG` | Preview the release annotation without changing Git state |
 | `just templates ARGS...` | Export a packaged configuration or workflow template |
 | `just test [PYTEST_ARGS...]` | Run the Python test suite or a selected subset |
+| `just tooling-run ARGS...` | Exercise the shared exact-release/GitHub-commit wrapper |
 | `just update` | Upgrade tools and Python dependencies, synchronize dev, then audit final locks |
 | `just update-dependencies` | Run the Python dependency workflow, then audit the final lock |
 | `just update-python-dependencies` | Update direct dev pins, upgrade the full lock, and synchronize dev |

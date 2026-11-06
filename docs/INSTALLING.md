@@ -3,12 +3,13 @@
 Toolchain management provides explicit setup, checks, synchronization, and
 managed execution. uv is a hard prerequisite. Native installer verification and
 isolated installed-package validation are release gates. Consumers migrate to
-an exact published package and validate their selected configuration.
+an exact published package or verified development commit and validate their
+selected configuration; [release gates require published tooling](dependency-provenance-api.md).
 
 ## Ownership and declarations
 
-Consumers own tool declarations; the exact installed shared release owns the
-mandatory Python support minimum through its published `Requires-Python` metadata.
+Consumers own tool declarations; the exact installed shared package owns the
+mandatory Python support minimum through its `Requires-Python` metadata.
 This language-feature guard applies to application packaging and dependency-only
 projects without an enablement switch. `toolchain.inherit-python` controls only
 development-selector mirroring and cannot bypass the minimum. See

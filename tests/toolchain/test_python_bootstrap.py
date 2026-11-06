@@ -11,7 +11,7 @@ import pytest
 
 from research_repo_tools.changelog import template
 
-SCRIPT = Path(__file__).resolve().parents[2] / "src/research_repo_tools/templates/python-bootstrap.py"
+SCRIPT = Path(__file__).resolve().parents[2] / "src/research_repo_tools/tooling_runtime.py"
 
 
 def test_bootstrap_supports_old_python_syntax_and_packaged_recipes():
@@ -70,11 +70,22 @@ def test_bootstrap_reads_exact_pypi_release(tmp_path, monkeypatch):
 
     urls = []
 
-    def open_release(url, **kwargs):
-        urls.append((url, kwargs))
-        return io.BytesIO(json.dumps({"info": {"name": "research-repo-tools", "version": "0.9.1", "requires_python": ">=3.15"}}).encode())
+    class Response(io.BytesIO):
+        status = 200
+        url = "https://pypi.org/pypi/research-repo-tools/0.9.1/json"
 
-    monkeypatch.setattr(urllib.request, "urlopen", open_release)
+    def open_release(self, request, **kwargs):
+        urls.append((request.full_url, kwargs))
+        return Response(
+            json.dumps(
+                {
+                    "info": {"name": "research-repo-tools", "version": "0.9.1", "requires_python": ">=3.15"},
+                    "urls": [{"url": "https://files.pythonhosted.org/packages/fixture.whl", "size": 42, "yanked": False, "packagetype": "bdist_wheel"}],
+                }
+            ).encode()
+        )
+
+    monkeypatch.setattr(urllib.request.OpenerDirector, "open", open_release)
     monkeypatch.setattr(subprocess, "run", lambda *args, **kwargs: SimpleNamespace(returncode=0))
     monkeypatch.chdir(tmp_path)
     main = runpy.run_path(str(SCRIPT))["main"]

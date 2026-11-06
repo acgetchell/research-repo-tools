@@ -246,6 +246,9 @@ def add_evidence_commands(release) -> None:
 
 
 def run_evidence(args: argparse.Namespace, settings: Config) -> None:
+    from research_repo_tools.dependency_provenance import check_release_dependencies
+
+    check_release_dependencies(args.checkout, packages=settings.release.published_dependencies)
     if args.operation == "candidate":
         _run_candidate(args, settings)
         return
@@ -271,6 +274,7 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
     read = partial(api, repository=policy.validation.repository)
 
     def observe() -> None:
+        check_release_dependencies(checkout, packages=settings.release.published_dependencies)
         if path.read_bytes() != original:
             raise ValueError("release evidence policy changed")
         _checkout(checkout, policy.package, args.version, args.commit, path_in_vcs=policy.path_in_vcs, package_kind=policy.package_kind)
@@ -376,6 +380,9 @@ def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
     checkout = args.checkout.resolve(strict=True)
 
     def unchanged() -> None:
+        from research_repo_tools.dependency_provenance import check_release_dependencies
+
+        check_release_dependencies(checkout, packages=settings.release.published_dependencies)
         for path, data in inputs.items():
             _regular(path)
             if path.read_bytes() != data:
@@ -393,12 +400,16 @@ def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
         publication_receipt=inputs[args.publication_receipt] if args.publication_receipt else None,
         publication_sha256=args.publication_sha256,
         expected=inputs[args.acceptance] if args.acceptance else None,
+        dependencies=settings.release.published_dependencies,
     )
     write_release_outputs(args.output, accepted, verify=unchanged)
     _present_evidence(accepted, args.format, candidate=True, acquisition_owner=policy.acquisition_owner)
 
 
 def run_assets(args: argparse.Namespace, settings: Config) -> None:
+    from research_repo_tools.dependency_provenance import check_release_dependencies
+
+    check_release_dependencies(args.checkout, packages=settings.release.published_dependencies)
     policy = load_asset_policy(_path(settings.root, args.configuration))
     checkout = args.checkout.resolve(strict=True)
     if Path(__file__).resolve().is_relative_to(checkout):
@@ -409,10 +420,18 @@ def run_assets(args: argparse.Namespace, settings: Config) -> None:
     title = args.tag if policy.expected_title == "tag" else None
     if args.operation == "preflight":
         _validate_distinct_paths((args.output, _path(settings.root, args.configuration), *([args.github_output] if args.github_output else [])))
-        target = preflight_release_target(settings.root, policy.repository, args.tag, args.commit, expected_title=title, checkout=checkout)
+        target = preflight_release_target(
+            settings.root,
+            policy.repository,
+            args.tag,
+            args.commit,
+            expected_title=title,
+            checkout=checkout,
+            dependencies=settings.release.published_dependencies,
+        )
 
         def verify() -> None:
-            revalidate_release_target(settings.root, target, checkout=checkout)
+            revalidate_release_target(settings.root, target, checkout=checkout, dependencies=settings.release.published_dependencies)
 
         write_release_outputs(
             args.output,
@@ -426,9 +445,18 @@ def run_assets(args: argparse.Namespace, settings: Config) -> None:
         target = parse_release_target(args.target.read_bytes())
         if (target.repository, target.tag, target.commit, target.expected_title) != (policy.repository, args.tag, args.commit, title):
             raise ValueError("release assertions/policy differ from captured target")
-        revalidate_release_target(settings.root, target, checkout=checkout)
+        revalidate_release_target(settings.root, target, checkout=checkout, dependencies=settings.release.published_dependencies)
         if args.operation == "upload":
-            publish_release_asset(settings.root, policy.repository, args.tag, args.asset, target=target, checkout=checkout, publish=args.publish)
+            publish_release_asset(
+                settings.root,
+                policy.repository,
+                args.tag,
+                args.asset,
+                target=target,
+                checkout=checkout,
+                publish=args.publish,
+                dependencies=settings.release.published_dependencies,
+            )
         print("Verified release target and requested asset operation.")
 
 

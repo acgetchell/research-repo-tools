@@ -319,6 +319,7 @@ def verify_candidate_release(
     reproduced_archive: Path | None = None,
     reproduced_tools: Mapping[str, str] | None = None,
     limits: ArchiveLimits = ArchiveLimits(),
+    dependencies: tuple[str, ...] = (),
 ) -> bytes:
     """Step 2 and approval revalidation; never measure, gate, or resolve a new schedule.
 
@@ -328,7 +329,11 @@ def verify_candidate_release(
     Optional Cargo reproduction uses the same paired archive/tool contract as
     verify_release_evidence. No files are written to root, and neither index nor
     working-tree changes are permitted at entry or return.
+    Dependencies supplements the checkout's manifest policy at both boundaries.
     """
+    from research_repo_tools.dependency_provenance import check_release_dependencies
+
+    check_release_dependencies(root, packages=dependencies)
     _digest(acquisition_sha256, "trusted Step 1 assertion digest")
     if acquisition_assertion_digest(policy) != acquisition_sha256:
         raise ValueError("candidate assertions differ from trusted Step 1 handoff")
@@ -378,6 +383,7 @@ def verify_candidate_release(
     final.verify()
     working.verify()
     require_release_checkout(root, commit)
+    check_release_dependencies(root, packages=dependencies)
     if expected is not None and accepted != expected:
         raise ValueError("approved source, native selection, acquisition, or archive changed")
     return accepted

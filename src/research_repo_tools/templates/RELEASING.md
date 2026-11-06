@@ -13,6 +13,17 @@ different UTC days when citation and changelog dates agree.
 
 ## Prepare the environment
 
+With v0.2.7 tooling, declare `published-dependencies = ["research-repo-tools"]`
+under `[tool.research-repo-tools.release]` in the consumer's `pyproject.toml`.
+Development and CI may use a reviewed full Git commit. Before release work,
+publish the supplying version, remove its development override, reconcile normal
+and isolated runtime pins, and resolve/sync the final lock deliberately.
+`just release-dependencies` verifies the published artifacts and installed bytes.
+Pass `--release-intent` to performance preparation/acquisition for an early check.
+Dependency or harness changes invalidate prior evidence under the existing
+freshness rules; retain rehearsals and acquire fresh final inputs when required.
+Pre-tag evidence and later approval/upload paths enforce the same policy again.
+
 Set the target tag once:
 
 ```bash

@@ -249,13 +249,27 @@ def load_preparation(root: Path, settings: PerformanceRelease) -> Preparation:
     return record
 
 
-def prepare_performance(root: Path, settings: PerformanceRelease, *, fetch_tags: bool = False, allow_git_mutations: bool = False) -> Preparation:
+def prepare_performance(
+    root: Path,
+    settings: PerformanceRelease,
+    *,
+    fetch_tags: bool = False,
+    allow_git_mutations: bool = False,
+    release_intent: bool = False,
+    dependencies: tuple[str, ...] = (),
+) -> Preparation:
     """Atomically retain independently resolved assertions; never measure or publish.
 
     Tag fetching is opt-in and additionally requires explicit Git-mutation
     authorization. A failed fetch can affect refs but never replaces the record.
+    With release intent, dependencies supplements the checkout's manifest policy
+    with selections from standalone controller configuration.
     """
     root = root.resolve(strict=True)
+    if release_intent:
+        from research_repo_tools.dependency_provenance import check_release_dependencies
+
+        check_release_dependencies(root, packages=dependencies)
     if fetch_tags and not allow_git_mutations:
         raise ValueError("fetching tags requires --allow-git-mutations; omit --fetch-tags to use reviewed local tags")
     destination = _scratch(root, settings.preparation)
@@ -326,6 +340,8 @@ def measure_release(
     resume: bool = False,
     progress: ProgressReporter | None = None,
     before_promotion: Callable[[], None] | None = None,
+    release_intent: bool = False,
+    dependencies: tuple[str, ...] = (),
 ) -> tuple[Path, ...]:
     """Measure a prepared pair, retain the raw evidence, then promote its report.
 
@@ -335,12 +351,18 @@ def measure_release(
     acquisition function solely to retry handoff capture or report publication.
     A report failure preserves successful raw acquisition. Retry promotion with
     the retained paths; README publication is an independent later operation.
+    With release intent, dependencies supplements the checkout's manifest policy
+    with selections from standalone controller configuration.
     """
     from research_repo_tools.performance_acquisition import measure_and_retain
     from research_repo_tools.performance_reports import load_report_plan
     from research_repo_tools.publication import publish_publication
 
     root = root.resolve(strict=True)
+    if release_intent:
+        from research_repo_tools.dependency_provenance import check_release_dependencies
+
+        check_release_dependencies(root, packages=dependencies)
     record = load_preparation(root, settings)
     reporter = progress or ProgressReporter()
     measure_and_retain(

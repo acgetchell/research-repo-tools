@@ -270,9 +270,19 @@ def require_release_checkout(checkout: Path, commit: str) -> None:
 
 
 def preflight_release_target(
-    root: Path, repository: str, tag: str, commit: str, *, expected_title: str | None = None, checkout: Path | None = None
+    root: Path,
+    repository: str,
+    tag: str,
+    commit: str,
+    *,
+    expected_title: str | None = None,
+    checkout: Path | None = None,
+    dependencies: tuple[str, ...] = (),
 ) -> ReleaseTarget:
     """Read-only preflight for a mutable stable draft on the expected tag commit."""
+    from research_repo_tools.dependency_provenance import check_release_dependencies
+
+    check_release_dependencies(checkout if checkout is not None else root, packages=dependencies)
     # Validate caller assertions before any API access.
     repository, tag, commit = _repository(repository), _stable_tag(tag), _sha(commit)
     expected_title = _expected_title(expected_title)
@@ -288,12 +298,15 @@ def preflight_release_target(
     release = _parse_release(matches[0], repository, tag, target.release_id)
     _require_identity(release, target)
     require_draft(release)
-    revalidate_release_target(root, target, checkout=checkout)
+    revalidate_release_target(root, target, checkout=checkout, dependencies=dependencies)
     return target
 
 
-def revalidate_release_target(root: Path, target: ReleaseTarget, *, checkout: Path | None = None) -> GitHubRelease:
+def revalidate_release_target(root: Path, target: ReleaseTarget, *, checkout: Path | None = None, dependencies: tuple[str, ...] = ()) -> GitHubRelease:
     """Read captured ID directly; require identity, title, lifecycle and tag SHA."""
+    from research_repo_tools.dependency_provenance import check_release_dependencies
+
+    check_release_dependencies(checkout if checkout is not None else root, packages=dependencies)
     if not isinstance(target, ReleaseTarget):
         raise TypeError("release target must be a ReleaseTarget")
     if checkout is not None:
@@ -480,6 +493,7 @@ def publish_release_asset(
     checkout: Path | None = None,
     publish: bool = False,
     limits: ArchiveLimits = ArchiveLimits(),
+    dependencies: tuple[str, ...] = (),
 ) -> None:
     """Attach inert bytes to the captured ID; verify metadata/bytes, publish last.
 
@@ -488,6 +502,9 @@ def publish_release_asset(
     executed. Prerequisite failures never publish; publication-response failures
     raise ReleasePublicationUnknownError and require inspection before retrying.
     """
+    from research_repo_tools.dependency_provenance import check_release_dependencies
+
+    check_release_dependencies(checkout if checkout is not None else root, packages=dependencies)
     repository, tag = _repository(repository), normalize_tag(tag)
     if type(publish) is not bool:
         raise ValueError("publish must be an explicit boolean")
@@ -505,11 +522,11 @@ def publish_release_asset(
     if not original or len(original) > limits.archive_bytes:
         raise ValueError("release asset must be nonempty and within the archive byte limit")
     if target is None:
-        target = preflight_release_target(root, repository, tag, _remote_commit(root, repository, tag))
+        target = preflight_release_target(root, repository, tag, _remote_commit(root, repository, tag), checkout=checkout, dependencies=dependencies)
     with tempfile.TemporaryDirectory(prefix="research-release-upload-") as directory:
         staged = Path(directory) / name
         staged.write_bytes(original)
-        release = revalidate_release_target(root, target, checkout=checkout)
+        release = revalidate_release_target(root, target, checkout=checkout, dependencies=dependencies)
         existing = any(entry[0] == name for entry in release.assets)
         if existing:
             _verified_asset(release, name, original)
@@ -528,14 +545,14 @@ def publish_release_asset(
                     str(staged),
                 ],
             )
-        current = revalidate_release_target(root, target, checkout=checkout)
+        current = revalidate_release_target(root, target, checkout=checkout, dependencies=dependencies)
         attached = _verified_asset(current, name, original)
         downloaded = _download(root, target.repository, attached[1], limits.archive_bytes)
         if downloaded != original:
             raise ValueError("downloaded release asset differs; refusing to publish")
         # Recheck after the potentially slow byte verification, immediately before
         # publication. Require the same completed asset ID as the verified bytes.
-        final = revalidate_release_target(root, target, checkout=checkout)
+        final = revalidate_release_target(root, target, checkout=checkout, dependencies=dependencies)
         if _verified_asset(final, name, original) != attached:
             raise ValueError("release asset identity changed after byte verification")
         if publish:

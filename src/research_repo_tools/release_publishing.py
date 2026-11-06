@@ -255,6 +255,9 @@ def check_reviewed_release(
     Fetch evidence through authenticated gh. No fetch, checkout, ref mutation,
     packaging, or upload occurs here. The caller owns native package verification.
     """
+    from research_repo_tools.dependency_provenance import check_release_dependencies
+
+    check_release_dependencies(config.root, packages=config.release.published_dependencies)
     settings = _settings(config)
     check_metadata(config, tag)
     head = _sha(run_git_command(["--no-pager", "rev-parse", "HEAD"], cwd=config.root).stdout.strip())
@@ -317,7 +320,7 @@ def publish_reviewed_release(config: "Config", tag: str, *, reuse_evidence: byte
     if current.identifier != release.identifier:
         raise ValueError("draft release identity changed before publication")
     target = ReleaseTarget(release.repository, tag, release.identifier, head)
-    final = revalidate_release_target(config.root, target)
+    final = revalidate_release_target(config.root, target, dependencies=config.release.published_dependencies)
     _assets(final, _settings(config), _tag(tag))
     published = _publish_release(config.root, target)
     try:
@@ -330,6 +333,9 @@ def publish_reviewed_release(config: "Config", tag: str, *, reuse_evidence: byte
 
 def verify_publication(config: "Config", tag: str, *, attempts: int = 1, interval: int = 10) -> None:
     """Require the published stable GitHub release/assets and exact registry version."""
+    from research_repo_tools.dependency_provenance import check_release_dependencies
+
+    check_release_dependencies(config.root, packages=config.release.published_dependencies)
     settings = _settings(config)
     version = _tag(tag)
     release = lookup_release(config.root, settings.repository, tag)

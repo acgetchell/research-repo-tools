@@ -8,17 +8,26 @@ for setup and ordinary workflows.
 
 ## Shared Python adoption API
 
+Exact Git sources for development retain the Python minimum and tool-profile
+checks. Their declaration, lock and installed PEP 610 identities must agree.
+Published-only enforcement applies to configured release boundaries; see the
+[upstream tooling contract](dependency-provenance-api.md).
+
 The packaged `python-bootstrap.py VERSION --dry-run|--apply` is a standalone
 standard-library-only entrypoint for an older consumer interpreter. It reads the
 exact target release's PyPI `Requires-Python` and passes it to isolated managed uvx
 startup. `--metadata-file PATH` accepts saved exact-release JSON for offline/local
 artifact evaluation; uv configuration such as `UV_FIND_LINKS` locates the artifact.
 The installed distribution independently owns support checks and adoption.
+This legacy saved-metadata path does not establish live publication and is
+unavailable with release intent or general command execution. The exported file
+is now the shared [release/GitHub runtime wrapper](dependency-provenance-api.md#python-api-and-boundaries);
+ordinary release startup additionally verifies a non-yanked artifact exists.
 
 `research_repo_tools.python_baseline.baseline()` returns a frozen
 `PythonBaseline(requirement, selected, package_version)`. The requirement and
 package version come from installed distribution metadata; selected is the
-package-owned development minor. `minimum_requirement` extracts the published
+package-owned development minor. `minimum_requirement` extracts the installed
 lower bound independently of that selector. `reconcile_requirement(requirement,
 authority)` adds the floor while preserving all consumer restrictions and rejects
 empty intersections. `check_minimum(root)` enforces application metadata without

@@ -2,7 +2,9 @@
 
 The public contract comprises the installed `research-repo-tools` CLI, documented
 TOML configuration, packaged templates and Python interfaces linked here.
-Consumers pin an exact published version and lock dependencies. Patch releases
+Consumers pin an exact published version, or a verified full development commit,
+and lock dependencies. [Release dependency policy](dependency-provenance-api.md)
+requires selected upstream tooling to be published at release boundaries. Patch releases
 preserve these contracts; minor releases may introduce documented changes while
 the package is below 1.0. Unlisted modules and private names are implementation
 details. Imports do not install tools, access the network or modify consumer files.
@@ -47,6 +49,7 @@ type namespace; signature display does not require resolving them.
 | Releases | [Metadata planning and registry publication](publishing-api.md), [evidence/assets](release-evidence-api.md) ([workflow](VERIFYING_RELEASE_EVIDENCE.md)) |
 | Security and SARIF | [Scanners, Rust documentation and SARIF generations](security-api.md) |
 | Toolchains | [Python adoption and managed-install cleanup](toolchain-api.md) |
+| Upstream tooling | [Development identity and published release dependencies](dependency-provenance-api.md) |
 | Workflows | [Configured measurement/assets, validation and CI export](workflow-api.md) |
 
 ## Performance

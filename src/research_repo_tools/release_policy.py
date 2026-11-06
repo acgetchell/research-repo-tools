@@ -6,6 +6,18 @@ from dataclasses import dataclass
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Literal
 
+from packaging.utils import canonicalize_name
+
+
+def dependency_names(value: object) -> tuple[str, ...]:
+    """Parse an unambiguous selection of upstream tooling package names."""
+    if not isinstance(value, (list, tuple)) or any(not isinstance(name, str) for name in value):
+        raise ValueError("release.published-dependencies must be package names")
+    result = tuple(canonicalize_name(name, validate=True) for name in value)
+    if len(set(result)) != len(result):
+        raise ValueError("release.published-dependencies contains duplicate package names")
+    return result
+
 
 def _relative_path(value: str, *, patterns: bool = False) -> str:
     if (
@@ -92,8 +104,10 @@ class ReleasePolicy:
     exclude: tuple[str, ...] = ()
     rules: tuple[ReleaseRule, ...] = ()
     tag_policy: Literal["normalized-stable", "canonical-stable"] = "normalized-stable"
+    published_dependencies: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
+        object.__setattr__(self, "published_dependencies", dependency_names(self.published_dependencies))
         if not isinstance(self.tag_policy, str) or self.tag_policy not in {"normalized-stable", "canonical-stable"}:
             raise ValueError("tag policy must be normalized-stable or canonical-stable")
         if self.date_policy not in {"today", "declared"} or type(self.final_changelog) is not bool:

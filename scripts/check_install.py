@@ -402,6 +402,12 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             validation_release_suite.write_bytes((ROOT / "tests/releases/public_validation_consumer.py").read_bytes())
             run_consumer_suite(python, [str(validation_release_suite)], cwd=consumer, env=local_env)
             evidence_suite = consumer / "public_evidence_consumer.py"
+            dependency_suite = consumer / "public_dependency_provenance_consumer.py"
+            dependency_suite.write_bytes((ROOT / "tests/releases/public_dependency_provenance_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(dependency_suite)], cwd=consumer, env=local_env)
+            runtime_suite = consumer / "public_tooling_runtime_consumer.py"
+            runtime_suite.write_bytes((ROOT / "tests/toolchain/public_tooling_runtime_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(runtime_suite)], cwd=consumer, env=local_env)
             dates_suite = consumer / "public_dates_consumer.py"
             dates_suite.write_bytes((ROOT / "tests/changelog/public_dates_consumer.py").read_bytes())
             run_consumer_suite(python, [str(dates_suite)], cwd=consumer, env=local_env)

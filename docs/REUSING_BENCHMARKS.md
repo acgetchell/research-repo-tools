@@ -7,6 +7,13 @@ conversion, and evidence mechanics. See the [API and trust contract](candidate-r
 
 ## Step 1: prepare and acquire
 
+When using the v0.2.7 published-dependency policy, run `just release-dependencies`
+and pass `--release-intent` to preparation and acquisition before final release
+measurements. Exact Git pins remain supported for development rehearsals.
+Replacing them with a published pin changes dependency/harness inputs and can
+invalidate checkpoints and candidates; revalidate and reacquire when required.
+See [upstream provenance](dependency-provenance-api.md).
+
 Before acquisition, set the prospective package version and finish source,
 dependency, build, harness, fixture, command/feature, and tool changes. Declare
 measurement schema 6, the exact report/document output exceptions, and a schedule:

@@ -56,7 +56,9 @@ def template(name: str, *, owner: str | None = None, repository: str | None = No
         raise ValueError(f"unknown template {name!r}; choose {', '.join(TEMPLATES)}")
     if dependency_bodies not in {"concise", "preserve"}:
         raise ValueError("dependency_bodies must be concise or preserve")
-    text = files("research_repo_tools").joinpath("templates", name).read_text(encoding="utf-8")
+    resource = files("research_repo_tools")
+    resource = resource.joinpath("tooling_runtime.py") if name == "python-bootstrap.py" else resource.joinpath("templates", name)
+    text = resource.read_text(encoding="utf-8")
     for placeholder, value in (("__OWNER__", owner), ("__REPOSITORY__", repository)):
         if placeholder not in text or value is None:
             continue
