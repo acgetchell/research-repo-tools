@@ -107,21 +107,56 @@ class TestToolingRuntime(unittest.TestCase):
                 self.assertEqual(arguments[arguments.index("--from") + 1], requirement)
 
     def test_optional_github_credentials_are_sent_only_to_the_api(self):
-        for primary, fallback, expected in (
-            ("primary-fixture", "fallback-fixture", "Bearer primary-fixture"),
-            ("", "fallback-fixture", "Bearer fallback-fixture"),
-            ("", "", None),
+        for lookup, primary, fallback, expected in (
+            ("lookup-fixture", "primary-fixture", "fallback-fixture", "Bearer lookup-fixture"),
+            ("", "primary-fixture", "fallback-fixture", "Bearer primary-fixture"),
+            ("", "", "fallback-fixture", "Bearer fallback-fixture"),
+            ("", "", "", None),
         ):
-            with self.subTest(primary=primary, fallback=fallback), patch.dict(os.environ, {"GITHUB_TOKEN": primary, "GH_TOKEN": fallback}):
+            with (
+                self.subTest(lookup=lookup, primary=primary, fallback=fallback),
+                patch.dict(os.environ, {"RRT_GITHUB_LOOKUP_TOKEN": lookup, "GITHUB_TOKEN": primary, "GH_TOKEN": fallback}),
+            ):
                 self.opener.reset_mock()
                 for source in (runtime.GitHubPin(REPOSITORY, SHA), runtime.ReleasePin(VERSION)):
                     self.assertEqual(runtime.run_tooling(source, ("toolchain", "check"), root=self.root), 7)
+                    environment = self.launch.call_args.kwargs["env"]
+                    self.assertFalse("RRT_GITHUB_LOOKUP_TOKEN" in environment, "lookup-only credential reached the tooling environment")
+                    self.assertEqual(environment["GITHUB_TOKEN"], primary)
+                    self.assertEqual(environment["GH_TOKEN"], fallback)
                 requests = [call.args[0] for call in self.opener.call_args_list]
                 self.assertEqual(len(requests), 3)
                 self.assertEqual(requests[0].full_url, f"https://api.github.com/repos/{REPOSITORY}/git/commits/{SHA}")
                 self.assertEqual(requests[0].get_header("Authorization"), expected)
                 self.assertIsNone(requests[1].get_header("Authorization"))
                 self.assertIsNone(requests[2].get_header("Authorization"))
+
+    def test_lookup_only_credentials_never_reach_legacy_offline_adoption(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            metadata = Path(temporary) / "release.json"
+            metadata.write_bytes(json.dumps(self.release).encode())
+            for variable in ("RRT_GITHUB_LOOKUP_TOKEN", "rrt_github_lookup_token"):
+                with self.subTest(variable=variable), patch.dict(os.environ, {variable: "lookup-fixture", "GH_TOKEN": "explicit-tooling-fixture"}):
+                    self.assertEqual(runtime.main([VERSION, "--metadata-file", str(metadata), "--root", str(self.root), "--dry-run"]), 7)
+                    environment = self.launch.call_args.kwargs["env"]
+                    self.assertFalse(any(key.upper() == "RRT_GITHUB_LOOKUP_TOKEN" for key in environment))
+                    self.assertEqual(environment["GH_TOKEN"], "explicit-tooling-fixture")
+        self.opener.assert_not_called()
+
+    def test_malformed_lookup_credentials_are_rejected_without_disclosing_them(self):
+        for credential in ("fixture-secret\r\ninjected", "fixture-secret\x01", "fixture-secret café", " fixture-secret"):
+            with (
+                self.subTest(credential=repr(credential)),
+                patch.dict(os.environ, {"RRT_GITHUB_LOOKUP_TOKEN": credential}),
+                contextlib.redirect_stderr(io.StringIO()) as errors,
+            ):
+                self.assertEqual(
+                    runtime.main(["--github", REPOSITORY, "--commit", SHA, "--root", str(self.root), "--arguments-json", '["toolchain","check"]']), 1
+                )
+                self.assertIn("lookup credential", errors.getvalue())
+                self.assertNotIn("fixture-secret", errors.getvalue())
+        self.opener.assert_not_called()
+        self.launch.assert_not_called()
 
     def test_invalid_arguments_and_extras_fail_before_lookup(self):
         for arguments, extras in (((), ()), (("check\x00",), ()), (("check",), ("python-tools", "python-tools")), (("check",), ("x] @ bad",))):
@@ -134,19 +169,22 @@ class TestToolingRuntime(unittest.TestCase):
         headers = Message()
         headers["Location"] = "https://other.example.invalid/collect"
         url = f"https://api.github.com/repos/{REPOSITORY}/git/commits/{SHA}"
-        response = RedirectResponse(io.BytesIO(b""), headers, url, 302)
-        with (
-            patch.dict(os.environ, {"GITHUB_TOKEN": "fixture-token"}),
-            patch.object(runtime.urllib.request.OpenerDirector, "open", new=self.http_open),
-            patch.object(runtime.urllib.request.HTTPSHandler, "https_open", return_value=response) as transport,
-            self.assertRaisesRegex(ValueError, "HTTP 302"),
-        ):
-            runtime.run_tooling(runtime.GitHubPin(REPOSITORY, SHA), ("toolchain", "check"), root=self.root)
-        transport.assert_called_once()
-        request = transport.call_args.args[0]
-        self.assertEqual(request.full_url, url)
-        self.assertEqual(request.get_header("Authorization"), "Bearer fixture-token")
-        self.assertTrue(response.closed)
+        for variable in ("GITHUB_TOKEN", "RRT_GITHUB_LOOKUP_TOKEN"):
+            response = RedirectResponse(io.BytesIO(b""), headers, url, 302)
+            credentials = {"GITHUB_TOKEN": "", "RRT_GITHUB_LOOKUP_TOKEN": ""} | {variable: "fixture-token"}
+            with (
+                self.subTest(variable=variable),
+                patch.dict(os.environ, credentials),
+                patch.object(runtime.urllib.request.OpenerDirector, "open", new=self.http_open),
+                patch.object(runtime.urllib.request.HTTPSHandler, "https_open", return_value=response) as transport,
+                self.assertRaisesRegex(ValueError, "HTTP 302"),
+            ):
+                runtime.run_tooling(runtime.GitHubPin(REPOSITORY, SHA), ("toolchain", "check"), root=self.root)
+            transport.assert_called_once()
+            request = transport.call_args.args[0]
+            self.assertEqual(request.full_url, url)
+            self.assertEqual(request.get_header("Authorization"), "Bearer fixture-token")
+            self.assertTrue(response.closed)
         self.launch.assert_not_called()
 
     def test_nonexistent_version_and_commit_never_launch_or_fall_back(self):

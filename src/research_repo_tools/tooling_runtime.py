@@ -75,8 +75,11 @@ class _NoRedirect(urllib.request.HTTPRedirectHandler):
 
 def _read(url: str) -> bytes:
     headers = {"User-Agent": "research-repo-tools-bootstrap"}
-    token = os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
+    token = os.environ.get("RRT_GITHUB_LOOKUP_TOKEN") or os.environ.get("GITHUB_TOKEN") or os.environ.get("GH_TOKEN")
     if token and url.startswith("https://api.github.com/"):
+        # http.client includes invalid header values in its exceptions.
+        if re.fullmatch(r"[\x21-\x7e]+", token) is None:
+            raise ValueError("GitHub lookup credential must contain only visible ASCII without whitespace")
         headers["Authorization"] = "Bearer " + token
     request = urllib.request.Request(url, headers=headers)
     try:
@@ -210,6 +213,9 @@ def _execute(resolved: _ResolvedSource, arguments: tuple[str, ...], *, root: Pat
         if local_artifact
         else {key: value for key, value in os.environ.items() if not key.upper().startswith("UV_") or key.upper() in {"UV_CACHE_DIR", "UV_PYTHON_INSTALL_DIR"}}
     )
+    # The Action's lookup credential is not an authorization grant to the
+    # selected tooling. Explicit caller-supplied tooling credentials remain.
+    environment = {key: value for key, value in environment.items() if key.upper() != "RRT_GITHUB_LOOKUP_TOKEN"}
     requirement = resolved.requirement
     if extras:
         requirement = PACKAGE + "[" + ",".join(sorted(extras)) + "]" + requirement[len(PACKAGE) :]

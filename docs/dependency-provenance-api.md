@@ -108,9 +108,16 @@ The return value is the child exit status. Failures raise `ValueError`, invalid
 source types raise `TypeError`, and process launch/timeouts propagate.
 
 GitHub selection supports public repositories and requires Python 3.11+ for TOML.
-`GITHUB_TOKEN` (or `GH_TOKEN` when unset) authenticates only `api.github.com`
-lookups. Credentials are never sent to PyPI or raw content, and redirects remain
-disabled. The composite Action supplies its available GitHub token automatically.
+Lookup authentication selects `RRT_GITHUB_LOOKUP_TOKEN`, then `GITHUB_TOKEN`,
+then `GH_TOKEN`, taking the first nonempty value. Lookup requests authenticate
+only `api.github.com`; credentials are never sent to PyPI or raw content, and
+redirects remain disabled. The composite Action supplies its token through
+`RRT_GITHUB_LOOKUP_TOKEN`, which is removed before every tooling launch,
+including legacy offline adoption. Caller-supplied `GITHUB_TOKEN` and `GH_TOKEN`
+remain available to tooling commands requiring authentication; the Action does
+not grant those credentials automatically.
+Malformed lookup credentials fail before HTTP transport without printing their
+values; accepted credentials contain visible ASCII without whitespace.
 The Just and Actions wrappers select managed Python 3.15 for bootstrap. The target
 package's metadata selects its own runtime Python. Release intent rejects Git
 before lookup. A verified release cannot be redirected by ambient uv source/index
