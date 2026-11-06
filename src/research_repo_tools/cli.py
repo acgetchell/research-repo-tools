@@ -144,6 +144,7 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("tag", nargs="?", help="canonical stable tag; requires final metadata and release notes")
     command.add_argument("--final-release", action="store_true")
     command.add_argument("--previous-release")
+    release.add_parser("dependencies", help="verify selected upstream pins, lock and installed bytes before release acquisition or publication")
     add_evidence_commands(release)
     command = release.add_parser(
         "gate",
@@ -719,6 +720,12 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
 
         return review.run(settings.root, base=args.base if args.action == "branch" else None)
     if args.group == "release":
+        if args.action == "dependencies":
+            from research_repo_tools.dependency_provenance import check_release_dependencies
+
+            identities = check_release_dependencies(settings.root, packages=settings.release.published_dependencies)
+            print(f"Verified {len(identities)} published upstream dependencies.")
+            return 0
         if args.action in {"assets", "evidence"}:
             from research_repo_tools.release_interfaces import run
 

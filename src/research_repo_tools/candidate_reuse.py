@@ -329,6 +329,9 @@ def verify_candidate_release(
     verify_release_evidence. No files are written to root, and neither index nor
     working-tree changes are permitted at entry or return.
     """
+    from research_repo_tools.dependency_provenance import check_release_dependencies
+
+    check_release_dependencies(root)
     _digest(acquisition_sha256, "trusted Step 1 assertion digest")
     if acquisition_assertion_digest(policy) != acquisition_sha256:
         raise ValueError("candidate assertions differ from trusted Step 1 handoff")
@@ -378,6 +381,7 @@ def verify_candidate_release(
     final.verify()
     working.verify()
     require_release_checkout(root, commit)
+    check_release_dependencies(root)
     if expected is not None and accepted != expected:
         raise ValueError("approved source, native selection, acquisition, or archive changed")
     return accepted

@@ -128,6 +128,10 @@ release-assets +args:
 release-check tag:
     uv run --locked research-repo-tools release check "$1"
 
+# Verify selected published upstream dependencies before release work.
+release-dependencies:
+    uv run --locked research-repo-tools release dependencies
+
 # Inspect this release's signed CI evidence, or pass explicit shared evidence commands.
 release-evidence *args:
     if [ "$#" -eq 0 ]; then uv run --locked python scripts/release_assets.py evidence --format summary; else uv run --locked research-repo-tools release evidence "$@"; fi
@@ -198,6 +202,10 @@ templates +args:
 # Run the Python test suite.
 test *args:
     uv run --locked pytest {{ pytest_parallel }} "$@"
+
+# Verify an exact release or GitHub commit, then run isolated shared tooling.
+tooling-run +args:
+    uv run --no-config --no-project --isolated --managed-python --python 3.15 --script src/research_repo_tools/tooling_runtime.py "$@"
 
 # Upgrade tools and Python dependencies, synchronize dev, then audit final locks.
 update: update-tools update-dependencies

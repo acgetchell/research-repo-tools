@@ -194,7 +194,7 @@ def test_adoption_rejects_nonexact_or_nonregistry_package_authority(consumer, pi
     path = root / "pyproject.toml"
     path.write_bytes(path.read_bytes().replace(b"research-repo-tools==0.1.6", pin.encode()))
     before = snapshot(root)
-    with pytest.raises(ValueError, match="exact registry package pins"):
+    with pytest.raises(ValueError, match="exact package pins"):
         adoption.plan_python_adoption(config.load(root=root))
     assert not calls and snapshot(root) == before
 

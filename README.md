@@ -29,6 +29,9 @@ are marked where a supplying release is required: prepared performance stages,
 parallel Criterion suites, shared release-evidence handoffs, command timing,
 optional CI reuse, and the notebook/stream refinements need v0.2.4.
 
+Exact Git development pins and published-dependency release enforcement target
+v0.2.7; see [development pins](#development-pins-and-release-dependencies).
+
 An upstream merge, local wheel or passing source test does not publish a package.
 Before adopting a new capability, verify its exact PyPI release, update your
 consumer's pin and lockfile, and run its integration checks. Keep working adapters
@@ -95,6 +98,83 @@ fixture and production scans. A package
 upgrade does not rewrite copied Just recipes; merge the relevant exported
 recipes as part of each consumer adoption and verify its integration before
 removing temporary adapters.
+
+## Development pins and release dependencies
+
+With the v0.2.7 capability, downstream development and CI may use a reviewed
+full commit from the tooling repository's main branch. Keep the requirement's
+exact version and extras, and add an exact Git source in the consumer manifest:
+
+```toml
+[dependency-groups]
+tooling = ["research-repo-tools[python-tools]==0.2.6"]
+dev = [{include-group = "tooling"}]
+
+[tool.uv.sources]
+# Example historical main commit; select the reviewed supplying implementation.
+research-repo-tools = {git = "https://github.com/acgetchell/research-repo-tools.git", rev = "ef783cac608bc0d2d4657052c20e663f2d45b232"}
+
+[tool.research-repo-tools.release]
+published-dependencies = ["research-repo-tools"]
+```
+
+The historical commit above illustrates pin syntax; it predates this capability.
+Use an exact supplying commit with the version declared by that commit, resolve
+and sync it deliberately, and retain the manifest and lock together. Match any
+isolated runtime selection to the same repository and full commit.
+Normal setup, checks and development evidence remain usable. Git provenance
+must agree with the declaration and lock; a matching version label alone fails.
+
+Before a release campaign, publish the supplying upstream version, remove its
+development source override, update both normal and isolated requirements to
+that exact PyPI release, then resolve and sync the lock. Run:
+
+```sh
+just release-dependencies
+just performance-prepare tooling/performance-release.toml --release-intent
+just performance-release tooling/performance-release.toml --release-intent
+```
+
+Release evidence, asset and approval paths enforce the configured policy again.
+The pin transition changes evidence inputs: revalidate the final configuration
+and acquire fresh results when measured inputs changed. Retain earlier results
+as rehearsal evidence. See the [proof, supported artifacts and public API](docs/dependency-provenance-api.md)
+for fail-closed limitations and recovery. No consumer guard implementation or
+automatic pin/lock rewrite is needed.
+
+Use the shared wrapper for isolated commands. Export the matching
+`python-bootstrap.py` template beside the consumer Justfile; it contains the
+same implementation as `research_repo_tools.tooling_runtime`. For example,
+after the supplying v0.2.7 release is published:
+
+```sh
+just templates python-bootstrap.py --output python-bootstrap.py
+just tooling-run --version 0.2.7 --release-intent --arguments-json '["release","dependencies"]'
+```
+
+For development, replace `--version` with `--github acgetchell/research-repo-tools
+--commit FULL_40_CHARACTER_SHA` and omit `--release-intent`. Add
+`--extras python-tools` when running checks that need the shared Ruff/ty/pytest
+profile. Selectors are mutually exclusive. Missing releases, yanked-only releases,
+missing commits and failed lookups stop before tooling starts; there is no fallback.
+
+GitHub Actions can use the same implementation, with uv already installed:
+
+```yaml
+- uses: acgetchell/research-repo-tools/.github/actions/run-tooling@v0.2.7
+  with:
+    version: '0.2.7'
+    release-intent: 'true'
+    arguments: '["release", "dependencies"]'
+```
+
+This example requires the supplying release; pin the action itself to its
+reviewed supplying commit under your Actions policy. For development, substitute
+the `github` and `commit` inputs for `version`. `root` selects the observed
+consumer/configuration root and `extras` selects optional package extras.
+The wrapper centralizes availability checks and isolated uv invocation;
+normal dependency pins remain in the manifest/lock, and release gates verify
+both installations. It never rewrites a consumer's pins or upgrades tooling.
 
 ## First workflow
 

@@ -102,7 +102,7 @@ GitHub releases, matching the existing CLI discovery limit.
 
 The module exports these frozen dataclasses:
 
-- `ReleasePolicy(date_policy="today", final_changelog=False, required_files=(), exclude=(), rules=(), tag_policy="normalized-stable")`
+- `ReleasePolicy(date_policy="today", final_changelog=False, required_files=(), exclude=(), rules=(), tag_policy="normalized-stable", published_dependencies=())`
   and `ReleaseRule(path, pattern, value=None, source=None, count=1, exclude=None)`
   follow the [declarative contract](UPDATING_RELEASE_METADATA.md#declarative-consumer-policies).
 - `ReleaseAdapter(input_files=(), prepare=None, validate=None)` uses trusted Python

@@ -138,9 +138,11 @@ def _locked_versions(document: dict[str, Any]) -> dict[str, set[str | None]]:
 
 def check(root: Path, *, executables: bool = True) -> None:
     """Inspect declarations, the locked dev graph, and selected executables; never sync."""
+    from research_repo_tools.dependency_provenance import check_development_dependency
     from research_repo_tools.process import run_command
 
     try:
+        check_development_dependency(root)
         check_declarations(tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8")))
         authority = versions()
         lock = _locked_versions(tomllib.loads((root / "uv.lock").read_text(encoding="utf-8")))

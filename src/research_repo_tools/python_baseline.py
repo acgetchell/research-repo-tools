@@ -1,4 +1,4 @@
-"""Installed-release authority for mandatory Python support and development mirrors."""
+"""Installed-package authority for mandatory Python support and development mirrors."""
 
 import re
 import tomllib
@@ -35,7 +35,7 @@ class PythonBaseline:
 
     @property
     def minimum_requirement(self) -> str:
-        """Extract the published lower bound independently of the dev selector.
+        """Extract the installed lower bound independently of the dev selector.
 
         Upper bounds and exclusions belong to the shared tool's own installation
         contract; consumers inherit its language-feature floor, not those limits.
@@ -141,17 +141,15 @@ def package_groups(document: dict[str, Any]) -> dict[str, list[Requirement]]:
             item = Requirement(value)
             if canonicalize_name(item.name) == PACKAGE:
                 if item.url or item.marker or len(item.specifier) != 1 or next(iter(item.specifier)).operator != "==" or "*" in str(item.specifier):
-                    raise ValueError("shared Python inheritance requires unmarked exact registry package pins in dependency groups")
+                    raise ValueError("shared Python inheritance requires unmarked exact package pins in dependency groups")
                 selected.append(item)
         if selected:
             result[group] = selected
     if not result:
         raise ValueError("shared Python inheritance requires an exact research-repo-tools pin in a dependency group")
-    tool = _table(document.get("tool", {}), "tool")
-    uv = _table(tool.get("uv", {}), "tool.uv")
-    sources = _table(uv.get("sources", {}), "tool.uv.sources")
-    if any(canonicalize_name(name) == PACKAGE for name in sources):
-        raise ValueError("shared Python inheritance requires a published registry pin, not tool.uv.sources")
+    from research_repo_tools.dependency_provenance import validate_development_source
+
+    validate_development_source(document)
     return result
 
 
@@ -198,5 +196,8 @@ def target_problems(document: dict[str, Any], selected: str) -> tuple[str, ...]:
 
 
 def check(root: Path, document: dict[str, Any] | None = None) -> None:
+    from research_repo_tools.dependency_provenance import check_development_dependency
+
+    check_development_dependency(root, document=document)
     if problems := drift(root, document):
         raise ValueError("shared Python drift: " + "; ".join(problems) + "; run the target pinned package's toolchain adopt --dry-run, then --apply")

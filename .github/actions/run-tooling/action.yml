@@ -1,0 +1,50 @@
+name: Run pinned research tooling
+description: Verify an exact published version or GitHub commit, then run isolated shared tooling.
+inputs:
+  version:
+    description: Exact published version; mutually exclusive with github and commit.
+    default: ''
+  github:
+    description: Public GitHub owner/repository for development tooling.
+    default: ''
+  commit:
+    description: Full lowercase 40-character commit SHA in github.
+    default: ''
+  arguments:
+    description: Nonempty JSON array of research-repo-tools command arguments.
+    required: true
+  extras:
+    description: Comma-separated package extras (for example python-tools).
+    default: ''
+  root:
+    description: Consumer checkout or trusted controller configuration root.
+    default: '.'
+  release-intent:
+    description: Require a published version before running tooling (true or false).
+    default: 'false'
+runs:
+  using: composite
+  steps:
+    - name: Verify and run selected tooling
+      shell: bash
+      env:
+        RRT_WRAPPER: ${{ github.action_path }}/../../../src/research_repo_tools/tooling_runtime.py
+        RRT_VERSION: ${{ inputs.version }}
+        RRT_GITHUB: ${{ inputs.github }}
+        RRT_COMMIT: ${{ inputs.commit }}
+        RRT_ARGUMENTS: ${{ inputs.arguments }}
+        RRT_EXTRAS: ${{ inputs.extras }}
+        RRT_ROOT: ${{ inputs.root }}
+        RRT_RELEASE_INTENT: ${{ inputs.release-intent }}
+      run: |
+        selectors=()
+        if [[ -n "$RRT_VERSION" ]]; then selectors+=(--version "$RRT_VERSION"); fi
+        if [[ -n "$RRT_GITHUB" ]]; then selectors+=(--github "$RRT_GITHUB"); fi
+        if [[ -n "$RRT_COMMIT" ]]; then selectors+=(--commit "$RRT_COMMIT"); fi
+        case "$RRT_RELEASE_INTENT" in
+          true) selectors+=(--release-intent) ;;
+          false) ;;
+          *) echo 'release-intent must be true or false' >&2; exit 2 ;;
+        esac
+        uv run --no-config --no-project --isolated --managed-python --python 3.15 --script "$RRT_WRAPPER" \
+          "${selectors[@]}" --root "$RRT_ROOT" --extras "$RRT_EXTRAS" --arguments-json "$RRT_ARGUMENTS"

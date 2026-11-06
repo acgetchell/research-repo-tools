@@ -249,13 +249,19 @@ def load_preparation(root: Path, settings: PerformanceRelease) -> Preparation:
     return record
 
 
-def prepare_performance(root: Path, settings: PerformanceRelease, *, fetch_tags: bool = False, allow_git_mutations: bool = False) -> Preparation:
+def prepare_performance(
+    root: Path, settings: PerformanceRelease, *, fetch_tags: bool = False, allow_git_mutations: bool = False, release_intent: bool = False
+) -> Preparation:
     """Atomically retain independently resolved assertions; never measure or publish.
 
     Tag fetching is opt-in and additionally requires explicit Git-mutation
     authorization. A failed fetch can affect refs but never replaces the record.
     """
     root = root.resolve(strict=True)
+    if release_intent:
+        from research_repo_tools.dependency_provenance import check_release_dependencies
+
+        check_release_dependencies(root)
     if fetch_tags and not allow_git_mutations:
         raise ValueError("fetching tags requires --allow-git-mutations; omit --fetch-tags to use reviewed local tags")
     destination = _scratch(root, settings.preparation)
@@ -326,6 +332,7 @@ def measure_release(
     resume: bool = False,
     progress: ProgressReporter | None = None,
     before_promotion: Callable[[], None] | None = None,
+    release_intent: bool = False,
 ) -> tuple[Path, ...]:
     """Measure a prepared pair, retain the raw evidence, then promote its report.
 
@@ -341,6 +348,10 @@ def measure_release(
     from research_repo_tools.publication import publish_publication
 
     root = root.resolve(strict=True)
+    if release_intent:
+        from research_repo_tools.dependency_provenance import check_release_dependencies
+
+        check_release_dependencies(root)
     record = load_preparation(root, settings)
     reporter = progress or ProgressReporter()
     measure_and_retain(

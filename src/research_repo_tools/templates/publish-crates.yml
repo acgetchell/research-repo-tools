@@ -1,5 +1,7 @@
-# Consumer-owned example for one root crate. Adopt only after v0.1.8 is published.
-# Pin research-repo-tools==0.1.8 in the locked tooling group; configure publishing.
+# Consumer-owned example for one root crate. Requires the supplying v0.2.7 release.
+# Pin its exact published version in the locked tooling group; configure publishing
+# and release.published-dependencies = ["research-repo-tools"]. The release gate
+# rechecks dependency provenance before provider access and credential acquisition.
 # Extend native commands/features and required checks for your crate/workspace.
 name: Publish to crates.io
 
