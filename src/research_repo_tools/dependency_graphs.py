@@ -1,6 +1,5 @@
 """Inert uv/Cargo source inspection and native locked graph verification."""
 
-import filecmp
 import os
 import re
 import tempfile
@@ -286,10 +285,8 @@ def _resolve_cargo(*, cwd: Path, environment: dict[str, str], checkouts: tuple[P
             if environment.get("RUSTUP_TOOLCHAIN") or environment.get("RUSTUP_HOME"):
                 raise ValueError("cannot verify the selected Rust toolchain without rustup") from error
             return cargo
-    # Rustup installs linked proxies. Compare bytes as well for copied proxies;
-    # a standalone Cargo binary does not delegate to rustup.
-    if not cargo.samefile(rustup) and not filecmp.cmp(cargo, rustup, shallow=False):
-        return cargo
+    # Package managers can wrap Cargo and rustup in distinct launchers. Different
+    # files or bytes do not prove that Cargo bypasses rustup's selected toolchain.
     rustup = outside(resolve_executable(rustup, cwd=cwd, env=environment))
     selected = Path(run_command(rustup, ["which", "cargo"], cwd=cwd, env={**environment, "RUSTUP_AUTO_INSTALL": "0"}, timeout=30).stdout.strip())
     if not selected.is_absolute():

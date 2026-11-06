@@ -693,7 +693,6 @@ class TestSourceWorkflows(unittest.TestCase):
     def test_native_rustup_cargo_selection_rejects_both_checkouts_and_accepts_external_toolchains(self) -> None:
         self.cargo()
         proof = verify_source(GitCommit("cargo", "sample-crate", "example/upstream", COMMIT), provider=self.provider)
-        marker = self.root / "cargo-ran"
         with tempfile.TemporaryDirectory(prefix="cargo selection café ") as directory:
             arena = Path(directory).resolve()
             candidate = arena / "checkout"
@@ -707,24 +706,53 @@ class TestSourceWorkflows(unittest.TestCase):
             program = arena / "probe.rs"
             program.write_bytes(b'fn main() { std::fs::write(std::env::var("RRT_CARGO_PROBE_MARKER").unwrap(), b"selected").unwrap(); }\n')
             process.run_command("rustc", [str(program), "-o", str(binary)], cwd=arena)
-            for toolchain in (self.root / "toolchain", candidate / "toolchain", trusted):
+
+            # Package-manager launchers may forward to rustup without sharing
+            # either an inode or file contents. Native wrappers cover this on
+            # every platform without requiring shell scripts or symlinks.
+            wrappers = arena / "wrappers"
+            wrappers.mkdir()
+            launcher_environment = {}
+            for tool in ("cargo", "rustup"):
+                variable = "RRT_REAL_" + tool.upper()
+                launcher_environment[variable] = str(process.resolve_executable(tool, cwd=arena))
+                launcher = wrappers / (tool + (".exe" if sys.platform == "win32" else ""))
+                program.write_bytes(
+                    (
+                        'fn main() { let status = std::process::Command::new(std::env::var("' + variable + '").unwrap())'
+                        ".args(std::env::args_os().skip(1)).status().unwrap(); std::process::exit(status.code().unwrap_or(1)); }\n"
+                    ).encode()
+                )
+                process.run_command("rustc", [str(program), "-o", str(launcher)], cwd=arena)
+            rustup_launcher = wrappers / ("rustup.exe" if sys.platform == "win32" else "rustup")
+            self.assertFalse((wrappers / binary_name).samefile(rustup_launcher))
+            self.assertNotEqual((wrappers / binary_name).read_bytes(), rustup_launcher.read_bytes())
+            for index, toolchain in enumerate((self.root / "toolchain", candidate / "toolchain", trusted)):
                 if toolchain != trusted:
                     (toolchain / "bin").mkdir(parents=True)
                     shutil.copy2(binary, toolchain / "bin" / binary_name)
-                with self.subTest(toolchain=toolchain), patch.dict(os.environ, {"RUSTUP_TOOLCHAIN": str(toolchain), "RRT_CARGO_PROBE_MARKER": str(marker)}):
-                    if toolchain == trusted:
-                        dependency_workflows._resolve_candidate(project, proof, checkout=self.root, candidate_checkout=candidate)
-                        self.assertEqual(marker.read_bytes(), b"selected")
-                        marker.unlink()
-                    else:
-                        with self.assertRaisesRegex(ValueError, "outside dependency checkouts"):
+                for wrapped in (False, True):
+                    marker = self.root / f"cargo-ran-{index}-{wrapped}"
+                    environment = {
+                        **launcher_environment,
+                        "RUSTUP_TOOLCHAIN": str(toolchain),
+                        "RRT_CARGO_PROBE_MARKER": str(marker),
+                        "PATH": str(wrappers) + os.pathsep + os.environ["PATH"] if wrapped else os.environ["PATH"],
+                    }
+                    with self.subTest(toolchain=toolchain, wrapped=wrapped), patch.dict(os.environ, environment):
+                        if toolchain == trusted:
                             dependency_workflows._resolve_candidate(project, proof, checkout=self.root, candidate_checkout=candidate)
-                        self.assertFalse(marker.exists())
-                        if toolchain.is_relative_to(self.root):
-                            graph = dependency_graphs.inspect_project(self.root, DependencyProject("cargo"))
+                            self.assertEqual(marker.read_bytes(), b"selected")
+                            marker.unlink()
+                        else:
                             with self.assertRaisesRegex(ValueError, "outside dependency checkouts"):
-                                dependency_graphs.check_native_graph(graph)
+                                dependency_workflows._resolve_candidate(project, proof, checkout=self.root, candidate_checkout=candidate)
                             self.assertFalse(marker.exists())
+                            if toolchain.is_relative_to(self.root):
+                                graph = dependency_graphs.inspect_project(self.root, DependencyProject("cargo"))
+                                with self.assertRaisesRegex(ValueError, "outside dependency checkouts"):
+                                    dependency_graphs.check_native_graph(graph)
+                                self.assertFalse(marker.exists())
 
     def test_cli_preview_and_release_gate_share_the_public_policy(self) -> None:
         self.python()
