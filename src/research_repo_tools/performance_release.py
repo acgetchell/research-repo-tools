@@ -121,12 +121,11 @@ def select_measurement_pair(
     releases = () if mode == "explicit" else published_releases(root, repository=repository)
     pair = resolve_pair(mode, package_tag="v" + read_package_info(root).version, releases=releases, order=order, current=current, baseline=baseline)
     measurement = load_measurement(root, configuration)
-    policy = measurement if isinstance(measurement, MeasurementConfig) else measurement.measurement
     from research_repo_tools.suite_measurement import SuiteMeasurementPlan
 
-    if not isinstance(measurement, SuiteMeasurementPlan):
-        policy.validate_release(pair.current)
-        policy.validate_release(pair.baseline)
+    policy = measurement if isinstance(measurement, (MeasurementConfig, SuiteMeasurementPlan)) else measurement.measurement
+    policy.validate_release(pair.current)
+    policy.validate_release(pair.baseline)
     working_tree = mode == "current-vs-latest" or (mode == "infer-release" and not any(item.tag == pair.current for item in releases))
     return pair, working_tree
 

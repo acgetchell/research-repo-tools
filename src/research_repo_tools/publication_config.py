@@ -69,7 +69,19 @@ def _run_layout(raw: dict[str, object], retained: Evidence):
             selected = recorded_series.get(_string(item["name"], "series name"))
             if selected is None:
                 raise ValueError("version label requires a retained series")
-            version = recorded_sources[selected.phase].get(version_key)
+            context = recorded_sources[selected.phase]
+            if isinstance(run, SuiteRun) and version_key.startswith("dependency."):
+                owners = [
+                    suite.name
+                    for suite in run.plan.suites
+                    for series in suite.measurement.series
+                    if f"{suite.name}/{series.name}" == selected.name and series.phase == selected.phase
+                ]
+                observations = [source for suite, phase, _, source in run.observations if suite in owners and phase == selected.phase]
+                if len(owners) != 1 or len(observations) != 1:
+                    raise ValueError(f"version label requires one owning suite observation: {selected.name}")
+                context = dict(observations[0].context)
+            version = context.get(version_key)
             label += " " + _string(version, f"{selected.phase} recorded {version_key}")
         series.append(
             SeriesSelection(

@@ -59,9 +59,13 @@ class AcquisitionSuite:
 
             _positive(self.nominal_seconds_per_case, "nominal seconds per case")
 
-    def decision(self, release: str, source: str) -> dict[str, object]:
+    def available(self, release: str) -> bool:
+        """Use the inclusive since/exclusive before interval for a selected release."""
         version = _tag_version(release)
-        available = (self.since is None or version >= _tag_version(self.since)) and (self.before is None or version < _tag_version(self.before))
+        return (self.since is None or version >= _tag_version(self.since)) and (self.before is None or version < _tag_version(self.before))
+
+    def decision(self, release: str, source: str) -> dict[str, object]:
+        available = self.available(release)
         return {
             "state": "available" if available else "unavailable",
             "reason": "inside declared release interval" if available else "outside declared release interval",
@@ -144,6 +148,12 @@ class SuiteMeasurementPlan:
     @property
     def harness(self) -> tuple[str, ...]:
         return self.measurement.harness
+
+    def validate_release(self, release: str) -> None:
+        """Require each available suite's floor without inspecting or acquiring sources."""
+        for suite in self.suites:
+            if suite.available(release):
+                suite.measurement.measurement.validate_release(release)
 
     def document(self) -> dict[str, Any]:
         return {
