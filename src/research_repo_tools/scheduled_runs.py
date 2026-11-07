@@ -23,7 +23,7 @@ from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.source_exports import capture_source
 from research_repo_tools.suite_measurement import SuiteMeasurementPlan, _environment_digest, _measure_suites, _source_record, parse_suite_plan
 from research_repo_tools.suite_runs import SUITE_RUN_SCHEMA, parse_suite_run, validate_suite_policy
-from research_repo_tools.trial_recovery import LIFECYCLE_SCHEMA, replay_trial
+from research_repo_tools.trial_recovery import LIFECYCLE_SCHEMA, _event_timestamp, replay_trial
 
 __all__ = ["SCHEDULED_RUN_SCHEMA", "ScheduledRun", "parse_scheduled_run", "select_trial"]
 
@@ -275,6 +275,8 @@ def measure_schedule(
 
                 def event(item: dict[str, Any]) -> None:
                     value = {"trial": index + 1, **item}
+                    # Reject a backward clock step before it can poison the journal.
+                    _event_timestamp(value, _event_timestamp(trial_events[-1]) if trial_events else 0)
                     if journal:
                         journal.append_event(value)
                     trial_events.append(value)

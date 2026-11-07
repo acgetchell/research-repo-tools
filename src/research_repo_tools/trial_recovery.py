@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
+from research_repo_tools._archive_paths import ArchivePaths
 from research_repo_tools.common_measurement import _validate_phase_identity, _validate_phase_sample
 from research_repo_tools.complete_runs import _integer, _parse_complete_sample
 from research_repo_tools.evidence import _object, _string, deterministic_json
@@ -20,9 +21,9 @@ _FAILED_OUTPUT_FILES = 4096
 def capture_failed_output(directory: Path) -> dict[str, Any]:
     """Preserve bounded opaque failure bytes; never parse them as valid samples."""
     from research_repo_tools.publication import _path
-    from research_repo_tools.source_exports import _names
 
     files: dict[str, str] = {}
+    paths = ArchivePaths()
     total = 0
     try:
         if not directory.exists() and not directory.is_symlink():
@@ -39,7 +40,7 @@ def capture_failed_output(directory: Path) -> dict[str, Any]:
             for name in sorted(names):
                 path = root / name
                 relative = path.relative_to(directory).as_posix()
-                _names(None, (*files, relative))
+                paths.add(relative, directory=False)
                 if len(files) >= _FAILED_OUTPUT_FILES:
                     raise ValueError("failed-output file bound exceeded")
                 with path.open("rb") as source:
@@ -90,6 +91,18 @@ class TrialRecovery:
     reused: list[str] = field(default_factory=list)
 
 
+def _event_timestamp(event: dict[str, Any], previous: int = 0) -> int:
+    at = _integer(
+        event["unit"].get("finished_ns")
+        if event.get("kind") == "suite-complete" and isinstance(event.get("unit"), dict)
+        else event.get("finished_ns", event.get("at_ns")),
+        "recovery timestamp",
+    )
+    if at < previous:
+        raise ValueError("recovery event intervals overlap or are reordered")
+    return at
+
+
 def replay_trial(events: list[Any], plan: SuiteMeasurementPlan, trial: int, *, complete: bool = False) -> TrialRecovery:
     """Derive a fixed completed prefix, never choose retained results by value."""
     import re
@@ -129,12 +142,7 @@ def replay_trial(events: list[Any], plan: SuiteMeasurementPlan, trial: int, *, c
         _object(event, "trial lifecycle event", {"trial", "kind", *fields[kind]})
         if type(event["trial"]) is not int or event["trial"] != trial or ended:
             raise ValueError("recovery trial inventory/order differs")
-        at = _integer(
-            event["unit"].get("finished_ns") if kind == "suite-complete" and isinstance(event["unit"], dict) else event.get("finished_ns", event.get("at_ns")),
-            "recovery timestamp",
-        )
-        if at < previous:
-            raise ValueError("recovery event intervals overlap or are reordered")
+        at = _event_timestamp(event, previous)
         previous = at
         if kind == "segment":
             if state.opened or pending is not None or len(state.units) == len(plan.suites):

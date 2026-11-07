@@ -59,12 +59,10 @@ The independent binding describes final release acceptance separately.
 
 ## Historical compiler inputs
 
-The independent Astra source-identity checkpoint for
-[#204](https://github.com/acgetchell/research-repo-tools/issues/204) permits an exact
-predeclared document output to remain an immutable **baseline source input** while
-being absent from every current measurement/gate input and both phases' harness
-and workloads. For example, a consumer may change its current Rust crate before
-acquisition from unconditional `doc = include_str!("../README.md")` to
+An exact predeclared document output can remain an immutable **baseline source
+input** while it is absent from every current measurement/gate input and both
+phases' harness and workloads. For example, a consumer may change its current
+Rust crate before acquisition from unconditional `doc = include_str!("../README.md")` to
 `cfg_attr(doc, doc = include_str!("../README.md"))`. It must independently prove
 the actual baseline and current compile dependencies. This is a consumer source
 change, not a common-harness overlay or a rewrite of historical source.

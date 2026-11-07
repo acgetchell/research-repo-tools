@@ -13,7 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from research_repo_tools.archives import ArchiveLimits, extract_archive
-from research_repo_tools.candidate_publication import _parse_publication, _PublicationReceipt
+from research_repo_tools.candidate_publication import _acquisition_input_keys, _parse_publication, _PublicationReceipt
 from research_repo_tools.complete_runs import _array, _integer, run_identity
 from research_repo_tools.criterion_suites import _archive
 from research_repo_tools.evidence import (
@@ -234,10 +234,7 @@ def _binding(policy: CandidatePolicy, final: str, publication: _PublicationRecei
     inputs = set()
     for _, _, phase, source in policy.observations:
         context = dict(source.context)
-        keys = ("harness-inventory", "workload-inventory")
-        if phase == "current":
-            keys += ("source-inventory", "original-source-inventory")
-        for key in keys:
+        for key in _acquisition_input_keys(phase):
             if key in context:
                 inputs.update(_string(name, key) for name in _array(_load_json(context[key].encode("utf-8"), key), key))
 

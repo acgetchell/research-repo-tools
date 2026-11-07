@@ -10,6 +10,8 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import time
+import unicodedata
 import unittest
 from contextlib import ExitStack, chdir, contextmanager
 from dataclasses import replace
@@ -52,6 +54,7 @@ from research_repo_tools.scheduled_runs import ScheduledRun, parse_scheduled_run
 from research_repo_tools.source_exports import export_source
 from research_repo_tools.suite_measurement import AcquisitionSuite, SuiteMeasurementPlan, parse_suite_plan
 from research_repo_tools.suite_runs import SuiteRun, comparison_incompatibilities, parse_suite_run
+from research_repo_tools.trial_recovery import capture_failed_output, replay_trial
 from research_repo_tools.trial_schedule import TrialSchedule, parse_schedule
 
 PROGRAM = """import json, subprocess, sys
@@ -1635,6 +1638,50 @@ sys.exit(status)
         evidence = measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
         validate_run_policy(evidence, selected, release=True)
 
+    def test_scheduled_backward_clock_never_persists_reordered_events(self):
+        selected = replace(plan(self.log, ("shared",)), schedule=TrialSchedule(1, "sequential"))
+        checkpoint = self.root / "clock-recovery"
+        now = [time.time_ns()]
+        append = Checkpoint.append_event
+        persisted = []
+
+        def append_then_step_back(journal, event):
+            append(journal, event)
+            persisted.append(event)
+            if event["kind"] == "suite-start":
+                now[0] = 0
+
+        with (
+            patch.object(Checkpoint, "append_event", append_then_step_back),
+            patch("research_repo_tools.scheduled_runs.time.time_ns", side_effect=lambda: now[0]),
+            self.assertRaises(BaseExceptionGroup) as caught,
+        ):
+            measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, progress=self.quiet)
+        self.assertIn("recovery event intervals overlap or are reordered", format_exception_diagnostics(caught.exception))
+        self.assertEqual([event["kind"] for event in persisted], ["segment", "suite-start"])
+        self.assertNotIn(" measure ", self.log.read_text())
+        original = {path.name: path.read_bytes() for path in checkpoint.iterdir()}
+        header = json.loads(original["header.json"])
+        with open_checkpoint(checkpoint, header["identity"], tuple(header["units"]), resume=True, events=True) as journal:
+            self.assertEqual(journal.read_events(), persisted)
+        self.assertTrue(replay_trial(persisted, selected, 1).opened)
+
+        # Recovery also rejects a backward abandonment/segment timestamp before
+        # changing the valid prefix or invoking a new measurement.
+        with (
+            patch("research_repo_tools.scheduled_runs.time.time_ns", return_value=0),
+            self.assertRaises(BaseExceptionGroup) as caught,
+        ):
+            measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+        self.assertIn("recovery event intervals overlap or are reordered", format_exception_diagnostics(caught.exception))
+        self.assertEqual({path.name: path.read_bytes() for path in checkpoint.iterdir()}, original)
+        self.assertNotIn(" measure ", self.log.read_text())
+        evidence = measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+        validate_run_policy(evidence, selected, release=True)
+        calls = self.log.read_text().splitlines()
+        self.assertEqual(calls.count("shared measure old"), 1)
+        self.assertEqual(calls.count("shared measure new"), 1)
+
     def test_scheduled_durable_event_failure_replays_disk_before_recovery(self):
         for kind in ("phase-complete", "suite-complete", "segment-end"):
             checkpoint = self.root / f"durable-{kind}"
@@ -2571,6 +2618,54 @@ sys.exit(status)
 
 
 class TestProgress(unittest.TestCase):
+    def test_failed_output_name_validation_scales_with_file_count(self):
+        work = []
+        normalize = unicodedata.normalize
+        with tempfile.TemporaryDirectory() as temporary:
+            for count in (64, 128):
+                root = Path(temporary).resolve() / str(count)
+                root.mkdir()
+                for index in range(count):
+                    (root / f"{index:03}.bin").write_bytes(b"\x00\xff\r\n")
+                with patch("unicodedata.normalize", wraps=normalize) as observed:
+                    result = capture_failed_output(root)
+                self.assertEqual(result["status"], "retained")
+                self.assertEqual(len(result["files"]), count)
+                work.append(observed.call_count)
+        self.assertGreater(work[0], 0)
+        self.assertLessEqual(work[1], 3 * work[0], "doubling files must not revalidate every previous name")
+
+    def test_failed_output_retains_prefix_on_portable_aliases_or_read_failure(self):
+        for first, later in (("A.bin", "a.bin"), ("e\u0301.bin", "\u00e9.bin"), ("Data/a.bin", "data/b.bin")):
+            with self.subTest(first=first, later=later), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary).resolve()
+                path = root / first
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(b"\x00\xff\r\n")
+                # Model the stored names directly: native filesystems may
+                # normalize Unicode or refuse distinct case aliases.
+                entries = [(path.parent, [], [path.name]), ((root / later).parent, [], [(root / later).name])]
+                with patch.object(Path, "walk", return_value=iter(entries)):
+                    result = capture_failed_output(root)
+                self.assertEqual(result["status"], "unavailable")
+                self.assertEqual(result["files"], {first: base64.b64encode(b"\x00\xff\r\n").decode("ascii")})
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            (root / "a.bin").write_bytes(b"\x00\xff\r\n")
+            later = root / "z.bin"
+            later.write_bytes(b"unreadable")
+            original_open = Path.open
+
+            def fail_open(path, *args, **kwargs):
+                if path == later:
+                    raise OSError("modeled read failure")
+                return original_open(path, *args, **kwargs)
+
+            with patch.object(Path, "open", fail_open):
+                result = capture_failed_output(root)
+            self.assertEqual(result["status"], "unavailable")
+            self.assertEqual(result["files"], {"a.bin": base64.b64encode(b"\x00\xff\r\n").decode("ascii")})
+
     def test_preparation_failure_survives_failed_terminal_reporting(self) -> None:
         reporting = OSError("progress stream failed")
 

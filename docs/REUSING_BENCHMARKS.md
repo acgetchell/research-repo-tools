@@ -163,9 +163,8 @@ those acquisitions and use a fresh checkpoint. Existing complete-run v5 evidence
 remains readable without synthesizing lifecycle fields; older readers may reject
 new lifecycle-bearing records.
 
-An independent Astra contract review for [#203](https://github.com/acgetchell/research-repo-tools/issues/203)
-required whole-pair recovery, immutable prefixes, explicit segments/abandonments,
-and validation of interrupted-attempt preparation. Recorded retries make exclusions
+Recovery retains whole pairs, immutable prefixes, explicit segments/abandonments,
+and validated interrupted-attempt preparation. Recorded retries make exclusions
 auditable; they do not prove that interruptions were independent of observed
 performance or eliminate optional-stopping bias. A recovered trial is a completed
 campaign slot, not evidence of one uninterrupted or freshly independent session.

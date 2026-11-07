@@ -42,6 +42,13 @@ def _roles(archive: str, current: str, identity: str) -> dict[str, str]:
     return dict(zip(paths, ("payload", "envelope", "report", "current", "index", "latest", "history"), strict=True))
 
 
+def _acquisition_input_keys(phase: str) -> tuple[str, ...]:
+    keys = ("harness-inventory", "workload-inventory")
+    if phase == "current":
+        keys += ("source-inventory", "original-source-inventory")
+    return keys
+
+
 def _parse_publication(payload: bytes, policy: CandidatePolicy) -> _PublicationReceipt:
     from research_repo_tools.candidate_reuse import acquisition_assertion_digest
 
@@ -77,10 +84,7 @@ def _parse_publication(payload: bytes, policy: CandidatePolicy) -> _PublicationR
     _names(None, tuple(sorted(set(original) | set(outputs))))
     inputs = set()
     for _, _, phase, source in policy.observations:
-        keys = ("harness-inventory", "workload-inventory")
-        if phase == "current":
-            keys += ("source-inventory", "original-source-inventory")
-        for key in keys:
+        for key in _acquisition_input_keys(phase):
             if key in dict(source.context):
                 inputs.update(json.loads(dict(source.context)[key]))
     inputs.add(policy.report)
