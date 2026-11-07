@@ -79,17 +79,11 @@ def test_platform_count_models_without_changing_os_identity(tmp_path):
     assert host_metadata._linux_counts(cpuinfo + "\n\nprocessor : 8", "MemTotal: invalid kB") == (None, None)
     with patch.object(host_metadata, "_probe", side_effect=["4", "8", "4096"]):
         assert host_metadata._hardware_counts("Darwin", tmp_path, {}, 1) == (4, 8, 4096)
-    calls = []
-
-    def windows(command, root, env, timeout):
-        calls.append(command)
-        assert timeout == 1
-        return None if command[0] == "pwsh" else '{"cores":8,"threads":16,"memory":8192}'
-
-    with patch.object(host_metadata, "_probe", side_effect=windows):
+    with (
+        patch("research_repo_tools._windows_hardware.counts", return_value=(8, 16, 8192)),
+        patch.object(host_metadata, "_probe", side_effect=AssertionError("Windows counts must not start a shell")),
+    ):
         assert host_metadata._hardware_counts("Windows", tmp_path, {}, 1) == (8, 16, 8192)
-    assert [command[0] for command in calls] == ["pwsh", "powershell"]
-    assert "[long]" in calls[-1][-1]
 
 
 def test_failed_probes_and_invalid_retained_types_stay_unknown(tmp_path):

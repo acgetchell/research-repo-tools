@@ -494,7 +494,11 @@ are rejected in retained records.
 `capture_host(root, *, probes=(), env=None, timeout=30)` uses
 `process.cpu_description` and the common bounded process runner. It observes
 Linux physical/core IDs and memory from `/proc`, macOS counts/memory via sysctl,
-and Windows processor totals and memory via bounded CIM PowerShell commands.
+and Windows active cores/threads across all processor groups and total physical
+memory through native Windows APIs. Windows core counts describe active cores,
+excluding firmware-disabled cores. Missing native observations stay unknown.
+Every capture makes fresh observations; hardware and configured version probes
+are never cached between rechecks.
 Logical-thread fallback uses the standard library. Counts describe the host,
 not affinity, container quotas or free memory. Missing facilities, denied access,
 malformed data, missing tools and failed/timed-out version probes stay unknown.

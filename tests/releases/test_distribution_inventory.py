@@ -10,6 +10,7 @@ import unittest
 import zipfile
 from collections import Counter
 from pathlib import Path
+from threading import Barrier, Event
 from types import SimpleNamespace
 
 import pytest
@@ -234,6 +235,89 @@ def test_changelog_only_runs_one_installed_generation_contract_per_artifact(
         assert args[1:] == ["TestPublishingConsumer.test_installed_cli_generation_with_real_external_generator"]
 
 
+def test_artifact_checks_overlap_with_separate_empty_caches_and_environments(
+    distribution_inventory: Path, monkeypatch: pytest.MonkeyPatch, install_checker
+) -> None:
+    monkeypatch.setattr(install_checker.shutil, "which", lambda program: program)
+    monkeypatch.setattr(install_checker, "run", lambda *args, **kwargs: "")
+    both_running = Barrier(2, timeout=10)
+    observations = []
+
+    def check_suite(python, arguments, *, cwd, env):
+        cache = Path(env["UV_CACHE_DIR"])
+        assert not cache.exists(), "each artifact must start without cached fixture dependencies"
+        assert not cache.is_relative_to(cwd), "the cache must not enter consumer source inventories"
+        cache.mkdir()
+        payload = cwd.name.encode()
+        (cache / "same-name.whl").write_bytes(payload)
+        env["ARTIFACT_PROBE"] = cwd.name
+        both_running.wait()
+        assert (cache / "same-name.whl").read_bytes() == payload
+        assert env["ARTIFACT_PROBE"] == cwd.name
+        observations.append((cwd, cache))
+
+    monkeypatch.setattr(install_checker, "run_consumer_suite", check_suite)
+    install_checker.check(distribution_inventory, changelog_only=True)
+    assert {cwd.name for cwd, _ in observations} == {"wheel", "sdist"}
+    assert len({cache for _, cache in observations}) == 2
+    assert all(not path.exists() for pair in observations for path in pair), "cleanup must follow both checks"
+    assert "ARTIFACT_PROBE" not in os.environ
+
+
+def test_failed_artifact_does_not_cancel_the_other_or_clean_up_early(tmp_path: Path, install_checker) -> None:
+    wheel, sdist = tmp_path / "fixture.whl", tmp_path / "fixture.tar.gz"
+    failure = subprocess.CalledProcessError(7, ["wheel probe"], output=b"wheel progress\r\n")
+    wheel_failed, sdist_finished = Event(), Event()
+    original_env = {"UV_CACHE_DIR": str(tmp_path / "warm cache"), "preserved": "yes"}
+
+    def check_artifact(artifact, env):
+        if artifact == wheel:
+            wheel_failed.set()
+            raise failure
+        assert wheel_failed.wait(10)
+        assert tmp_path.is_dir()
+        assert env["preserved"] == "yes"
+        Path(env["UV_CACHE_DIR"]).mkdir()
+        sdist_finished.set()
+
+    with pytest.raises(subprocess.CalledProcessError) as raised:
+        install_checker.check_artifacts((wheel, sdist), check_artifact, tmp_path, original_env)
+    assert raised.value is failure
+    assert sdist_finished.is_set()
+    assert failure.__notes__ == ["Installed artifact: fixture.whl"]
+    assert original_env == {"UV_CACHE_DIR": str(tmp_path / "warm cache"), "preserved": "yes"}
+
+
+def test_both_artifact_failures_retain_their_captured_diagnostics(tmp_path: Path, install_checker, monkeypatch: pytest.MonkeyPatch, capsys) -> None:
+    wheel, sdist = tmp_path / "fixture.whl", tmp_path / "fixture.tar.gz"
+    failures = (
+        subprocess.CalledProcessError(7, ["wheel probe"], output=b"wheel caf\xc3\xa9\r\n", stderr="wheel error\n"),
+        subprocess.TimeoutExpired(["sdist probe"], 900, output="sdist progress\n", stderr=b"partial \xe5\x88"),
+    )
+    both_running = Barrier(2, timeout=10)
+
+    def check_artifact(artifact, env):
+        both_running.wait()
+        raise failures[0 if artifact == wheel else 1]
+
+    def check(*args, **kwargs):
+        install_checker.check_artifacts((wheel, sdist), check_artifact, tmp_path, {})
+
+    monkeypatch.setattr(install_checker, "check", check)
+    monkeypatch.setattr(sys, "argv", ["check_install.py"])
+    with pytest.raises(ExceptionGroup) as raised:
+        install_checker.main()
+    assert raised.value.exceptions == failures
+    assert [failure.__notes__ for failure in failures] == [["Installed artifact: fixture.whl"], ["Installed artifact: fixture.tar.gz"]]
+    assert list(install_checker.command_failures(ExceptionGroup("nested", [raised.value, ValueError("other failure")]))) == list(failures)
+    output = capsys.readouterr()
+    assert output.out.endswith("wheel café\r\nsdist progress\n")
+    for artifact in (wheel, sdist):
+        assert f"RUN ARTIFACT: {artifact.name}" in output.out
+        assert f"END ARTIFACT: {artifact.name}" in output.out
+    assert output.err == "wheel error\npartial �"
+
+
 def test_install_check_does_not_forward_external_project_locations(distribution_inventory: Path, monkeypatch: pytest.MonkeyPatch, install_checker) -> None:
     module = install_checker
     tmp_path = distribution_inventory
@@ -262,6 +346,8 @@ def test_install_check_does_not_forward_external_project_locations(distribution_
         raise CheckedEnvironment
 
     monkeypatch.setattr(module, "run", intercept)
-    with pytest.raises(CheckedEnvironment):
+    with pytest.raises(ExceptionGroup) as raised:
         module.check(tmp_path)
+    assert len(raised.value.exceptions) == 2
+    assert all(isinstance(error, CheckedEnvironment) for error in raised.value.exceptions)
     assert sentinel.read_bytes() == b"do not modify\n"

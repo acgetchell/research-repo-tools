@@ -123,7 +123,7 @@ def _linux_counts(cpuinfo: str, meminfo: str) -> tuple[int | None, int | None]:
 
 
 def capture_host(root: Path, *, probes: tuple[tuple[str, tuple[str, ...]], ...] = (), env: Mapping[str, str] | None = None, timeout: int = 30) -> HostMetadata:
-    """Observe system-wide counts and configured versions using bounded processes.
+    """Observe system-wide counts and versions, bounding subprocess probes.
 
     Counts describe the host, not process affinity, container quotas or available RAM.
     Tool failures and unavailable OS facilities produce unknown values independently.
@@ -171,22 +171,10 @@ def _hardware_counts(system: str, root: Path, environment: Mapping[str, str], ti
 
         cores, memory = _linux_counts(read("/proc/cpuinfo"), read("/proc/meminfo"))
     elif system == "Windows":
-        script = (
-            "[Console]::OutputEncoding=[System.Text.UTF8Encoding]::new(); "
-            "$ErrorActionPreference='Stop'; $c=@(Get-CimInstance Win32_Processor); "
-            "@{cores=[long]($c | Measure-Object NumberOfCores -Sum).Sum; "
-            "threads=[long]($c | Measure-Object NumberOfLogicalProcessors -Sum).Sum; "
-            "memory=(Get-CimInstance Win32_ComputerSystem).TotalPhysicalMemory} | ConvertTo-Json -Compress"
-        )
-        for shell in ("pwsh", "powershell"):
-            output = _probe((shell, "-NoProfile", "-NonInteractive", "-Command", script), root, environment, timeout)
-            try:
-                data = _object(_load_json((output or "null").encode(), "Windows hardware"), "Windows hardware")
-                cores, memory = _count(data.get("cores")), _count(data.get("memory"))
-                threads = _count(data.get("threads")) or threads
-                break
-            except ValueError:
-                continue
+        from research_repo_tools._windows_hardware import counts
+
+        cores, native_threads, memory = counts()
+        threads = native_threads or threads
     return cores, threads, memory
 
 
