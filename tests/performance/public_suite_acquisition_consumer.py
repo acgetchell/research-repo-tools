@@ -196,6 +196,108 @@ class TestSuiteAcquisition(unittest.TestCase):
         self.write_reuse(evidence, policy)
         return evidence, policy
 
+    def dependency_plan(self, *, names=("shared", "later"), mode="independent"):
+        selected = plan(self.log, names=names, mode=mode)
+        suites = []
+        for index, suite in enumerate(selected.suites):
+            lock = f"{suite.name}.lock"
+            for phase, files in enumerate(self.revisions.values()):
+                files[lock] = f'[[package]]\nname="demo"\nversion="{index + 1}.{phase}.0"\n'.encode()
+            measurement = suite.measurement.measurement
+            suites.append(
+                replace(
+                    suite,
+                    measurement=replace(
+                        suite.measurement,
+                        measurement=replace(
+                            measurement,
+                            harness=(*measurement.harness, lock),
+                            dependencies=(("demo", lock),),
+                            compatible=tuple(sorted((*measurement.compatible, "context.dependency.demo"))),
+                        ),
+                    ),
+                )
+            )
+        self.stack.enter_context(patch("research_repo_tools.source_exports._git", side_effect=git_model(self.revisions)))
+        return replace(selected, suites=tuple(suites))
+
+    def test_dependency_labels_use_owning_suite_and_originating_phase(self):
+        selected = self.dependency_plan()
+        evidence = measure_pair(self.root, selected, PAIR, progress=self.quiet)
+        run = parse_suite_run(evidence)
+        self.assertEqual(
+            {(suite, phase): dict(source.context)["dependency.demo"] for suite, phase, _, source in run.observations},
+            {("shared", "baseline"): "1.0.0", ("shared", "current"): "1.1.0", ("later", "baseline"): "2.0.0", ("later", "current"): "2.1.0"},
+        )
+        self.assertTrue(all("dependency.demo" not in dict(source.context) for _, source in evidence.sources))
+        payload, manifest = serialize_evidence(evidence)
+        (self.root / "run.json").write_bytes(payload)
+        (self.root / "evidence.json").write_bytes(manifest)
+        config = (
+            'schema=2\npayload="run.json"\nmanifest="evidence.json"\n'
+            'unit="ns"\nstatistic="median"\ncsv="result.csv"\n'
+            'rows=[{key="case",label="Case",coordinate=1}]\n'
+            'plot={path="result.svg",title="Timings",x-label="Case",y-label="ns"}\n'
+            "series=["
+            + ",".join(
+                f'{{name="{suite}/{phase}",label="{suite} {phase}",label-version="dependency.demo",rows={{case="{suite}/case"}}}}'
+                for suite in ("shared", "later")
+                for phase in ("baseline", "current")
+            )
+            + "]\n"
+            '[provenance.baseline]\nrelease="v1.0.0"\nrevision="' + "a" * 40 + '"\n'
+            '[provenance.current]\nrelease="v1.1.0"\nrevision="' + "b" * 40 + '"\n'
+        )
+        (self.root / "publication.toml").write_text(config, encoding="utf-8", newline="\n")
+        prepared = load_publication(self.root, "publication.toml", artifacts_only=True)
+        self.assertFalse((self.root / "result.csv").exists())
+        for content in dict(prepared.outputs).values():
+            for label in (b"shared baseline 1.0.0", b"shared current 1.1.0", b"later baseline 2.0.0", b"later current 2.1.0"):
+                self.assertIn(label, content)
+        publish_publication(prepared)
+        outputs = {name: (self.root / name).read_bytes() for name, _ in prepared.outputs}
+        # Missing metadata and a row owned by another suite must not borrow a version.
+        for invalid in (
+            config.replace('label-version="dependency.demo"', 'label-version="dependency.absent"', 1),
+            config.replace('rows={case="shared/case"}', 'rows={case="later/case"}', 1),
+        ):
+            (self.root / "publication.toml").write_text(invalid, encoding="utf-8", newline="\n")
+            with self.assertRaises(ValueError):
+                load_publication(self.root, "publication.toml", artifacts_only=True)
+            self.assertEqual({name: (self.root / name).read_bytes() for name in outputs}, outputs)
+        self.assertEqual(((self.root / "run.json").read_bytes(), (self.root / "evidence.json").read_bytes()), (payload, manifest))
+        (self.root / "publication.toml").write_text(config, encoding="utf-8", newline="\n")
+        for key, value in (("release", "v9.0.0"), ("dependency.demo", "")):
+            raw = json.loads(evidence.payload)
+            raw["units"][0]["observations"]["baseline"]["source"]["context"][key] = value
+            altered = replace(evidence, payload=deterministic_json(raw))
+            changed_payload, changed_manifest = serialize_evidence(altered)
+            (self.root / "run.json").write_bytes(changed_payload)
+            (self.root / "evidence.json").write_bytes(changed_manifest)
+            with self.subTest(key=key), self.assertRaises(ValueError):
+                load_publication(self.root, "publication.toml", artifacts_only=True)
+            self.assertEqual({name: (self.root / name).read_bytes() for name in outputs}, outputs)
+
+    def test_dependency_label_rejects_unavailable_owning_observation(self):
+        selected = self.dependency_plan(names=("shared", "new"), mode="common")
+        evidence = measure_pair(self.root, selected, PAIR, progress=self.quiet)
+        payload, manifest = serialize_evidence(evidence)
+        (self.root / "run.json").write_bytes(payload)
+        (self.root / "evidence.json").write_bytes(manifest)
+        (self.root / "result.csv").write_bytes(b"prior output\r\n")
+        config = (
+            'schema=2\npayload="run.json"\nmanifest="evidence.json"\n'
+            'unit="ns"\nstatistic="median"\ncsv="result.csv"\nmissing="unavailable"\n'
+            'rows=[{key="case",label="Case"}]\n'
+            'series=[{name="new/baseline",label="New",label-version="dependency.demo",rows={case="new/case"}}]\n'
+            '[provenance.baseline]\nrelease="v1.0.0"\nrevision="' + "a" * 40 + '"\n'
+            '[provenance.current]\nrelease="v1.1.0"\nrevision="' + "b" * 40 + '"\n'
+        )
+        (self.root / "publication.toml").write_text(config, encoding="utf-8", newline="\n")
+        with self.assertRaisesRegex(ValueError, "one owning suite observation: new/baseline"):
+            load_publication(self.root, "publication.toml", artifacts_only=True)
+        self.assertEqual((self.root / "result.csv").read_bytes(), b"prior output\r\n")
+
     def write_reuse(self, evidence, policy):
         payload, manifest = serialize_evidence(evidence)
         (self.root / "run.json").write_bytes(payload)
@@ -910,7 +1012,9 @@ sys.exit(status)
                 return "[" + ", ".join(toml(item) for item in value) + "]"
             return json.dumps(value)
 
-        selected = replace(plan(self.log), schedule=TrialSchedule()) if scheduled else plan(self.log)
+        selected = self.dependency_plan(names=("shared", "new", "removed"), mode="common")
+        if scheduled:
+            selected = replace(selected, schedule=TrialSchedule())
         for name, data in self.revisions["v1.1.0"].items():
             (self.root / name).write_bytes(data)
         (self.root / "target").mkdir()
@@ -975,7 +1079,7 @@ sys.exit(status)
                 'unit="ns"',
                 'statistic="median"',
                 'rows=[{key="case", label="Case"}]',
-                'series=[{name="shared/baseline",label="Before",rows={case="shared/case"}}, {name="shared/current",label="After",rows={case="shared/case"}}]',
+                'series=[{name="shared/baseline",label="Before",label-version="dependency.demo",rows={case="shared/case"}}, {name="shared/current",label="After",label-version="release",rows={case="shared/case"}}]',
                 'comparisons=[{numerator="shared/baseline",denominator="shared/current"}]',
                 'references=[{path="Cargo.toml",pattern=\'^version="(?P<value>[^"]+)"$\',source="version"},{path="releases.txt",pattern=\'^current=(?P<value>.*)$\',source="tag"},{path="releases.txt",pattern=\'^previous=(?P<value>.*)$\',source="previous-tag"}]',
                 "[provenance.baseline]",
@@ -995,6 +1099,8 @@ sys.exit(status)
         before = (self.root / "README.md").read_bytes()
         self.assertTrue(before.startswith(b"head\r\n"))
         self.assertTrue(before.endswith(b"tail\r\n"))
+        self.assertIn(b"Before 1.1.0", before)
+        self.assertIn(b"After v1.1.0", before)
         if scheduled:
             self.assertIn(b"Trial 2", before)
         (self.root / "input-shared.json").write_bytes(b"changed")

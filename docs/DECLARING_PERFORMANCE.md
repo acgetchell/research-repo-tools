@@ -17,6 +17,9 @@ manifests belong in the harness even when this conservatively suppresses ratios.
 
 Optional `since = "v1.1.0"` is inclusive; `before = "v2.0.0"` is exclusive.
 Bounds are canonical stable tags; no bounds means available on both revisions.
+Pair selection and preparation enforce each available suite's nested
+`minimum-release` on both selected labels. An unavailable side is exempt from
+that suite's floor; a failed preparation preserves any existing record.
 Resolution uses independently captured tag/revision/source receipts before any
 harness overlay or native command. Prospective working-tree labels must match
 the original captured package version. Compilation, discovery, missing required
@@ -228,7 +231,7 @@ and links; do not backfill declarations that were never recorded.
 
 ## Source selection
 
-Measurement schemas 1, 2 and 3 accept an optional stable release floor:
+Measurement schemas 1–4 accept an optional stable release floor:
 
 ```toml
 minimum-release = "v1.0.0"
@@ -325,7 +328,10 @@ tables keep their behavior.
 A series can append its recorded version using `label-version = "release"` or
 `label-version = "dependency.NAME"`. The original series phase determines the
 source: current library labels come from current evidence; reused peer labels
-come from baseline evidence, never today's lockfile. Missing recorded values fail.
+come from baseline evidence, never today's lockfile. Suite dependency labels use
+the owning suite's observation in that phase, including an explicitly selected
+scheduled trial. They never borrow another suite's version or the aggregate phase
+context. Missing, unavailable, ambiguous or inconsistent observations fail.
 
 Keep named publication configurations for metric, mean/median and linear/log
 views. `--artifacts-only` writes only configured SVG/CSV outputs and does not

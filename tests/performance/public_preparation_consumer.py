@@ -86,7 +86,114 @@ def evidence(root):
     )
 
 
+def suite_fixture(root, *, bounds="", scheduled=False):
+    settings = fixture(root)
+    declaration = f"schema={6 if scheduled else 5}\n"
+    if scheduled:
+        declaration += 'schedule={order="alternating",trials=2}\n'
+    declaration += f"""[[suites]]
+name="shared"
+contract="shared-v1"
+{bounds}
+[suites.measurement]
+schema=4
+minimum-release="v1.0.0"
+backend="export"
+harness-mode="common"
+sources=["source.py"]
+harness=["source.py"]
+workloads=["source.py"]
+sample-count=2
+series=[{{name="baseline",phase="baseline",select={{include=["*"]}}}}, {{name="current",phase="current",select={{include=["*"]}}}}]
+[suites.measurement.probes]
+fixture=["inert"]
+"""
+    for phase in ("baseline", "current"):
+        declaration += f"""[suites.measurement.phases.{phase}]
+command=["inert"]
+gate=["inert","gate"]
+[suites.measurement.phases.{phase}.discovery]
+required=["case"]
+suites=[{{name="shared",command=["inert","--list"]}}]
+"""
+    (root / "measurement.toml").write_text(declaration, encoding="utf-8", newline="\n")
+    return settings
+
+
 class TestPreparation(unittest.TestCase):
+    def test_suite_selection_enforces_active_floors_with_availability_boundaries(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            for scheduled in (False, True):
+                for bounds, current, baseline, accepted in (
+                    ("", "v1.1.0", "v0.9.0", False),
+                    ("", "v0.9.0", "v1.1.0", False),
+                    ("", "v1.1.0", "v1.0.0", True),
+                    ("", "v1.2.0", "v1.1.0", True),
+                    ('since="v1.0.0"', "v1.0.0", "v0.9.0", True),
+                    ('since="v1.0.0"', "v0.9.0", "v1.0.0", True),
+                    ('since="v0.9.0"', "v1.1.0", "v0.9.0", False),
+                    ('before="v0.9.0"', "v0.9.1", "v0.9.0", True),
+                    ('before="v0.9.1"', "v1.1.0", "v0.9.0", False),
+                ):
+                    with self.subTest(scheduled=scheduled, bounds=bounds, current=current, baseline=baseline):
+                        suite_fixture(root, bounds=bounds, scheduled=scheduled)
+                        with (
+                            patch("research_repo_tools.source_exports.capture_source", side_effect=AssertionError("selection captured source")),
+                            patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("selection measured")),
+                        ):
+                            if accepted:
+                                pair, working = select_measurement_pair(root, "measurement.toml", mode="explicit", current=current, baseline=baseline)
+                                self.assertEqual((pair.current, pair.baseline, working), (current, baseline, False))
+                            else:
+                                with self.assertRaisesRegex(ValueError, "requires v1.0.0 or newer"):
+                                    select_measurement_pair(root, "measurement.toml", mode="explicit", current=current, baseline=baseline)
+
+    def test_suite_selection_checks_every_active_suite_floor(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            suite_fixture(root)
+            path = root / "measurement.toml"
+            declaration = path.read_text(encoding="utf-8")
+            second = declaration.split("\n", 1)[1].replace('name="shared"\n', 'name="second"\n').replace('minimum-release="v1.0.0"', 'minimum-release="v1.2.0"')
+            path.write_text(declaration + second, encoding="utf-8", newline="\n")
+            with self.assertRaisesRegex(ValueError, "requires v1.2.0 or newer"):
+                select_measurement_pair(root, "measurement.toml", mode="explicit", current="v1.2.0", baseline="v1.1.0")
+            path.write_text(declaration + second.replace('name="second"\n', 'name="second"\nsince="v1.2.0"\n'), encoding="utf-8", newline="\n")
+            pair, working = select_measurement_pair(root, "measurement.toml", mode="explicit", current="v1.2.0", baseline="v1.1.0")
+            self.assertEqual((pair.current, pair.baseline, working), ("v1.2.0", "v1.1.0", False))
+
+    def test_suite_preparation_cli_rejection_preserves_existing_record(self):
+        self.models()
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            settings = suite_fixture(root)
+            args = ["--root", str(root), "performance", "prepare", "release.toml"]
+            destination = root / settings.preparation
+            for existing in (False, True):
+                if existing:
+                    with redirect_stdout(io.StringIO()):
+                        self.assertEqual(main(args), 0)
+                    original = destination.read_bytes()
+                    self.assertEqual(load_preparation(root, settings).pair.baseline, "v1.0.0")
+                else:
+                    original = None
+                errors = io.StringIO()
+                output = io.StringIO()
+                with (
+                    patch(
+                        "research_repo_tools.performance_release.published_releases",
+                        return_value=(PublishedRelease("v0.9.0", datetime(2024, 1, 1, tzinfo=UTC)),),
+                    ),
+                    patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("preparation measured")),
+                    redirect_stderr(errors),
+                    redirect_stdout(output),
+                ):
+                    self.assertEqual(main(args), 1)
+                self.assertIn("requires v1.0.0 or newer", errors.getvalue())
+                self.assertNotIn("Saved preparation", output.getvalue())
+                self.assertEqual(destination.read_bytes() if destination.exists() else None, original)
+
     @unittest.skipIf(os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1", "Git-mutating fixture disabled")
     def test_native_preparation_preserves_index_and_refs(self):
         from research_repo_tools.process import run_git_bytes
