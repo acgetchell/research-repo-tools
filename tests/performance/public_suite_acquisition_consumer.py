@@ -1680,7 +1680,14 @@ sys.exit(status)
         generated_diagnostic = "committed generated output differs from trusted publication"
         undeclared_diagnostic = "performance-relevant or undeclared final-tree differences"
         damages = [(name, mapping["final"][name] + b" ", generated_diagnostic) for name in generated]
-        damages += [(name, b"changed", undeclared_diagnostic) for name in ("bench.py", "Cargo.toml", "input-shared.json", "report.toml", "revision")]
+        # Without a source policy, the release gate now parses Cargo.toml before
+        # binding. Preserve the malformed input and separately prove that valid
+        # manifest edits still reach the final-tree tampering guard.
+        damages += [
+            (name, b"changed", "release dependency provenance: Expected '='" if name == "Cargo.toml" else undeclared_diagnostic)
+            for name in ("bench.py", "Cargo.toml", "input-shared.json", "report.toml", "revision")
+        ]
+        damages += [("Cargo.toml", mapping["final"]["Cargo.toml"] + b"\n# changed\n", undeclared_diagnostic)]
         damages += [(name, b"changed history", "historical benchmark run bytes or modes changed") for name in self.prior_history]
         damages += [("docs/performance-runs/unapproved.json", b"{}", undeclared_diagnostic)]
         damages += [("docs/Performance-Runs/extra.json", b"{}", "portable directory aliases")]
@@ -2059,6 +2066,7 @@ sys.exit(status)
             ("revision", b"changed"),
             ("bench.py", b"changed"),
             ("Cargo.toml", b"changed"),
+            ("Cargo.toml", (self.root / "Cargo.toml").read_bytes() + b"\n# changed\n"),
             ("input-shared.json", b"changed"),
             ("new-build-input", b"added"),
             ("input-shared.json", None),
@@ -2078,7 +2086,9 @@ sys.exit(status)
                     patch("research_repo_tools.source_exports._git", side_effect=git_model(changed)),
                     patch("research_repo_tools.source_exports.select_files", return_value=tuple(sorted(files))),
                     self.subTest(name=name, data=data),
-                    self.assertRaisesRegex(ValueError, "undeclared final-tree"),
+                    self.assertRaisesRegex(
+                        ValueError, "release dependency provenance: Expected '='" if name == "Cargo.toml" and data == b"changed" else "undeclared final-tree"
+                    ),
                 ):
                     verify_candidate_release(self.root, evidence, policy, native, lambda endpoint: {}, acquisition_sha256=acquisition_assertion_digest(policy))
             finally:

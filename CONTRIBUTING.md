@@ -71,6 +71,7 @@ including changelog and release recipes.
 | `just ci` | Run checks, tests, builds, and installation checks for final review |
 | `just clean [ARGS...]` | Preview obsolete package-owned installs; pass `--apply` to remove them |
 | `just coverage [PYTEST_ARGS...]` | Run tests with branch and subprocess coverage and write `coverage/cobertura.xml` |
+| `just dependency-source NAME [--apply]` | Preview or apply a configured verified dependency source and native lock |
 | `just help` | List recipes and arguments in lexicographic order, with arguments |
 | `just install-check` | Build and check isolated installations |
 | `just justfile-check` | Check maintainer and packaged recipes with the pinned Just formatter |

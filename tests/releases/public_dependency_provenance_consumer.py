@@ -18,7 +18,7 @@ from pathlib import Path
 from typing import Any, override
 from unittest.mock import patch
 
-from research_repo_tools import _dependency_probe, cli, config, dependency_provenance, process, python_baseline, python_tools, registry
+from research_repo_tools import _dependency_probe, cli, config, dependency_provenance, dependency_sources, process, python_baseline, python_tools, registry
 from research_repo_tools.dependency_provenance import check_development_dependency, check_release_dependencies
 
 PACKAGE = "research-repo-tools"
@@ -73,17 +73,26 @@ class TestDependencyProvenance(unittest.TestCase):
         )
         (self.root / "pyproject.toml").write_bytes(self.manifest.encode())
         (self.root / "uv.lock").write_bytes(self.lock.encode())
+        (self.root / "dependency-sources.toml").write_bytes(b'schema=1\n[projects.python]\necosystem="python"\n')
         (self.root / ".python-version").write_bytes(b"3.15\n")
         self.inventory: dict[str, Any] = {
             "info": {"name": PACKAGE, "version": VERSION},
             "urls": [
-                {"filename": WHEEL, "url": FILE_URL + WHEEL, "size": len(self.wheel), "digests": {"sha256": self.digest}, "yanked": False},
+                {
+                    "filename": WHEEL,
+                    "url": FILE_URL + WHEEL,
+                    "size": len(self.wheel),
+                    "digests": {"sha256": self.digest},
+                    "yanked": False,
+                    "packagetype": "bdist_wheel",
+                },
                 {
                     "filename": "research_repo_tools-0.2.6.tar.gz",
                     "url": FILE_URL + "research_repo_tools-0.2.6.tar.gz",
                     "size": 10,
                     "digests": {"sha256": "b" * 64},
                     "yanked": False,
+                    "packagetype": "sdist",
                 },
             ],
         }
@@ -96,6 +105,9 @@ class TestDependencyProvenance(unittest.TestCase):
         self.network = self.enterContext(patch.object(registry, "_json", return_value=self.inventory))
         self.enterContext(patch.object(registry._OPENER, "open", side_effect=lambda *_args, **_kwargs: Response(self.wheel)))
         self.command = self.enterContext(patch.object(process, "run_command", return_value=subprocess.CompletedProcess([], 0, "", "")))
+        self.source_lookup = self.enterContext(
+            patch.object(dependency_sources.HttpSourceProvider, "read", side_effect=lambda _url: json.dumps(self.inventory).encode())
+        )
 
     def snapshot(self):
         return {path.relative_to(self.root).as_posix(): path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
@@ -111,6 +123,8 @@ class TestDependencyProvenance(unittest.TestCase):
     def test_published_pin_checks_artifacts_and_installed_bytes_without_mutation(self):
         before = self.snapshot()
         (identity,) = check_release_dependencies(self.root)
+        self.network.assert_called_once()
+        self.source_lookup.assert_called_once()
         self.assertEqual((identity.name, identity.version, identity.source, identity.revision), (PACKAGE, VERSION, dependency_provenance.INDEX, None))
         self.assertEqual(self.snapshot(), before)
         self.assertIn("--check", self.command.call_args.args[1])
@@ -282,7 +296,8 @@ class TestDependencyProvenance(unittest.TestCase):
         (self.root / "pyproject.toml").write_bytes(
             self.manifest.replace('published-dependencies=["research-repo-tools"]', "published-dependencies=[]").encode()
         )
-        self.assertEqual(check_release_dependencies(self.root), ())
+        (identity,) = check_release_dependencies(self.root)
+        self.assertEqual(identity.name, PACKAGE)
         self.network.assert_not_called()
 
     def test_release_intent_fails_before_reading_campaign_configuration(self):
@@ -377,7 +392,8 @@ class TestDependencyProvenance(unittest.TestCase):
         policy = self.root / "policy.toml"
         policy.write_bytes(b'[release]\npublished-dependencies=["research-repo-tools"]\n')
         dependencies = config.load(policy, root=self.root).release.published_dependencies
-        self.assertEqual(check_release_dependencies(self.root), ())
+        with self.assertRaisesRegex(ValueError, "source overrides"):
+            check_release_dependencies(self.root)
         # The gate must reject the Git dependency before inspecting campaign or
         # candidate inputs. No external policy selection lives in the manifest.
         untrusted: Any = None
@@ -455,16 +471,21 @@ class TestDependencyProvenance(unittest.TestCase):
         site = self.normal_environment(self.root / ".venv")
         marker = self.root / "executed.txt"
         (site / "consumer.pth").write_bytes(f"import pathlib; pathlib.Path({str(marker)!r}).write_bytes(b'executed')\n".encode())
-        check_release_dependencies(self.root)
+        # The canonical policy now rejects unrecognized hooks in addition to
+        # preserving the metadata probe's existing no-execution guarantee.
+        with self.assertRaisesRegex(ValueError, "startup hooks"):
+            check_release_dependencies(self.root)
         self.assertFalse(marker.exists(), "release observation executed consumer startup code")
 
-    def test_one_check_reuses_matching_wheel_bytes_but_a_later_check_reacquires(self):
+    def test_each_verification_path_reuses_wheel_bytes_but_a_later_check_reacquires(self):
         self.normal_environment(self.root / ".venv")
         with patch.object(registry._OPENER, "open", side_effect=lambda *_args, **_kwargs: Response(self.wheel)) as download:
             check_release_dependencies(self.root)
-            self.assertEqual(download.call_count, 1)
-            check_release_dependencies(self.root)
+            # Legacy selection and the full policy graph both verify the wheel;
+            # the legacy normal/isolated pair still shares one download.
             self.assertEqual(download.call_count, 2)
+            check_release_dependencies(self.root)
+            self.assertEqual(download.call_count, 4)
 
     def test_custom_uv_environment_cannot_hide_same_version_drift(self):
         environment = self.root / "custom env"

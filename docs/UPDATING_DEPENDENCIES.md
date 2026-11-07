@@ -481,3 +481,84 @@ plain version list (optional opaque columns, comments/blank lines and `latest`
 are allowed; duplicate or unsupported entries fail). This avoids an embedded compatibility
 table. Other wrappers may opt into the same contract. This detects absent version
 support, not every possible runtime incompatibility; retain focused consumer CI.
+
+## Verified dependency sources
+
+Use the shared [dependency source workflow](../README.md#verified-python-and-cargo-dependency-sources)
+for exact development commits and explicit commit-to-release transitions. The
+canonical `dependency-sources.toml` belongs at the checkout root. It declares
+Python/uv and Cargo projects, the package directories owned by each release,
+and optional named source selections. The same file is inspected at release
+acquisition, candidate revalidation, evidence, tag and publication boundaries.
+A source selection never changes release policy: GitHub commits are development
+inputs, while release dependencies must come from PyPI or crates.io.
+Without this file, only checkouts without declared or locked dependencies pass;
+workspace membership and source overrides also require an explicit policy.
+The older `published-dependencies` selection adds checks and cannot bypass this
+requirement.
+
+The first `release-owned` directory identifies the package being released;
+additional directories must be declared workspace members that are private
+(`publish = false` for Cargo, `tool.uv.package = false` for Python). Ownership
+must remain inside the declared project. External path dependencies cannot gain
+release ownership through a dependency declaration. Separately published
+workspace packages require upstream-first publication and registry dependencies
+before the dependent release. The package being released has no circular
+requirement to exist in its registry already.
+
+A preview verifies the selected upstream identity, copies the consumer to a
+disposable directory, preserves dependency aliases, extras/features, dependency
+kinds, target conditions and workspace inheritance, then asks uv or Cargo to
+reconcile the native lock. It prints the complete manifest/lock diff. Resolution
+may populate native caches; it does not synchronize the normal environment.
+Apply rechecks provider evidence and original input bytes before a recoverable
+multi-file publication. Failed resolution leaves the checkout unchanged; a
+publication failure rolls back, and an incomplete rollback reports retained
+backup paths. Inspect those backups before retrying. Concurrent edits require a
+new preview. No source transition upgrades tooling or publishes a package.
+Snapshots retain ignored and untracked inputs, with limits of 10,000 inventory
+entries, 32 MiB per file and 128 MiB in aggregate. Oversized inputs fail before
+copying or resolution; move unrelated large data outside the checkout before
+retrying. Generated/cache directories are omitted unless they contain declared
+workspace manifests. Required workspace inputs are never omitted just to meet
+these limits.
+
+Release inspection reads all declared requirements and universal lock entries,
+including development/build dependencies, optional features and alternate
+targets. Cargo additionally checks an all-features, unfiltered-target native
+metadata graph with `--locked --offline`. uv checks lock freshness offline with
+builds and interpreter downloads disabled. Neither inspection runs consumer
+startup or build hooks. The native inspector executable must be outside the
+observed checkout. Source replacements, alternate registries/indexes, external
+paths, floating selectors, ambiguous metadata and unsupported provenance fail
+closed. Python build requirements must also have a matching locked identity;
+include them in a dependency group when uv would otherwise resolve them only
+in an isolated build environment.
+
+Availability proof binds exact PyPI upload URLs, sizes and SHA-256 digests, or
+the crates.io archive checksum and size, and rejects yanked uploads. Cargo's
+resolved cached input files are compared with the downloaded published archive.
+Existing Python environments are inspected through static distribution metadata
+and compared with matching published wheels; packages are never imported into
+the controller. An absent Python environment is an acquisition input: sync the
+checked lock and run the required downstream validation before promotion.
+Current installed Python byte proof requires ordinary wheels without relocated
+`.data` files; locally built sdists cannot substitute for this proof. Universal
+lock checks cover variants not installed on the current host; they do not claim
+that those variants were tested there.
+The exact legacy uv 0.8.0 `_virtualenv.py`/`_virtualenv.pth` pair is recognized
+by content without executing or changing it. Modified or unknown startup hooks
+are rejected; recreate such environments with the supported uv.
+
+GitHub proof requires an exact full lowercase commit SHA, matching repository
+identity, and static package metadata at the selected directory. Cargo additionally
+requires a complete repository tree with at most 100 Cargo manifests and exactly
+one package with the selected name. GitHub redirects, dynamic Python versions,
+missing commits/packages and unavailable providers are errors. Commit existence
+is development availability evidence, not a signature or publication assertion.
+
+Keep `dependency-sources.toml`, affected manifests and locks in the source and
+harness inventories used by the existing evidence workflow. Applying a source
+transition preserves prior rehearsal files and changes those input identities.
+Rerun the affected downstream checks against the final registry configuration;
+never rename or relabel commit-based evidence as a published-artifact result.

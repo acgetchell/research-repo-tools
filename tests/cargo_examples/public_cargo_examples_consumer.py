@@ -544,6 +544,8 @@ class TestNativeCargo(unittest.TestCase):
         self.assertFalse((self.root / "target").exists())
 
     def test_cli_exit_timeout_and_assertion_failures_remain_failures(self) -> None:
+        # CLI probes include cold Cargo builds; their five-minute watchdog is
+        # separate from the one-second example timeout exercised below.
         for policy, message in (
             ('args=["fail"]', "exit status 23"),
             ('args=["wait"]\ntimeout=1', "timed out"),
@@ -556,7 +558,7 @@ class TestNativeCargo(unittest.TestCase):
                     ["-I", "-X", "utf8", "-m", "research_repo_tools", "--root", str(self.root), "validation", "cargo-examples", "examples.toml"],
                     cwd=self.root,
                     check=False,
-                    timeout=60,
+                    timeout=300,
                 )
                 self.assertEqual(result.returncode, 1, result.stderr)
                 self.assertIn(message, result.stderr)
@@ -589,7 +591,7 @@ class TestNativeCargo(unittest.TestCase):
                     sys.executable,
                     ["-I", "-X", "utf8", "-m", "research_repo_tools", "--root", str(self.root), "validation", "cargo-examples", "examples.toml"],
                     cwd=self.root,
-                    timeout=60,
+                    timeout=300,
                     check=False,
                 )
                 self.assertEqual(result.returncode, 0 if expected is None else 1, result.stderr[-2000:])

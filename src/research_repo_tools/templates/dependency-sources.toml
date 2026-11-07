@@ -1,0 +1,28 @@
+# Keep this file at the consumer checkout root and include it in source evidence.
+schema = 1
+
+[projects.rust]
+ecosystem = "cargo"
+directory = "."
+# First directory is the package being released. Additional owned members must
+# be explicitly private; separately published dependencies use crates.io.
+release-owned = ["."]
+
+# Add this project when the checkout also consumes Python dependencies.
+# [projects.python]
+# ecosystem = "python"
+# directory = "."
+# release-owned = ["."]
+
+# A named source selects an already declared dependency. Replace these example
+# values, then preview with `just dependency-source upstream`.
+# [sources.upstream]
+# project = "rust"
+# package = "upstream-crate"
+# github = "owner/repository"
+# commit = "0123456789abcdef0123456789abcdef01234567"
+# directory = "crates/upstream-crate"
+
+# After publishing upstream, remove github/commit/directory and select its exact
+# registry version instead. Preview/apply, then rerun downstream validation.
+# version = "1.2.3"

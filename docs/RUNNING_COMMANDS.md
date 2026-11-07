@@ -27,6 +27,7 @@ arguments in lexicographic order.
 | `just ci` | Run the same canonical consumer gate as local validation |
 | `just clean [ARGS...]` | Preview obsolete package-owned installs; `--apply` removes them; repeat `--keep-root PATH` to retain other consumers' pins |
 | `just command-time CONFIG OUTPUT` | Acquire exploratory external-command timings into a new JSON report and print a summary |
+| `just dependency-source NAME [--apply]` | Preview or apply a verified Python/Cargo source and lock transition with recoverable multi-file publication |
 | `just files COMMAND...` | Check raw line limits, list selected files or run a command over them |
 | `just help` | List recipes and arguments in lexicographic order, with arguments |
 | `just notebook-advise FILE... [--strict]` | Report configured review warnings, optionally failing on them |
@@ -103,14 +104,14 @@ global root/configuration options before the group; consult
 | Changelog | `changelog archive`, `check`, `generate`, `normalize`, `notes`, `tag` | Root `CHANGELOG.md`; completed minor series in `docs/archives/changelog/` |
 | CI environment | `ci export` | Validate all single-line values before appending a GitHub environment command file |
 | Coverage | `coverage report` | Cobertura summaries with deduplicated source lines |
-| Dependencies | `deps check-uv`, `update-python`, `update-tools`, `update-uv` | Exact development pins; canonical Cargo SemVer; stable uv pins |
+| Dependencies | `deps check-uv`, `source`, `update-python`, `update-tools`, `update-uv` | Verified source previews/transitions; exact development pins; canonical Cargo SemVer; stable uv pins |
 | Documentation | `docs check-lines` | Existing explicit-path Markdown policy: 160 characters with table exemptions |
 | File selection | `files check-lines`, `list`, `run` | Configurable raw line gate, tracked/nonignored inputs, exclusions and portable argument batching |
 | Notebooks | `notebooks advise`, `check`, `clear`, `execute`, `group`, `inspect`, `launch`, `lint`, `reset`, `sync` | Read-only review, locked JupyterLab, native Ruff/ty checks, execution reports, and explicit restoration |
 | Papers | `papers check`, `normalize`, `source-date` | Explicit UTC dates, optional PDF text/geometry checks and validated metadata normalization |
 | Performance | `performance assemble-suites`, `assets`, `baseline`, `command-time`, `compare`, `convert`, `discover`, `export`, `extract`, `fetch`, `host`, `measure`, `pack-suite`, `prepare`, `profile`, `promote`, `publish`, `readme`, `release`, `release-draft`, `release-upload`, `render`, `verify`, `verify-saved` | Complete configured measurement, retained evidence, release assets and publication |
 | Python | `python check`, `fix`, `typecheck` | Complete tracked/nonignored inventory; native Ruff/ty policy; explicit fixes only |
-| Releases | `release assets`, `check`, `evidence`, `gate`, `publish`, `registry`, `reuse`, `update`, `verify` | Metadata preparation, reviewed publication gates and exact registry/GitHub verification |
+| Releases | `release assets`, `check`, `dependencies`, `evidence`, `gate`, `publish`, `registry`, `reuse`, `update`, `verify` | Metadata preparation, published-only dependency gates and exact registry/GitHub verification |
 | Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
 | SARIF | `sarif split` | Consumer-selected drivers/namespaces, corrected rule indices and complete output generations |
 | Security | `security osv`, `secrets` | Managed OSV/Gitleaks, explicit inputs, full history, redacted native reports |

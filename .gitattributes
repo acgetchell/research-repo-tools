@@ -1,2 +1,4 @@
 # Keep both maintainer and packaged recipes compatible with Just's formatter.
 justfile text eol=lf
+# This historical startup artifact is verified by its exact published bytes.
+tests/dependencies/fixtures/uv-0.8.0-virtualenv.txt -text

@@ -49,6 +49,10 @@ command-time configuration output:
 [private]
 default: help
 
+# Preview a configured Python/Cargo source transition; pass --apply to publish it.
+dependency-source name *args:
+    uv run --locked research-repo-tools deps source "$@"
+
 # Check raw lines, list inputs, or batch a validator over tracked/nonignored files.
 files +args:
     uv run --locked --group dev research-repo-tools files "$@"
