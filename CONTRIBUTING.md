@@ -400,6 +400,9 @@ checkout tests and the isolated consumers before changing package checks.
   `run_consumer_suite` so test names, stdout, stderr, and elapsed time remain
   visible in CI, including on failure. Diagnose a timeout using native suite
   timings and the last reported test; keep the ordinary command budget bounded.
+  Wheel and sdist checks run concurrently in separate consumer trees and empty
+  caches; `RUN ARTIFACT` and `END ARTIFACT` report their durations. Each artifact
+  retains its suite and dependency-installation order; live output can interleave.
 - **Shell paths and filesystem paths:** Just's `invocation_directory()` can
   return a Unix-style `/c/...` path on Windows. Use
   `invocation_directory_native()` when comparing its result with `Path`.

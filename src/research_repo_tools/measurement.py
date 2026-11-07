@@ -94,6 +94,7 @@ class MeasurementConfig:
             "saved-sample",
             "workload-inventory",
             "workload-sha256",
+            "phase-source-case-sensitive",
         }
         context = dict(self.context)
         if len(context) != len(self.context) or context.keys() & reserved or any(key.startswith(("tool.", "dependency.", "host.")) for key in context):

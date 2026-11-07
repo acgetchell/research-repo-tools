@@ -6,7 +6,7 @@ import time
 from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from fnmatch import fnmatchcase
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING, Any, overload
 
 if TYPE_CHECKING:
@@ -113,6 +113,7 @@ class MeasurementPhase:
     gate: tuple[str, ...]
     policy: CompletePolicy | DiscoveryPolicy
     environment: tuple[tuple[str, str], ...] = ()
+    sources: tuple[str, ...] | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
         for key in ("command", "gate"):
@@ -122,6 +123,8 @@ class MeasurementPhase:
         if not isinstance(self.policy, CompletePolicy | DiscoveryPolicy):
             raise TypeError("phase requires a completeness policy")
         object.__setattr__(self, "environment", _environment(self.environment))
+        if self.sources is not None:
+            object.__setattr__(self, "sources", _strings(self.sources, "phase sources"))
 
 
 @dataclass(frozen=True, slots=True)
@@ -143,6 +146,8 @@ class CompleteMeasurementPlan:
             raise ValueError("invalid harness mode or source backend")
         if self.schema != 4 and self.harness_mode != "common":
             raise ValueError("independent harness mode requires measurement schema 4")
+        if self.schema != 4 and any(phase.sources is not None for phase in (self.baseline, self.current)):
+            raise ValueError("phase source declarations require measurement schema 4")
         if self.schema != 4 and (self.raw_files or self.saved_sample is not None):
             raise ValueError("raw files and saved samples require measurement schema 4")
         from research_repo_tools.criterion_baselines import _raw_files, _saved_name
@@ -192,6 +197,13 @@ class CompleteMeasurementPlan:
     def harness(self) -> tuple[str, ...]:
         return self.measurement.harness
 
+    def phase_sources(self, phase: str) -> tuple[str, ...]:
+        """Select truthful compiler inputs without changing common harness roles."""
+        if phase not in {"baseline", "current"}:
+            raise ValueError("source phase must be baseline or current")
+        selected = (self.baseline if phase == "baseline" else self.current).sources
+        return self.sources if selected is None else selected
+
 
 @dataclass(frozen=True, slots=True)
 class CommonHarnessPlan(CompleteMeasurementPlan):
@@ -240,7 +252,7 @@ def parse_plan(document: dict[str, Any]) -> CompleteMeasurementPlan:
             data,
             name,
             {"command", "gate"},
-            {"expected", "discovery", "environment"} | ({"sample-counts"} if schema >= 3 else set()) | ({"sample-count"} if schema == 4 else set()),
+            {"expected", "discovery", "environment"} | ({"sample-counts"} if schema >= 3 else set()) | ({"sample-count", "sources"} if schema == 4 else set()),
         )
         if ("expected" in phase) == ("discovery" in phase):
             raise ValueError("phase requires exactly one of expected or discovery")
@@ -263,6 +275,7 @@ def parse_plan(document: dict[str, Any]) -> CompleteMeasurementPlan:
             _strings(phase["gate"], "gate"),
             policy,
             tuple((key, _environment_value(value)) for key, value in _object(phase.get("environment", {}), "environment").items()),
+            sources=_strings(phase["sources"], "phase sources") if "sources" in phase else None,
         )
     if not isinstance(raw["series"], list):
         raise ValueError("series must be an array of tables")
@@ -469,6 +482,9 @@ def _prepare_phases(
     on_sample: Callable[[str, CompleteSample, float], None] | None = None,
     phase_order: tuple[str, ...] = ("baseline", "current"),
     on_phase: Callable[[str, int, int], None] | None = None,
+    on_phase_start: Callable[[str, int], None] | None = None,
+    on_phase_sample: Callable[[str, CompleteSample, Provenance, int, int], None] | None = None,
+    on_phase_failure: Callable[[str, int, Path, BaseException], None] | None = None,
 ) -> tuple[dict[str, CompletePolicy], dict[str, Provenance], Callable[[], tuple[tuple[tuple[str, CompleteSample], ...], tuple[tuple[str, Provenance], ...]]]]:
     """Prepare a complete unit; return the same validated sampler used by v1-v3."""
     reporter = progress or ProgressReporter(mode="none")
@@ -503,7 +519,7 @@ def _prepare_phases(
         raise ValueError("dependency resolution files must belong to the captured harness")
     originals = {}
     for phase, root in roots.items():
-        names = _inventory(root, plan.sources)
+        names = _inventory(root, plan.phase_sources(phase))
         originals[phase] = (fingerprint_files(root, tuple(map(Path, names))), names)
         criterion = root / plan.measurement.criterion_dir
         if any(path.is_symlink() or path.is_junction() for path in (criterion, *criterion.parents) if path.is_relative_to(root)):
@@ -527,7 +543,7 @@ def _prepare_phases(
     effective = {}
     if plan.schema == 4:
         for phase, root in roots.items():
-            names = set(_inventory(root, (*plan.sources, *plan.harness, *plan.measurement.workloads)))
+            names = set(_inventory(root, (*plan.phase_sources(phase), *plan.harness, *plan.measurement.workloads)))
             if captured_sources is not None:
                 names.update(name for name, _, _ in captured_sources[phase].files if (root / name).exists())
             effective[phase] = _files(root, tuple(sorted(names)))
@@ -537,7 +553,7 @@ def _prepare_phases(
     environments = {}
     for phase, root in roots.items():
         selected = plan.baseline if phase == "baseline" else plan.current
-        config = replace(plan.measurement, command=selected.command)
+        config = replace(plan.measurement, command=selected.command, sources=plan.phase_sources(phase))
         configurations[phase] = config
         env = _overlay_environment(os.environ, selected.environment)
         environments[phase] = env
@@ -560,6 +576,7 @@ def _prepare_phases(
                     "original-source-sha256": originals[phase][0],
                     "original-source-inventory": json.dumps(originals[phase][1]),
                     "measurement-declaration": _declaration(plan),
+                    **({"phase-source-case-sensitive": "false" if os.name == "nt" else "true"} if selected.sources is not None else {}),
                 }.items()
             ),
         )
@@ -641,7 +658,10 @@ def _prepare_phases(
             if any((directory / plan.measurement.criterion_dir).exists() for directory in roots.values()):
                 raise ValueError("preflight gate produced timing output before measurement")
 
-    def acquire() -> tuple[tuple[tuple[str, CompleteSample], ...], tuple[tuple[str, Provenance], ...]]:
+    in_progress: tuple[str, int] | None = None
+
+    def collect() -> tuple[tuple[tuple[str, CompleteSample], ...], tuple[tuple[str, Provenance], ...]]:
+        nonlocal in_progress
         samples: list[tuple[str, CompleteSample]] = []
         sources: list[tuple[str, Provenance]] = []
         for phase in phase_order:
@@ -654,6 +674,9 @@ def _prepare_phases(
                 raise ValueError(f"{phase} timing output appeared before its measurement")
             started = time.monotonic()
             started_ns = time.time_ns()
+            if on_phase_start is not None:
+                on_phase_start(phase, started_ns)
+            in_progress = phase, started_ns
             with reporter.stage("acquisition", suite=reporter.suite, phase=phase):
                 result = run_command_live(selected.command[0], selected.command[1:], cwd=root, env=environments[phase], timeout=plan.measurement.timeout)
             finished_ns = time.time_ns()
@@ -675,6 +698,9 @@ def _prepare_phases(
             source = declared[phase]
             context = {**dict(source.context), "gate-status": "passed", **({"saved-sample": plan.saved_sample or "none"} if plan.schema == 4 else {})}
             sources.append((phase, Provenance(source.revision, source.source_sha256, source.harness_sha256, tuple(context.items()))))
+            in_progress = None
+            if on_phase_sample is not None:
+                on_phase_sample(phase, samples[-1][1], sources[-1][1], started_ns, finished_ns)
             if on_phase is not None:
                 on_phase(phase, started_ns, finished_ns)
             if on_sample is not None:
@@ -696,6 +722,18 @@ def _prepare_phases(
                     raw_files=("benchmark.json", "estimates.json", "sample.json", *plan.raw_files),
                 )
         return tuple(samples), tuple(sources)
+
+    def acquire() -> tuple[tuple[tuple[str, CompleteSample], ...], tuple[tuple[str, Provenance], ...]]:
+        try:
+            return collect()
+        except BaseException as error:
+            if in_progress is not None and on_phase_failure is not None:
+                phase, started = in_progress
+                try:
+                    on_phase_failure(phase, started, roots[phase] / plan.measurement.criterion_dir, error)
+                except BaseException as retention_error:
+                    raise BaseExceptionGroup("measurement and interrupted-output retention failed", [error, retention_error]) from None
+            raise
 
     return policies, declared, acquire
 
@@ -774,6 +812,8 @@ def _plan_document(plan: CompleteMeasurementPlan) -> dict[str, Any]:
         selected = getattr(plan, phase)
         policy = selected.policy
         entry: dict[str, Any] = {"command": selected.command, "gate": selected.gate, "environment": dict(selected.environment)}
+        if selected.sources is not None:
+            entry["sources"] = selected.sources
         counts = policy.sample_counts
         if counts:
             entry["sample-counts"] = dict(counts)
@@ -851,6 +891,16 @@ def _validate_phase_identity(source: Provenance, plan: CompleteMeasurementPlan, 
         names = _strings(json.loads(context[key]), key)
         _names(None, names)
         inventories[key] = names
+    if getattr(plan, phase).sources is not None:
+        patterns = plan.phase_sources(phase)
+        case = context.get("phase-source-case-sensitive")
+        if case not in {"true", "false"}:
+            raise ValueError("phase source selection requires its captured native case semantics")
+        for key in ("source-inventory", "original-source-inventory"):
+            if any(not any(PurePosixPath(name).full_match(pattern, case_sensitive=case == "true") for pattern in patterns) for name in inventories[key]):
+                raise ValueError("retained source inventory differs from phase source selection")
+    elif "phase-source-case-sensitive" in context:
+        raise ValueError("phase case receipt requires an explicit phase source selection")
     modes = _array(json.loads(context.get("harness-modes", "null")), "harness modes")
     if any(not isinstance(item, list) or len(item) != 2 or type(item[1]) is not int or not 0 <= item[1] <= 0o777 for item in modes):
         raise ValueError("invalid captured harness modes")
@@ -870,6 +920,17 @@ def _validate_phase_identity(source: Provenance, plan: CompleteMeasurementPlan, 
         if receipt.get("mode") != ("working-tree" if context["mode"] == "working-tree" else "revision"):
             raise ValueError("export source mode differs from acquisition")
         names = {item[0] for item in _array(receipt["files"], "source files")}
+        if getattr(plan, phase).sources is not None:
+            expected = {
+                name
+                for name in names
+                if any(
+                    PurePosixPath(name).full_match(pattern, case_sensitive=context["phase-source-case-sensitive"] == "true")
+                    for pattern in plan.phase_sources(phase)
+                )
+            }
+            if expected != set(inventories["original-source-inventory"]):
+                raise ValueError("original source inventory differs from phase source selection")
         required = set(inventories["original-source-inventory"])
         if plan.harness_mode == "independent":
             required.update(inventories["harness-inventory"])

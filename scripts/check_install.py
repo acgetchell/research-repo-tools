@@ -16,6 +16,8 @@ import tempfile
 import time
 import tomllib
 import zipfile
+from collections.abc import Callable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -49,6 +51,43 @@ def run_consumer_suite(python: Path, arguments: list[str], *, cwd: Path, env: di
         run_isolated(python, ["-u", *arguments, "-v"], cwd=cwd, env=env, timeout=CONSUMER_TIMEOUT, capture_output=False)
     finally:
         print(f"END: {cwd.name} {label} ({time.monotonic() - started:.2f}s)", flush=True)
+
+
+def check_artifacts(artifacts: tuple[Path, Path], check_artifact: Callable[[Path, dict[str, str]], None], temporary: Path, env: dict[str, str]) -> None:
+    """Overlap isolated artifacts, finish both, and retain every failure."""
+
+    def timed_check(artifact: Path, isolated_env: dict[str, str]) -> None:
+        started = time.monotonic()
+        print(f"RUN ARTIFACT: {artifact.name}", flush=True)
+        try:
+            check_artifact(artifact, isolated_env)
+        finally:
+            print(f"END ARTIFACT: {artifact.name} ({time.monotonic() - started:.2f}s)", flush=True)
+
+    failures = []
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(timed_check, artifact, {**env, "UV_CACHE_DIR": str(temporary / f"uv-cache-{index}")}) for index, artifact in enumerate(artifacts)
+        ]
+        for artifact, future in zip(artifacts, futures, strict=True):
+            try:
+                future.result()
+            except Exception as error:
+                error.add_note(f"Installed artifact: {artifact.name}")
+                failures.append(error)
+    if len(failures) == 1:
+        raise failures[0]
+    if failures:
+        raise ExceptionGroup("Installed distribution checks failed", failures)
+
+
+def command_failures(error: Exception) -> Iterator[subprocess.CalledProcessError | subprocess.TimeoutExpired]:
+    """Find captured command diagnostics inside concurrent artifact failures."""
+    if isinstance(error, ExceptionGroup):
+        for failure in error.exceptions:
+            yield from command_failures(failure)
+    elif isinstance(error, (subprocess.CalledProcessError, subprocess.TimeoutExpired)):
+        yield error
 
 
 BASE_SMOKE = r"""
@@ -333,9 +372,10 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
         print("Git-mutating consumer tests are skipped by RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS=1 (wheel and sdist).")
     with tempfile.TemporaryDirectory(prefix="research-repo-tools-installed-") as directory:
         temporary = Path(directory)
-        # A warm user cache can hide missing fixture artifacts in offline checks.
-        env["UV_CACHE_DIR"] = str(temporary / "uv-cache")
-        for artifact in (wheel, sdist):
+
+        # Each artifact gets an empty cache: neither the user's cache nor the
+        # other artifact may supply missing offline fixture dependencies.
+        def check_artifact(artifact: Path, env: dict[str, str]) -> None:
             name = "wheel" if artifact == wheel else "sdist"
             consumer = temporary / name
             consumer.mkdir()
@@ -355,7 +395,7 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
                     env=local_env,
                 )
                 print(f"PASS: installed {name} changelog CLI with real git-cliff")
-                continue
+                return
             run_isolated(python, ["-c", BASE_SMOKE, str(ROOT)], cwd=consumer, env=local_env)
             import_suite = consumer / "public_import_consumer.py"
             import_suite.write_bytes((ROOT / "tests/validation/public_import_consumer.py").read_bytes())
@@ -420,6 +460,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             run_consumer_suite(python, [str(dates_suite)], cwd=consumer, env=local_env)
             evidence_suite.write_bytes((ROOT / "tests/releases/public_evidence_consumer.py").read_bytes())
             run_consumer_suite(python, [str(evidence_suite)], cwd=consumer, env=local_env)
+            host_suite = consumer / "public_host_consumer.py"
+            host_suite.write_bytes((ROOT / "tests/performance/public_host_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(host_suite)], cwd=consumer, env=local_env)
             reuse_suite = consumer / "public_reuse_consumer.py"
             reuse_suite.write_bytes((ROOT / "tests/releases/public_reuse_consumer.py").read_bytes())
             run_consumer_suite(python, [str(reuse_suite)], cwd=consumer, env=local_env)
@@ -645,6 +688,8 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             check_python_update(consumer / "update consumer", artifact, registry / wheel.name, version, uv, just, env)
             print(f"PASS: installed {name} outside checkout; bundled just")
 
+        check_artifacts((wheel, sdist), check_artifact, temporary, env)
+
 
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
@@ -653,11 +698,12 @@ def main() -> int:
     args = parser.parse_args()
     try:
         check(args.dist.resolve(), changelog_only=args.changelog_only)
-    except (subprocess.CalledProcessError, subprocess.TimeoutExpired) as error:
-        for output, stream in ((error.stdout, sys.stdout), (error.stderr, sys.stderr)):
-            if output:
-                stream.write(output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output)
-                stream.flush()
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ExceptionGroup) as error:
+        for failure in command_failures(error):
+            for output, stream in ((failure.stdout, sys.stdout), (failure.stderr, sys.stderr)):
+                if output:
+                    stream.write(output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output)
+                    stream.flush()
         raise
     return 0
 
