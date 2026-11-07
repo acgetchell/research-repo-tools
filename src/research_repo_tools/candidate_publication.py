@@ -76,8 +76,11 @@ def _parse_publication(payload: bytes, policy: CandidatePolicy) -> _PublicationR
     outputs = _object(raw["outputs"], "generated outputs", set(roles))
     _names(None, tuple(sorted(set(original) | set(outputs))))
     inputs = set()
-    for _, _, _, source in policy.observations:
-        for key in ("source-inventory", "original-source-inventory", "harness-inventory", "workload-inventory"):
+    for _, _, phase, source in policy.observations:
+        keys = ("harness-inventory", "workload-inventory")
+        if phase == "current":
+            keys += ("source-inventory", "original-source-inventory")
+        for key in keys:
             if key in dict(source.context):
                 inputs.update(json.loads(dict(source.context)[key]))
     inputs.add(policy.report)

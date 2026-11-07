@@ -13,7 +13,7 @@ import tempfile
 import unittest
 from contextlib import ExitStack, chdir, contextmanager
 from dataclasses import replace
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from threading import Event
 from typing import Any, get_type_hints, override
 from unittest.mock import patch
@@ -31,12 +31,12 @@ from research_repo_tools.candidate_reuse import (
     verify_candidate_release,
 )
 from research_repo_tools.cli import main, parser
-from research_repo_tools.common_measurement import DiscoveredSeries, DiscoveryPolicy, parse_plan, validate_run_policy
+from research_repo_tools.common_measurement import DiscoveredSeries, DiscoveryPolicy, _validate_phase_identity, parse_plan, validate_run_policy
 from research_repo_tools.complete_runs import render_run, run_identity, validate_run_evidence
 from research_repo_tools.evidence import deterministic_json, parse_evidence, serialize_evidence
 from research_repo_tools.host_metadata import HostMetadata
 from research_repo_tools.measurement import load_measurement, measure_pair
-from research_repo_tools.measurement_checkpoints import open_checkpoint
+from research_repo_tools.measurement_checkpoints import Checkpoint, open_checkpoint
 from research_repo_tools.performance_acquisition import measure_and_retain
 from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.process import format_exception_diagnostics, run_command, run_command_live
@@ -50,11 +50,11 @@ from research_repo_tools.run_presentation import RunLayout, RunRow, SeriesSelect
 from research_repo_tools.run_reports import load_run_report_plan
 from research_repo_tools.scheduled_runs import ScheduledRun, parse_scheduled_run, select_trial
 from research_repo_tools.source_exports import export_source
-from research_repo_tools.suite_measurement import AcquisitionSuite, SuiteMeasurementPlan
+from research_repo_tools.suite_measurement import AcquisitionSuite, SuiteMeasurementPlan, parse_suite_plan
 from research_repo_tools.suite_runs import SuiteRun, comparison_incompatibilities, parse_suite_run
 from research_repo_tools.trial_schedule import TrialSchedule, parse_schedule
 
-PROGRAM = """import json, sys
+PROGRAM = """import json, subprocess, sys
 from pathlib import Path
 suite, action, log = sys.argv[1:4]
 supported = json.loads(Path('apis.json').read_bytes())
@@ -62,7 +62,11 @@ assert suite in supported, 'unsupported API was compiled/invoked'
 with Path(log).open('ab') as output:
     output.write((suite + ' ' + action + ' ' + Path('revision').read_text() + '\\n').encode())
 case = suite + '/case'
-if action == 'list':
+if action == 'compile' and Path('doc.rs').exists():
+    subprocess.run(['rustc', '--crate-type=lib', '--emit=dep-info=inputs.d', 'doc.rs'], check=True)
+    dependencies = Path('inputs.d').read_text()
+    assert ('README.md' in dependencies) == (Path('revision').read_bytes() == b'old')
+elif action == 'list':
     print(case + ': benchmark')
 elif action == 'measure':
     target = Path('target/criterion') / suite / 'new'
@@ -1327,8 +1331,8 @@ sys.exit(status)
         with self.assertRaisesRegex(ValueError, "finite"):
             render_run(retained)
 
-    def scheduled_fixture(self, schedule=None, *, outputs=(), working_tree=False, checkpoint=None):
-        selected = plan(self.log, ("shared",))
+    def scheduled_fixture(self, schedule=None, *, outputs=(), working_tree=False, checkpoint=None, selected=None):
+        selected = selected or plan(self.log, ("shared",))
         selected = replace(
             selected,
             schedule=schedule or TrialSchedule(),
@@ -1439,12 +1443,42 @@ sys.exit(status)
             lambda raw: raw["trials"][0]["receipts"][0].update(finished_ns=0),
             lambda raw: raw["trials"][0].update(identity="0" * 64),
             lambda raw: raw["declaration"]["schedule"].update(order="sequential"),
+            lambda raw: raw["trials"][0]["lifecycle"]["events"].reverse(),
+            lambda raw: raw["trials"][0]["lifecycle"]["events"][1].update(session=raw["trials"][0]["session"]),
+            lambda raw: raw["trials"][0]["lifecycle"]["events"][0]["prepared"]["shared"].pop("current"),
         ]
         for change in changes:
             raw = json.loads(evidence.payload)
             change(raw)
             with self.subTest(change=change), self.assertRaises(ValueError):
                 parse_scheduled_run(replace(evidence, payload=deterministic_json(raw)))
+        raw = json.loads(evidence.payload)
+        events = raw["trials"][0]["lifecycle"]["events"]
+        last_phase = max(index for index, event in enumerate(events) if event["kind"] == "phase-complete")
+        complete = events[last_phase]
+        events.insert(
+            last_phase,
+            {
+                "trial": 1,
+                "kind": "phase-failed",
+                "phase": complete["phase"],
+                "started_ns": complete["started_ns"],
+                "at_ns": complete["finished_ns"],
+                "reason": "CalledProcessError",
+                "output": {"status": "absent", "files": {}, "reason": "no output observed"},
+            },
+        )
+        with self.assertRaisesRegex(ValueError, "completion lacks its original start"):
+            parse_scheduled_run(replace(evidence, payload=deterministic_json(raw)))
+        # Older complete v5 records remain exact and receive no lifecycle.
+        legacy = json.loads(evidence.payload)
+        for trial in legacy["trials"]:
+            trial.pop("lifecycle")
+        legacy_evidence = replace(evidence, payload=deterministic_json(legacy))
+        legacy_bytes = serialize_evidence(legacy_evidence)
+        self.assertEqual(serialize_evidence(parse_evidence(*legacy_bytes)), legacy_bytes)
+        self.assertEqual(len(parse_scheduled_run(legacy_evidence).trials), len(legacy["trials"]))
+        self.assertNotIn(b"Collection:", render_run(legacy_evidence))
         with self.assertRaisesRegex(ValueError, "declaration changed"):
             validate_run_policy(evidence, replace(selected, schedule=TrialSchedule(2, "randomized", 1)))
         with self.assertRaisesRegex(ValueError, "explicit trial"):
@@ -1452,7 +1486,7 @@ sys.exit(status)
                 evidence, RunLayout((SeriesSelection("shared/current", "Current", (("row", "shared/case"),)),), (RunRow("row", "Row"),), "median", "ns")
             )
 
-    def test_schedule_resume_retains_exact_bytes_and_rejects_interrupted_trial(self):
+    def test_schedule_resume_retains_exact_bytes_and_reconstructs_committed_trial(self):
         checkpoint = self.root / "scheduled"
         selected, evidence = self.scheduled_fixture(checkpoint=checkpoint)
         original = {path.name: path.read_bytes() for path in checkpoint.glob("*.json")}
@@ -1478,11 +1512,13 @@ sys.exit(status)
             [line for line in self.log.read_bytes().splitlines() if b" measure " in line], [line for line in before_calls.splitlines() if b" measure " in line]
         )
         (checkpoint / "unit-trial-2.json").unlink()
-        with (
-            patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("must fail before gate")),
-            self.assertRaisesRegex(ValueError, "interrupted trial"),
-        ):
-            measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+        # The new journal independently retained every paired unit, phase raw
+        # file, and completed lifecycle before the outer trial commit. Rebuild
+        # that missing receipt exactly, with no replacement measurement.
+        with patch("research_repo_tools.common_measurement.run_command_live", side_effect=no_measure):
+            recovered = measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+        self.assertEqual(serialize_evidence(recovered), serialize_evidence(evidence))
+        self.assertEqual(original, {path.name: path.read_bytes() for path in checkpoint.glob("*.json")})
         # A failure after real output exists preserves the started marker and
         # never invents a completed receipt or repeats the hidden observations.
         failed = self.root / "failed-schedule"
@@ -1498,7 +1534,163 @@ sys.exit(status)
         self.assertTrue((failed / "unit-started-trial-1.json").exists())
         self.assertFalse((failed / "unit-trial-1.json").exists())
 
-    def candidate_fixture(self, *, generated=False):
+    def test_scheduled_resume_preserves_pairs_and_abandoned_phase_bytes(self):
+        for schedule in (TrialSchedule(1, "sequential"), TrialSchedule(2), TrialSchedule(4, "randomized", 42)):
+            checkpoint = self.root / f"recover-{schedule.order}"
+            selected = replace(plan(self.log, ("shared", "later")), schedule=schedule)
+            self.log.unlink(missing_ok=True)
+            second_phase = schedule.phases[0][1]
+            revision = b"new" if second_phase == "current" else b"old"
+
+            def interrupt(command, args=(), **kwargs):
+                if args[1:3] == ("later", "measure") and (kwargs["cwd"] / "revision").read_bytes() == revision:
+                    raise KeyboardInterrupt()
+                return run_command_live(command, args, **kwargs)
+
+            with self.subTest(schedule=schedule):
+                for attempt in range(2):
+                    with patch("research_repo_tools.common_measurement.run_command_live", side_effect=interrupt), self.assertRaises(KeyboardInterrupt):
+                        measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=attempt > 0, progress=self.quiet)
+                with open_checkpoint(
+                    checkpoint,
+                    json.loads((checkpoint / "header.json").read_bytes())["identity"],
+                    tuple(json.loads((checkpoint / "header.json").read_bytes())["units"]),
+                    resume=True,
+                    events=True,
+                ) as journal:
+                    events = journal.read_events()
+                first = next(event["unit"] for event in events if event["kind"] == "suite-complete")
+                assert isinstance(first, dict)
+                self.assertEqual(first["name"], "shared")
+                abandoned = [event for event in events if event["kind"] == "phase-complete" and event["phase"] == schedule.phases[0][0]]
+                self.assertEqual(len(abandoned), 3)  # shared, then two incomplete later pairs
+                retained_bytes = (checkpoint / "events.jsonl").read_bytes()
+                evidence = measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+                self.assertTrue((checkpoint / "events.jsonl").read_bytes().startswith(retained_bytes))
+                validate_run_policy(evidence, selected, release=True)
+                trial = parse_suite_run(select_trial(evidence, 1))
+                self.assertEqual(deterministic_json(trial.units[0]), deterministic_json(first))
+                calls = [line for line in self.log.read_text().splitlines() if " measure " in line]
+                first_revision = "old" if schedule.phases[0][0] == "baseline" else "new"
+                self.assertEqual(calls.count("shared measure old"), schedule.trials)
+                self.assertEqual(calls.count("shared measure new"), schedule.trials)
+                self.assertEqual(calls.count(f"later measure {first_revision}"), schedule.trials + 2)
+                self.assertEqual(calls.count(f"later measure {revision.decode()}"), schedule.trials)
+                lifecycle = json.loads(evidence.payload)["trials"][0]["lifecycle"]
+                self.assertEqual(sum(event["kind"] == "abandoned" for event in lifecycle["events"]), 2)
+                self.assertEqual(sum(event["kind"] == "segment" for event in lifecycle["events"]), 3)
+                with patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("offline consumer")):
+                    self.assertIn(b"2 abandoned", render_run(evidence))
+
+    def test_scheduled_partial_failure_drift_and_corrupt_events_reject_before_measurement(self):
+        selected = replace(plan(self.log, ("shared", "later")), schedule=TrialSchedule(1, "sequential"))
+        checkpoint = self.root / "partial-recovery"
+
+        def fail(command, args=(), **kwargs):
+            result = run_command_live(command, args, **kwargs)
+            if args[1:3] == ("later", "measure"):
+                (kwargs["cwd"] / "target/criterion/empty.bin").write_bytes(b"")
+                (kwargs["cwd"] / "target/criterion/binary.bin").write_bytes(b"\x00\xff\r\n")
+                raise RuntimeError("process failed after writing partial output")
+            return result
+
+        with patch("research_repo_tools.common_measurement.run_command_live", side_effect=fail), self.assertRaises(RuntimeError):
+            measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, progress=self.quiet)
+        original = (checkpoint / "events.jsonl").read_bytes()
+        failed_output = [json.loads(line)["event"] for line in original.splitlines() if json.loads(line)["event"]["kind"] == "phase-failed"]
+        self.assertEqual(len(failed_output), 1)
+        self.assertEqual(failed_output[0]["output"]["status"], "retained")
+        self.assertEqual(base64.b64decode(failed_output[0]["output"]["files"]["empty.bin"]), b"")
+        self.assertEqual(base64.b64decode(failed_output[0]["output"]["files"]["binary.bin"]), b"\x00\xff\r\n")
+        self.assertEqual(base64.b64decode(failed_output[0]["output"]["files"]["later/new/sample.json"]), b'{"iters": [1, 1], "times": [5, 5]}\r\n')
+        before = self.log.read_bytes()
+        with (
+            patch("research_repo_tools.measurement.capture_host", return_value=replace(HOST, cpu="different")),
+            self.assertRaisesRegex(ValueError, "checkpoint observations"),
+        ):
+            measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+        self.assertEqual((checkpoint / "events.jsonl").read_bytes(), original)
+        self.assertEqual(
+            [line for line in before.splitlines() if b" measure " in line], [line for line in self.log.read_bytes().splitlines() if b" measure " in line]
+        )
+        with patch.dict(os.environ, {"RECOVERY_INPUT_CHANGE": "different"}), self.assertRaisesRegex(ValueError, "identity changed"):
+            measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+        drift = {tag: dict(files) for tag, files in self.revisions.items()}
+        drift[PAIR.current]["revision"] = b"changed source"
+        with patch("research_repo_tools.source_exports._git", side_effect=git_model(drift)), self.assertRaisesRegex(ValueError, "identity changed"):
+            measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+        (checkpoint / ".writer").mkdir()
+        with self.assertRaisesRegex(ValueError, "writer"):
+            measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+        (checkpoint / ".writer").rmdir()
+        for data in (original[:-1], original + b'{"event":', original.replace(b'"sequence":1,', b'"sequence":0,', 1)):
+            (checkpoint / "events.jsonl").write_bytes(data)
+            with (
+                patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("corruption must reject before commands")),
+                self.assertRaises(ValueError),
+            ):
+                measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+            self.assertEqual((checkpoint / "events.jsonl").read_bytes(), data)
+        (checkpoint / "events.jsonl").write_bytes(original)
+        evidence = measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+        validate_run_policy(evidence, selected, release=True)
+
+    def test_scheduled_durable_event_failure_replays_disk_before_recovery(self):
+        for kind in ("phase-complete", "suite-complete", "segment-end"):
+            checkpoint = self.root / f"durable-{kind}"
+            selected = replace(plan(self.log, ("shared",)), schedule=TrialSchedule(1, "sequential"))
+            append = Checkpoint.append_event
+            failed = False
+
+            def append_then_fail(journal, event):
+                nonlocal failed
+                append(journal, event)
+                if event["kind"] == kind and not failed:
+                    failed = True
+                    raise OSError("durable append returned an error")
+
+            self.log.unlink(missing_ok=True)
+            with self.subTest(kind=kind):
+                with patch.object(Checkpoint, "append_event", append_then_fail), self.assertRaises(OSError):
+                    measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, progress=self.quiet)
+                prefix = (checkpoint / "events.jsonl").read_bytes()
+                evidence = measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+                validate_run_policy(evidence, selected, release=True)
+                self.assertTrue((checkpoint / "events.jsonl").read_bytes().startswith(prefix))
+                calls = self.log.read_text().splitlines()
+                self.assertEqual(calls.count("shared measure old"), 2 if kind == "phase-complete" else 1)
+                self.assertEqual(calls.count("shared measure new"), 1)
+                events = json.loads(evidence.payload)["trials"][0]["lifecycle"]["events"]
+                if kind == "suite-complete":
+                    self.assertEqual(events[-1]["kind"], "recovered-end")
+                    self.assertNotIn("finished_ns", next(event for event in events if event["kind"] == "abandoned"))
+
+    def test_legacy_interrupted_schedule_still_rejects_unretained_timings(self):
+        checkpoint = self.root / "legacy-schedule"
+        selected, _ = self.scheduled_fixture(checkpoint=checkpoint)
+        header = json.loads((checkpoint / "header.json").read_bytes())
+        header["schema"] = "research-repo-tools/acquisition-checkpoint/v1"
+        (checkpoint / "header.json").write_bytes(deterministic_json(header))
+        (checkpoint / "events.jsonl").unlink()
+        for index in (1, 2):
+            (checkpoint / f"unit-trial-{index}.json").unlink()
+        (checkpoint / "unit-started-trial-2.json").unlink()
+        unit = {"trial": 1}
+        (checkpoint / "unit-started-trial-1.json").write_bytes(
+            deterministic_json({"unit": unit, "sha256": hashlib.sha256(deterministic_json(unit)).hexdigest()})
+        )
+        with (
+            patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("legacy rejection before commands")),
+            self.assertRaisesRegex(ValueError, "interrupted trial"),
+        ):
+            measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+
+    def candidate_fixture(self, *, generated=False, historical_readme=False, recovered=False, current_sources=()):
+        if historical_readme:
+            self.revisions["v1.0.0"]["README.md"] = b"immutable historical compiler input\r\n"
+            self.revisions["v1.0.0"]["doc.rs"] = b'#![doc = include_str!("README.md")]\npub fn value() -> u8 { 1 }\n'
+            self.revisions["v1.1.0"]["doc.rs"] = b'#![cfg_attr(doc, doc = include_str!("README.md"))]\npub fn value() -> u8 { 1 }\n'
+            self.stack.enter_context(patch("research_repo_tools.source_exports._git", side_effect=git_model(self.revisions)))
         original = {**self.revisions["v1.1.0"], "README.md": b"before\r\n"}
         if generated:
             # A previous independently retained run establishes a nonempty
@@ -1519,10 +1711,67 @@ sys.exit(status)
         inventory = set(original)
         self.stack.enter_context(patch("research_repo_tools.source_exports.select_files", side_effect=lambda root, **kwargs: tuple(sorted(inventory))))
         exceptions = ("README.md",)
-        if generated:
+        if generated and not current_sources:
             exceptions += ("docs/performance-runs/runs/unindexed/report.md",)
             exceptions += tuple(name for name in original if "/runs/" in name and name.endswith("report.md"))
-        selected, evidence = self.scheduled_fixture(outputs=exceptions, working_tree=True)
+        selection = plan(self.log, ("shared", "later") if recovered else ("shared",))
+        if current_sources:
+            selection = replace(
+                selection,
+                suites=tuple(
+                    replace(
+                        suite,
+                        measurement=replace(
+                            suite.measurement, current=replace(suite.measurement.current, sources=(*suite.measurement.sources, *current_sources))
+                        ),
+                    )
+                    for suite in selection.suites
+                ),
+            )
+        if historical_readme:
+            selection = replace(
+                selection,
+                suites=tuple(
+                    replace(
+                        suite,
+                        measurement=replace(
+                            suite.measurement,
+                            measurement=replace(suite.measurement.measurement, sources=(*suite.measurement.sources, "doc.rs")),
+                            baseline=replace(suite.measurement.baseline, sources=(*suite.measurement.sources, "doc.rs", "README.md")),
+                        ),
+                    )
+                    for suite in selection.suites
+                ),
+            )
+        if recovered:
+            checkpoint = self.root / "candidate-checkpoint"
+            selection = replace(selection, schedule=TrialSchedule(1, "sequential"), outputs=exceptions)
+            # Use the same owner context as the ordinary scheduled fixture.
+            selection = replace(
+                selection,
+                suites=tuple(
+                    replace(
+                        suite,
+                        measurement=replace(
+                            suite.measurement,
+                            measurement=replace(suite.measurement.measurement, context=(("repository", "example/library"), ("acquisition-owner", "local"))),
+                        ),
+                    )
+                    for suite in selection.suites
+                ),
+            )
+
+            def interrupt(command, args=(), **kwargs):
+                if args[1:3] == ("later", "measure") and (kwargs["cwd"] / "revision").read_bytes() == b"candidate":
+                    raise KeyboardInterrupt()
+                return run_command_live(command, args, **kwargs)
+
+            with patch("research_repo_tools.common_measurement.run_command_live", side_effect=interrupt), self.assertRaises(KeyboardInterrupt):
+                measure_pair(self.root, selection, PAIR, working_tree=True, checkpoint=checkpoint, progress=self.quiet)
+            selected = selection
+            evidence = measure_pair(self.root, selected, PAIR, working_tree=True, checkpoint=checkpoint, resume=True, progress=self.quiet)
+        else:
+            selected, evidence = self.scheduled_fixture(outputs=exceptions, working_tree=True, selected=selection)
         if generated:
             payload, envelope = serialize_evidence(evidence)
             self.original_evidence_bytes = (payload, b" \r\n" + envelope.replace(b"\n", b"\r\n"))
@@ -1609,6 +1858,83 @@ sys.exit(status)
         )
         self.assertEqual(before, self.log.read_bytes())
         return evidence, policy, native, provider, accepted, mapping
+
+    def test_historical_compiler_input_and_recovered_candidate_publish_without_acquisition(self):
+        evidence, policy, native, _, accepted, _ = self.candidate_fixture(generated=True, historical_readme=True, recovered=True)
+        parse_suite_plan_for_test = parse_suite_plan(json.loads(deterministic_json(policy.measurement.document())))
+        self.assertEqual(deterministic_json(parse_suite_plan_for_test.document()), deterministic_json(policy.measurement.document()))
+        self.assertEqual(parse_suite_plan_for_test.suites[0].measurement.phase_sources("baseline")[-1], "README.md")
+        for trial in parse_scheduled_run(evidence).trials:
+            for _, phase, _, source in parse_suite_run(trial).observations:
+                inventory = json.loads(dict(source.context)["original-source-inventory"])
+                self.assertEqual("README.md" in inventory, phase == "baseline")
+                original = json.loads(dict(source.context)["source-export"])
+                readme = next(item for item in original["files"] if item[0] == "README.md")
+                if phase == "baseline":
+                    self.assertEqual(readme[1], hashlib.sha256(b"immutable historical compiler input\r\n").hexdigest())
+        before = self.log.read_bytes()
+        for name, data in (
+            ("run.json", serialize_evidence(evidence)[0]),
+            ("evidence.json", serialize_evidence(evidence)[1]),
+            ("policy.json", serialize_candidate_policy(policy)),
+            ("accepted.json", accepted),
+        ):
+            (self.root / name).write_bytes(data)
+        with patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("Step 2 must remain read-only")):
+            self.assertEqual(
+                verify_candidate_release(
+                    self.root,
+                    evidence,
+                    policy,
+                    native,
+                    lambda endpoint: {},
+                    acquisition_sha256=acquisition_assertion_digest(policy),
+                    publication_receipt=self.publication_receipt,
+                    publication_sha256=self.publication_digest,
+                    expected=accepted,
+                ),
+                accepted,
+            )
+            publish_publication(plan_candidate_archive(self.root, "run.json", "evidence.json", "policy.json", "accepted.json", "recovered.tar.gz"))
+            self.assertEqual(serialize_evidence(verify_candidate_archive(self.root / "recovered.tar.gz", policy, accepted)), serialize_evidence(evidence))
+        self.assertEqual(before, self.log.read_bytes())
+        suite = policy.measurement.suites[0]
+        for role in ("current", "harness", "workloads"):
+            for name in ("README.md", "readme.md"):
+                measurement = suite.measurement
+                if role == "current":
+                    measurement = replace(measurement, current=replace(measurement.current, sources=(*measurement.phase_sources("current"), name)))
+                else:
+                    measurement = replace(measurement, measurement=replace(measurement.measurement, **{role: (*getattr(measurement.measurement, role), name)}))
+                with self.subTest(role=role, name=name), self.assertRaisesRegex(ValueError, "overlaps"):
+                    replace(policy.measurement, suites=(replace(suite, measurement=measurement),))
+
+    def test_generated_outputs_protect_explicit_current_source_patterns(self):
+        with self.assertRaisesRegex(ValueError, "generated output overlaps acquisition inputs"):
+            self.candidate_fixture(generated=True, current_sources=("docs/performance-runs/runs/*/report.md",))
+
+    def test_phase_source_case_receipts_validate_windows_inventory(self):
+        for files in self.revisions.values():
+            files["MODULE.RS"] = b"pub fn value() {}\n"
+        self.stack.enter_context(patch("research_repo_tools.source_exports._git", side_effect=git_model(self.revisions)))
+        selection = plan(self.log, ("shared",))
+        suite = selection.suites[0]
+        pattern = "*.rs" if os.name == "nt" else "*.RS"
+        measured = replace(
+            suite.measurement, baseline=replace(suite.measurement.baseline, sources=(pattern,)), current=replace(suite.measurement.current, sources=(pattern,))
+        )
+        selected, evidence = self.scheduled_fixture(TrialSchedule(1, "sequential"), selected=replace(selection, suites=(replace(suite, measurement=measured),)))
+        for _, phase, _, source in parse_suite_run(select_trial(evidence, 1)).observations:
+            context = dict(source.context)
+            self.assertEqual(json.loads(context["source-inventory"]), ["MODULE.RS"])
+            self.assertEqual(context["phase-source-case-sensitive"], "false" if os.name == "nt" else "true")
+            self.assertTrue(PureWindowsPath("MODULE.RS").full_match("*.rs"))
+            modeled = replace(measured, baseline=replace(measured.baseline, sources=("*.rs",)), current=replace(measured.current, sources=("*.rs",)))
+            windows_source = replace(source, context=tuple({**context, "phase-source-case-sensitive": "false"}.items()))
+            _validate_phase_identity(windows_source, modeled, phase)
+            with self.assertRaisesRegex(ValueError, "inventory differs"):
+                _validate_phase_identity(replace(source, context=tuple({**context, "phase-source-case-sensitive": "true"}.items())), modeled, phase)
+        validate_run_policy(evidence, selected, release=True)
 
     def test_committed_publisher_evidence_reuses_one_acquisition_and_preserves_history(self):
         evidence, policy, native, provider, accepted, _ = self.candidate_fixture(generated=True)

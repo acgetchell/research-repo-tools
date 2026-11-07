@@ -17,7 +17,7 @@ ordering and recovery.
 
 `scheduled_runs.parse_scheduled_run(evidence)` and `validate_run_evidence` return
 `ScheduledRun(plan, trials)` for complete-run v5. `trials` contains the exact
-original v4 evidence for each independent trial. The outer payload retains unique
+original v4 evidence for each declared trial slot. The outer payload retains unique
 sessions and observed per-suite/phase timestamps in declared execution order.
 `select_trial(evidence, trial)` validates the entire schedule before selecting a
 one-based trial for table, CSV, or plot APIs. A scheduled run deliberately has no
@@ -40,6 +40,15 @@ phase_views = run.phases
 `ScheduledRun` according to its schedule. Runtime schema/policy mismatches raise
 `ValueError`.
 The whole v5 evidence remains the authority for trial order and provenance.
+
+New trial records also carry `lifecycle` with schema
+`research-repo-tools/trial-lifecycle/v1`. It retains collection segments,
+suite/phase starts, accepted phase bytes, failed-output capture receipts,
+abandonments, and durable whole-pair commits. Parsers verify its exact correspondence
+with the trial payload and execution receipts. Recovery finalization is separately
+labeled when the original collection finish is unknown. Original v5 records without
+this extension remain readable and unchanged. See the
+[recovery contract](REUSING_BENCHMARKS.md#interrupted-acquisition-and-limitations).
 
 The default complete report displays every trial separately. Schema-2 README
 publication requires an explicit `trial` and labels that selection. Historical
@@ -98,6 +107,17 @@ For source selection, independent eligibility and the schema-4 acquisition
 contract, see [Declaring complete performance workflows](DECLARING_PERFORMANCE.md).
 
 ## Configuration and measurement
+
+Schema-4 `common_measurement.MeasurementPhase` accepts keyword-only
+`sources: tuple[str, ...] | None = None`; TOML spells it `phases.PHASE.sources`.
+Omitting it uses the shared top-level `sources`. An explicit nonempty selector
+replaces that phase's source patterns for original/effective inventories,
+fingerprints, declaration identity, validation, and drift checks. Harness and
+workload declarations remain shared. Earlier measurement schemas reject this
+option. Explicit selectors retain their acquisition host's native glob case
+semantics in a provenance receipt, so Windows captures validate on other hosts
+without reinterpreting their inventories. Output alias checks remain portable
+and case-folded. See the [historical compiler-input contract](candidate-reuse-api.md#historical-compiler-inputs).
 
 `measurement.load_measurement(root, configuration)` accepts schema-1
 `MeasurementConfig`, schema-2/3 `common_measurement.CommonHarnessPlan`, or

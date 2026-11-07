@@ -232,9 +232,12 @@ def _binding(policy: CandidatePolicy, final: str, publication: _PublicationRecei
     elif publication is not None:
         raise ValueError("publication receipt requires a declared candidate report")
     inputs = set()
-    for _, _, _, source in policy.observations:
+    for _, _, phase, source in policy.observations:
         context = dict(source.context)
-        for key in ("source-inventory", "original-source-inventory", "harness-inventory", "workload-inventory"):
+        keys = ("harness-inventory", "workload-inventory")
+        if phase == "current":
+            keys += ("source-inventory", "original-source-inventory")
+        for key in keys:
             if key in context:
                 inputs.update(_string(name, key) for name in _array(_load_json(context[key].encode("utf-8"), key), key))
 

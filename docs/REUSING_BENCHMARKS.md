@@ -44,8 +44,8 @@ just performance-release performance-release.toml --checkpoint target/release-tr
 just performance-readme performance-release.toml
 ```
 
-This is one acquisition session containing the declared independently executed
-trials. Each trial uses fresh exports/output trees. For each suite, the declared
+This is one bounded campaign containing the declared trial slots. Each paired
+suite uses fresh exports/output trees. For each suite, the declared
 phase order is executed before advancing to the next suite. Alternating order
 starts baseline/current, then current/baseline. Randomization ranks zero-based
 trial indices by SHA-256 of the ASCII string `rrt-schedule-v1:SEED:INDEX`, with
@@ -132,14 +132,43 @@ adoption; consumer migrations do not block upstream publication.
 
 ## Interrupted acquisition and limitations
 
-A schema-6 checkpoint accepts only a contiguous completed trial prefix. Resume
-rechecks original source/environment and freshly prepares retained units to check
-host, tools, dependencies, inventories, and gates before any new timing. Completed
-trials retain their bytes, identities, and timestamps. If a trial started without
-a complete retained receipt, it may have produced unretained measurements: resume
-rejects it. Preserve that failed acquisition and begin an explicitly new session
-at a new checkpoint path. Missing/duplicate/reordered receipts, gaps, changed
-declarations/seeds, and corrupt checkpoints are errors, never resampling signals.
+Schema-6 recovery retains a contiguous completed trial prefix and the contiguous
+completed paired-suite prefix within the next trial. Resume rechecks original
+sources/environment and freshly prepares every suite to check host, tools,
+dependencies, inventories, policies, declarations, and gates against retained
+assertions, including interrupted attempts, before any new timing. It retains
+every durable completed pair and repeats the first uncommitted pair in full,
+in its original scheduled phase order. It never borrows an interrupted phase.
+The schedule and measurement budget of completed slots do not change; retries
+are additional, explicitly disclosed work.
+
+The exclusive schema-2 checkpoint adds a checksummed append-only event journal.
+Starts precede timing; phase receipts retain accepted raw bytes and provenance;
+paired-suite commits precede the next suite. Interrupted attempts remain in a
+versioned trial lifecycle, outside accepted paired samples. On caught phase
+failure, opaque output is retained up to 4,096 files and 16 MiB per attempt.
+Absent, unreadable, unsafe, or oversized output has an explicit capture status;
+a hard-killed process can leave partial bytes unavailable. Such an unfinished
+attempt has no invented finish time. Recovery records its own observation time
+and a separate collection segment. If all pairs committed before interruption,
+recovery validates and finalizes them without measuring again. Completed trial
+payloads, sessions, timestamps, order receipts, and raw bytes remain exact.
+
+Missing/duplicate/reordered receipts, gaps, changed declarations/seeds, partial
+event records, and corrupt checkpoints reject resume. An unresolved writer lock
+requires explicit operator recovery after verifying exclusive ownership; it is
+never stolen. Legacy schema-1 checkpoints can retain completed whole trials, but
+their interrupted trials lack lifecycle receipts and still reject resume. Preserve
+those acquisitions and use a fresh checkpoint. Existing complete-run v5 evidence
+remains readable without synthesizing lifecycle fields; older readers may reject
+new lifecycle-bearing records.
+
+An independent Astra contract review for [#203](https://github.com/acgetchell/research-repo-tools/issues/203)
+required whole-pair recovery, immutable prefixes, explicit segments/abandonments,
+and validation of interrupted-attempt preparation. Recorded retries make exclusions
+auditable; they do not prove that interruptions were independent of observed
+performance or eliminate optional-stopping bias. A recovered trial is a completed
+campaign slot, not evidence of one uninterrupted or freshly independent session.
 
 Historical v1–v4 evidence retains its original meaning: sequential acquisition
 without a verified order-control receipt. It must not be relabeled counterbalanced.

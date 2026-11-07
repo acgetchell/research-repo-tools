@@ -35,8 +35,8 @@ assume-unchanged or skip-worktree entries. It compares **all** original candidat
 bytes, and executable bits. Additions, deletions, renames, and input changes
 invalidate reuse unless they are exact predeclared output paths. Output exceptions
 are limited to nonexecutable Markdown, reStructuredText, CSV, and SVG files. They
-cannot overlap declared input patterns or the actual source/harness/workload
-inventories, including portable case/Unicode aliases. The measurement controller
+cannot overlap current source patterns/inventories or either phase's
+harness/workload patterns/inventories, including portable case/Unicode aliases. The measurement controller
 cannot exempt its own configuration. Build files, lockfiles, scripts, and arbitrary
 configuration files are not output exceptions. Consumers must truthfully declare
 all inputs: a document read by a build or workload is an input, regardless of its
@@ -56,6 +56,47 @@ required jobs/steps/platforms, signer, event/ref, run/attempt and immutable arti
 Candidate acceptance does not weaken its source or Cargo archive guarantee.
 Acquisition provenance is never rewritten to the final commit or packaging host.
 The independent binding describes final release acceptance separately.
+
+## Historical compiler inputs
+
+The independent Astra source-identity checkpoint for
+[#204](https://github.com/acgetchell/research-repo-tools/issues/204) permits an exact
+predeclared document output to remain an immutable **baseline source input** while
+being absent from every current measurement/gate input and both phases' harness
+and workloads. For example, a consumer may change its current Rust crate before
+acquisition from unconditional `doc = include_str!("../README.md")` to
+`cfg_attr(doc, doc = include_str!("../README.md"))`. It must independently prove
+the actual baseline and current compile dependencies. This is a consumer source
+change, not a common-harness overlay or a rewrite of historical source.
+
+Within each schema-4 suite measurement, keep the shared `sources` as the current
+selection and declare the extra historical file explicitly:
+
+```toml
+sources = ["src/**/*.rs"]
+# The immutable baseline still compiles README; current ordinary builds do not.
+[phases.baseline]
+sources = ["src/**/*.rs", "README.md"]
+# Retain the existing command, gate, and expected/discovery settings here.
+```
+
+`MeasurementPhase.sources` is optional and replaces only that phase's source
+selection. Both original and effective baseline fingerprints and whole-tree
+exports retain README, while current provenance records its distinct truthful
+input inventory. Changing this selector after acquisition invalidates the
+independent assertion digest. Output protection and exact publisher receipts
+use current source selectors and both phases' harness/workload roles. Final
+binding still compares the entire original current tree with the final commit,
+including exact predeclared output names, executable bits, and path aliases.
+
+If any current compilation, discovery, gate, benchmark, executable, or workload
+reads README, declare it as a current input: its output exception must reject.
+File extensions and `cfg(doc)` alone prove no workload equivalence; trusted
+consumer commands can read undeclared files, which this API cannot infer.
+Downstream must validate default and exact rustdoc, README examples, native gates,
+and package contents for the final bytes. The historical acquisition receipts and
+final native/package acceptance remain distinct. Step 2 verification, report/README
+retries, and archive derivation acquire no data and run no scientific gates.
 
 ## Committed publisher evidence
 

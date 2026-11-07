@@ -1,4 +1,4 @@
-"""Versioned independent trials with observed execution receipts.
+"""Versioned declared trial slots with observed execution and recovery receipts.
 
 The outer evidence binds a declaration and original v4 bytes. It never pools
 Criterion samples or fabricates a receipt for a historical acquisition.
@@ -12,16 +12,18 @@ from collections.abc import Callable
 from contextlib import nullcontext
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 from research_repo_tools.complete_runs import RUN_SCHEMA_V5, _array, _integer, run_identity
 from research_repo_tools.criterion import _markdown_text
-from research_repo_tools.evidence import Evidence, _load_json, _object, deterministic_json, parse_evidence, serialize_evidence
+from research_repo_tools.evidence import Evidence, Provenance, _load_json, _object, deterministic_json, parse_evidence, serialize_evidence
 from research_repo_tools.measurement_checkpoints import open_checkpoint
 from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.source_exports import capture_source
-from research_repo_tools.suite_measurement import SuiteMeasurementPlan, _environment_digest, _measure_suites, parse_suite_plan
-from research_repo_tools.suite_runs import parse_suite_run, validate_suite_policy
+from research_repo_tools.suite_measurement import SuiteMeasurementPlan, _environment_digest, _measure_suites, _source_record, parse_suite_plan
+from research_repo_tools.suite_runs import SUITE_RUN_SCHEMA, parse_suite_run, validate_suite_policy
+from research_repo_tools.trial_recovery import LIFECYCLE_SCHEMA, replay_trial
 
 __all__ = ["SCHEDULED_RUN_SCHEMA", "ScheduledRun", "parse_scheduled_run", "select_trial"]
 
@@ -77,7 +79,13 @@ def _parse_scheduled_run(evidence: Evidence, *, partial: bool = False) -> Schedu
     previous_end = 0
     observed_sources = None
     for index, value in enumerate(records):
-        record = _object(value, "trial", {"trial", "session", "started_ns", "finished_ns", "order", "receipts", "payload", "manifest", "identity"})
+        record = _object(value, "trial")
+        _object(
+            record,
+            "trial",
+            {"trial", "session", "started_ns", "finished_ns", "order", "receipts", "payload", "manifest", "identity"}
+            | ({"lifecycle"} if "lifecycle" in record else set()),
+        )
         if type(record["trial"]) is not int or record["trial"] != index + 1 or record["order"] != list(plan.schedule.phases[index]):
             raise ValueError("trial identity/order differs from schedule")
         import re
@@ -100,11 +108,29 @@ def _parse_scheduled_run(evidence: Evidence, *, partial: bool = False) -> Schedu
         if observed_sources is not None and sources != observed_sources:
             raise ValueError("trial source/host/tool/environment observations changed")
         observed_sources = sources
+        recovery = None
+        if "lifecycle" in record:
+            lifecycle = _object(record["lifecycle"], "trial lifecycle", {"schema", "events"})
+            if lifecycle["schema"] != LIFECYCLE_SCHEMA:
+                raise ValueError("unknown trial lifecycle schema")
+            events = _array(lifecycle["events"], "trial lifecycle events")
+            recovery = replay_trial(events, plan, index + 1, complete=True)
+            if (
+                (started, ended, record["session"]) != (recovery.started, recovery.finished, events[0]["session"])
+                or deterministic_json(list(run.units)) != deterministic_json(recovery.units)
+                or record["receipts"] != recovery.receipts
+                or _object(_load_json(original.payload, "trial"), "trial")["reused"] != sorted(recovery.reused)
+            ):
+                raise ValueError("trial differs from committed recovery lifecycle")
+            other_sessions = recovery.sessions - {record["session"]}
+            if sessions & other_sessions:
+                raise ValueError("recovery collection sessions are reused across trials")
+            sessions.update(other_sessions)
         expected_order = []
         units = {unit["name"]: unit for unit in run.units}
         for suite in base.suites:
             unit = units[suite.name]
-            if not started <= unit["started_ns"] <= unit["finished_ns"] <= ended or unit["session"] in sessions:
+            if not started <= unit["started_ns"] <= unit["finished_ns"] <= ended or (recovery is None and unit["session"] in sessions):
                 raise ValueError("trial unit session/interval differs")
             sessions.add(unit["session"])
             expected_order.extend((suite.name, phase) for phase in plan.schedule.phases[index] if phase in unit["observations"])
@@ -176,10 +202,17 @@ def measure_schedule(
 
     names = tuple(f"trial-{index + 1}" for index in range(plan.schedule.trials))
     keys = tuple(key for name in names for key in (f"started-{name}", name))
-    context = open_checkpoint(checkpoint, identity, keys, resume=resume) if checkpoint else nullcontext(None)
+    context = open_checkpoint(checkpoint, identity, keys, resume=resume, events=True) if checkpoint else nullcontext(None)
     with context as journal:
         with progress.stage("checkpoint"):
             retained = journal.read() if journal else {}
+            events = journal.read_events() if journal else []
+        lifecycle_enabled = journal is None or journal.events_enabled
+        event_trials = [event.get("trial") for event in events]
+        if any(type(trial) is not int or not 1 <= trial <= len(names) for trial in event_trials):
+            raise ValueError("checkpoint recovery trial events are reordered or unknown")
+        if event_trials != sorted(_integer(trial, "recovery trial") for trial in event_trials):
+            raise ValueError("checkpoint recovery trial events are reordered or unknown")
         prefix = []
         for name in names:
             if name in retained:
@@ -187,7 +220,20 @@ def measure_schedule(
                     raise ValueError("checkpoint trials must form a contiguous started/completed prefix")
                 prefix.append(retained[name])
             elif f"started-{name}" in retained:
-                raise ValueError("interrupted trial may contain unretained timings; preserve it and start a new acquisition")
+                if names.index(name) != len(prefix) or retained[f"started-{name}"] != {"trial": len(prefix) + 1, "lifecycle": LIFECYCLE_SCHEMA}:
+                    raise ValueError("interrupted trial may contain unretained timings; preserve it and start a new acquisition")
+        for index, name in enumerate(names):
+            trial_events = [event for event in events if event["trial"] == index + 1]
+            if trial_events and f"started-{name}" not in retained:
+                raise ValueError("recovery events lack a started trial marker")
+            if index < len(prefix):
+                expected_events = _object(prefix[index].get("lifecycle", {}), "trial lifecycle").get("events", [])
+                if trial_events != expected_events:
+                    raise ValueError("completed trial differs from checkpoint recovery journal")
+            elif trial_events:
+                if index != len(prefix):
+                    raise ValueError("recovery trial events must form a contiguous prefix")
+                replay_trial(trial_events, plan, index + 1)
         asserted_units = ()
         if prefix:
             first = parse_evidence(_decode(prefix[0].get("payload")), _decode(prefix[0].get("manifest")))
@@ -220,30 +266,95 @@ def measure_schedule(
                 record = prefix[index]
                 original = parse_evidence(_decode(record.get("payload")), _decode(record.get("manifest")))
             else:
-                if journal:
-                    journal.accept(f"started-{names[index]}", {"trial": index + 1})
-                receipts = []
+                marker = f"started-{names[index]}"
+                if journal and marker not in retained:
+                    journal.accept(marker, {"trial": index + 1, **({"lifecycle": LIFECYCLE_SCHEMA} if lifecycle_enabled else {})})
+                trial_events = [event for event in events if event["trial"] == index + 1]
+                recovery = replay_trial(trial_events, plan, index + 1)
+                receipts = list(recovery.receipts)
+
+                def event(item: dict[str, Any]) -> None:
+                    value = {"trial": index + 1, **item}
+                    if journal:
+                        journal.append_event(value)
+                    trial_events.append(value)
+
+                def prepared(observations: dict[str, dict[str, Provenance]]) -> None:
+                    observed = {name: {phase: _source_record(source) for phase, source in phases.items()} for name, phases in observations.items()}
+                    if recovery.prepared is not None and deterministic_json(observed) != deterministic_json(recovery.prepared):
+                        raise ValueError("checkpoint observations differ from interrupted trial preparation")
+                    if recovery.finished:
+                        return
+                    if recovery.opened:
+                        event({"kind": "abandoned", "at_ns": time.time_ns(), "reason": "recovery observed an unclosed collection segment; finish time unknown"})
+                    if len(recovery.units) == len(plan.suites):
+                        event(
+                            {
+                                "kind": "recovered-end",
+                                "at_ns": time.time_ns(),
+                                "reason": "recovery finalized durable pairs; original collection finish time unknown",
+                            }
+                        )
+                        return
+                    event({"kind": "segment", "session": uuid.uuid4().hex, "at_ns": time.time_ns(), "prepared": observed})
 
                 def phase_receipt(suite: str, phase: str, first: int, last: int) -> None:
                     receipts.append({"suite": suite, "phase": phase, "started_ns": first, "finished_ns": last})
 
                 start = time.time_ns()
-                original = _measure_suites(
-                    root,
-                    SuiteMeasurementPlan(plan.suites),
-                    pair,
-                    working_tree=working_tree,
-                    progress=progress,
-                    verify=unchanged,
-                    phase_order=order,
-                    on_phase=phase_receipt,
-                    asserted_units=asserted_units,
-                )
+                try:
+                    original = _measure_suites(
+                        root,
+                        SuiteMeasurementPlan(plan.suites),
+                        pair,
+                        working_tree=working_tree,
+                        progress=progress,
+                        verify=unchanged,
+                        phase_order=order,
+                        on_phase=phase_receipt,
+                        asserted_units=asserted_units,
+                        retained_units=tuple(recovery.units),
+                        on_prepared=prepared if lifecycle_enabled else None,
+                        on_event=event if lifecycle_enabled and not recovery.finished else None,
+                    )
+                    if lifecycle_enabled and not replay_trial(trial_events, plan, index + 1).finished:
+                        event({"kind": "segment-end", "at_ns": time.time_ns()})
+                except BaseException as error:
+                    if lifecycle_enabled:
+                        try:
+                            # A failed append can leave a partial journal. Never
+                            # append beyond it or reinterpret it as missing work.
+                            if journal:
+                                trial_events[:] = [item for item in journal.read_events() if item.get("trial") == index + 1]
+                            state = replay_trial(trial_events, plan, index + 1)
+                            if state.opened:
+                                event({"kind": "abandoned", "at_ns": time.time_ns(), "reason": type(error).__name__})
+                        except BaseException as retention_error:
+                            raise BaseExceptionGroup("acquisition and recovery retention failed", [error, retention_error]) from None
+                    raise
                 finish = time.time_ns()
+                if lifecycle_enabled:
+                    recovery = replay_trial(trial_events, plan, index + 1, complete=True)
+                    start, finish = recovery.started, recovery.finished
+                    receipts = recovery.receipts
+                    # Reconstruct from durable pairs, including when assembly
+                    # failed after the last commit. Do not invent new unit bytes.
+                    original = Evidence(
+                        deterministic_json(
+                            {
+                                "schema": SUITE_RUN_SCHEMA,
+                                "declaration": SuiteMeasurementPlan(plan.suites).document(),
+                                "units": recovery.units,
+                                "reused": sorted(recovery.reused),
+                            }
+                        ),
+                        SUITE_RUN_SCHEMA,
+                        original.sources,
+                    )
                 payload, manifest = serialize_evidence(original)
                 record = {
                     "trial": index + 1,
-                    "session": uuid.uuid4().hex,
+                    "session": trial_events[0]["session"] if lifecycle_enabled else uuid.uuid4().hex,
                     "started_ns": start,
                     "finished_ns": finish,
                     "order": list(order),
@@ -251,6 +362,7 @@ def measure_schedule(
                     "payload": base64.b64encode(payload).decode("ascii"),
                     "manifest": base64.b64encode(manifest).decode("ascii"),
                     "identity": run_identity(original),
+                    **({"lifecycle": {"schema": LIFECYCLE_SCHEMA, "events": trial_events}} if lifecycle_enabled else {}),
                 }
                 asserted_units = parse_suite_run(original).units
             if envelope is not None and original.sources != envelope:
@@ -291,6 +403,24 @@ def render_scheduled_run(evidence: Evidence, *, title: str, links: str, identity
     records = _array(_object(_load_json(evidence.payload, "schedule"), "schedule")["trials"], "trials")
     for index, trial in enumerate(run.trials):
         lines.extend(["", f"## Trial {index + 1}: {' → '.join(run.plan.schedule.phases[index])}", ""])
+        if "lifecycle" in records[index]:
+            recovery = replay_trial(records[index]["lifecycle"]["events"], run.plan, index + 1, complete=True)
+            lines.extend(
+                [
+                    f"Collection: {recovery.segments} segment(s); {recovery.abandoned} abandoned attempt(s). Validated abandoned phases are retained and excluded from accepted pairs; failed-output capture status is recorded.",
+                    "These are completed campaign slots; recovery does not establish uninterrupted collection, independent trials, or absence of optional-stopping bias.",
+                    "",
+                ]
+            )
+            for event in records[index]["lifecycle"]["events"]:
+                if event["kind"] == "segment":
+                    lines.append(f"- Collection segment `{event['session']}` started: {event['at_ns']} (Unix ns).")
+                elif event["kind"] == "abandoned":
+                    lines.append(f"- Abandonment observed: {event['at_ns']} (Unix ns); {_markdown_text(event['reason'])}.")
+                elif event["kind"] == "phase-failed":
+                    lines.append(f"- Failed {event['phase']} output: {event['output']['status']}; {len(event['output']['files'])} opaque file(s) retained.")
+                elif event["kind"] == "recovered-end":
+                    lines.append(f"- Recovery finalization observed: {event['at_ns']} (Unix ns); original collection finish unknown.")
         for receipt in records[index]["receipts"]:
             lines.append(f"- {receipt['suite']}/{receipt['phase']}: {receipt['started_ns']}–{receipt['finished_ns']} (Unix ns).")
         trial_report = render_suite_run(trial, title=f"Trial {index + 1}", links=links, identity=run_identity(trial)).decode("utf-8").splitlines()

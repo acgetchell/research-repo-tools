@@ -113,7 +113,7 @@ class SuiteMeasurementPlan:
             if any(
                 PurePosixPath(unicodedata.normalize("NFC", name).casefold()).full_match(unicodedata.normalize("NFC", pattern).casefold())
                 for suite in suites
-                for pattern in (*suite.measurement.sources, *suite.measurement.harness, *suite.measurement.measurement.workloads)
+                for pattern in (*suite.measurement.phase_sources("current"), *suite.measurement.harness, *suite.measurement.measurement.workloads)
             ):
                 raise ValueError("declared output overlaps measured inputs")
         object.__setattr__(self, "outputs", tuple(sorted(outputs)))
@@ -136,7 +136,7 @@ class SuiteMeasurementPlan:
         first = self.suites[0].measurement.measurement
         return replace(
             first,
-            sources=tuple(sorted({p for s in self.suites for p in s.measurement.sources})),
+            sources=tuple(sorted({p for s in self.suites for p in s.measurement.phase_sources("current")})),
             harness=tuple(sorted({p for s in self.suites for p in s.measurement.harness})),
             workloads=tuple(sorted({p for s in self.suites for p in s.measurement.measurement.workloads})),
         )
@@ -226,6 +226,21 @@ def _environment_digest() -> str:
     return sha256(deterministic_json({key: value for key, value in os.environ.items() if key not in ignored}))
 
 
+def _retain_failed_phase(phase: str, started: int, directory: Path, error: BaseException, emit: Callable[[dict[str, Any]], None]) -> None:
+    from research_repo_tools.trial_recovery import capture_failed_output
+
+    emit(
+        {
+            "kind": "phase-failed",
+            "phase": phase,
+            "started_ns": started,
+            "at_ns": time.time_ns(),
+            "reason": type(error).__name__,
+            "output": capture_failed_output(directory),
+        }
+    )
+
+
 def measure_suites(
     root: Path,
     plan: SuiteMeasurementPlan,
@@ -264,6 +279,9 @@ def _measure_suites(
     on_phase: Callable[[str, str, int, int], None] | None = None,
     asserted_units: tuple[dict[str, Any], ...] = (),
     reuse_assertions: bool = False,
+    retained_units: tuple[dict[str, Any], ...] = (),
+    on_prepared: Callable[[dict[str, dict[str, Provenance]]], None] | None = None,
+    on_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> Evidence:
     """Resolve availability before native commands and resume whole complete units."""
     from research_repo_tools.suite_runs import SUITE_RUN_SCHEMA, parse_suite_run, sample_document, validate_unit
@@ -364,6 +382,22 @@ def _measure_suites(
                 on_sample=accepted_sample,
                 phase_order=phase_order,
                 on_phase=(lambda phase, start, end: on_phase(suite.name, phase, start, end)) if on_phase is not None else None,
+                on_phase_start=(lambda phase, start: on_event({"kind": "phase-start", "phase": phase, "at_ns": start})) if on_event else None,
+                on_phase_sample=(
+                    lambda phase, sample, source, start, end: on_event(
+                        {
+                            "kind": "phase-complete",
+                            "phase": phase,
+                            "started_ns": start,
+                            "finished_ns": end,
+                            "sample": sample_document(sample),
+                            "source": _source_record(source),
+                        }
+                    )
+                )
+                if on_event
+                else None,
+                on_phase_failure=(lambda phase, start, directory, error: _retain_failed_phase(phase, start, directory, error, on_event)) if on_event else None,
             )
 
         # Discover and gate every suite before timing, retaining only metadata.
@@ -396,6 +430,10 @@ def _measure_suites(
         if journal is not None:
             with reporter.stage("checkpoint"):
                 retained = journal.read()
+        if retained_units:
+            if journal is not None or reuse_assertions:
+                raise ValueError("retained suite units require a single external checkpoint owner")
+            retained = {unit["name"]: unit for unit in retained_units}
         if reuse_assertions:
             if journal is not None or not asserted_units:
                 raise ValueError("retained assertions require a complete independent unit set without a checkpoint")
@@ -405,6 +443,8 @@ def _measure_suites(
             if suite.name in retained:
                 with reporter.stage("checkpoint", suite=suite.name):
                     validate_unit(retained[suite.name], suite, decisions[suite.name], prepared.get(suite.name, ({}, {}))[1])
+        if on_prepared is not None:
+            on_prepared({suite.name: prepared.get(suite.name, ({}, {}))[1] for suite in plan.suites})
         units = []
         for suite in plan.suites:
             reporter.suite = suite.name
@@ -413,6 +453,9 @@ def _measure_suites(
             started = time.time_ns()
             elapsed_started = reporter.clock()
             if unit is None:
+                session = uuid.uuid4().hex
+                if on_event is not None:
+                    on_event({"kind": "suite-start", "suite": suite.name, "session": session, "at_ns": started})
                 measurements: tuple[tuple[str, CompleteSample], ...] = ()
                 sources: tuple[tuple[str, Provenance], ...] = ()
                 if suite.name in prepared:
@@ -427,7 +470,7 @@ def _measure_suites(
                     "name": suite.name,
                     "contract": suite.contract,
                     "availability": decisions[suite.name],
-                    "session": uuid.uuid4().hex,
+                    "session": session,
                     "started_ns": started,
                     "finished_ns": time.time_ns(),
                     "observations": {
@@ -436,6 +479,8 @@ def _measure_suites(
                 }
                 validate_unit(unit, suite, decisions[suite.name], prepared.get(suite.name, ({}, {}))[1])
                 unchanged()
+                if on_event is not None:
+                    on_event({"kind": "suite-complete", "unit": unit})
                 if journal:
                     with reporter.stage("checkpoint", suite=suite.name):
                         journal.accept(suite.name, unit)
