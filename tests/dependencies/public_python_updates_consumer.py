@@ -3,7 +3,9 @@
 import io
 import json
 import os
+import shlex
 import subprocess
+import sys
 import tempfile
 import tomllib
 import unittest
@@ -14,10 +16,11 @@ from typing import override
 from unittest.mock import patch
 
 from research_repo_tools import cli, dependencies, python_updates
+from research_repo_tools.changelog import template
 from research_repo_tools.process import run_command_live
 
 
-def wheel(directory: Path, name: str, version: str, requires: tuple[str, ...] = (), *, requires_python: str = ">=3.15") -> Path:
+def wheel(directory: Path, name: str, version: str, requires: tuple[str, ...] = (), *, requires_python: str = ">=3.15", extras: tuple[str, ...] = ()) -> Path:
     directory.mkdir(parents=True, exist_ok=True)
     stem = name.replace("-", "_") + "-" + version
     path = directory / (stem + "-py3-none-any.whl")
@@ -25,6 +28,7 @@ def wheel(directory: Path, name: str, version: str, requires: tuple[str, ...] = 
         archive.writestr(
             stem + ".dist-info/METADATA",
             f"Metadata-Version: 2.3\nName: {name}\nVersion: {version}\nRequires-Python: {requires_python}\n"
+            + "".join(f"Provides-Extra: {item}\n" for item in extras)
             + "".join(f"Requires-Dist: {item}\n" for item in requires),
         )
         archive.writestr(stem + ".dist-info/WHEEL", "Wheel-Version: 1.0\nRoot-Is-Purelib: true\nTag: py3-none-any\n")
@@ -99,6 +103,206 @@ class TestPythonUpdates(unittest.TestCase):
     def preview(self):
         constraints, pins = dependencies.parse_project(self.manifest.read_text(encoding="utf-8"))
         return dependencies.resolve_latest_pins(pins, constraints, self.project, env=self.env)
+
+    def exact_git_source(self):
+        if os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1":
+            self.skipTest("disposable Git mutations disabled")
+        upstream = self.root / "Git supplier café"
+        upstream.mkdir()
+        tools = ("ruff", "ty", "pytest")
+        payload = wheel(upstream, "fixed-tool", "1.0", tuple(f'{name}==1.0; extra == "tools"' for name in tools), extras=("tools",))
+        (upstream / "pyproject.toml").write_bytes(
+            b'[build-system]\nrequires=[]\nbuild-backend="backend"\nbackend-path=["."]\n'
+            b'[project]\nname="fixed-tool"\nversion="1.0"\nrequires-python=">=3.15"\n'
+            b'[project.optional-dependencies]\ntools=["ruff==1.0","ty==1.0","pytest==1.0"]\n'
+        )
+        (upstream / "backend.py").write_text(
+            "import pathlib, shutil\n"
+            "def build_wheel(wheel_directory, config_settings=None, metadata_directory=None):\n"
+            f"    name = {payload.name!r}\n"
+            "    shutil.copyfile(name, pathlib.Path(wheel_directory) / name)\n"
+            "    return name\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        git_env = {key: value for key, value in self.env.items() if not key.startswith("GIT_")}
+        git_env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_COUNT="0")
+
+        def git(*args):
+            result = subprocess.run(["git", *args], cwd=upstream, env=git_env, capture_output=True, text=True, check=False, timeout=30)
+            self.assertEqual(result.returncode, 0, result.stderr)
+            return result.stdout.strip()
+
+        git("init", "--quiet", "--template=")
+        git("add", ".")
+        author = ("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false")
+        git(*author, "commit", "--quiet", "-m", "fixture")
+        commit = git("--no-pager", "rev-parse", "HEAD")
+        (upstream / "backend.py").write_bytes(b'raise RuntimeError("must not follow the supplier branch")\n')
+        git(*author, "commit", "--quiet", "--all", "-m", "advance branch")
+        self.assertNotEqual(git("--no-pager", "rev-parse", "HEAD"), commit)
+        # Exercise HTTPS source identity with local, offline Git transport. The
+        # URL uv records must remain the declared URL, not the transport rewrite.
+        url = "https://example.invalid/fixed-tool.git"
+        git_config = self.root / "gitconfig"
+        git_config.write_text(f'[url "{upstream.as_uri()}"]\n\tinsteadOf = {url}\n', encoding="utf-8", newline="\n")
+        self.env = {key: value for key, value in self.env.items() if not key.startswith("GIT_")}
+        self.env.update(GIT_CONFIG_GLOBAL=str(git_config), GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_COUNT="0", GIT_TERMINAL_PROMPT="0", GIT_ALLOW_PROTOCOL="file")
+        # Git fetching is local, but uv's offline mode forbids a first fetch.
+        self.env.pop("UV_OFFLINE", None)
+        for name in tools:
+            for version in ("1.0", "2.0"):
+                wheel(self.wheels, name, version)
+        wheel(self.wheels, "fixed-tool", "1.0")  # Same-version registry impostor.
+        source = self.manifest.read_text(encoding="utf-8").replace('tooling=["fixture-tool<3"]', 'tooling=["fixture-tool<3", "fixed-tool[tools]==1.0"]')
+        source += f'[tool.uv.sources]\nfixed-tool={{git="{url}",rev="{commit}"}}\n'
+        self.manifest.write_text(source, encoding="utf-8", newline="\n")
+        self.environment.stop()
+        self.environment = patch.dict(os.environ, self.env, clear=True)
+        self.environment.start()
+        self.addCleanup(self.environment.stop)
+        return url, commit
+
+    def assert_git_identity(self, identity):
+        url, commit = identity
+        manifest = tomllib.loads(self.manifest.read_text(encoding="utf-8"))
+        self.assertEqual(manifest["tool"]["uv"]["sources"], {"fixed-tool": {"git": url, "rev": commit}})
+        self.assertEqual(manifest["dependency-groups"]["tooling"], ["fixture-tool<3", "fixed-tool[tools]==1.0"])
+        lock = tomllib.loads((self.project / "uv.lock").read_text(encoding="utf-8"))
+        fixed = [package for package in lock["package"] if package["name"] == "fixed-tool"]
+        self.assertEqual(len(fixed), 1)
+        self.assertEqual(fixed[0]["source"], {"git": f"{url}?rev={commit}#{commit}"})
+        python = self.project / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+        result = subprocess.run(
+            [str(python), "-I", "-X", "utf8", "-c", "import importlib.metadata as m; print(m.distribution('fixed-tool').read_text('direct_url.json'))"],
+            capture_output=True,
+            text=True,
+            check=True,
+            timeout=30,
+        )
+        self.assertEqual(json.loads(result.stdout), {"url": url, "vcs_info": {"vcs": "git", "requested_revision": commit, "commit_id": commit}})
+        for name in ("ruff", "ty", "pytest"):
+            self.assertEqual(self.installed_version(self.project, name), "1.0")
+
+    def test_exact_git_source_preview_and_update_keep_included_constraints(self):
+        identity = self.exact_git_source()
+        original = self.manifest.read_bytes()
+        self.assertEqual(self.preview(), [dependencies.DevPin("fixture-tool", "1.0")])
+        self.assertEqual(self.manifest.read_bytes(), original)
+        self.assertFalse((self.project / "uv.lock").exists())
+        self.assertFalse((self.project / ".venv").exists())
+        self.assertEqual(self.all_projects(), (0, ""))
+        self.assertEqual(self.manifest.read_bytes(), original)
+        self.assert_git_identity(identity)
+        wheel(self.wheels, "fixture-tool", "2.0")
+        wheel(self.wheels, "fixture-tool", "3.0")  # Included-group ceiling stays authoritative.
+        self.assertEqual(self.preview(), [dependencies.DevPin("fixture-tool", "2.0")])
+        self.assertEqual(self.all_projects(), (0, ""))
+        self.assertEqual(self.installed_version(self.project, "fixture-tool"), "2.0")
+        self.assert_git_identity(identity)
+
+    def test_exact_git_source_template_aggregate_keeps_identity(self):
+        identity = self.exact_git_source()
+        launcher = self.root / "template launcher.py"
+        launcher.write_text(
+            "import os, sys\nfrom unittest.mock import patch\n"
+            "from research_repo_tools import cli, python_updates\n"
+            "args = sys.argv[1:]\n"
+            "if 'update-python' in args:\n"
+            "    with patch.object(python_updates.toolchain.Runtime, 'inspect', return_value=[]), "
+            "patch.object(python_updates.toolchain.Runtime, 'project_environment', return_value=dict(os.environ)):\n"
+            "        sys.exit(cli.main(['deps', 'update-python', '--all-projects']))\n"
+            "if 'osv' in args:\n"
+            "    import tomllib\n"
+            "    from pathlib import Path\n"
+            "    assert tomllib.loads(Path('uv.lock').read_text(encoding='utf-8'))['package']\n",
+            encoding="utf-8",
+            newline="\n",
+        )
+        command = shlex.join([sys.executable, "-I", "-X", "utf8", str(launcher)])
+        justfile = self.project / "justfile"
+        justfile.write_text(template("justfile").replace("uv run", command + " run"), encoding="utf-8", newline="\n")
+        for version in ("1.0", "2.0"):
+            with self.subTest(version=version):
+                wheel(self.wheels, "fixture-tool", version)
+                result = subprocess.run(["just", "update"], cwd=self.project, env=self.env, capture_output=True, text=True, check=False, timeout=120)
+                self.assertEqual(result.returncode, 0, result.stderr)
+                self.assertEqual(self.installed_version(self.project, "fixture-tool"), version)
+                self.assert_git_identity(identity)
+
+    def test_exact_git_source_survives_failed_resolution_and_multi_project_sync_recovery(self):
+        identity = self.exact_git_source()
+        scanner = self.independent_project()
+        paths = [project / name for project in (self.project, scanner) for name in ("pyproject.toml", "uv.lock")]
+        original = {path: path.read_bytes() for path in paths}
+        wheel(self.wheels, "fixture-tool", "2.0", ("unavailable-library==1",))
+        # A bad newer candidate can correctly leave the compatible 1.0 pin in
+        # place. Make the retained include closure itself unsatisfiable instead.
+        self.manifest.write_text(
+            self.manifest.read_text(encoding="utf-8").replace('"fixture-tool<3"', '"fixture-tool<3", "unavailable-library==1"'),
+            encoding="utf-8",
+            newline="\n",
+        )
+        failed_inputs = {path: path.read_bytes() for path in paths}
+        failures = []
+        native_run = dependencies.run_safe_command
+
+        def capture_failure(*args, **kwargs):
+            try:
+                return native_run(*args, **kwargs)
+            except subprocess.CalledProcessError as error:
+                failures.append(error)
+                raise
+
+        with patch.object(dependencies, "run_safe_command", side_effect=capture_failure):
+            code, diagnostic = self.all_projects()
+        self.assertEqual(code, 1)
+        self.assertIn("command failed with exit status 1", diagnostic)
+        self.assertEqual(len(failures), 1)
+        # Dependency CLI diagnostics are deliberately capped at 400 characters;
+        # inspect native stderr to prove the failure's cause with long paths.
+        self.assertIn("unavailable-library", failures[0].stderr)
+        self.assertEqual({path: path.read_bytes() for path in paths}, failed_inputs)
+        self.manifest.write_bytes(original[self.manifest])
+        self.assert_git_identity(identity)
+        (self.wheels / "fixture_tool-2.0-py3-none-any.whl").unlink()
+        wheel(self.wheels, "fixture-tool", "2.1")
+        wheel(self.wheels, "fixture-library", "2.0")
+        injected = False
+
+        def sync_then_fail(command, args, **kwargs):
+            nonlocal injected
+            result = run_command_live(command, args, **kwargs)
+            if args[0] == "sync" and kwargs["cwd"] == scanner and not injected:
+                injected = True
+                raise subprocess.CalledProcessError(23, [command, *args], stderr="injected Git-source synchronization failure")
+            return result
+
+        with patch.object(python_updates, "run_command_live", side_effect=sync_then_fail):
+            code, diagnostic = self.all_projects()
+        self.assertEqual(code, 1)
+        self.assertTrue(injected)
+        self.assertIn("command failed with exit status 23", diagnostic)
+        self.assertEqual({path: path.read_bytes() for path in paths}, original)
+        self.assertEqual(self.installed_version(self.project, "fixture-tool"), "1.0")
+        self.assertEqual(self.installed_version(scanner, "fixture-library"), "1.0")
+        self.assert_git_identity(identity)
+        self.assertEqual(self.all_projects(), (0, ""))
+        self.assert_git_identity(identity)
+
+    def test_floating_git_source_cli_rejects_even_without_upgrade_targets(self):
+        source = self.manifest.read_text(encoding="utf-8").replace('"fixture-tool==1.0"', '"fixed-tool==1.0"')
+        source += '[tool.uv.sources]\nfixed-tool={git="https://example.invalid/fixed-tool.git",rev="main"}\n'
+        self.manifest.write_text(source, encoding="utf-8", newline="\n")
+        original = self.manifest.read_bytes()
+        errors = io.StringIO()
+        with redirect_stderr(errors), redirect_stdout(io.StringIO()):
+            result = cli.main(["--root", str(self.project), "deps", "update-python"])
+        self.assertEqual(result, 1)
+        self.assertIn("full lowercase 40-character commit", errors.getvalue())
+        self.assertEqual(self.manifest.read_bytes(), original)
+        self.assertFalse((self.project / "uv.lock").exists())
+        self.assertFalse((self.project / ".venv").exists())
 
     def test_override_policy_keeps_new_tool_compatible_and_preview_read_only(self):
         wheel(self.wheels, "fixture-tool", "2.0", ("fixture-lib==1.0",))

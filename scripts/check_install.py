@@ -250,7 +250,10 @@ def check_semgrep_update(consumer: Path, artifact: Path, version: str, uv: str, 
     python = scripts / ("python.exe" if os.name == "nt" else "python")
     suite = consumer / "public_native_semgrep_consumer.py"
     suite.write_bytes((ROOT / "tests/semgrep/public_native_semgrep_consumer.py").read_bytes())
-    run_consumer_suite(python, [str(suite)], cwd=consumer, env=env)
+    # Semgrep can delegate to pysemgrep by name. Keep that child in this
+    # consumer's environment even when the checkout has a newer scanner.
+    local_env = {**env, "PATH": str(scripts) + os.pathsep + env.get("PATH", "")}
+    run_consumer_suite(python, [str(suite)], cwd=consumer, env=local_env)
     assert lock.read_bytes() == original_lock
 
 

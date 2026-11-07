@@ -168,7 +168,16 @@ URLs and `find-links` remain relative to the consumer project.
 Pin discovery supports registry requirements and named-index sources with
 optional platform markers. Absolute local wheel/sdist source files are also
 retained for isolated artifact evaluation; their fixed pins are not upgrade
-targets. Relative paths, source directories, workspace, Git, direct URL, group/extra-scoped
+targets. Exact development Git sources use the same declaration accepted during
+adoption: one uncredentialed HTTPS repository URL and a full lowercase
+40-character `rev`, with no branch, tag, marker, group or extra scope. These
+packages retain their version requirements, extras and exact repository/commit
+through candidate resolution, full-lock refresh and synchronization, including
+when inherited through `tooling`. They are not registry upgrade targets, even
+when the registry has the same version. Development Git pins remain prohibited
+at release acquisition, evidence and publication boundaries.
+
+Relative paths, source directories, workspace, floating or conditional Git, direct URL, group/extra-scoped
 sources, scoped override tables, dynamic dependencies, legacy uv dev dependencies
 and conflicting-group policies are rejected before writes. Use explicit uv
 maintenance for those forms; the updater never falls back to PyPI to bypass them.
