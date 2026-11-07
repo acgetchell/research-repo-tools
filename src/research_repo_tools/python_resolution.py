@@ -45,7 +45,7 @@ def _literal(value: object) -> str:
 
 
 def policy(text: str, root: Path) -> dict[str, object]:
-    """Validate source forms before writes; retain named-index identity and auth."""
+    """Validate sources before writes; retain index and fixed-source identity."""
     data = tomllib.loads(text)
     uv = _table(_table(data.get("tool", {}), "tool").get("uv", {}), "tool.uv")
     for name in ("workspace", "conflicts", "dev-dependencies"):
@@ -59,6 +59,16 @@ def policy(text: str, root: Path) -> dict[str, object]:
         raise ValueError("Python pin updates require static project dependencies")
     sources = _table(uv.get("sources", {}), "tool.uv.sources")
     for name, entries in sources.items():
+        if any(isinstance(entry, dict) and "git" in entry for entry in (entries if isinstance(entries, list) else [entries])):
+            from research_repo_tools.dependency_provenance import validate_development_source
+
+            # Use the adoption contract unchanged: a single uncredentialed HTTPS
+            # repository and full lowercase commit, without conditional scopes.
+            try:
+                validate_development_source(data, canonicalize_name(name))
+            except ValueError as error:
+                raise ValueError(f"unsupported tool.uv.sources.{name}: {error}") from error
+            continue
         for entry in entries if isinstance(entries, list) else [entries]:
             if isinstance(entry, dict) and isinstance(entry.get("path"), str) and not set(entry) - {"path", "marker"}:
                 path = Path(entry["path"])
@@ -66,8 +76,8 @@ def policy(text: str, root: Path) -> dict[str, object]:
                     continue
             if not isinstance(entry, dict) or not isinstance(entry.get("index"), str) or set(entry) - {"index", "marker"}:
                 raise ValueError(
-                    f"unsupported tool.uv.sources.{name}: pin updates support named indexes and absolute wheel/sdist files with optional markers; "
-                    "relative paths, directories, workspace/Git/URL/group/extra sources require explicit uv maintenance"
+                    f"unsupported tool.uv.sources.{name}: pin updates support named indexes, absolute wheel/sdist files with optional markers, "
+                    "and exact development Git sources; relative paths, directories, workspace/URL/group/extra sources require explicit uv maintenance"
                 )
     result = {key: value for key, value in uv.items() if key in PROJECT_POLICY}
     if "index" in result:
@@ -93,8 +103,8 @@ def policy(text: str, root: Path) -> dict[str, object]:
     return result
 
 
-def artifact_source_names(text: str) -> set[str]:
-    """Fixed local distributions retain their pins; they have no upgrade index."""
+def fixed_source_names(text: str) -> set[str]:
+    """Fixed artifacts and Git commits retain pins; they have no upgrade index."""
     data = tomllib.loads(text)
     uv = _table(_table(data.get("tool", {}), "tool").get("uv", {}), "tool.uv")
     sources = _table(uv.get("sources", {}), "tool.uv.sources")
@@ -102,7 +112,7 @@ def artifact_source_names(text: str) -> set[str]:
         canonicalize_name(name)
         for name, entries in sources.items()
         for entry in (entries if isinstance(entries, list) else [entries])
-        if isinstance(entry, dict) and isinstance(entry.get("path"), str) and Path(entry["path"]).is_absolute()
+        if isinstance(entry, dict) and ("git" in entry or isinstance(entry.get("path"), str) and Path(entry["path"]).is_absolute())
     }
 
 

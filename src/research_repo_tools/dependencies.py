@@ -129,8 +129,8 @@ def parse_project(text: str, *, toolchain: config.ToolchainSettings | None = Non
 
     project = _required_table(data, "project")
     pins = _dev_pins(_required_table(data, "dependency-groups"))
-    fixed_artifacts = python_resolution.artifact_source_names(text)
-    pins = [pin for pin in pins if canonicalize_name(pin.name) not in fixed_artifacts]
+    fixed_sources = python_resolution.fixed_source_names(text)
+    pins = [pin for pin in pins if canonicalize_name(pin.name) not in fixed_sources]
     if toolchain is None:
         tool = config._table(data.get("tool", {}), "tool")
         settings = config._table(tool.get("research-repo-tools", {}), "tool.research-repo-tools")
@@ -436,7 +436,9 @@ def main(argv: list[str] | None = None, *, toolchain: config.ToolchainSettings |
     """Advance exact development-tool pins without touching other requirements."""
     args = parse_args(argv)
     try:
-        _requires_python, pins = parse_project(args.pyproject.read_text(encoding="utf-8"), toolchain=toolchain)
+        text = args.pyproject.read_text(encoding="utf-8")
+        _requires_python, pins = parse_project(text, toolchain=toolchain)
+        python_resolution.policy(text, args.pyproject.parent)
         if not pins:
             print("No exact direct Python development-tool pins to update.")
             return 0
