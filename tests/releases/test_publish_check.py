@@ -12,6 +12,7 @@ import pytest
 import yaml
 
 from research_repo_tools.just_inspect import dry_run
+from research_repo_tools.process import get_safe_executable
 
 ROOT = Path(__file__).resolve().parents[2]
 
@@ -153,5 +154,8 @@ def test_native_aggregate_requires_every_stage_success(stage, result):
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
     gate = workflow["jobs"]["check"]["steps"][0]
     env = {**os.environ, **dict.fromkeys(gate["env"], "success"), stage: result}
-    completed = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-c", gate["run"]], env=env, capture_output=True, timeout=15)
-    assert (completed.returncode == 0) == (result == "success")
+    completed = subprocess.run([get_safe_executable("sh"), "-e", "-c", gate["run"]], env=env, capture_output=True, timeout=15)
+    # The gate uses POSIX builtins. Require its exact silent rejection so a shell
+    # startup failure (including Windows' WSL bash launcher) cannot satisfy it.
+    assert completed.stdout == completed.stderr == b"", completed
+    assert completed.returncode == (0 if result == "success" else 1), completed

@@ -393,6 +393,11 @@ and deployment approval. Keep one-time account setup in the maintainer's private
 Review the encoding, path representation, and fixture cleanup used by both the
 checkout tests and the isolated consumers before changing package checks.
 
+- **Shell discovery:** Portable shell probes use the required POSIX `sh`, resolved
+  through `get_safe_executable`, with POSIX arguments. Bare `bash` on Windows can
+  select the WSL launcher. If a probe requires Bash features, resolve the intended
+  Git for Windows executable explicitly. Assert expected diagnostics as well as
+  exit codes so shell-startup failures cannot satisfy a rejection test.
 - **Isolated Python and captured output:** `-I` ignores every `PYTHON*`
   environment variable, including `PYTHONUTF8` and `PYTHONIOENCODING`. If the
   parent decodes output as UTF-8, select that encoding in the child's startup
