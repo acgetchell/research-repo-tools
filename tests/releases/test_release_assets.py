@@ -618,6 +618,21 @@ def test_complete_attempt_and_installed_validation_are_required(remote, tmp_path
     assert not (tmp_path / "dist").exists()
 
 
+@pytest.mark.parametrize("name", [name for name, _ in release.POLICY.required_steps])
+@pytest.mark.parametrize("defect", ["missing", "wrong-attempt", "skipped"])
+def test_every_parallel_stage_is_bound_to_the_complete_successful_attempt(name, defect):
+    selected = jobs()
+    target = next(job for job in selected if job["name"] == name)
+    if defect == "missing":
+        selected.remove(target)
+    elif defect == "wrong-attempt":
+        target["run_attempt"] = 2
+    else:
+        target["conclusion"] = "skipped"
+    with pytest.raises(ValueError):
+        release.validate_jobs(release.POLICY, run(), selected)
+
+
 @pytest.mark.parametrize(
     "defect",
     [
@@ -792,14 +807,24 @@ def test_workflows_preserve_native_gates_and_promote_without_rebuilding():
     prepare = yaml.load((ROOT / ".github/workflows/prepare-release.yml").read_text(), Loader=yaml.BaseLoader)
     publish = yaml.load((ROOT / ".github/workflows/publish.yml").read_text(), Loader=yaml.BaseLoader)
     assert "pull_request" in ci["on"] and ci["on"]["push"]["branches"] == ["main"]
-    native = ci["jobs"]["check"]
-    native_steps = {step["name"] for step in native["steps"] if "name" in step and "if" not in step}
-    check_steps = {step["name"] for step in native["steps"] if step.get("run", "").startswith("uv run --locked just ")}
     required = dict(release.POLICY.required_steps)
-    for host in native["strategy"]["matrix"]["os"]:
-        assert check_steps <= set(required[f"check ({host})"]) <= native_steps
+    for stage in ("source", "distributions", "setup", "check"):
+        native = ci["jobs"][stage]
+        native_steps = {step["name"] for step in native["steps"] if "name" in step and "if" not in step}
+        check_steps = {step["name"] for step in native["steps"] if " just " in step.get("run", "")}
+        for host in native["strategy"]["matrix"]["os"]:
+            assert check_steps <= set(required[f"{stage} ({host})"]) <= native_steps
+        assert native["if"] == "${{ !cancelled() }}"
+        if stage != "check":
+            assert native["needs"] == "build"  # No stage waits for another native stage.
+            assert native["runs-on"] == "${{ matrix.os }}"
+    aggregate = ci["jobs"]["check"]
+    assert set(aggregate["needs"]) == {"build", "source", "distributions", "setup"}
+    gate = aggregate["steps"][0]
+    assert set(gate["env"].values()) == {f"${{{{ needs.{stage}.result }}}}" for stage in aggregate["needs"]}
+    assert all(f'test "${variable}" = success' in gate["run"] for variable in gate["env"])
     evidence = ci["jobs"]["release-evidence"]
-    assert set(evidence["needs"]) == {"build", "check", "changelog-integration"}
+    assert set(evidence["needs"]) == {"build", "source", "distributions", "setup", "check", "changelog-integration"}
     assert "github.event_name == 'push'" in evidence["if"] and "refs/heads/main" in evidence["if"]
     assert prepare["on"] == {"push": {"tags": ["v*"]}}
     assert set(prepare["jobs"]) == {"preflight", "stage"}

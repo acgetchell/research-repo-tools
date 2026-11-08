@@ -127,8 +127,10 @@ work stealing by default. Set `RESEARCH_REPO_TOOLS_TEST_WORKERS` to adjust the
 worker count, or set it to `0` for serial execution. For example,
 `just test tests/cargo_docs -n 0` runs that subset serially.
 
-`just ci` runs checks and tests with coverage, builds wheel and sdist artifacts, and installs both
-outside the checkout with uv. Installation checks exercise the console entry
+`just ci` runs fast policy checks, builds and validates wheel and sdist artifacts,
+then runs source tests with coverage concurrently with isolated installation
+checks. Both branches must pass. Use `just --jobs 1 ci` to serialize them on a
+resource-constrained host. Installation checks exercise the console entry
 point, public process/file-publication/release-plan/performance/document-publication consumer contracts,
 imports, packaged templates, runtime dependencies, and the bundled `just` executable.
 Installed public suites also cover complete-directory rollback/recovery, SARIF
@@ -152,8 +154,12 @@ See [Validation](docs/VALIDATING.md) for check coverage and agent restrictions.
 New Git-mutating pytest fixtures must depend on `git_mutations_allowed`.
 Standalone unittest consumer suites must skip those fixtures before setup when
 `RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS=1`, including during installation checks.
-Hosted CI builds once and installs the same wheel and sdist on all three platforms
-using `just check-dist`. Linux uses `just coverage`; macOS and Windows use
+Hosted CI builds once, then runs source tests, distribution installation checks,
+and fresh setup as independent native jobs on all three platforms. Every stage
+retrieves the same immutable build artifact. The existing `check (OS)` required
+checks aggregate all native stages and fail if any stage fails or is skipped.
+Release evidence verifies the individual stage jobs and their required steps,
+as well as these aggregate checks. Linux uses `just coverage`; macOS and Windows use
 `just test`. CI calls the reusable `codecov.yml` workflow to upload the Linux
 report without rerunning tests. The required platform jobs also run `just check-setup`
 against the built wheel, installing real tools and updating the disposable
@@ -161,7 +167,10 @@ runner user's shell configuration. It also runs the packaged Cargo dependency-up
 recipe with pinned cargo-edit, verifies that a tiny crate's requirements and lock
 resolution advance, and compiles the result with managed Rust and `--locked`.
 The native check also installs both Clippy SARIF helpers and checks conversion and failure propagation.
-This check is excluded from local `just ci`.
+This check is excluded from local `just ci`. Only Cargo compilation output is
+cached between setup runs; interpreter, manager and tool installation homes stay
+fresh. Cache keys include the host and the fixture/toolchain declarations; Cargo
+fingerprints decide which compiled dependencies can be reused.
 Successful main-push runs retain immutable distributions and signed
 producer/validation evidence for 30 days. The [release workflows](docs/RELEASING.md)
 select that exact commit's complete main-push attempt and attach the same bytes

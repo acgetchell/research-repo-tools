@@ -30,10 +30,56 @@ from research_repo_tools import (
     toolchain_upgrade,
 )
 from research_repo_tools.toolchain_clean import apply_clean, plan_clean
-from research_repo_tools.toolchain_config import Toolchain, load
+from research_repo_tools.toolchain_config import CargoTool, RustToolchain, Toolchain, load
 
 
 class TestToolchainConsumer(unittest.TestCase):
+    def test_cargo_build_cache_reuses_compilation_without_reusing_installations(self):
+        with tempfile.TemporaryDirectory(prefix="cargo cache café ") as directory:
+            root = Path(directory).resolve()
+            build_home = root / "shared build"
+            ready = toolchain.Status("fixture", "", "", "fixture", True)
+            commands = []
+            for index, (host, channel, version) in enumerate(
+                (
+                    ("x86_64-pc-windows-msvc", "1.98.0", "2.14.1"),
+                    ("x86_64-pc-windows-msvc", "1.98.0", "2.14.2"),
+                    ("aarch64-apple-darwin", "1.98.0", "2.14.2"),
+                    ("x86_64-pc-windows-msvc", "1.99.0", "2.14.2"),
+                )
+            ):
+                with (
+                    patch.dict(os.environ, {"RESEARCH_REPO_TOOLS_HOME": str(root / str(index)), "RESEARCH_REPO_TOOLS_CARGO_BUILD_HOME": str(build_home)}),
+                    patch.object(toolchain, "host_target", return_value=host),
+                    patch.object(toolchain, "_probe", return_value=ready),
+                ):
+                    tool = CargoTool("git-cliff", version, "git-cliff", ("--version",))
+                    runtime = toolchain.Runtime(Toolchain(root, "0.13.6", "3.15", RustToolchain(channel, (), (), "minimal"), (tool,)))
+                    with (
+                        patch.object(runtime, "uv_status", return_value=ready),
+                        patch.object(runtime, "python_status", return_value=ready),
+                        patch.object(runtime, "shell_status", return_value=ready),
+                        patch.object(runtime, "rust_statuses", return_value=[ready]),
+                        patch.object(runtime, "cargo_status", side_effect=[replace(ready, ok=False), ready]),
+                        patch.object(runtime, "_install") as install,
+                    ):
+                        runtime.sync()
+                    args = install.call_args.args[1]
+                    self.assertIn("--locked", args)
+                    self.assertIn(f"={version}", args)
+                    commands.append(args)
+            targets = [args[args.index("--target-dir") + 1] for args in commands]
+            self.assertEqual(targets[0], targets[1])
+            self.assertEqual(len(set(targets)), 3)
+            self.assertTrue(all(Path(target).is_relative_to(build_home) for target in targets))
+            self.assertEqual(len({args[args.index("--root") + 1] for args in commands}), 4)
+            self.assertFalse(build_home.exists(), "inspection or command planning created a cache")
+
+    def test_cargo_build_cache_override_requires_an_absolute_path(self):
+        with patch.dict(os.environ, {"RESEARCH_REPO_TOOLS_CARGO_BUILD_HOME": "relative-cache"}):
+            with self.assertRaisesRegex(ValueError, "CARGO_BUILD_HOME must be absolute"):
+                toolchain.Runtime(Toolchain(Path.cwd(), "0.13.6", "3.15", None, ()))
+
     def test_adoption_plan_snapshots_mutable_inputs(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

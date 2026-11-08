@@ -144,6 +144,21 @@ def test_native_environment_replaces_inherited_installation_and_project_override
         assert Path(env[name]).is_relative_to(tmp_path)
 
 
+def test_native_environment_retains_only_the_explicit_compilation_cache(harness, tmp_path, monkeypatch):
+    cache = tmp_path / "build cache"
+    cache.mkdir()
+    (cache / "retained-object").write_bytes(b"compiled fixture")
+    monkeypatch.setenv("RESEARCH_REPO_TOOLS_CARGO_BUILD_HOME", str(cache))
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path / "unrelated project target"))
+    first = harness.isolated_environment(tmp_path / "first")
+    second = harness.isolated_environment(tmp_path / "second")
+    assert first["RESEARCH_REPO_TOOLS_CARGO_BUILD_HOME"] == second["RESEARCH_REPO_TOOLS_CARGO_BUILD_HOME"] == str(cache)
+    assert first["RESEARCH_REPO_TOOLS_HOME"] != second["RESEARCH_REPO_TOOLS_HOME"]
+    assert not Path(first["RESEARCH_REPO_TOOLS_HOME"]).exists() and not Path(second["RESEARCH_REPO_TOOLS_HOME"]).exists()
+    assert "CARGO_TARGET_DIR" not in first and "CARGO_TARGET_DIR" not in second
+    assert (cache / "retained-object").read_bytes() == b"compiled fixture"
+
+
 def test_native_release_operation_follows_credential_free_locked_package_installation(harness, tmp_path, monkeypatch):
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")

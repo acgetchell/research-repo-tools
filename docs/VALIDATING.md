@@ -187,9 +187,16 @@ Codecov project and patch statuses are initially advisory while a baseline is
 established; test failures still fail the required platform checks. Setup and
 account activation are documented in [GitHub configuration](CONFIGURING_GITHUB.md#codecov).
 
-The required platform jobs run `just check-setup` against the built wheel in a
+Source, installed-distribution, and setup jobs run concurrently after the shared
+build on each supported platform. Required `check (OS)` aggregate gates require
+every stage to succeed, and signed release evidence checks every stage's actual
+job and step identities. Locally, `just ci` finishes policy and artifact checks
+before overlapping coverage and installed-consumer checks; `just --jobs 1 ci`
+serializes those branches when needed.
+
+The native setup jobs run `just check-setup` against the built wheel in a
 temporary consumer with fresh managed-tool directories. This downloads managed
-Python, installs Rust with a component and target plus a Cargo tool, and runs the
+Python, installs Rust with a component and target plus Cargo tools, and runs the
 explicit setup command. It checks verified executable selection, a native Rust
 compile/run, user-level Just in a fresh shell, development dependency sync,
 unchanged declarations/lockfiles, and repeat setup without replacing tools or

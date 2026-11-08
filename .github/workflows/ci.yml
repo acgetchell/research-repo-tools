@@ -45,7 +45,7 @@ jobs:
           if-no-files-found: error
           retention-days: 30
 
-  check:
+  source:
     needs: build
     # Required checks must fail, rather than skip, if the shared build failed.
     if: ${{ !cancelled() }}
@@ -61,8 +61,7 @@ jobs:
           - os: windows-2025
             test-recipe: test
     runs-on: ${{ matrix.os }}
-    # Include native tool installation after the full source and distribution checks.
-    timeout-minutes: 120
+    timeout-minutes: 40
     env:
       PYTHONUTF8: "1"
     steps:
@@ -109,8 +108,6 @@ jobs:
       # The source test recipes forward trailing arguments to pytest.
       - name: Run source tests
         run: uv run --locked just ${{ matrix.test-recipe }}
-      - name: Validate installed distributions
-        run: uv run --locked just check-dist
       - name: Retain coverage even when later checks fail
         if: ${{ !cancelled() && runner.os == 'Linux' && hashFiles('coverage/cobertura.xml') != '' }}
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -120,14 +117,120 @@ jobs:
           if-no-files-found: error
           overwrite: true
           retention-days: 7
+
+  distributions:
+    needs: build
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - name: Require successful distribution build
+        if: needs.build.result != 'success'
+        run: exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version-file: "pyproject.toml"
+          enable-cache: true
+      - name: Install locked development environment
+        run: uv sync --locked
+      - name: Provision the stable compiler for packaged documentation regressions
+        run: rustup toolchain install 1.99.1 --profile minimal --no-self-update
+      - name: Provision native pkg-config discovery test prerequisite
+        if: runner.os != 'Windows'
+        shell: bash
+        run: |
+          if [[ "$RUNNER_OS" == Linux ]]; then
+            sudo apt-get update
+            sudo apt-get install -y --no-install-recommends pkg-config
+          else
+            brew install pkgconf
+          fi
+      - name: Retrieve distributions by immutable ID
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISTRIBUTION_ARTIFACT: ${{ needs.build.outputs.artifact-id }}
+        run: uv run --locked --no-sync python scripts/release_assets.py consume --artifact "$DISTRIBUTION_ARTIFACT"
+        shell: bash
+      - name: Validate installed distributions
+        run: uv run --locked just check-dist
+
+  setup:
+    needs: build
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    env:
+      PYTHONUTF8: "1"
+    steps:
+      - name: Require successful distribution build
+        if: needs.build.result != 'success'
+        run: exit 1
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
+        with:
+          version-file: "pyproject.toml"
+          enable-cache: true
+      - name: Install locked development environment
+        run: uv sync --locked
+      - name: Retrieve distributions by immutable ID
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DISTRIBUTION_ARTIFACT: ${{ needs.build.outputs.artifact-id }}
+        run: uv run --locked --no-sync python scripts/release_assets.py consume --artifact "$DISTRIBUTION_ARTIFACT"
+        shell: bash
+      - name: Reuse managed Cargo compilation
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ${{ runner.temp }}/rrt-cargo-build
+          key: cargo-build-v1-${{ runner.os }}-${{ runner.arch }}-${{ hashFiles('scripts/check_setup.py', 'src/research_repo_tools/toolchain.py', 'justfile') }}
       - name: Exercise native setup and Cargo updates from the built wheel
         env:
           GITHUB_TOKEN: ${{ github.token }}
+          # Cache compilation only; the harness still creates empty installation homes.
+          RESEARCH_REPO_TOOLS_CARGO_BUILD_HOME: ${{ runner.temp }}/rrt-cargo-build
         run: uv run --locked --no-sync --no-python-downloads just check-setup
+
+  check:
+    # Preserve branch-protection names; every gate requires all native stages.
+    needs: [build, source, distributions, setup]
+    if: ${{ !cancelled() }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, macos-15, windows-2025]
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Require all native validation stages
+        env:
+          BUILD_RESULT: ${{ needs.build.result }}
+          SOURCE_RESULT: ${{ needs.source.result }}
+          DISTRIBUTIONS_RESULT: ${{ needs.distributions.result }}
+          SETUP_RESULT: ${{ needs.setup.result }}
+        run: |
+          test "$BUILD_RESULT" = success
+          test "$SOURCE_RESULT" = success
+          test "$DISTRIBUTIONS_RESULT" = success
+          test "$SETUP_RESULT" = success
 
   codecov:
     name: Upload coverage
-    needs: [build, check]
+    needs: [build, source]
     # Upload the Linux report even if a later native check failed.
     # Release validation retains reports but does not depend on Codecov availability.
     if: ${{ !cancelled() && needs.build.result == 'success' && github.ref_type != 'tag' && github.repository == 'acgetchell/research-repo-tools' }}
@@ -160,7 +263,7 @@ jobs:
         run: uv run --locked just check changelog-setup changelog-test check-dist-changelog
 
   release-evidence:
-    needs: [build, check, changelog-integration]
+    needs: [build, source, distributions, setup, check, changelog-integration]
     # Only protected main pushes may produce release-eligible validation evidence.
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && github.repository == 'acgetchell/research-repo-tools'
     runs-on: ubuntu-24.04

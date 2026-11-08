@@ -2,6 +2,8 @@
 
 import importlib.util
 import io
+import os
+import subprocess
 import tarfile
 import zipfile
 from pathlib import Path
@@ -137,9 +139,19 @@ def test_local_and_hosted_ci_check_once_after_build_before_retaining_artifacts()
 
 def test_hosted_package_checks_run_variadic_source_recipe_separately():
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
-    steps = workflow["jobs"]["check"]["steps"]
+    steps = workflow["jobs"]["source"]["steps"]
     assert [step["run"] for step in steps if step.get("run", "").startswith("uv run --locked just ")] == [
         "uv run --locked just check",
         "uv run --locked just ${{ matrix.test-recipe }}",
-        "uv run --locked just check-dist",
     ]
+    assert any(step.get("run") == "uv run --locked just check-dist" for step in workflow["jobs"]["distributions"]["steps"])
+
+
+@pytest.mark.parametrize("result", ["success", "failure", "cancelled", "skipped"])
+@pytest.mark.parametrize("stage", ["BUILD_RESULT", "SOURCE_RESULT", "DISTRIBUTIONS_RESULT", "SETUP_RESULT"])
+def test_native_aggregate_requires_every_stage_success(stage, result):
+    workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
+    gate = workflow["jobs"]["check"]["steps"][0]
+    env = {**os.environ, **dict.fromkeys(gate["env"], "success"), stage: result}
+    completed = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-c", gate["run"]], env=env, capture_output=True, timeout=15)
+    assert (completed.returncode == 0) == (result == "success")

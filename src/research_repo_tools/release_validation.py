@@ -248,16 +248,16 @@ POLICY = ValidationPolicy(
         ("build", ("Build release distributions once", "Upload immutable distributions")),
         *(
             (
-                f"check ({platform})",
-                (
-                    "Retrieve distributions by immutable ID",
-                    "Validate source policy",
-                    "Run source tests",
-                    "Validate installed distributions",
-                    "Exercise native setup and Cargo updates from the built wheel",
-                ),
+                f"{stage} ({platform})",
+                steps,
             )
             for platform in ("ubuntu-24.04", "macos-15", "windows-2025")
+            for stage, steps in (
+                ("source", ("Retrieve distributions by immutable ID", "Validate source policy", "Run source tests")),
+                ("distributions", ("Retrieve distributions by immutable ID", "Validate installed distributions")),
+                ("setup", ("Retrieve distributions by immutable ID", "Exercise native setup and Cargo updates from the built wheel")),
+                ("check", ("Require all native validation stages",)),
+            )
         ),
         (
             "changelog-integration",

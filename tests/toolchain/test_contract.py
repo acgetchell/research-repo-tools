@@ -103,6 +103,7 @@ class FakeTools:
 @pytest.fixture
 def runtime(consumer, tmp_path, monkeypatch):
     monkeypatch.delenv("UV_PROJECT_ENVIRONMENT", raising=False)
+    monkeypatch.delenv("RESEARCH_REPO_TOOLS_CARGO_BUILD_HOME", raising=False)
     monkeypatch.setenv("RESEARCH_REPO_TOOLS_HOME", str(tmp_path / "managed tools"))
     monkeypatch.setenv("PATH", str(tmp_path / "executables"))
     monkeypatch.setattr(toolchain_config, "host_target", lambda: "aarch64-apple-darwin")
@@ -138,6 +139,8 @@ def test_sync_then_repeat_is_noop_and_check_is_read_only(runtime, tmp_path):
     ]
     assert len(installs) == 3
     assert all("--locked" in args and "--force" in args for args in installs[1:])
+    targets = {args[args.index("--target-dir") + 1] for args in installs[1:]}
+    assert targets == {str(instance.base / "cargo-build" / instance.host / "1.98.0")}
     assert any("=2.14.1" in args for args in installs)
     fake.calls.clear()
     instance.sync()
