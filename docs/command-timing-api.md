@@ -2,7 +2,7 @@
 
 Pin a verified published version that provides `performance command-time` and
 `research_repo_tools.command_timing` before adoption. This format is separate
-from Criterion, schema-4 acquisition, complete-run/v3, release eligibility,
+from Criterion, complete acquisitions and scheduled trials, release eligibility,
 and scientific comparability evidence.
 It does not feed their promotion or publication paths. Workload selection,
 throughput definitions, correctness assertions, and scientific interpretation

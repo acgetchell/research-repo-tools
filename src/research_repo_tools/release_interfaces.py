@@ -38,9 +38,10 @@ lazy from research_repo_tools.release_assets import (
 )
 lazy from research_repo_tools.release_evidence import EvidencePolicy, PythonDistributionPolicy, create_evidence_manifest, verify_release_evidence
 lazy from research_repo_tools.release_metadata import read_package_info
+lazy from research_repo_tools.release_receipts import TagPushPolicy
 lazy from research_repo_tools.release_validation import ValidationPolicy, api, parse_release_json, redact_release_diagnostic
 
-__all__ = ["AssetPolicy", "load_asset_policy", "load_evidence_policy", "write_release_outputs"]
+__all__ = ["AssetPolicy", "load_asset_policy", "load_evidence_policy", "load_receipt_policy", "write_release_outputs"]
 
 
 def _document(path: Path, required: set[str], optional: set[str]) -> dict[str, object]:
@@ -122,6 +123,30 @@ def load_asset_policy(path: Path) -> AssetPolicy:
     return AssetPolicy(_string(raw["repository"], "repository"), _string(raw["expected-title"], "expected-title") if "expected-title" in raw else None)
 
 
+def load_receipt_policy(path: Path) -> "TagPushPolicy":
+    """Load a separate original tag-push receipt policy, never a branch policy."""
+    from research_repo_tools.release_receipts import TagPushPolicy
+
+    raw = _document(path, {"repository", "workflow", "workflow-name", "jobs"}, {"artifact-prefix"})
+    if not isinstance(raw["jobs"], list):
+        raise ValueError("receipt jobs requires an array of tables")
+    steps, labels = [], []
+    for item in raw["jobs"]:
+        job = _table(item, "receipt job", {"name", "steps"}, {"runner-labels"})
+        name = _string(job["name"], "job name")
+        steps.append((name, _strings(job["steps"], "job steps")))
+        if "runner-labels" in job:
+            labels.append((name, _strings(job["runner-labels"], "runner labels")))
+    return TagPushPolicy(
+        _string(raw["repository"], "repository"),
+        _string(raw["workflow"], "workflow"),
+        _string(raw["workflow-name"], "workflow-name"),
+        tuple(steps),
+        _string(raw.get("artifact-prefix", "draft-receipt"), "artifact prefix"),
+        tuple(labels),
+    )
+
+
 def _regular(path: Path) -> None:
     if any(item.is_symlink() or item.is_junction() for item in (path, *path.parents)) or (path.exists() and not path.is_file()):
         raise ValueError(f"release handoff must be a regular file without links: {path}")
@@ -188,9 +213,18 @@ def add_commands(release) -> None:
     assets = release.add_parser("assets", help="prepare drafts, capture/revalidate targets and upload verified inert assets").add_subparsers(
         dest="operation", required=True
     )
-    for operation in ("preflight", "prepare", "upload", "verify"):
+    for operation in ("preflight", "prepare", "retrieve", "upload", "verify"):
         command = assets.add_parser(operation)
         command.add_argument("configuration")
+        if operation == "retrieve":
+            command.description = "Retrieve the original authenticated tag-push receipt; existing outputs freeze every retry. No release mutation."
+            command.add_argument("--commit", required=True, help="independent full peeled release commit")
+            selection = command.add_mutually_exclusive_group()
+            selection.add_argument("--expected", type=Path, help="original frozen selection, for restoration into a new output directory")
+            command.add_argument("--output", type=Path, required=True, help="immutable receipt directory outside the consumer root")
+            selection.add_argument("--run-id", type=int, help="independently reviewed original run ID for deliberate manual selection")
+            command.add_argument("--tag", required=True, help="canonical stable tag; always interpreted as refs/tags/vX.Y.Z")
+            continue
         if operation == "prepare":
             command.description = "Prepare an unpublished draft from frozen signed evidence without a checkout; preserve the receipt across every retry."
             command.add_argument("--approve", action="store_true", required=True, help="explicitly authorize draft creation")
@@ -419,9 +453,66 @@ def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
     _present_evidence(accepted, args.format, candidate=True, acquisition_owner=policy.acquisition_owner)
 
 
+def _retrieve_receipt(args: argparse.Namespace, settings: Config) -> None:
+    from research_repo_tools.release_receipts import DiscoverOriginal, FrozenReceipt, OriginalRun, TagSource, retrieve_draft_receipt
+
+    configuration = _path(settings.root, args.configuration)
+    original_policy = configuration.read_bytes()
+    policy = load_receipt_policy(configuration)
+    source = TagSource(f"refs/tags/{args.tag}", args.commit)
+    output = args.output if args.output.is_absolute() else settings.root / args.output
+    if output.is_symlink() or output.is_junction():
+        raise ValueError("receipt output must not be a link or junction")
+    if Path(os.path.abspath(output)).is_relative_to(settings.root) or output.resolve().is_relative_to(settings.root.resolve()):
+        raise ValueError("retain draft receipts outside the consumer checkout")
+    output = output.resolve()
+    names = {"selection.json", "target.json", "draft-receipt.json"}
+    if output.exists() and (not output.is_dir() or {item.name for item in output.iterdir()} not in (set(), names)):
+        raise ValueError("receipt output is incomplete or contains unrelated files; retain it and restore the original selection into a new directory")
+    paths = {name: output / name for name in names}
+    for path in paths.values():
+        _regular(path)
+    originals = {path: path.read_bytes() if path.exists() else None for path in paths.values()}
+    expected = args.expected.resolve() if args.expected else None
+    _validate_distinct_paths((configuration, *paths.values(), *([expected] if expected else [])))
+    expected_bytes = expected.read_bytes() if expected else None
+    retained = originals[paths["selection.json"]]
+    if retained is not None and expected_bytes is not None and retained != expected_bytes:
+        raise ValueError("explicit selection cannot replace the original receipt output")
+    mode: DiscoverOriginal | OriginalRun | FrozenReceipt
+    if (payload := retained if retained is not None else expected_bytes) is not None:
+        mode = FrozenReceipt(payload)
+        if args.run_id is not None and parse_release_json(payload)["run"]["id"] != args.run_id:
+            raise ValueError("manual run ID cannot replace the frozen original")
+    else:
+        mode = DiscoverOriginal() if args.run_id is None else OriginalRun(args.run_id)
+    retrieved = retrieve_draft_receipt(policy, source, partial(api, repository=policy.repository), selection=mode)
+    updates = {
+        paths["selection.json"]: retrieved.selection,
+        paths["target.json"]: retrieved.target_bytes,
+        paths["draft-receipt.json"]: retrieved.receipt_bytes,
+    }
+    if any(before is not None and before != updates[path] for path, before in originals.items()):
+        raise ValueError("existing receipt output differs from the original authenticated files")
+
+    def unchanged() -> None:
+        if configuration.read_bytes() != original_policy or (expected and expected.read_bytes() != expected_bytes):
+            raise ValueError("receipt assertions changed during retrieval")
+        for path, before in originals.items():
+            _regular(path)
+            if (path.read_bytes() if path.exists() else None) != before:
+                raise ValueError("receipt output changed during retrieval")
+
+    replace_many(updates, verify=unchanged)
+    print(f"Retrieved original draft {retrieved.target.release_id}; retain {paths['selection.json']} for every retry.")
+
+
 def run_assets(args: argparse.Namespace, settings: Config) -> None:
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
+    if args.operation == "retrieve":
+        _retrieve_receipt(args, settings)
+        return
     if args.operation == "prepare":
         from research_repo_tools.release_drafts import prepare_release_draft
 

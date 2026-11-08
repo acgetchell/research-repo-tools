@@ -29,7 +29,7 @@ Physical LF/CRLF/CR endings are removed, including on a final line without a
 newline; Unicode separators remain characters. The APIs never write files.
 The CLI returns 1 for violations/errors and 0 for clean/empty selections.
 The established `docs check-lines` Markdown policy retains its table exemption;
-it is separate from this new strict raw gate.
+it is separate from the strict raw gate.
 
 ## Python file-publication API
 

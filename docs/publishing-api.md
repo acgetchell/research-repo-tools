@@ -16,7 +16,7 @@ registry (`pypi` or `crates-io`), package, GitHub repository, a nonempty list of
 check name/provider IDs, and optional required asset filenames. Unknown fields,
 invalid identities, duplicates, and missing checks raise `ValueError`.
 
-`check_metadata(config, tag, previous_tag=None)` reuses final release metadata and
+`check_metadata(config, tag, *, previous_tag=None)` reuses final release metadata and
 changelog checks. An explicit predecessor is validated and passed through to
 release-policy checks; tagged CLI checks retain `--previous-release` semantics.
 `validate_event(event, repository, commit, ref)` parses a stable published event;
@@ -54,7 +54,7 @@ before mutation, and validates the publication response through the shared
 [release-target contract](workflow-api.md#release-assets). An invalid/unavailable
 publication response raises `release_assets.ReleasePublicationUnknownError`;
 inspect the captured ID before retrying because publication may have succeeded.
-`verify_publication(config, tag, attempts=1, interval=10)` requires a published
+`verify_publication(config, tag, *, attempts=1, interval=10)` requires a published
 stable GitHub Release, configured assets and the exact registry version.
 
 `research_repo_tools.registry` exposes `RegistryVersion`, `RegistryLookupError`,

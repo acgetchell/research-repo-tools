@@ -69,7 +69,8 @@ including changelog and release recipes.
 | `just check-dist-changelog` | Test real changelog CLI generation from existing wheel and sdist installations |
 | `just check-setup` | Exercise real setup on disposable GitHub-hosted runners only |
 | `just ci` | Run checks, tests, builds, and installation checks for final review |
-| `just clean [ARGS...]` | Preview obsolete package-owned installs; pass `--apply` to remove them |
+| `just clean [ARGS...]` | Preview obsolete tool installs and retained coverage; pass `--apply` to remove them |
+| `just clean-coverage [--dry-run \| --apply]` | Preview/remove retained coverage shards and runs; preserve current reports |
 | `just coverage [PYTEST_ARGS...]` | Run tests with branch and subprocess coverage and write `coverage/cobertura.xml` |
 | `just dependency-source NAME [--apply]` | Preview or apply a configured verified dependency source and native lock |
 | `just help` | List recipes and arguments in lexicographic order, with arguments |
@@ -82,7 +83,7 @@ including changelog and release recipes.
 | `just performance-release CONFIG [ARGS...]` | Measure a prepared pair and retain/promote its report |
 | `just publish-check` | Check the current built wheel and sdist with strict Twine validation; no build or upload |
 | `just python-check` | Check formatting, lint, and strict types for the complete Python inventory |
-| `just release-assets COMMAND...` | Capture/revalidate release targets or explicitly upload attachments |
+| `just release-assets COMMAND...` | Prepare drafts, capture/revalidate release targets or explicitly upload attachments |
 | `just release-check TAG` | Check final release metadata and generated notes |
 | `just release-dependencies` | Verify configured upstream tooling provenance before release work |
 | `just release-evidence [COMMAND...]` | Inspect this checkout's signed CI evidence; explicit commands create/verify shared handoffs |
@@ -122,6 +123,12 @@ Root and consumer `just release-check TAG` use the same final metadata/notes con
 Use `just check` while iterating, with targeted regressions when
 a behavioral change needs verification. Run `just ci` once the
 work is ready for final review.
+Use `just clean-coverage` to preview old root `.coverage.*` files and retained
+`coverage/failed-*` or `coverage/.run-*` directories. Stop coverage writers before
+running `just clean-coverage --apply`. The shared implementation preserves the
+latest `.coverage` and current reports; `just clean` includes the same cleanup.
+See the [selection and failure contract](docs/INSTALLING.md#cleaning-retained-coverage).
+
 The source tests in `just test` and `just coverage` use four pytest workers with
 work stealing by default. Set `RESEARCH_REPO_TOOLS_TEST_WORKERS` to adjust the
 worker count, or set it to `0` for serial execution. For example,
@@ -229,8 +236,9 @@ calls per worker. This probe models repeated use in one process; help/version
 still measure fresh CLI processes. Keep JIT evidence separate from comparisons
 between interpreter builds and from the ordinary development baseline.
 
-Explicit lazy imports are limited to CLI discovery and handler dependencies in
-`cli`, `performance`, `performance_workflows`, and `changelog`. Imports used for
+Explicit lazy imports defer CLI handlers and selected release/publication
+dependencies in `cli`, `performance`, `performance_workflows`, `changelog`,
+`release_interfaces`, and `candidate_publication`. Imports used for
 exception handling, class construction, registration, or side effects remain eager.
 The parser still builds all commands before parsing. Handler dependencies resolve
 on first use inside the existing CLI error boundary; public imports, complete
@@ -238,21 +246,6 @@ package import smoke checks, and frozen-module modes are exercised by both insta
 distributions. No global lazy-import mode or filter is enabled. Application bundlers
 must still discover the statically declared dependencies and validate their bundle;
 CPython's frozen-module checks do not prove third-party bundler support.
-
-Further 3.15 opportunities need separate designs and measurements. `frozendict`
-could replace some copied `MappingProxyType` configuration/evidence snapshots,
-but freezing is shallow, order still matters in serialization, and public `Mapping`
-contracts must remain compatible. Built-in `sentinel` could distinguish absent
-configuration from explicit null values if a future schema needs that distinction;
-the current None policies are deliberate. Unpacking comprehensions can simplify
-flattening pipelines, but do not by themselves justify performance claims. Splitting
-parser metadata from large handlers and sharing immutable validated snapshots across
-planning phases are larger refactors: preserve annotation introspection, optional
-dependency errors, registration, snapshot freshness, and publication revalidation.
-The 3.15 sampling profiler can assess these without tracer overhead; deterministic
-call counts alone are not elapsed-time gains. JIT on/off comparisons need the same
-JIT-enabled build and warmed workloads, separate from import/batching measurements.
-An unavailable JIT yields no JIT performance evidence.
 
 Run `just update` to upgrade uv through its owner, reconcile its manifest pin,
 then advance exact development-tool pins through
@@ -289,8 +282,9 @@ uv run --locked research-repo-tools --help
 An editable install with `uv add --dev --editable /path/to/research-repo-tools`
 also supports local development. For setup evaluation, use the `tooling`
 group described in the [toolchain guide](docs/INSTALLING.md). Local wheels and
-editable installs are development aids; normal consumer setup and CI use a
-pinned PyPI release.
+editable installs are development aids. Consumers can also use a reviewed
+exact Git commit through the [development-pin workflow](README.md#development-pins-and-release-dependencies).
+Release validation requires the selected upstream tooling to be published.
 
 ## Generated changelog
 

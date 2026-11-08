@@ -43,14 +43,14 @@ below are examples, not automatic upgrades:
 
 ```toml
 [dependency-groups]
-tooling = ["research-repo-tools==0.2.3"]
+tooling = ["research-repo-tools==0.2.6"]
 dev = [{include-group = "tooling"}]
 
 [tool.uv]
-required-version = "==0.13.6"
+required-version = "==0.13.7"
 
 [tool.research-repo-tools.toolchain.cargo]
-git-cliff = "2.14.1"
+git-cliff = "2.14.2"
 ```
 
 Keep the consumer's other development dependencies in `dev` and its notebook
@@ -62,7 +62,7 @@ minimums, upper bounds, and exclusions. Checks verify the resolved patch version
 
 Use the consumer's existing `rust-toolchain.toml`. Cargo includes its own version
 within that Rust distribution; do not introduce an independent Cargo version pin.
-The initial contract supports stable `X.Y.Z` toolchains and the `minimal` or
+The contract supports stable `X.Y.Z` toolchains and the `minimal` or
 `default` profile; an omitted profile means `minimal`. Named channels, dated nightlies, custom paths, and the `complete`
 profile are rejected explicitly. Python-only consumers can omit the Rust file and
 Cargo tool table.
@@ -98,7 +98,7 @@ redaction, reports and consumer-owned exceptions.
 
 ## First adoption and setup
 
-Managed Cargo installs reuse compilation output under
+With the v0.2.7 capability, managed Cargo installs reuse compilation output under
 `RESEARCH_REPO_TOOLS_HOME/cargo-build/<host>/<Rust version>` (the default home is
 `~/.cache/research-repo-tools`). Package versions retain separate installation
 directories and are still installed with exact pins, `--locked`, and executable
@@ -152,9 +152,10 @@ rerun it. Setup does not rewrite declarations, locks, or existing recipes.
 The consumer template provides:
 
 - `just changelog`: run the shared generator with the checked managed git-cliff.
-- `just clean`: preview obsolete package-owned installations; pass `--apply` to remove them.
+- `just clean`: preview obsolete tool installations and retained coverage; pass `--apply` to remove them.
+- `just clean-coverage`: preview retained coverage only; pass `--apply` to remove it, preserving current reports.
 - `just help`: list all available commands and arguments in lexicographic order.
-- `just setup`: synchronize declared tools and then the default Python environment.
+- `just setup`: synchronize declared tools and then the locked Python environment, including `dev`.
 - `just tools-check`: inspect without syncing the environment or downloading Python.
 - `just tools-sync-binaries`: verify and repair pinned release binaries without package synchronization.
 - `just update`: upgrade tools, then Cargo and Python dependencies and synchronize dev.
@@ -178,6 +179,8 @@ The underlying commands are:
 
 | Command | Behavior |
 | --- | --- |
+| `clean [--dry-run \| --apply] [--keep-root PATH]...` | Compose managed-installation and retained-coverage cleanup |
+| `coverage clean [--dry-run \| --apply]` | Preview/remove retained coverage shards and runs, preserving current database and reports |
 | `setup` | Install user Just and declared tools, configure PATH, and sync the locked Python environment |
 | `toolchain adopt (--dry-run \| --apply)` | Plan or apply migration to the executing shared package and its mandatory Python minimum, plus enabled development mirrors |
 | `toolchain check [--json]` | Report expected/actual versions and selected paths; nonzero if incomplete |
@@ -233,8 +236,9 @@ toolchain. Old cache entries remain available until deliberately removed.
 
 ## Cleaning obsolete installations
 
-`just clean` previews removals; `just clean --apply` performs them after checking
-the inventory and declarations again. Neither command installs tools. Both use
+`just clean` previews obsolete installations and [retained coverage](#cleaning-retained-coverage);
+`just clean --apply` performs removals after checking the inventories and declarations
+again. The CLI `toolchain clean` keeps its installation-only scope. Neither mode installs tools. Both use
 the locked project environment without synchronizing it or downloading Python.
 Run setup first if that environment is missing.
 
@@ -268,11 +272,46 @@ Retention is conservative:
 
 Unknown packages, newer versions, user-wide installations, external Python
 stores, project environments, build artifacts, and download/dependency caches
-are outside cleanup. Linked or junction-backed installation boundaries are
+are outside tool-installation cleanup. Linked or junction-backed installation boundaries are
 rejected. Close processes using obsolete tools before applying cleanup,
 especially on Windows where open executables can prevent removal. Do not install
 tools or edit declarations concurrently. Cleanup stops on the first failure;
 earlier removals remain applied. Correct the cause and preview again.
+
+## Cleaning retained coverage
+
+The v0.2.7 consumer template exports `clean-coverage` and includes the same shared
+cleanup in `clean`. Upgrade the package pin and lock, then merge these two recipes
+from its exported Justfile; upgrading the package alone does not replace existing
+recipes. The CLI entry points are `coverage clean [--dry-run | --apply]` and
+`clean [--dry-run | --apply] [--keep-root PATH]...`.
+
+```sh
+just clean-coverage
+just clean-coverage --apply
+```
+
+Stop coverage writers before applying cleanup. Preview is the default, reports
+selected file bytes, and makes no changes. Cleanup selects regular root
+`.coverage.*` files and direct `coverage/failed-*` or `coverage/.run-*` directories
+containing only `.coverage`, `.coverage.*`, or staged `cobertura.xml` files. Empty
+matching directories are also removed. This is a fixed shared convention; custom
+data paths and Rust coverage output remain consumer-owned.
+
+The root `.coverage`, current `coverage/cobertura.xml`, HTML reports and unrelated
+files stay. Matching run directories with unfamiliar or nested contents are
+reported and preserved in full. Selected symlink/junction boundaries are refused.
+Retained failed-run shards may be useful for diagnosis; apply only after deciding
+they are no longer needed.
+
+Application rechecks the complete inventory before deletion and rejects changes.
+It does not lock coverage processes or establish that a run has stopped. Removal
+uses individual files followed by empty directories, never a recursive sweep.
+An I/O failure stops cleanup, reports that earlier removals remain applied, and
+requires a fresh preview after resolving the cause. Aggregate cleanup plans both
+capabilities before deleting anything, then removes tools followed by coverage;
+it does not roll back successful deletions if a later operation fails.
+`--keep-root` retains other consumers' tool pins; it does not clean their coverage.
 
 ## Installing and recovering tools
 
@@ -288,8 +327,8 @@ The package does not install OS packages. Git must be available. Native Rust
 builds may require Xcode Command Line Tools on macOS, a C/C++ toolchain and system
 development libraries on Linux, or Visual Studio C++ Build Tools and a Windows SDK
 on Windows. A successful version check is not a native compilation test; missing
-linkers or libraries are diagnosed by the build/install operation. Initial host
-support is x86_64/aarch64 macOS, glibc Linux, and Windows MSVC. Cross-compilation
+linkers or libraries are diagnosed by the build/install operation. Supported hosts
+are x86_64/aarch64 macOS, glibc Linux, and Windows MSVC. Cross-compilation
 linkers remain consumer/platform prerequisites even when Rust targets are present.
 
 ### Additional Cargo tools and native prerequisites
@@ -471,6 +510,3 @@ package-owned store; user-wide Cargo, rustup and uv Python installs, project
 [cleanup contract](INSTALLING.md#cleaning-obsolete-installations) for retention
 rules and Windows guidance. Consumers copy the packaged recipe and pin the shared
 package; the cleanup implementation lives here.
-
-Follow the [toolchain guide](INSTALLING.md) for declarations, first-time setup, and
-strictly read-only tool checks.

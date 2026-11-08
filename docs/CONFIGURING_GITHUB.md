@@ -2,21 +2,21 @@
 
 Source and issues live at
 [acgetchell/research-repo-tools](https://github.com/acgetchell/research-repo-tools).
-Consumers will install released packages from PyPI. Local wheels are for pilot
+Consumers install released packages from PyPI. Local wheels are for candidate
 evaluation and installation checks; see [publishing](RELEASING.md).
 
 ## Repository controls
 
-The baseline follows Delaunay and la-stack, adapted to this Python package:
+The checked-in settings define this repository's desired baseline:
 
 - Pull requests, one approval, resolved review threads, and up-to-date required
   checks on the default branch; deletion and force pushes are blocked.
-- The same administrator bypass as the reference repositories permits initial
-  setup and maintainer recovery.
+- An administrator bypass permits setup and maintainer recovery.
 - Required checks cover all three package-check platforms, changelog integration,
   CodeQL for Python and Actions, zizmor, the Python dependency audit, and the
-  CodeRabbit status. The initial CodeRabbit rule uses its status name, matching
-  MCMC; GitHub rejects its App binding until the App has repository access.
+  CodeRabbit status. The checked-in CodeRabbit rule currently matches its status
+  name without an App binding; review that binding against the installed App when
+  reconciling live settings.
 - Read-only default workflow tokens; write permissions are limited to specific
   security-upload, Dependabot, and draft-release staging jobs. OIDC identity is
   limited to Codecov, validated-release signing, and PyPI upload jobs. Actions
@@ -25,15 +25,14 @@ The baseline follows Delaunay and la-stack, adapted to this Python package:
   GitHub Actions weekly, with separate security-update groups. The uv updater is
   paused pending Python 3.15 support; maintain Python dependencies with
   `just update-python-dependencies` as described in the
-  [rollout guidance](AUTOMATING_DEPENDABOT.md#pilot-and-rollout).
+  [rollout guidance](AUTOMATING_DEPENDABOT.md#deployment-and-rollout).
 - Dependabot alerts/security updates, secret scanning, push protection, and private
   vulnerability reporting are enabled through repository settings.
 
-The checked-in payloads in `.github/settings/` are the desired API configuration.
-The Actions policy deliberately requires SHA pins in addition to the reference
-repositories' selected-action policy. Rust-only Clippy/Cargo scans do not apply
-to this package. Codacy's project-specific Delaunay scan is not a required check
-here; CodeQL, Ruff, ty, and zizmor cover the currently configured analysis.
+The checked-in payloads in `.github/settings/` are the desired API configuration;
+read live settings before applying them and reconcile any newer changes. The
+Actions policy requires both selected actions and full SHA pins. CodeQL, Ruff,
+ty, and zizmor provide this Python package's configured static analysis.
 
 ## Apply or reconcile GitHub settings
 
@@ -69,13 +68,13 @@ gh api --method POST repos/acgetchell/research-repo-tools/rulesets --input .gith
 ```
 
 Required check names must remain synchronized with workflow job names. Verify
-native check results on the first PR; local validation does not establish that
+native check results after configuration changes; local validation does not establish that
 the hosted services are connected or passing.
 
 ## Codecov
 
-The Linux package check collects Python branch and subprocess coverage with
-`just coverage`; macOS and Windows use `just test`. CI calls the reusable
+The Linux `source` job collects Python branch and subprocess coverage with
+`just coverage`; macOS and Windows `source` jobs use `just test`. CI calls the reusable
 `.github/workflows/codecov.yml` upload workflow, which has no independent push or
 pull-request trigger and does not rerun tests. It uses the SHA-pinned Codecov
 action and GitHub OIDC, so no `CODECOV_TOKEN` secret is needed. Forks use the action's public
@@ -88,11 +87,11 @@ ensure the Codecov GitHub App has access to this repository for PR checks. The
 selected-Actions allowlist includes `codecov/codecov-action@*`; full SHA pinning
 remains required. Apply the allowlist command above when reconciling settings.
 
-The checked-in `.codecov.yml` starts with advisory project and patch statuses and
-disables bot comments. Coverage is visible without becoming a new merge gate
-before the first `main` baseline exists. Revisit thresholds after reviewing that
-baseline. The upload job reports upload failures, while coverage thresholds are
-not added to the branch ruleset. Reports remain available as Actions artifacts
+The checked-in `.codecov.yml` makes project and patch statuses advisory and
+disables bot comments. Coverage is visible without a coverage-threshold merge
+gate. Review the measured baseline before changing that policy. The upload job
+reports upload failures, while coverage thresholds are not part of the checked-in
+branch ruleset. Reports remain available as Actions artifacts
 even when the service cannot accept an upload.
 
 ## CodeRabbit and Dependabot
@@ -105,11 +104,11 @@ The repository's `.coderabbit.yaml` enables reviews, approval on resolved findin
 and the legacy `CodeRabbit` status used by the branch rule. CodeRabbit continues
 to review ordinary PRs. Its required status remains separate from a submitted
 approval: a successful skipped review is not an approving review.
-After the App is connected, add `"integration_id": 347564` to its entry in
-`.github/settings/main-ruleset.json` and update the existing ruleset to bind that
-status to CodeRabbit's identity, as Delaunay does.
+To bind the required status to CodeRabbit, verify the installed App's integration
+ID, add it as `integration_id` to the CodeRabbit entry in
+`.github/settings/main-ruleset.json`, and reconcile the existing live ruleset.
 
-The Dependabot caller now uses the shared
+The Dependabot caller uses the shared
 [dependency approval workflow](AUTOMATING_DEPENDABOT.md). It approves eligible updates
 permitted by this repository's Dependabot configuration, including GitHub Actions,
 then enables native squash auto-merge. All required checks,
@@ -120,14 +119,14 @@ Apply `.github/settings/workflow-permissions.json` to permit Actions approvals
 and `.github/settings/allowed-actions.json` to allow the SHA-pinned metadata
 action. Default token permissions remain read-only. These payloads describe the
 desired configuration; committing them does not apply repository settings.
-No `CODERABBIT_REVIEW_TOKEN` is needed by the new workflow. Existing copies can be
+No `CODERABBIT_REVIEW_TOKEN` is needed by this workflow. Existing copies can be
 removed from this repository after confirming no other workflow uses them; do
 not revoke a token shared with other repositories.
 
 ## Release configuration
 
-The repository is pushed and normal changes go through pull requests. The
-maintainer performs Git mutations under [AGENTS.md](../AGENTS.md).
+Normal changes go through pull requests. The maintainer performs Git mutations
+under [AGENTS.md](../AGENTS.md).
 
 Registry trust and deployment approvals must be configured before publishing.
 Keep account-specific registration and approval choices in the maintainer's

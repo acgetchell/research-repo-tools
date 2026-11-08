@@ -1,17 +1,16 @@
 # Migrating consumer release policies
 
-MCMC's coordinated extraction removes generic release discovery, candidate
-staging, CLI-output capture, and publication wrappers. A published version
-containing the structured release API lets a consumer remove that orchestration.
-Pin that release before deleting the old helpers. The following is a small worked
-fixture using MCMC's fixed concept DOI and representative release references; file
-selection and counts must match the consumer's actual active documents.
+Replace generic release discovery, candidate staging, CLI-output capture, and
+publication wrappers with the structured release API from the selected published
+pin. The following is a worked fixture using MCMC's concept DOI and representative
+release references. Supply the consumer's own DOI, file selection and match counts;
+the fixture does not describe the current state of a downstream repository.
 
 ## Declarative assertions and selected edits
 
 This configuration requires the publication files, asserts the DOI independently
-on each surface, updates one source link, and updates one explicit performance
-command pair. It leaves measured report links and archived evidence unchanged.
+on each surface and updates one source link. It leaves active documentation
+navigation, measured report links, and archived evidence unchanged.
 No repository name or DOI is a package default.
 
 ```toml
@@ -48,20 +47,12 @@ source = "tag"
 count = 1
 exclude = '/docs/|/(?:README|CONTRIBUTING|AGENTS|SECURITY)\.md(?:$|[?#])'
 
-[[tool.research-repo-tools.release.rules]]
-path = "docs/RELEASING.md"
-pattern = 'just performance-release[ \t]+(?P<value>v[0-9]+\.[0-9]+\.[0-9]+)[ \t]+v[0-9]+\.[0-9]+\.[0-9]+'
-source = "tag"
-
-[[tool.research-repo-tools.release.rules]]
-path = "docs/RELEASING.md"
-pattern = 'just performance-release[ \t]+v[0-9]+\.[0-9]+\.[0-9]+[ \t]+(?P<value>v[0-9]+\.[0-9]+\.[0-9]+)'
-source = "previous-tag"
 ```
 
 Replace `example/consumer` and `count` with the reviewed repository URL and link
-inventory. Add a separate selector per active command document. Omit command-pair
-rules where the consumer now documents inferred arguments or placeholders.
+inventory. The prepared performance workflow takes a configuration path, so it
+needs no release-tag rewrites in command examples; independently select the
+release pair through its [configuration and preparation](RECORDING_PERFORMANCE.md#prepared-performance-releases).
 A missing example fails an explicit rule; optional regex branches do not bypass
 cardinality. Changes to the active document inventory should update configuration
 and its focused integration tests together.
@@ -75,14 +66,14 @@ consumer-selected evidence directories to the automatic Markdown exclusions.
 
 ## Thin consumer wrapper
 
-For the MCMC migration, use `tag-policy="canonical-stable"`, explicit previous
+Use `tag-policy="canonical-stable"`, explicit previous
 release/date arguments, fixed DOI rules, and version-independent example commands.
 Ordinary checks stay offline. A non-package Python environment (`tool.uv.package=false`)
 beside Cargo is not a second releasable package and its environment version is not
 synchronized. No callback is needed merely to advance an example baseline.
 
 With only these declarative rules, use the existing shared release recipes and
-delete both generic wrappers. If current evidence needs extra interpretation,
+delete the generic wrappers. If current evidence needs extra interpretation,
 retain a small adapter. This example shows a synthetic evidence index whose
 `release` field tracks the prepared version while its `measured` field stays
 pinned. A real consumer supplies its own evidence parser and acceptance rules.

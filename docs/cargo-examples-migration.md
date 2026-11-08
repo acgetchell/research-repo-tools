@@ -19,7 +19,7 @@ passing an old plan to the new action is an error, not implicit conversion.
 | Per-check execution timeout | Preserve it as root `timeout` or a per-example override |
 | Build timeout | Preserve it as `build-timeout`, applied to each build |
 | Scientific stdout expectations | Copy unchanged into the corresponding target's `expect`; upstream does not choose or rewrite them |
-| Logger/stderr expectations and shell `2>&1` | Pin the release containing #132 and copy stderr markers unchanged into `expect-stderr`; remove shell redirection and guessed executable paths |
+| Logger/stderr expectations and shell `2>&1` | Copy stderr markers unchanged into `expect-stderr`; remove shell redirection and guessed executable paths |
 | Arguments or intentional omissions | Preserve literal `args` and explicit consumer `include`/`exclude` policy |
 
 Use the [worked example](RUNNING_CHECKS.md#cargo-examples) to wire a thin Just recipe.
@@ -41,8 +41,5 @@ the example configuration to preserve live forwarding.
 Keep focused consumer tests proving intended Cargo coverage, default-feature
 behavior, real feature-specific execution, budgets, and scientific expectations.
 Shared discovery, process failures, malformed configuration and distribution
-regressions live upstream. Delaunay's current static plan informed this contract;
-its scientific content and separate adoption issue `acgetchell/delaunay#626`
-remain consumer work. CDT stderr adoption belongs to causal-triangulations #301,
-blocked by verified v0.2.4 publication under #146. Cross-repository rollout is
-tracked separately in #69.
+regressions live upstream. Consumer adoption is complete only after the selected
+published package and copied recipes pass those focused integration checks.

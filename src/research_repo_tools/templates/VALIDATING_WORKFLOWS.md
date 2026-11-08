@@ -1,10 +1,10 @@
 # Validating workflows and Python
 
 This guide ships with the package alongside `justfile`, `python-validation.toml`,
-and `zizmor.yml`. The Python 3.15, strict and fail-fast validation contract
-described here targets v0.1.9; v0.1.8 retains its previous Python gate. Adopt
-an exact published registry version containing these capabilities. A local wheel
-can verify a candidate; it does not establish registry availability.
+and `zizmor.yml`. It describes the current Python 3.15, strict and fail-fast
+validation contract. Export these templates from the exact package pinned by
+the consumer and validate their integration. A local wheel can verify a
+candidate; it does not establish registry availability.
 
 ## Audit contract
 
@@ -143,10 +143,10 @@ threshold. These are consumer choices; they do not alter Ruff/Ty. Consult
 [CodeRabbit's configuration reference](https://docs.coderabbit.ai/reference/configuration)
 when updating the consumer's settings.
 
-MCMC adoption still requires its own annotations, exact fixture exceptions,
-CodeRabbit choices, tool pins, and local/CI wiring. Keep its adoption issues open
-until those checks run against the published registry pin. Other consumers can
-adopt independently without production Python helpers or copied shared tests.
+Each consumer owns its annotations, exact fixture exceptions, CodeRabbit choices,
+tool pins, and local/CI wiring. Verify those checks against the selected registry
+pin before completing adoption. Consumers can adopt independently without
+production Python helpers or copied shared tests.
 
 Record authenticated and unauthenticated smoke results separately. Synthetic
 credential tests establish precedence/redaction behavior, not successful online

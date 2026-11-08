@@ -21,15 +21,16 @@ arguments in lexicographic order.
 | `just changelog` | Generate, normalize, and archive completed minor series |
 | `just changelog-archive` | Archive existing notes without regenerating history |
 | `just changelog-check` | Validate the whole root changelog and all archives without writing |
-| `just changelog-preview` | Validate the generated root and archives without writing; print the root candidate |
+| `just changelog-preview [ARGS...]` | Validate the generated root and archives without writing; print the root candidate |
 | `just changelog-release TAG [DATE]` | Generate a prospective release from prepared citation metadata or an explicit date |
 | `just check` | Run Python, Semgrep fixture, and zizmor validation; extend with consumer domain gates |
 | `just ci` | Run the same canonical consumer gate as local validation |
-| `just clean [ARGS...]` | Preview obsolete package-owned installs; `--apply` removes them; repeat `--keep-root PATH` to retain other consumers' pins |
+| `just clean [ARGS...]` | Preview obsolete tool installs and retained coverage; `--apply` removes them; repeat `--keep-root PATH` to retain other consumers' pins |
+| `just clean-coverage [--dry-run \| --apply]` | Preview/remove retained coverage shards and runs while preserving current reports |
 | `just command-time CONFIG OUTPUT` | Acquire exploratory external-command timings into a new JSON report and print a summary |
 | `just dependency-source NAME [--apply]` | Preview or apply a verified Python/Cargo source and lock transition with recoverable multi-file publication |
 | `just files COMMAND...` | Check raw line limits, list selected files or run a command over them |
-| `just help` | List recipes and arguments in lexicographic order, with arguments |
+| `just help` | List recipes and arguments in lexicographic order |
 | `just notebook-advise FILE... [--strict]` | Report configured review warnings, optionally failing on them |
 | `just notebook-check FILE...` | Validate notebook structure, cell IDs, and output policy |
 | `just notebook-clear FILE...` | Deliberately clear generated notebook state |
@@ -47,7 +48,7 @@ arguments in lexicographic order.
 | `just python-check` | Check lint, formatting, and types for all tracked and nonignored Python, including fixtures |
 | `just python-fix` | Apply configured Ruff fixes and formatting to the same complete inventory |
 | `just python-typecheck` | Run native ty without modifying source |
-| `just release-assets COMMAND...` | Prepare drafts, capture/revalidate targets or explicitly upload verified attachments |
+| `just release-assets COMMAND...` | Prepare drafts, retrieve original tag-push receipts, capture/revalidate targets or explicitly upload attachments |
 | `just release-check TAG` | Check final release metadata and generated notes |
 | `just release-dependencies` | Verify selected upstream published pins, lock and executing runtime bytes |
 | `just release-evidence COMMAND...` | Create/verify exact-commit evidence, check published Python bytes, and save handoffs |
@@ -81,7 +82,7 @@ arguments in lexicographic order.
 | `just update-cargo-dependencies` | Upgrade root Cargo requirements (including incompatible releases) and lock resolution; skip projects without a root Cargo.toml |
 | `just update-cargo-tools` | Upgrade declared Cargo tools and release binaries; publish verified TOML pins |
 | `just update-dependencies` | Run Cargo and Python dependency updates, then audit the final selected locks |
-| `just update-python-dependencies` | Update direct dev pins, upgrade the full Python lock, and synchronize dev |
+| `just update-python-dependencies` | Update main dev pins, then upgrade locks and sync the main and declared independent Python projects |
 | `just update-tools` | Upgrade uv and managed tools without repeating shell configuration |
 | `just update-uv` | Upgrade uv through its installation owner and reconcile its pin |
 | `just update-version TAG [ARGS...]` | Prepare release metadata; optionally override predecessor or date |
@@ -103,7 +104,8 @@ global root/configuration options before the group; consult
 | Actions | `actions allowlist`, `update` | [Strict consumer allowlists and opt-in commit pin updates](UPDATING_DEPENDENCIES.md#actions-allowlists-and-opt-in-pin-updates) |
 | Changelog | `changelog archive`, `check`, `generate`, `normalize`, `notes`, `tag` | Root `CHANGELOG.md`; completed minor series in `docs/archives/changelog/` |
 | CI environment | `ci export` | Validate all single-line values before appending a GitHub environment command file |
-| Coverage | `coverage report` | Cobertura summaries with deduplicated source lines |
+| Cleanup | `clean` | Compose tool-installation and coverage cleanup; preview by default; `--keep-root` retains other consumers' tool pins |
+| Coverage | `coverage clean`, `report` | Preview/remove retained Python coverage artifacts; summarize Cobertura with deduplicated source lines |
 | Dependencies | `deps check-uv`, `source`, `update-python`, `update-tools`, `update-uv` | Verified source previews/transitions; exact development pins; canonical Cargo SemVer; stable uv pins |
 | Documentation | `docs check-lines` | Existing explicit-path Markdown policy: 160 characters with table exemptions |
 | File selection | `files check-lines`, `list`, `run` | Configurable raw line gate, tracked/nonignored inputs, exclusions and portable argument batching |

@@ -106,7 +106,7 @@ the CLI returns nonzero and prints the notebook and cell diagnostic. A failure
 to publish artifacts is also an error. Files written by notebook code remain the
 consumer's responsibility. Interrupted runs are not successful reports.
 
-The v0.2.4 execution boundary uses an owned selector loop in a temporary worker
+Execution uses an owned selector loop in a temporary worker
 for PyZMQ socket readers, with explicit kernel and loop cleanup. It preserves
 the caller's current event loop and does not change deprecated global asyncio
 policies. Synchronous calls from a running loop remain supported. Kernel startup
@@ -134,10 +134,10 @@ For integration tests, the
 [public fixture API](notebooks-api.md#python-notebook-integration-test-api) prepares isolated
 projects and returns executed notebooks and reports while borrowing the test
 process's locked interpreter. The [worked example](notebooks-api.md#consumer-integration-tests)
-replaces temporary-file copying and manifest surgery. Adopt it after publication;
+replaces temporary-file copying and manifest surgery. Verify its installed integration;
 retain scientific notebook cells, input policies, and assertions in the consumer.
 
-The inspection and advisory commands added after `0.1.4` replace generic summary
+The inspection and advisory commands replace generic summary
 and review helpers once the consumer has tested the published release against its
 workflow. Retain only consumer invocation and policy checks after adoption. The
 base-package inspection command tolerates repairable nbformat 4 structure; strict
@@ -211,7 +211,7 @@ environment to its existing lock, as for other locked consumer commands.
 consumer root; outside environments and symlink/junction aliases are rejected
 before synchronization.
 
-In v0.2.4, `notebooks launch [NOTEBOOK]` accepts one optional literal `.ipynb`
+`notebooks launch [NOTEBOOK]` accepts one optional literal `.ipynb`
 file. Resolve relative selections from the consumer root, including when
 `notebooks.cwd` names a subdirectory. The selected file must exist inside that
 working directory without traversal, symlink/junction components, or hard-link aliases. Selection
@@ -366,7 +366,7 @@ cell IDs, and original source line numbers. The policy never runs cells or
 changes their source. Python strings and comments containing installation
 examples are not commands.
 
-The v0.2.4 policy follows literal `python -m pip`, `python -m uv`, and `uv run`
+The policy follows literal `python -m pip`, `python -m uv`, and `uv run`
 installer commands, including versioned/path-qualified executables and Windows
 `py -3.15` launchers. It consumes Python flags such as `-I`, `-W`, and `-X` and
 known installer options with values: `%pip --log info install numpy` is rejected,

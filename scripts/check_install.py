@@ -459,6 +459,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             dates_suite.write_bytes((ROOT / "tests/changelog/public_dates_consumer.py").read_bytes())
             run_consumer_suite(python, [str(dates_suite)], cwd=consumer, env=local_env)
             evidence_suite.write_bytes((ROOT / "tests/releases/public_evidence_consumer.py").read_bytes())
+            receipts_suite = consumer / "public_receipts_consumer.py"
+            receipts_suite.write_bytes((ROOT / "tests/releases/public_receipts_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(receipts_suite)], cwd=consumer, env=local_env)
             run_consumer_suite(python, [str(evidence_suite)], cwd=consumer, env=local_env)
             host_suite = consumer / "public_host_consumer.py"
             host_suite.write_bytes((ROOT / "tests/performance/public_host_consumer.py").read_bytes())

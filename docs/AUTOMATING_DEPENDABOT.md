@@ -53,12 +53,12 @@ receive neither approval nor an auto-merge request from this workflow.
 Use active rulesets requiring at least one approval, dismissal of stale reviews,
 resolved review threads, and strict up-to-date status checks. The workflow queries
 the effective rules and refuses approval if these protections are absent; legacy
-branch protection alone is not supported by this pilot. The shared-tools settings
+branch protection alone is not supported by this workflow. The shared-tools settings
 payload enables stale-approval dismissal without removing any required check.
 
 Enable **Settings → General → Pull Requests → Allow auto-merge** and
 **Allow squash merging** in each consumer repository. These are separate from
-the Actions approval permission. The pilot's `.github/settings/repository.json`
+the Actions approval permission. This repository's `.github/settings/repository.json`
 enables both merge settings.
 
 Enable **Settings →
@@ -115,13 +115,13 @@ not forward secrets or expose inputs through PR titles, comments, or labels.
 Review policy changes as ordinary code changes. Dependabot can maintain the
 external workflow's SHA pin through its GitHub Actions ecosystem updater.
 
-The shared-tools pilot uses a local reusable-workflow reference so the caller and
+This repository uses a local reusable-workflow reference so the caller and
 implementation are tested at the same commit. Keep the approval workflow job
 optional in branch rules: it intentionally skips ordinary PRs. The existing
 CodeRabbit status may remain required, but it does not supply this workflow's
 approval and a failure still blocks merging.
 
-## Pilot and rollout
+## Deployment and rollout
 
 Merge the workflow and caller into the default branch before expecting
 `pull_request_target` to use them. Apply the repository and two Actions settings
@@ -132,9 +132,10 @@ An old run uses its original workflow revision; merely rerunning it is not a
 substitute for a new event after deployment.
 
 `research-repo-tools` checks GitHub Actions dependencies on Saturdays at 03:00
-in `America/Los_Angeles`. Its uv entry is paused because the hosted updater
-supports Python through 3.14 and rejects this package's `>=3.15` runtime before
-fetching dependencies. There is no interpreter override in Dependabot's
+in `America/Los_Angeles`. Its uv entry is paused after the hosted updater rejected
+this package's `>=3.15` runtime before fetching dependencies. Check the hosted
+updater's current support before restoring that entry. There is no interpreter
+override in Dependabot's
 [configuration options](https://docs.github.com/en/code-security/reference/supply-chain-security/dependabot-options-reference).
 Maintain Python dependencies with `just update-python-dependencies`, review the
 manifest and lock changes, and run `just ci`. The scheduled Python vulnerability
@@ -149,9 +150,10 @@ operation. GitHub can run
 [Dependabot graph jobs](https://docs.github.com/en/code-security/concepts/supply-chain-security/dependency-graph-data#dependabot-graph-jobs)
 whenever the repository's dependency graph is enabled, independently of this
 version-update entry. Pausing uv version updates does not guarantee that these
-graph jobs stop. Their Python 3.15 rejection requires upstream runtime support;
-rerunning the same updater image cannot resolve it. Keep the dependency graph
-enabled and use the package's scheduled audit while graph refreshes are blocked.
+graph jobs stop. If they report the same Python-version rejection, they need a
+compatible upstream updater runtime; rerunning that same unsupported image
+cannot resolve it. Keep the dependency graph enabled and use the package's
+scheduled audit while graph refreshes are blocked.
 
 Verify an actual `github-actions[bot]` approval on the current head, native
 merge only after required checks pass, and continued blocking for ineligible
@@ -174,5 +176,8 @@ Manually dispatch `ci.yml` using the default-branch name (for example,
 the merged commit before accepting its results. GitHub accepts a branch or tag
 for dispatch, not a raw commit SHA. If the branch has advanced, that run checks
 the newer branch state; it does not establish validation of the earlier merge.
+A manual dispatch verifies checks but does not produce this package's required
+main-push release evidence. Release preparation still requires the complete
+trusted push attempt described in [the release guide](RELEASING.md#reusable-ci-evidence).
 If automatic post-merge workflows become a requirement, plan a separately
 scoped GitHub App credential; this approval workflow does not introduce one.

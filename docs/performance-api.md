@@ -1,8 +1,9 @@
 # Performance data and evidence APIs
 
-The supported names below are available starting with the release containing
-them, after `0.1.2`. Private names and the CLI implementation module are not public
-APIs. The [task guide](RECORDING_PERFORMANCE.md#performance-evidence) contains consumer commands
+This reference describes current source; check
+[release availability](../README.md#release-availability) before adoption.
+Private names and the CLI implementation module are not public APIs.
+The [task guide](RECORDING_PERFORMANCE.md#performance-evidence) contains consumer commands
 and examples. All paths are `Path` objects; relative paths use the calling process's
 directory in Python and the selected consumer root in the CLI.
 
@@ -191,13 +192,17 @@ worktree and release-asset operations are documented separately in the
 
 ## Complete acquisition and read-only sources
 
-The current complete acquisition API is
+The schema-4 complete acquisition API is
 `common_measurement.CompleteMeasurementPlan(..., harness_mode="independent",
 backend="export")`, loaded declaratively through `measurement.load_measurement`
 with schema 4. `measurement.measure_pair` returns complete-run v3 evidence after
 cleanup. `source_exports.capture_source` and `export_source` expose the verified
 read-only source boundary independently. References resolve locally; exports
 contain no Git metadata and never fall back to worktrees.
+
+Schema-5 suites and schema-6 scheduled trials compose that acquisition boundary
+and produce complete-run v4 and v5 respectively; see the
+[complete-run APIs](complete-run-api.md).
 
 `complete_runs.ratio_incompatibilities` returns retained diagnostic reasons
 without probing today's host. `validate_run_evidence` establishes acquisition

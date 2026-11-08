@@ -49,7 +49,7 @@ change can be validated with its focused regressions, `just check`, and
 the unaffected source and installation suites.
 
 `just check` includes `just newline-check`, so both local `just ci` and every
-native package job enforce explicit newline policies. The guard's positive and
+native `source` job enforce explicit newline policies. The guard's positive and
 negative fixtures verify detection; byte assertions exercise mixed LF/CRLF data
 on the native host and a focused Windows translation model. See the
 [contributor guidance](../CONTRIBUTING.md#shared-implementation) for the syntax
@@ -183,21 +183,24 @@ and Dependabot use public-repository tokenless uploads. No additional test run i
 scheduled for coverage. macOS and Windows run ordinary tests and the same
 installation checks. Release preparation reuses the exact main-push distributions
 and validation; it does not run another package matrix or upload another report.
-Codecov project and patch statuses are initially advisory while a baseline is
-established; test failures still fail the required platform checks. Setup and
-account activation are documented in [GitHub configuration](CONFIGURING_GITHUB.md#codecov).
+Codecov project and patch statuses are configured as advisory; test failures
+still fail the required platform checks. Setup and account activation are
+documented in [GitHub configuration](CONFIGURING_GITHUB.md#codecov).
 
-Source, installed-distribution, and setup jobs run concurrently after the shared
-build on each supported platform. Required `check (OS)` aggregate gates require
-every stage to succeed, and signed release evidence checks every stage's actual
-job and step identities. Locally, `just ci` finishes policy and artifact checks
+The `source`, `distributions`, and `setup` jobs run concurrently after the shared
+build on each supported platform. Each required `check (OS)` aggregate gate
+requires every stage to succeed across all platforms, and signed release
+evidence checks every stage's actual job and step identities. Locally, `just ci` finishes policy and artifact checks
 before overlapping coverage and installed-consumer checks; `just --jobs 1 ci`
 serializes those branches when needed.
 
 The native setup jobs run `just check-setup` against the built wheel in a
-temporary consumer with fresh managed-tool directories. This downloads managed
-Python, installs Rust with a component and target plus Cargo tools, and runs the
-explicit setup command. It checks verified executable selection, a native Rust
+disposable consumer at a stable path under the runner's temporary directory, with fresh managed-tool
+installation directories. Only Cargo compilation output is cached between runs;
+an existing consumer directory is rejected, and cleanup removes it after the
+check. The setup run downloads managed Python, installs Rust with a component
+and target plus Cargo tools, and runs the explicit setup command. It checks
+verified executable selection, a native Rust
 compile/run, user-level Just in a fresh shell, development dependency sync,
 unchanged declarations/lockfiles, and repeat setup without replacing tools or
 duplicating shell configuration. Linux uses Bash, macOS uses Zsh, and Windows

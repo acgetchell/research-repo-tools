@@ -3,9 +3,9 @@
 Exact-release-commit CI remains the default. A consumer can explicitly reuse
 signed source checks from a same-repository PR's synthetic merge checkout after
 a squash merge, provided the tested tree and merge base match the release and
-the checks implement the reviewed execution contract below. This capability is
-part of the planned v0.2.4 release; use it in consumers only after that version is
-published, normally installed and integration-tested.
+the checks implement the reviewed execution contract below. Pin a published
+version containing this capability and verify the consumer integration before
+enabling reuse; see [release availability](../README.md#release-availability).
 
 This does not enable reuse in this package's own workflows. Its build-once
 wheel/sdist validation and promotion still require the exact release commit.

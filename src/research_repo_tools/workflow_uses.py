@@ -64,13 +64,8 @@ def _validate(node: Node, path: Path, active: set[int], visited: set[int]) -> No
     visited.add(id(node))
 
 
-def references(path: Path, text: str) -> tuple[Use, ...]:
-    """Reject ambiguous YAML; inspect workflow calls and workflow/composite steps.
-
-    Aliases retain the anchor's source location. This is reference inspection,
-    not an actionlint replacement. Local and same-repository references and
-    containers are out of scope.
-    """
+def _document(path: Path, text: str) -> dict[str, Node]:
+    """Parse inert Actions YAML without duplicate/merge keys or recursive aliases."""
     try:
         document = yaml.compose(text, Loader=yaml.SafeLoader)
         if document is not None:
@@ -81,7 +76,17 @@ def references(path: Path, text: str) -> tuple[Use, ...]:
         raise ValueError(f"{path}: invalid Actions YAML: {error}") from error
     if document is None:
         raise ValueError(f"{path}: empty Actions YAML")
-    top = _mapping(document, path)
+    return _mapping(document, path)
+
+
+def references(path: Path, text: str) -> tuple[Use, ...]:
+    """Reject ambiguous YAML; inspect workflow calls and workflow/composite steps.
+
+    Aliases retain the anchor's source location. This is reference inspection,
+    not an actionlint replacement. Local and same-repository references and
+    containers are out of scope.
+    """
+    top = _document(path, text)
     uses: list[Use] = []
 
     def collect(node: Node, context: str) -> None:

@@ -8,6 +8,7 @@ import subprocess
 import tarfile
 import tempfile
 import threading
+from collections.abc import Callable
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -140,7 +141,13 @@ def parse_release_target(payload: bytes) -> ReleaseTarget:
 
 def _remote_commit(root: Path, repository: str, tag: str) -> str:
     """Resolve only refs/tags, with bounded annotated-tag peeling and no checkout."""
-    data = _object(_load_json(_gh(root, ["api", f"repos/{repository}/git/ref/tags/{quote(tag, safe='')}"]), "GitHub tag"), "tag ref")
+    return _resolve_tag_commit(tag, lambda endpoint: _load_json(_gh(root, ["api", f"repos/{repository}/{endpoint}"]), "GitHub tag"))
+
+
+def _resolve_tag_commit(tag: str, read: Callable[[str], object]) -> str:
+    """Share exact tag resolution between asset gates and receipt selection."""
+    _stable_tag(tag)
+    data = _object(read(f"git/ref/tags/{quote(tag, safe='')}"), "tag ref")
     if data.get("ref") != f"refs/tags/{tag}":
         raise ValueError("remote release tag is missing or differs")
     obj = data.get("object")
@@ -156,7 +163,7 @@ def _remote_commit(root: Path, repository: str, tag: str) -> str:
             return sha
         if obj.get("type") != "tag":
             break
-        data = _object(_load_json(_gh(root, ["api", f"repos/{repository}/git/tags/{sha}"]), "GitHub annotated tag"), "annotated tag")
+        data = _object(read(f"git/tags/{sha}"), "annotated tag")
         if data.get("sha") != sha:
             break
         obj = data.get("object")

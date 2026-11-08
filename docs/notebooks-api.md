@@ -22,7 +22,7 @@ construct settings for these public interfaces:
 - `research_repo_tools.notebook_workflows.launch(settings, *, notebook=None,
   browser=None, scratch_dir=None) -> int`: `None` selects configuration for browser
   and scratch; omitted notebook retains the Lab landing page. The optional
-  v0.2.4 `notebook` argument is a literal `str` or `Path`, relative to the consumer
+  `notebook` argument is a literal `str` or `Path`, relative to the consumer
   root or absolute within it, naming an existing `.ipynb` inside `notebooks.cwd`.
   Traversal, symlinks/junctions, hard-link aliases, outside paths, and option-shaped arguments raise
   `ValueError` before synchronization. Selection is encoded as a JupyterLab tree
@@ -102,7 +102,7 @@ uses the existing notebook engine and a fresh kernel for each call:
 - Context exit removes only the newly created workspace, including on an
   exception. Artifact paths then expire and further execution raises `ValueError`.
 
-Starting with v0.2.4, execution owns a selector event loop in a temporary worker,
+Execution owns a selector event loop in a temporary worker,
 including its shutdown. This supports PyZMQ socket readers on Windows without
 deprecated asyncio policy changes. The local Jupyter provisioner starts kernels
 through `subprocess.Popen`; it does not require selector-loop asyncio subprocess
@@ -120,7 +120,7 @@ and external side effects. Place intended test outputs beneath `project.root`.
 
 The [worked example](#consumer-integration-tests) replaces generic
 notebook/project copying, `UV_PROJECT_ENVIRONMENT` mutation, Cargo-table string
-slicing, and sidecar-path reconstruction. MCMC adoption should retain its
+slicing, and sidecar-path reconstruction. Consumers retain their
 trace-root, output-destination, ACF, ESS, timing, and split-R-hat assertions;
 modify only fixture copies when injecting scientific assertion cells. Consumer
 adoption follows publication and does not follow automatically from upstream tests.
@@ -182,5 +182,5 @@ assert "changelog notes" in preview.stderr
 
 Dry-run preserves native stdout/stderr and argument boundaries. It does not run
 recipe bodies, but Just still evaluates configuration and expressions; use
-trusted Justfiles. See the [integration-test API contract](api.md) for overrides,
+trusted Justfiles. See the [Just inspection contract](process-api.md#python-just-inspection-api) for overrides,
 errors, path boundaries, environment handling, and migration details.

@@ -1,7 +1,8 @@
 # Retained performance evidence migration
 
-Adoption requires a published package after `0.1.2` containing the
-[performance APIs](performance-api.md). Package implementation, publication,
+Adoption requires a published package supplying the
+[performance APIs](performance-api.md); check
+[release availability](../README.md#release-availability). Package implementation, publication,
 and consumer adoption are separate checkpoints. Keep retained evidence readable
 throughout the migration; a new common envelope does not replace old schemas
 automatically. Consumer commands and new-evidence examples are in the
@@ -9,17 +10,16 @@ automatically. Consumer commands and new-evidence examples are in the
 
 ## Release capability adoption
 
-The coordinated extensions below first become available in v0.1.9. Pin
-`research-repo-tools==0.1.9` only after the release workflow verifies
-the GitHub Release and the unyanked PyPI wheel and sdist. A merged implementation,
-local build or sibling checkout does not satisfy that publication gate.
+Use the published pin from the [quickstart](../README.md#install-with-uv), or a
+newer verified release supplying the required contract. A merged implementation,
+local build or sibling checkout does not satisfy the publication gate.
 
 All listed capabilities ship in the base package; no optional extra is required.
 Native measurement still requires the consumer's Git/Rust/Cargo toolchain, and
 GitHub release operations require authenticated GitHub CLI. Notebook, paper and
 Python validator dependencies retain their separately documented extras.
 
-v0.1.9 requires Python 3.15 or newer and selects Python 3.15 for development.
+The current package requires Python 3.15 or newer and selects Python 3.15 for development.
 Use the existing [shared Python adoption recipes](UPDATING_DEPENDENCIES.md#shared-python-adoption)
 to reconcile the exact package pin, support metadata, tool declarations and
 locked environment. Preserve consumer Ruff configuration and precise exceptions;
@@ -29,12 +29,12 @@ actual native workflow before deleting generic helpers.
 
 | Capability | Migration and supported interface | Compatibility boundary |
 | --- | --- | --- |
-| Captured release targets (#94) | Pass versioned target JSON from [trusted preflight to the writer](VERIFYING_RELEASE_EVIDENCE.md#trusted-release-target-handoff) | Bind uploads to the captured ID, tag commit, title and lifecycle; consumers retain trusted handoff, archive formats and publication decisions |
-| Coordinate plots (#95) | Declare series, coordinates, statistic, units and axes through [configured presentation](complete-run-api.md#configured-presentation) | Preserve original phases and recorded marginal timing intervals; coordinates and scientific interpretation stay in consumers |
-| Provenance reports (#96) | Use [retention and report rendering](complete-run-api.md#retention-and-publication) with existing current/archive paths | The mutable index can migrate to renderer version 2; old retained reports and exact evidence bytes remain immutable, with no host recapture |
-| Complete-run document publication (#97) | Select complete evidence or retained history with [publication schema 2](publication-api.md#publication-configuration-v2) | Schema 1 still accepts comparison evidence; retain original series phases, document bytes outside markers and transactional freshness checks |
-| Criterion discovery and saved baselines (#98) | Configure native discovery and exact saved-file checks through the [Criterion APIs](criterion-api.md) and packaged templates | Semantic IDs stay separate from storage paths; require complete inventories and identical configured raw JSON bytes before publication |
-| Heterogeneous sample counts (#101) | Explicitly select [measurement schema 3 and complete-run v2](complete-run-api.md#configuration-and-measurement), with exhaustive per-case counts | Uniform schema-2/v1 defaults remain supported; original samples are never padded, discarded or relabelled, and historical schemas retain their contracts |
+| Captured release targets | Pass versioned target JSON from [trusted preflight to the writer](VERIFYING_RELEASE_EVIDENCE.md#trusted-release-target-handoff) | Bind uploads to the captured ID, tag commit, title and lifecycle; consumers retain trusted handoff, archive formats and publication decisions |
+| Coordinate plots | Declare series, coordinates, statistic, units and axes through [configured presentation](complete-run-api.md#configured-presentation) | Preserve original phases and recorded marginal timing intervals; coordinates and scientific interpretation stay in consumers |
+| Provenance reports | Use [retention and report rendering](complete-run-api.md#retention-and-publication) with existing current/archive paths | The mutable index uses version 2 with a per-run renderer version; old retained reports and exact evidence bytes remain immutable, with no host recapture |
+| Complete-run document publication | Select complete evidence or retained history with [publication schema 2](publication-api.md#publication-configuration-v2) | Schema 1 still accepts comparison evidence; retain original series phases, document bytes outside markers and transactional freshness checks |
+| Criterion discovery and saved baselines | Configure native discovery and exact saved-file checks through the [Criterion APIs](criterion-api.md) and packaged templates | Semantic IDs stay separate from storage paths; require complete inventories and identical configured raw JSON bytes before publication |
+| Heterogeneous sample counts | Explicitly select [measurement schema 3 and complete-run v2](complete-run-api.md#configuration-and-measurement), with exhaustive per-case counts | Uniform schema-2/v1 defaults remain supported; original samples are never padded, discarded or relabelled, and historical schemas retain their contracts |
 
 Retain consumer scientific gates, workload selection, compatibility adapters and
 legacy artifacts. Shared package validation covers generic behavior; downstream
@@ -135,7 +135,7 @@ the shared marker/snapshot/transaction contract.
 The coordinated extraction supplies configured release selection, authenticated
 assets, provenance capture, live measurement, explicit worktree lifecycle,
 retained report promotion and rerendering. See the [workflow contracts](workflow-api.md)
-and [complete MCMC deletion map](mcmc-extraction.md). Consumers select benchmark
+and [shared helper ownership map](shared-capability-migration.md#performance-and-release-helper-adoption). Consumers select benchmark
 commands/inventories, compatibility fields, workloads, statistical interpretation,
 and publication decisions in configuration and prose. The earlier incremental
 guidance to retain generic wrappers is superseded by these complete workflows.
@@ -146,18 +146,20 @@ stale source/harness rejection, unsafe release assets, and failed promotion with
 unchanged originals. Keep domain tests in consumers and shared implementation
 regressions here. Native Linux/macOS/Windows checks and wheel/sdist checks belong
 to this package's existing CI matrix. A local run is not evidence that the other
-platforms or a migrated consumer passed. Release and adoption completion remain
-necessary before closing the parent extraction issue's published-package acceptance.
+platforms or a migrated consumer passed. Record publication and downstream
+integration evidence separately; downstream adoption does not block upstream publication.
 
 ## Common harness and host adoption
 
-Issues #64 and #75 target the schema-2 measurement/report and versioned host
-contracts in the [complete-run API](complete-run-api.md). Pin an exact PyPI
-release containing these contracts (target v0.1.8), then test the consumer before
+The schema-2 measurement/report and versioned host contracts are defined in the
+[complete-run API](complete-run-api.md). Pin an exact PyPI
+release containing these contracts, then test the consumer before
 retiring working implementations. The installed suite uses a small representative
 common-harness fixture with a substituted Cargo lock/toolchain, independent input
 gates and a baseline-only reference. It is not proof of la-stack or delaunay
-adoption, nor a replacement for native package jobs.
+adoption, nor a replacement for native package jobs. The maps below describe
+historical helper roles; reconcile current consumer paths and behavior before
+removing code.
 
 | Consumer surface | Shared replacement | Consumer responsibility |
 | --- | --- | --- |
@@ -176,7 +178,7 @@ fields, attach current host data to old evidence, or promote an old digest into
 the new framing. Legacy conversions retain their explicit origin hashes and
 schema names using the existing adapter; they do not claim complete-run status.
 
-The standard provenance report (issue #96, targeting v0.1.9) replaces a consumer's
+The standard provenance report replaces a consumer's
 second renderer for generic audit context. Pin the published implementation,
 then use the schema-2 report configuration with the existing current/archive
 paths. No new metadata capture or measurement is needed to rerender retained
@@ -188,7 +190,7 @@ scientific interpretation and figures remain consumer responsibilities. See the
 
 ### Plotting disposition
 
-v0.1.9 supplies generic multi-series coordinate plots through
+The package supplies generic multi-series coordinate plots through
 [`run_presentation`](complete-run-api.md#configured-presentation) and
 [complete-run document configuration](publication-api.md#publication-configuration-v2).
 Declare named series, benchmark-to-coordinate mappings, mean or median, recorded
@@ -210,7 +212,7 @@ required before declaring downstream extraction complete.
 
 ## Criterion discovery and saved-baseline adoption
 
-Issue #98 targets v0.1.9 for these [public contracts](criterion-api.md). Pin an
+Use the [public contracts](criterion-api.md). Pin an
 exact published package containing them, run a focused consumer integration
 test, then remove the generic helpers. An implementation merge does not unblock
 consumer adoption. Existing raw baselines, archives, legacy fingerprints and
@@ -257,11 +259,9 @@ package evidence.
 
 ## Parallel Criterion suite adoption
 
-[Issue #158](https://github.com/acgetchell/research-repo-tools/issues/158) targets
-v0.2.4 for [suite verification and archive assembly](criterion-api.md#parallel-suite-transport).
-[la-stack #316](https://github.com/acgetchell/la-stack/issues/316) targets v0.5.2
-for adoption after the supplying package is published. Pin that exact published
-version and run the consumer integration before deleting the temporary adapter.
+Use [suite verification and archive assembly](criterion-api.md#parallel-suite-transport)
+from an exact published pin. Run the consumer integration before deleting its
+temporary adapter.
 
 | Consumer surface | Shared replacement | Consumer responsibility |
 | --- | --- | --- |
@@ -276,13 +276,10 @@ historical archives; this changes newly collected artifacts only.
 
 ## Captured release target adoption
 
-[Issue #94](https://github.com/acgetchell/research-repo-tools/issues/94) supplies
-the v0.1.9 [release-target contract](workflow-api.md#release-assets).
-Upstream merge alone does not authorize downstream deletion. Verify v0.1.9
-publication and record its release and native validation evidence before adoption.
-Consumers must pin that published package
-and pass focused integration checks before deleting their working implementation.
-This does not reopen completed v0.1.8 capabilities or their existing adoption gates.
+Use the [release-target contract](workflow-api.md#release-assets) from a verified
+published package and record its release and native validation evidence.
+Consumers must pass focused integration checks before deleting their working
+implementation; an upstream merge alone does not establish downstream acceptance.
 
 The following map refers to la-stack's
 [release benchmark workflow](https://github.com/acgetchell/la-stack/blob/b8ffb208addb5eda68c71eb142253b382b384028/.github/workflows/release-benchmarks.yml)
@@ -311,7 +308,7 @@ the consumer's own asset filename and raw archive, attachment verification, and
 explicit publication intent. Generic provider failure matrices belong in this
 package; consumers retain tests for their actual workflow composition.
 Benchmark measurements, scientific eligibility, plotting, historical evidence
-conversion, registry publication and live GitHub settings remain outside #94.
+conversion, registry publication and live GitHub settings remain consumer responsibilities.
 
 ## Independent acquisition and export adoption
 
@@ -327,9 +324,8 @@ compatibility where it obstructs correctness or API design, and never synthesize
 missing proof. Unsupported artifacts require their producing release's reader;
 retain that environment separately when needed. Do not rewrite old files as v3.
 
-Delaunay #648 and mcmc-learned-proposals #44 remain separate adoption tasks.
 Verify the exact published supplying release and normal wheel/sdist resolution
-before removing their working adapters. Keep scientific selections, count policy,
+before removing working adapters. Keep scientific selections, count policy,
 fixture validation and interpretation in consumers. A local implementation or
 merged PR is not publication or downstream acceptance.
 
@@ -341,10 +337,9 @@ It replaces the manual creation block while preserving pre-tag evidence,
 owner-selected measurements, captured-target attachment and explicit publication.
 
 Use the same recipe names and meanings in every consumer. The shared replacement
-must be present in a verified published v0.2.4 (or later supplying release),
+must be present in a verified published supplying release,
 pinned exactly and tested through the consumer's lock before deleting working
-adapters. Publication is tracked in #146; adoption remains separate in Delaunay
-#653, la-stack #304, MCMC #216/#209 and CDT #302. Do not patch site-packages or
+adapters. Do not patch site-packages or
 switch consumers to sibling source checkouts as a permanent replacement.
 
 | Existing consumer plumbing | Installed replacement | Retained consumer responsibility |

@@ -5,28 +5,26 @@ declared repeated trials, and final-main acceptance, use the v0.2.6
 [candidate contract](candidate-reuse-api.md) and
 [two-step procedure](REUSING_BENCHMARKS.md).
 
-This contract targets v0.2.5. It is a derived transport of an existing acquisition,
-not a new measurement or an authentication mechanism. Consumer adoption requires
-the exact supplying PyPI version and successful normal resolution, tracked by
-[#170](https://github.com/acgetchell/research-repo-tools/issues/170). A merged
-implementation or local wheel does not establish published availability.
+This is a derived transport of an existing acquisition, not a new measurement or
+an authentication mechanism. Consumer adoption requires an exact supplying PyPI
+version and successful normal resolution; see
+[release availability](../README.md#release-availability).
 
 ## Architecture and trust decision
 
-The Astra checkpoint for [#169](https://github.com/acgetchell/research-repo-tools/issues/169)
-permits a bounded complete-run v4 conversion. Preparation, acquisition, rendering,
+The converter accepts bounded complete-run v4 evidence. Preparation, acquisition, rendering,
 packaging, draft attachment and approval-time publication remain separate stages.
 Existing engines continue to own each stage; conversion adds only independent
 acceptance and a byte-preserving projection of the retained current observations.
 
 | Capability | Existing contract | Reuse decision |
 | --- | --- | --- |
-| Acquisition and source identity (#127/#137) | Complete raw cases, source exports, gates, declarations and probes | Validate the entire v4 run against an independently supplied schema-5 plan; retain every original byte and observation. |
-| Availability and collection ownership (#166) | Paired suite units with original sessions and nanosecond intervals | Support v4 only; absent sides remain absent, and no session is invented for older evidence. |
-| Preparation and README (#129) | Independent reference assertions and offline retained-evidence publication | Reuse these stages; rendering never calls acquisition. |
-| Saved-sample and suite transport (#158) | Verification of native fresh/saved equality and suite assembly | Keep that contract. The new derived archive does not claim native saved-pair production. |
-| Evidence and assets (#140) | Captured release target, immutable artifact selection, signer/event/ref/run/attempt checks, upload byte verification | Preserve those boundaries. An evidence envelope, reuse policy or derived receipt is not signed CI evidence. |
-| Missing conversion | No complete-run-to-release projection with independent acceptance assertions | Add `benchmark_reuse`, using existing archive and publication engines. |
+| Acquisition and source identity | Complete raw cases, source exports, gates, declarations and probes | Validate the entire v4 run against an independently supplied schema-5 plan; retain every original byte and observation. |
+| Availability and collection ownership | Paired suite units with original sessions and nanosecond intervals | Support v4 only; absent sides remain absent, and no session is invented for older evidence. |
+| Preparation and README | Independent reference assertions and offline retained-evidence publication | Reuse these stages; rendering never calls acquisition. |
+| Saved-sample and suite transport | Verification of native fresh/saved equality and suite assembly | Keep that contract. The derived archive does not claim native saved-pair production. |
+| Evidence and assets | Captured release target, immutable artifact selection, signer/event/ref/run/attempt checks, upload byte verification | Preserve those boundaries. An evidence envelope, reuse policy or derived receipt is not signed CI evidence. |
+| Archive conversion | Independent acceptance and a complete-run-to-release projection | `benchmark_reuse` composes the existing archive and publication engines. |
 
 Consumers choose acquisition location explicitly as `local` or `github-actions`,
 recording it in every suite's measurement context as `acquisition-owner`, alongside
@@ -54,8 +52,8 @@ precedes the README edit and final tag. That workflow still needs its existing
 exact-tag acquisition. A matching source subtree cannot turn the earlier commit
 into the final commit. Working-tree-to-tag equivalence is unsupported by this v1 API;
 the candidate contract requires new schema-6/v5 acquisition evidence, independent
-assertions and an explicit whole-tree binding. Real release ordering and scientific acceptance remain downstream
-in [la-stack#323](https://github.com/acgetchell/la-stack/issues/323).
+assertions and an explicit whole-tree binding. Release ordering and scientific
+acceptance remain consumer responsibilities.
 
 Both the envelope's current source and every projected current observation must
 identify the target tag and full commit. Each observation must retain a clean

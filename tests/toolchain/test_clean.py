@@ -7,7 +7,7 @@ from pathlib import Path
 
 import pytest
 
-from research_repo_tools import config, toolchain, toolchain_config
+from research_repo_tools import cli, config, toolchain, toolchain_config
 from research_repo_tools import toolchain_clean as clean
 
 
@@ -41,6 +41,39 @@ def install(path):
     path.mkdir(parents=True, exist_ok=True)
     (path / "sentinel").write_bytes(b"fixture\r\n")
     return path
+
+
+def test_aggregate_cleanup_shares_preview_apply_and_retention(owned, tmp_path, capsys):
+    settings, runtime = owned
+    obsolete = install(runtime.cargo_root(runtime.plan.cargo[0]).with_name("2.13.0"))
+    retained = consumer(tmp_path / "retained", cargo="2.13.0")
+    shard = settings.root / ".coverage.worker"
+    shard.write_bytes(b"old data")
+    arguments = ["--root", str(settings.root), "clean", "--keep-root", str(retained.root)]
+    assert cli.main(arguments) == 0
+    assert shard.read_bytes() == b"old data" and obsolete.is_dir()
+    assert "Preview only" in capsys.readouterr().out
+    assert cli.main([*arguments, "--apply"]) == 0
+    assert not shard.exists() and obsolete.is_dir()
+    shard.write_bytes(b"more data")
+    assert cli.main(["--root", str(settings.root), "clean", "--apply"]) == 0
+    assert not shard.exists() and not obsolete.exists()
+
+
+def test_aggregate_invalid_tool_plan_does_not_remove_coverage(owned, tmp_path):
+    settings, _ = owned
+    shard = settings.root / ".coverage.worker"
+    shard.write_bytes(b"data")
+    assert cli.main(["--root", str(settings.root), "clean", "--apply", "--keep-root", str(tmp_path / "missing")]) == 1
+    assert shard.read_bytes() == b"data"
+
+
+def test_aggregate_invalid_coverage_plan_does_not_remove_tools(owned):
+    settings, runtime = owned
+    obsolete = install(runtime.cargo_root(runtime.plan.cargo[0]).with_name("2.13.0"))
+    (settings.root / "coverage").write_bytes(b"not a directory")
+    assert cli.main(["--root", str(settings.root), "clean", "--apply"]) == 1
+    assert obsolete.is_dir()
 
 
 def test_retained_roots_versions_compilers_and_unknown_entries(owned, tmp_path):

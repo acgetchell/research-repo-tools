@@ -39,13 +39,14 @@ Ruff and ty
 infer targets from project metadata. Consumer lint rules, fixture exceptions,
 notebook policy, and deliberate lower targets remain consumer decisions.
 
-After the target version is published, use the packaged standalone bootstrap:
+Use the packaged standalone bootstrap with the
+[published quickstart pin](../README.md#release-availability):
 
 ```sh
 just templates python-bootstrap.py --output python-bootstrap.py
 # Merge the matching published Justfile recipes into the consumer's Justfile.
-just shared-python-plan 0.2.3
-just shared-python-update 0.2.3
+just shared-python-plan 0.2.6
+just shared-python-update 0.2.6
 just python-check
 ```
 
@@ -101,8 +102,8 @@ from `dev`. The same standalone adoption recipes prepare the extra, declarations
 lock and environment. This example targets the published quickstart pin:
 
 ```sh
-just shared-python-plan 0.2.3
-just shared-python-update 0.2.3
+just shared-python-plan 0.2.6
+just shared-python-update 0.2.6
 just tools-python-check
 just python-check
 ```
@@ -156,7 +157,7 @@ synchronizes `dev`, even with `default-groups = []`. The final sync runs with
 checked managed tools so native Python builds can find Rust. Included groups,
 including the pinned shared package in `tooling`, retain their declared constraints.
 
-Starting with v0.2.4, candidate resolution retains named uv indexes, marker-split
+Candidate resolution retains named uv indexes, marker-split
 package source mappings, explicit-index isolation, overrides, constraints, build
 constraints and supported native resolver/build/authentication settings. Current
 managed versions are lower bounds, including when an override selects a version.
@@ -168,7 +169,7 @@ URLs and `find-links` remain relative to the consumer project.
 Pin discovery supports registry requirements and named-index sources with
 optional platform markers. Absolute local wheel/sdist source files are also
 retained for isolated artifact evaluation; their fixed pins are not upgrade
-targets. Exact development Git sources use the same declaration accepted during
+targets. With v0.2.7, exact development Git sources use the same declaration accepted during
 adoption: one uncredentialed HTTPS repository URL and a full lowercase
 40-character `rev`, with no branch, tag, marker, group or extra scope. These
 packages retain their version requirements, extras and exact repository/commit
@@ -234,10 +235,11 @@ validate-native configuration *names:
 ```
 
 Other independent tools can continue to use explicitly declared Python projects.
-After **v0.2.4 is published and verified**, adopt its exact registry pin, reconcile
-copied recipes and audit lock selection, and run focused consumer integration
-checks before removing local source-index or audit workarounds. These changes in
-the repository do not establish that the release is already available on PyPI.
+When upgrading an older consumer, reconcile copied recipes and audit lock
+selection, then run focused integration checks against its exact published pin
+before removing local source-index or audit workarounds. See
+[release availability](../README.md#release-availability) for features that still
+require a supplying release.
 
 For Rust projects, pin `cargo-edit` to an exact version in the managed Cargo tool
 table (for example, `cargo-edit = "0.13.13"`) and keep the compiler pinned in
@@ -493,8 +495,8 @@ support, not every possible runtime incompatibility; retain focused consumer CI.
 
 ## Verified dependency sources
 
-Use the shared [dependency source workflow](../README.md#verified-python-and-cargo-dependency-sources)
-for exact development commits and explicit commit-to-release transitions. The
+The v0.2.7 [dependency source workflow](../README.md#verified-python-and-cargo-dependency-sources)
+supports exact development commits and explicit commit-to-release transitions. The
 canonical `dependency-sources.toml` belongs at the checkout root. It declares
 Python/uv and Cargo projects, the package directories owned by each release,
 and optional named source selections. The same file is inspected at release

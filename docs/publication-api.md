@@ -1,7 +1,8 @@
 # Evidence-backed document publication
 
-Available in the release containing these APIs, after `0.1.2`. Consumer commands
-and complete configuration examples live in the
+This reference describes current source; check
+[release availability](../README.md#release-availability) before adoption.
+Consumer commands and complete configuration examples live in the
 [task guide](PUBLISHING_REPORTS.md#document-publication). Historical-schema adoption is covered
 in [publication migration](publication-migration.md).
 
@@ -29,7 +30,7 @@ Import from `research_repo_tools.publication`:
 Import `load_publication(root, configuration, *, identities=None, artifacts_only=False)` from
 `research_repo_tools.publication_config` to parse a publication TOML file,
 validate shared comparison evidence, and return a `PublicationPlan`.
-The [v0.2.1 declarative contract](DECLARING_PERFORMANCE.md#reusable-publication)
+The [declarative contract](DECLARING_PERFORMANCE.md#reusable-publication)
 defines runtime identity assertions, recorded phase version labels, optional
 measurement eligibility, artifact-only rendering and candidate formatting.
 `root` is a `Path`; configuration, document, figure, input, link, and reference
@@ -49,8 +50,11 @@ bytes and can come from consumer renderers. The built-in renderer creates SVG;
 the generic planner also accepts other figure formats.
 
 `references` uses the existing public
-[`ReleaseRule`](publishing-api.md#python-release-api) selector type, with fixed `value`
-assertions only. Each rule must find exactly its configured number of nonempty
+[`ReleaseRule`](publishing-api.md#python-release-api) selector type, with
+`replacement=FixedValue(expected_text)` assertions only. In v0.2.7, import
+`FixedValue` alongside `ReleaseRule` from `research_repo_tools.releases`;
+derived `ReleaseSource` replacements are not accepted by this planner.
+Each rule must find exactly its configured number of nonempty
 named `value` captures and every capture must equal the expected value. Rules
 selecting outputs inspect candidate bytes. This supports release/report identity
 and active-link checks without rewriting historical references.
@@ -106,6 +110,7 @@ non-integer schema/count values, and empty required arrays fail before writes.
 | `begin`, `end` | Required literal marker strings |
 | `current-sources`, `current-harness` | Optional glob inventories checked against current shared fingerprints and included in stale-input snapshots |
 | `document` | Existing document to update |
+| `formatter` | Optional root-relative rumdl configuration for validating and formatting candidate Markdown |
 | `links` | Optional nonempty array of `{label, path}` tables; paths must exist or be candidates |
 | `manifest`, `payload` | Existing retained sidecar and comparison payload |
 | `prose-file` | Optional consumer interpretation, included in the input snapshot |
@@ -169,13 +174,16 @@ traceback; a successful check is silent.
 
 ## Publication configuration v2
 
-Schema 2 accepts `research-repo-tools/complete-run/v1`,
-`research-repo-tools/complete-run/v2` and `research-repo-tools/complete-run/v3`
-evidence directly, with the same independent provenance pins, source/harness
+Schema 2 accepts complete-run v1–v5 evidence, with the same independent provenance pins, source/harness
 checks, references, markers, tagged links, preview/check and transaction contracts
 as schema 1. The [task guide](PUBLISHING_REPORTS.md#complete-run-document-sections-and-coordinate-plots)
 owns commands and the packaged `complete-publication.toml` provides an editable
 configuration example. Schema 1 continues to require comparison evidence.
+Suite v4 evidence preserves availability and observation-level comparison rules.
+Scheduled v5 evidence requires an explicit one-based `trial`; validation checks
+the entire schedule before selecting that trial, labels the selected trial in
+the document, and links the original full evidence. It does not pool trials or
+infer significance. A `trial` setting on nonscheduled evidence is rejected.
 Independent v3 measurements can be published even when their phases are not
 comparable. Tables mark incompatible cross-phase ratio and reduction cells
 unavailable while retaining same-phase comparisons. A configured incompatible
@@ -199,17 +207,20 @@ first when immutable archival is required.
 | `comparisons` | Optional nonempty array of `{numerator, denominator}` selecting two distinct configured retained series names |
 | `csv` | Optional selected timing CSV path, linked from the document |
 | `manifest`, `payload` | Both required in explicit-input mode; original full evidence is linked automatically |
+| `measurement` | Optional independent measurement declaration; document publication then requires immutable `archive` selection |
 | `missing` | `error` by default; `unavailable` explicitly permits unmapped cells |
 | `plot` | Optional coordinate figure table with `path`, `title`, `x-label`, `y-label`, optional `x-scale` and `y-scale` (`linear`/`log`) |
+| `release` | Requires `measurement`; defaults to true for document publication and false for artifact-only rendering; false permits policy-checked absolute evidence |
 | `rows` | Ordered nonempty array of `{key, label}` with optional finite numeric `coordinate`; coordinates required and unique for a plot |
 | `schema` | Integer `2` |
 | `series` | Ordered nonempty array of `{name, label, rows}`; `name` identifies an existing retained view, `rows` maps configured row keys to exact semantic benchmark IDs within that view |
 | `statistic` | Explicit recorded `mean` or `median` |
 | `svg` | Optional point-ratio figure; requires exactly one comparison |
 | `table` | Optional Markdown style table; controls headings, interval placement, shared timing legend and independently selected comparison columns; see [style fields](complete-run-api.md#configured-presentation) |
+| `trial` | Required one-based trial selection for scheduled v5 evidence; prohibited for other evidence |
 | `unit` | Must equal the recorded timing unit; no conversion |
 
-The remaining optional common fields are `links`, `repository`, `tag-policy`,
+The remaining optional common fields are `formatter`, `links`, `repository`, `tag-policy`,
 `prose-file`, `current-sources`, and `current-harness`. Schema-1-only
 `baseline-label`/`current-label` fields are replaced by explicit series labels.
 Unknown fields, ambiguous mappings and duplicated/aliased output paths fail.

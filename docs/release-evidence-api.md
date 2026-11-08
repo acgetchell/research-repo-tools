@@ -19,14 +19,15 @@ requires the separately trusted Step 1 assertion digest and freezes the original
 acquisition, full-tree binding, native selection, and exact benchmark archive.
 Later approval uses the original `--acceptance`; no benchmark or preflight runs.
 
-Committed schema-2 publisher outputs additionally require `--publication-receipt`
-and the acquisition owner's independent `--publication-sha256`. The receipt is
+For the v0.2.7 committed-publication contract, schema-2 publisher outputs
+additionally require `--publication-receipt` and the acquisition owner's
+independent `--publication-sha256`. The receipt is
 captured before promotion with `candidate_publication.plan_candidate_publication`;
 it cannot be reconstructed as trusted evidence from the final candidate.
 
 ## Verification presentation
 
-`candidate`, `verify` and `published` accept `--format summary` to render the
+In v0.2.7, `candidate`, `verify` and `published` accept `--format summary` to render the
 existing verifier's completed result, after any requested handoff writes succeed.
 The summary identifies release/version/full commit, native run/attempt, actual
 package guarantee, optional benchmark identity and original source, signature and
@@ -208,7 +209,8 @@ claim a signature, or accept caller-provided JSON as authority. This supports
 private repositories where the account can read Actions runs, jobs and retained
 artifacts. Adding a signing job requires successful cryptographic verification
 as well. GitHub currently requires Enterprise Cloud for private/internal
-artifact attestations; see [GitHub's availability documentation](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations).
+artifact attestations; see
+[GitHub's availability documentation](https://docs.github.com/en/actions/how-tos/secure-your-work/use-artifact-attestations/use-artifact-attestations).
 
 Pass the original selection as `expected` after approval. Pass the local
 publication directory as `distributions` to compare its bytes with the retained
@@ -253,6 +255,89 @@ installation verified; source-only availability does not satisfy that gate.
 
 ## Shared primitives and asset composition
 
+### Tag-push receipt retrieval
+
+The v0.2.7 module `research_repo_tools.release_receipts` retrieves the original
+successful preparation output. It leaves `ValidationPolicy`, `select_main_run`
+and `validate_run` as main-branch evidence contracts; dotted tags are never
+recast as branches. It shares their job/artifact identity checks and bounded ZIP
+transport without inheriting main-push recovery instructions.
+
+`TagSource(ref, commit)` requires `refs/tags/vX.Y.Z` and a full lowercase source
+commit. The remote tag must peel to that commit; lightweight and annotated tags
+are supported. `TagPushPolicy(repository, workflow, workflow_name, required_steps,
+artifact_prefix="draft-receipt", runner_labels=())` declares exact workflow and
+gate identities. Only original attempt 1 and the inert `target.json` /
+`draft-receipt.json` inventory are supported. The artifact name is
+`PREFIX-RUN_ID-1`. `release_interfaces.load_receipt_policy(path)` loads the
+[corresponding TOML policy](PREPARING_DRAFTS.md#retrieve-original-preparation-output).
+
+`retrieve_draft_receipt(policy, source, read, *, selection=DiscoverOriginal())`
+returns `DraftReceipt(target, selection, target_bytes, receipt_bytes)`. `target`
+is the existing `ReleaseTarget`; the byte fields preserve the authenticated
+files exactly. The result record's constructor itself grants no trust.
+The selection modes are distinct immutable variants:
+
+| Mode | Contract |
+| --- | --- |
+| `DiscoverOriginal()` | Require one retained push run for this exact tag across unfiltered, bounded workflow history; no newest-run heuristic |
+| `OriginalRun(run_id)` | Explicit manual selection of an independently reviewed original run; retain every identity/gate/attempt/artifact check |
+| `FrozenReceipt(selection_bytes)` | Revalidate the saved original IDs and full selection; never search for another run or artifact |
+
+`read(endpoint)` must be authenticated and scoped to the declared repository;
+`partial(release_validation.api, repository=policy.repository)` supplies it.
+The existing `download_artifact` transport authenticates the original ZIP bytes
+using `gh`, its provider digest and exact inventory. No extracted file is executed.
+ZIP/expanded data is bounded to 2 MiB, with 1 MiB per JSON file; workflow source
+and saved selection each have a 1 MiB limit.
+
+Run identity binds repository/head repository IDs and names, exact source commit,
+workflow ID/path/name, push event, canonical tag and attempt 1. Because GitHub's
+short ref name alone cannot prove tag identity, retrieval also reads the workflow
+at the asserted commit, verifies its blob bytes and requires a tag-only push
+trigger. Mixed branch/tag workflows, ambiguous YAML and implicit push triggers
+reject. It does not relax the main-push verifier to accept dotted branch names.
+
+The versioned `research-repo-tools/draft-selection/v1` record freezes the complete
+policy/source assertions, workflow blob/SHA-256, run identity, required job IDs,
+artifact ID/name/size/provider SHA-256, and both receipt-file SHA-256 values.
+Frozen inputs are parsed before provider access, then checked against live
+provider identities and downloaded bytes. Self-declared hashes are not authority.
+Required steps must succeed, and the journal must be captured with the same
+repository/tag/commit/title/release ID as the target. Provider state is checked
+again after download; initial automatic discovery also rechecks uniqueness.
+
+Persist all returned bytes under exclusive control outside the consumer checkout.
+On retry, use the original bytes:
+
+```python
+from functools import partial
+from research_repo_tools.release_receipts import FrozenReceipt, TagSource, retrieve_draft_receipt
+from research_repo_tools.release_validation import api
+
+# policy and source assertions are independently trusted consumer inputs.
+source = TagSource("refs/tags/v1.2.3", observed_commit)
+read = partial(api, repository=policy.repository)
+first = retrieve_draft_receipt(policy, source, read)
+again = retrieve_draft_receipt(policy, source, read, selection=FrozenReceipt(first.selection))
+assert again.target == first.target
+```
+
+This API is read-only against GitHub and returns data without writing persistent
+consumer files. Missing/failed/ambiguous/expired or changed selections raise
+`ValueError`; provider errors retain their transport category. There is no
+automatic retry, alternate selection, draft creation, benchmark acquisition or
+publication. Historical workflow data is not a permanent intent ledger and cannot
+prove that deleted history never existed. Consumers retain original selections
+and own any stronger durable intent policy. Live checks are not an atomic GitHub
+transaction or perpetual authorization; existing asset APIs revalidate the captured
+release before effects.
+
+The CLI `release assets retrieve` stores all three files transactionally, uses
+an existing output selection automatically on retry, and refuses changed output
+bytes. `--run-id` selects a reviewed original run manually; `--expected` restores
+a frozen selection into a new output directory. They are mutually exclusive.
+
 ### Draft preparation
 
 The v0.2.7 public function is
@@ -263,7 +348,8 @@ It returns the existing `release_assets.ReleaseTarget`; serialize it with
 `release assets prepare EVIDENCE_POLICY`, with independent `--repository`,
 `--tag`, `--commit`, `--expected-title`, `--expected SELECTION`, `--notes`,
 `--receipt`, `--output TARGET`, and mandatory `--approve`. It requires no checkout.
-The other asset commands retain their existing asset-policy/checkout contracts.
+Retrieval uses its separate tag-push policy above; preflight/upload/verify retain
+their existing asset-policy/checkout contracts.
 
 `policy` is an `EvidencePolicy` for the asserted repository with a signing job.
 `expected` must be the original canonical selection bytes returned by
