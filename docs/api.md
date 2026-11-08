@@ -71,8 +71,9 @@ modification time and change time; these are snapshots, not permanent ownership
 proof. Obtain plans from `plan_clean` rather than constructing removal records.
 
 `apply_clean(plan: CleanPlan) -> None` recomputes the plan before deleting files
-and empty run directories. Changed inventories raise `ValueError` before removal;
-I/O failures raise `RuntimeError` with the original cause and partial-progress
+and empty run directories. A changed inventory or refused link/junction raises
+`ValueError` before any removal. I/O failures and link/junction refusals after
+removal starts raise `RuntimeError` with the original cause and partial-progress
 warning. Callers must stop coverage writers throughout planning/application.
 Neither function installs tools, executes configuration, or needs coverage.py.
 

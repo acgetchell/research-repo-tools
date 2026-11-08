@@ -155,6 +155,12 @@ Long-running jobs must supply their preflight target. The old call signature and
 The optional `checkout` path adds an independently observed clean-source
 assertion at the target commit, before and after remote revalidation. It can be
 separate from `root`, the trusted runtime's transport working directory.
+For preflight, revalidation and publication, dependency-policy checks inspect
+`checkout` when supplied, otherwise `root`. Omitting `checkout` does not discover
+the release source: an empty transport directory may pass as dependency-free.
+Supply the source checkout or independently validate its configured dependency
+policy before using a transport-only root. `dependencies=()` still enforces the
+policy configured in the directory being inspected; it does not disable that check.
 `require_release_checkout(checkout, commit)` exposes that read-only observation.
 When supplied to publication, checkout drift blocks upload or subsequent
 publication; already attached bytes are left available for inspection. Keep the

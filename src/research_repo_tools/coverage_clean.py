@@ -118,12 +118,13 @@ def plan_clean(root: Path) -> CleanPlan:
 def apply_clean(plan: CleanPlan) -> None:
     """Recheck the whole plan, then delete listed files and empty run directories.
 
-    Refuse stale plans before removing anything. An I/O failure stops cleanup and
-    reports partial progress; already removed artifacts cannot be rolled back.
+    Refuse stale plans before removing anything. I/O failures and boundary changes
+    after deletion starts report partial progress; removals cannot be rolled back.
     The caller must keep coverage writers stopped throughout this operation.
     """
     if plan_clean(plan.root) != plan:
         raise ValueError("coverage inventory changed; stop coverage writers and preview again")
+    removed = False
     for removal in plan.removals:
         try:
             _plain(plan.root / "coverage")
@@ -131,15 +132,20 @@ def apply_clean(plan: CleanPlan) -> None:
             match removal:
                 case FileRemoval():
                     removal.path.unlink()
+                    removed = True
                 case RunRemoval():
                     for file in removal.files:
                         _plain(file.path)
                         file.path.unlink()
+                        removed = True
                     # Do not recursively delete new or unrecognized contents.
                     removal.path.rmdir()
+                    removed = True
                 case _:
                     assert_never(removal)
-        except OSError as error:
+        except (OSError, ValueError) as error:
+            if isinstance(error, ValueError) and not removed:
+                raise
             raise RuntimeError(
                 f"coverage cleanup failed at {removal.path}; earlier removals remain applied; close coverage processes and preview again"
             ) from error

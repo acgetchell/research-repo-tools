@@ -9,7 +9,7 @@ configuration file:
 ```sh
 just update-version v1.2.3 --previous-release v1.2.2 --dry-run
 just update-version v1.2.3 --previous-release v1.2.2 --date 2026-09-07
-just changelog-release v1.2.3
+just changelog-release v1.2.3 2026-09-07
 just release-version-check
 ```
 

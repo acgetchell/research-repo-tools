@@ -100,6 +100,56 @@ class TestCoverageCleanup(ConsumerCase):
         self.assertEqual(coverage_clean.plan_clean(self.root).removals, ())
         self.assertEqual(cli.main(["--root", str(self.root), "coverage", "clean", "--apply"]), 0)
 
+    def test_late_link_refusal_reports_completed_removals_and_preserves_remaining_files(self) -> None:
+        for kind in ("file", "run-file", "empty-run"):
+            with self.subTest(kind=kind):
+                root = self.root / kind
+                root.mkdir()
+                if kind == "file":
+                    first, blocked = root / ".coverage.a", root / ".coverage.b"
+                elif kind == "run-file":
+                    first, blocked = root / "coverage/failed-run/.coverage.a", root / "coverage/failed-run/.coverage.b"
+                else:
+                    first, blocked = root / "coverage/.run-a", root / "coverage/.run-b"
+                first.parent.mkdir(parents=True, exist_ok=True)
+                if kind == "empty-run":
+                    first.mkdir()
+                    blocked.mkdir()
+                    retained = blocked / ".coverage.child"
+                else:
+                    first.write_bytes(b"removed")
+                    retained = blocked
+                retained.write_bytes(b"retained")
+                plan = coverage_clean.plan_clean(root)
+                original = Path.is_junction
+
+                def late_junction(path):
+                    return (path == blocked and not first.exists()) or original(path)
+
+                with patch.object(Path, "is_junction", late_junction), self.assertRaisesRegex(RuntimeError, "earlier removals remain applied") as raised:
+                    coverage_clean.apply_clean(plan)
+                self.assertIsInstance(raised.exception.__cause__, ValueError)
+                self.assertFalse(first.exists())
+                self.assertEqual(retained.read_bytes(), b"retained")
+
+    def test_link_refusal_after_recheck_before_first_removal_keeps_validation_error(self) -> None:
+        shard = self.root / ".coverage.first"
+        shard.write_bytes(b"retained")
+        plan = coverage_clean.plan_clean(self.root)
+        original = Path.is_symlink
+        observations = 0
+
+        def late_link(path):
+            nonlocal observations
+            if path == shard:
+                observations += 1
+                return observations > 1
+            return original(path)
+
+        with patch.object(Path, "is_symlink", late_link), self.assertRaisesRegex(ValueError, "links or junctions"):
+            coverage_clean.apply_clean(plan)
+        self.assertEqual(shard.read_bytes(), b"retained")
+
 
 class TestProcess(ConsumerCase):
     def test_public_signatures_are_inspectable_without_loading_optional_dependencies(self) -> None:
