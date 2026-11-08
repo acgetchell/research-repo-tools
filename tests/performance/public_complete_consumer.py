@@ -421,6 +421,24 @@ source="tag"
 
 
 class TestCompleteConsumer(unittest.TestCase):
+    def test_complete_plan_checks_nested_types_before_reading_fields(self):
+        with tempfile.TemporaryDirectory() as directory:
+            plan = fixture(Path(directory))
+            for fields in ({"baseline": None}, {"current": "phase"}, {"measurement": None, "schema": 4, "saved_sample": "retained"}):
+                with self.subTest(fields=fields), self.assertRaisesRegex(TypeError, "measurement settings and two phases"):
+                    replace(plan, **fields)
+
+    def test_measurement_context_rejects_nontext_before_namespace_checks(self):
+        valid = MeasurementConfig(("benchmark",), ("source",), ("harness",), context=(("suite", "full"),))
+        for key in (None, 1, True, b"suite", ("suite",)):
+            with self.subTest(key=key), self.assertRaisesRegex(ValueError, "context name"):
+                replace(valid, context=((key, "full"),))
+        with self.assertRaisesRegex(ValueError, "context suite"):
+            replace(valid, context=(("suite", 1),))
+        with self.assertRaisesRegex(ValueError, "captured metadata"):
+            replace(valid, context=(("tool.python", "asserted"),))
+        self.assertEqual(valid.context, (("suite", "full"),))
+
     def test_minimum_release_configuration_and_numeric_boundary(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

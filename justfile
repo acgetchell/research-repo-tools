@@ -64,8 +64,12 @@ check-dist-changelog: changelog-tools-check
 check-setup:
     uv run --locked --no-sync --no-python-downloads python scripts/check_setup.py
 
-# Run checks, tests, builds, and isolated installation checks.
-ci: check build publish-check coverage install-check
+# Check policy and artifacts, then overlap source and isolated installation tests.
+ci: check build publish-check ci-tests
+
+[parallel]
+[private]
+ci-tests: coverage check-dist
 
 # Preview obsolete package-owned tool installs; pass --apply to remove them.
 clean *args:
@@ -124,7 +128,7 @@ publish-check:
 python-check:
     uv run --locked --no-sync --no-python-downloads research-repo-tools python check
 
-# Capture/revalidate a release target or explicitly upload verified attachments.
+# Prepare drafts, capture/revalidate targets, or explicitly upload verified attachments.
 release-assets +args:
     uv run --locked research-repo-tools release assets "$@"
 

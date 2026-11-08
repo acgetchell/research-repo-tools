@@ -3,9 +3,11 @@
 import re
 import tempfile
 from collections import Counter
-from dataclasses import dataclass, replace
+from collections.abc import Mapping
+from dataclasses import dataclass, field, replace
 from pathlib import Path
-from typing import Any, cast, override
+from types import MappingProxyType
+from typing import Any, assert_never, cast, override
 
 import yaml
 
@@ -90,12 +92,15 @@ def build_fixture_config(path: Path, configuration: Path, *, namespace: str = ""
 
 
 @dataclass(frozen=True, slots=True)
-class FixtureCase:
+class _SpanCase:
     source: Path
-    names: list[str]
-    count_mode: bool = False
+    names: tuple[str, ...]
+    expected: Mapping[tuple[str, int], int]
     block: RustBlock | None = None
-    expected: Counter[tuple[str, int]] | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "names", tuple(self.names))
+        object.__setattr__(self, "expected", MappingProxyType(dict(self.expected)))
 
     @property
     def label(self) -> str:
@@ -104,11 +109,42 @@ class FixtureCase:
         return f"{self.source} (Rust block {self.block.index + 1}, lines {self.block.start_line}-{self.block.end_line})"
 
 
-def _documentation_cases(path: Path, source: dict[str, dict[str, Any]], namespace: str, *, extract: bool = True) -> list[FixtureCase]:
+@dataclass(frozen=True, slots=True)
+class _CountCase:
+    source: Path
+    expected: Mapping[str, int]
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "expected", MappingProxyType(dict(self.expected)))
+
+    @property
+    def names(self) -> tuple[str, ...]:
+        return tuple(self.expected)
+
+    @property
+    def block(self) -> None:
+        return None
+
+    @property
+    def label(self) -> str:
+        return str(self.source)
+
+
+type _FixtureCase = _SpanCase | _CountCase
+
+
+@dataclass(slots=True)
+class _AnnotationGroup:
+    block: RustBlock | None
+    names: list[str] = field(default_factory=list)
+    expected: Counter[tuple[str, int]] = field(default_factory=Counter)
+
+
+def _documentation_cases(path: Path, source: dict[str, dict[str, Any]], namespace: str, *, extract: bool = True) -> list[_SpanCase]:
     blocks = documentation_blocks(path) if extract and path.suffix in {".rs", ".md"} else ()
     policies = {name: representation_rules(rule) for name, rule in source.items()}
     lines = _documentation(path, preserve_source=True)
-    cases: dict[int | None, FixtureCase] = {}
+    cases: dict[int | None, _AnnotationGroup] = {}
     for number, line in enumerate(lines, start=1):
         for kind, name in annotations(line, namespace):
             if name not in source:
@@ -120,22 +156,21 @@ def _documentation_cases(path: Path, source: dict[str, dict[str, Any]], namespac
             if block is None and "source" not in policies[name]:
                 raise ValueError(f"{path}:{number}: {name} annotation requires a selected Rust block")
             key = None if block is None else block.index
-            case = cases.setdefault(key, FixtureCase(path, [], block=block, expected=Counter()))
+            case = cases.setdefault(key, _AnnotationGroup(block))
             if name not in case.names:
                 case.names.append(name)
             if kind == "ruleid":
-                assert case.expected is not None
                 case.expected[name, target] += 1
     for block in blocks:
         if block.index not in cases:
             raise ValueError(f"{path} (Rust block {block.index + 1}): fixture block requires Rust-rule annotations")
     if path.suffix == ".rs" and blocks:
         names = list(dict.fromkeys(name for case in cases.values() if case.block is not None for name in case.names))
-        native = cases.setdefault(None, FixtureCase(path, [], expected=Counter()))
+        native = cases.setdefault(None, _AnnotationGroup(None))
         native.names.extend(name for name in names if name not in native.names and "source" in policies[name])
         if not native.names:
             del cases[None]
-    return list(cases.values())
+    return [_SpanCase(path, tuple(case.names), case.expected, case.block) for case in cases.values()]
 
 
 def check(config: Config, *, rust_docs: bool = False) -> int:
@@ -156,7 +191,7 @@ def check(config: Config, *, rust_docs: bool = False) -> int:
     if not selected_rules:
         raise ValueError(f"Semgrep configuration has no rules in namespace {namespace!r}")
     positives: set[str] = set()
-    selected: list[FixtureCase] = []
+    selected: list[_FixtureCase] = []
     for path in paths:
         if rust_docs and path.is_symlink():
             raise ValueError(f"fixture symlinks are unsupported: {path}")
@@ -183,7 +218,8 @@ def check(config: Config, *, rust_docs: bool = False) -> int:
                 names = fixture_rule_ids(path, source, namespace)
                 if any("source" not in representation_rules(source[name]) for name in names):
                     raise ValueError(f"{path}: Rust-block annotations require --rust-docs and selected extraction scope")
-                selected.append(FixtureCase(path, names))
+                expected = {finding: count for finding, count in _expected_findings(path).items() if finding[0].startswith(namespace)}
+                selected.append(_SpanCase(path, tuple(names), expected))
         if expected_counts:
             names = [name for name in expected_counts if name.startswith(namespace)]
             if set(names) - source.keys():
@@ -191,7 +227,7 @@ def check(config: Config, *, rust_docs: bool = False) -> int:
             if names:
                 if any("source" not in representation_rules(source[name]) for name in names):
                     raise ValueError(f"{path}: count expectations require source rules")
-                selected.append(FixtureCase(path, names, count_mode=True))
+                selected.append(_CountCase(path, {name: expected_counts[name] for name in names}))
                 positives.update(name for name in names if expected_counts[name] > 0)
     missing = selected_rules - positives
     if missing:
@@ -200,7 +236,8 @@ def check(config: Config, *, rust_docs: bool = False) -> int:
     with tempfile.TemporaryDirectory(prefix="research-repo-semgrep-") as directory:
         temporary = Path(directory)
         for index, case in enumerate(selected):
-            path, names, count_mode = case.source, case.names, case.count_mode
+            path, names = case.source, case.names
+            count_mode = isinstance(case, _CountCase)
             if case.block is not None:
                 path = temporary / "blocks" / str(index) / path.name
                 path.parent.mkdir(parents=True)
@@ -280,20 +317,16 @@ def check(config: Config, *, rust_docs: bool = False) -> int:
             unexpected = {finding.check_id for finding in actual} - set(names)
             if unexpected:
                 raise ValueError(f"{case.label}: unexpected Semgrep rules: {', '.join(sorted(unexpected))}")
-            if count_mode:
-                found = Counter(finding.check_id for finding in actual)
-                mismatches = tuple(
-                    f"{name}: expected {counts[path.resolve()][name]} findings, got {found[name]}"
-                    for name in names
-                    if found[name] != counts[path.resolve()][name]
-                )
-            else:
-                expected = (
-                    case.expected
-                    if case.expected is not None
-                    else Counter({finding: count for finding, count in _expected_findings(path).items() if finding[0].startswith(namespace)})
-                )
-                mismatches = _finding_mismatches(expected, actual)
+            match case:
+                case _CountCase():
+                    found = Counter(finding.check_id for finding in actual)
+                    mismatches = tuple(
+                        f"{name}: expected {expected} findings, got {found[name]}" for name, expected in case.expected.items() if found[name] != expected
+                    )
+                case _SpanCase():
+                    mismatches = _finding_mismatches(Counter(case.expected), actual)
+                case _:
+                    assert_never(case)
             if mismatches:
                 raise ValueError(f"{case.label}: " + "; ".join(mismatches))
             # Native test mode also verifies autofix output when a companion exists.

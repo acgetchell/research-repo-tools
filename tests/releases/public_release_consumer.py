@@ -15,10 +15,12 @@ from unittest.mock import patch
 from research_repo_tools.cli import main
 from research_repo_tools.files import RecoveryError
 from research_repo_tools.releases import (
+    FixedValue,
     ReleaseAdapter,
     ReleaseContext,
     ReleasePolicy,
     ReleaseRule,
+    ReleaseSource,
     ReleaseValidationError,
     StaleReleasePlanError,
     apply_release,
@@ -36,17 +38,17 @@ def policy() -> ReleasePolicy:
         required_files=("Cargo.lock", "pyproject.toml", "uv.lock", "CITATION.cff", "CHANGELOG.md", "README.md", "REFERENCES.md"),
         exclude=("docs/evidence/**",),
         rules=(
-            ReleaseRule("CITATION.cff", r"^doi: (?P<value>\S+)$", value=DOI),
-            ReleaseRule("README.md", r"\[!\[DOI\]\([^)]*\)\]\(https://doi.org/(?P<value>[^)]+)\)", value=DOI),
-            ReleaseRule("REFERENCES.md", r"^- DOI: <https://doi.org/(?P<value>[^>]+)>$", value=DOI),
+            ReleaseRule("CITATION.cff", r"^doi: (?P<value>\S+)$", replacement=FixedValue(DOI)),
+            ReleaseRule("README.md", r"\[!\[DOI\]\([^)]*\)\]\(https://doi.org/(?P<value>[^)]+)\)", replacement=FixedValue(DOI)),
+            ReleaseRule("REFERENCES.md", r"^- DOI: <https://doi.org/(?P<value>[^>]+)>$", replacement=FixedValue(DOI)),
             ReleaseRule(
                 "README.md",
                 r"https://github.com/example/consumer/blob/(?P<value>[^/]+)/[^\s)]+",
-                source="tag",
+                replacement=ReleaseSource.TAG,
                 exclude=r"/docs/(?:PERFORMANCE\.md|archive/performance/)",
             ),
-            ReleaseRule("docs/RELEASING.md", r"just performance-release (?P<value>v\S+) v\S+", source="tag"),
-            ReleaseRule("docs/RELEASING.md", r"just performance-release v\S+ (?P<value>v\S+)", source="previous-tag"),
+            ReleaseRule("docs/RELEASING.md", r"just performance-release (?P<value>v\S+) v\S+", replacement=ReleaseSource.TAG),
+            ReleaseRule("docs/RELEASING.md", r"just performance-release v\S+ (?P<value>v\S+)", replacement=ReleaseSource.PREVIOUS_TAG),
         ),
     )
 
@@ -85,6 +87,23 @@ class TestReleaseConsumer(unittest.TestCase):
 
     def snapshot(self) -> dict[str, bytes]:
         return {path.relative_to(self.root).as_posix(): path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
+
+    def test_rule_replacement_retains_one_valid_alternative_through_copy(self) -> None:
+        rule = ReleaseRule("README.md", r"(?P<value>.+)", FixedValue("retained"))
+        self.assertEqual(rule.matches("retained")[0].group("value"), "retained")
+        for source in ReleaseSource:
+            with self.subTest(source=source):
+                copied = replace(rule, replacement=source)
+                self.assertIs(copied.replacement, source)
+        for invalid in (None, "tag", {"value": "literal", "source": "tag"}):
+            with self.subTest(invalid=invalid), self.assertRaisesRegex(ValueError, "replacement"):
+                ReleaseRule("README.md", r"(?P<value>.+)", invalid)  # ty: ignore[invalid-argument-type] Untyped caller.
+            with self.subTest(copy=invalid), self.assertRaisesRegex(ValueError, "replacement"):
+                replace(rule, replacement=invalid)
+        with self.assertRaisesRegex(ValueError, "nonempty"):
+            FixedValue("")
+        with self.assertRaisesRegex(ValueError, "nonempty"):
+            replace(FixedValue("retained"), value="")
 
     def test_release_edits_preserve_unicode_strings_before_real_toml_versions(self) -> None:
         baseline = self.snapshot()
@@ -136,7 +155,7 @@ class TestReleaseConsumer(unittest.TestCase):
         for name in (".git/config", ".GIT/config", ".Git/config", ".git./config", ".git /config", "nested/.GIT. /config"):
             with self.subTest(name=name):
                 for construct in (
-                    lambda: ReleaseRule(name, "(?P<value>.+)", source="version"),
+                    lambda: ReleaseRule(name, "(?P<value>.+)", replacement=ReleaseSource.VERSION),
                     lambda: ReleasePolicy(required_files=(name,)),
                     lambda: ReleaseAdapter((name,)),
                 ):
@@ -151,7 +170,7 @@ class TestReleaseConsumer(unittest.TestCase):
         for name in ("docs/file.md:stream", "docs/NUL.txt", "docs/CON", "docs/file.", "docs/file ", "docs/bad\0name", "docs/bad\nname", "docs/bad\ud800"):
             with self.subTest(name=name):
                 for construct in (
-                    lambda: ReleaseRule(name, "(?P<value>.+)", source="version"),
+                    lambda: ReleaseRule(name, "(?P<value>.+)", replacement=ReleaseSource.VERSION),
                     lambda: ReleasePolicy(required_files=(name,)),
                     lambda: ReleaseAdapter((name,)),
                 ):
@@ -395,9 +414,13 @@ class TestReleaseConsumer(unittest.TestCase):
         lines = ["[release]", 'exclude = ["docs/evidence/**"]', "required-files = " + json.dumps(list(self.policy.required_files))]
         for rule in self.policy.rules:
             lines.extend(["[[release.rules]]", "path = " + json.dumps(rule.path), "pattern = " + json.dumps(rule.pattern)])
-            for name in ("value", "source", "exclude"):
-                if value := getattr(rule, name):
-                    lines.append(name + " = " + json.dumps(value))
+            replacement = rule.replacement
+            if isinstance(replacement, FixedValue):
+                lines.append("value = " + json.dumps(replacement.value))
+            else:
+                lines.append("source = " + json.dumps(replacement.value))
+            if rule.exclude is not None:
+                lines.append("exclude = " + json.dumps(rule.exclude))
         config.write_text("\n".join(lines), encoding="utf-8", newline="\n")
         args = ["--root", str(self.root), "--config", str(config), "release"]
         with contextlib.redirect_stdout(io.StringIO()):
@@ -494,7 +517,7 @@ class TestFirstRelease(unittest.TestCase):
                 "v0.1.0",
                 first_release=True,
                 offline=True,
-                policy=ReleasePolicy(rules=(ReleaseRule("pyproject.toml", r'name="(?P<value>first)"', source="previous-tag"),)),
+                policy=ReleasePolicy(rules=(ReleaseRule("pyproject.toml", r'name="(?P<value>first)"', replacement=ReleaseSource.PREVIOUS_TAG),)),
             )
         with self.assertRaisesRegex(ValueError, "downgrade"):
             plan_release(self.root, "v0.0.0", first_release=True, offline=True)

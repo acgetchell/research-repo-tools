@@ -29,11 +29,21 @@ def recipes(tmp_path, monkeypatch, request):
     python.symlink_to(sys.executable)
     recorder = tmp_path / "record calls.py"
     recorder.write_text(
-        "import json, os, pathlib, subprocess, sys\n"
+        "import json, os, pathlib, subprocess, sys, time\n"
         "args = sys.argv[1:]\n"
         "log = pathlib.Path('calls.jsonl')\n"
         "with log.open('a', newline='\\n') as stream: stream.write(json.dumps(args) + '\\n')\n"
         "if len(log.read_text().splitlines()) == int(os.environ.get('FAIL_STEP', '0')): sys.exit(23)\n"
+        "scripts = {'scripts/run_coverage.py', 'scripts/check_install.py'}\n"
+        "selected = scripts.intersection(args)\n"
+        "if selected and os.environ.get('REQUIRE_OVERLAP'):\n"
+        "    script = selected.pop()\n"
+        "    pathlib.Path(pathlib.Path(script).name + '.started').touch()\n"
+        "    peer = pathlib.Path(pathlib.Path((scripts - {script}).pop()).name + '.started')\n"
+        "    deadline = time.monotonic() + 10\n"
+        "    while not peer.exists() and time.monotonic() < deadline: time.sleep(0.01)\n"
+        "    assert peer.exists(), 'independent CI stages did not overlap'\n"
+        "if os.environ.get('FAIL_SCRIPT') in args: sys.exit(23)\n"
         "if args[:3] == ['run', '--locked', 'just']:\n"
         f"    sys.exit(subprocess.run([{process.get_safe_executable('just')!r}, *args[3:]], check=False).returncode)\n",
         newline="\n",
@@ -43,6 +53,8 @@ def recipes(tmp_path, monkeypatch, request):
     uv.chmod(0o755)
     monkeypatch.setenv("PATH", str(tmp_path) + os.pathsep + os.environ["PATH"])
     monkeypatch.delenv("FAIL_STEP", raising=False)
+    monkeypatch.delenv("FAIL_SCRIPT", raising=False)
+    monkeypatch.delenv("REQUIRE_OVERLAP", raising=False)
     monkeypatch.delenv("RESEARCH_REPO_TOOLS_TEST_WORKERS", raising=False)
     return justfile, consumer
 
@@ -184,18 +196,27 @@ def maintainer_checks(justfile):
     ]
 
 
-def test_maintainer_ci_checks_early_and_coalesces_lock_validation(recipes):
+@pytest.mark.parametrize("failure", [None, "scripts/run_coverage.py", "scripts/check_install.py"])
+def test_maintainer_ci_checks_early_then_overlaps_complete_test_stages(recipes, monkeypatch, failure):
     justfile, consumer = recipes
     if consumer:
         pytest.skip("maintainer validation tiers")
+    monkeypatch.setenv("REQUIRE_OVERLAP", "1")
+    if failure is not None:
+        monkeypatch.setenv("FAIL_SCRIPT", failure)
     result, calls = invoke(justfile, "ci")
-    assert result.returncode == 0, result.stderr
-    assert calls == maintainer_checks(justfile) + [
+    assert result.returncode == (0 if failure is None else 23), result.stderr
+    prerequisites = maintainer_checks(justfile) + [
         ["build", "--no-sources", "--clear"],
         ["run", "--locked", "python", "scripts/check_publish.py"],
-        ["run", "--locked", "python", "scripts/run_coverage.py", "-n", "4", "--dist", "worksteal", "--max-worker-restart", "0"],
-        ["run", "--locked", "python", "scripts/check_install.py"],
     ]
+    assert calls[: len(prerequisites)] == prerequisites
+    assert sorted(calls[len(prerequisites) :]) == sorted(
+        [
+            ["run", "--locked", "python", "scripts/run_coverage.py", "-n", "4", "--dist", "worksteal", "--max-worker-restart", "0"],
+            ["run", "--locked", "python", "scripts/check_install.py"],
+        ]
+    )
 
 
 @pytest.mark.parametrize(("recipe", "runner"), [("coverage", ["python", "scripts/run_coverage.py"]), ("test", ["pytest"])])

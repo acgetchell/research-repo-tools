@@ -20,7 +20,7 @@ from threading import Event
 from typing import TYPE_CHECKING, Any, Literal
 
 from research_repo_tools import files, toolchain, toolchain_config
-from research_repo_tools.config import Config
+from research_repo_tools.config import Config, notebook_output_policy
 from research_repo_tools.process import format_exception_diagnostics, run_safe_command
 
 if TYPE_CHECKING:
@@ -175,6 +175,7 @@ def serialize(node: "NotebookNode") -> bytes:
 
 
 def check(paths: list[Path], *, outputs: Literal["clear", "preserve"] = "clear") -> None:
+    outputs = notebook_output_policy(outputs)
     notebooks = selected(paths)
     for notebook in notebooks:
         if outputs == "clear" and generated_state(notebook.node):

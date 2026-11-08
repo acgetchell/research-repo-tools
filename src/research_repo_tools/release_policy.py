@@ -3,6 +3,7 @@
 import ntpath
 import re
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import PurePosixPath, PureWindowsPath
 from typing import Literal
 
@@ -47,6 +48,40 @@ def relative_path(value: str) -> str:
 
 
 @dataclass(frozen=True, slots=True)
+class FixedValue:
+    """A nonempty literal assertion, never a source for release edits."""
+
+    value: str
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.value, str) or not self.value:
+            raise ValueError("release rule value must be a nonempty string")
+
+
+class ReleaseSource(StrEnum):
+    VERSION = "version"
+    TAG = "tag"
+    PREVIOUS_TAG = "previous-tag"
+    RELEASE_DATE = "release-date"
+
+
+type RuleReplacement = FixedValue | ReleaseSource
+
+
+def _parse_rule_replacement(value: object, source: object) -> RuleReplacement:
+    """Convert the existing TOML alternatives into one exhaustive domain choice."""
+    if (value is None) == (source is None):
+        raise ValueError("release rule requires exactly one of value or source")
+    if value is not None:
+        if not isinstance(value, str):
+            raise ValueError("release rule value must be a nonempty string")
+        return FixedValue(value)
+    if not isinstance(source, str):
+        raise ValueError("release rule source must be a string")
+    return ReleaseSource(source)
+
+
+@dataclass(frozen=True, slots=True)
 class ReleaseRule:
     """Select exactly ``count`` nonempty named ``value`` captures in one file.
 
@@ -57,19 +92,14 @@ class ReleaseRule:
 
     path: str
     pattern: str
-    value: str | None = None
-    source: Literal["version", "tag", "previous-tag", "release-date"] | None = None
+    replacement: RuleReplacement
     count: int = 1
     exclude: str | None = None
 
     def __post_init__(self) -> None:
         relative_path(self.path)
-        if (self.value is None) == (self.source is None):
-            raise ValueError("release rule requires exactly one of value or source")
-        if self.value is not None and (not isinstance(self.value, str) or not self.value):
-            raise ValueError("release rule value must be a nonempty string")
-        if self.source is not None and self.source not in {"version", "tag", "previous-tag", "release-date"}:
-            raise ValueError("release rule source must be version, tag, previous-tag, or release-date")
+        if not isinstance(self.replacement, (FixedValue, ReleaseSource)):
+            raise ValueError("release rule replacement must be FixedValue or ReleaseSource")
         if type(self.count) is not int or self.count < 1:
             raise ValueError("release rule count must be a positive integer")
         if not isinstance(self.pattern, str) or not self.pattern:

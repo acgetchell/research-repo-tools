@@ -12,7 +12,17 @@ import tomllib
 from pathlib import Path
 
 from research_repo_tools.archives import ArchiveLimits, extract_archive
-from research_repo_tools.criterion import COMPARISON_SCHEMA, Estimate, Sample, _statistic, _unit, collect_sample, compare_samples, serialize_comparison
+from research_repo_tools.criterion import (
+    COMPARISON_SCHEMA,
+    Estimate,
+    Sample,
+    _parse_interval,
+    _statistic,
+    _unit,
+    collect_sample,
+    compare_samples,
+    serialize_comparison,
+)
 from research_repo_tools.evidence import Evidence, Provenance, _load_json, _object, _string, sha256, verify_sha256
 from research_repo_tools.measurement import _strings
 from research_repo_tools.publication import _path
@@ -128,7 +138,7 @@ def convert_csv(payload: bytes, manifest: bytes, configuration: bytes) -> Eviden
                 raise ValueError(f"legacy {side} bounds require a point estimate")
             numbers = [float(fields[part]) if fields.get(part) else None for part in ("point", "lower", "upper", "confidence-level")]
             assert numbers[0] is not None
-            samples[side].append((name, Estimate(numbers[0], numbers[1], numbers[2], numbers[3])))
+            samples[side].append((name, Estimate(numbers[0], _parse_interval(numbers[1], numbers[2], numbers[3]))))
             present = True
         if not present:
             raise ValueError("legacy benchmark has neither a baseline nor a current estimate")

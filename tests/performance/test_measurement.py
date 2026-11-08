@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from research_repo_tools import measurement
-from research_repo_tools.criterion import Estimate, Sample, parse_sample, serialize_sample
+from research_repo_tools.criterion import ConfidenceInterval, Estimate, Sample, parse_sample, serialize_sample
 from research_repo_tools.evidence import Provenance
 from research_repo_tools.release_assets import package_baseline, read_baseline
 
@@ -53,7 +53,7 @@ def test_source_changes_reject_measurement(tmp_path: Path, monkeypatch: pytest.M
 
 
 def test_sample_and_baseline_round_trip_preserve_bounds_and_unknown_provenance(tmp_path: Path) -> None:
-    sample = Sample((("name", Estimate(2, 1, 4, 0.95)), ("second", Estimate(8))), statistic="mean", unit="us")
+    sample = Sample((("name", Estimate(2, ConfidenceInterval(1, 4, 0.95))), ("second", Estimate(8))), statistic="mean", unit="us")
     source = Provenance("a" * 40, context=(("release", "v1.0.0"),))
     assert parse_sample(serialize_sample(sample)) == sample
     first, second = tmp_path / "first.tar.gz", tmp_path / "second.tar.gz"

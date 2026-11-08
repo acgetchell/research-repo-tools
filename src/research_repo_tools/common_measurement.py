@@ -140,6 +140,8 @@ class CompleteMeasurementPlan:
     saved_sample: str | None = field(default=None, kw_only=True)
 
     def __post_init__(self) -> None:
+        if not isinstance(self.measurement, MeasurementConfig) or any(not isinstance(phase, MeasurementPhase) for phase in (self.baseline, self.current)):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
+            raise TypeError("common plan requires measurement settings and two phases")
         if type(self.schema) is not int or self.schema not in (2, 3, 4):
             raise ValueError("common measurement schema must be integer 2, 3, or 4")
         if self.harness_mode not in {"common", "independent"} or self.backend not in {"export", "worktree"}:
@@ -158,8 +160,6 @@ class CompleteMeasurementPlan:
             _saved_name(self.saved_sample)
             if self.saved_sample == self.measurement.sample:
                 raise ValueError("saved sample must differ from fresh sample")
-        if not isinstance(self.measurement, MeasurementConfig) or any(not isinstance(phase, MeasurementPhase) for phase in (self.baseline, self.current)):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
-            raise TypeError("common plan requires measurement settings and two phases")
         if self.schema == 4 and not self.measurement.workloads:
             raise ValueError("measurement schema 4 requires nonempty workloads")
         if "harness_sha256" not in self.measurement.compatible:

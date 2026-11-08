@@ -47,7 +47,7 @@ arguments in lexicographic order.
 | `just python-check` | Check lint, formatting, and types for all tracked and nonignored Python, including fixtures |
 | `just python-fix` | Apply configured Ruff fixes and formatting to the same complete inventory |
 | `just python-typecheck` | Run native ty without modifying source |
-| `just release-assets COMMAND...` | Capture/revalidate release targets or explicitly upload verified attachments |
+| `just release-assets COMMAND...` | Prepare drafts, capture/revalidate targets or explicitly upload verified attachments |
 | `just release-check TAG` | Check final release metadata and generated notes |
 | `just release-dependencies` | Verify selected upstream published pins, lock and executing runtime bytes |
 | `just release-evidence COMMAND...` | Create/verify exact-commit evidence, check published Python bytes, and save handoffs |

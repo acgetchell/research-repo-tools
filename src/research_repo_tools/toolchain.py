@@ -79,12 +79,17 @@ class Runtime:
     """Keep manager homes and Cargo installations separate from user-owned tools.
 
     Construction and inspection do not create directories or install anything.
-    Shared cache keys include host, toolchain, package, and package version.
+    Installations are keyed by host, toolchain, package, and package version.
+    Cargo compilation is shared per host/toolchain with Cargo fingerprinting.
     """
 
     def __init__(self, plan: Toolchain):
         self.plan = plan
         self.base = home()
+        build_home = os.environ.get("RESEARCH_REPO_TOOLS_CARGO_BUILD_HOME")
+        self.build_home = Path(build_home).expanduser() if build_home else self.base / "cargo-build"
+        if not self.build_home.is_absolute():
+            raise ValueError("RESEARCH_REPO_TOOLS_CARGO_BUILD_HOME must be absolute")
         self.host = host_target()
         self.manager = self.base / "rustup" / RUSTUP_VERSION / self.host
         self.rustup = executable(self.manager / "cargo" / "bin", "rustup")
@@ -354,6 +359,8 @@ class Runtime:
                         f"={tool.version}",
                         "--root",
                         str(self.cargo_root(tool)),
+                        "--target-dir",
+                        str(self.build_home / self.host / rust.channel),
                         "--force",
                         tool.package,
                     ],

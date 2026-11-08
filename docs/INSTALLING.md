@@ -98,6 +98,22 @@ redaction, reports and consumer-owned exceptions.
 
 ## First adoption and setup
 
+Managed Cargo installs reuse compilation output under
+`RESEARCH_REPO_TOOLS_HOME/cargo-build/<host>/<Rust version>` (the default home is
+`~/.cache/research-repo-tools`). Package versions retain separate installation
+directories and are still installed with exact pins, `--locked`, and executable
+verification. Cargo fingerprints distinguish package versions, features, and
+compiler flags within the build cache. A warm cache never replaces an install check.
+
+Set `RESEARCH_REPO_TOOLS_CARGO_BUILD_HOME` to an absolute directory to retain
+compilation separately from installation homes, including disposable CI setups.
+Host and Rust-version subdirectories are added automatically. This affects only
+managed tool installation; project builds keep their own target directories.
+Cache only this build directory in CI, key it by runner OS/architecture and
+toolchain/tool declarations, and preserve the CI provider's branch trust boundaries.
+The compilation cache is disposable; remove it with no builds running to reclaim
+space or force recompilation. `just clean` retains it while pruning obsolete installs.
+
 Install [uv](https://docs.astral.sh/uv/getting-started/installation/) separately
 and make the declared version available on PATH. Setup never installs uv or
 substitutes a private copy when the installed version differs.

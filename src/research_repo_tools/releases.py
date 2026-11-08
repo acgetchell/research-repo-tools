@@ -11,6 +11,7 @@ from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
 from pathlib import Path
+from typing import assert_never
 
 from research_repo_tools import release_metadata as metadata
 from research_repo_tools.config import load
@@ -19,11 +20,14 @@ from research_repo_tools.release_discovery import TAG, _published_releases, _tag
 from research_repo_tools.release_discovery import PublishedRelease as PublishedRelease
 from research_repo_tools.release_metadata import PackageInfo as PackageInfo
 from research_repo_tools.release_metadata import VersionReference as VersionReference
+from research_repo_tools.release_policy import FixedValue as FixedValue
 from research_repo_tools.release_policy import ReleasePolicy as ReleasePolicy
 from research_repo_tools.release_policy import ReleaseRule as ReleaseRule
+from research_repo_tools.release_policy import ReleaseSource as ReleaseSource
 from research_repo_tools.release_policy import relative_path
 
 __all__ = [
+    "FixedValue",
     "PackageInfo",
     "PublishedRelease",
     "ReleaseAdapter",
@@ -35,6 +39,7 @@ __all__ = [
     "ReleasePolicy",
     "ReleaseResult",
     "ReleaseRule",
+    "ReleaseSource",
     "ReleaseValidationError",
     "StaleReleasePlanError",
     "VersionReference",
@@ -188,7 +193,7 @@ def discover_release(
     captures: dict[str, list[tuple[int, int]]] = {}
     for rule in policy.rules:
         matches = rule.matches((root / rule.path).read_bytes().decode("utf-8"))
-        if rule.source is not None:
+        if isinstance(rule.replacement, ReleaseSource):
             captures.setdefault(rule.path, []).extend(match.span("value") for match in matches)
     for path, spans in captures.items():
         spans.sort()
@@ -198,19 +203,28 @@ def discover_release(
 
 
 def _expected(rule: ReleaseRule, context: ReleaseContext) -> str:
-    if rule.value is not None:
-        return rule.value
-    if rule.source == "previous-tag":
-        if context.previous_tag is None:
-            raise ValueError(f"{rule.path}: previous-tag rule requires previous release discovery")
-        return context.previous_tag
-    return {"version": context.version, "tag": context.tag, "release-date": context.release_date}[str(rule.source)]
+    replacement = rule.replacement
+    match replacement:
+        case FixedValue(value=value):
+            return value
+        case ReleaseSource.VERSION:
+            return context.version
+        case ReleaseSource.TAG:
+            return context.tag
+        case ReleaseSource.PREVIOUS_TAG:
+            if context.previous_tag is None:
+                raise ValueError(f"{rule.path}: previous-tag rule requires previous release discovery")
+            return context.previous_tag
+        case ReleaseSource.RELEASE_DATE:
+            return context.release_date
+        case _:
+            assert_never(replacement)
 
 
 def _rule_problems(root: Path, policy: ReleasePolicy, context: ReleaseContext, *, fixed_only: bool = False) -> list[str]:
     problems = []
     for rule in policy.rules:
-        if fixed_only and rule.value is None:
+        if fixed_only and not isinstance(rule.replacement, FixedValue):
             continue
         text = (root / rule.path).read_bytes().decode("utf-8")
         expected = _expected(rule, context)
@@ -306,7 +320,7 @@ def check_release(
     discovery = discover_release(root, policy=policy, adapter=adapter)
     root, policy = discovery.root, discovery.policy
     target = "v" + discovery.package.version.removeprefix("v")
-    previous = _previous(root, target, previous_tag, required=any(rule.source == "previous-tag" for rule in policy.rules))
+    previous = _previous(root, target, previous_tag, required=any(rule.replacement == ReleaseSource.PREVIOUS_TAG for rule in policy.rules))
     files = {path: (root / path).read_bytes() for path in discovery.files}
     with tempfile.TemporaryDirectory(prefix="research-release-check-") as directory:
         staged = _stage(root, Path(directory).resolve(), files)
@@ -321,21 +335,25 @@ def check_release(
 def _edit_rules(root: Path, policy: ReleasePolicy, context: ReleaseContext, *, initial_version: str) -> None:
     edits: dict[str, list[tuple[int, int, str]]] = {}
     for rule in policy.rules:
-        if rule.source is None:
+        if isinstance(rule.replacement, FixedValue):
             continue
         text = (root / rule.path).read_bytes().decode("utf-8")
         for match in rule.matches(text):
             value = match["value"]
-            if rule.source == "version" or (rule.source == "tag" and TAG.fullmatch(value)):
-                allowed = {context.version, str(context.previous_tag).removeprefix("v")} if rule.source == "version" else {context.tag, context.previous_tag}
+            if rule.replacement == ReleaseSource.VERSION or (rule.replacement == ReleaseSource.TAG and TAG.fullmatch(value)):
+                allowed = (
+                    {context.version, str(context.previous_tag).removeprefix("v")}
+                    if rule.replacement == ReleaseSource.VERSION
+                    else {context.tag, context.previous_tag}
+                )
                 if context.previous_tag is None:
-                    allowed.add(initial_version if rule.source == "version" else "v" + initial_version)
+                    allowed.add(initial_version if rule.replacement == ReleaseSource.VERSION else "v" + initial_version)
                 if value not in allowed:
                     raise ValueError(f"{rule.path}: unexpected active release version {value!r}; expected previous or target release")
-            if rule.source == "previous-tag":
+            if rule.replacement == ReleaseSource.PREVIOUS_TAG:
                 if normalize_tag(value) != value or _tag_version(value) >= _tag_version(context.tag):
                     raise ValueError(f"{rule.path}: previous-tag reference must precede the target: {value!r}")
-            if rule.source == "release-date" and date.fromisoformat(value).isoformat() != value:
+            if rule.replacement == ReleaseSource.RELEASE_DATE and date.fromisoformat(value).isoformat() != value:
                 raise ValueError(f"{rule.path}: release-date reference must use YYYY-MM-DD form")
             start, end = match.span("value")
             edits.setdefault(rule.path, []).append((start, end, _expected(rule, context)))
@@ -386,7 +404,7 @@ def plan_release(
     if problems := _rule_problems(root, policy, fixed_context, fixed_only=True):
         raise ReleaseValidationError(problems)
     if first_release:
-        if any(rule.source == "previous-tag" for rule in policy.rules):
+        if any(rule.replacement == ReleaseSource.PREVIOUS_TAG for rule in policy.rules):
             raise ValueError("first release has no predecessor; previous-tag selectors are incompatible")
         if _tag_version(tag) < _tag_version("v" + discovery.package.version):
             raise ValueError("first release cannot downgrade the package version")

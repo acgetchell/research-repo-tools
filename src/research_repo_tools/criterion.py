@@ -15,6 +15,7 @@ __all__ = [
     "SAMPLE_SCHEMA",
     "Comparison",
     "ComparisonSet",
+    "ConfidenceInterval",
     "Estimate",
     "Sample",
     "Statistic",
@@ -72,32 +73,66 @@ def _unit(value: object) -> Unit:
 
 
 @dataclass(frozen=True, slots=True)
-class Estimate:
-    """A positive point and optional complete ordered confidence interval.
+class ConfidenceInterval:
+    """Complete positive ordered bounds with an optional recorded confidence level."""
 
-    Units belong to Sample. Bootstrap intervals need not contain the point.
-    No significance or confidence interval for a ratio is inferred here.
-    """
-
-    point: float
-    lower: float | None = None
-    upper: float | None = None
+    lower: float
+    upper: float
     confidence_level: float | None = None
 
     def __post_init__(self) -> None:
-        for name in ("point", "lower", "upper"):
-            value = getattr(self, name)
-            if name == "point" or value is not None:
-                object.__setattr__(self, name, _positive(value, name))
-        if (self.lower is None) != (self.upper is None):
-            raise ValueError("confidence interval requires both bounds")
-        if self.lower is not None and self.upper is not None and self.lower > self.upper:
+        object.__setattr__(self, "lower", _positive(self.lower, "lower"))
+        object.__setattr__(self, "upper", _positive(self.upper, "upper"))
+        if self.lower > self.upper:
             raise ValueError("confidence interval lower bound exceeds upper bound")
         if self.confidence_level is not None:
             level = _positive(self.confidence_level, "confidence_level")
-            if level >= 1 or self.lower is None:
-                raise ValueError("confidence_level requires an interval and must lie strictly between zero and one")
+            if level >= 1:
+                raise ValueError("confidence_level must lie strictly between zero and one")
             object.__setattr__(self, "confidence_level", level)
+
+
+@dataclass(frozen=True, slots=True)
+class Estimate:
+    """A positive point with either no interval or a complete ConfidenceInterval.
+
+    Units belong to Sample. Bootstrap intervals need not contain the point.
+    No significance or confidence interval for a ratio is inferred here.
+    Bounds/confidence properties expose nullable values for flat table columns.
+    """
+
+    point: float
+    interval: ConfidenceInterval | None = None
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "point", _positive(self.point, "point"))
+        if self.interval is not None and not isinstance(self.interval, ConfidenceInterval):
+            raise TypeError("estimate interval must be a ConfidenceInterval or None")
+
+    @property
+    def lower(self) -> float | None:
+        return None if self.interval is None else self.interval.lower
+
+    @property
+    def upper(self) -> float | None:
+        return None if self.interval is None else self.interval.upper
+
+    @property
+    def confidence_level(self) -> float | None:
+        return None if self.interval is None else self.interval.confidence_level
+
+
+def _parse_interval(lower: object, upper: object, confidence_level: object) -> ConfidenceInterval | None:
+    """Parse the nullable columns used by retained samples and legacy CSV."""
+    if lower is None and upper is None:
+        if confidence_level is not None:
+            raise ValueError("confidence_level requires an interval")
+        return None
+    if lower is None or upper is None:
+        raise ValueError("confidence interval requires both bounds")
+    return ConfidenceInterval(
+        _positive(lower, "lower"), _positive(upper, "upper"), None if confidence_level is None else _positive(confidence_level, "confidence_level")
+    )
 
 
 @dataclass(frozen=True, slots=True)
@@ -200,9 +235,11 @@ def parse_estimate(payload: bytes, *, statistic: Statistic = "median") -> Estima
     level = interval.get("confidence_level")
     return Estimate(
         point,
-        _positive(interval.get("lower_bound"), "lower_bound"),
-        _positive(interval.get("upper_bound"), "upper_bound"),
-        None if level is None else _positive(level, "confidence_level"),
+        ConfidenceInterval(
+            _positive(interval.get("lower_bound"), "lower_bound"),
+            _positive(interval.get("upper_bound"), "upper_bound"),
+            None if level is None else _positive(level, "confidence_level"),
+        ),
     )
 
 
@@ -268,9 +305,7 @@ def _parse_sample(raw: object, statistic: Statistic, unit: Unit) -> Sample:
                 _string(row["benchmark"], "benchmark"),
                 Estimate(
                     _positive(row["point"], "point"),
-                    None if row["lower"] is None else _positive(row["lower"], "lower"),
-                    None if row["upper"] is None else _positive(row["upper"], "upper"),
-                    None if row["confidence_level"] is None else _positive(row["confidence_level"], "confidence_level"),
+                    _parse_interval(row["lower"], row["upper"], row["confidence_level"]),
                 ),
             )
         )
@@ -342,10 +377,10 @@ def _format_estimate(
     if estimate is None:
         return "—"
     point = f"{estimate.point:g}" + (f" {unit}" if include_unit else "")
-    if estimate.lower is not None and estimate.upper is not None:
-        point += f"{interval_separator}[{estimate.lower:g}, {estimate.upper:g}]"
-        if include_confidence and estimate.confidence_level is not None:
-            point += f" ({estimate.confidence_level:g} confidence)"
+    if estimate.interval is not None:
+        point += f"{interval_separator}[{estimate.interval.lower:g}, {estimate.interval.upper:g}]"
+        if include_confidence and estimate.interval.confidence_level is not None:
+            point += f" ({estimate.interval.confidence_level:g} confidence)"
     return point
 
 

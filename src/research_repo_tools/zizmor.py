@@ -10,7 +10,9 @@ import subprocess
 import sys
 import tomllib
 from collections.abc import Sequence
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import assert_never
 
 from packaging.requirements import Requirement
 
@@ -55,17 +57,35 @@ def _scanner(settings: Config, environment: dict[str, str]) -> tuple[Path, str, 
     return path, required, environment
 
 
-def _valid_token(value: str) -> bool:
-    return bool(value) and value.isascii() and all(33 <= ord(char) <= 126 for char in value)
+def _valid_token(value: object) -> bool:
+    return isinstance(value, str) and bool(value) and value.isascii() and all(33 <= ord(char) <= 126 for char in value)
 
 
-def _authentication(environment: dict[str, str], root: Path) -> tuple[str | None, str]:
+@dataclass(frozen=True, slots=True)
+class _Authenticated:
+    token: str = field(repr=False)
+    source: str
+
+    def __post_init__(self) -> None:
+        if not _valid_token(self.token):
+            raise ValueError("authentication requires a nonempty ASCII token without whitespace")
+
+
+@dataclass(frozen=True, slots=True)
+class _Unauthenticated:
+    reason: str
+
+
+type _Authentication = _Authenticated | _Unauthenticated
+
+
+def _authentication(environment: dict[str, str], root: Path) -> _Authentication:
     for name in ("ZIZMOR_GITHUB_TOKEN", "GH_TOKEN"):
         value = environment.get(name, "")
         if value:
             if not _valid_token(value):
                 raise ValueError(f"{name} must contain a nonempty ASCII token without whitespace")
-            return value, name
+            return _Authenticated(value, name)
     # GITHUB_TOKEN is intentionally not an implicit fourth token source. Match
     # the scanner host even when gh has another default account configured.
     discovery_env = {key: value for key, value in environment.items() if key not in _CREDENTIALS}
@@ -80,16 +100,16 @@ def _authentication(environment: dict[str, str], root: Path) -> tuple[str | None
             check=False,
         )
     except ExecutableNotFoundError:
-        return None, "gh is unavailable"
+        return _Unauthenticated("gh is unavailable")
     except OSError, subprocess.SubprocessError:
-        return None, "gh authentication discovery failed"
+        return _Unauthenticated("gh authentication discovery failed")
     if result.returncode:
-        return None, "gh authentication discovery failed"
+        return _Unauthenticated("gh authentication discovery failed")
     try:
         token = result.stdout.decode("ascii").strip()
     except UnicodeError:
-        return None, "gh returned an invalid token"
-    return (token, "gh auth token") if _valid_token(token) else (None, "gh returned an empty or invalid token")
+        return _Unauthenticated("gh returned an invalid token")
+    return _Authenticated(token, "gh auth token") if _valid_token(token) else _Unauthenticated("gh returned an empty or invalid token")
 
 
 def _redact(payload: bytes, secrets: Sequence[str]) -> bytes:
@@ -118,9 +138,9 @@ def check(settings: Config, paths: Sequence[str], *, output_format: str = "plain
         scanner, required, environment = _scanner(settings, environment)
     except _FAILURES:
         raise RuntimeError("could not locate the declared zizmor scanner; run just setup") from None
-    token, source = (None, "explicit --offline") if offline else _authentication(environment, settings.root)
-    if require_online and token is None:
-        raise ValueError(f"zizmor online audits required, but authentication is unavailable ({source})")
+    authentication = _Unauthenticated("explicit --offline") if offline else _authentication(environment, settings.root)
+    if require_online and isinstance(authentication, _Unauthenticated):
+        raise ValueError(f"zizmor online audits required, but authentication is unavailable ({authentication.reason})")
     # Explicit CLI policy always wins over inherited zizmor mode/token aliases.
     environment = {key: value for key, value in environment.items() if key not in (*_CREDENTIALS, *_MODE_VARIABLES)}
     try:
@@ -131,14 +151,17 @@ def check(settings: Config, paths: Sequence[str], *, output_format: str = "plain
     if actual != required:
         raise ValueError(f"zizmor version does not match declared {required}; run just setup")
     args = ["--strict-collection", "--persona", persona, "--format", output_format, "--no-progress", "--color", "never"]
-    if token is not None:
-        secrets.append(token)
-        environment["ZIZMOR_GITHUB_TOKEN"] = token
-        args.extend(["--gh-hostname", environment.get("GH_HOST", "github.com")])
-        print(f"zizmor: online audits enabled using {source}; version {required}; persona {persona}", file=sys.stderr)
-    else:
-        args.append("--offline")
-        print(f"zizmor: offline audits only ({source}); online audits skipped; version {required}; persona {persona}", file=sys.stderr)
+    match authentication:
+        case _Authenticated(token, source):
+            secrets.append(token)
+            environment["ZIZMOR_GITHUB_TOKEN"] = token
+            args.extend(["--gh-hostname", environment.get("GH_HOST", "github.com")])
+            print(f"zizmor: online audits enabled using {source}; version {required}; persona {persona}", file=sys.stderr)
+        case _Unauthenticated(reason):
+            args.append("--offline")
+            print(f"zizmor: offline audits only ({reason}); online audits skipped; version {required}; persona {persona}", file=sys.stderr)
+        case _:
+            assert_never(authentication)
     try:
         result = run_command_bytes(scanner, [*args, "--", *inputs], cwd=settings.root, env=environment, input=b"", timeout=settings.zizmor.timeout, check=False)
     except subprocess.TimeoutExpired:

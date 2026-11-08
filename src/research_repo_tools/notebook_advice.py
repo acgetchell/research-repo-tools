@@ -7,7 +7,7 @@ from pathlib import Path
 from warnings import catch_warnings
 
 from research_repo_tools.config import Config
-from research_repo_tools.notebook_lint import RUFF_COMMON, Diagnostic, _run, python_notebooks, require_checkers
+from research_repo_tools.notebook_lint import RUFF_COMMON, Diagnostic, DiagnosticKind, _run, python_notebooks, require_checkers
 
 GENERATED_ID = re.compile(r"(?:[0-9a-f]{8,64}|[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12})", re.IGNORECASE)
 POSITIONAL_ID = re.compile(r"(?:\d+|(?:cell|code|markdown|raw)[-_]?\d+)", re.IGNORECASE)
@@ -72,9 +72,9 @@ def advise(settings: Config, paths: list[Path], *, strict: bool = False, timeout
         for diagnostic in information:
             print(f"INFO {diagnostic.render(notebook)}", file=sys.stderr)
         for diagnostic in diagnostics:
-            severity = "INFO" if diagnostic.informational else "ERROR" if diagnostic.operational else "WARNING"
+            severity = diagnostic.kind.advice_label
             print(f"{severity} {diagnostic.render(notebook)}", file=sys.stderr)
-        warnings = [item for item in diagnostics if not item.operational and not item.informational]
-        failed |= any(diagnostic.operational for diagnostic in diagnostics) or bool(warnings) and (strict or policy.strict)
+        warnings = [item for item in diagnostics if item.kind is DiagnosticKind.FINDING]
+        failed |= any(diagnostic.kind is DiagnosticKind.OPERATIONAL for diagnostic in diagnostics) or bool(warnings) and (strict or policy.strict)
         print(f"Reviewed {notebook.path}: {len(warnings)} advisory warning(s), {len(information)} skipped cell(s)")
     return int(failed)

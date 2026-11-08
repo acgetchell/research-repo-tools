@@ -7,8 +7,9 @@ import json
 import tempfile
 import unittest
 import warnings
+from dataclasses import replace
 from pathlib import Path
-from typing import override
+from typing import Any, override
 from unittest.mock import patch
 
 from research_repo_tools.cli import main
@@ -139,6 +140,69 @@ class TestExecutionPreflight(Consumer):
 
 
 class TestInspection(Consumer):
+    def test_invalid_output_policy_fails_before_notebook_inspection(self):
+        from research_repo_tools import notebooks
+
+        outputs = json.loads('"typo"')
+        with patch.object(notebooks, "selected", side_effect=AssertionError("must reject policy before reading notebooks")):
+            with self.assertRaisesRegex(ValueError, "notebooks.outputs must be clear or preserve"):
+                notebooks.check([self.path], outputs=outputs)
+
+    def test_notebook_settings_construction_and_replacement_preserve_policies(self):
+        from research_repo_tools.config import NotebookSettings
+
+        defaults = NotebookSettings()
+        self.assertEqual(defaults.outputs, "clear")
+        self.assertEqual(replace(defaults, outputs="preserve").outputs, "preserve")
+        # Deliberately malformed runtime inputs from untyped callers.
+        cases: tuple[tuple[dict[str, Any], str], ...] = (
+            ({"outputs": "typo"}, "notebooks.outputs"),
+            ({"timeout": 0}, "notebooks.timeout"),
+            ({"timeout": True}, "notebooks.timeout"),
+            ({"prohibit_installs": "false"}, "notebooks.prohibit-installs"),
+            ({"group": ""}, "notebooks.group"),
+            ({"cwd": ""}, "notebooks.cwd"),
+            ({"output_dir": ""}, "notebooks.output-dir"),
+            ({"advice": {}}, "notebooks.advice"),
+            ({"lab": {}}, "notebooks.lab"),
+            ({"reset": {}}, "notebooks.reset"),
+        )
+        for changes, message in cases:
+            with self.subTest(changes=changes):
+                with self.assertRaisesRegex(ValueError, message):
+                    NotebookSettings(**changes)
+                with self.assertRaisesRegex(ValueError, message):
+                    replace(defaults, **changes)
+
+    def test_nested_notebook_settings_retain_invariants_and_own_collections(self):
+        from research_repo_tools.config import NotebookAdvice, NotebookLab, NotebookReset
+
+        rules = json.loads('["E", "F"]')
+        paths = json.loads('["notebooks"]')
+        advice, reset = NotebookAdvice(ruff_rules=rules), NotebookReset(sources=paths, scratch=paths, checkpoints=paths)
+        rules.append("invalid rule")
+        paths.append("\0")
+        self.assertEqual(advice.ruff_rules, ("E", "F"))
+        self.assertEqual((reset.sources, reset.scratch, reset.checkpoints), (("notebooks",),) * 3)
+        cases: tuple[tuple[Any, dict[str, Any], str], ...] = (
+            (NotebookAdvice, {"descriptive_ids": "false"}, "descriptive-ids"),
+            (NotebookAdvice, {"strict": 1}, "strict"),
+            (NotebookAdvice, {"subprocess_timeout": "true"}, "subprocess-timeout"),
+            (NotebookAdvice, {"ruff_rules": ["F", "F"]}, "distinct"),
+            (NotebookAdvice, {"ruff_rules": ["invalid rule"]}, "Ruff rule codes"),
+            (NotebookLab, {"browser": "false"}, "browser"),
+            (NotebookLab, {"scratch_dir": ""}, "scratch-dir"),
+            (NotebookReset, {"sources": ["notebooks", "notebooks"]}, "distinct"),
+            (NotebookReset, {"scratch": "target"}, "literal paths"),
+            (NotebookReset, {"checkpoints": ["\0"]}, "literal paths"),
+        )
+        for constructor, changes, message in cases:
+            with self.subTest(constructor=constructor.__name__, changes=changes):
+                with self.assertRaisesRegex(ValueError, message):
+                    constructor(**changes)
+                with self.assertRaisesRegex(ValueError, message):
+                    replace(constructor(), **changes)
+
     def test_repair_inventory_preserves_positions_existing_ids_bytes_and_privacy(self):
         missing = code(["secret source\n", "second line\n"])
         del missing["id"]

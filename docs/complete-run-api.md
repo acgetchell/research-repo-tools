@@ -7,9 +7,18 @@ asserted release target. It does not manufacture native saved samples or CI trus
 ## Scheduled trials (v0.2.6)
 
 `SuiteMeasurementPlan(suites, schedule=TrialSchedule(...), outputs=())` is schema 6.
-`trial_schedule.TrialSchedule(trials=2, order="alternating", seed=None)` declares
-separate trial pairs; randomized order requires an explicit seed and an even
-trial count. Sequential order is supported without claiming counterbalancing.
+`trial_schedule.TrialSchedule(trials=2, order=AlternatingOrder())` declares
+separate trial pairs. The order is one of three immutable variants from
+`trial_schedule`: `AlternatingOrder()`, `RandomizedOrder(seed)`, or
+`SequentialOrder()`. Alternating and randomized schedules require an even trial
+count; `RandomizedOrder` requires an unsigned 64-bit integer seed. Sequential
+order permits a single trial without claiming counterbalancing.
+
+In v0.2.7 Python callers pass an order variant instead of an order string and a
+separate seed, for example `TrialSchedule(6, RandomizedOrder(42))`. TOML and JSON
+retain their `order` string and optional `seed` fields; `parse_schedule` converts
+those fields into the corresponding variant. `schedule.order` exposes that
+variant, and `schedule.document()` returns the transport representation.
 `parse_schedule` verifies any supplied realized schedule against the declared
 algorithm; `seed` and `phases` are independently optional in the input document
 when the order needs no seed. The [procedure](REUSING_BENCHMARKS.md) specifies

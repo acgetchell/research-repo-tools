@@ -13,7 +13,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from research_repo_tools.cli import main
-from research_repo_tools.criterion import COMPARISON_SCHEMA, Estimate, Sample, compare_samples, serialize_comparison
+from research_repo_tools.criterion import COMPARISON_SCHEMA, ConfidenceInterval, Estimate, Sample, compare_samples, serialize_comparison
 from research_repo_tools.evidence import Evidence, Provenance, fingerprint_files, load_evidence, publish_evidence, serialize_evidence
 from research_repo_tools.postprocess_changelog import MarkdownFormatError
 from research_repo_tools.publication import (
@@ -30,6 +30,7 @@ from research_repo_tools.publication import (
     verify_tagged_files,
 )
 from research_repo_tools.publication_config import load_publication
+from research_repo_tools.release_policy import FixedValue
 from research_repo_tools.releases import ReleaseRule
 
 MARKERS = MarkerPair("<!-- PERFORMANCE:BEGIN -->", "<!-- PERFORMANCE:END -->")
@@ -39,7 +40,7 @@ LAYOUT = TableLayout((("step/2", "Step | <two>"), ("tiny", "Tiny")), "v1.0.0", "
 
 def comparison():
     return compare_samples(
-        Sample((("step/2", Estimate(100, 90, 110, 0.95)), ("tiny", Estimate(3)), ("gone", Estimate(2)))),
+        Sample((("step/2", Estimate(100, ConfidenceInterval(90, 110, 0.95))), ("tiny", Estimate(3)), ("gone", Estimate(2)))),
         Sample((("step/2", Estimate(80)), ("tiny", Estimate(6)), ("added", Estimate(4)))),
     )
 
@@ -364,7 +365,7 @@ class TestPublicationConsumer(unittest.TestCase):
                 "Consumer narrative\n" + render_table(comparison(), LAYOUT),
                 inputs={"legacy.csv": payload},
                 figures={"figures/timing.svg": render_svg(comparison(), LAYOUT)},
-                references=(ReleaseRule("README.md", r"(?P<value>old/v[^/]+/report.md)", value="old/v0.9/report.md"),),
+                references=(ReleaseRule("README.md", r"(?P<value>old/v[^/]+/report.md)", replacement=FixedValue("old/v0.9/report.md")),),
             )
             self.assertIn("Consumer narrative", preview_publication(plan))
             self.assertFalse((root / "figures").exists())

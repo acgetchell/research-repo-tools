@@ -253,6 +253,81 @@ installation verified; source-only availability does not satisfy that gate.
 
 ## Shared primitives and asset composition
 
+### Draft preparation
+
+The v0.2.7 public function is
+`release_drafts.prepare_release_draft(root, repository, tag, commit, *, policy,
+expected, title, notes, receipt, approve=False, recover_release_id=None)`.
+It returns the existing `release_assets.ReleaseTarget`; serialize it with
+`serialize_release_target` for later attachment/revalidation. The CLI is
+`release assets prepare EVIDENCE_POLICY`, with independent `--repository`,
+`--tag`, `--commit`, `--expected-title`, `--expected SELECTION`, `--notes`,
+`--receipt`, `--output TARGET`, and mandatory `--approve`. It requires no checkout.
+The other asset commands retain their existing asset-policy/checkout contracts.
+
+`policy` is an `EvidencePolicy` for the asserted repository with a signing job.
+`expected` must be the original canonical selection bytes returned by
+`verify_release_evidence`, authenticated separately by the consumer. Preparation
+never chooses a replacement selection. Live verification uses that exact
+source/run/attempt, jobs, artifact ID/digest and manifest/signature, including
+current expiration and any configured freshness limits. Complete main-push and
+signer requirements remain those of the existing evidence policy. This applies
+to signed-source, signed Cargo archive and signed Python distribution policies;
+preparation has no hard-coded package, registry, gate names or file inventory.
+Signed-source verification does not establish byte-identical Cargo promotion.
+
+`tag` is canonical stable `vX.Y.Z`; `commit` is a full lowercase SHA. `title` is
+a required nonempty single line. `notes` is nonempty UTF-8 bytes without NUL,
+bounded to 1 MiB, and is compared byte-for-byte, including CRLF and trailing
+newlines. The selection is also nonempty bytes bounded to 1 MiB. Caller input
+and receipts are parsed before provider mutations. Local receipt parent aliases
+resolve to their native storage; the receipt itself cannot be a link/junction.
+
+Successful complete authenticated paginated release lookup is the only proof
+of absence. Provider/network/authentication/JSON/pagination errors fail closed.
+Duplicate matches reject. An existing release must have the expected ID, tag,
+title and exact body and be draft, non-prerelease and mutable; its assets remain
+unchanged. The remote `refs/tags` identity is peeled through bounded annotated
+tags to the asserted commit, so same-named branches cannot substitute. Evidence,
+tag and release identities are rechecked around creation and before returning.
+
+The durable receipt is schema `research-repo-tools/draft-receipt/v1`, binding
+repository, tag, commit, title, notes SHA-256, exact selection SHA-256, state and
+release ID. `pending` requires a null ID; `captured` requires a positive integer.
+Unknown fields, duplicate JSON keys, invalid state/ID combinations and changed
+bindings reject. Parsing is not authentication. Callers retain exclusive control
+and authenticate receipts passed between jobs, including their immutable artifact
+ID/digest and producer run/attempt.
+
+Before POST, preparation exclusively creates and fsyncs a pending receipt. After
+a valid creation identity is returned, it retains that ID before further network
+reads. Retries with a captured receipt read the same ID and reject deletion or
+replacement; they never create again. A matching existing draft can also be
+captured without a POST. A pending receipt blocks automatic retry, even if lookup
+now shows a matching draft. After independent inspection, provide
+`recover_release_id=ID` / `--recover-release-id ID` with the original pending
+receipt; recovery revalidates that exact ID, body, lifecycle, tag and evidence,
+then captures it without release mutation. It cannot replace a captured ID.
+
+Invalid assertions/current prerequisites raise `ValueError`; provider read
+errors retain their transport category. `DraftPreparationUnknownError` signals
+an unconfirmed attempted creation or an unresolved pending receipt. A creation
+may have succeeded despite this exception. Never discard the receipt or rerun
+with a new path to escape recovery. No automatic POST retry, edit, deletion,
+asset overwrite, publication or tag movement is performed. Filesystem failures
+also require inspecting retained state. Receipt writes are synced and replacements
+use the shared file publisher; they are not a distributed transaction or a guarantee
+against lost disks, hard runner termination, or concurrent hostile writers.
+
+GitHub provides no atomic conditional release creation spanning evidence/tag
+checks and POST. The tag can race after the last check; competing writers can
+create duplicates. Postchecks detect observable drift but cannot undo creation
+or make it linearizable. Serialize all writers for the repository/tag with
+non-cancelling concurrency and preserve the same receipt across jobs/reruns.
+See the [workflow example and recovery procedure](PREPARING_DRAFTS.md).
+
+### Existing target and attachment commands
+
 Consumer commands are in the
 [task guide](VERIFYING_RELEASE_EVIDENCE.md#release-evidence-and-attachment-handoffs). Both Justfiles use
 `release-evidence` for `release evidence` and `release-assets` for `release assets`.

@@ -103,7 +103,7 @@ GitHub releases, matching the existing CLI discovery limit.
 The module exports these frozen dataclasses:
 
 - `ReleasePolicy(date_policy="today", final_changelog=False, required_files=(), exclude=(), rules=(), tag_policy="normalized-stable", published_dependencies=())`
-  and `ReleaseRule(path, pattern, value=None, source=None, count=1, exclude=None)`
+  and `ReleaseRule(path, pattern, replacement, count=1, exclude=None)`
   follow the [declarative contract](UPDATING_RELEASE_METADATA.md#declarative-consumer-policies).
 - `ReleaseAdapter(input_files=(), prepare=None, validate=None)` uses trusted Python
   callbacks, each receiving `(candidate: Path, context: ReleaseContext)`.
@@ -113,6 +113,7 @@ The module exports these frozen dataclasses:
 - `ReleaseContext(tag, previous_tag, release_date)` also exposes `version` without
   the `v` prefix. During checks, `previous_tag` can be `None` when no rule or
   explicit argument requires it.
+
 - `ReleaseDiscovery(root, package, files, references, policy)` exposes an absolute
   root, `PackageInfo(name, version)`, sorted relative file paths, and standard
   `VersionReference(path, line, version, kind, text)` records. Reference paths are
@@ -126,6 +127,15 @@ The module exports these frozen dataclasses:
 - `ReleaseResult(context, changed_paths)` reports relative paths in publication order.
 - `PublishedRelease(tag, published_at)` contains a normalized tag and a timezone-aware
   `datetime` from GitHub.
+
+For v0.2.7 Python callers, replace `ReleaseRule(..., value=text)` with
+`ReleaseRule(..., replacement=FixedValue(text))`, and `source="tag"` with
+`replacement=ReleaseSource.TAG`. `FixedValue`, `ReleaseSource`, and `ReleaseRule`
+are available from `research_repo_tools.releases`. Other source cases are
+`VERSION`, `PREVIOUS_TAG`, and `RELEASE_DATE`. The rule carries exactly one
+literal assertion or derived source; absent/contradictory payloads are no longer
+constructor options. TOML retains its `value`/`source` spelling and parses that
+choice once at the boundary. Consumers handle the resulting union exhaustively.
 
 Malformed configuration, selectors, metadata, dates, or paths raise `ValueError`.
 I/O and UTF-8 decoding errors propagate. Synchronization mismatches appear in

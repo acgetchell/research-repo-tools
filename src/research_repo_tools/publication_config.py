@@ -28,7 +28,7 @@ from research_repo_tools.publication import (
     render_table,
     replace_section,
 )
-from research_repo_tools.release_policy import ReleaseRule
+from research_repo_tools.release_policy import FixedValue, ReleaseRule
 from research_repo_tools.release_tags import _github_repo_url, validate_semver
 
 __all__ = ["load_publication"]
@@ -319,7 +319,7 @@ def load_publication(
             ReleaseRule(
                 _string(rule["path"], "reference path"),
                 _string(rule["pattern"], "reference pattern"),
-                value=values[source],
+                replacement=FixedValue(values[source]),
                 count=count,
                 exclude=_string(rule["exclude"], "reference exclude") if "exclude" in rule else None,
             )

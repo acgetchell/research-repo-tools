@@ -2,6 +2,7 @@
 
 import importlib.util
 import os
+import stat
 import subprocess
 import sys
 import tomllib
@@ -59,7 +60,7 @@ def test_native_check_refuses_local_and_self_hosted_execution(harness, tmp_path,
         pytest.fail("native check attempted an operation before rejecting a non-disposable runner")
 
     monkeypatch.setattr(harness.subprocess, "run", unexpected)
-    monkeypatch.setattr(harness.tempfile, "TemporaryDirectory", unexpected)
+    monkeypatch.setattr(harness, "native_workspace", unexpected)
     with pytest.raises(RuntimeError, match="disposable GitHub-hosted runner"):
         harness.check(tmp_path / "nonexistent distributions")
 
@@ -72,7 +73,9 @@ def test_native_workspace_uses_runner_temp_instead_of_nested_user_temp(harness, 
     monkeypatch.setenv("GITHUB_ACTIONS", "true")
     monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
     monkeypatch.setenv("RUNNER_TEMP", str(runner_temp))
-    monkeypatch.setattr(harness.tempfile, "tempdir", str(user_temp))
+    monkeypatch.setenv("TMPDIR", str(user_temp))
+    monkeypatch.setenv("TEMP", str(user_temp))
+    monkeypatch.setenv("TMP", str(user_temp))
     monkeypatch.setattr(harness.shutil, "which", lambda _name: "uv")
     version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
     (tmp_path / f"research_repo_tools-{version}-py3-none-any.whl").touch()
@@ -99,6 +102,41 @@ def test_native_workspace_uses_runner_temp_instead_of_nested_user_temp(harness, 
         harness.check(tmp_path)
     assert len(workspaces) == 1 and not workspaces[0].exists()
     assert not list(user_temp.iterdir())
+
+
+def test_native_workspace_recreates_empty_installation_homes_at_stable_paths(harness, tmp_path, monkeypatch):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    paths = []
+    for _ in range(2):
+        with harness.native_workspace() as workspace:
+            paths.append(workspace)
+            assert list(workspace.iterdir()) == []
+            tools = Path(harness.isolated_environment(workspace)["RESEARCH_REPO_TOOLS_HOME"])
+            tools.mkdir()
+            binary = tools / "readonly-tool.exe"
+            binary.write_bytes(b"disposable installed tool")
+            binary.chmod(stat.S_IRUSR)
+        assert not workspace.exists()
+    assert paths[0] == paths[1]
+
+
+@pytest.mark.parametrize("kind", ["directory", "file"])
+def test_native_workspace_preserves_preexisting_state(harness, tmp_path, monkeypatch, kind):
+    monkeypatch.setenv("GITHUB_ACTIONS", "true")
+    monkeypatch.setenv("RUNNER_ENVIRONMENT", "github-hosted")
+    monkeypatch.setenv("RUNNER_TEMP", str(tmp_path))
+    workspace = tmp_path / "rrt-setup"
+    if kind == "directory":
+        workspace.mkdir()
+        sentinel = workspace / "sentinel"
+    else:
+        sentinel = workspace
+    sentinel.write_bytes(b"existing state must survive")
+    with pytest.raises(FileExistsError), harness.native_workspace():
+        pytest.fail("preexisting workspace was reused")
+    assert sentinel.read_bytes() == b"existing state must survive"
 
 
 def test_native_environment_replaces_inherited_installation_and_project_overrides(harness, tmp_path, monkeypatch):
@@ -142,6 +180,21 @@ def test_native_environment_replaces_inherited_installation_and_project_override
     assert all(value != "outside-fixture" for name, value in env.items() if name in overrides)
     for name in ("UV_TOOL_BIN_DIR", "UV_TOOL_DIR", "UV_PYTHON_INSTALL_DIR", "UV_CACHE_DIR", "RESEARCH_REPO_TOOLS_HOME"):
         assert Path(env[name]).is_relative_to(tmp_path)
+
+
+def test_native_environment_retains_only_the_explicit_compilation_cache(harness, tmp_path, monkeypatch):
+    cache = tmp_path / "build cache"
+    cache.mkdir()
+    (cache / "retained-object").write_bytes(b"compiled fixture")
+    monkeypatch.setenv("RESEARCH_REPO_TOOLS_CARGO_BUILD_HOME", str(cache))
+    monkeypatch.setenv("CARGO_TARGET_DIR", str(tmp_path / "unrelated project target"))
+    first = harness.isolated_environment(tmp_path / "first")
+    second = harness.isolated_environment(tmp_path / "second")
+    assert first["RESEARCH_REPO_TOOLS_CARGO_BUILD_HOME"] == second["RESEARCH_REPO_TOOLS_CARGO_BUILD_HOME"] == str(cache)
+    assert first["RESEARCH_REPO_TOOLS_HOME"] != second["RESEARCH_REPO_TOOLS_HOME"]
+    assert not Path(first["RESEARCH_REPO_TOOLS_HOME"]).exists() and not Path(second["RESEARCH_REPO_TOOLS_HOME"]).exists()
+    assert "CARGO_TARGET_DIR" not in first and "CARGO_TARGET_DIR" not in second
+    assert (cache / "retained-object").read_bytes() == b"compiled fixture"
 
 
 def test_native_release_operation_follows_credential_free_locked_package_installation(harness, tmp_path, monkeypatch):

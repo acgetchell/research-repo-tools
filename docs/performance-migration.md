@@ -335,6 +335,11 @@ merged PR is not publication or downstream acceptance.
 
 ## Release interface reconciliation
 
+For the v0.2.7 package-neutral draft creator, see the
+[la-stack draft-preparation migration map](PREPARING_DRAFTS.md#la-stack-migration-map).
+It replaces the manual creation block while preserving pre-tag evidence,
+owner-selected measurements, captured-target attachment and explicit publication.
+
 Use the same recipe names and meanings in every consumer. The shared replacement
 must be present in a verified published v0.2.4 (or later supplying release),
 pinned exactly and tested through the consumer's lock before deleting working

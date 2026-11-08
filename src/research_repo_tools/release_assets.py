@@ -174,6 +174,7 @@ class GitHubRelease:
     assets: tuple[tuple[str, int, int, str | None], ...]
     title: str | None = None
     asset_states: tuple[tuple[int, str], ...] = ()
+    body: str | None = None
 
 
 def lookup_release(root: Path, repository: str, tag: str) -> GitHubRelease:
@@ -190,7 +191,7 @@ def lookup_release(root: Path, repository: str, tag: str) -> GitHubRelease:
     return _release_by_id(root, repository, tag, identifier)
 
 
-def _parse_release(data: dict[str, object], repository: str, tag: str, expected_identifier: int) -> GitHubRelease:
+def _require_response_identity(data: dict[str, object], repository: str, tag: str, expected_identifier: int) -> None:
     release_id = data.get("id")
     url = data.get("url")
     if (
@@ -201,8 +202,15 @@ def _parse_release(data: dict[str, object], repository: str, tag: str, expected_
         or url.casefold() != f"https://api.github.com/repos/{repository}/releases/{expected_identifier}".casefold()
     ):
         raise ValueError("GitHub release has invalid tag or identity")
+
+
+def _parse_release(data: dict[str, object], repository: str, tag: str, expected_identifier: int) -> GitHubRelease:
+    _require_response_identity(data, repository, tag, expected_identifier)
     if "name" not in data or (data["name"] is not None and not isinstance(data["name"], str)):
         raise ValueError("GitHub release title must be a string or null")
+    body = data.get("body")
+    if body is not None and not isinstance(body, str):
+        raise ValueError("GitHub release body must be a string or null")
     for field in ("draft", "immutable", "prerelease"):
         if type(data.get(field)) is not bool:
             raise ValueError(f"GitHub release {field} must be a boolean")
@@ -229,13 +237,14 @@ def _parse_release(data: dict[str, object], repository: str, tag: str, expected_
     return GitHubRelease(
         repository,
         tag,
-        release_id,
+        expected_identifier,
         data["draft"] is True,
         data["immutable"] is True,
         data["prerelease"] is True,
         tuple(assets),
         data["name"],
         tuple(states),
+        body,
     )
 
 
@@ -269,6 +278,23 @@ def require_release_checkout(checkout: Path, commit: str) -> None:
     require_checkout(commit, lambda args: run_command_bytes(executable, args, cwd=checkout, env=environment, timeout=30).stdout, executable=executable)
 
 
+def _release_matches(root: Path, repository: str, tag: str) -> list[dict[str, object]]:
+    # gh must successfully finish all provider pages. Errors are never absence.
+    pages = _load_json(_gh(root, ["api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100"]), "GitHub release pages")
+    if not isinstance(pages, list) or not pages or any(not isinstance(page, list) for page in pages):
+        raise ValueError("GitHub releases require paginated arrays")
+    releases = [_object(item, "release") for page in pages for item in page]
+    identifiers = set()
+    for item in releases:
+        identifier = item.get("id")
+        if type(identifier) is not int or identifier <= 0 or not isinstance(item.get("tag_name"), str) or not item["tag_name"]:
+            raise ValueError("GitHub release listing has invalid tag or identity")
+        if identifier in identifiers:
+            raise ValueError("duplicate GitHub release identity in provider pages")
+        identifiers.add(identifier)
+    return [item for item in releases if item["tag_name"] == tag]
+
+
 def preflight_release_target(
     root: Path,
     repository: str,
@@ -286,11 +312,7 @@ def preflight_release_target(
     # Validate caller assertions before any API access.
     repository, tag, commit = _repository(repository), _stable_tag(tag), _sha(commit)
     expected_title = _expected_title(expected_title)
-    pages = _load_json(_gh(root, ["api", "--paginate", "--slurp", f"repos/{repository}/releases?per_page=100"]), "GitHub release pages")
-    if not isinstance(pages, list) or not pages or any(not isinstance(page, list) for page in pages):
-        raise ValueError("GitHub releases require paginated arrays")
-    releases = [_object(item, "release") for page in pages for item in page]
-    matches = [item for item in releases if item.get("tag_name") == tag]
+    matches = _release_matches(root, repository, tag)
     if len(matches) != 1:
         raise ValueError("preflight requires exactly one release for the stable tag")
     identifier = matches[0].get("id")
