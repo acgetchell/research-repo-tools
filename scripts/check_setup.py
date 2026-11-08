@@ -7,10 +7,12 @@ shell configuration (or Windows user PATH). Intentionally excluded from just ci.
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
-import tempfile
 import tomllib
+from collections.abc import Callable, Iterator
+from contextlib import contextmanager
 from pathlib import Path
 
 from research_repo_tools import release_credentials
@@ -21,6 +23,27 @@ ROOT = Path(__file__).resolve().parents[1]
 def require_hosted_runner() -> None:
     if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
         raise RuntimeError("check-setup requires a disposable GitHub-hosted runner; it installs tools and updates the runner user's PATH")
+
+
+def _remove_readonly(function: Callable[..., object], path: str, error: BaseException) -> None:
+    target = Path(path)
+    if not isinstance(error, PermissionError) or target.is_symlink() or target.is_junction():
+        raise error
+    target.chmod(target.stat().st_mode | stat.S_IWUSR)
+    function(path)
+
+
+@contextmanager
+def native_workspace() -> Iterator[Path]:
+    require_hosted_runner()
+    directory = Path(os.environ["RUNNER_TEMP"]).resolve() / "rrt-setup"
+    # Fresh installation homes must have stable paths for Cargo fingerprints.
+    # Exclusive creation rejects stale state and concurrent harness invocations.
+    directory.mkdir()
+    try:
+        yield directory
+    finally:
+        shutil.rmtree(directory, onexc=_remove_readonly)
 
 
 def check_uv_tool_owner(consumer: Path, uv: str, cli: str, python: Path, version: str, env: dict[str, str]) -> None:
@@ -281,8 +304,7 @@ def check(dist: Path) -> None:
     ).strip()
     # Windows' user TEMP plus the managed Rust hierarchy can exceed link.exe's
     # path limit. RUNNER_TEMP provides a short, runner-owned workspace on all hosts.
-    with tempfile.TemporaryDirectory(prefix="rrt-", dir=os.environ["RUNNER_TEMP"]) as temporary:
-        directory = Path(temporary).resolve()
+    with native_workspace() as directory:
         consumer = directory / "consumer with spaces"
         consumer.mkdir()
         env = isolated_environment(directory)

@@ -169,7 +169,10 @@ resolution advance, and compiles the result with managed Rust and `--locked`.
 The native check also installs both Clippy SARIF helpers and checks conversion and failure propagation.
 This check is excluded from local `just ci`. Only Cargo compilation output is
 cached between setup runs; interpreter, manager and tool installation homes stay
-fresh. Cache keys include the host and the fixture/toolchain declarations; Cargo
+fresh. The harness exclusively creates a fixed workspace under `RUNNER_TEMP`,
+rejects preexisting state, and removes it on exit. Stable paths let Cargo reuse
+dependency fingerprints after the empty installation homes are recreated.
+Cache keys include the host and the fixture/toolchain declarations; Cargo
 fingerprints decide which compiled dependencies can be reused.
 Successful main-push runs retain immutable distributions and signed
 producer/validation evidence for 30 days. The [release workflows](docs/RELEASING.md)
