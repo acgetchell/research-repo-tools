@@ -446,8 +446,12 @@ package and artifact checks still apply. Approval, registry publication,
 attachment uploads and downstream adoption remain distinct actions.
 
 For the v0.2.7 draft-preparation capability, a read-only job verifies the tagged
-source and generates notes. A separate writer with an isolated exact installed
-pin consumes the authenticated selection and inert note bytes, without a checkout:
+source and generates notes. CI writers with repository-write credentials use
+the isolated, exactly pinned, no-checkout invocation in the
+[workflow and recovery guide](docs/PREPARING_DRAFTS.md).
+
+The following recipe is for a trusted local project environment. It executes
+the project's Justfile and uses its uv environment:
 
 ```sh
 just release-assets prepare /trusted/evidence.toml \
@@ -460,8 +464,8 @@ just release-assets prepare /trusted/evidence.toml \
 This creates an unpublished stable draft or retains an exact matching draft and
 its assets. Preserve the original receipt for every retry: missing or replaced
 captured IDs reject, and ambiguous creation requires explicit recovery. The
-[workflow and recovery guide](docs/PREPARING_DRAFTS.md) covers immutable handoff
-authentication, least privilege, and the supplying-release adoption gate.
+guide covers immutable handoff authentication, least privilege, and the
+supplying-release adoption gate.
 
 For Python releases, set `package-kind = "python"` and
 `guarantee = "python-distributions"` in the evidence policy. Explicit selection
