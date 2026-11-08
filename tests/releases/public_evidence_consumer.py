@@ -24,7 +24,7 @@ from dataclasses import replace
 from datetime import UTC, datetime, timedelta
 from email.message import Message
 from pathlib import Path
-from typing import override
+from typing import Any, override
 from unittest.mock import patch
 
 from research_repo_tools import cli, release_validation
@@ -34,6 +34,7 @@ from research_repo_tools.files import RecoveryError
 from research_repo_tools.process import run_git_bytes
 from research_repo_tools.registry import lookup_version, verify_published_distributions
 from research_repo_tools.release_assets import require_release_checkout
+from research_repo_tools.release_drafts import DraftPreparationUnknownError, prepare_release_draft
 from research_repo_tools.release_evidence import (
     EvidencePolicy,
     PythonDistributionPolicy,
@@ -1880,6 +1881,455 @@ class TestReleaseCheckoutConsumer(unittest.TestCase):
             self.observe()
         self.assertEqual((child / ".git/index").read_bytes(), before)
         self.assertEqual((child / "source.txt").read_bytes(), b"hidden submodule\n")
+
+
+class DraftProvider(Provider):
+    """Authenticated provider model; records every attempted remote mutation."""
+
+    def __init__(self):
+        super().__init__(SOURCE)
+        self.retain(create_evidence_manifest(SOURCE, "1.2.3", COMMIT, 123, 2, self.read))
+        self.release = None
+        self.posts = []
+        self.calls = []
+        self.listing = None
+        self.response = None
+        self.annotated = False
+        self.ref = "refs/tags/v1.2.3"
+        self.tag_commit = COMMIT
+        self.on_create = lambda: None
+        self.on_tag = lambda: None
+        self.on_list = lambda: None
+
+    def draft(self, **changes):
+        return {
+            "url": "https://api.github.com/repos/example/package/releases/91",
+            "id": 91,
+            "tag_name": "v1.2.3",
+            "name": "Release 1.2.3",
+            "body": "Generated notes café\r\n\n- Change.\n",
+            "draft": True,
+            "immutable": False,
+            "prerelease": False,
+            "assets": [],
+            **changes,
+        }
+
+    def gh(self, program, args, **kwargs):
+        assert program == "gh"
+        self.calls.append(args)
+        endpoint = "repos/example/package"
+        if "POST" in args:
+            assert args[:5] == ["api", "--method", "POST", f"{endpoint}/releases", "--input"]
+            request = json.loads(Path(args[5]).read_bytes())
+            self.posts.append(request)
+            self.release = self.draft(**request)
+            self.on_create()
+            value = self.release if self.response is None else self.response
+        elif args[-1] == f"{endpoint}/releases?per_page=100":
+            assert args[:3] == ["api", "--paginate", "--slurp"]
+            self.on_list()
+            value = [[self.release] if self.release is not None else []] if self.listing is None else self.listing
+        elif args[-1] == f"{endpoint}/releases/91":
+            if self.release is None:
+                raise subprocess.CalledProcessError(1, args, stderr=b"not found")
+            value = self.release
+        elif args[-1] == f"{endpoint}/releases/91/assets?per_page=100":
+            assert self.release is not None
+            value = [self.release["assets"]]
+        elif args[-1] == f"{endpoint}/git/ref/tags/v1.2.3":
+            self.on_tag()
+            value = {"ref": self.ref, "object": {"type": "tag" if self.annotated else "commit", "sha": "b" * 40 if self.annotated else self.tag_commit}}
+        elif args[-1] == f"{endpoint}/git/tags/" + "b" * 40:
+            value = {"sha": "b" * 40, "object": {"type": "commit", "sha": self.tag_commit}}
+        else:
+            raise AssertionError(f"unexpected draft provider command: {args}")
+        if isinstance(value, Exception):
+            raise value
+        return subprocess.CompletedProcess(args, 0, value if isinstance(value, bytes) else encode(value), b"")
+
+
+class TestDraftPreparation(unittest.TestCase):
+    @override
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="draft café ")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name)
+        self.receipt = self.root / "receipt.json"
+        self.provider = DraftProvider()
+        self.enterContext(patch("research_repo_tools.release_validation.subprocess.run", self.provider.execute))
+        self.enterContext(patch("research_repo_tools.release_drafts.api", side_effect=lambda endpoint, **kw: self.provider.read(endpoint)))
+        self.enterContext(patch("research_repo_tools.release_assets.run_command_bytes", self.provider.gh))
+        self.selection = verify_release_evidence(SOURCE, "1.2.3", COMMIT, self.provider.read)
+        self.notes = self.provider.draft()["body"].encode("utf-8")
+
+    def prepare(self, **changes):
+        options: dict[str, Any] = dict(policy=SOURCE, expected=self.selection, title="Release 1.2.3", notes=self.notes, receipt=self.receipt, approve=True)
+        options.update(changes)
+        return prepare_release_draft(self.root, "example/package", "v1.2.3", COMMIT, **options)
+
+    def test_create_retains_pending_intent_before_post_and_captured_id_after(self):
+        pending = []
+        self.provider.on_create = lambda: pending.append(json.loads(self.receipt.read_bytes()))
+        target = self.prepare()
+        self.assertEqual(
+            (target.repository, target.tag, target.commit, target.release_id, target.expected_title), ("example/package", "v1.2.3", COMMIT, 91, "Release 1.2.3")
+        )
+        self.assertEqual((pending[0]["state"], pending[0]["release_id"]), ("pending", None))
+        retained = json.loads(self.receipt.read_bytes())
+        self.assertEqual((retained["state"], retained["release_id"]), ("captured", 91))
+        self.assertEqual(retained["selection_sha256"], hashlib.sha256(self.selection).hexdigest())
+        self.assertEqual(retained["notes_sha256"], hashlib.sha256(self.notes).hexdigest())
+        self.assertEqual(
+            self.provider.posts,
+            [
+                {
+                    "tag_name": "v1.2.3",
+                    "target_commitish": COMMIT,
+                    "name": "Release 1.2.3",
+                    "body": self.notes.decode("utf-8"),
+                    "draft": True,
+                    "prerelease": False,
+                }
+            ],
+        )
+        before = self.receipt.read_bytes()
+        self.assertEqual(self.prepare(), target)
+        self.assertEqual(self.receipt.read_bytes(), before)
+        self.assertEqual(len(self.provider.posts), 1)
+
+    def test_matching_draft_is_unchanged_including_existing_assets(self):
+        self.provider.release = self.provider.draft(assets=[{"id": 17, "name": "transfer.json", "size": 5, "state": "uploaded", "digest": None}])
+        original = copy.deepcopy(self.provider.release)
+        self.assertEqual(self.prepare().release_id, 91)
+        self.assertEqual(self.provider.release, original)
+        self.assertEqual(self.provider.posts, [])
+
+    def test_provider_failure_malformed_or_incomplete_pagination_never_means_absence(self):
+        for listing in (
+            [],
+            {},
+            [None],
+            [[False]],
+            [[{}]],
+            [[{"id": True, "tag_name": "other"}]],
+            b"[[]",
+            b'[[{"id":1,"id":2}]]',
+            subprocess.CalledProcessError(1, ["gh"], stderr=b"authentication/network/pagination failure"),
+        ):
+            with self.subTest(listing=listing):
+                self.provider.listing = listing
+                with self.assertRaises((ValueError, subprocess.SubprocessError)):
+                    self.prepare()
+                self.assertEqual(self.provider.posts, [])
+                self.assertFalse(self.receipt.exists())
+
+    def test_complete_lookup_can_prove_absence_among_other_tags(self):
+        # Model separate successful provider pages, then the created release.
+        self.provider.listing = [[self.provider.draft(id=90, tag_name="v0.1.0")], []]
+        self.provider.on_create = lambda: setattr(self.provider, "listing", None)
+        self.assertEqual(self.prepare().release_id, 91)
+
+    def test_duplicate_and_drifted_existing_releases_reject_without_mutation(self):
+        for field, value in (
+            ("name", "changed"),
+            ("body", "changed\n"),
+            ("body", None),
+            ("draft", False),
+            ("prerelease", True),
+            ("immutable", True),
+            ("immutable", 0),
+            ("url", "https://api.github.com/repos/other/repo/releases/91"),
+        ):
+            with self.subTest(field=field, value=value):
+                self.provider.release = self.provider.draft(**{field: value})
+                with self.assertRaises(ValueError):
+                    self.prepare()
+                self.assertEqual(self.provider.posts, [])
+                self.assertFalse(self.receipt.exists())
+        self.provider.release = self.provider.draft()
+        self.provider.listing = [[self.provider.release], [self.provider.draft(id=92)]]
+        with self.assertRaisesRegex(ValueError, "duplicate releases"):
+            self.prepare()
+        self.assertEqual(self.provider.posts, [])
+
+    def test_annotated_tag_and_same_named_branch_use_only_tags_namespace(self):
+        self.provider.annotated = True
+        self.prepare()
+        self.assertTrue(any("git/ref/tags/v1.2.3" in call[-1] for call in self.provider.calls))
+        self.assertFalse(any("commits/v1.2.3" in call[-1] or "heads/v1.2.3" in call[-1] for call in self.provider.calls))
+
+    def test_wrong_ref_moved_tag_and_racing_release_stop_before_post(self):
+        for change in ("wrong-ref", "moved", "moved-while-verifying", "appeared"):
+            with self.subTest(change=change):
+                self.provider.ref = "refs/heads/v1.2.3" if change == "wrong-ref" else "refs/tags/v1.2.3"
+                self.provider.tag_commit = "c" * 40 if change == "moved" else COMMIT
+                tags = []
+                listings = []
+
+                def tag():
+                    tags.append(1)
+                    if change == "moved-while-verifying" and len(tags) == 2:
+                        self.provider.tag_commit = "c" * 40
+
+                def listing():
+                    listings.append(1)
+                    if change == "appeared" and len(listings) == 2:
+                        self.provider.release = self.provider.draft()
+
+                self.provider.on_tag, self.provider.on_list = tag, listing
+                with self.assertRaises(ValueError):
+                    self.prepare()
+                self.assertEqual(self.provider.posts, [])
+                self.assertFalse(self.receipt.exists())
+
+    def test_changed_attempt_artifact_jobs_signature_or_expiration_cannot_reselect(self):
+        cases = (
+            ("attempt", lambda p: p.run.update(run_attempt=3)),
+            ("expired", lambda p: p.artifact.update(expired=True)),
+            ("artifact", lambda p: p.artifact.update(id=43)),
+            ("jobs", lambda p: p.jobs[0].update(conclusion="failure")),
+            ("signature", lambda p: p.certificate.update(buildTrigger="workflow_dispatch")),
+            ("missing", lambda p: p.files.pop("validation.sigstore.json")),
+            ("source", lambda p: p.run.update(head_sha="f" * 40)),
+        )
+        for name, change in cases:
+            with self.subTest(name=name):
+                provider = DraftProvider()
+                change(provider)
+                if name == "missing":
+                    provider.repack()
+                with (
+                    patch("research_repo_tools.release_drafts.api", side_effect=lambda endpoint, **kw: provider.read(endpoint)),
+                    patch("research_repo_tools.release_validation.subprocess.run", provider.execute),
+                ):
+                    with self.assertRaises(ValueError):
+                        self.prepare()
+                self.assertEqual(self.provider.posts, [])
+                self.assertFalse(self.receipt.exists())
+
+    def test_changed_evidence_between_checks_prevents_creation(self):
+        self.provider.on_list = lambda: self.provider.run.update(run_attempt=3)
+        with self.assertRaisesRegex(ValueError, "attempt changed"):
+            self.prepare()
+        self.assertEqual(self.provider.posts, [])
+
+    def test_captured_identity_survives_deleted_or_replaced_draft(self):
+        self.prepare()
+        original = self.receipt.read_bytes()
+        for replacement in (None, self.provider.draft(id=92)):
+            with self.subTest(replacement=replacement):
+                self.provider.release = replacement
+                with self.assertRaisesRegex(ValueError, "disappeared|replaced"):
+                    self.prepare()
+                self.assertEqual(self.receipt.read_bytes(), original)
+                self.assertEqual(len(self.provider.posts), 1)
+
+    def test_ambiguous_response_requires_original_receipt_and_explicit_reviewed_id(self):
+        self.provider.response = subprocess.TimeoutExpired("gh", 120)
+        with self.assertRaises(DraftPreparationUnknownError):
+            self.prepare()
+        pending = self.receipt.read_bytes()
+        self.assertEqual(json.loads(pending)["state"], "pending")
+        with self.assertRaisesRegex(DraftPreparationUnknownError, "pending draft creation"):
+            self.prepare()
+        with self.assertRaises(ValueError):
+            self.prepare(recover_release_id=92)
+        self.assertEqual(self.receipt.read_bytes(), pending)
+        self.assertEqual(self.prepare(recover_release_id=91).release_id, 91)
+        self.assertEqual(len(self.provider.posts), 1)
+        self.assertEqual(json.loads(self.receipt.read_bytes())["release_id"], 91)
+
+    def test_malformed_post_response_and_post_create_drift_keep_retry_guard(self):
+        for response in (b"invalid", b"{}", b'{"id":91,"id":92}', b'{"id":true}'):
+            with self.subTest(response=response):
+                receipt = self.root / ("receipt-" + hashlib.sha256(response).hexdigest())
+                self.provider.release, self.provider.response = None, response
+                with self.assertRaises(DraftPreparationUnknownError):
+                    self.prepare(receipt=receipt)
+                with self.assertRaises(DraftPreparationUnknownError):
+                    self.prepare(receipt=receipt)
+                self.assertEqual(json.loads(receipt.read_bytes())["state"], "pending")
+        self.provider.release, self.provider.response = None, None
+        self.provider.on_create = lambda: self.provider.run.update(run_attempt=3)
+        with self.assertRaises(DraftPreparationUnknownError):
+            self.prepare()
+        self.assertEqual(json.loads(self.receipt.read_bytes())["release_id"], 91)
+        count = len(self.provider.posts)
+        with self.assertRaises(ValueError):
+            self.prepare()
+        self.assertEqual(len(self.provider.posts), count)
+
+    def test_post_create_lifecycle_body_title_and_tag_drift_retain_captured_id(self):
+        changes = (("draft", False), ("prerelease", True), ("immutable", True), ("body", "edited"), ("name", "edited"), ("tag", "c" * 40))
+        for field, value in changes:
+            with self.subTest(field=field):
+                self.provider.release = None
+                self.provider.tag_commit = COMMIT
+                receipt = self.root / f"{field}-receipt.json"
+
+                def drift():
+                    if field == "tag":
+                        assert isinstance(value, str)
+                        self.provider.tag_commit = value
+                    else:
+                        assert self.provider.release is not None
+                        self.provider.release[field] = value
+
+                self.provider.on_create = drift
+                with self.assertRaises(DraftPreparationUnknownError):
+                    self.prepare(receipt=receipt)
+                self.assertEqual(json.loads(receipt.read_bytes())["release_id"], 91)
+                count = len(self.provider.posts)
+                with self.assertRaises(ValueError):
+                    self.prepare(receipt=receipt)
+                self.assertEqual(len(self.provider.posts), count)
+
+    def test_failed_id_capture_preserves_pending_receipt_and_never_reposts(self):
+        with patch("research_repo_tools.release_drafts.replace_many", side_effect=OSError("receipt replacement failed")):
+            with self.assertRaises(DraftPreparationUnknownError):
+                self.prepare()
+        self.assertEqual(json.loads(self.receipt.read_bytes())["state"], "pending")
+        with self.assertRaises(DraftPreparationUnknownError):
+            self.prepare()
+        self.assertEqual(len(self.provider.posts), 1)
+        self.provider.release = None
+        with self.assertRaises(ValueError):
+            self.prepare(recover_release_id=91)
+        self.assertEqual(json.loads(self.receipt.read_bytes())["state"], "pending")
+        self.assertEqual(len(self.provider.posts), 1)
+
+    def test_known_creation_identity_survives_malformed_response_details(self):
+        self.provider.response = self.provider.draft(body=123)
+        with self.assertRaises(DraftPreparationUnknownError):
+            self.prepare()
+        self.assertEqual(json.loads(self.receipt.read_bytes())["release_id"], 91)
+        self.provider.release = self.provider.draft(id=92)
+        with self.assertRaisesRegex(ValueError, "cannot replace"):
+            self.prepare(recover_release_id=92)
+        self.assertEqual(len(self.provider.posts), 1)
+
+    def test_tag_move_during_final_absence_lookup_prevents_post(self):
+        calls = []
+
+        def move():
+            calls.append(1)
+            if len(calls) == 2:
+                self.provider.tag_commit = "c" * 40
+
+        self.provider.on_list = move
+        with self.assertRaisesRegex(ValueError, "remote release tag"):
+            self.prepare()
+        self.assertEqual(self.provider.posts, [])
+        self.assertFalse(self.receipt.exists())
+
+    def test_invalid_repository_tag_and_commit_stop_at_input_boundary(self):
+        for repository, tag, commit in (
+            ("../repo", "v1.2.3", COMMIT),
+            ("example/package", "1.2.3", COMMIT),
+            ("example/package", "v1.2.3-rc.1", COMMIT),
+            ("example/package", "v1.2.3", "a" * 39),
+        ):
+            with self.subTest(repository=repository, tag=tag, commit=commit), self.assertRaises(ValueError):
+                prepare_release_draft(
+                    self.root,
+                    repository,
+                    tag,
+                    commit,
+                    policy=SOURCE,
+                    expected=self.selection,
+                    title="Release 1.2.3",
+                    notes=self.notes,
+                    receipt=self.receipt,
+                    approve=True,
+                )
+        self.assertEqual(self.provider.calls, [])
+        self.assertEqual(self.provider.posts, [])
+
+    def test_invalid_assertions_and_receipts_reject_before_provider_access(self):
+        for changes in (
+            {"approve": False},
+            {"approve": 1},
+            {"title": "bad\n"},
+            {"notes": b"\xff"},
+            {"notes": b""},
+            {"notes": b"a\0b"},
+            {"expected": b""},
+            {"policy": CARGO},
+            {"recover_release_id": True},
+            {"recover_release_id": 91},
+        ):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.prepare(**changes)
+        self.assertEqual(self.provider.calls, [])
+        self.assertEqual(self.provider.posts, [])
+        self.prepare()
+        before = json.loads(self.receipt.read_bytes())
+        for field, value in (("state", "pending"), ("release_id", True), ("release_id", None), ("notes_sha256", "f" * 64), ("extra", "unknown")):
+            with self.subTest(field=field):
+                self.receipt.write_bytes(encode({**before, field: value}))
+                with self.assertRaises(ValueError):
+                    self.prepare()
+        self.receipt.write_bytes(encode(before))
+        for changes in ({"title": "changed"}, {"notes": b"different\n"}, {"expected": self.selection + b"\n"}, {"recover_release_id": 92}):
+            with self.subTest(changes=changes), self.assertRaises(ValueError):
+                self.prepare(**changes)
+        self.assertEqual(len(self.provider.posts), 1)
+
+    def test_journal_sync_failure_prevents_post_and_partial_receipt_blocks_retry(self):
+        from research_repo_tools.release_drafts import _reserve
+
+        def fail_receipt_sync(path, payload):
+            # Evidence extraction also fsyncs files. Inject only at the journal
+            # boundary so the fixture reaches the intended failure precondition.
+            with patch("research_repo_tools.release_drafts.os.fsync", side_effect=OSError("sync failed")):
+                _reserve(path, payload)
+
+        with patch("research_repo_tools.release_drafts._reserve", side_effect=fail_receipt_sync):
+            with self.assertRaises(OSError):
+                self.prepare()
+        self.assertEqual(self.provider.posts, [])
+        with self.assertRaises(DraftPreparationUnknownError):
+            self.prepare()
+
+    def test_cli_prepares_without_checkout_and_retains_target_for_attachment(self):
+        interface_policy(self.root)
+        (self.root / "selection.json").write_bytes(self.selection)
+        (self.root / "notes.md").write_bytes(self.notes)
+        args = [
+            "--root",
+            str(self.root),
+            "release",
+            "assets",
+            "prepare",
+            "evidence.toml",
+            "--repository",
+            "example/package",
+            "--tag",
+            "v1.2.3",
+            "--commit",
+            COMMIT,
+            "--expected-title",
+            "Release 1.2.3",
+            "--expected",
+            "selection.json",
+            "--notes",
+            "notes.md",
+            "--receipt",
+            "receipt.json",
+            "--output",
+            "target.json",
+            "--approve",
+        ]
+        caller = self.root / "caller"
+        caller.mkdir()
+        with contextlib.chdir(caller), contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(args), 0)
+            self.assertEqual(cli.main(args), 0)
+        target = json.loads((self.root / "target.json").read_bytes())
+        self.assertEqual((target["release_id"], target["expected_title"]), (91, "Release 1.2.3"))
+        self.assertEqual(list(caller.iterdir()), [])
+        self.assertEqual(len(self.provider.posts), 1)
 
 
 if __name__ == "__main__":

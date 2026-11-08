@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from research_repo_tools.criterion import (
+    ConfidenceInterval,
     Estimate,
     Sample,
     collect_sample,
@@ -48,11 +49,11 @@ def test_json_failures_are_contextual(payload: bytes) -> None:
 
 
 def test_bootstrap_interval_need_not_contain_point_and_no_invented_confidence() -> None:
-    assert Estimate(10, 11, 12).confidence_level is None
-    with pytest.raises(ValueError, match="requires an interval"):
-        Estimate(1, confidence_level=0.95)
-    with pytest.raises(ValueError, match="both bounds"):
-        Estimate(1, upper=2)
+    assert Estimate(10, ConfidenceInterval(11, 12)).confidence_level is None
+    with pytest.raises(TypeError, match="confidence_level"):
+        Estimate(1, confidence_level=0.95)  # ty: ignore[unknown-argument]  The v0.2.7 model has no confidence without an interval.
+    with pytest.raises(TypeError, match="lower"):
+        ConfidenceInterval(upper=2)  # ty: ignore[missing-argument]  An interval cannot be constructed with one bound.
 
 
 def test_mean_is_explicit_and_unsupported_statistics_fail() -> None:

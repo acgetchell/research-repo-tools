@@ -129,7 +129,7 @@ python-fix:
 python-typecheck:
     uv run --locked --no-sync --no-python-downloads research-repo-tools python typecheck
 
-# Capture/revalidate a release target or explicitly upload verified attachments.
+# Prepare drafts, capture/revalidate targets, or explicitly upload verified attachments.
 release-assets +args:
     uv run --locked --group dev research-repo-tools release assets "$@"
 

@@ -7,6 +7,7 @@ import pytest
 
 from research_repo_tools import release_discovery, update_release
 from research_repo_tools import release_metadata as release_check
+from research_repo_tools.release_policy import ReleaseSource
 from research_repo_tools.releases import ReleasePolicy, ReleaseRule
 from tests.releases.metadata_support import _DOI, _RELEASE_DATE, _VERSION, write_project
 
@@ -242,7 +243,7 @@ def test_check_reports_previous_release_discovery_failures(
 ) -> None:
     write_project(tmp_path)
     (tmp_path / "release.txt").write_text("previous: v1.2.2\n", encoding="utf-8", newline="\n")
-    policy = ReleasePolicy(rules=(ReleaseRule("release.txt", r"previous: (?P<value>v\S+)", source="previous-tag"),))
+    policy = ReleasePolicy(rules=(ReleaseRule("release.txt", r"previous: (?P<value>v\S+)", replacement=ReleaseSource.PREVIOUS_TAG),))
 
     def fail_discovery(command: str, args: list[str], *, cwd: Path) -> None:
         assert command == "gh" and args[:2] == ["release", "list"] and cwd == tmp_path.resolve()

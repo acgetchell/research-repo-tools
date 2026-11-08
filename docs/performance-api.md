@@ -21,7 +21,8 @@ Import from `research_repo_tools.criterion`:
 | `COMPARISON_SCHEMA` | `research-repo-tools/criterion-comparison/v1` |
 | `Comparison(benchmark, baseline, current)` | Validated paired estimates with `speedup` and `percent_reduction` properties |
 | `ComparisonSet(baseline, current)` | Immutable samples with derived `comparisons`, `missing_baseline`, and `missing_current` tuples |
-| `Estimate(point, lower=None, upper=None, confidence_level=None)` | Finite positive timing values; intervals require both ordered bounds; optional confidence lies strictly between zero and one |
+| `ConfidenceInterval(lower, upper, confidence_level=None)` | Finite positive ordered bounds; optional confidence lies strictly between zero and one |
+| `Estimate(point, interval=None)` | Finite positive timing point with either no interval or one complete `ConfidenceInterval`; nullable `lower`, `upper`, and `confidence_level` properties support flat presentation columns |
 | `Sample(estimates, statistic="median", unit="ns")` | Immutable sorted `(benchmark, Estimate)` pairs; duplicate or invalid names fail |
 | `Statistic`, `Unit` | Literal aliases: `mean`/`median` and `ns`/`us`/`ms`/`s` |
 | `collect_sample(criterion_dir, sample, *, statistic="median", unit="ns")` | Read relative benchmark paths whose immediate parent directory is the selected sample |
@@ -33,6 +34,12 @@ Import from `research_repo_tools.criterion`:
 | `serialize_comparison(comparison)` | Deterministic JSON bytes containing full samples and explicit statistic/unit |
 | `serialize_comparison_csv(comparison)` | Full inventories, coverage, unit/statistic, points and optional marginal bounds/confidence as UTF-8/LF CSV |
 | `serialize_sample(sample)`, `parse_sample(payload)` | Validated retained sample bytes using `SAMPLE_SCHEMA`, `research-repo-tools/criterion-sample/v1` |
+
+In v0.2.7 Python callers construct a complete interval separately, for example
+`Estimate(10, ConfidenceInterval(8, 12, 0.95))`, instead of passing nullable bounds
+and confidence fields to `Estimate`. The shared sample/comparison JSON and CSV
+representations retain their existing flat fields. Bootstrap intervals need not
+contain the point estimate, and an interval may have an unknown confidence level.
 
 Criterion's default wall-time measurement records nanoseconds, but custom
 measurements choose their own numeric scale. Units cannot be inferred from

@@ -18,6 +18,7 @@ from packaging.utils import canonicalize_name
 from research_repo_tools import config, files, python_baseline, python_tools, toolchain, toolchain_config
 from research_repo_tools.config import _table
 from research_repo_tools.process import get_safe_executable, run_safe_command
+from research_repo_tools.release_policy import relative_path
 from research_repo_tools.selection import select_files
 from research_repo_tools.toml_source import key_line, replace_array_strings, set_value
 
@@ -33,6 +34,43 @@ class PythonAdoptionPlan:
     groups: tuple[str, ...]
     notebook_group: str | None
     inherit_tools: bool = False
+
+    def __post_init__(self) -> None:
+        # Keep the public plan a value snapshot even when an untyped caller
+        # supplies lists, and repeat these checks for dataclasses.replace.
+        for values in (self.originals, self.replacements, self.inventory, self.groups):
+            if not isinstance(values, (tuple, list)):
+                raise TypeError("adoption snapshots and selections must be tuples or lists")
+        object.__setattr__(self, "originals", tuple(tuple(item) for item in self.originals))
+        object.__setattr__(self, "replacements", tuple(tuple(item) for item in self.replacements))
+        object.__setattr__(self, "inventory", tuple(self.inventory))
+        object.__setattr__(self, "groups", tuple(self.groups))
+        for entries, context in ((self.originals, "originals"), (self.replacements, "replacements")):
+            names = []
+            for name, payload in entries:
+                relative_path(name)
+                if not isinstance(payload, bytes) and not (context == "originals" and payload is None):
+                    raise ValueError(f"adoption {context} require exact bytes")
+                names.append(name.casefold())
+            if len(names) != len(set(names)):
+                raise ValueError(f"adoption {context} contain duplicate paths")
+        for name in self.inventory:
+            relative_path(name)
+        if len(self.inventory) != len(set(name.casefold() for name in self.inventory)):
+            raise ValueError("adoption inventory contains duplicate paths")
+        originals = dict(self.originals)
+        if set(self.inventory) - originals.keys() or any(originals[name] is None for name in self.inventory):
+            raise ValueError("adoption inventory requires captured source bytes")
+        if any(name not in originals for name, _ in self.replacements):
+            raise ValueError("adoption replacements require a captured source snapshot")
+        if any(not isinstance(group, str) or not group or "\0" in group for group in self.groups) or len(self.groups) != len(set(self.groups)):  # ty: ignore[redundant-condition-strict] Runtime boundary also protects untyped callers.
+            raise ValueError("adoption groups must be unique nonempty names without NUL")
+        if self.notebook_group is not None and self.notebook_group not in self.groups:
+            raise ValueError("adoption notebook group must be selected for synchronization")
+        if type(self.inherit_tools) is not bool:
+            raise TypeError("adoption inherit_tools must be boolean")
+        if self.tools.root != self.root:
+            raise ValueError("adoption tools must belong to the plan root")
 
     @property
     def changed_paths(self) -> tuple[str, ...]:

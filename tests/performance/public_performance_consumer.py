@@ -13,6 +13,7 @@ import tempfile
 import unittest
 import urllib.error
 import zipfile
+from dataclasses import replace
 from email.message import Message
 from pathlib import Path
 from typing import cast
@@ -21,14 +22,17 @@ from unittest.mock import patch
 from research_repo_tools.archives import ArchiveLimits, download_asset, extract_archive
 from research_repo_tools.criterion import (
     COMPARISON_SCHEMA,
+    ConfidenceInterval,
     Estimate,
     Sample,
     collect_sample,
     compare_samples,
     parse_comparison,
     parse_estimate,
+    parse_sample,
     render_comparison,
     serialize_comparison,
+    serialize_sample,
 )
 from research_repo_tools.evidence import (
     Evidence,
@@ -61,6 +65,27 @@ def zip_asset(path: Path, entries: list[tuple[str, bytes]]) -> None:
 
 
 class TestPerformanceConsumer(unittest.TestCase):
+    def test_confidence_interval_is_complete_and_survives_sample_restoration(self):
+        interval = ConfidenceInterval(11, 12, 0.95)
+        estimate = Estimate(10, interval)
+        self.assertEqual((estimate.lower, estimate.upper, estimate.confidence_level), (11, 12, 0.95))
+        sample = Sample((("case", estimate),))
+        payload = serialize_sample(sample)
+        self.assertEqual(parse_sample(payload), sample)
+        row = json.loads(payload)["estimates"][0]
+        self.assertEqual(row, {"benchmark": "case", "point": 10.0, "lower": 11.0, "upper": 12.0, "confidence_level": 0.95})
+        self.assertIsNone(replace(estimate, interval=None).lower)
+        for fields in ({"lower": 13}, {"upper": 0}, {"confidence_level": 1}, {"lower": float("nan")}, {"upper": True}):
+            with self.subTest(fields=fields), self.assertRaises(ValueError):
+                replace(interval, **fields)
+        with self.assertRaisesRegex(TypeError, "ConfidenceInterval"):
+            replace(estimate, interval=(11, 12))
+        for lower, upper, level in ((11, None, 0.95), (None, 12, None), (None, None, 0.95), (13, 12, None)):
+            document = json.loads(payload)
+            document["estimates"][0].update(lower=lower, upper=upper, confidence_level=level)
+            with self.subTest(lower=lower, upper=upper, level=level), self.assertRaises(ValueError):
+                parse_sample(deterministic_json(document))
+
     def test_failed_download_closes_error_response_and_can_retry(self):
         url = "https://example.invalid/asset.zip"
         payload = b"verified asset\r\n"

@@ -96,12 +96,12 @@ class MeasurementConfig:
             "workload-sha256",
             "phase-source-case-sensitive",
         }
-        context = dict(self.context)
-        if len(context) != len(self.context) or context.keys() & reserved or any(key.startswith(("tool.", "dependency.", "host.")) for key in context):
-            raise ValueError("measurement context duplicates or replaces captured metadata")
         for key, value in self.context:
             _string(key, "context name")
             _string(value, f"context {key}")
+        context = dict(self.context)
+        if len(context) != len(self.context) or context.keys() & reserved or any(key.startswith(("tool.", "dependency.", "host.")) for key in context):
+            raise ValueError("measurement context duplicates or replaces captured metadata")
         for name, _command in self.probes:
             _string(name, "probe name")
         if len(dict(self.probes)) != len(self.probes) or len(dict(self.dependencies)) != len(self.dependencies):

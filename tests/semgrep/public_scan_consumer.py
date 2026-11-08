@@ -6,6 +6,7 @@ import json
 import subprocess
 import tempfile
 import unittest
+from dataclasses import replace
 from pathlib import Path
 from typing import override
 from unittest.mock import patch
@@ -17,6 +18,19 @@ from research_repo_tools.selection import argument_batches
 
 
 class TestScanConsumer(unittest.TestCase):
+    def test_count_expectations_are_validated_and_snapshotted_for_direct_callers(self):
+        fixture = self.root / "fixture.py"
+        original = {fixture: {"example.rule": 1}}
+        settings = config.SemgrepSettings(counts=original)
+        original[fixture]["example.rule"] = 2
+        self.assertEqual(settings.counts[fixture]["example.rule"], 1)
+        for invalid in json.loads('[true, -1, "1"]'):
+            with self.subTest(invalid=invalid):
+                with self.assertRaisesRegex(ValueError, "nonnegative integer"):
+                    config.SemgrepSettings(counts={fixture: {"example.rule": invalid}})
+                with self.assertRaisesRegex(ValueError, "nonnegative integer"):
+                    replace(settings, counts={fixture: {"example.rule": invalid}})
+
     def test_final_status_write_preserves_scan_failure_and_interruption(self):
         marker = self.root / "reports.attempt.json"
         original_write = semgrep_scan.replace_many

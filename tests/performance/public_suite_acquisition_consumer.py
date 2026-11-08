@@ -55,7 +55,7 @@ from research_repo_tools.source_exports import export_source
 from research_repo_tools.suite_measurement import AcquisitionSuite, SuiteMeasurementPlan, parse_suite_plan
 from research_repo_tools.suite_runs import SuiteRun, comparison_incompatibilities, parse_suite_run
 from research_repo_tools.trial_recovery import capture_failed_output, replay_trial
-from research_repo_tools.trial_schedule import TrialSchedule, parse_schedule
+from research_repo_tools.trial_schedule import AlternatingOrder, RandomizedOrder, SequentialOrder, TrialSchedule, parse_schedule
 
 PROGRAM = """import json, subprocess, sys
 from pathlib import Path
@@ -1359,7 +1359,7 @@ sys.exit(status)
         # SHA-256 command over the ASCII schedule records (no ambient RNG).
         for seed, expected in ((0, "CBCCBB"), (42, "BBCCCB"), (2**64 - 1, "CBBCCB")):
             with self.subTest(seed=seed):
-                schedule = TrialSchedule(6, "randomized", seed)
+                schedule = TrialSchedule(6, RandomizedOrder(seed))
                 phases = tuple(("current", "baseline") if first == "C" else ("baseline", "current") for first in expected)
                 self.assertEqual(schedule.phases, phases)
                 self.assertEqual(parse_schedule(schedule.document()).phases, phases)
@@ -1367,13 +1367,31 @@ sys.exit(status)
             with self.subTest(count=count):
                 self.assertEqual(TrialSchedule(count).phases, (("baseline", "current"), ("current", "baseline")) * (count // 2))
                 for seed in (0, 42, 2**64 - 1):
-                    phases = TrialSchedule(count, "randomized", seed).phases
+                    phases = TrialSchedule(count, RandomizedOrder(seed)).phases
                     self.assertEqual(len(phases), count)
                     self.assertEqual(phases.count(("baseline", "current")), count // 2)
                     self.assertEqual(phases.count(("current", "baseline")), count // 2)
 
+    def test_schedule_order_variants_validate_construction_and_replacement(self):
+        randomized = TrialSchedule(6, RandomizedOrder(42))
+        self.assertEqual(randomized.order, RandomizedOrder(42))
+        self.assertEqual(parse_schedule(randomized.document()), randomized)
+        sequential = replace(randomized, trials=1, order=SequentialOrder())
+        self.assertEqual(sequential.document(), {"trials": 1, "order": "sequential", "seed": None, "phases": [["baseline", "current"]]})
+        self.assertEqual(replace(randomized, order=AlternatingOrder()).phases, (("baseline", "current"), ("current", "baseline")) * 3)
+        for seed in (None, True, -1, 2**64, 1.0, "42"):
+            with self.subTest(seed=seed), self.assertRaisesRegex(ValueError, "unsigned 64-bit seed"):
+                RandomizedOrder(seed)  # ty: ignore[invalid-argument-type]  Exercise untyped runtime callers.
+        with self.assertRaisesRegex(TypeError, "trial order requires"):
+            TrialSchedule(2, "randomized")  # ty: ignore[invalid-argument-type]  Exercise untyped runtime callers.
+        with self.assertRaisesRegex(ValueError, "even number"):
+            replace(randomized, trials=3)
+        for order, seed in (("alternating", 0), ("sequential", 42), ("randomized", None), ("randomized", True), ("unknown", None)):
+            with self.subTest(order=order, seed=seed), self.assertRaises(ValueError):
+                parse_schedule({"trials": 2, "order": order, "seed": seed})
+
     def test_schedules_execute_declared_order_and_keep_original_trial_bytes(self):
-        for schedule in (TrialSchedule(), TrialSchedule(4, "randomized", 42), TrialSchedule(1, "sequential")):
+        for schedule in (TrialSchedule(), TrialSchedule(4, RandomizedOrder(42)), TrialSchedule(1, SequentialOrder())):
             self.log.unlink(missing_ok=True)
             selected, evidence = self.scheduled_fixture(schedule)
             observed = [line.split()[-1] for line in self.log.read_text().splitlines() if " measure " in line]
@@ -1384,7 +1402,7 @@ sys.exit(status)
             self.assertEqual(run.plan.document(), selected.document())
             # A caller selects a trial explicitly before using phase/series views.
             self.assertEqual(len(parse_suite_run(select_trial(evidence, 1)).phases), 2)
-            if schedule.seed is None:
+            if not isinstance(schedule.order, RandomizedOrder):
                 document = schedule.document()
                 del document["seed"]
                 self.assertEqual(parse_schedule(document), schedule)
@@ -1400,9 +1418,9 @@ sys.exit(status)
                 self.assertIn(b"Within-phase samples are not independent trials", report)
                 self.assertIn(b"Trial 1", report)
                 self.assertIn(b"Trial &lt;script&gt; &amp; notes", report)
-        self.assertEqual(TrialSchedule(4, "randomized", 42).phases, TrialSchedule(4, "randomized", 42).phases)
-        self.assertEqual(sum(order[0] == "current" for order in TrialSchedule(10, "randomized", 9).phases), 5)
-        for args in ((3, "alternating"), (2, "randomized"), (2, "sequential", 1), (True, "sequential")):
+        self.assertEqual(TrialSchedule(4, RandomizedOrder(42)).phases, TrialSchedule(4, RandomizedOrder(42)).phases)
+        self.assertEqual(sum(order[0] == "current" for order in TrialSchedule(10, RandomizedOrder(9)).phases), 5)
+        for args in ((3, AlternatingOrder()), (True, SequentialOrder())):
             with self.assertRaises(ValueError):
                 TrialSchedule(*args)
 
@@ -1483,7 +1501,7 @@ sys.exit(status)
         self.assertEqual(len(parse_scheduled_run(legacy_evidence).trials), len(legacy["trials"]))
         self.assertNotIn(b"Collection:", render_run(legacy_evidence))
         with self.assertRaisesRegex(ValueError, "declaration changed"):
-            validate_run_policy(evidence, replace(selected, schedule=TrialSchedule(2, "randomized", 1)))
+            validate_run_policy(evidence, replace(selected, schedule=TrialSchedule(2, RandomizedOrder(1))))
         with self.assertRaisesRegex(ValueError, "explicit trial"):
             render_run_table(
                 evidence, RunLayout((SeriesSelection("shared/current", "Current", (("row", "shared/case"),)),), (RunRow("row", "Row"),), "median", "ns")
@@ -1538,8 +1556,8 @@ sys.exit(status)
         self.assertFalse((failed / "unit-trial-1.json").exists())
 
     def test_scheduled_resume_preserves_pairs_and_abandoned_phase_bytes(self):
-        for schedule in (TrialSchedule(1, "sequential"), TrialSchedule(2), TrialSchedule(4, "randomized", 42)):
-            checkpoint = self.root / f"recover-{schedule.order}"
+        for schedule in (TrialSchedule(1, SequentialOrder()), TrialSchedule(2), TrialSchedule(4, RandomizedOrder(42))):
+            checkpoint = self.root / f"recover-{schedule.document()['order']}"
             selected = replace(plan(self.log, ("shared", "later")), schedule=schedule)
             self.log.unlink(missing_ok=True)
             second_phase = schedule.phases[0][1]
@@ -1586,7 +1604,7 @@ sys.exit(status)
                     self.assertIn(b"2 abandoned", render_run(evidence))
 
     def test_scheduled_partial_failure_drift_and_corrupt_events_reject_before_measurement(self):
-        selected = replace(plan(self.log, ("shared", "later")), schedule=TrialSchedule(1, "sequential"))
+        selected = replace(plan(self.log, ("shared", "later")), schedule=TrialSchedule(1, SequentialOrder()))
         checkpoint = self.root / "partial-recovery"
 
         def fail(command, args=(), **kwargs):
@@ -1639,7 +1657,7 @@ sys.exit(status)
         validate_run_policy(evidence, selected, release=True)
 
     def test_scheduled_backward_clock_never_persists_reordered_events(self):
-        selected = replace(plan(self.log, ("shared",)), schedule=TrialSchedule(1, "sequential"))
+        selected = replace(plan(self.log, ("shared",)), schedule=TrialSchedule(1, SequentialOrder()))
         checkpoint = self.root / "clock-recovery"
         now = [time.time_ns()]
         append = Checkpoint.append_event
@@ -1685,7 +1703,7 @@ sys.exit(status)
     def test_scheduled_durable_event_failure_replays_disk_before_recovery(self):
         for kind in ("phase-complete", "suite-complete", "segment-end"):
             checkpoint = self.root / f"durable-{kind}"
-            selected = replace(plan(self.log, ("shared",)), schedule=TrialSchedule(1, "sequential"))
+            selected = replace(plan(self.log, ("shared",)), schedule=TrialSchedule(1, SequentialOrder()))
             append = Checkpoint.append_event
             failed = False
 
@@ -1792,7 +1810,7 @@ sys.exit(status)
             )
         if recovered:
             checkpoint = self.root / "candidate-checkpoint"
-            selection = replace(selection, schedule=TrialSchedule(1, "sequential"), outputs=exceptions)
+            selection = replace(selection, schedule=TrialSchedule(1, SequentialOrder()), outputs=exceptions)
             # Use the same owner context as the ordinary scheduled fixture.
             selection = replace(
                 selection,
@@ -1970,7 +1988,9 @@ sys.exit(status)
         measured = replace(
             suite.measurement, baseline=replace(suite.measurement.baseline, sources=(pattern,)), current=replace(suite.measurement.current, sources=(pattern,))
         )
-        selected, evidence = self.scheduled_fixture(TrialSchedule(1, "sequential"), selected=replace(selection, suites=(replace(suite, measurement=measured),)))
+        selected, evidence = self.scheduled_fixture(
+            TrialSchedule(1, SequentialOrder()), selected=replace(selection, suites=(replace(suite, measurement=measured),))
+        )
         for _, phase, _, source in parse_suite_run(select_trial(evidence, 1)).observations:
             context = dict(source.context)
             self.assertEqual(json.loads(context["source-inventory"]), ["MODULE.RS"])

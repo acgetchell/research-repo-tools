@@ -14,7 +14,7 @@ from research_repo_tools.criterion import Comparison, ComparisonSet, Unit, _form
 from research_repo_tools.evidence import _string, sha256
 from research_repo_tools.files import _validate_distinct_paths, replace_many
 from research_repo_tools.process import run_git_bytes
-from research_repo_tools.release_policy import ReleaseRule, relative_path
+from research_repo_tools.release_policy import FixedValue, ReleaseRule, relative_path
 
 __all__ = [
     "GitCheck",
@@ -449,15 +449,15 @@ def plan_publication(
         # Formatting must retain exactly one valid pair of document markers.
         replace_section(outputs[document], markers, content)
     for rule in references:
-        if rule.value is None:
+        if not isinstance(rule.replacement, FixedValue):
             raise ValueError("publication references require fixed-value ReleaseRules")
         if rule.path not in originals:
             originals[rule.path] = _path(root, rule.path).read_bytes()
         data = outputs.get(rule.path, originals[rule.path])
         if data is None:
             raise ValueError(f"publication reference is missing: {rule.path}")
-        if any(match.group("value") != rule.value for match in rule.matches(data.decode("utf-8"))):
-            raise ValueError(f"{rule.path}: publication reference does not match {rule.value!r}")
+        if any(match.group("value") != rule.replacement.value for match in rule.matches(data.decode("utf-8"))):
+            raise ValueError(f"{rule.path}: publication reference does not match {rule.replacement.value!r}")
     _validate_distinct_paths(tuple(_path(root, name) for name in originals))
     plan = PublicationPlan(root, tuple(outputs.items()), tuple(originals.items()), tuple(git_checks), tuple(glob_checks), tuple(run_checks))
     _verify_plan(plan)

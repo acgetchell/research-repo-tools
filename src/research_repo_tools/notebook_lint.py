@@ -6,8 +6,10 @@ import re
 import subprocess
 import sys
 from dataclasses import dataclass
+from enum import Enum
 from importlib.metadata import PackageNotFoundError, version
 from pathlib import Path
+from typing import assert_never
 
 from packaging.version import Version
 
@@ -23,14 +25,34 @@ RUFF_TARGET_NOTICE = "warning: Support for Python 3.15 is under development and 
 TY_LOCATION = re.compile(r"^.+:cell (?P<cell>\d+):(?P<line>\d+):(?P<column>\d+): (?P<message>.+)$")
 
 
+class DiagnosticKind(Enum):
+    FINDING = "finding"
+    INFORMATIONAL = "informational"
+    OPERATIONAL = "operational"
+
+    @property
+    def advice_label(self) -> str:
+        match self:
+            case DiagnosticKind.FINDING:
+                return "WARNING"
+            case DiagnosticKind.INFORMATIONAL:
+                return "INFO"
+            case DiagnosticKind.OPERATIONAL:
+                return "ERROR"
+        assert_never(self)
+
+
 @dataclass(frozen=True)
 class Diagnostic:
     message: str
     cell: int | None = None
     line: int | None = None
     column: int | None = None
-    operational: bool = False
-    informational: bool = False
+    kind: DiagnosticKind = DiagnosticKind.FINDING
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.kind, DiagnosticKind):
+            raise ValueError("diagnostic kind must be a DiagnosticKind")
 
     def render(self, notebook: Notebook) -> str:
         location = str(notebook.path)
@@ -82,7 +104,7 @@ def ruff_diagnostics(output: str, notebook: Notebook, label: str) -> list[Diagno
                 cell,
                 _positive(position.get("row")),
                 _positive(position.get("column")),
-                operational=entry["code"] == "invalid-syntax",
+                kind=DiagnosticKind.OPERATIONAL if entry["code"] == "invalid-syntax" else DiagnosticKind.FINDING,
             )
         )
     return result
@@ -108,26 +130,26 @@ def _run(notebook: Notebook, settings: Config, module: str, args: list[str], lab
     try:
         result = run_safe_command(sys.executable, ["-m", module, *args, str(notebook.path)], cwd=settings.root, env=env, timeout=timeout, check=False)
     except subprocess.TimeoutExpired:
-        return [Diagnostic(f"{label} timed out after {timeout} seconds", operational=True)]
+        return [Diagnostic(f"{label} timed out after {timeout} seconds", kind=DiagnosticKind.OPERATIONAL)]
     except (OSError, subprocess.SubprocessError) as error:
-        return [Diagnostic(f"{label} unavailable: {format_exception_diagnostics(error, single_line=True)}", operational=True)]
+        return [Diagnostic(f"{label} unavailable: {format_exception_diagnostics(error, single_line=True)}", kind=DiagnosticKind.OPERATIONAL)]
     if result.returncode not in (0, 1):
         detail = (result.stderr or result.stdout).strip()
-        return [Diagnostic(f"{label} failed with exit code {result.returncode}: {detail}", operational=True)]
+        return [Diagnostic(f"{label} failed with exit code {result.returncode}: {detail}", kind=DiagnosticKind.OPERATIONAL)]
     try:
         diagnostics = ruff_diagnostics(result.stdout, notebook, label) if module == "ruff" else ty_diagnostics(result.stdout, notebook)
     except ValueError as error:
-        return [Diagnostic(f"{label} returned invalid diagnostics: {error}", operational=True)]
+        return [Diagnostic(f"{label} returned invalid diagnostics: {error}", kind=DiagnosticKind.OPERATIONAL)]
     stderr = result.stderr.strip()
     if module == "ruff" and RUFF_TARGET_NOTICE in stderr.splitlines():
         # This known target-support notice is not a malformed config or a
         # source finding. Keep it visible without enabling preview policies.
-        diagnostics.append(Diagnostic(f"{label}: {RUFF_TARGET_NOTICE}", informational=True))
+        diagnostics.append(Diagnostic(f"{label}: {RUFF_TARGET_NOTICE}", kind=DiagnosticKind.INFORMATIONAL))
         stderr = "\n".join(line for line in stderr.splitlines() if line != RUFF_TARGET_NOTICE).strip()
     if stderr:
-        diagnostics.append(Diagnostic(f"{label}: {stderr}", operational=True))
-    if result.returncode and not any(not item.informational for item in diagnostics):
-        diagnostics.append(Diagnostic(f"{label} failed with exit code {result.returncode} without diagnostics", operational=True))
+        diagnostics.append(Diagnostic(f"{label}: {stderr}", kind=DiagnosticKind.OPERATIONAL))
+    if result.returncode and not any(item.kind is not DiagnosticKind.INFORMATIONAL for item in diagnostics):
+        diagnostics.append(Diagnostic(f"{label} failed with exit code {result.returncode} without diagnostics", kind=DiagnosticKind.OPERATIONAL))
     return diagnostics
 
 
@@ -185,8 +207,8 @@ def lint(settings: Config, paths: list[Path], *, timeout: int = 30, id_pattern: 
         for module, args, label in checks:
             diagnostics.extend(_run(notebook, settings, module, args, label, timeout))
         for diagnostic in diagnostics:
-            print(("INFO " if diagnostic.informational else "") + diagnostic.render(notebook), file=sys.stderr)
-        if any(not item.informational for item in diagnostics):
+            print(("INFO " if diagnostic.kind is DiagnosticKind.INFORMATIONAL else "") + diagnostic.render(notebook), file=sys.stderr)
+        if any(item.kind is not DiagnosticKind.INFORMATIONAL for item in diagnostics):
             failed = True
         else:
             print(f"OK linted {notebook.path}")

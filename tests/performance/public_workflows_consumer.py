@@ -17,7 +17,7 @@ from unittest.mock import patch
 
 from research_repo_tools.ci import export_environment
 from research_repo_tools.cli import main
-from research_repo_tools.criterion import COMPARISON_SCHEMA, Estimate, Sample, compare_samples, parse_comparison, serialize_comparison
+from research_repo_tools.criterion import COMPARISON_SCHEMA, ConfidenceInterval, Estimate, Sample, compare_samples, parse_comparison, serialize_comparison
 from research_repo_tools.evidence import Evidence, Provenance, deterministic_json, publish_evidence, sha256
 from research_repo_tools.legacy_evidence import convert_csv
 from research_repo_tools.measurement import MeasurementConfig, measure_checkout, measure_pair
@@ -79,7 +79,9 @@ def legacy() -> tuple[bytes, bytes]:
 
 
 def retained(current: str = "v1.1.0", baseline: str = "v1.0.0", point: float = 5) -> Evidence:
-    comparison = compare_samples(Sample((("shared", Estimate(10, 8, 12)),)), Sample((("shared", Estimate(point, 4, 6)),)))
+    comparison = compare_samples(
+        Sample((("shared", Estimate(10, ConfidenceInterval(8, 12))),)), Sample((("shared", Estimate(point, ConfidenceInterval(4, 6))),))
+    )
     return Evidence(
         serialize_comparison(comparison),
         COMPARISON_SCHEMA,
@@ -429,7 +431,7 @@ record="$"
             write_archive()
             original = archive.read_bytes()
             sample, source = read_baseline(archive, legacy_configuration=configuration, expected_tag="v1.0.0")
-            self.assertEqual(sample.estimates[0][1], Estimate(10, 8, 12, 0.95))
+            self.assertEqual(sample.estimates[0][1], Estimate(10, ConfidenceInterval(8, 12, 0.95)))
             self.assertIsNone(source.source_sha256)
             self.assertIsNone(source.harness_sha256)
             self.assertEqual(dict(source.context)["legacy.archive-sha256"], sha256(original))
@@ -657,7 +659,7 @@ record="$"
     def test_baseline_asset_environment_and_configured_example(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve()
-            sample = Sample((("example", Estimate(2, 1, 4, 0.95)),), "mean", "us")
+            sample = Sample((("example", Estimate(2, ConfidenceInterval(1, 4, 0.95))),), "mean", "us")
             provenance = Provenance("a" * 40, context=(("release", "v1.0.0"),))
             package_baseline(sample, provenance, root / "baseline.tar.gz")
             self.assertEqual(read_baseline(root / "baseline.tar.gz"), (sample, provenance))

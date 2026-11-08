@@ -41,7 +41,12 @@ than the selected interpreter fail.
 `python_adoption.plan_python_adoption(settings)` prepares an immutable
 `PythonAdoptionPlan` with `changed_paths`, source byte snapshots, candidate
 manifest/selector/lock bytes, selected groups and notebook-kernel intent.
-It resolves and installs a private candidate before returning. Adoption can
+Planning resolves and installs a private candidate before returning.
+Construction snapshots collection inputs and requires every replacement to have
+an original byte or absence snapshot. Replacements and source inventories use
+distinct portable paths; a selected notebook group must also be synchronized.
+Copying a plan with `dataclasses.replace` enforces the same invariants.
+Adoption can
 run without either inheritance setting. It reconciles application metadata for
 both installable and dependency-only projects, all exact shared-package pins and
 extras, tooling-group restrictions, the interpreter selector and lock.

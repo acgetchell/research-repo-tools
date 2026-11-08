@@ -11,6 +11,7 @@ import tomllib
 import unittest
 import urllib.error
 from contextlib import redirect_stderr, redirect_stdout
+from dataclasses import replace
 from pathlib import Path
 from typing import override
 from unittest.mock import patch
@@ -33,6 +34,60 @@ from research_repo_tools.toolchain_config import Toolchain, load
 
 
 class TestToolchainConsumer(unittest.TestCase):
+    def test_adoption_plan_snapshots_mutable_inputs(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            originals = [["pyproject.toml", b"original\r\n"]]
+            replacements = [["pyproject.toml", b"candidate\n"]]
+            inventory = ["pyproject.toml"]
+            groups = ["notebooks"]
+            plan = python_adoption.PythonAdoptionPlan(
+                root,
+                python_baseline.baseline(),
+                originals,  # ty: ignore[invalid-argument-type] Exercise an untyped caller's mutable input.
+                inventory,  # ty: ignore[invalid-argument-type] Exercise an untyped caller's mutable input.
+                replacements,  # ty: ignore[invalid-argument-type] Exercise an untyped caller's mutable input.
+                Toolchain(root, "0.13.0", "3.15", None, ()),
+                groups,  # ty: ignore[invalid-argument-type] Exercise an untyped caller's mutable input.
+                "notebooks",
+            )
+            originals[0][1] = b"changed source"
+            replacements[0][0] = "another.toml"
+            inventory.clear()
+            groups.clear()
+            self.assertEqual(plan.originals, (("pyproject.toml", b"original\r\n"),))
+            self.assertEqual(plan.replacements, (("pyproject.toml", b"candidate\n"),))
+            self.assertEqual(plan.inventory, ("pyproject.toml",))
+            self.assertEqual(plan.groups, ("notebooks",))
+            self.assertEqual(plan.changed_paths, ("pyproject.toml",))
+
+    def test_adoption_plan_rejects_uncaptured_or_unsafe_replacements(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan = python_adoption.PythonAdoptionPlan(
+                root,
+                python_baseline.baseline(),
+                (("pyproject.toml", b"original"),),
+                ("pyproject.toml",),
+                (("pyproject.toml", b"candidate"),),
+                Toolchain(root, "0.13.0", "3.15", None, ()),
+                (),
+                None,
+            )
+            for updates in (
+                {"replacements": (("unobserved.toml", b"candidate"),)},
+                {"replacements": (("../outside.toml", b"candidate"),)},
+                {"replacements": (("C:/outside.toml", b"candidate"),)},
+                {"replacements": (("pyproject.toml", b"one"), ("PYPROJECT.TOML", b"two"))},
+                {"replacements": (("pyproject.toml", None),)},
+                {"originals": (("pyproject.toml", None),)},
+                {"inventory": ("unobserved.toml",)},
+                {"notebook_group": "notebooks"},
+                {"tools": replace(plan.tools, root=root / "another")},
+            ):
+                with self.subTest(updates=updates), self.assertRaises(ValueError):
+                    replace(plan, **updates)
+
     def test_binary_release_rejects_ambiguous_draft_status(self):
         payload = b'{"draft":true,"draft":false,"prerelease":false,"tag_name":"v1.0.0"}'
         with patch.object(prebuilt_tools.urllib.request, "urlopen", return_value=io.BytesIO(payload)):

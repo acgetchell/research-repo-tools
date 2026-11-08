@@ -391,6 +391,7 @@ def render_scheduled_run(evidence: Evidence, *, title: str, links: str, identity
 
     run = parse_scheduled_run(evidence)
     assert run.plan.schedule is not None
+    schedule = run.plan.schedule.document()
     lines = [
         "<!-- research-repo-tools/run-report/v2 -->",
         f"# {_markdown_text(title)}",
@@ -399,7 +400,7 @@ def render_scheduled_run(evidence: Evidence, *, title: str, links: str, identity
         "",
         links,
         "",
-        f"Acquisition schedule: {run.plan.schedule.order}; trials: {len(run.trials)}; seed: {run.plan.schedule.seed}.",
+        f"Acquisition schedule: {schedule['order']}; trials: {len(run.trials)}; seed: {schedule['seed']}.",
         "Each trial is retained separately. Within-phase samples are not independent trials; no pooled significance claim is made.",
     ]
     records = _array(_object(_load_json(evidence.payload, "schedule"), "schedule")["trials"], "trials")

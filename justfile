@@ -124,7 +124,7 @@ publish-check:
 python-check:
     uv run --locked --no-sync --no-python-downloads research-repo-tools python check
 
-# Capture/revalidate a release target or explicitly upload verified attachments.
+# Prepare drafts, capture/revalidate targets, or explicitly upload verified attachments.
 release-assets +args:
     uv run --locked research-repo-tools release assets "$@"
 

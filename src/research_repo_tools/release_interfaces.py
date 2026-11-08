@@ -185,12 +185,25 @@ def _checkout(
 
 def add_commands(release) -> None:
     """Install the sorted asset subcommands before release check."""
-    assets = release.add_parser("assets", help="capture/revalidate release targets and upload verified inert assets").add_subparsers(
+    assets = release.add_parser("assets", help="prepare drafts, capture/revalidate targets and upload verified inert assets").add_subparsers(
         dest="operation", required=True
     )
-    for operation in ("preflight", "upload", "verify"):
+    for operation in ("preflight", "prepare", "upload", "verify"):
         command = assets.add_parser(operation)
         command.add_argument("configuration")
+        if operation == "prepare":
+            command.description = "Prepare an unpublished draft from frozen signed evidence without a checkout; preserve the receipt across every retry."
+            command.add_argument("--approve", action="store_true", required=True, help="explicitly authorize draft creation")
+            command.add_argument("--commit", required=True, help="independent full release commit")
+            command.add_argument("--expected", type=Path, required=True, help="original authenticated evidence selection; never reselect")
+            command.add_argument("--expected-title", required=True)
+            command.add_argument("--notes", type=Path, required=True, help="generated UTF-8 note bytes from the read-only job")
+            command.add_argument("--output", type=Path, required=True, help="captured release-target JSON for later attachment")
+            command.add_argument("--receipt", type=Path, required=True, help="durable preparation journal; retain even on failure")
+            command.add_argument("--recover-release-id", type=int, help="explicitly reviewed ID resolving an original pending receipt, without creation")
+            command.add_argument("--repository", required=True, help="independent owner/name assertion")
+            command.add_argument("--tag", required=True)
+            continue
         command.add_argument("--checkout", type=Path, required=True, help="observed clean source checkout, separate from trusted installed runtime")
         command.add_argument("--commit", required=True, help="independent full release commit")
         command.add_argument("--tag", required=True)
@@ -408,6 +421,40 @@ def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
 
 def run_assets(args: argparse.Namespace, settings: Config) -> None:
     from research_repo_tools.dependency_provenance import check_release_dependencies
+
+    if args.operation == "prepare":
+        from research_repo_tools.release_drafts import prepare_release_draft
+
+        configuration = _path(settings.root, args.configuration)
+        _validate_distinct_paths((configuration, args.expected, args.notes, args.receipt, args.output))
+        for path in (configuration, args.expected, args.notes, args.output):
+            _regular(path)
+        # Reject an unrelated output before authorizing a remote operation. A
+        # retry may only reproduce the target already captured by its receipt.
+        if args.output.exists():
+            from research_repo_tools.release_drafts import _Assertions, _Captured, _parse_receipt
+
+            assertions = _Assertions(args.repository, args.tag, args.commit, args.expected_title, args.notes.read_bytes(), args.expected.read_bytes())
+            _regular(args.receipt)
+            retained = _parse_receipt(args.receipt.read_bytes(), assertions) if args.receipt.exists() else None
+            if not isinstance(retained, _Captured) or retained.target != parse_release_target(args.output.read_bytes()):
+                raise ValueError("existing draft target does not match the original captured receipt")
+        target = prepare_release_draft(
+            settings.root,
+            args.repository,
+            args.tag,
+            args.commit,
+            policy=load_evidence_policy(configuration),
+            expected=args.expected.read_bytes(),
+            title=args.expected_title,
+            notes=args.notes.read_bytes(),
+            receipt=args.receipt,
+            approve=args.approve,
+            recover_release_id=args.recover_release_id,
+        )
+        write_release_outputs(args.output, serialize_release_target(target))
+        print(f"Prepared unpublished draft {target.release_id}; retain its preparation receipt for every retry.")
+        return
 
     check_release_dependencies(args.checkout, packages=settings.release.published_dependencies)
     policy = load_asset_policy(_path(settings.root, args.configuration))

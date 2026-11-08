@@ -10,7 +10,7 @@ from typing import Literal, TypeIs, cast
 
 from research_repo_tools.paper_pdf import PdfPolicy
 from research_repo_tools.release_policy import ReleasePolicy as ReleasePolicy
-from research_repo_tools.release_policy import ReleaseRule, dependency_names
+from research_repo_tools.release_policy import ReleaseRule, _parse_rule_replacement, dependency_names
 from research_repo_tools.release_publishing import PublishingSettings, parse_publishing
 from research_repo_tools.sarif import SarifPolicy
 
@@ -70,11 +70,20 @@ class NotebookAdvice:
     strict: bool = False
     subprocess_timeout: bool = False
 
+    def __post_init__(self) -> None:
+        for name in ("descriptive_ids", "strict", "subprocess_timeout"):
+            _boolean(getattr(self, name), f"notebooks.advice.{name.replace('_', '-')}")
+        object.__setattr__(self, "ruff_rules", _notebook_rules(self.ruff_rules))
+
 
 @dataclass(frozen=True, slots=True)
 class NotebookLab:
     browser: bool = False
     scratch_dir: str = "target/jupyter"
+
+    def __post_init__(self) -> None:
+        _boolean(self.browser, "notebooks.lab.browser")
+        _string(self.scratch_dir, "notebooks.lab.scratch-dir")
 
 
 @dataclass(frozen=True, slots=True)
@@ -82,6 +91,10 @@ class NotebookReset:
     sources: tuple[str, ...] = ()
     scratch: tuple[str, ...] = ()
     checkpoints: tuple[str, ...] = ()
+
+    def __post_init__(self) -> None:
+        for name in ("sources", "scratch", "checkpoints"):
+            object.__setattr__(self, name, _notebook_paths(getattr(self, name), name))
 
 
 def notebook_id_pattern(value: object) -> re.Pattern[str] | None:
@@ -93,6 +106,15 @@ def notebook_id_pattern(value: object) -> re.Pattern[str] | None:
         return re.compile(pattern)
     except re.PatternError as error:
         raise ValueError(f"notebooks.id-pattern must be a valid regular expression: {error}") from error
+
+
+def notebook_output_policy(value: object) -> Literal["clear", "preserve"]:
+    """Parse the output policy used by configuration and direct notebook checks."""
+    if value == "clear":
+        return "clear"
+    if value == "preserve":
+        return "preserve"
+    raise ValueError("notebooks.outputs must be clear or preserve")
 
 
 @dataclass(frozen=True, slots=True)
@@ -109,7 +131,16 @@ class NotebookSettings:
     reset: NotebookReset = field(default_factory=NotebookReset)
 
     def __post_init__(self) -> None:
+        _string(self.group, "notebooks.group")
+        _string(self.cwd, "notebooks.cwd")
+        _string(self.output_dir, "notebooks.output-dir")
+        _positive_integer(self.timeout, "notebooks.timeout")
+        object.__setattr__(self, "outputs", notebook_output_policy(self.outputs))
+        _boolean(self.prohibit_installs, "notebooks.prohibit-installs")
         notebook_id_pattern(self.id_pattern)
+        for name, expected in (("advice", NotebookAdvice), ("lab", NotebookLab), ("reset", NotebookReset)):
+            if not isinstance(getattr(self, name), expected):
+                raise ValueError(f"notebooks.{name} must be {expected.__name__}")
 
 
 @dataclass(frozen=True, slots=True)
@@ -181,7 +212,7 @@ class SemgrepSettings:
             object.__setattr__(self, name, tuple(value))
         if not isinstance(self.report_category, str) or re.fullmatch(r"[A-Za-z0-9][A-Za-z0-9_.-]*", self.report_category) is None:
             raise ValueError("semgrep.report-category must be a filename-safe identifier")
-        object.__setattr__(self, "counts", MappingProxyType({path: MappingProxyType(dict(counts)) for path, counts in self.counts.items()}))
+        object.__setattr__(self, "counts", _fixture_counts(self.counts))
 
 
 @dataclass(frozen=True, slots=True)
@@ -299,22 +330,36 @@ def _strings(value: object, context: str) -> dict[str, str]:
     return {_string(key, context): _string(item, f"{context}.{key}") for key, item in _table(value, context).items()}
 
 
+def _fixture_counts(value: object) -> Mapping[Path, Mapping[str, int]]:
+    if not isinstance(value, Mapping):
+        raise ValueError("semgrep.counts must map fixture paths to rule counts")
+    parsed: dict[Path, Mapping[str, int]] = {}
+    for path, counts in value.items():
+        if not isinstance(path, Path):
+            raise ValueError("semgrep.counts must map fixture paths to rule counts")
+        parsed[path] = _rule_counts(counts, str(path))
+    return MappingProxyType(parsed)
+
+
+def _rule_counts(value: object, path: str) -> Mapping[str, int]:
+    if not isinstance(value, Mapping) or not value:
+        raise ValueError(f"semgrep.counts.{path} must contain rule counts")
+    parsed: dict[str, int] = {}
+    for rule, count in value.items():
+        rule = _string(rule, "semgrep.counts rule")
+        if type(count) is not int or count < 0:
+            raise ValueError(f"semgrep.counts.{path}.{rule} must be a nonnegative integer")
+        parsed[rule] = count
+    return MappingProxyType(parsed)
+
+
 def _counts(value: object, root: Path) -> dict[Path, Mapping[str, int]]:
     result: dict[Path, Mapping[str, int]] = {}
     for raw_path, raw_counts in _table(value, "semgrep.counts").items():
         path = (root / _string(raw_path, "semgrep.counts path")).resolve()
         if path in result:
             raise ValueError(f"duplicate semgrep.counts fixture path: {raw_path!r} resolves to {path}")
-        counts = _table(raw_counts, f"semgrep.counts.{raw_path}")
-        if not counts:
-            raise ValueError(f"semgrep.counts.{raw_path} must contain rule counts")
-        parsed: dict[str, int] = {}
-        for rule, count in counts.items():
-            rule = _string(rule, "semgrep.counts rule")
-            if type(count) is not int or count < 0:
-                raise ValueError(f"semgrep.counts.{raw_path}.{rule} must be a nonnegative integer")
-            parsed[rule] = count
-        result[path] = parsed
+        result[path] = _rule_counts(raw_counts, raw_path)
     return result
 
 
@@ -342,8 +387,7 @@ def _release_rules(value: object) -> tuple[ReleaseRule, ...]:
             ReleaseRule(
                 path=_string(rule.get("path"), "release rule path"),
                 pattern=_string(rule.get("pattern"), "release rule pattern"),
-                value=_optional_string(rule, "value", "release rule"),
-                source=cast(Literal["version", "tag", "previous-tag", "release-date"] | None, source),
+                replacement=_parse_rule_replacement(_optional_string(rule, "value", "release rule"), source),
                 count=count,
                 exclude=_optional_string(rule, "exclude", "release rule"),
             )
@@ -351,23 +395,28 @@ def _release_rules(value: object) -> tuple[ReleaseRule, ...]:
     return tuple(rules)
 
 
+def _notebook_rules(value: object) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError("notebooks.advice.ruff-rules must be an array of Ruff rule codes or prefixes")
+    parsed: list[str] = []
+    for rule in value:
+        if not isinstance(rule, str) or re.fullmatch(r"[A-Z]+[0-9]*", rule) is None:
+            raise ValueError("notebooks.advice.ruff-rules must be an array of Ruff rule codes or prefixes")
+        parsed.append(rule)
+    if len(set(parsed)) != len(parsed):
+        raise ValueError("notebooks.advice.ruff-rules must be distinct")
+    return tuple(parsed)
+
+
 def _notebook_advice(value: object) -> NotebookAdvice:
     section = _table(value, "notebooks.advice")
     if section.keys() - {"descriptive-ids", "ruff-rules", "strict", "subprocess-timeout"}:
         raise ValueError("unknown notebooks.advice field")
-    for key in ("descriptive-ids", "strict", "subprocess-timeout"):
-        if key in section and type(section[key]) is not bool:
-            raise ValueError(f"notebooks.advice.{key} must be a boolean")
-    rules = section.get("ruff-rules", [])
-    if not isinstance(rules, list) or any(not isinstance(rule, str) or re.fullmatch(r"[A-Z]+[0-9]*", rule) is None for rule in rules):
-        raise ValueError("notebooks.advice.ruff-rules must be an array of Ruff rule codes or prefixes")
-    if len(set(rules)) != len(rules):
-        raise ValueError("notebooks.advice.ruff-rules must be distinct")
     return NotebookAdvice(
-        descriptive_ids=section.get("descriptive-ids", True) is True,
-        ruff_rules=tuple(rules),
-        strict=section.get("strict", False) is True,
-        subprocess_timeout=section.get("subprocess-timeout", False) is True,
+        descriptive_ids=_boolean(section.get("descriptive-ids", True), "notebooks.advice.descriptive-ids"),
+        ruff_rules=_notebook_rules(section.get("ruff-rules", [])),
+        strict=_boolean(section.get("strict", False), "notebooks.advice.strict"),
+        subprocess_timeout=_boolean(section.get("subprocess-timeout", False), "notebooks.advice.subprocess-timeout"),
     )
 
 
@@ -381,18 +430,24 @@ def _notebook_lab(value: object) -> NotebookLab:
     )
 
 
+def _notebook_paths(value: object, key: str) -> tuple[str, ...]:
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"notebooks.reset.{key} must be an array of nonempty literal paths without NUL")
+    parsed: list[str] = []
+    for path in value:
+        if not isinstance(path, str) or not path or "\0" in path:
+            raise ValueError(f"notebooks.reset.{key} must be an array of nonempty literal paths without NUL")
+        parsed.append(path)
+    if len(set(parsed)) != len(parsed):
+        raise ValueError(f"notebooks.reset.{key} paths must be distinct")
+    return tuple(parsed)
+
+
 def _notebook_reset(value: object) -> NotebookReset:
     section = _table(value, "notebooks.reset")
     if section.keys() - {"sources", "scratch", "checkpoints"}:
         raise ValueError("unknown notebooks.reset field")
-    paths = {}
-    for key in ("sources", "scratch", "checkpoints"):
-        raw = section.get(key, [])
-        if not isinstance(raw, list) or any(not isinstance(path, str) or not path or "\0" in path for path in raw):
-            raise ValueError(f"notebooks.reset.{key} must be an array of nonempty literal paths without NUL")
-        if len(set(raw)) != len(raw):
-            raise ValueError(f"notebooks.reset.{key} paths must be distinct")
-        paths[key] = tuple(raw)
+    paths = {key: _notebook_paths(section.get(key, []), key) for key in ("sources", "scratch", "checkpoints")}
     return NotebookReset(**paths)
 
 
@@ -451,9 +506,7 @@ def parse(value: object, *, root: Path) -> Config:
     notebook_timeout = notebooks.get("timeout", 600)
     if type(notebook_timeout) is not int or notebook_timeout <= 0:
         raise ValueError("notebooks.timeout must be a positive integer")
-    notebook_outputs = notebooks.get("outputs", "clear")
-    if notebook_outputs not in ("clear", "preserve"):
-        raise ValueError("notebooks.outputs must be clear or preserve")
+    notebook_outputs = notebook_output_policy(notebooks.get("outputs", "clear"))
     prohibit_installs = notebooks.get("prohibit-installs", False)
     if type(prohibit_installs) is not bool:
         raise ValueError("notebooks.prohibit-installs must be a boolean")
@@ -535,7 +588,7 @@ def parse(value: object, *, root: Path) -> Config:
             cwd=_string(notebooks.get("cwd", "."), "notebooks.cwd"),
             output_dir=_string(notebooks.get("output-dir", "target/notebooks"), "notebooks.output-dir"),
             timeout=notebook_timeout,
-            outputs="preserve" if notebook_outputs == "preserve" else "clear",
+            outputs=notebook_outputs,
             advice=_notebook_advice(notebooks.get("advice", {})),
             prohibit_installs=prohibit_installs,
             id_pattern=_optional_string(notebooks, "id-pattern", "notebooks"),
