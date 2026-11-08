@@ -1,9 +1,9 @@
 # Preparing an unpublished release draft
 
 This capability targets v0.2.7. Enable it only after verifying the published
-supplying version and its installed consumer integration. Source availability
-does not establish that the example pin is published. This work does not
-authorize publishing research-repo-tools or a consumer release.
+supplying version and its installed consumer integration. See
+[release availability](../README.md#release-availability); source availability
+does not establish that the example pin is published.
 
 The [public contract](release-evidence-api.md#draft-preparation) composes retained
 signed evidence with existing captured release targets. Consumer policy owns
@@ -204,9 +204,11 @@ Keep the read-only handoff's producer run/attempt and artifact ID/digest with th
 preparation journal. The writer's final receipt artifact is a different handoff:
 record its own immutable ID/digest and producer run/attempt for recovery and
 attachment. A digest carried inside the same unauthenticated ZIP is insufficient.
-Retrieve by those independently retained IDs, verify the original ZIP digest and
-provider association, then extract only the expected inert files. Never select
-an artifact by latest name or silently substitute a later attempt.
+The automatic retrieval command below can authenticate and freeze that original
+selection. Explicit original IDs remain available for deliberate manual recovery.
+Both routes verify the original ZIP digest and provider association before
+extracting the expected inert files. Never select an artifact by latest name or
+silently substitute a later attempt.
 
 The example blocks automatic Actions reruns and new runs for tags already in
 this workflow's retained history. Keep that workflow identity and history intact
@@ -224,6 +226,75 @@ Upload-on-failure cannot guarantee durability after hard runner termination or
 artifact upload failure. If the journal was not retained, stop automation and
 reconcile provider/audit state manually before any further creation. Do not
 treat a new workflow run or a missing receipt as permission to replace a draft.
+
+## Retrieve original preparation output
+
+The v0.2.7 `release assets retrieve` command supplies the authenticated captured
+target needed by consumer Step 2. It does not run preparation, look up another
+draft by tag, build packages, acquire measurements or authorize publication.
+Keep this separate policy in `tooling/draft-receipt.toml`, with the actual
+repository and workflow filename. For the workflow above:
+
+```toml
+schema = 1
+repository = "OWNER/REPO"
+workflow = ".github/workflows/prepare-draft.yml"
+workflow-name = "Prepare consumer draft"
+artifact-prefix = "draft-receipt"
+
+[[jobs]]
+name = "verify"
+steps = ["Assert source and verify original signed evidence"]
+runner-labels = ["ubuntu-24.04"]
+
+[[jobs]]
+name = "prepare"
+steps = ["Authenticate inert handoff and prepare unpublished draft", "Retain journal even after an unconfirmed creation"]
+runner-labels = ["ubuntu-24.04"]
+```
+
+Observe the full source commit independently, peeling an annotated tag to its
+commit. Then run the consumer's existing `release-assets` wrapper:
+
+```sh
+just release-assets retrieve tooling/draft-receipt.toml \
+  --tag v1.2.3 --commit FULL_OBSERVED_COMMIT \
+  --output ../release-handoffs/v1.2.3
+```
+
+The destination must be outside the consumer root. First retrieval requires one
+unambiguous retained push run for the tag, successful original attempt 1 and all
+declared jobs/steps. It authenticates the immutable artifact's exact ID, provider
+SHA-256 and two-file inventory, then stores `selection.json`, `target.json` and
+`draft-receipt.json` together. The target records the original release ID; feed
+that file to the existing `release assets verify` / `upload --target` commands.
+Consumers still own acquisition selection, stage/publish wiring and approval.
+
+Repeating the same command automatically revalidates `selection.json` and its
+original run/attempt/artifact ID/digest. It never discovers a replacement after
+capture. Missing, expired, failed, changed or incomplete records stop. Preserve
+exclusive control of the output directory; local records are assertions, not
+offline authorization tokens. The asset APIs still revalidate the release itself
+immediately before their effects.
+
+For a deliberately reviewed original run, `--run-id ORIGINAL_ID` bypasses automatic
+history selection while retaining every source, workflow, original-attempt, job
+and artifact check. It cannot replace a captured selection. To restore the same
+selection into a new directory, pass `--expected /trusted/selection.json`.
+Neither option permits a later attempt or unauthenticated receipt bytes.
+Failed preparation with only a pending journal uses the explicit recovery flow
+below; successful automatic retrieval requires both captured receipt files.
+
+GitHub run metadata reports a short `head_branch` for both branch and tag pushes.
+Retrieval therefore verifies the workflow bytes at the independently asserted
+commit and requires a push trigger containing only `tags` or `tags-ignore`, with
+no `branches` or `branches-ignore`. A workflow supporting both namespaces is not
+accepted, even when a branch and tag happen to point at the same commit.
+[GitHub's trigger rules](https://docs.github.com/en/actions/reference/workflows-and-actions/workflow-syntax#onpushbranchestagsbranches-ignoretags-ignore)
+define this distinction. The existing main-push evidence policy remains separate.
+
+See the [Python retrieval contract](release-evidence-api.md#tag-push-receipt-retrieval)
+for the typed selection modes and frozen identity fields.
 
 ## Retry and recovery
 
@@ -251,7 +322,7 @@ they cannot undo a release or guarantee an atomic remote snapshot.
 ## La-stack migration map
 
 After the verified supplying package is pinned and installed integration passes,
-replace the manual temporary-notes/`gh release create` block from la-stack #330
+replace the consumer's manual temporary-notes/`gh release create` block
 with the tag-triggered read-only verification and no-checkout preparation above.
 Retain these consumer-owned steps and boundaries:
 
@@ -260,6 +331,7 @@ Retain these consumer-owned steps and boundaries:
 | Pre-tag `release-evidence` | Keep the exact final-main signed selection; preparation revalidates it without builds or a new test matrix |
 | Generated release notes | Generate with read-only credentials; freeze original bytes in the authenticated handoff |
 | Manual draft creation | Replace with `release assets prepare`; retain receipt and captured `ReleaseTarget` |
+| Manually copied preparation run/artifact IDs | Use `release assets retrieve` once, then retain its frozen selection and captured target for every retry |
 | Owner-selected `transfer.json` | Keep independent explicit selection and its original provenance; preparation never acquires measurements |
 | Draft-first attachment | Attach only to the captured ID using the existing asset API and trusted target handoff |
 | Immutable release assets | Preserve exact-byte retry checks and refuse conflicting uploads; never overwrite |
@@ -268,7 +340,6 @@ Retain these consumer-owned steps and boundaries:
 
 Signed source validation does not prove byte-identical Cargo archive promotion.
 Scientific workloads, retained measurements, Cargo publication and account
-configuration remain outside this capability. The implementation issue #206
-closes only after merge and required native validation, recording its supplying
-revision/version. Published-package verification and la-stack release readiness
-remain in la-stack #333.
+configuration remain consumer-owned. Record the supplying package version and
+installed integration results in the consumer's adoption issue; upstream source
+validation alone does not establish downstream release readiness.

@@ -3,14 +3,18 @@
 These commands maintain consumer metadata. For publishing this tooling package
 itself, follow [Releasing research-repo-tools](RELEASING.md).
 
-Normal release commands need no separate configuration file:
+Use the packaged recipes for routine release preparation; they need no separate
+configuration file:
 
 ```sh
-research-repo-tools release check
-research-repo-tools release update 1.2.3 --previous-release v1.2.2 --dry-run
-research-repo-tools release update 1.2.3 --previous-release v1.2.2 --date 2026-09-07
-research-repo-tools release check --final-release
+just update-version v1.2.3 --previous-release v1.2.2 --dry-run
+just update-version v1.2.3 --previous-release v1.2.2 --date 2026-09-07
+just changelog-release v1.2.3 2026-09-07
+just release-version-check
 ```
+
+For metadata inspection before generating final release notes, the underlying
+`research-repo-tools release check` command omits the final-changelog requirement.
 
 The owning version comes from a root Cargo package, Cargo workspace package, or
 Python project. Declared Python package versions follow that version. A Python
@@ -61,8 +65,7 @@ Python adapters extend preparation as described below.
 
 ## First-release preparation
 
-The first-release mode added for v0.1.7 prepares metadata without inventing a
-predecessor. After adopting that release and its consumer template, run
+First-release mode prepares metadata without inventing a predecessor. Run
 `just release-first v0.1.0 YYYY-MM-DD` with the intended target and UTC date.
 The command checks GitHub's published stable history and refuses first-release
 preparation if any stable release exists. Authentication or lookup failures also

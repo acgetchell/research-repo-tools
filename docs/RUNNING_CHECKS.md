@@ -44,8 +44,8 @@ budget; the first failing batch stops the gate and its native status propagates.
 `python fix` stops on a failed lint-fix batch before formatting.
 Use `just setup` to prepare the locked environment.
 
-Declare one zizmor scanner pin, either `zizmor==1.30.1` in the consumer's dev
-dependency group or `zizmor = "1.30.1"` in its existing managed Cargo toolchain.
+Declare one exact zizmor scanner pin, either a Python requirement in the
+consumer's dev dependency group or a `zizmor` entry in its managed Cargo toolchain.
 Keep the choice in that one repository-owned declaration. Configure an explicit
 persona in pyproject.toml:
 
@@ -157,7 +157,7 @@ just security
 
 Supply only the lockfiles the consumer actually owns. Use `just files` to inspect
 tracked and nonignored inputs for repositories containing several packages.
-The v0.2.4 template's `audit` recipe selects root `uv.lock` by default. Replace
+The template's `audit` recipe selects root `uv.lock` by default. Replace
 that selection with every maintained resolution, for example:
 
 ```just
@@ -473,6 +473,11 @@ order. Duplicate source lines are counted once. The CLI supports `--prefix`,
 `--limit` and `--descending`; missing or malformed reports fail. This summary
 does not run tests or impose a minimum coverage threshold. Consumers own those
 gates and their interpretation of the results.
+
+Use the packaged `just clean-coverage` recipe to preview retained Python coverage
+shards and failed/interrupted runs; add `--apply` after stopping coverage writers.
+`just clean` includes this operation. Current reports and the root database are
+preserved; see the [cleanup contract](INSTALLING.md#cleaning-retained-coverage).
 
 ## Consumer glue and release jobs
 

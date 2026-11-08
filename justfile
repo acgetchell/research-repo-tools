@@ -71,9 +71,13 @@ ci: check build publish-check ci-tests
 [private]
 ci-tests: coverage check-dist
 
-# Preview obsolete package-owned tool installs; pass --apply to remove them.
+# Preview obsolete tool installs and retained coverage; pass --apply to remove them.
 clean *args:
-    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain clean "$@"
+    uv run --locked --no-sync --no-python-downloads research-repo-tools clean "$@"
+
+# Preview retained coverage shards/runs, preserving current reports; pass --apply.
+clean-coverage *args:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools coverage clean "$@"
 
 # Run tests once with branch/subprocess coverage and write a Cobertura report.
 coverage *args:
@@ -128,7 +132,7 @@ publish-check:
 python-check:
     uv run --locked --no-sync --no-python-downloads research-repo-tools python check
 
-# Prepare drafts, capture/revalidate targets, or explicitly upload verified attachments.
+# Prepare drafts, retrieve original receipts, verify targets, or upload attachments.
 release-assets +args:
     uv run --locked research-repo-tools release assets "$@"
 

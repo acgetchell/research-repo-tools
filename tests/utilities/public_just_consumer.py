@@ -7,6 +7,7 @@ import unittest
 from pathlib import Path
 from typing import override
 
+from research_repo_tools.changelog import template
 from research_repo_tools.just_inspect import dry_run, inspect_justfile
 from research_repo_tools.process import ExecutableNotFoundError, resolve_executable
 
@@ -87,6 +88,17 @@ class TestJustInspection(unittest.TestCase):
         for recipe in ("", "value=override", "bad\0name"):
             with self.subTest(recipe=recipe), self.assertRaises(ValueError):
                 dry_run(self.root, recipe, justfile=self.file, executable=self.just)
+
+    def test_packaged_cleanup_recipes_preserve_arguments_without_running_cleanup(self):
+        justfile = self.root / "justfile"
+        justfile.write_text(template("justfile"), encoding="utf-8", newline="\n")
+        shard = self.root / ".coverage.worker"
+        shard.write_bytes(b"preserve")
+        for recipe, command in (("clean", "clean"), ("clean-coverage", "coverage clean")):
+            with self.subTest(recipe=recipe):
+                result = dry_run(self.root, recipe, ["--apply"], executable=self.just)
+                self.assertIn(f'research-repo-tools {command} "$@"', result.stderr)
+                self.assertEqual(shard.read_bytes(), b"preserve")
 
 
 if __name__ == "__main__":

@@ -4,10 +4,13 @@ The public contract comprises the installed `research-repo-tools` CLI, documente
 TOML configuration, packaged templates and Python interfaces linked here.
 Consumers pin an exact published version, or a verified full development commit,
 and lock dependencies. [Release dependency policy](dependency-provenance-api.md)
-requires selected upstream tooling to be published at release boundaries. Patch releases
-preserve these contracts; minor releases may introduce documented changes while
-the package is below 1.0. Unlisted modules and private names are implementation
-details. Imports do not install tools, access the network or modify consumer files.
+requires selected upstream tooling to be published at release boundaries. Patch
+releases normally preserve these contracts; minor releases may introduce
+documented changes while the package is below 1.0. The planned v0.2.7 release is
+an explicit exception for the documented Python API redesign: update custom
+callers to the current signatures and typed variants before adopting it.
+Unlisted modules and private names are implementation details. Imports do not
+install tools, access the network or modify consumer files.
 
 Start with the [consumer quickstart](../README.md#install-with-uv) or
 [task index](../README.md#capability-index). This reference describes current
@@ -40,6 +43,7 @@ type namespace; signature display does not require resolving them.
 | Cargo documentation | [Stable packaged library docs](cargo-docs-api.md) |
 | Cargo examples | [Discovery, configuration and live streams](cargo-examples-api.md) |
 | Configuration and CLI | [Configuration objects, entry point and platform contract](configuration-api.md) |
+| Coverage cleanup | [Plans, typed removals and explicit application](#coverage-cleanup) |
 | Files and text | [Selection, line checks and transactional file/directory publication](files-api.md) |
 | Git inspection | [Index-preserving status and content-based changed paths](process-api.md#python-git-inspection-api) |
 | Notebooks | [Workflow and isolated test APIs](notebooks-api.md), [inspection JSON](notebook-inspection.md) |
@@ -51,6 +55,27 @@ type namespace; signature display does not require resolving them.
 | Toolchains | [Python adoption and managed-install cleanup](toolchain-api.md) |
 | Upstream tooling | [Development identity and published release dependencies](dependency-provenance-api.md) |
 | Workflows | [Configured measurement/assets, validation and CI export](workflow-api.md) |
+
+## Coverage cleanup
+
+`research_repo_tools.coverage_clean.plan_clean(root: Path) -> CleanPlan` inspects
+the shared [coverage layout](INSTALLING.md#cleaning-retained-coverage) without
+reading databases or changing files. The frozen plan carries the resolved `root`,
+ordered `removals`, and `preserved` paths with unfamiliar contents. `plan.size`
+reports selected file bytes, not allocated disk blocks.
+
+Each removal is a `FileRemoval(path, size, identity)` or
+`RunRemoval(path, identity, files)`. A run's `files` is an immutable tuple of
+`FileRemoval` records and its `size` is their sum. Identities record device, inode,
+modification time and change time; these are snapshots, not permanent ownership
+proof. Obtain plans from `plan_clean` rather than constructing removal records.
+
+`apply_clean(plan: CleanPlan) -> None` recomputes the plan before deleting files
+and empty run directories. A changed inventory or refused link/junction raises
+`ValueError` before any removal. I/O failures and link/junction refusals after
+removal starts raise `RuntimeError` with the original cause and partial-progress
+warning. Callers must stop coverage writers throughout planning/application.
+Neither function installs tools, executes configuration, or needs coverage.py.
 
 ## Performance
 

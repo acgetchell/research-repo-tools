@@ -19,6 +19,15 @@ from research_repo_tools.tool_pins import SEMVER, STABLE
 __all__ = ["CleanPlan", "Removal", "apply_clean", "plan_clean"]
 
 
+def print_plan(plan: CleanPlan) -> None:
+    """Render the shared tool inventory for standalone and aggregate cleanup."""
+    print(f"Package-owned store: {plan.home}")
+    for root in (plan.root, *plan.keep_roots):
+        print(f"Retain declarations: {root}")
+    for removal in plan.removals:
+        print(f"Would remove {removal.kind}: {removal.path}")
+
+
 @dataclass(frozen=True)
 class Removal:
     """An owned installation and the directory identity observed during preview."""

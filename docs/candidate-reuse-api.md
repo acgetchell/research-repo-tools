@@ -1,9 +1,12 @@
 # Candidate acquisition acceptance
 
-The v0.2.6 candidate contract supports measurement before the release-preparation
+The candidate contract supports measurement before the release-preparation
 merge. It is separate from the unchanged [exact-tag v1 contract](benchmark-reuse-api.md).
 It requires measurement schema 6 and complete-run v5 evidence. Historical v1–v4
 evidence is not upgraded, assigned missing receipts, or silently measured again.
+This reference includes v0.2.7 extensions to the published v0.2.6 contract:
+committed publisher receipts, phase-specific source inputs, and typed trial
+orders. Check [release availability](../README.md#release-availability) before adoption.
 
 ## Source and trust contract
 

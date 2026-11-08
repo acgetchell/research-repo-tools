@@ -213,6 +213,27 @@ def _requirements(value: object, context: str, *, unique_values: bool = True) ->
     return tuple(result)
 
 
+def _workflow_policy(
+    repository: str,
+    workflow: str,
+    workflow_name: str,
+    required_steps: object,
+    runner_labels: object,
+) -> tuple[tuple[tuple[str, tuple[str, ...]], ...], tuple[tuple[str, tuple[str, ...]], ...]]:
+    _repository(repository)
+    steps = _requirements(required_steps, "step requirements")
+    labels = _requirements(runner_labels, "runner labels", unique_values=False)
+    if not isinstance(workflow, str) or re.fullmatch(r"\.github/workflows/[A-Za-z0-9_-]+\.yml", workflow) is None:
+        raise ValueError("workflow must be an explicit .github/workflows/*.yml path")
+    _policy_name(workflow_name, "workflow name")
+    names = {name for name, _ in steps}
+    if not names:
+        raise ValueError("validation policy requires unique named jobs and nonempty step requirements")
+    if any(name not in names for name, _ in labels):
+        raise ValueError("runner labels require unique required-job names and nonempty labels")
+    return steps, labels
+
+
 @dataclass(frozen=True)
 class ValidationPolicy:
     """Trusted repository/workflow and named gates, independent of registry policy."""
@@ -225,19 +246,11 @@ class ValidationPolicy:
     runner_labels: tuple[tuple[str, tuple[str, ...]], ...] = ()
 
     def __post_init__(self) -> None:
-        _repository(self.repository)
-        object.__setattr__(self, "required_steps", _requirements(self.required_steps, "step requirements"))
-        object.__setattr__(self, "runner_labels", _requirements(self.runner_labels, "runner labels", unique_values=False))
-        if not isinstance(self.workflow, str) or re.fullmatch(r"\.github/workflows/[A-Za-z0-9_-]+\.yml", self.workflow) is None:
-            raise ValueError("workflow must be an explicit .github/workflows/*.yml path")
+        steps, labels = _workflow_policy(self.repository, self.workflow, self.workflow_name, self.required_steps, self.runner_labels)
+        object.__setattr__(self, "required_steps", steps)
+        object.__setattr__(self, "runner_labels", labels)
         if not isinstance(self.branch, str) or re.fullmatch(r"[A-Za-z0-9_/-]+", self.branch) is None or any(not part for part in self.branch.split("/")):
             raise ValueError("branch must be an explicit portable branch name")
-        _policy_name(self.workflow_name, "workflow name")
-        names = {name for name, _ in self.required_steps}
-        if not names:
-            raise ValueError("validation policy requires unique named jobs and nonempty step requirements")
-        if any(name not in names for name, _ in self.runner_labels):
-            raise ValueError("runner labels require unique required-job names and nonempty labels")
 
 
 POLICY = ValidationPolicy(
@@ -309,8 +322,12 @@ _pages = read_pages
 
 
 def _workflow_id(policy: ValidationPolicy, workflow: dict[str, Any]) -> int:
+    return _workflow_identity(policy.workflow, policy.workflow_name, workflow)
+
+
+def _workflow_identity(path: str, name: str, workflow: dict[str, Any]) -> int:
     identifier = _integer(workflow.get("id"), "workflow ID")
-    if workflow.get("path") != policy.workflow or workflow.get("name") != policy.workflow_name or workflow.get("state") != "active":
+    if workflow.get("path") != path or workflow.get("name") != name or workflow.get("state") != "active":
         raise ValueError("expected active workflow identity matching the validation policy")
     return identifier
 
@@ -382,11 +399,22 @@ def validate_jobs(policy: ValidationPolicy, run: dict[str, Any], jobs: list[dict
     A failed-jobs-only or individual-job rerun omits the original producer and is
     rejected. A full rerun produces a new artifact and evidence for the new attempt.
     """
+    return _validate_jobs(policy.required_steps, policy.runner_labels, run, jobs, recovery=RECOVERY)
+
+
+def _validate_jobs(
+    required_steps: tuple[tuple[str, tuple[str, ...]], ...],
+    runner_labels: tuple[tuple[str, tuple[str, ...]], ...],
+    run: dict[str, Any],
+    jobs: list[dict[str, Any]],
+    *,
+    recovery: str,
+) -> dict[str, int]:
     result = {}
-    for name, steps in policy.required_steps:
+    for name, steps in required_steps:
         matches = [job for job in jobs if job.get("name") == name]
         if len(matches) != 1:
-            raise ValueError(f"missing or ambiguous {name} in attempt {run['run_attempt']}; {RECOVERY}")
+            raise ValueError(f"missing or ambiguous {name} in attempt {run['run_attempt']}; {recovery}")
         job = matches[0]
         if any(job.get(key) != run[key] for key in ("head_sha", "head_branch")) or (
             _integer(job.get("run_id"), "job run ID"),
@@ -394,8 +422,8 @@ def validate_jobs(policy: ValidationPolicy, run: dict[str, Any], jobs: list[dict
         ) != (run["id"], run["run_attempt"]):
             raise ValueError(f"{name} belongs to another run, attempt, ref or commit")
         if job.get("status") != "completed" or job.get("conclusion") != "success":
-            raise ValueError(f"{name} did not succeed; {RECOVERY}")
-        labels = dict(policy.runner_labels).get(name)
+            raise ValueError(f"{name} did not succeed; {recovery}")
+        labels = dict(runner_labels).get(name)
         if labels is not None and (
             not isinstance(job.get("labels"), list)
             or any(not isinstance(label, str) or not label for label in job["labels"])
@@ -408,7 +436,7 @@ def validate_jobs(policy: ValidationPolicy, run: dict[str, Any], jobs: list[dict
         for required in steps:
             found = [step for step in job.get("steps", []) if step.get("name") == required]
             if len(found) != 1 or found[0].get("status") != "completed" or found[0].get("conclusion") != "success":
-                raise ValueError(f"{name} did not validate required step {required}; {RECOVERY}")
+                raise ValueError(f"{name} did not validate required step {required}; {recovery}")
         result[name] = _integer(job.get("id"), "job ID")
     if len(set(result.values())) != len(result):
         raise ValueError("validation job IDs are not unique")
@@ -422,10 +450,14 @@ def artifact_identity(data: dict[str, Any], run: dict[str, Any], name: str, *, m
     attempt-specific name and verify the attempt inside its retained manifest.
     max_bytes bounds the original ZIP; pass the same bound to download_artifact.
     """
+    return _artifact_identity(data, run, name, max_bytes=max_bytes, recovery=RECOVERY)
+
+
+def _artifact_identity(data: dict[str, Any], run: dict[str, Any], name: str, *, max_bytes: int, recovery: str) -> dict[str, Any]:
     _integer(max_bytes, "artifact byte limit")
     identity = _object(data.get("workflow_run"), "artifact.workflow_run")
     if data.get("name") != name or data.get("expired") is not False:
-        raise ValueError(f"missing, expired or mismatched {name}; {RECOVERY}")
+        raise ValueError(f"missing, expired or mismatched {name}; {recovery}")
     expected = {
         "id": run["id"],
         "head_sha": run["head_sha"],

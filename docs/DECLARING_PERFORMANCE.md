@@ -2,9 +2,10 @@
 
 ## Availability, progress and resume (schema 5)
 
-These interfaces are intended for v0.2.5. Implementation, merge, PyPI publication
-and consumer adoption are separate states. Verify the supplying exact-version
-registry installation before changing a consumer pin.
+This guide describes the current measurement contracts. Check
+[release availability](../README.md#release-availability) and verify the supplying
+exact-version installation before changing a consumer pin. Scheduled trials and
+their interruption recovery are covered by [benchmark reuse](REUSING_BENCHMARKS.md).
 
 The `suite-measurement.toml` template declares `schema = 5` and ordered
 `[[suites]]` tables. Each has a unique lowercase slug `name`, a consumer-owned
@@ -39,7 +40,8 @@ Schema 5 requires `backend = "export"` in each nested measurement. Both common
 and independent harnesses are supported. Worktrees are rejected before execution;
 schemas 1–4 preserve their existing behavior and authorization boundary. Exports
 provide stored source bytes without Git metadata or checkout filters. Native
-commands requiring those facilities cannot use schema 5 yet.
+commands requiring those facilities must use an explicitly authorized worktree
+workflow instead of schema 5.
 
 Complete-run v4 records every suite decision and available side. Entirely absent
 phases have no fabricated sample. Reports expose the union, absence reasons,
@@ -120,7 +122,7 @@ the phase environment so the retained declaration binds it.
 
 `--progress human` is the default; `json` emits JSON Lines; `none` disables status.
 Status uses stderr without changing native stdout/data output. The finite
-`--progress-cadence SECONDS` defaults to 10 and must be at least 1. Transitions
+`--progress-cadence SECONDS` defaults to 300 and must be at least 1. Transitions
 are immediate; ordinary heartbeat work is bounded by the suite inventory, without
 scanning directories, parsing native logs or triggering measurements.
 JSON status shares stderr with inherited native diagnostics; filter records by
@@ -151,17 +153,17 @@ A new attempt revalidates the checkpoint and starts fresh progress counts.
 Schemas 2–4 also advance completion after each validated phase. Their separate
 phase work classes keep cross-phase ETA unknown without a suite-level contract.
 
-### Bounded la-stack migration
+### Suite adoption
 
 Keep scientific operations, benchmark inputs, API introduction versions, peer
-selection and gates in la-stack. Split shared and newly introduced APIs into
+selection and gates in the consumer. Split shared and newly introduced APIs into
 independently compilable suites, then replace permanent baseline exclusion lists
 with release intervals. Keep peers with their library suite when ratios are needed.
 Verify the supplying PyPI version before adoption. Upstream publication does not
 wait for the consumer release. Preparation, acquisition/promotion and README
 retry remain separate; existing running acquisitions are not migrated.
 
-The v0.2.1 interfaces connect installed commands to consumer TOML and native
+The shared interfaces connect installed commands to consumer TOML and native
 Just/Cargo commands. Consumers own benchmark definitions, scientific gates,
 dimensions, report selections, peer mappings, sampling and compatibility policy.
 The package owns discovery, validation, isolated execution, retention and
@@ -182,7 +184,7 @@ consumer's timing command; required IDs cannot also be excluded.
 Existing schemas 2/3 already express exact rows, separate phase commands and
 environments, required cases, exclusions, full versus non-exact suites, and
 baseline-phase peers. Explicit declarations suffice for ordinary report views.
-Only an open-ended all-benchmarks view needs the new bounded selector:
+Only an open-ended all-benchmarks view needs a bounded selector:
 
 ```toml
 [[series]]
@@ -413,17 +415,17 @@ Run preparation, measurement, promotion, then publication in that order.
 cleanup. Native release recipes run discovery and their saved-name benchmark
 command before `just performance-saved TAG PATH`.
 
-For la-stack, retire execution compatibility before v0.5.0 and the metadata-free
-historical-asset recipe downstream. Declare its full/non-exact native commands,
-scientific sample values, required IDs, explicit peer rows, and named plot
-configurations there. After v0.2.1 is published and its exact unyanked wheel/sdist
-are verified, pin that release and remove the two production orchestration
-modules. Retain scientific Rust gates and focused tests of actual recipe/config
-wiring. Publication and downstream cleanup are separate handoff boundaries.
+Keep supported native release ranges, full/non-exact commands, scientific sample
+values, required IDs, explicit peer rows, and named plot configurations in the
+consumer. After pinning and testing the supplying published package, remove the
+generic orchestration it replaces. Retain scientific Rust gates and focused tests
+of actual recipe/configuration wiring. Publication and downstream cleanup remain
+separate handoff boundaries.
 
 ## Complete acquisition contract (schema 4)
 
-New workflows use measurement schema 4 and `complete-run/v3` evidence. Declare
+Measurement schema 4 produces `complete-run/v3` evidence and supplies the nested
+acquisition contract for schema-5 suites and schema-6 scheduled trials. Declare
 `harness-mode = "independent"` or `"common"` and `backend = "export"` or
 `"worktree"` explicitly. Independent mode preserves both original harnesses,
 including baseline-only files. Common mode still installs the captured current
@@ -516,5 +518,4 @@ publication. Retained evidence remains usable after successful source cleanup.
 
 Historical files remain untouched. There is no migration that relabels earlier
 evidence as v3, fills missing raw files, or retroactively captures host/source
-proofs. Older readers currently available are not a constraint on this new
-contract. Use the producing release to inspect unsupported historical formats.
+proofs. Use the producing release to inspect unsupported historical formats.

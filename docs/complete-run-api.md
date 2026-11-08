@@ -130,7 +130,9 @@ and case-folded. See the [historical compiler-input contract](candidate-reuse-ap
 
 `measurement.load_measurement(root, configuration)` accepts schema-1
 `MeasurementConfig`, schema-2/3 `common_measurement.CommonHarnessPlan`, or
-schema-4 `common_measurement.CompleteMeasurementPlan`. Schema 4 explicitly
+schema-4 `common_measurement.CompleteMeasurementPlan`. Schemas 5 and 6 load
+`suite_measurement.SuiteMeasurementPlan` without or with a trial schedule.
+Schema 4 explicitly
 selects common/independent harnesses and export/worktree sources; its
 [acquisition contract](DECLARING_PERFORMANCE.md#complete-acquisition-contract-schema-4)
 defines complete-run v3 and union-inventory reporting. The schema-2/3 contract

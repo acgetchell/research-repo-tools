@@ -299,10 +299,13 @@ checks and the `release-evidence` job. If the run has not appeared, repeat the
 listing; if it fails, follow the [recovery guidance](#recovering-a-failed-run).
 Keep this checkout at the verified commit through tagging and publication.
 
-The `release-evidence` job is inside the `Package checks` workflow in `ci.yml`.
-It depends on `build`, every platform in `check`, and `changelog-integration`,
-so it starts only after they succeed and may not appear in the jobs list while
-they are running. It signs and retains the validation evidence. The local
+The `Package checks` workflow in `ci.yml` builds distributions once, then runs
+`source`, `distributions`, and `setup` jobs in parallel on Linux, macOS, and
+Windows. Each `check` job is an aggregate gate requiring the build and all three
+validation stages to succeed across every platform. The `release-evidence` job
+depends on the build, those validation stages and aggregate checks, and
+`changelog-integration`. It starts only after they all succeed, then signs and
+retains the validation evidence. The local
 `just release-evidence` recipe in step 4 inspects that evidence after the tag push.
 
 ### 2. Create and verify the annotated tag

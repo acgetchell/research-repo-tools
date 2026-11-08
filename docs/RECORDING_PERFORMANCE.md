@@ -77,7 +77,7 @@ for schema, freshness and retry details.
 For installed measurement, independent eligibility, saved-sample verification and
 publication through static consumer declarations, see
 [Declaring complete performance workflows](DECLARING_PERFORMANCE.md).
-The v0.2.1 additions include `complete-measurement.toml`, runtime saved names,
+The interfaces include `complete-measurement.toml`, runtime saved names,
 required storage layouts, reusable publication identities and recorded version
 labels. Named configurations preserve consumer scientific selections.
 
@@ -235,9 +235,9 @@ identifies the generic helpers these contracts replace.
 
 ## Parallel saved-baseline suites
 
-The suite transport commands target v0.2.4. Publish the supplying package before
-updating a consumer's exact dependency pin. Consumers keep native discovery,
-correctness gates, benchmark commands, job budgets and release upload policy.
+Pin a published package supplying the suite transport commands before adoption.
+Consumers keep native discovery, correctness gates, benchmark commands, job
+budgets and release upload policy.
 
 Each parallel job uses a fresh Criterion output directory and the same complete
 inventory and saved-sample configuration. Capture host metadata on that runner,
@@ -286,7 +286,7 @@ still require the consumer's compatibility policy. See the
 ## Performance evidence
 
 The [adoption matrix](performance-migration.md#release-capability-adoption)
-lists minimum versions, extras and compatibility boundaries for older consumers.
+lists shared capabilities, prerequisites and compatibility boundaries for consumers.
 
 Merge the packaged `performance` recipe into the consumer justfile, then compare
 existing Criterion trees without executing benchmarks:
@@ -349,8 +349,7 @@ replacing consumer helpers or changing artifact formats.
 
 ## Configured benchmark workflows
 
-Configured workflows around the retained-evidence APIs are available from v0.1.4.
-Pin an exact published version containing the capabilities your consumer uses.
+Pin an exact published version containing the configured workflows your consumer uses.
 Start with the packaged `benchmark.toml`, `examples.toml`, and
 `performance-report.toml` templates, selecting your actual workloads and paths.
 For example, a measurement configuration contains:

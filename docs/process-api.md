@@ -9,7 +9,7 @@ for setup and ordinary workflows.
 
 ## Python Git inspection API
 
-`research_repo_tools.git_inspect` exports two fixed queries, targeting v0.2.5.
+`research_repo_tools.git_inspect` exports two fixed queries.
 They return `subprocess.CompletedProcess[bytes]` with exact byte stdout/stderr,
 without decoding, quoting or newline translation. The existing general
 `process.run_git_bytes` defaults and caller-owned Git policy remain unchanged.
@@ -191,9 +191,9 @@ or unchecked text output is decoded using `encoding` and `errors`. Diagnostic
 formatting does not redact arguments or output; consumers own sensitive-data
 policy. See the [Python examples](#calling-from-python).
 
-The release containing the [Cargo example runner](cargo-examples-api.md) adds
-`stdout_markers: Sequence[bytes] = ()` to `run_command_live`. The additive #132
-contract also provides `stderr_markers: Sequence[bytes] = ()`. Each selected
+`run_command_live` accepts `stdout_markers: Sequence[bytes] = ()` and
+`stderr_markers: Sequence[bytes] = ()`, also used by the
+[Cargo example runner](cargo-examples-api.md). Each selected
 stream uses its own temporary spool, exact live forwarding and incremental
 matching with bounded memory; a marker on the wrong stream cannot satisfy it.
 Stdin and unasserted streams remain inherited; disk use scales with selected

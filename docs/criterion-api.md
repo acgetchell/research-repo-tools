@@ -163,7 +163,7 @@ Complete-run evidence can instead use the distinct
 [derived archive contract](benchmark-reuse-api.md). It preserves original raw
 bytes without claiming that conversion produced a native fresh/saved pair.
 
-These additions target v0.2.4. `load_saved_sample(..., suite=name)` and
+`load_saved_sample(..., suite=name)` and
 `performance verify-saved --suite NAME` validate the entire saved-sample
 configuration first, including required inventory coverage, storage assertions
 and exhaustive per-case counts. They then select that suite's included IDs,

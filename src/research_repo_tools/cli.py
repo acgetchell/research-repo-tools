@@ -15,6 +15,12 @@ lazy import research_repo_tools.config as config
 lazy from research_repo_tools.performance import _write_stdout
 
 
+def _clean_mode(command: argparse.ArgumentParser) -> None:
+    mode = command.add_mutually_exclusive_group()
+    mode.add_argument("--apply", action="store_true", help="remove the previewed artifacts; stop their writers first")
+    mode.add_argument("--dry-run", action="store_true", help="preview only (the default)")
+
+
 def parser() -> argparse.ArgumentParser:
     result = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     result.add_argument("--version", action="version", version=__version__)
@@ -55,11 +61,16 @@ def parser() -> argparse.ArgumentParser:
     command = ci.add_parser("export", help="append checked single-line values to GITHUB_ENV")
     command.add_argument("names", nargs="+")
     command.add_argument("--file", type=Path, help="command file; defaults to GITHUB_ENV")
-    coverage = groups.add_parser("coverage", help="summarize Cobertura coverage").add_subparsers(dest="action", required=True).add_parser("report")
-    coverage.add_argument("--report", default="coverage/cobertura.xml")
-    coverage.add_argument("--prefix", default="")
-    coverage.add_argument("--limit", type=int)
-    coverage.add_argument("--descending", action="store_true")
+    clean = groups.add_parser("clean", help="preview obsolete tool installations and retained coverage artifacts", allow_abbrev=False)
+    _clean_mode(clean)
+    clean.add_argument("--keep-root", type=Path, action="append", default=[], help="also retain this consumer's tool pins (repeatable)")
+    coverage = groups.add_parser("coverage", help="clean retained data or summarize Cobertura coverage").add_subparsers(dest="action", required=True)
+    _clean_mode(coverage.add_parser("clean", help="preview retained shards and runs; preserve current database and reports", allow_abbrev=False))
+    report = coverage.add_parser("report")
+    report.add_argument("--report", default="coverage/cobertura.xml")
+    report.add_argument("--prefix", default="")
+    report.add_argument("--limit", type=int)
+    report.add_argument("--descending", action="store_true")
     deps = groups.add_parser("deps", help="maintain dependency and tool pins").add_subparsers(dest="action", required=True)
     uv = deps.add_parser("check-uv")
     uv.add_argument("--uv-executable")
@@ -247,9 +258,7 @@ def parser() -> argparse.ArgumentParser:
     mode.add_argument("--apply", action="store_true")
     toolchain.add_parser("check", help="inspect installed tools without installing anything").add_argument("--json", action="store_true")
     clean = toolchain.add_parser("clean", help="preview obsolete package-owned installations; --apply removes them")
-    mode = clean.add_mutually_exclusive_group()
-    mode.add_argument("--apply", action="store_true")
-    mode.add_argument("--dry-run", action="store_true", help="preview only (the default)")
+    _clean_mode(clean)
     clean.add_argument("--keep-root", type=Path, action="append", default=[], help="also retain this consumer's pins (repeatable)")
     toolchain.add_parser("export", help="verify tools and export their environment to GITHUB_ENV").add_argument("--file", type=Path)
     toolchain.add_parser("python-check", help="check mandatory shared Python support and optional development mirrors without mutation")
@@ -288,6 +297,22 @@ def parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace, settings: config.Config) -> int:
+    if args.group == "clean":
+        from research_repo_tools import coverage_clean, toolchain_clean
+
+        coverage_plan = coverage_clean.plan_clean(settings.root)
+        tools_plan = toolchain_clean.plan_clean(settings, keep_roots=tuple(args.keep_root))
+        coverage_clean.print_plan(coverage_plan)
+        toolchain_clean.print_plan(tools_plan)
+        if args.apply:
+            if coverage_clean.plan_clean(settings.root) != coverage_plan:
+                raise ValueError("coverage inventory changed; stop coverage writers and preview again")
+            toolchain_clean.apply_clean(tools_plan, config.load(args.config, args.root))
+            coverage_clean.apply_clean(coverage_plan)
+            print(f"Removed {len(tools_plan.removals)} obsolete installations and {len(coverage_plan.removals)} coverage entries.")
+        else:
+            print("Preview only; stop tool/coverage processes and pass --apply to remove the listed entries. Use --keep-root for other consumers' pins.")
+        return 0
     if args.group == "actions":
         policy = settings.path(str(args.policy))
         if args.action == "allowlist":
@@ -509,14 +534,10 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             return 0
 
         if args.action == "clean":
-            from research_repo_tools.toolchain_clean import apply_clean, plan_clean
+            from research_repo_tools.toolchain_clean import apply_clean, plan_clean, print_plan
 
             plan = plan_clean(settings, keep_roots=tuple(args.keep_root))
-            print(f"Package-owned store: {plan.home}")
-            for root in (plan.root, *plan.keep_roots):
-                print(f"Retain declarations: {root}")
-            for removal in plan.removals:
-                print(f"Would remove {removal.kind}: {removal.path}")
+            print_plan(plan)
             if args.apply:
                 apply_clean(plan, config.load(args.config, args.root))
                 print(f"Removed {len(plan.removals)} obsolete installations.")
@@ -566,6 +587,17 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
 
         return main([str(settings.path(path)) for path in args.files])
     if args.group == "coverage":
+        if args.action == "clean":
+            from research_repo_tools.coverage_clean import apply_clean, plan_clean, print_plan
+
+            plan = plan_clean(settings.root)
+            print_plan(plan)
+            if args.apply:
+                apply_clean(plan)
+                print(f"Removed {len(plan.removals)} coverage entries.")
+            else:
+                print("Preview only; stop coverage writers and pass --apply to remove the listed entries.")
+            return 0
         from research_repo_tools.coverage import main
 
         arguments = ["--report", str(settings.path(args.report)), f"--prefix={args.prefix}"]

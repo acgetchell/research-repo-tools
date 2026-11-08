@@ -17,6 +17,7 @@ from types import MappingProxyType
 from typing import assert_type, override
 from unittest.mock import patch
 
+from research_repo_tools import cli, coverage_clean
 from research_repo_tools.files import RecoveryError, publish_directory, replace_many
 from research_repo_tools.process import (
     ExecutableNotFoundError,
@@ -37,6 +38,117 @@ class ConsumerCase(unittest.TestCase):
         self.addCleanup(temporary.cleanup)
         self.root = Path(temporary.name).resolve() / "consumer café"
         self.root.mkdir()
+
+
+class TestCoverageCleanup(ConsumerCase):
+    def test_preview_apply_and_idempotence_preserve_latest_reports_and_unknown_files(self) -> None:
+        retained = {
+            ".coverage": b"latest database",
+            "coverage/cobertura.xml": b"latest report\r\n",
+            "coverage/index.html": b"current HTML",
+            "coverage/failed-unknown/notes.txt": b"user notes",
+            "coverage/failed-unknown/.coverage.child": b"keep this whole run",
+            "nested/.coverage.child": b"unrelated tree",
+        }
+        removable = {
+            ".coverage.worker.123": b"old shard",
+            ".coverage.empty": b"",
+            "coverage/failed-retained/.coverage": b"failed database",
+            "coverage/failed-retained/.coverage.worker": b"failed shard",
+            "coverage/failed-retained/cobertura.xml": b"staged report",
+            "coverage/.run-interrupted/.coverage.worker": b"interrupted shard",
+        }
+        for name, data in retained.items() | removable.items():
+            path = self.root / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
+        (self.root / "coverage/failed-empty").mkdir()
+        plan = coverage_clean.plan_clean(self.root)
+        self.assertEqual(plan.size, sum(map(len, removable.values())))
+        self.assertEqual(len(plan.removals), 5)
+        self.assertEqual(plan.preserved, (self.root / "coverage/failed-unknown",))
+        arguments = ["--root", str(self.root), "coverage", "clean"]
+        self.assertEqual(cli.main(arguments), 0)
+        self.assertEqual(cli.main([*arguments, "--dry-run"]), 0)
+        for name, data in retained.items() | removable.items():
+            self.assertEqual((self.root / name).read_bytes(), data)
+        self.assertEqual(cli.main([*arguments, "--apply"]), 0)
+        for name, data in retained.items():
+            self.assertEqual((self.root / name).read_bytes(), data)
+        for name in removable:
+            self.assertFalse((self.root / name).exists())
+        for name in ("failed-retained", "failed-empty", ".run-interrupted"):
+            self.assertFalse((self.root / "coverage" / name).exists())
+        self.assertEqual(coverage_clean.plan_clean(self.root).removals, ())
+        self.assertEqual(cli.main([*arguments, "--apply"]), 0)
+
+    def test_changed_run_refuses_before_any_removal(self) -> None:
+        shard = self.root / ".coverage.first"
+        shard.write_bytes(b"first")
+        run = self.root / "coverage/failed-interrupted"
+        run.mkdir(parents=True)
+        data = run / ".coverage.child"
+        data.write_bytes(b"old")
+        plan = coverage_clean.plan_clean(self.root)
+        data.write_bytes(b"new data")
+        with self.assertRaisesRegex(ValueError, "inventory changed"):
+            coverage_clean.apply_clean(plan)
+        self.assertEqual(shard.read_bytes(), b"first")
+        self.assertEqual(data.read_bytes(), b"new data")
+
+    def test_empty_repository_needs_no_toolchain_or_coverage_dependency(self) -> None:
+        self.assertEqual(coverage_clean.plan_clean(self.root).removals, ())
+        self.assertEqual(cli.main(["--root", str(self.root), "coverage", "clean", "--apply"]), 0)
+
+    def test_late_link_refusal_reports_completed_removals_and_preserves_remaining_files(self) -> None:
+        for kind in ("file", "run-file", "empty-run"):
+            with self.subTest(kind=kind):
+                root = self.root / kind
+                root.mkdir()
+                if kind == "file":
+                    first, blocked = root / ".coverage.a", root / ".coverage.b"
+                elif kind == "run-file":
+                    first, blocked = root / "coverage/failed-run/.coverage.a", root / "coverage/failed-run/.coverage.b"
+                else:
+                    first, blocked = root / "coverage/.run-a", root / "coverage/.run-b"
+                first.parent.mkdir(parents=True, exist_ok=True)
+                if kind == "empty-run":
+                    first.mkdir()
+                    blocked.mkdir()
+                    retained = blocked / ".coverage.child"
+                else:
+                    first.write_bytes(b"removed")
+                    retained = blocked
+                retained.write_bytes(b"retained")
+                plan = coverage_clean.plan_clean(root)
+                original = Path.is_junction
+
+                def late_junction(path):
+                    return (path == blocked and not first.exists()) or original(path)
+
+                with patch.object(Path, "is_junction", late_junction), self.assertRaisesRegex(RuntimeError, "earlier removals remain applied") as raised:
+                    coverage_clean.apply_clean(plan)
+                self.assertIsInstance(raised.exception.__cause__, ValueError)
+                self.assertFalse(first.exists())
+                self.assertEqual(retained.read_bytes(), b"retained")
+
+    def test_link_refusal_after_recheck_before_first_removal_keeps_validation_error(self) -> None:
+        shard = self.root / ".coverage.first"
+        shard.write_bytes(b"retained")
+        plan = coverage_clean.plan_clean(self.root)
+        original = Path.is_symlink
+        observations = 0
+
+        def late_link(path):
+            nonlocal observations
+            if path == shard:
+                observations += 1
+                return observations > 1
+            return original(path)
+
+        with patch.object(Path, "is_symlink", late_link), self.assertRaisesRegex(ValueError, "links or junctions"):
+            coverage_clean.apply_clean(plan)
+        self.assertEqual(shard.read_bytes(), b"retained")
 
 
 class TestProcess(ConsumerCase):

@@ -1,6 +1,6 @@
 # Shared scope and adoption
 
-For the v0.1.6 workflow-security and Python-typing adoption contract, see the
+For the workflow-security and Python-typing adoption contract, see the
 [installed validation guide](../src/research_repo_tools/templates/VALIDATING_WORKFLOWS.md).
 It replaces separate zizmor-action scanner authority with the shared direct
 scanner path, reuses file selection for complete Python coverage, and retains
@@ -22,11 +22,11 @@ ordinary validation. Development selection and minimum support remain distinct.
 
 ## Python 3.15 validation contract
 
-The next published release moves runtime support and the selected development
-minor to 3.15. Existing 3.14 selectors are migration inputs, not supported runtime
+Runtime support and the selected development minor are Python 3.15. Existing
+3.14 selectors are migration inputs, not supported runtime
 overrides. The package uses explicit selective lazy imports; it never enables a
 global lazy-import mode. Native CI reads `.python-version`; the universal lock
-records the 3.15 floor and retains the existing dependency versions.
+records the 3.15 floor and the project's resolved dependency versions.
 
 The common gate supersedes the previous lint/format/type order and continuation
 after failures. Checks now use format, lint, then `ty --error all`, stopping at the
@@ -37,12 +37,11 @@ Consumer warning settings cannot relax the strict type gate. Consumers should
 remove copied validation runners when adopting this contract and use the packaged
 Python recipes; keep their lint rules and deliberate fixture exceptions.
 
-Publication precedes adoption. For dotfiles #169, use the exact published version
-through its existing shared-Python plan/update recipes, review the metadata,
-selector and lock diff, then run consumer CI. Do not use a local baseline override,
+Use an exact published version through the shared-Python plan/update recipes,
+review the metadata, selector and lock diff, then run consumer CI. Do not use a local baseline override,
 an unpublished package pin, or a sibling checkout as a released dependency.
 
-After an exact release containing the implementation is published:
+When adopting a published release:
 
 1. Review the release's `Requires-Python` compatibility implications, consumer
    upper bounds/exclusions, and any stricter minimum. Keep scientific dependencies,
@@ -65,14 +64,29 @@ Dry runs and checks leave source files, environments and Git state untouched.
 Checks do not select a newer shared release or repair metadata. Apply restores
 prior declarations and the environment on caught failures; recovery errors name
 retained backups. See [adoption and recovery](UPDATING_DEPENDENCIES.md#shared-python-adoption).
-Merge, shared-package publication, and consumer rollout are separate steps:
-[#85](https://github.com/acgetchell/research-repo-tools/issues/85) implements the
-guard; [#69](https://github.com/acgetchell/research-repo-tools/issues/69) and the
-consumer issues track upgrades after an exact PyPI publication.
+Merge, shared-package publication, and consumer rollout are separate steps.
+See [release availability](../README.md#release-availability) before selecting
+a version; development pins support rehearsal but do not prove publication.
 
-The first version provides changelog generation, normalization, archiving, release
-notes and local tags; declared toolchain setup; release metadata synchronization; dependency pin maintenance;
-Semgrep fixture validation; Markdown line checks; and coverage summaries.
+## Python API changes for v0.2.7
+
+The forthcoming v0.2.7 release intentionally changes these public Python
+constructors to represent valid alternatives explicitly. Update custom callers
+when changing the pin; do not depend on the old combinations of optional fields.
+
+| Previous Python call | v0.2.7 replacement | Contract |
+| --- | --- | --- |
+| `Estimate(point, lower, upper, confidence_level)` | `Estimate(point, ConfidenceInterval(lower, upper, confidence_level))`, or `Estimate(point)` without an interval | [Timing estimates](performance-api.md) |
+| `TrialSchedule(6, order="randomized", seed=42)` | `TrialSchedule(6, RandomizedOrder(42))`; use `AlternatingOrder()` or `SequentialOrder()` for the other orders | [Trial schedules](complete-run-api.md#scheduled-trials-v026) |
+| `ReleaseRule(..., value=text)` or `ReleaseRule(..., source="tag")` | `ReleaseRule(..., replacement=FixedValue(text))` or `replacement=ReleaseSource.TAG` | [Release rules](publishing-api.md) |
+
+The corresponding TOML/JSON transports retain their documented field names;
+their parsers construct the typed alternatives. Read the current signatures
+and invariants in the linked contracts, and validate the exact installed pin
+with the consumer's integration checks. Internal scanner and notebook helper
+classes are not public compatibility surfaces.
+
+## Shared and consumer ownership
 
 Consumers install one package and retain thin wrappers that invoke its commands.
 Common defaults live here: `CHANGELOG.md`, `docs/archives/changelog/`, canonical
@@ -86,7 +100,7 @@ commands and release-pinned links retain their contents unless explicitly select
 by a [declarative release policy](UPDATING_RELEASE_METADATA.md#declarative-consumer-policies).
 The [worked release-policy migration](release-policy-migration.md) replaces consumer
 discovery, staging, CLI-output parsing, and publication wrappers with structured plans.
-It requires a subsequent published package containing the new API; `0.1.2` is insufficient.
+Use the documented public interfaces from the selected installed release.
 
 Tests exercise the shared implementation with small synthetic inputs grouped by
 capability, including representative edge and failure cases. Fixes and release
@@ -125,17 +139,12 @@ To adopt the package:
 3. Run the consumer's own checks against that command before removing its old script.
 4. Keep special scientific and deployment behavior in the consumer.
 
-The first pilot is `markov-chain-monte-carlo`, after its current work reaches a
-completed, validated checkpoint. Its [separate changelog adoption issue](https://github.com/acgetchell/markov-chain-monte-carlo/issues/157)
-depends on publication and does not block this package's release. External-tool
-setup adoption belongs in a separate consumer follow-up. Consumers install a
-pinned published version from PyPI, with no sibling checkout or machine-specific
-artifact dependency.
-Proceed to `causal-triangulations` after the pilot. Adoption need not follow Rust
-dependency order.
-
-Validate each adoption in the consuming repository. Local package validation
-does not establish that a consumer workflow has migrated successfully.
+Consumers choose their own adoption order and retain integration issues in
+their repositories. Shared-package publication does not imply that those
+workflows have migrated. Validate each adoption against the exact published pin;
+local package checks and source-checkout rehearsals do not establish consumer
+release readiness. The [capability migration map](shared-capability-migration.md)
+identifies reusable replacements and the checks that remain downstream.
 
 ## Dependency and tool update adoption
 
@@ -154,9 +163,9 @@ rewrite copied Justfiles: merge the updated recipe once when adopting this
 capability. Additional project locks and environments then participate in every
 Python dependency update without duplicated consumer update commands.
 
-For v0.2.4, retain consumer source-index workarounds and local audit composition
-until that exact release is published and passes consumer integration. Then
-merge the packaged `audit`/`security` recipes, select all maintained Python and
+Retain consumer source-index workarounds and local audit composition until the
+selected published package passes consumer integration. Merge the packaged
+`audit`/`security` recipes, select all maintained Python and
 Cargo locks, and retain the final audit stage in `update-dependencies`. Source
 policy remains consumer-owned. Verify a normal upgrade with named indexes and
 overrides, downgrade rejection, all-project rollback, and nonzero post-update
@@ -208,10 +217,9 @@ validation of each consumer's generated artifacts remain in that consumer.
 
 ## CodeRabbit review adoption
 
-The shared review contract follows the branch/uncommitted scopes and live-base
-checks in markov-chain-monte-carlo's Just review helper. Consumer adoption is
-separate from maintenance-tool migration and requires a published package version
-containing the review capability. See the [review recipes](RUNNING_CHECKS.md#coderabbit-review).
+The shared review contract provides branch/uncommitted scopes and verifies the
+selected base before invoking CodeRabbit. Adopt it with the selected package's
+thin [review recipes](RUNNING_CHECKS.md#coderabbit-review).
 
 Replace duplicated review helpers with the packaged thin recipes. The common
 default is verified `origin/main`, superseding local `main` defaults; explicit local
@@ -224,9 +232,8 @@ authorized work, outside routine checks and CI.
 
 ## Migrating Python helpers
 
-Published `0.1.2` does not support process or transaction imports. Wait for a
-subsequent published package containing the [public APIs](process-api.md#python-process-api),
-pin that version, and run the consumer's focused integration checks before
+Use the [public APIs](process-api.md#python-process-api) from the selected
+published pin, and run the consumer's focused integration checks before
 removing local helper copies. Local wheels remain a pre-publication evaluation aid.
 
 Replace executable lookup with `resolve_executable`; use `run_command` for captured
@@ -238,7 +245,7 @@ repository-specific command policy remains in the consumer.
 
 For index-preserving status and changed-path inspection, adopt
 `research_repo_tools.git_inspect.git_status_bytes` and `git_diff_paths_bytes`
-from the targeted v0.2.5 release once its PyPI publication is verified. Replace
+from the installed package. Replace
 local status calls with `git_status_bytes`; replace index/worktree diffs with
 `git_diff_paths_bytes`, selecting `cached=True` for staged changes or `base=...`
 for a resolved base tree. Both return byte `CompletedProcess` results; split
@@ -268,9 +275,8 @@ handling in the consumer.
 ## Portable update and Actions policy adoption
 
 Pin a published package containing the required capabilities before downstream
-adoption; exact-commit policy and composite support target 0.2.4. Release
-publication and consumer PRs are separate
-operations. Follow the [Actions policy wiring](UPDATING_DEPENDENCIES.md#actions-allowlists-and-opt-in-pin-updates)
+adoption. Release publication and consumer PRs are separate operations.
+Follow the [Actions policy wiring](UPDATING_DEPENDENCIES.md#actions-allowlists-and-opt-in-pin-updates)
 and [mixed installation ownership](UPDATING_DEPENDENCIES.md#mixed-installation-owners-on-linux-and-macos).
 
 Move generic YAML allowlist checks upstream while retaining the consumer's existing

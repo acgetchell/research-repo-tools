@@ -1,8 +1,8 @@
 # Document publication migration
 
-The [publication API](publication-api.md) requires a published release after
-`0.1.2` containing it. Implementation, release, and downstream migration are
-separate checkpoints. Keep the consumer's retained schemas and original evidence
+Pin a published package supplying the [publication API](publication-api.md);
+see [release availability](../README.md#release-availability). Package publication
+and downstream migration are separate checkpoints. Keep the consumer's retained schemas and original evidence
 bytes throughout adoption; follow the
 [performance migration contract](performance-migration.md).
 

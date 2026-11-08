@@ -101,7 +101,7 @@ commands are `just performance-prepare tooling/performance-release.toml`,
 `just performance-release tooling/performance-release.toml`, and
 `just performance-readme tooling/performance-release.toml`, in that order.
 README retries consume retained results without repeating measurements.
-For candidate reuse with committed schema-2 histories, the trusted acquisition
+For v0.2.7 candidate reuse with committed schema-2 histories, the trusted acquisition
 adapter declares the original report configuration in `CandidatePolicy.report`
 and freezes `plan_candidate_publication`'s receipt and SHA-256 before promotion.
 Use the `measure_release(before_promotion=...)` hook or the staged APIs. Retain
@@ -222,9 +222,14 @@ PR, manual-dispatch and partial-rerun evidence cannot substitute for it.
 ### 5. Create the draft GitHub release
 
 Let the repository's preparation workflow create the draft and required assets.
-If no workflow creates a draft, create it in GitHub from the existing tag and
-notes. Keep the title identical to the tag, including its leading `v`, and leave
-it as a stable draft until asset preparation and review are complete.
+With published v0.2.7 tooling, a consumer can compose signed retained evidence
+with `release assets prepare`; use the
+[isolated writer and receipt-recovery procedure](https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md).
+Preserve its captured release ID and original receipt for every retry.
+If no workflow creates a draft and the consumer's provenance policy permits
+manual creation, create it in GitHub from the existing tag and notes. Keep the
+title identical to the tag, including its leading `v`, and leave it as a stable
+draft until asset preparation and review are complete.
 
 ### 6. Review the draft
 
@@ -265,6 +270,13 @@ consumer and record the release, workflow, artifact, and consumer evidence in
 the release PR or tracking issue.
 
 ### Recovering a failed run
+
+For retained CI evidence, rerun all jobs of the original trusted main-push run,
+including the producer and every required validation gate. A partial rerun cannot
+establish a complete attempt. Require new attempt-specific artifacts and a new
+reviewed evidence selection; do not silently replace an approved handoff.
+Draft preparation retries must retain the original receipt and captured release
+ID. An uncertain creation requires explicit recovery before another attempt.
 
 Inspect a failed run and exact registry version before retrying. Cargo can
 report a timeout after a successful upload. Verify an existing publication

@@ -20,17 +20,22 @@ then choose a [capability](#capability-index). Package development belongs in
 
 ## Release availability
 
-This README describes current source, including work intended for **v0.2.5**.
-The shared-environment Semgrep and representation/retention policy need v0.2.5.
-Availability-aware benchmark suites, acquisition progress and checkpoint/resume
-also require a supplying v0.2.5 release; see the [suite contract][performance-policy].
-The quickstart uses the published [0.2.3 package][published-pin]. Newer examples
-are marked where a supplying release is required: prepared performance stages,
-parallel Criterion suites, shared release-evidence handoffs, command timing,
-optional CI reuse, and the notebook/stream refinements need v0.2.4.
+This README describes current `main`, including work intended for **v0.2.7**.
+The latest published package and quickstart pin are [v0.2.6][published-pin].
+Examples marked v0.2.7 require its publication or an exact supplying
+[development pin](#development-pins-and-release-dependencies) for rehearsal.
 
-Exact Git development pins and published-dependency release enforcement target
-v0.2.7; see [development pins](#development-pins-and-release-dependencies).
+The v0.2.7 additions include verified Python/Cargo dependency sources,
+published-dependency release gates, retained-evidence draft preparation and
+authenticated retrieval of original tag-push receipts,
+committed benchmark publication receipts, resumable scheduled suites, and
+reusable compilation for managed Cargo tool installs, and shared coverage cleanup. These are not supplied
+by the v0.2.6 registry pin.
+
+**v0.2.7 includes breaking Python API changes.** Update callers to the documented
+typed variants, including [trial orders][complete-api] and
+[release-rule replacements][publishing-api]. Review the current
+[API contracts][api] when upgrading custom integrations.
 
 An upstream merge, local wheel or passing source test does not publish a package.
 Before adopting a new capability, verify its exact PyPI release, update your
@@ -50,7 +55,7 @@ the published package requires Python 3.15 or newer.
 From the consumer root, add the exact published package:
 
 ```sh
-uv add --group tooling --no-sync "research-repo-tools==0.2.3"
+uv add --group tooling --no-sync "research-repo-tools==0.2.6"
 ```
 
 Include `tooling` from `dev`, retaining your other dependencies. Set
@@ -60,7 +65,7 @@ if the project currently requires an older interpreter.
 
 ```toml
 [dependency-groups]
-tooling = ["research-repo-tools==0.2.3"]
+tooling = ["research-repo-tools==0.2.6"]
 dev = [{include-group = "tooling"}]
 ```
 
@@ -90,14 +95,26 @@ Open a new terminal if PATH changed. A failed step stops setup with a diagnostic
 fix that prerequisite and rerun. [Installation and recovery][toolchain] explains
 ownership, native build prerequisites and platform behavior.
 
+With v0.2.7, managed Cargo tool installs reuse compilation output across setup
+and update runs while retaining exact-version installation and executable checks.
+See [local and CI cache configuration][cargo-cache] before adopting it downstream.
+
 Semgrep consumers request the `semgrep` extra on their shared package pin,
 retain the shared Python 3.15 selector, and adopt the package's
-[shared dependency overrides](docs/RUNNING_CHECKS.md#rust-documentation-scans)
+[shared dependency overrides][rust-scans]
 before locking. The consumer lock selects the exact compatible scanner used for
 fixture and production scans. A package
 upgrade does not rewrite copied Just recipes; merge the relevant exported
 recipes as part of each consumer adoption and verify its integration before
 removing temporary adapters.
+
+With the v0.2.7 cleanup recipes, preview obsolete tool installations and retained
+coverage artifacts with `just clean`, then use `just clean --apply` to remove
+the listed entries. `just clean-coverage` previews only coverage cleanup;
+`just clean-coverage --apply` performs it. Stop coverage runs first. Both preserve
+the latest `.coverage` database and current reports. See the
+[coverage cleanup contract](docs/INSTALLING.md#cleaning-retained-coverage) for
+the selected paths and adoption instructions.
 
 ## Development pins and release dependencies
 
@@ -111,15 +128,16 @@ tooling = ["research-repo-tools[python-tools]==0.2.6"]
 dev = [{include-group = "tooling"}]
 
 [tool.uv.sources]
-# Example historical main commit; select the reviewed supplying implementation.
-research-repo-tools = {git = "https://github.com/acgetchell/research-repo-tools.git", rev = "ef783cac608bc0d2d4657052c20e663f2d45b232"}
+# Supplying main commit; its package metadata still declares 0.2.6.
+research-repo-tools = {git = "https://github.com/acgetchell/research-repo-tools.git", rev = "5ad89e0f8ea861deb140109c25a30a254b27189d"}
 
 [tool.research-repo-tools.release]
 published-dependencies = ["research-repo-tools"]
 ```
 
-The historical commit above illustrates pin syntax; it predates this capability.
-Use an exact supplying commit with the version declared by that commit, resolve
+The commit above supplies the dependency-source and release-dependency capabilities.
+Choose a reviewed commit that supplies every interface your consumer uses.
+Use the version declared by that commit, resolve
 and sync it deliberately, and retain the manifest and lock together. Match any
 isolated runtime selection to the same repository and full commit.
 Normal setup, checks and development evidence remain usable. Git provenance
@@ -138,7 +156,7 @@ just performance-release tooling/performance-release.toml --release-intent
 Release evidence, asset and approval paths enforce the configured policy again.
 The pin transition changes evidence inputs: revalidate the final configuration
 and acquire fresh results when measured inputs changed. Retain earlier results
-as rehearsal evidence. See the [proof, supported artifacts and public API](docs/dependency-provenance-api.md)
+as rehearsal evidence. See the [proof, supported artifacts and public API][dependency-api]
 for fail-closed limitations and recovery. No consumer guard implementation or
 automatic pin/lock rewrite is needed.
 
@@ -202,7 +220,7 @@ remain available for integrations.
 
 ## Verified Python and Cargo dependency sources
 
-Use `dependency-sources.toml` at the checkout root to select arbitrary upstream
+With v0.2.7, use `dependency-sources.toml` at the checkout root to select upstream
 Python packages or Cargo crates. Releases accept **PyPI and crates.io only**;
 exact GitHub commits are available for development checks and rehearsal.
 
@@ -245,7 +263,7 @@ and `["release", "dependencies"]` with `release-intent: 'true'` before release w
 Use the pinned Action and exact published tooling version shown above; consumers
 do not assemble Git URLs or implement their own dependency guard. Workspace
 ownership, registry proof limits and recovery are described in the
-[dependency source guide](docs/UPDATING_DEPENDENCIES.md#verified-dependency-sources).
+[dependency source guide][dependency-sources].
 
 ## Common workflows
 
@@ -280,6 +298,7 @@ for exhaustive arguments, configuration and Python contracts.
 | Check code, dependencies and secrets | [Python, Cargo, Semgrep, SARIF and review][checks-guide] | [Security APIs][security-api] |
 | Generate changelogs and prepare releases | [Changelog generation][changelog], [metadata preparation][release] | [Release APIs][publishing-api] |
 | Inspect and execute notebooks | [Notebook workflows][notebooks-guide] | [Notebook APIs][notebooks-api] |
+| Prepare a retained-evidence release draft | [Isolated writer and recovery][draft-guide] | [Draft preparation API][draft-api] |
 | Publish reports and figures | [Preview and publish retained evidence][reports-guide] | [Publication APIs][publication-api] |
 | Publish to PyPI or crates.io | [Reviewed release procedure][publishing] | [Exact-commit evidence][evidence-guide], [optional reuse][reuse-guide] |
 | Record complete performance results | [Prepare, measure/retain, publish README][performance-guide] | [Measurement policy][performance-policy], [complete-run APIs][complete-api] |
@@ -290,8 +309,7 @@ for exhaustive arguments, configuration and Python contracts.
 
 ### Git inspection
 
-The index-preserving inspection API targets v0.2.5. After that release is
-published, pin it before replacing local inspection wrappers:
+Use the index-preserving inspection API to replace local inspection wrappers:
 
 ```python
 from pathlib import Path
@@ -327,7 +345,7 @@ JupyterLab, explicit source reset and source-policy checks are in the same guide
 
 ### Performance
 
-For v0.2.4, configure the installed `performance-release.toml` template with your
+Configure the installed `performance-release.toml` template with your
 measurement, retained-report and document-publication policies. Declare and ignore
 its scratch directory; keep the report archive outside scratch. Then run:
 
@@ -339,7 +357,8 @@ just performance-readme tooling/performance-release.toml
 ```
 
 For schema-5 measurement declarations, use a new ignored checkpoint directory
-whose parent already exists. Resume explicitly after an interruption:
+whose parent already exists. v0.2.7 also supports interruption recovery within
+schema-6 scheduled trials. Resume explicitly after an interruption:
 
 ```sh
 just performance-release tooling/performance-release.toml --checkpoint target/performance-checkpoint
@@ -347,7 +366,9 @@ just performance-release tooling/performance-release.toml --checkpoint target/pe
 ```
 
 Completed paired suites retain their original raw bytes and sessions. An
-incomplete pair is recollected in full. `--progress json` emits versioned status
+incomplete pair is recollected in full. Scheduled recovery retains completed
+trials and completed suites within the interrupted trial; follow the
+[schedule and recovery contract][candidate-guide]. `--progress json` emits versioned status
 events on stderr; `--progress none` disables status. Heartbeats default to 300
 seconds (five minutes); `--progress-cadence 60` or `--progress-cadence 600` selects
 a shorter or longer interval. Stage changes and failures are reported immediately.
@@ -361,7 +382,7 @@ and retry that last stage without measuring again. The [performance guide][perfo
 explains source exports versus worktrees, common versus independent harnesses,
 parallel suite assembly, ratio eligibility and first-use report state.
 
-The v0.2.5 [benchmark reuse API][benchmark-reuse] derives release archives from
+The [benchmark reuse API][benchmark-reuse] derives release archives from
 one accepted complete-run v4 acquisition. Supply a trusted, independently prepared
 reuse policy, then plan and publish the archive without invoking benchmarks:
 
@@ -379,11 +400,11 @@ publish_publication(candidate)
 ```
 
 This v1 API requires exact tagged source measurements. The v0.2.6
-[candidate contract](docs/candidate-reuse-api.md) supports a single pre-tag
+[candidate contract][candidate-api] supports a single pre-tag
 acquisition, report/README edits, final-main evidence acceptance, and archive
 reuse. Its schema-6 measurement declaration includes repeated alternating or
 seeded randomized trials, retained separately with observed execution receipts.
-Follow the [Step 1 → Step 2 → publication procedure](docs/REUSING_BENCHMARKS.md).
+Follow the [Step 1 → Step 2 → publication procedure][candidate-guide].
 The derived archive preserves original evidence and does not authenticate CI origin;
 attachment and approval retain the existing release safeguards. Verify the
 supplying PyPI release before adoption.
@@ -403,8 +424,9 @@ revalidate that selection. Obtain `STEP1_ASSERTION_SHA256` from the trusted
 acquisition owner's separate handoff. Never derive it from the candidate being
 checked. These operations perform no benchmark acquisition or preflight.
 
-For committed schema-2 publisher histories, declare the original report
-configuration in `CandidatePolicy(report="tooling/performance-report.toml", ...)`.
+For committed schema-2 publisher histories, v0.2.7 adds a publication receipt.
+Declare the original report configuration in
+`CandidatePolicy(report="tooling/performance-report.toml", ...)`.
 Before promotion, freeze the shared publisher's exact outputs under acquisition-owner
 control:
 
@@ -426,14 +448,13 @@ Commit the generated run trio, index/latest files and reports with the release P
 Step 2 adds `--publication-receipt /trusted/publication.json`,
 `--publication-sha256 "$STEP1_PUBLICATION_SHA256"`, and `--format summary` to the
 candidate command above. Keep final acceptance and attestations outside committed
-history. [The contract](docs/candidate-reuse-api.md#committed-publisher-evidence)
-preserves exact old history and rejects arbitrary JSON/output paths. This follow-up
-requires a verified supplying patch release; a v0.2.6 pin alone does not supply it.
+history. [The contract][candidate-publication] preserves exact old history and
+rejects arbitrary JSON/output paths.
 
 ### Releases
 
-Add `--format summary` to shared evidence verification commands for release/commit,
-native run/attempt, actual package guarantee, optional benchmark acquisition,
+With v0.2.7, add `--format summary` to shared evidence verification commands for
+release/commit, native run/attempt, actual package guarantee, optional benchmark acquisition,
 signature and artifact-integrity results. `--format json` prints the same verified
 record saved by `--output`; default shared CLI status messages remain compatible.
 Checks that are not configured are labeled explicitly. Failures print diagnostics
@@ -448,7 +469,7 @@ attachment uploads and downstream adoption remain distinct actions.
 For the v0.2.7 draft-preparation capability, a read-only job verifies the tagged
 source and generates notes. CI writers with repository-write credentials use
 the isolated, exactly pinned, no-checkout invocation in the
-[workflow and recovery guide](docs/PREPARING_DRAFTS.md).
+[workflow and recovery guide][draft-guide].
 
 The following recipe is for a trusted local project environment. It executes
 the project's Justfile and uses its uv environment:
@@ -466,6 +487,12 @@ its assets. Preserve the original receipt for every retry: missing or replaced
 captured IDs reject, and ambiguous creation requires explicit recovery. The
 guide covers immutable handoff authentication, least privilege, and the
 supplying-release adoption gate.
+
+After the preparation workflow succeeds, Step 2 can retrieve its original
+authenticated target with `just release-assets retrieve`. The command freezes
+the original run/attempt/artifact ID/digest and revalidates that selection on
+retry. Configure the exact workflow and required steps as shown in the
+[retrieval guide](docs/PREPARING_DRAFTS.md#retrieve-original-preparation-output).
 
 For Python releases, set `package-kind = "python"` and
 `guarantee = "python-distributions"` in the evidence policy. Explicit selection
@@ -513,8 +540,8 @@ just release-evidence published tooling/release-evidence.toml \
 
 `published` checks registry inventory, metadata, hashes and downloaded bytes;
 version presence alone does not prove byte identity. It performs no upload.
-See the [evidence guarantees](docs/release-evidence-api.md#python-distribution-evidence)
-and [complete-run recovery](docs/VERIFYING_RELEASE_EVIDENCE.md#complete-run-recovery).
+See the [evidence guarantees][python-evidence]
+and [complete-run recovery][evidence-recovery].
 These Python interfaces require an exact published supplying version containing
 this contract, verified through ordinary wheel/sdist and locked consumer installs
 before adoption; a merged source change or editable checkout is insufficient.
@@ -539,6 +566,11 @@ BSD-3-Clause. See [LICENSE][license].
 [api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/api.md
 [audit-badge]: https://github.com/acgetchell/research-repo-tools/actions/workflows/audit.yml/badge.svg?branch=main
 [audit-workflow]: https://github.com/acgetchell/research-repo-tools/actions/workflows/audit.yml
+[benchmark-reuse]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/benchmark-reuse-api.md
+[candidate-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/candidate-reuse-api.md
+[candidate-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_BENCHMARKS.md
+[candidate-publication]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/candidate-reuse-api.md#committed-publisher-evidence
+[cargo-cache]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/INSTALLING.md#first-adoption-and-setup
 [changelog]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/GENERATING_CHANGELOGS.md
 [changelog-history]: https://github.com/acgetchell/research-repo-tools/blob/main/CHANGELOG.md
 [checks-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_CHECKS.md
@@ -549,12 +581,17 @@ BSD-3-Clause. See [LICENSE][license].
 [codeql-badge]: https://github.com/acgetchell/research-repo-tools/actions/workflows/codeql.yml/badge.svg?branch=main
 [codeql-workflow]: https://github.com/acgetchell/research-repo-tools/actions/workflows/codeql.yml
 [commands]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_COMMANDS.md
-[benchmark-reuse]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/benchmark-reuse-api.md
 [complete-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/complete-run-api.md
 [configuration-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/configuration-api.md
 [contributing]: https://github.com/acgetchell/research-repo-tools/blob/main/CONTRIBUTING.md
 [dependabot]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/AUTOMATING_DEPENDABOT.md
+[dependency-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/dependency-provenance-api.md
+[dependency-sources]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_DEPENDENCIES.md#verified-dependency-sources
 [doi]: https://doi.org/10.5281/zenodo.23744167
+[draft-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/release-evidence-api.md#draft-preparation
+[draft-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md
+[evidence-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/VERIFYING_RELEASE_EVIDENCE.md
+[evidence-recovery]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/VERIFYING_RELEASE_EVIDENCE.md#complete-run-recovery
 [files-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/files-api.md
 [git-inspection-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/process-api.md#python-git-inspection-api
 [github-settings]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/CONFIGURING_GITHUB.md
@@ -571,15 +608,17 @@ BSD-3-Clause. See [LICENSE][license].
 [performance-policy]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/DECLARING_PERFORMANCE.md
 [process-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/process-api.md
 [publication-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/publication-api.md
-[published-pin]: https://pypi.org/project/research-repo-tools/0.2.3/
+[published-pin]: https://pypi.org/project/research-repo-tools/0.2.6/
 [publishing]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RELEASING.md
 [publishing-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/publishing-api.md
 [pypi]: https://pypi.org/project/research-repo-tools/
 [pypi-badge]: https://badgen.net/pypi/v/research-repo-tools
 [python-adoption]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_DEPENDENCIES.md#shared-python-adoption
+[python-evidence]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/release-evidence-api.md#python-distribution-evidence
 [release]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_RELEASE_METADATA.md
 [reports-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/PUBLISHING_REPORTS.md
 [reuse-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_CI.md
+[rust-scans]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_CHECKS.md#rust-documentation-scans
 [security-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/security-api.md
 [timing-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/command-timing-api.md
 [timing-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/TIMING_COMMANDS.md
@@ -589,4 +628,3 @@ BSD-3-Clause. See [LICENSE][license].
 [workflow-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/workflow-api.md
 [zizmor-badge]: https://github.com/acgetchell/research-repo-tools/actions/workflows/zizmor.yml/badge.svg?branch=main
 [zizmor-workflow]: https://github.com/acgetchell/research-repo-tools/actions/workflows/zizmor.yml
-[evidence-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/VERIFYING_RELEASE_EVIDENCE.md

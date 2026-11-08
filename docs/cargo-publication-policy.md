@@ -1,8 +1,7 @@
 # Cargo publication policy
 
-The [#128](https://github.com/acgetchell/research-repo-tools/issues/128) evaluation
-selects **native Cargo publication** for the current shared capability. A custom
-exact-archive registry uploader is a no-go for this release. The evidence core
+The shared tooling supports **native Cargo publication**. It does not provide a
+custom exact-archive registry uploader. The evidence core
 supports retained-archive verification and reproduction without claiming that
 native publication uploads those retained bytes.
 
@@ -36,8 +35,8 @@ publication guarantees; it does not claim an exhaustive survey of all uploaders.
 
 Packaging, download and verification costs are **unmeasured**. There is no
 performance claim or assumed savings. The potential provenance benefit does not
-justify taking ownership of an additional publishing client within this bounded
-release. Consumer native/scientific/feature checks, approval, registry absence,
+justify taking ownership of an additional publishing client. Consumer
+native/scientific/feature checks, approval, registry absence,
 tag/version/commit checks and post-upload visibility remain required.
 
 A future proposal may reopen the uploader decision with a maintained supported
@@ -47,4 +46,5 @@ and approval, upload with short-lived credentials without executing consumer
 code, and confirm the registry checksum. On an upload timeout, inspect registry
 state and checksum before deciding recovery; never retry blindly. A speed claim
 would additionally require representative packaging/download/verification
-measurements. No existing consumer release depends on that future proposal.
+measurements. Consumers must retain the supported native publication path until
+any replacement is implemented, published, and integration-tested.

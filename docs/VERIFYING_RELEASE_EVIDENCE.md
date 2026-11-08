@@ -3,9 +3,10 @@
 Use this guide when composing trusted preflight and writer jobs. Follow your
 consumer's adapted release procedure, using the
 [packaged release template](../src/research_repo_tools/templates/RELEASING.md)
-for the overall order and approvals. These
-interfaces require a verified published v0.2.4 package. Exact-release-commit
-evidence is the default; [CI reuse](REUSING_CI.md) is a separate explicit policy.
+for the overall order and approvals. This guide describes current source;
+check [release availability](../README.md#release-availability) before adopting
+the documented interfaces. Exact-release-commit evidence is the default;
+[CI reuse](REUSING_CI.md) is a separate explicit policy.
 
 ## Release evidence and attachment handoffs
 
@@ -42,7 +43,7 @@ just release-assets upload tooling/release-assets.toml \
   --target /trusted/target.json --asset /path/to/baseline.tar.gz --approve
 ```
 
-Add `--format summary` for a concise human-readable result after verification.
+With v0.2.7, add `--format summary` for a concise human-readable result after verification.
 The summary states the actual package guarantee and labels absent benchmark or
 signature checks explicitly. JSON handoff bytes and approval selections remain
 unchanged; `--format json` also emits those bytes on stdout. For committed benchmark

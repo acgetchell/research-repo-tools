@@ -36,9 +36,13 @@ check: python-check semgrep-check zizmor-check
 # Local and CI use the same complete validation gate.
 ci: check
 
-# Preview obsolete package-owned tool installs; pass --apply to remove them.
+# Preview obsolete tool installs and retained coverage; pass --apply to remove them.
 clean *args:
-    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain clean "$@"
+    uv run --locked --no-sync --no-python-downloads research-repo-tools clean "$@"
+
+# Preview retained coverage shards/runs, preserving current reports; pass --apply.
+clean-coverage *args:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools coverage clean "$@"
 
 # Acquire exploratory wall timings into a new JSON report with a concise summary.
 command-time configuration output:
@@ -129,7 +133,7 @@ python-fix:
 python-typecheck:
     uv run --locked --no-sync --no-python-downloads research-repo-tools python typecheck
 
-# Prepare drafts, capture/revalidate targets, or explicitly upload verified attachments.
+# Prepare drafts, retrieve original receipts, verify targets, or upload attachments.
 release-assets +args:
     uv run --locked --group dev research-repo-tools release assets "$@"
 

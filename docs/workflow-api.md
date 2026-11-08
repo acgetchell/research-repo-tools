@@ -1,9 +1,11 @@
 # Configured workflow contracts
 
-The original workflow APIs belong to the coordinated v0.1.4 extraction.
-Availability in the working tree does not mean that release has been published. Consumer commands
-and configuration examples are in the [task guide](RECORDING_PERFORMANCE.md#configured-benchmark-workflows).
-The [MCMC ownership map](mcmc-extraction.md) defines the first adoption gate.
+This reference describes current source; check
+[release availability](../README.md#release-availability) before adoption.
+Consumer commands and configuration examples are in the
+[task guide](RECORDING_PERFORMANCE.md#configured-benchmark-workflows).
+The [shared ownership map](shared-capability-migration.md#performance-and-release-helper-adoption)
+defines the helper boundary and downstream integration requirements.
 Schema-2/3 common-harness measurement, complete-run retention and reusable host/
 profiling capture are described in the [complete-run contract](complete-run-api.md).
 
@@ -105,11 +107,11 @@ frozen validated identity. Repository is a GitHub `owner/name`, ID is a positive
 integer (booleans reject), tag is canonical stable `vX.Y.Z`, and commit is a full
 40-character lowercase GitHub SHA. An optional title is an exact, nonempty
 single-line assertion; title-equals-tag is expressed with `expected_title=tag`.
-No repository name selects policy. Existing `GitHubRelease` positional fields
-remain compatible, with trailing `title` and `(asset_id, state)` pairs added.
+No repository name selects policy. `GitHubRelease` also exposes optional `title`
+and `body` text and the `(asset_id, state)` inventory in `asset_states`.
 
 `preflight_release_target(root, repository, tag, commit, *, expected_title=None,
-checkout=None)`
+checkout=None, dependencies=())`
 is read-only. It requires exactly one matching release across authenticated
 paginated release listings, a mutable stable draft, and the expected tag commit.
 Fully qualified `git/ref/tags/...` lookup excludes same-named branches; annotated
@@ -137,13 +139,13 @@ nesting. All six fields are required, including nullable `expected_title`:
 Parsing proves structural validity, not authenticity, freshness or approval.
 Consumers own a trusted job-output/artifact handoff and must prevent benchmark
 code from replacing the captured target. See the [trusted-job example](VERIFYING_RELEASE_EVIDENCE.md#trusted-release-target-handoff).
-`revalidate_release_target(root, target, *, checkout=None)` reads the captured ID directly and
+`revalidate_release_target(root, target, *, checkout=None, dependencies=())` reads the captured ID directly and
 returns `GitHubRelease` after checking identity, title assertion, mutable stable
 draft state and resolved tag SHA. A missing/deleted ID fails; it never substitutes
 a replacement draft selected by tag.
 
 `publish_release_asset(root, repository, tag, asset, *, target=None, checkout=None,
-publish=False, limits=ArchiveLimits())` snapshots nonempty regular-file bytes to
+publish=False, limits=ArchiveLimits(), dependencies=())` snapshots nonempty regular-file bytes to
 private staging. Repository/tag must agree with the target. Without `target`,
 existing callers capture and verify a fresh target inside this invocation; bare
 stable tags still normalize to `vX.Y.Z`. That mode cannot protect an earlier build.
@@ -153,6 +155,12 @@ Long-running jobs must supply their preflight target. The old call signature and
 The optional `checkout` path adds an independently observed clean-source
 assertion at the target commit, before and after remote revalidation. It can be
 separate from `root`, the trusted runtime's transport working directory.
+For preflight, revalidation and publication, dependency-policy checks inspect
+`checkout` when supplied, otherwise `root`. Omitting `checkout` does not discover
+the release source: an empty transport directory may pass as dependency-free.
+Supply the source checkout or independently validate its configured dependency
+policy before using a transport-only root. `dependencies=()` still enforces the
+policy configured in the directory being inspected; it does not disable that check.
 `require_release_checkout(checkout, commit)` exposes that read-only observation.
 When supplied to publication, checkout drift blocks upload or subsequent
 publication; already attached bytes are left available for inspection. Keep the

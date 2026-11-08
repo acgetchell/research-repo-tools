@@ -6,10 +6,28 @@ import pytest
 import yaml
 
 from research_repo_tools import release_drafts, release_interfaces, release_validation
-from research_repo_tools.release_assets import ReleaseTarget
+from research_repo_tools.release_assets import ReleaseTarget, parse_release_target
+from research_repo_tools.release_receipts import TagSource, retrieve_draft_receipt
+from tests.releases import public_receipts_consumer
 
 SHA = "a" * 40
 REPOSITORY = "example/consumer"
+
+
+def test_documented_receipt_policy_retrieves_the_example_target(tmp_path, monkeypatch):
+    guide = Path(__file__).resolve().parents[2] / "docs/PREPARING_DRAFTS.md"
+    text = guide.read_text(encoding="utf-8")
+    source = text.split("```yaml\n", 1)[1].split("\n```", 1)[0]
+    document = text.split("```toml\n", 1)[1].split("\n```", 1)[0]
+    configuration = tmp_path / "receipt.toml"
+    configuration.write_text(document.replace("OWNER/REPO", "example/package"), encoding="utf-8", newline="\n")
+    policy = release_interfaces.load_receipt_policy(configuration)
+    monkeypatch.setattr(public_receipts_consumer, "POLICY", policy)
+    provider = public_receipts_consumer.Provider()
+    provider.workflow_text = source.encode("utf-8")
+    monkeypatch.setattr(release_validation.subprocess, "run", provider.execute)
+    result = retrieve_draft_receipt(policy, TagSource("refs/tags/v1.2.3", SHA), provider.read)
+    assert result.target == parse_release_target(result.target_bytes) == ReleaseTarget("example/package", "v1.2.3", 91, SHA, "v1.2.3")
 
 
 @pytest.mark.parametrize(

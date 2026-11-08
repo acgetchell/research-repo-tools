@@ -1,7 +1,9 @@
 # Reusing benchmark acquisitions
 
-This procedure is the v0.2.6 contract for consumer release preparation. Consumers
-own workloads, scientific acceptance, output declarations, and thin recipe/workflow
+This procedure describes the current candidate contract for consumer release
+preparation, including the v0.2.7 publication-receipt and interruption-recovery
+extensions. Check [release availability](../README.md#release-availability) before
+adoption. Consumers own workloads, scientific acceptance, output declarations, and thin recipe/workflow
 wiring. The shared package owns acquisition, trial receipts, validation, archive
 conversion, and evidence mechanics. See the [API and trust contract](candidate-reuse-api.md).
 

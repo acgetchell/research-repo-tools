@@ -1,10 +1,10 @@
 # Cargo example runner contract
 
-The release containing this capability adds `validation cargo-examples CONFIG`
-and `research_repo_tools.cargo_examples`. Consumers must pin the exact published
-release containing it before adoption. Implementation of issue #71 does not
-publish a release or perform consumer rollout. The existing `validation run`
-contract remains supported. See the [consumer example](RUNNING_CHECKS.md#cargo-examples)
+`validation cargo-examples CONFIG` and `research_repo_tools.cargo_examples`
+discover and execute a consumer's Cargo examples. Pin a published package and
+validate the consumer's selection and assertions when adopting the runner.
+The general `validation run` contract remains supported.
+See the [consumer example](RUNNING_CHECKS.md#cargo-examples)
 and [migration guidance](cargo-examples-migration.md).
 
 ## CLI and discovery
