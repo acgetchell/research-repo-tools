@@ -12,6 +12,7 @@ from dataclasses import replace
 from pathlib import Path
 from unittest.mock import patch
 
+from research_repo_tools import files as publication_files
 from research_repo_tools.cli import main
 from research_repo_tools.criterion import COMPARISON_SCHEMA, ConfidenceInterval, Estimate, Sample, compare_samples, serialize_comparison
 from research_repo_tools.evidence import Evidence, Provenance, fingerprint_files, load_evidence, publish_evidence, serialize_evidence
@@ -113,6 +114,27 @@ def fixture_git(root: Path, *args: str, input: bytes | None = None) -> bytes:
 
 
 class TestPublicationConsumer(unittest.TestCase):
+    def test_staging_edits_reject_before_replacing_any_output(self) -> None:
+        for changed in ("evidence.json", "README.md", "figures/timing.svg"):
+            with self.subTest(changed=changed), tempfile.TemporaryDirectory(prefix="publication café ") as temporary:
+                root = Path(temporary).resolve()
+                make_fixture(root)
+                plan = load_publication(root, "publication.toml")
+                before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+                stage = publication_files._stage_writes
+
+                def stage_then_edit(writes):
+                    staged = stage(writes)
+                    (root / changed).write_bytes(b"intervening edit\r\n\x00\xff")
+                    return staged
+
+                with patch.object(publication_files, "_stage_writes", side_effect=stage_then_edit):
+                    with self.assertRaisesRegex(ValueError, "changed after planning"):
+                        publish_publication(plan)
+                before[Path(changed)] = b"intervening edit\r\n\x00\xff"
+                self.assertEqual({path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}, before)
+                self.assertEqual((root / "figures").exists(), changed == "figures/timing.svg")
+
     def test_formatter_receives_candidate_contents_and_binary_target_inventory(self) -> None:
         with tempfile.TemporaryDirectory(prefix="publication café ") as temporary:
             root = Path(temporary).resolve()

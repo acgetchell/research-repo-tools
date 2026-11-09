@@ -464,16 +464,20 @@ def plan_publication(
     return plan
 
 
-def _verify_plan(plan: PublicationPlan) -> None:
+def _verify_snapshots(plan: PublicationPlan) -> None:
     _validate_distinct_paths(tuple(_path(plan.root, name) for name, _ in plan.originals))
-    for check in plan.glob_checks:
-        if _inventory(plan.root, check.patterns) != check.paths:
-            raise ValueError("publication source inventory changed after planning")
     for name, expected in plan.originals:
         path = _path(plan.root, name)
         actual = path.read_bytes() if path.exists() else None
         if actual != expected:
             raise ValueError(f"publication input or output changed after planning: {name}")
+
+
+def _verify_plan(plan: PublicationPlan) -> None:
+    _verify_snapshots(plan)
+    for check in plan.glob_checks:
+        if _inventory(plan.root, check.patterns) != check.paths:
+            raise ValueError("publication source inventory changed after planning")
     for check in plan.run_checks:
         from research_repo_tools.complete_runs import run_identity
         from research_repo_tools.run_reports import load_latest_run
@@ -500,13 +504,14 @@ def _verify_plan(plan: PublicationPlan) -> None:
 def publish_publication(plan: PublicationPlan) -> tuple[Path, ...]:
     """Recheck snapshots/tags and publish changed outputs in one shared transaction.
 
+    Recheck file snapshots after staging as well, before the first replacement.
     Shares replace_many's rollback/recovery contract. Requires exclusive writer
     control; snapshot checks do not provide locking or crash atomicity.
     """
     _verify_plan(plan)
     original = dict(plan.originals)
     changed = {plan.root / name: data for name, data in plan.outputs if data != original[name]}
-    replace_many(changed)
+    replace_many(changed, verify=lambda: _verify_snapshots(plan))
     return tuple(changed)
 
 

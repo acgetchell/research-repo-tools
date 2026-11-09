@@ -86,6 +86,8 @@ outlining. Its visual text metrics depend on the viewer's sans-serif font.
 
 Publication rechecks every input, reference, and output against its snapshot,
 including expected absence, immediately before calling `replace_many` once.
+File snapshots are checked again after staging and before the first replacement,
+so intervening edits remain intact and reject publication.
 It also repeats configured Git checks and expands each `GlobCheck` again to
 reject added, removed, renamed, unsafe, or aliased matching paths. The TOML adapter
 retains these checks for both `current-sources` and `current-harness`; files outside
