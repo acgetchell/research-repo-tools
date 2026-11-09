@@ -80,9 +80,11 @@ def _build_environment(root: Path, temporary: Path, policy: SourceBuildPolicy, u
     environment = {
         key: value
         for key, value in os.environ.items()
-        # setuptools locates vswhere/MSVC through ProgramFiles on Windows.
+        # setuptools locates vswhere through ProgramFiles; vswhere's COM service
+        # needs ProgramData to discover installed MSVC instances (vswhere#236).
         # Match case-insensitively while retaining the native spelling.
-        if key.upper() in {"PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TMP", "TEMP", "TMPDIR", "LANG", "LC_ALL", "PROGRAMFILES", "PROGRAMFILES(X86)"}
+        if key.upper()
+        in {"PATH", "SYSTEMROOT", "WINDIR", "COMSPEC", "PATHEXT", "TMP", "TEMP", "TMPDIR", "LANG", "LC_ALL", "PROGRAMFILES", "PROGRAMFILES(X86)", "PROGRAMDATA"}
     }
     home = temporary / "home"
     home.mkdir()

@@ -197,13 +197,13 @@ class TestSourceBuilds(unittest.TestCase):
 
 class TestBuildPolicy(unittest.TestCase):
     def test_build_environment_preserves_native_compiler_discovery_and_isolates_configuration(self) -> None:
-        for program_files in ("ProgramFiles", "PROGRAMFILES", "ProgramFiles(x86)", "PROGRAMFILES(X86)"):
-            with self.subTest(key=program_files), tempfile.TemporaryDirectory() as directory:
+        for discovery_key in ("ProgramFiles", "PROGRAMFILES", "ProgramFiles(x86)", "PROGRAMFILES(X86)", "ProgramData", "PROGRAMDATA"):
+            with self.subTest(key=discovery_key), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 uv = root / "uv.exe"
                 uv.write_bytes(b"native executable fixture")
                 inherited = {
-                    program_files: r"C:\Program Files",
+                    discovery_key: r"C:\Native toolchain",
                     "PATH": "native-path",
                     "PYTHONPATH": "untrusted",
                     "UV_INDEX_URL": "untrusted",
@@ -218,7 +218,7 @@ class TestBuildPolicy(unittest.TestCase):
                 ):
                     run.return_value.stdout = "# locked build requirements\n"
                     _, environment, _ = dependency_builds._build_environment(root, root, policy, uv)
-                self.assertEqual({key.upper(): value for key, value in environment.items()}[program_files.upper()], r"C:\Program Files")
+                self.assertEqual({key.upper(): value for key, value in environment.items()}[discovery_key.upper()], r"C:\Native toolchain")
                 self.assertEqual(environment["PATH"], "native-path")
                 self.assertEqual(environment["HOME"], str(root / "home"))
                 self.assertNotIn("PYTHONPATH", environment)
