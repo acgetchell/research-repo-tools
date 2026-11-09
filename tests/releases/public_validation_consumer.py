@@ -141,6 +141,53 @@ class TestValidationConsumer(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "portable plain filenames"):
                     download_artifact(POLICY.repository, {"id": 42}, Path("unused"), names)
 
+    def test_immutable_download_retries_transient_http_errors_without_partial_bytes(self):
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as archive:
+            archive.writestr("wheel.whl", b"exact\r\n\xff\x00bytes")
+        payload = stream.getvalue()
+        artifact = {"id": 42, "digest": f"sha256:{hashlib.sha256(payload).hexdigest()}", "size_in_bytes": len(payload)}
+        attempts = 0
+
+        def execute(args, **kwargs):
+            nonlocal attempts
+            attempts += 1
+            self.assertEqual(args, ["gh", "api", "repos/example/package/actions/artifacts/42/zip"])
+            self.assertEqual(kwargs["stdout"].tell(), 0)
+            self.assertEqual(kwargs["stdout"].read(), b"")
+            if attempts < 3:
+                kwargs["stdout"].write(b"incomplete" * len(payload))
+                raise subprocess.CalledProcessError(1, args, stderr=b"gh: HTTP 503\n")
+            kwargs["stdout"].write(payload)
+            return subprocess.CompletedProcess(args, 0)
+
+        with (
+            tempfile.TemporaryDirectory() as directory,
+            patch("research_repo_tools.release_validation.subprocess.run", side_effect=execute),
+            patch("research_repo_tools.release_validation.time.sleep") as sleep,
+        ):
+            destination = Path(directory) / "dist"
+            download_artifact(POLICY.repository, artifact, destination, ("wheel.whl",))
+            self.assertEqual((destination / "wheel.whl").read_bytes(), b"exact\r\n\xff\x00bytes")
+            self.assertEqual(attempts, 3)
+            self.assertEqual([call.args for call in sleep.call_args_list], [(1,), (2,)])
+
+    def test_download_retry_exhaustion_and_permanent_errors_never_publish(self):
+        artifact = {"id": 42, "digest": f"sha256:{'0' * 64}", "size_in_bytes": 100}
+        for diagnostic, attempts in ((b"gh: HTTP 503\n", 3), ("gh: HTTP 502\n", 3), (b"gh: HTTP 404\n", 1), (b"gh: HTTP 401\n", 1)):
+            with (
+                self.subTest(diagnostic=diagnostic),
+                tempfile.TemporaryDirectory() as directory,
+                patch("research_repo_tools.release_validation.subprocess.run", side_effect=subprocess.CalledProcessError(1, "gh", stderr=diagnostic)) as run,
+                patch("research_repo_tools.release_validation.time.sleep") as sleep,
+            ):
+                destination = Path(directory) / "dist"
+                with self.assertRaises(subprocess.CalledProcessError):
+                    download_artifact(POLICY.repository, artifact, destination, ("wheel.whl",))
+                self.assertEqual(run.call_count, attempts)
+                self.assertEqual(sleep.call_count, attempts - 1)
+                self.assertFalse(destination.exists())
+
     def test_original_zip_member_names_cannot_hide_nul_suffixes(self):
         stream = io.BytesIO()
         with zipfile.ZipFile(stream, "w") as archive:

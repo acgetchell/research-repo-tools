@@ -115,7 +115,7 @@ def verify_python_environment(graph: DependencyGraph, *, build_directory: Path |
     """
     from importlib.metadata import distributions
 
-    from research_repo_tools._dependency_probe import inspect_installation
+    from research_repo_tools._dependency_probe import MAX_NATIVE_BYTES, inspect_installation
     from research_repo_tools.dependency_build_receipts import MAX_WHEEL_BYTES, verify_build_receipt
     from research_repo_tools.dependency_builds import locked_sdist
     from research_repo_tools.dependency_policy import load_policy
@@ -161,9 +161,9 @@ def verify_python_environment(graph: DependencyGraph, *, build_directory: Path |
     locked = tomllib.loads((graph.root / "uv.lock").read_text(encoding="utf-8"))["package"]
     policy = load_policy(graph.root)
     builds = policy.source_builds if policy is not None else None
-    # Native development tools include large engines (Semgrep is over 200 MiB).
+    # The locked Linux Semgrep wheel expands to 286,642,049 bytes (>256 MiB).
     # Keep a finite package bound without changing selected-tool verification defaults.
-    native_limit = 256 * 1024 * 1024
+    native_limit = MAX_NATIVE_BYTES
     observations = []
     source_wheels = []
     scripts = environment / ("Scripts" if os.name == "nt" else "bin")

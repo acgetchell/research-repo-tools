@@ -196,6 +196,36 @@ class TestSourceBuilds(unittest.TestCase):
 
 
 class TestBuildPolicy(unittest.TestCase):
+    def test_build_environment_preserves_native_compiler_discovery_and_isolates_configuration(self) -> None:
+        for program_files in ("ProgramFiles", "PROGRAMFILES", "ProgramFiles(x86)", "PROGRAMFILES(X86)"):
+            with self.subTest(key=program_files), tempfile.TemporaryDirectory() as directory:
+                root = Path(directory)
+                uv = root / "uv.exe"
+                uv.write_bytes(b"native executable fixture")
+                inherited = {
+                    program_files: r"C:\Program Files",
+                    "PATH": "native-path",
+                    "PYTHONPATH": "untrusted",
+                    "UV_INDEX_URL": "untrusted",
+                    "HOME": "ambient",
+                }
+                policy = parse_build_policy({"packages": ["sample-pkg"], "group": "build"})
+                assert policy is not None
+                with (
+                    patch.dict(os.environ, inherited, clear=True),
+                    patch.object(dependency_builds, "run_safe_command") as run,
+                    patch.object(dependency_builds, "_tool_inventory", return_value={}),
+                ):
+                    run.return_value.stdout = "# locked build requirements\n"
+                    _, environment, _ = dependency_builds._build_environment(root, root, policy, uv)
+                self.assertEqual({key.upper(): value for key, value in environment.items()}[program_files.upper()], r"C:\Program Files")
+                self.assertEqual(environment["PATH"], "native-path")
+                self.assertEqual(environment["HOME"], str(root / "home"))
+                self.assertNotIn("PYTHONPATH", environment)
+                self.assertNotIn("UV_INDEX_URL", environment)
+                for call in run.call_args_list:
+                    self.assertEqual(call.kwargs["env"], environment)
+
     def test_source_build_selection_is_explicit_and_strict(self) -> None:
         policy = parse_build_policy({"packages": ["sample-pkg"], "group": "build"})
         self.assertEqual(policy.packages if policy else None, ("sample-pkg",))
@@ -255,12 +285,34 @@ class TestBuildPolicy(unittest.TestCase):
             assert isinstance(observed["files"], dict)
             self.assertIn("shared/first.py", observed["files"])
             self.assertNotIn("shared/second.py", observed["files"])
+            self.assertEqual(inspect_installation("first", paths=(site,), limit=512 * 1024 * 1024, shared_files=shared), observed)
+            with self.assertRaisesRegex(ValueError, "first: .*at most 512 MiB"):
+                inspect_installation("first", paths=(site,), limit=512 * 1024 * 1024 + 1)
             (site / "shared/unrecorded.py").write_bytes(b"raise RuntimeError('untrusted')\n")
             files = inspect_installation("first", paths=(site,), shared_files=shared)["files"]
             assert isinstance(files, dict)
             self.assertIn("shared/unrecorded.py", files)
             with self.assertRaisesRegex(ValueError, "byte limits"):
                 inspect_installation("first", paths=(site,), limit=8, shared_files=shared)
+
+    def test_wheel_limits_retain_small_default_and_allow_bounded_native_payloads(self) -> None:
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w", compression=zipfile.ZIP_DEFLATED) as archive:
+            archive.writestr("engine-1.0.dist-info/METADATA", b"Name: engine\nVersion: 1.0\n")
+            archive.writestr("engine-1.0.dist-info/WHEEL", b"Wheel-Version: 1.0\nTag: py3-none-any\n")
+            archive.writestr("engine-1.0.dist-info/RECORD", b"")
+            archive.writestr("engine.bin", b"x" * (32 * 1024 * 1024))
+        payload = stream.getvalue()
+        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+            observed = {"files": {name: hashlib.sha256(archive.read(name)).hexdigest() for name in archive.namelist()}}
+        with self.assertRaisesRegex(ValueError, "content limits"):
+            verify_wheel_payload("engine", payload, observed)
+        verify_wheel_payload("engine", payload, observed, limit=512 * 1024 * 1024)
+        with self.assertRaisesRegex(ValueError, "bounded byte limit"):
+            verify_wheel_payload("engine", payload, observed, limit=512 * 1024 * 1024 + 1)
+        observed["files"]["engine.bin"] = "0" * 64
+        with self.assertRaisesRegex(ValueError, "bytes differ"):
+            verify_wheel_payload("engine", payload, observed, limit=512 * 1024 * 1024)
 
 
 if __name__ == "__main__":

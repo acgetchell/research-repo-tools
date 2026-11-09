@@ -27,7 +27,7 @@ from packaging.utils import canonicalize_name, parse_wheel_filename
 from packaging.version import Version
 
 from research_repo_tools._archive_paths import ArchivePaths
-from research_repo_tools._dependency_probe import inspect_installation
+from research_repo_tools._dependency_probe import MAX_NATIVE_BYTES, inspect_installation
 from research_repo_tools._git_checkout import _in_checkout
 from research_repo_tools.evidence import _load_json
 from research_repo_tools.release_policy import dependency_names
@@ -359,7 +359,7 @@ def _published_wheel(
 
 def verify_wheel_payload(name: str, payload: bytes, observed: dict[str, Any], *, scripts: Path | None = None, limit: int = 32 * 1024 * 1024) -> None:
     """Compare installed bytes with a previously authenticated wheel payload."""
-    if type(limit) is not int or not 0 < limit <= 256 * 1024 * 1024 or len(payload) > limit:
+    if type(limit) is not int or not 0 < limit <= MAX_NATIVE_BYTES or len(payload) > limit:
         raise ValueError("dependency wheel exceeds its bounded byte limit")
     files = _table(observed.get("files"), "installed file hashes")
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:

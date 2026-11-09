@@ -51,8 +51,10 @@ configuration overrides fail closed.
 
 The published artifact proof uses PyPI and `files.pythonhosted.org`, with
 32 MiB compressed/uncompressed wheel bounds for individually selected tooling
-and 256 MiB bounds for the complete native development environment, which may
-include large engines such as Semgrep. Both retain a 10,000 member/file limit.
+and 512 MiB compressed/uncompressed bounds per package for the complete native
+development environment, which may include large engines such as Semgrep.
+Retained source-built wheels are bounded at 256 MiB. All checks retain a
+10,000 member/file limit.
 Custom indexes, missing wheel artifacts, or ambiguous installed wheel tags fail
 closed. Package directories are inventoried for added code, including files
 omitted from RECORD. In complete-environment checks, shared namespace files are

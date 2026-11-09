@@ -5,12 +5,15 @@ from importlib.metadata import Distribution, PackagePath, distributions
 from pathlib import Path, PureWindowsPath
 
 MAX_INSTALLED_BYTES = 32 * 1024 * 1024
+# Full native environments include engines exceeding 256 MiB on Linux.
+# Callers must opt in; selected-tool observations retain their smaller default.
+MAX_NATIVE_BYTES = 512 * 1024 * 1024
 MAX_INSTALLED_FILES = 10000
 
 
 def _hashes(dist: Distribution, files: list[PackagePath], *, limit: int = MAX_INSTALLED_BYTES, shared_files: frozenset[str] = frozenset()) -> dict[str, str]:
-    if type(limit) is not int or not 0 < limit <= 256 * 1024 * 1024:
-        raise ValueError("installed package byte limit must be positive and at most 256 MiB")
+    if type(limit) is not int or not 0 < limit <= MAX_NATIVE_BYTES:
+        raise ValueError("installed package byte limit must be positive and at most 512 MiB")
     base = Path(str(dist.locate_file("")))
     names = set()
     roots = set()
@@ -70,7 +73,10 @@ def inspect_installation(
     if files is None:
         raise ValueError(f"{name}: installed RECORD is missing")
     # Direct sources are identified by PEP 610, never by their version label.
-    hashes = {} if direct is not None else _hashes(dist, files, limit=limit, shared_files=shared_files)
+    try:
+        hashes = {} if direct is not None else _hashes(dist, files, limit=limit, shared_files=shared_files)
+    except ValueError as error:
+        raise ValueError(f"{name}: {error}") from error
     return {
         "name": name,
         "version": dist.version,
