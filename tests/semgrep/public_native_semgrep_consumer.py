@@ -267,6 +267,16 @@ class TestNativeSemgrepConsumer(unittest.TestCase):
         self.assertEqual(semgrep.check(settings), 0)
         self.assertEqual({item: item.read_bytes() for item in (path, fixed)}, original)
 
+    def test_plain_fixture_annotations_preserve_native_line_numbers(self):
+        from research_repo_tools import semgrep
+
+        settings = self.settings([{"id": "rust.print", "languages": ["rust"], "pattern": "println!(...)", "message": "print", "severity": "WARNING"}])
+        settings = replace(settings, semgrep=replace(settings.semgrep, fixtures="fixtures"))
+        source = self.write("fixtures/print.rs", '// before\x85\u2028\u2029after\r\n// ruleid: rust.print\r\nfn main() { println!("fixture"); }\r\n')
+        original = source.read_bytes()
+        self.assertEqual(semgrep.check(settings), 0)
+        self.assertEqual(source.read_bytes(), original)
+
     def test_fixture_and_production_scan_verify_the_managed_lock(self):
         from research_repo_tools import semgrep
 

@@ -181,6 +181,15 @@ def test_main_matches_markdown_finding_after_blank_line_and_code_fence(monkeypat
     assert _run_main(monkeypatch, fixture, {"results": [_result("docs.foo", 4, path=fixture.name)]}) == 0
 
 
+@pytest.mark.parametrize("separator", ["\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029", "\r"])
+def test_fixture_annotations_use_native_lf_lines(tmp_path: Path, monkeypatch: pytest.MonkeyPatch, separator: str) -> None:
+    fixture = tmp_path / "fixture.rs"
+    original = f"// before{separator}after\r\n// ruleid: rust.foo\r\nfn main() {{ bad(); }}\r\n".encode("utf-8")
+    fixture.write_bytes(original)
+    assert _run_main(monkeypatch, fixture, {"results": [_result("rust.foo", 3)]}) == 0
+    assert fixture.read_bytes() == original
+
+
 @pytest.mark.parametrize("include_matching", [False, True])
 def test_main_rejects_findings_from_another_file(tmp_path, monkeypatch, capsys, include_matching):
     fixture = tmp_path / "fixture.rs"

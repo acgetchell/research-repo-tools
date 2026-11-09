@@ -9,6 +9,7 @@ from pathlib import Path
 from typing import TypeIs
 
 from research_repo_tools.evidence import _load_json
+from research_repo_tools.semgrep_docs import _source_lines
 
 RULE_ANNOTATION = re.compile(r"\bruleid:\s*([A-Za-z0-9_.-]+(?:\s*,\s*[A-Za-z0-9_.-]+)*)")
 
@@ -125,7 +126,7 @@ type ExpectedFinding = tuple[str, int]
 
 def _expected_findings(path: Path) -> collections.Counter[ExpectedFinding]:
     expected: collections.Counter[ExpectedFinding] = collections.Counter()
-    lines = path.read_text(encoding="utf-8").splitlines()
+    lines = _source_lines(path)
     for line_number, line in enumerate(lines, start=1):
         for match in RULE_ANNOTATION.finditer(line):
             finding_line = line_number + 1
