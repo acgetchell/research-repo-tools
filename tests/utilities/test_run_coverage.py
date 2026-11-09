@@ -124,7 +124,18 @@ def test_coverage_keeps_child_branch_data_and_reports_test_status(tmp_path, test
     assert report.find(".//class[@filename='application.py']/lines/line[@number='3'][@hits='1']") is not None
     branch = report.find(".//class[@filename='application.py']/lines/line[@number='2'][@branch='true']")
     assert branch is not None and branch.get("condition-coverage") == "50% (1/2)"
-    assert list((tmp_path / "coverage").iterdir()) == [tmp_path / "coverage" / "cobertura.xml"]
+    if test_status:
+        (retained,) = (tmp_path / "coverage").glob("failed-*")
+        assert f"Pytest failed with exit status {test_status}" in result.stderr
+        assert str(retained) in result.stderr
+        diagnostics = ET.parse(retained / "pytest.xml")
+        failure = diagnostics.find(".//testcase[@name='test_child']/failure")
+        assert failure is not None and "assert False" in (failure.text or "")
+        assert (retained / ".coverage").read_bytes() == (tmp_path / ".coverage").read_bytes()
+        assert (retained / "cobertura.xml").read_bytes() == (tmp_path / "coverage/cobertura.xml").read_bytes()
+        assert list(retained.glob(".coverage.*"))
+    else:
+        assert list((tmp_path / "coverage").iterdir()) == [tmp_path / "coverage" / "cobertura.xml"]
 
 
 @pytest.mark.parametrize("damage", [b"not a coverage database\n", b"SQLite format 3\0" + b"\0" * 100])

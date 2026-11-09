@@ -56,6 +56,7 @@ class TestCoverageCleanup(ConsumerCase):
             "coverage/failed-retained/.coverage": b"failed database",
             "coverage/failed-retained/.coverage.worker": b"failed shard",
             "coverage/failed-retained/cobertura.xml": b"staged report",
+            "coverage/failed-retained/pytest.xml": b"test failure report",
             "coverage/.run-interrupted/.coverage.worker": b"interrupted shard",
         }
         for name, data in retained.items() | removable.items():
