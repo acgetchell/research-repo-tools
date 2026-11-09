@@ -175,6 +175,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Reject input or output edits detected after publication staging.
   - Match Semgrep fixture annotations using native LF line boundaries.
   - Refresh the locked bracex dependency to 3.2.2.
+- Verify source-built Python dependencies [`a859edd`](https://github.com/acgetchell/research-repo-tools/commit/a859edd85c189ed3a4df3aca5c23ee0b1ffd9563)
+
+  - Rebuild explicitly selected PyPI sources with hash-locked build tools
+  - Authenticate retained native wheels and build evidence against current inputs
+  - Verify pinned external executables, wheel relocation, and shared namespaces
+  - Declare the release dependency graph and require native provenance in CI
+  - Document source-build preparation and recovery before tagging v0.2.7
 
 ### Maintenance
 
