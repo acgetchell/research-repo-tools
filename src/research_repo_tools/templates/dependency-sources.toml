@@ -14,6 +14,15 @@ release-owned = ["."]
 # directory = "."
 # release-owned = ["."]
 
+# If a root Python project's dependencies require source builds, pin all build
+# requirements in this group in pyproject.toml and uv.lock, then prepare native
+# receipts with `just release-dependency-builds` on each validation machine.
+# [source-builds]
+# packages = ["package-needing-a-build"]
+# group = "build"
+# Backends packaging downloaded executables also require exact per-platform
+# [[source-builds.external]] pins; see README.md#source-built-python-dependencies.
+
 # A named source selects an already declared dependency. Replace these example
 # values, then preview with `just dependency-source upstream`.
 # [sources.upstream]

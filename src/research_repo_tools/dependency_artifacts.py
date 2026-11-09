@@ -105,7 +105,7 @@ def _cargo_input(path: Path, verified: VerifiedSource, *, provider: SourceProvid
     return snapshot
 
 
-def verify_python_environment(graph: DependencyGraph) -> None:
+def verify_python_environment(graph: DependencyGraph, *, build_directory: Path | None = None) -> None:
     """Inspect existing site-packages statically; never import consumer packages.
 
     Universal locks prove all target/extra variants. For distributions actually
@@ -116,7 +116,10 @@ def verify_python_environment(graph: DependencyGraph) -> None:
     from importlib.metadata import distributions
 
     from research_repo_tools._dependency_probe import inspect_installation
-    from research_repo_tools.dependency_provenance import _check_installation, _published_wheel
+    from research_repo_tools.dependency_build_receipts import MAX_WHEEL_BYTES, verify_build_receipt
+    from research_repo_tools.dependency_builds import locked_sdist
+    from research_repo_tools.dependency_policy import load_policy
+    from research_repo_tools.dependency_provenance import _check_installation, _published_wheel, verify_wheel_payload
 
     environment = graph.root / os.environ.get("UV_PROJECT_ENVIRONMENT", ".venv")
     if not environment.exists():
@@ -140,6 +143,7 @@ def verify_python_environment(graph: DependencyGraph) -> None:
     if set(installed) - owned - {dependency.source.package for dependency in graph.dependencies}:
         raise ValueError("dependency environment contains unlocked distributions")
     roots = set()
+    shared_files = set()
     for dist in inventory:
         records = dist.files
         if records is None:
@@ -147,6 +151,7 @@ def verify_python_environment(graph: DependencyGraph) -> None:
         for record in records:
             if record.parts and ".." not in record.parts:
                 roots.add(record.parts[0])
+                shared_files.add(record.as_posix())
     legacy = _legacy_uv_hooks(sites[0])
     recognized = {path.name for path, content in legacy.files if content is not None}
     if {path.name for path in sites[0].iterdir()} - roots - {"__pycache__"} - recognized:
@@ -154,16 +159,36 @@ def verify_python_environment(graph: DependencyGraph) -> None:
     import tomllib
 
     locked = tomllib.loads((graph.root / "uv.lock").read_text(encoding="utf-8"))["package"]
+    policy = load_policy(graph.root)
+    builds = policy.source_builds if policy is not None else None
+    # Native development tools include large engines (Semgrep is over 200 MiB).
+    # Keep a finite package bound without changing selected-tool verification defaults.
+    native_limit = 256 * 1024 * 1024
     observations = []
+    source_wheels = []
+    scripts = environment / ("Scripts" if os.name == "nt" else "bin")
     for name in sorted(set(installed) - owned):
-        observed = inspect_installation(name, paths=tuple(sites))
+        # Every RECORD is checked below. Shared namespace files belong to their
+        # own distribution; unrecorded additions still fail their namespace scan.
+        observed = inspect_installation(name, paths=tuple(sites), limit=native_limit, shared_files=frozenset(shared_files))
         matches = [item for item in locked if canonicalize_name(item["name"]) == name and item["version"] == observed.get("version")]
         if len(matches) != 1 or observed.get("direct_url") is not None:
             raise ValueError("installed dependency differs from the registry lock or has development provenance")
         _check_installation(observed, name, matches[0]["version"])
-        _published_wheel(name, matches[0]["version"], table(matches[0], "locked package"), (observed,), require_sdist=False)
+        if builds is not None and name in builds.packages:
+            version, source = locked_sdist(graph, name)
+            receipt = verify_build_receipt(graph.root, name, version, source, directory=build_directory)
+            verify_wheel_payload(name, receipt.payload, observed, scripts=scripts, limit=MAX_WHEEL_BYTES)
+            source_wheels.append((name, version, source, observed))
+        else:
+            _published_wheel(
+                name, matches[0]["version"], table(matches[0], "locked package"), (observed,), require_sdist=False, limit=native_limit, scripts=scripts
+            )
         observations.append((name, observed))
     for name, observed in observations:
-        if inspect_installation(name, paths=tuple(sites)) != observed:
+        if inspect_installation(name, paths=tuple(sites), limit=native_limit, shared_files=frozenset(shared_files)) != observed:
             raise ValueError("installed dependency changed during verification")
     legacy.verify()
+    for name, version, source, observed in source_wheels:
+        receipt = verify_build_receipt(graph.root, name, version, source, directory=build_directory)
+        verify_wheel_payload(name, receipt.payload, observed, scripts=scripts, limit=native_limit)

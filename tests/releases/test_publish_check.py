@@ -142,6 +142,7 @@ def test_hosted_package_checks_run_variadic_source_recipe_separately():
     workflow = yaml.safe_load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"))
     steps = workflow["jobs"]["source"]["steps"]
     assert [step["run"] for step in steps if step.get("run", "").startswith("uv run --locked just ")] == [
+        "uv run --locked just release-dependency-builds",
         "uv run --locked just check",
         "uv run --locked just ${{ matrix.test-recipe }}",
     ]

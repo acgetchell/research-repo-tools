@@ -159,6 +159,7 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--final-release", action="store_true")
     command.add_argument("--previous-release")
     release.add_parser("dependencies", help="verify selected upstream pins, lock and installed bytes before release acquisition or publication")
+    release.add_parser("dependency-builds", help="rebuild configured source dependencies and authenticate their local wheel outputs")
     add_evidence_commands(release)
     command = release.add_parser(
         "gate",
@@ -764,6 +765,12 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
 
         return review.run(settings.root, base=args.base if args.action == "branch" else None)
     if args.group == "release":
+        if args.action == "dependency-builds":
+            from research_repo_tools.dependency_builds import prepare_dependency_builds
+
+            wheels = prepare_dependency_builds(settings.root)
+            print(f"Prepared {len(wheels)} authenticated local dependency builds.")
+            return 0
         if args.action == "dependencies":
             from research_repo_tools.dependency_provenance import check_release_dependencies
 

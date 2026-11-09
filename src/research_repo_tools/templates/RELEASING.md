@@ -115,11 +115,22 @@ preparation.
 ### 4. Validate the release branch
 
 ```bash
+just release-dependency-builds
+just release-dependencies
 just ci
 just release-version-check
 ```
 
 Consumers retain their packaging, feature, MSRV, platform and scientific checks.
+`release-dependency-builds` prepares explicitly configured Python source builds;
+it has no effects when the policy does not select any. Repeat it after changes
+to the lock, policy, manifest, interpreter or builder. Its authenticated receipts
+are machine-local evidence, not portable attestations or published wheel claims.
+`release-dependencies` verifies the checked-in `dependency-sources.toml`, registry
+sources, and installed dependency provenance before the release PR is merged.
+Declare each dependency-bearing project and its release-owned package boundaries;
+include build requirements in the native lock and retain the policy in source
+distributions and release evidence.
 Run additional registry dry-run checks here if they are not already part of
 `just ci`. The final version check requires matching metadata and complete,
 dated release notes.

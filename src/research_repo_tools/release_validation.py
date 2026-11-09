@@ -266,7 +266,7 @@ POLICY = ValidationPolicy(
             )
             for platform in ("ubuntu-24.04", "macos-15", "windows-2025")
             for stage, steps in (
-                ("source", ("Retrieve distributions by immutable ID", "Validate source policy", "Run source tests")),
+                ("source", ("Retrieve distributions by immutable ID", "Verify native dependency provenance", "Validate source policy", "Run source tests")),
                 ("distributions", ("Retrieve distributions by immutable ID", "Validate installed distributions")),
                 ("setup", ("Retrieve distributions by immutable ID", "Exercise native setup and Cargo updates from the built wheel")),
                 ("check", ("Require all native validation stages",)),

@@ -145,6 +145,10 @@ release-check tag:
 release-dependencies:
     uv run --locked --group dev research-repo-tools release dependencies
 
+# Rebuild configured source dependencies and authenticate local wheel outputs.
+release-dependency-builds:
+    uv run --locked --group dev research-repo-tools release dependency-builds
+
 # Create or verify evidence; add --format summary for human-readable verification.
 release-evidence +args:
     uv run --locked --group dev research-repo-tools release evidence "$@"

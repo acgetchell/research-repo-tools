@@ -8,7 +8,9 @@ MAX_INSTALLED_BYTES = 32 * 1024 * 1024
 MAX_INSTALLED_FILES = 10000
 
 
-def _hashes(dist: Distribution, files: list[PackagePath]) -> dict[str, str]:
+def _hashes(dist: Distribution, files: list[PackagePath], *, limit: int = MAX_INSTALLED_BYTES, shared_files: frozenset[str] = frozenset()) -> dict[str, str]:
+    if type(limit) is not int or not 0 < limit <= 256 * 1024 * 1024:
+        raise ValueError("installed package byte limit must be positive and at most 256 MiB")
     base = Path(str(dist.locate_file("")))
     names = set()
     roots = set()
@@ -30,13 +32,15 @@ def _hashes(dist: Distribution, files: list[PackagePath]) -> dict[str, str]:
             if path.is_symlink() and path.is_dir():
                 raise ValueError("published dependency proof does not support symlinked package directories")
             if path.is_file() and path.suffix != ".pyc":
-                names.add(path.relative_to(base).as_posix())
+                relative = path.relative_to(base).as_posix()
+                if relative not in shared_files:
+                    names.add(relative)
             if len(names) > MAX_INSTALLED_FILES:
                 raise ValueError("installed package exceeds file limits")
     if len(names) > MAX_INSTALLED_FILES:
         raise ValueError("installed package exceeds file limits")
     result = {}
-    remaining = MAX_INSTALLED_BYTES
+    remaining = limit
     for name in sorted(names):
         with (base / name).open("rb") as stream:
             data = stream.read(remaining + 1)
@@ -47,7 +51,9 @@ def _hashes(dist: Distribution, files: list[PackagePath]) -> dict[str, str]:
     return result
 
 
-def inspect_installation(name: str, *, paths: tuple[Path, ...] | None = None) -> dict[str, object]:
+def inspect_installation(
+    name: str, *, paths: tuple[Path, ...] | None = None, limit: int = MAX_INSTALLED_BYTES, shared_files: frozenset[str] = frozenset()
+) -> dict[str, object]:
     """Observe metadata and installed bytes without importing the selected package."""
     import re
 
@@ -64,7 +70,7 @@ def inspect_installation(name: str, *, paths: tuple[Path, ...] | None = None) ->
     if files is None:
         raise ValueError(f"{name}: installed RECORD is missing")
     # Direct sources are identified by PEP 610, never by their version label.
-    hashes = {} if direct is not None else _hashes(dist, files)
+    hashes = {} if direct is not None else _hashes(dist, files, limit=limit, shared_files=shared_files)
     return {
         "name": name,
         "version": dist.version,

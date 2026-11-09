@@ -265,6 +265,50 @@ do not assemble Git URLs or implement their own dependency guard. Workspace
 ownership, registry proof limits and recovery are described in the
 [dependency source guide][dependency-sources].
 
+### Source-built Python dependencies
+
+When a locked PyPI dependency needs a native source build, explicitly select it
+in the canonical policy and pin its build requirements in a locked dependency
+group. One root Python project is supported for source-build preparation:
+
+```toml
+[source-builds]
+packages = ["package-needing-a-build"]
+group = "build"
+```
+
+Run `just release-dependency-builds` before `just release-dependencies`. The
+builder checks the published sdist against the lock, installs hash-locked build
+tools from wheels into a fresh environment, builds with automatic build dependency
+resolution disabled, and installs the resulting wheel. It never certifies an
+existing local installation without rebuilding it. The release gate compares
+installed files with that authenticated wheel, including supported `purelib`,
+`platlib`, environment-relative `data`, and unchanged native `scripts` relocation. Other wheel relocation
+schemes or rewritten script shebangs remain unsupported.
+
+Backends that package downloaded executables must declare each platform's input
+under `[[source-builds.external]]`: `package`, `platform`, exact GitHub release
+asset `url`, `sha256`, archive `member`, and destination `wheel-member`. The builder
+independently checks the archive hash and compares the packaged executable byte
+for byte. This repository's [policy](dependency-sources.toml) provides a complete
+actionlint example. Keep these pins synchronized when updating that dependency.
+
+Receipts and retained wheels live in `~/.research-repo-tools/source-builds`,
+outside the checkout. `RESEARCH_REPO_TOOLS_BUILD_STORE` can select another absolute,
+private directory outside it. Receipts authenticate the source, lock, policy,
+manifest, build-tool inventory, builder, interpreter, native platform and output
+wheel using a machine-local key. Changes require rebuilding. Each CI runner
+creates its own evidence; do not copy signing keys between machines.
+
+This trusts the local runtime, filesystem, native toolchain and verified upstream
+build hooks. A fresh virtual environment is not a security sandbox; build hooks
+can execute native tools or access the network. The receipt records observed
+inputs and output, not a complete system dependency closure, reproducible build,
+portable attestation, or publisher signature. Keep the store private using user
+permissions on POSIX and the user profile's ACLs on Windows. If installation
+fails partway, rerun preparation; release verification continues to reject any
+unverified installed payload.
+
 ## Common workflows
 
 These are independent commands; run only the workflow you intend. Some require

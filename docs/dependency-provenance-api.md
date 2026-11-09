@@ -49,13 +49,25 @@ with the observed root selected explicitly. Consumer build hooks are disabled;
 inherited project-directory selectors cannot redirect the check. Separate uv
 configuration overrides fail closed.
 
-The supported artifact proof uses PyPI and `files.pythonhosted.org`, with
-32 MiB compressed/uncompressed wheel bounds and at most 10,000 members.
-Wheels requiring `.data` relocation, custom indexes, missing wheel artifacts,
-or ambiguous installed wheel tags fail closed. Package directories are also
-inventoried for added code, including files omitted from RECORD. Shared namespace
-directories containing other packages and symlinked package directories are
-unsupported. Installed observation is bounded to 32 MiB and 10,000 files.
+The published artifact proof uses PyPI and `files.pythonhosted.org`, with
+32 MiB compressed/uncompressed wheel bounds for individually selected tooling
+and 256 MiB bounds for the complete native development environment, which may
+include large engines such as Semgrep. Both retain a 10,000 member/file limit.
+Custom indexes, missing wheel artifacts, or ambiguous installed wheel tags fail
+closed. Package directories are inventoried for added code, including files
+omitted from RECORD. In complete-environment checks, shared namespace files are
+verified against their owning distributions; unrecorded files still fail.
+Symlinked package directories remain unsupported.
+
+`prepare_dependency_builds(root)` rebuilds explicitly selected sdists using
+hash-locked build-tool wheels and issues authenticated local receipts. It then
+installs and verifies the resulting wheels. `verify_build_receipt` binds retained
+wheel bytes to the live manifest, lock, policy, builder, interpreter and platform.
+It rejects unauthenticated receipt content and does not import installed dependencies.
+Complete-environment checks support `purelib`, `platlib`, environment-relative
+`data` and byte-preserving native script relocation for both published and
+authenticated source-built wheels. Other relocation schemes fail closed. See the
+[source-build trust boundary](../README.md#source-built-python-dependencies).
 Installer-generated RECORD,
 bytecode and entry-point wrappers are not publication evidence; package payloads,
 METADATA and WHEEL bytes are compared. Matching normal and isolated installations
