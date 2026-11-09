@@ -190,6 +190,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Preserve Windows compiler discovery data [`1a1886c`](https://github.com/acgetchell/research-repo-tools/commit/1a1886c5db0f6080918fefff91cd8ecc080ad834)
 
   Preserve ProgramData so vswhere can locate installed MSVC toolchains in the isolated source-build environment.
+- Bound dependency provenance verification work [`f6add17`](https://github.com/acgetchell/research-repo-tools/commit/f6add17c3b2b9b94c9830308a3f428b9266db529)
+
+  - Stream installed file hashes with bounded buffers
+  - Reuse parsed distribution snapshots while retaining fresh identity and byte checks
+  - Report provenance phase timings and allow 60 minutes for all native source jobs
+  - Apply the same byte limit when rechecking authenticated source-built wheels
 
 ### Maintenance
 
