@@ -182,6 +182,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Verify pinned external executables, wheel relocation, and shared namespaces
   - Declare the release dependency graph and require native provenance in CI
   - Document source-build preparation and recovery before tagging v0.2.7
+- Restore native dependency validation [`b1c4950`](https://github.com/acgetchell/research-repo-tools/commit/b1c4950fd5cb68925c3c0ad44db52c0dd8b07cdb)
+
+  - Preserve Windows compiler discovery in isolated source builds
+  - Verify large Linux dependency payloads within an explicit native byte bound
+  - Retry transient immutable artifact downloads without accepting partial bytes
 
 ### Maintenance
 
