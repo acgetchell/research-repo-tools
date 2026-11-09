@@ -100,7 +100,7 @@ def plan_clean(root: Path) -> CleanPlan:
             files = []
             recognized = True
             for child in sorted(path.iterdir()):
-                if child.name not in {".coverage", "cobertura.xml"} and not child.name.startswith(".coverage."):
+                if child.name not in {".coverage", "cobertura.xml", "pytest.xml"} and not child.name.startswith(".coverage."):
                     recognized = False
                     continue
                 file = _file(child)

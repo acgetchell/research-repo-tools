@@ -5,6 +5,189 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.7] - 2026-11-09
+
+### ⚠️ Breaking Changes
+
+- ReleaseRule now takes FixedValue or ReleaseSource;
+  TrialSchedule takes an order variant; Estimate takes an optional complete
+  ConfidenceInterval. Python callers must migrate for v0.2.7. Existing valid
+  TOML, JSON, CSV, and retained evidence formats keep their contracts.
+
+#### docs(release): clarify the draft writer isolation boundary
+
+  Limit the Just recipe example to a trusted local project environment and
+  direct CI writers with repository-write credentials to the isolated,
+  exactly pinned no-checkout workflow.
+
+### Merged Pull Requests
+
+- Preserve publication snapshots and Semgrep fixture lines [#210](https://github.com/acgetchell/research-repo-tools/pull/210)
+- Retrieve draft receipts, clean coverage, and refresh docs [#209](https://github.com/acgetchell/research-repo-tools/pull/209)
+- Prepare retained drafts, enforce typed states, and parallelize validation [#207](https://github.com/acgetchell/research-repo-tools/pull/207)
+- Resume scheduled suites and separate phase inputs [#205](https://github.com/acgetchell/research-repo-tools/pull/205)
+- Bump astral-sh/setup-uv [#202](https://github.com/acgetchell/research-repo-tools/pull/202)
+- Preserve exact Git development pins during updates [#201](https://github.com/acgetchell/research-repo-tools/pull/201)
+- Honor suite provenance and release floors [#199](https://github.com/acgetchell/research-repo-tools/pull/199)
+- Verify Python and Cargo dependency sources [#198](https://github.com/acgetchell/research-repo-tools/pull/198)
+- Verify development pins and published tooling [#195](https://github.com/acgetchell/research-repo-tools/pull/195)
+- Report rejected gates as failed [#192](https://github.com/acgetchell/research-repo-tools/pull/192)
+- Support committed benchmark evidence and release summaries [#190](https://github.com/acgetchell/research-repo-tools/pull/190)
+
+### Added
+
+- Support committed benchmark evidence and release summaries [#190](https://github.com/acgetchell/research-repo-tools/pull/190)
+  [`1308688`](https://github.com/acgetchell/research-repo-tools/commit/130868893b17497b610395054fc9222771648864)
+
+#### feat: support committed benchmark evidence and release summaries
+  - Accept exact publisher-generated benchmark evidence with independently
+    captured acquisition identity, pinned receipts, and preserved run history.
+  - Present readable release-evidence summaries while preserving JSON handoffs,
+    signatures, integrity checks, freshness checks, and approval revalidation.
+  - Retain raw acquisitions across failed report promotion and allow inspection
+    and retries without repeating measurement.
+  - Reject malformed process, selection, Cargo documentation, and release-policy
+    inputs before effects, and retain complete coverage evidence on failure.
+  - Close failed HTTP responses and preserve portable output bytes and diagnostics.
+#### fix: clarify candidate receipts and narrow benchmark evidence scope
+  - Document the paired publication receipt arguments and independently trusted
+    digest required when candidate policy declares a report.
+  - Remove unrelated Cargo documentation and security inventory changes from
+    the benchmark evidence follow-up, retaining their existing base behavior.
+
+- Verify development pins and published tooling [#195](https://github.com/acgetchell/research-repo-tools/pull/195)
+  [`a4640b0`](https://github.com/acgetchell/research-repo-tools/commit/a4640b0efd8f2a7c2632f834998fc4b46e5c0000)
+
+#### feat(release): verify development pins and published tooling
+  - Accept exact Git tooling pins for development while requiring published
+    dependencies at release acquisition, evidence, and publication boundaries.
+  - Verify declarations, locks, installed payloads, and isolated runtime sources
+    without executing consumer environment startup or build hooks.
+  - Share typed release and GitHub commit selection through the standalone
+    bootstrap, Just recipe, and GitHub Action, rejecting unavailable sources.
+#### fix(release): harden source lookups and dependency gates
+  - Preserve recovery diagnostics for truncated registry and tooling responses.
+  - Authenticate GitHub API lookups without forwarding credentials to raw
+    content, package indexes, or redirect destinations.
+  - Carry standalone dependency policy through performance and candidate APIs,
+    including candidate revalidation before returning acceptance.
+#### fix(tooling): keep lookup credentials out of child processes
+  - Give the shared Action a lookup-only GitHub credential and remove it from
+    normal and legacy tooling launches.
+  - Preserve explicitly supplied authentication for tooling commands that need it.
+  - Reject malformed lookup credentials before HTTP transport without disclosing
+    their values in diagnostics.
+
+- Verify Python and Cargo dependency sources [#198](https://github.com/acgetchell/research-repo-tools/pull/198)
+  [`9d0337f`](https://github.com/acgetchell/research-repo-tools/commit/9d0337fbfbd1130d7387f89664cb77ae8c95e4a5)
+
+#### feat(deps): verify Python and Cargo dependency sources
+
+  Add a shared source policy and typed selectors for exact PyPI/crates.io
+  releases and GitHub development commits. Provide preview/apply transitions
+  that resolve native locks before publishing manifests and locks together.
+
+  Verify configured release dependency graphs and consumed package bytes
+  against eligible registry artifacts, with explicit workspace ownership
+  and unchanged-input checks at release boundaries.
+#### fix(deps): harden source transitions and release verification
+
+  Require an explicit source policy for dependency-bearing releases and retain
+  both legacy and graph verification without duplicate identity results. Pace
+  crates.io metadata requests and recognize legacy uv hooks by exact content.
+
+  Preserve managed launcher settings, resolve Cargo source changes using the
+  current lock's origin, and find inherited versions in verified workspace
+  manifests. Bound checkout snapshots before copying and describe publication
+  as recoverable across files.
+#### fix(deps): accept uv tool launcher directories
+
+  Allow uv tool installation directories during source verification so managed
+  Windows launchers can run the release gate without permitting source overrides.
+
+- [**breaking**] Prepare retained drafts, enforce typed states, and parallelize validation [#207](https://github.com/acgetchell/research-repo-tools/pull/207)
+  [`5ad89e0`](https://github.com/acgetchell/research-repo-tools/commit/5ad89e0f8ea861deb140109c25a30a254b27189d)
+
+#### feat(release)!: prepare retained drafts with typed domain states
+  - Prepare unpublished stable drafts from retained signed evidence and exact
+    generated notes through a package-neutral API and CLI.
+  - Bind retries to durable intent and captured release IDs, and authenticate
+    the isolated writer handoff without executing checkout code.
+  - Model release rules, trial ordering, confidence intervals, fixture matching,
+    authentication, and recovery with explicit alternatives.
+  - Preserve notebook, scanner, measurement, and adoption-plan invariants across
+    direct construction, nested aliases, and replacement.
+
+- Retrieve draft receipts, clean coverage, and refresh docs [#209](https://github.com/acgetchell/research-repo-tools/pull/209)
+  [`cd8594f`](https://github.com/acgetchell/research-repo-tools/commit/cd8594f658b5bf3ade063a685834565cc62e0cb3)
+
+#### feat(release): retrieve original draft receipts and clean coverage
+  - Authenticate the original tag-push receipt by source, workflow, successful
+    gates, immutable artifact identity, digest, and exact retained files.
+  - Freeze the original run and artifact for retries, with explicit manual
+    recovery and an outside-checkout CLI handoff.
+  - Export safe coverage cleanup and compose it into just clean while preserving
+    current reports, unrelated files, and stale-plan safeguards.
+  - Refresh consumer, API, release, and development guidance and retire the
+    obsolete MCMC extraction document.
+#### fix(clean): report partial cleanup and clarify release guidance
+  - Preserve early validation errors and report completed removals when a late
+    link or junction interrupts coverage cleanup.
+  - Use an explicit date in the changelog preparation example and explain which
+    directory supplies the release asset APIs' dependency policy.
+
+### Fixed
+
+- Report rejected gates as failed [#192](https://github.com/acgetchell/research-repo-tools/pull/192)
+  [`ef783ca`](https://github.com/acgetchell/research-repo-tools/commit/ef783cac608bc0d2d4657052c20e663f2d45b232)
+
+  Report gate completion only after the native command, input freshness, and forbidden timing-output checks pass. Preserve failure and interruption outcomes
+  without accepting samples or publishing evidence.
+- Honor suite provenance and release floors [#199](https://github.com/acgetchell/research-repo-tools/pull/199)
+  [`a8dc578`](https://github.com/acgetchell/research-repo-tools/commit/a8dc578a7583f1e4d811a5bad1ceb47ae28949e4)
+
+  Resolve dependency version labels from the selected suite and originating phase observation, including scheduled trials. Enforce each available suite minimum
+  release during pair selection and preparation while respecting availability exclusions.
+- Preserve exact Git development pins during updates [#201](https://github.com/acgetchell/research-repo-tools/pull/201)
+  [`aadac36`](https://github.com/acgetchell/research-repo-tools/commit/aadac36cd8083a43ecbabec701c3414de78206fd)
+
+  Retain immutable Git source identity, extras, included-group constraints,
+  and inherited tool versions while advancing eligible registry dependencies.
+  Reject unsupported sources even when no direct upgrade targets remain.
+
+  Keep isolated Semgrep child processes in their installed environment and
+  refresh the locked Semgrep and serialization dependencies.
+- Resume scheduled suites and separate phase inputs [#205](https://github.com/acgetchell/research-repo-tools/pull/205)
+  [`055353c`](https://github.com/acgetchell/research-repo-tools/commit/055353c630604b1ae3438c1eaf534ba85e067a7e)
+
+  Retain completed paired suites within interrupted trial schedules, preserving
+  raw observations, collection segments, and abandoned attempts. Revalidate
+  retained preparation assertions before retrying an incomplete pair in full.
+
+  Allow phase-specific source declarations so immutable baseline compiler inputs
+  can coexist with current documentation outputs while protecting current source,
+  harness, workload, and exact publisher inputs.
+
+  Refresh the locked sse-starlette dependency to 3.7.0.
+- Preserve publication snapshots and Semgrep fixture lines [#210](https://github.com/acgetchell/research-repo-tools/pull/210)
+  [`22f4841`](https://github.com/acgetchell/research-repo-tools/commit/22f4841433050128c0ccf2b61077e29b9e76c60b)
+
+  - Reject input or output edits detected after publication staging.
+  - Match Semgrep fixture annotations using native LF line boundaries.
+  - Refresh the locked bracex dependency to 3.2.2.
+
+### Maintenance
+
+- Bump astral-sh/setup-uv [#202](https://github.com/acgetchell/research-repo-tools/pull/202)
+  [`13af6b6`](https://github.com/acgetchell/research-repo-tools/commit/13af6b60c9bc1712b329bfe9504c7a54840e043c)
+
+  Bumps the github-actions group with 1 update: [astral-sh/setup-uv](https://github.com/astral-sh/setup-uv).
+
+  Updates `astral-sh/setup-uv` from 10.3.2 to 10.3.3
+
+  - [Release notes](https://github.com/astral-sh/setup-uv/releases)
+  - [Commits](https://github.com/astral-sh/setup-uv/compare/07a047e608db84b3d8c06cd9a7c7dcc9c355c18e...68559e99cc807c1eb7e9238fd43a15bba460eec2)
+
 ## [0.2.6] - 2026-11-05
 
 ### ⚠️ Breaking Changes
@@ -599,6 +782,7 @@ Older releases are archived by minor series:
 
 - [0.1.x](docs/archives/changelog/0.1.md)
 
+[0.2.7]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.4...v0.2.5
 [0.2.4]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.3...v0.2.4

@@ -294,8 +294,9 @@ just clean-coverage --apply
 Stop coverage writers before applying cleanup. Preview is the default, reports
 selected file bytes, and makes no changes. Cleanup selects regular root
 `.coverage.*` files and direct `coverage/failed-*` or `coverage/.run-*` directories
-containing only `.coverage`, `.coverage.*`, or staged `cobertura.xml` files. Empty
-matching directories are also removed. This is a fixed shared convention; custom
+containing only `.coverage`, `.coverage.*`, staged `cobertura.xml`, or pytest's
+`pytest.xml` failure report. Empty matching directories are also removed. This is
+a fixed shared convention; custom
 data paths and Rust coverage output remain consumer-owned.
 
 The root `.coverage`, current `coverage/cobertura.xml`, HTML reports and unrelated

@@ -123,6 +123,12 @@ Root and consumer `just release-check TAG` use the same final metadata/notes con
 Use `just check` while iterating, with targeted regressions when
 a behavioral change needs verification. Run `just ci` once the
 work is ready for final review.
+When pytest fails during `just coverage` or `just ci`, the coverage runner retains
+its raw data and a JUnit failure report at `coverage/failed-*/pytest.xml`, then
+prints the retained directory after the coverage summary. The command still
+fails even when coverage aggregation succeeds. An explicit pytest `--junitxml`
+argument overrides the default report path. Successful runs remove their
+temporary diagnostics.
 Use `just clean-coverage` to preview old root `.coverage.*` files and retained
 `coverage/failed-*` or `coverage/.run-*` directories. Stop coverage writers before
 running `just clean-coverage --apply`. The shared implementation preserves the
