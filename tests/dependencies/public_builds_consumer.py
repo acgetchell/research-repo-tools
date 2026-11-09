@@ -4,22 +4,25 @@ import hashlib
 import io
 import json
 import os
+import shutil
 import sys
 import tarfile
 import tempfile
 import unittest
 import zipfile
+from contextlib import contextmanager
+from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import override
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
-from research_repo_tools import dependency_build_receipts, dependency_builds, dependency_graphs
-from research_repo_tools._dependency_probe import inspect_installation
+from research_repo_tools import dependency_build_receipts, dependency_builds, dependency_graphs, dependency_provenance
+from research_repo_tools._dependency_probe import distribution_inventory, inspect_distribution, inspect_installation
 from research_repo_tools.dependency_artifacts import verify_python_environment
 from research_repo_tools.dependency_build_policy import parse_build_policy
 from research_repo_tools.dependency_build_receipts import verify_build_receipt
 from research_repo_tools.dependency_builds import prepare_dependency_builds
-from research_repo_tools.dependency_policy import load_policy
+from research_repo_tools.dependency_policy import DependencyProject, load_policy
 from research_repo_tools.dependency_provenance import verify_wheel_payload
 from research_repo_tools.process import run_safe_command
 
@@ -196,6 +199,162 @@ class TestSourceBuilds(unittest.TestCase):
 
 
 class TestBuildPolicy(unittest.TestCase):
+    def test_environment_inventory_is_linear_and_rechecks_live_identities(self) -> None:
+        for damage in (None, "duplicate", "added", "removed", "changed"):
+            with self.subTest(damage=damage), tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                environment = root / ".venv"
+                site = environment / ("Lib/site-packages" if os.name == "nt" else "lib/python3.15/site-packages")
+                site.mkdir(parents=True)
+                (environment / "pyvenv.cfg").write_bytes(b"include-system-site-packages = false\n")
+                packages = [f"sample{index}" for index in range(8)]
+                dependencies = ",".join(f'"{name}==1.0"' for name in packages)
+                (root / "pyproject.toml").write_bytes(
+                    f'[project]\nname="consumer"\nversion="1.0"\nrequires-python=">=3.15"\ndependencies=[{dependencies}]\n'.encode()
+                )
+                lock = 'version=1\n[[package]]\nname="consumer"\nversion="1.0"\nsource={virtual="."}\n'
+                expected = {}
+                wheels = {}
+                for name in packages:
+                    lock += f'[[package]]\nname="{name}"\nversion="1.0"\nsource={{registry="https://pypi.org/simple"}}\n'
+                    metadata = f"{name}-1.0.dist-info"
+                    (site / metadata).mkdir()
+                    contents = {
+                        f"{name}.py": b'raise RuntimeError("must never import consumer code")\r\n',
+                        f"{metadata}/METADATA": f"Name: {name}\nVersion: 1.0\n".encode(),
+                        f"{metadata}/WHEEL": b"Wheel-Version: 1.0\nTag: py3-none-any\n",
+                    }
+                    record = f"{metadata}/RECORD"
+                    contents[record] = "".join(f"{path},,\n" for path in (*contents, record)).encode()
+                    for path, data in contents.items():
+                        (site / path).write_bytes(data)
+                    expected[name] = {path: hashlib.sha256(data).hexdigest() for path, data in contents.items()}
+                    buffer = io.BytesIO()
+                    with zipfile.ZipFile(buffer, "w") as archive:
+                        for path, data in contents.items():
+                            archive.writestr(path, data)
+                    wheels[name] = buffer.getvalue()
+                    digest = hashlib.sha256(wheels[name]).hexdigest()
+                    lock += (
+                        f'wheels=[{{url="https://files.pythonhosted.org/fixture/{name}-1.0-py3-none-any.whl",'
+                        f'hash="sha256:{digest}",size={len(wheels[name])}}}]\n'
+                    )
+                (root / "uv.lock").write_bytes(lock.encode())
+                graph = dependency_graphs.inspect_project(root, DependencyProject("python"))
+                original_open = Path.open
+                metadata_reads = []
+                verified = []
+
+                def counted_open(path, *args, **kwargs):
+                    if path.name == "METADATA":
+                        metadata_reads.append(path)
+                    return original_open(path, *args, **kwargs)
+
+                def published(name, version, locked, observations, **kwargs):
+                    self.assertEqual(observations[0]["files"], expected[name])
+                    verify_wheel_payload(name, wheels[name], observations[0])
+                    verified.append(name)
+                    if len(verified) != len(packages):
+                        return
+                    if damage in {"duplicate", "added"}:
+                        extra = site / "extra-1.0.dist-info"
+                        extra.mkdir()
+                        (extra / "METADATA").write_bytes(f"Name: {'sample0' if damage == 'duplicate' else 'extra'}\nVersion: 1.0\n".encode())
+                        (extra / "RECORD").write_bytes(b"extra-1.0.dist-info/METADATA,,\nextra-1.0.dist-info/RECORD,,\n")
+                    elif damage == "removed":
+                        shutil.rmtree(site / "sample0-1.0.dist-info")
+                    elif damage == "changed":
+                        (site / "sample0.py").write_bytes(b"unpublished bytes\n")
+
+                with patch.object(Path, "open", counted_open), patch.object(dependency_provenance, "_published_wheel", side_effect=published):
+                    if damage is None:
+                        verify_python_environment(graph)
+                        self.assertLessEqual(len(metadata_reads), 8 * len(packages), "metadata reads must scale with packages, not packages squared")
+                    else:
+                        with self.assertRaisesRegex(ValueError, "duplicate installed identities|changed during verification"):
+                            verify_python_environment(graph)
+                self.assertEqual(verified, packages)
+
+    def test_parsed_distribution_owns_metadata_and_requires_a_fresh_observation(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            site = Path(temporary)
+            metadata = site / "sample-1.0.dist-info"
+            metadata.mkdir()
+            identity = metadata / "METADATA"
+            identity.write_bytes(b"Name: Sample_Pkg\nVersion: 1.0\n")
+            (metadata / "RECORD").write_bytes(b"sample-1.0.dist-info/METADATA,,\nsample-1.0.dist-info/RECORD,,\n")
+            parsed = distribution_inventory((site,))["sample-pkg"]
+            self.assertEqual((parsed.name, parsed.version), ("sample-pkg", "1.0"))
+            self.assertIsInstance(parsed.records, tuple)
+            with self.assertRaises(FrozenInstanceError):
+                setattr(parsed, "name", "unrelated")
+            original = inspect_distribution(parsed)
+            identity.write_bytes(b"Name: Sample_Pkg\nVersion: 2.0\n")
+            self.assertEqual(parsed.version, "1.0")
+            fresh = distribution_inventory((site,))["sample-pkg"]
+            self.assertEqual(fresh.version, "2.0")
+            self.assertNotEqual(inspect_distribution(fresh), original)
+            for invalid in (b"Name: sample\n", b"Name: ../unsafe\nVersion: 1.0\n"):
+                identity.write_bytes(invalid)
+                with self.assertRaisesRegex(ValueError, "requires a package name and version"):
+                    distribution_inventory((site,))
+            identity.write_bytes(b"Name: sample\nVersion: 1.0\n")
+            unsafe = site / "outside.py"
+            unsafe.write_bytes(b"untrusted bytes\n")
+            # importlib.metadata omits nonexistent RECORD targets. Retain an
+            # existing absolute target so the parser actually sees the defect.
+            (metadata / "RECORD").write_bytes(f"{unsafe.as_posix()},,\n".encode())
+            with self.assertRaisesRegex(ValueError, "unsafe path"):
+                distribution_inventory((site,))
+
+    def test_installed_hashes_stream_exact_bytes_with_a_cumulative_limit(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            site = Path(temporary)
+            metadata = site / "sample-1.0.dist-info"
+            metadata.mkdir()
+            contents = {
+                "sample.bin": b"native\r\n\xff\x00" * 250000,
+                "empty.bin": b"",
+                "sample-1.0.dist-info/METADATA": b"Name: sample\nVersion: 1.0\n",
+            }
+            record = "sample-1.0.dist-info/RECORD"
+            contents[record] = "".join(f"{name},,\n" for name in (*contents, record)).encode()
+            for name, data in contents.items():
+                (site / name).write_bytes(data)
+            original_open = Path.open
+            reads = []
+
+            @contextmanager
+            def bounded_open(path, *args, **kwargs):
+                with original_open(path, *args, **kwargs) as stream:
+                    if args != ("rb",):
+                        yield stream
+                        return
+
+                    def read(size=-1):
+                        self.assertGreaterEqual(size, 0)
+                        self.assertLessEqual(size, 4 * 1024 * 1024, "small files must not reserve the whole package allowance")
+                        reads.append(size)
+                        return stream.read(size)
+
+                    proxy = Mock(wraps=stream)
+                    proxy.read.side_effect = read
+                    yield proxy
+
+            expected = {name: hashlib.sha256(data).hexdigest() for name, data in contents.items()}
+            total = sum(map(len, contents.values()))
+            with patch.object(Path, "open", bounded_open):
+                self.assertEqual(inspect_installation("sample", paths=(site,), limit=512 * 1024 * 1024)["files"], expected)
+                self.assertEqual(inspect_installation("sample", paths=(site,), limit=total)["files"], expected)
+                with self.assertRaisesRegex(ValueError, "sample: .*byte limits"):
+                    inspect_installation("sample", paths=(site,), limit=total - 1)
+            self.assertTrue(reads)
+            changed = contents["sample.bin"][:-1] + b"!"
+            (site / "sample.bin").write_bytes(changed)
+            hashes = inspect_installation("sample", paths=(site,))["files"]
+            assert isinstance(hashes, dict)
+            self.assertEqual(hashes["sample.bin"], hashlib.sha256(changed).hexdigest())
+
     def test_build_environment_preserves_native_compiler_discovery_and_isolates_configuration(self) -> None:
         for discovery_key in ("ProgramFiles", "PROGRAMFILES", "ProgramFiles(x86)", "PROGRAMFILES(X86)", "ProgramData", "PROGRAMDATA"):
             with self.subTest(key=discovery_key), tempfile.TemporaryDirectory() as directory:

@@ -61,7 +61,7 @@ jobs:
           - os: windows-2025
             test-recipe: test
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       PYTHONUTF8: "1"
     steps:

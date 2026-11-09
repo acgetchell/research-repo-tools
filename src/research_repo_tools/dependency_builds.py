@@ -11,6 +11,7 @@ import shutil
 import sys
 import tarfile
 import tempfile
+import time
 import tomllib
 import urllib.request
 import zipfile
@@ -149,13 +150,10 @@ def _build_environment(root: Path, temporary: Path, policy: SourceBuildPolicy, u
 
 
 def _tool_inventory(build_env: Path) -> dict[str, object]:
-    from importlib.metadata import distributions
-
     sites = (build_env / "Lib/site-packages",) if os.name == "nt" else tuple((build_env / "lib").glob("python*/site-packages"))
     inventory = {}
-    for dist in distributions(path=[str(site) for site in sites]):
-        name = dist.metadata["Name"]
-        observed = _dependency_probe.inspect_installation(name, paths=sites)
+    for name, dist in _dependency_probe.distribution_inventory(sites).items():
+        observed = _dependency_probe.inspect_distribution(dist)
         if observed["direct_url"] is not None:
             raise ValueError("build tools must be installed from locked registry wheels")
         inventory[name] = {"version": observed["version"], "files_sha256": digest(canonical(observed["files"]))}
@@ -182,13 +180,21 @@ def prepare_dependency_builds(root: Path, *, directory: Path | None = None, prov
     build_policy = policy.source_builds
     before = context(root)
     uv = Path(get_safe_executable("uv")).resolve()
+    started = time.perf_counter()
+    print("Verifying locked dependency graph", file=sys.stderr, flush=True)
     verify_graph(graph, provider=provider)
+    print(f"Verified locked dependency graph in {time.perf_counter() - started:.2f}s", file=sys.stderr, flush=True)
     source_provider = provider or HttpSourceProvider()
     completed: list[tuple[str, str, dict[str, object], Path, bytes]] = []
     with tempfile.TemporaryDirectory(prefix="verified-dependency-build-") as temporary_name:
         temporary = Path(temporary_name)
+        started = time.perf_counter()
+        print("Preparing locked build tools", file=sys.stderr, flush=True)
         python, environment, tools = _build_environment(root, temporary, build_policy, uv)
+        print(f"Prepared locked build tools in {time.perf_counter() - started:.2f}s", file=sys.stderr, flush=True)
         for package in build_policy.packages:
+            started = time.perf_counter()
+            print(f"Preparing verified source: {package}", file=sys.stderr, flush=True)
             version, source = locked_sdist(graph, package)
             url, size, expected = source["url"], source["size"], source["hash"]
             if not isinstance(url, str) or type(size) is not int or not isinstance(expected, str):
@@ -245,10 +251,13 @@ def prepare_dependency_builds(root: Path, *, directory: Path | None = None, prov
                 "build_log_sha256": digest(build_log),
             }
             completed.append((package, version, record, wheel, build_log))
+            print(f"Built and checked {package}=={version} in {time.perf_counter() - started:.2f}s", file=sys.stderr, flush=True)
         graph.snapshot.verify()
         if context(root) != before:
             raise ValueError("source-build inputs changed during preparation")
         # Signing occurs in the parent only after all build hooks have completed.
+        started = time.perf_counter()
+        print("Authenticating and installing built wheels", file=sys.stderr, flush=True)
         verified: list[VerifiedBuild] = [
             _publish_build_receipt(root, name, version, record, wheel, build_log=log, directory=directory) for name, version, record, wheel, log in completed
         ]
@@ -281,6 +290,7 @@ def prepare_dependency_builds(root: Path, *, directory: Path | None = None, prov
             timeout=300,
         )
         graph.snapshot.verify()
+        print(f"Authenticated and installed built wheels in {time.perf_counter() - started:.2f}s", file=sys.stderr, flush=True)
     from research_repo_tools.dependency_artifacts import verify_python_environment
 
     verify_python_environment(graph, build_directory=directory)

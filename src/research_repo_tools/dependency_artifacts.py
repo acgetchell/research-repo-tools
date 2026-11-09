@@ -3,7 +3,9 @@
 import hashlib
 import io
 import os
+import sys
 import tarfile
+import time
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
@@ -113,9 +115,7 @@ def verify_python_environment(graph: DependencyGraph, *, build_directory: Path |
     An absent environment belongs to acquisition, whose native installer must
     consume the same checked lock before downstream validation.
     """
-    from importlib.metadata import distributions
-
-    from research_repo_tools._dependency_probe import MAX_NATIVE_BYTES, inspect_installation
+    from research_repo_tools._dependency_probe import MAX_NATIVE_BYTES, distribution_inventory, inspect_distribution
     from research_repo_tools.dependency_build_receipts import MAX_WHEEL_BYTES, verify_build_receipt
     from research_repo_tools.dependency_builds import locked_sdist
     from research_repo_tools.dependency_policy import load_policy
@@ -135,20 +135,15 @@ def verify_python_environment(graph: DependencyGraph, *, build_directory: Path |
         raise ValueError("dependency environment requires one native site-packages directory")
     from packaging.utils import canonicalize_name
 
-    inventory = tuple(distributions(path=[str(sites[0])]))
-    installed = [canonicalize_name(dist.metadata["Name"]) for dist in inventory]
-    if len(set(installed)) != len(installed):
-        raise ValueError("dependency environment contains duplicate installed identities")
+    inventory = distribution_inventory(tuple(sites))
+    installed = set(inventory)
     owned = {name for name, _, _ in graph.owned}
     if set(installed) - owned - {dependency.source.package for dependency in graph.dependencies}:
         raise ValueError("dependency environment contains unlocked distributions")
     roots = set()
     shared_files = set()
-    for dist in inventory:
-        records = dist.files
-        if records is None:
-            raise ValueError("installed distribution requires a RECORD inventory")
-        for record in records:
+    for dist in inventory.values():
+        for record in dist.records:
             if record.parts and ".." not in record.parts:
                 roots.add(record.parts[0])
                 shared_files.add(record.as_posix())
@@ -167,10 +162,14 @@ def verify_python_environment(graph: DependencyGraph, *, build_directory: Path |
     observations = []
     source_wheels = []
     scripts = environment / ("Scripts" if os.name == "nt" else "bin")
+    print(f"Verifying {len(installed - owned)} installed dependencies", file=sys.stderr, flush=True)
     for name in sorted(set(installed) - owned):
+        started = time.perf_counter()
+        print(f"Verifying installed dependency: {name}", file=sys.stderr, flush=True)
         # Every RECORD is checked below. Shared namespace files belong to their
         # own distribution; unrecorded additions still fail their namespace scan.
-        observed = inspect_installation(name, paths=tuple(sites), limit=native_limit, shared_files=frozenset(shared_files))
+        observed = inspect_distribution(inventory[name], limit=native_limit, shared_files=frozenset(shared_files))
+        observed_at = time.perf_counter()
         matches = [item for item in locked if canonicalize_name(item["name"]) == name and item["version"] == observed.get("version")]
         if len(matches) != 1 or observed.get("direct_url") is not None:
             raise ValueError("installed dependency differs from the registry lock or has development provenance")
@@ -185,10 +184,23 @@ def verify_python_environment(graph: DependencyGraph, *, build_directory: Path |
                 name, matches[0]["version"], table(matches[0], "locked package"), (observed,), require_sdist=False, limit=native_limit, scripts=scripts
             )
         observations.append((name, observed))
+        print(
+            f"Verified {name}: installed files {observed_at - started:.2f}s, artifact {time.perf_counter() - observed_at:.2f}s",
+            file=sys.stderr,
+            flush=True,
+        )
+    # Discover identities again; a retained inventory must not hide additions,
+    # removals or duplicate distributions introduced during verification.
+    started = time.perf_counter()
+    print("Rechecking installed identities and bytes", file=sys.stderr, flush=True)
+    current = distribution_inventory(tuple(sites))
+    if current.keys() != inventory.keys():
+        raise ValueError("installed dependency inventory changed during verification")
     for name, observed in observations:
-        if inspect_installation(name, paths=tuple(sites), limit=native_limit, shared_files=frozenset(shared_files)) != observed:
+        if inspect_distribution(current[name], limit=native_limit, shared_files=frozenset(shared_files)) != observed:
             raise ValueError("installed dependency changed during verification")
     legacy.verify()
     for name, version, source, observed in source_wheels:
         receipt = verify_build_receipt(graph.root, name, version, source, directory=build_directory)
-        verify_wheel_payload(name, receipt.payload, observed, scripts=scripts, limit=native_limit)
+        verify_wheel_payload(name, receipt.payload, observed, scripts=scripts, limit=MAX_WHEEL_BYTES)
+    print(f"Rechecked installed identities and bytes in {time.perf_counter() - started:.2f}s", file=sys.stderr, flush=True)
