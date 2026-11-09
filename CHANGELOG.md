@@ -187,6 +187,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Preserve Windows compiler discovery in isolated source builds
   - Verify large Linux dependency payloads within an explicit native byte bound
   - Retry transient immutable artifact downloads without accepting partial bytes
+- Preserve Windows compiler discovery data [`1a1886c`](https://github.com/acgetchell/research-repo-tools/commit/1a1886c5db0f6080918fefff91cd8ecc080ad834)
+
+  Preserve ProgramData so vswhere can locate installed MSVC toolchains in the isolated source-build environment.
 
 ### Maintenance
 
