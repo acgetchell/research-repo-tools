@@ -11,6 +11,7 @@ import tomllib
 from dataclasses import dataclass
 from pathlib import Path
 
+from research_repo_tools.dependency_build_policy import SourceBuildPolicy, parse_build_policy
 from research_repo_tools.dependency_sources import Ecosystem, Source, parse_source, relative_directory, string, table
 
 POLICY_FILE = "dependency-sources.toml"
@@ -47,12 +48,13 @@ class SourceSelection:
 class DependencyPolicy:
     projects: tuple[DependencyProject, ...]
     selections: tuple[SourceSelection, ...]
+    source_builds: SourceBuildPolicy | None = None
 
 
 def parse_policy(value: object) -> DependencyPolicy:
     data = table(value, "dependency policy")
-    if set(data) - {"schema", "projects", "sources"} or type(data.get("schema")) is not int or data["schema"] != 1:
-        raise ValueError("dependency policy requires schema = 1 and only projects/sources")
+    if set(data) - {"schema", "projects", "sources", "source-builds"} or type(data.get("schema")) is not int or data["schema"] != 1:
+        raise ValueError("dependency policy requires schema = 1 and only projects/sources/source-builds")
     projects: dict[str, DependencyProject] = {}
     for name, raw in table(data.get("projects"), "projects").items():
         project = table(raw, "dependency project")
@@ -82,7 +84,10 @@ def parse_policy(value: object) -> DependencyPolicy:
         selections.append(SourceSelection(name, project, source))
     if len({(s.project, s.source.package) for s in selections}) != len(selections):
         raise ValueError("a package cannot have competing source selections")
-    return DependencyPolicy(tuple(projects.values()), tuple(selections))
+    builds = parse_build_policy(data.get("source-builds"))
+    if builds is not None and sum(project.ecosystem == "python" for project in projects.values()) != 1:
+        raise ValueError("source builds require exactly one declared Python project")
+    return DependencyPolicy(tuple(projects.values()), tuple(selections), builds)
 
 
 def load_policy(root: Path) -> DependencyPolicy | None:

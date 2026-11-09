@@ -51,6 +51,7 @@ arguments in lexicographic order.
 | `just release-assets COMMAND...` | Prepare drafts, retrieve original tag-push receipts, capture/revalidate targets or explicitly upload attachments |
 | `just release-check TAG` | Check final release metadata and generated notes |
 | `just release-dependencies` | Verify selected upstream published pins, lock and executing runtime bytes |
+| `just release-dependency-builds` | Rebuild configured Python sources and authenticate their local wheel outputs |
 | `just release-evidence COMMAND...` | Create/verify exact-commit evidence, check published Python bytes, and save handoffs |
 | `just release-first TAG DATE` | Prepare a first release after checking published stable history |
 | `just release-notes TAG` | Print release notes from the root changelog or an archive |

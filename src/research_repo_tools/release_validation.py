@@ -266,7 +266,7 @@ POLICY = ValidationPolicy(
             )
             for platform in ("ubuntu-24.04", "macos-15", "windows-2025")
             for stage, steps in (
-                ("source", ("Retrieve distributions by immutable ID", "Validate source policy", "Run source tests")),
+                ("source", ("Retrieve distributions by immutable ID", "Verify native dependency provenance", "Validate source policy", "Run source tests")),
                 ("distributions", ("Retrieve distributions by immutable ID", "Validate installed distributions")),
                 ("setup", ("Retrieve distributions by immutable ID", "Exercise native setup and Cargo updates from the built wheel")),
                 ("check", ("Require all native validation stages",)),
@@ -525,6 +525,7 @@ def download_artifact(
     Refuse links, directory entries, duplicates, aliases, extras and resource
     excesses before creating the destination. Never call extractall on input.
     max_bytes bounds the ZIP; max_expanded_bytes defaults to that same limit.
+    Retry transient HTTP transport failures at most twice for this immutable ID.
     """
     _repository(repository)
     _integer(max_bytes, "artifact byte limit")
@@ -545,7 +546,22 @@ def download_artifact(
     if expected_size > max_bytes:
         raise ValueError("artifact size exceeds the release bound")
     with tempfile.TemporaryFile() as stream:
-        subprocess.run(["gh", "api", f"repos/{repository}/actions/artifacts/{identifier}/zip"], stdout=stream, stderr=subprocess.PIPE, check=True, timeout=120)
+        for attempt in range(3):
+            # A failed transfer may have written a partial or longer response.
+            stream.seek(0)
+            stream.truncate()
+            try:
+                subprocess.run(
+                    ["gh", "api", f"repos/{repository}/actions/artifacts/{identifier}/zip"], stdout=stream, stderr=subprocess.PIPE, check=True, timeout=120
+                )
+                break
+            except subprocess.CalledProcessError as error:
+                diagnostic = error.stderr or b""
+                if isinstance(diagnostic, str):
+                    diagnostic = diagnostic.encode("utf-8")
+                if attempt == 2 or re.search(rb"\bHTTP (?:500|502|503|504)\b", diagnostic) is None:
+                    raise
+                time.sleep(2**attempt)
         stream.seek(0)
         payload = stream.read(expected_size + 1)
     if len(payload) != expected_size or f"sha256:{_sha(payload)}" != artifact.get("digest"):

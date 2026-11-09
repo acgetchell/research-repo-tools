@@ -175,6 +175,27 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Reject input or output edits detected after publication staging.
   - Match Semgrep fixture annotations using native LF line boundaries.
   - Refresh the locked bracex dependency to 3.2.2.
+- Verify source-built Python dependencies [`a859edd`](https://github.com/acgetchell/research-repo-tools/commit/a859edd85c189ed3a4df3aca5c23ee0b1ffd9563)
+
+  - Rebuild explicitly selected PyPI sources with hash-locked build tools
+  - Authenticate retained native wheels and build evidence against current inputs
+  - Verify pinned external executables, wheel relocation, and shared namespaces
+  - Declare the release dependency graph and require native provenance in CI
+  - Document source-build preparation and recovery before tagging v0.2.7
+- Restore native dependency validation [`b1c4950`](https://github.com/acgetchell/research-repo-tools/commit/b1c4950fd5cb68925c3c0ad44db52c0dd8b07cdb)
+
+  - Preserve Windows compiler discovery in isolated source builds
+  - Verify large Linux dependency payloads within an explicit native byte bound
+  - Retry transient immutable artifact downloads without accepting partial bytes
+- Preserve Windows compiler discovery data [`1a1886c`](https://github.com/acgetchell/research-repo-tools/commit/1a1886c5db0f6080918fefff91cd8ecc080ad834)
+
+  Preserve ProgramData so vswhere can locate installed MSVC toolchains in the isolated source-build environment.
+- Bound dependency provenance verification work [`f6add17`](https://github.com/acgetchell/research-repo-tools/commit/f6add17c3b2b9b94c9830308a3f428b9266db529)
+
+  - Stream installed file hashes with bounded buffers
+  - Reuse parsed distribution snapshots while retaining fresh identity and byte checks
+  - Report provenance phase timings and allow 60 minutes for all native source jobs
+  - Apply the same byte limit when rechecking authenticated source-built wheels
 
 ### Maintenance
 

@@ -553,8 +553,10 @@ Existing Python environments are inspected through static distribution metadata
 and compared with matching published wheels; packages are never imported into
 the controller. An absent Python environment is an acquisition input: sync the
 checked lock and run the required downstream validation before promotion.
-Current installed Python byte proof requires ordinary wheels without relocated
-`.data` files; locally built sdists cannot substitute for this proof. Universal
+Explicitly configured source builds use authenticated machine-local receipts
+and retained wheels, including supported wheel relocation; see
+[source-built dependencies](../README.md#source-built-python-dependencies).
+Unrecorded local builds cannot substitute for published-wheel proof. Universal
 lock checks cover variants not installed on the current host; they do not claim
 that those variants were tested there.
 The exact legacy uv 0.8.0 `_virtualenv.py`/`_virtualenv.pth` pair is recognized

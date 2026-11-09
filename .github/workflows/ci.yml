@@ -61,7 +61,7 @@ jobs:
           - os: windows-2025
             test-recipe: test
     runs-on: ${{ matrix.os }}
-    timeout-minutes: 40
+    timeout-minutes: 60
     env:
       PYTHONUTF8: "1"
     steps:
@@ -81,6 +81,8 @@ jobs:
         run: rustup toolchain install 1.99.1 --profile minimal --no-self-update
       - name: Verify native Semgrep startup with synthetic input
         run: uv run --locked pytest tests/semgrep/test_native_semgrep.py -k native_engine_reports --cov --cov-report=term
+      - name: Verify native dependency provenance
+        run: uv run --locked just release-dependency-builds
       - name: Verify native Windows process byte transport
         if: runner.os == 'Windows'
         run: >-

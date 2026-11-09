@@ -26,7 +26,8 @@ from packaging.tags import parse_tag
 from packaging.utils import canonicalize_name, parse_wheel_filename
 from packaging.version import Version
 
-from research_repo_tools._dependency_probe import inspect_installation
+from research_repo_tools._archive_paths import ArchivePaths
+from research_repo_tools._dependency_probe import MAX_NATIVE_BYTES, inspect_installation
 from research_repo_tools._git_checkout import _in_checkout
 from research_repo_tools.evidence import _load_json
 from research_repo_tools.release_policy import dependency_names
@@ -283,7 +284,16 @@ def check_development_dependency(root: Path, name: str = PACKAGE, *, document: d
     return DependencyIdentity(name, version, url, revision)
 
 
-def _published_wheel(name: str, version: str, locked: dict[str, Any], installed: tuple[dict[str, Any], ...], *, require_sdist: bool = True) -> None:
+def _published_wheel(
+    name: str,
+    version: str,
+    locked: dict[str, Any],
+    installed: tuple[dict[str, Any], ...],
+    *,
+    require_sdist: bool = True,
+    limit: int = 32 * 1024 * 1024,
+    scripts: Path | None = None,
+) -> None:
     from research_repo_tools import registry
 
     data = registry._json(f"https://pypi.org/pypi/{name}/{version}/json")
@@ -332,40 +342,74 @@ def _published_wheel(name: str, version: str, locked: dict[str, Any], installed:
         if len(candidates) != 1:
             raise ValueError(f"{name}: installed wheel needs exactly one matching locked published artifact")
         artifact = candidates[0]
-        if artifact["size"] > registry.MAX_BYTES:
+        if artifact["size"] > limit:
             raise ValueError("published dependency wheel exceeds the byte limit")
         url = registry.pypi_destination(artifact["url"])
         if url not in payloads:
             with registry.closing_http_errors(), registry._OPENER.open(url, timeout=30) as response:
-                payload = response.read(registry.MAX_BYTES + 1)
+                payload = response.read(limit + 1)
                 if response.status != 200 or response.url != url:
                     raise ValueError("published dependency wheel returned an unexpected status or redirect")
             payloads[url] = payload
         payload = payloads[url]
         if len(payload) != artifact["size"] or hashlib.sha256(payload).hexdigest() != artifact["hash"][7:]:
             raise ValueError("published dependency wheel bytes differ from the lock")
-        files = _table(observed.get("files"), "installed file hashes")
-        with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-            members = archive.infolist()
-            if len(members) > 10000 or sum(member.file_size for member in members) > registry.MAX_BYTES:
-                raise ValueError("published dependency wheel exceeds content limits")
-            names = [member.filename for member in members]
-            if len(set(names)) != len(names):
-                raise ValueError("published dependency wheel has duplicate members")
-            metadata = [item for item in names if item.endswith(".dist-info/METADATA")]
-            if len(metadata) != 1 or metadata[0].replace("METADATA", "WHEEL") not in names or metadata[0].replace("METADATA", "RECORD") not in names:
-                raise ValueError("published dependency wheel metadata is missing or ambiguous")
-            installer_files = {str(PurePosixPath(metadata[0]).parent / name) for name in ("INSTALLER", "REQUESTED", "uv_cache.json")}
-            if set(files) - set(names) - installer_files:
-                raise ValueError(f"{name}: unpublished installed files differ from the published wheel")
-            for member in members:
-                path = PurePosixPath(member.filename)
-                if path.is_absolute() or ".." in path.parts or "\\" in member.filename or any(part.endswith(".data") for part in path.parts):
-                    raise ValueError("published dependency proof requires a wheel without relocated .data members or unsafe paths")
-                if member.is_dir() or member.filename.endswith((".dist-info/RECORD", ".dist-info/RECORD.jws", ".dist-info/RECORD.p7s")):
+        verify_wheel_payload(name, payload, observed, scripts=scripts, limit=limit)
+
+
+def verify_wheel_payload(name: str, payload: bytes, observed: dict[str, Any], *, scripts: Path | None = None, limit: int = 32 * 1024 * 1024) -> None:
+    """Compare installed bytes with a previously authenticated wheel payload."""
+    if type(limit) is not int or not 0 < limit <= MAX_NATIVE_BYTES or len(payload) > limit:
+        raise ValueError("dependency wheel exceeds its bounded byte limit")
+    files = _table(observed.get("files"), "installed file hashes")
+    with zipfile.ZipFile(io.BytesIO(payload)) as archive:
+        members = archive.infolist()
+        if len(members) > 10000 or sum(member.file_size for member in members) > limit:
+            raise ValueError("published dependency wheel exceeds content limits")
+        names = [member.filename for member in members]
+        if len(set(names)) != len(names):
+            raise ValueError("published dependency wheel has duplicate members")
+        metadata = [item for item in names if len(PurePosixPath(item).parts) == 2 and item.endswith(".dist-info/METADATA")]
+        if len(metadata) != 1 or metadata[0].replace("METADATA", "WHEEL") not in names or metadata[0].replace("METADATA", "RECORD") not in names:
+            raise ValueError("published dependency wheel metadata is missing or ambiguous")
+        installer_files = {str(PurePosixPath(metadata[0]).parent / name) for name in ("INSTALLER", "REQUESTED", "uv_cache.json")}
+        generated_records = {str(PurePosixPath(metadata[0]).parent / name) for name in ("RECORD", "RECORD.jws", "RECORD.p7s")}
+        paths, installed_paths = ArchivePaths(), ArchivePaths()
+        expected = set()
+        for member in members:
+            path = paths.add(member.filename, directory=member.is_dir())
+            if (member.external_attr >> 16) & 0o170000 == 0o120000:
+                raise ValueError("dependency wheels cannot contain symlinks")
+            if member.is_dir():
+                continue
+            relative = path.as_posix()
+            if any(part.endswith(".data") for part in path.parts):
+                data_prefix = PurePosixPath(metadata[0]).parent.name.removesuffix(".dist-info") + ".data"
+                if scripts is None or len(path.parts) < 3 or path.parts[0] != data_prefix:
+                    raise ValueError(f"{name}: dependency proof requires supported .data relocation")
+                scheme = path.parts[1]
+                relative = PurePosixPath(*path.parts[2:]).as_posix()
+                if scheme == "data" or scheme == "scripts" and len(path.parts) == 3:
+                    target = (scripts.parent if scheme == "data" else scripts) / relative
+                    if (
+                        not target.resolve().is_relative_to(scripts.parent.resolve())
+                        or target.is_symlink()
+                        or not target.is_file()
+                        or target.stat().st_size != member.file_size
+                        or target.read_bytes() != archive.read(member)
+                    ):
+                        raise ValueError(f"{name}: installed script differs from the authenticated wheel: {path.name}")
                     continue
-                if files.get(member.filename) != hashlib.sha256(archive.read(member)).hexdigest():
-                    raise ValueError(f"{name}: installed or isolated runtime bytes differ from the published wheel: {member.filename}")
+                if scheme not in {"purelib", "platlib"}:
+                    raise ValueError(f"{name}: dependency proof requires supported .data relocation")
+            installed_paths.add(relative, directory=False)
+            expected.add(relative)
+            if relative in generated_records:
+                continue
+            if files.get(relative) != hashlib.sha256(archive.read(member)).hexdigest():
+                raise ValueError(f"{name}: installed or isolated runtime bytes differ from the published wheel: {relative}")
+        if set(files) - expected - installer_files:
+            raise ValueError(f"{name}: unpublished installed files differ from the published wheel")
 
 
 def _policy_identities(root: Path) -> tuple[DependencyIdentity, ...]:

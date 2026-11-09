@@ -52,6 +52,8 @@ The release commands share Delaunay's operator-facing roles:
 | `changelog-preview [--tag TAG] [--date DATE]` | Preview generation without publishing files |
 | `changelog-release TAG [DATE]` | Generate prospective notes using the prepared citation date by default |
 | `publish-check` | Check the current built wheel and sdist with strict Twine validation |
+| `release-dependencies` | Verify the declared release dependency graph and installed dependency provenance |
+| `release-dependency-builds` | Rebuild configured source dependencies and retain authenticated local build evidence |
 | `release-evidence` | Verify the clean checkout's retained signed main CI evidence without rebuilding |
 | `release-notes TAG` | Print the generated notes for the tag and GitHub release |
 | `release-publish TAG` | Check the reviewed draft and approve GitHub publication |
@@ -179,10 +181,24 @@ date. Review the generated changelog and archive changes; do not edit them manua
 ### 4. Validate the release branch
 
 ```bash
+just release-dependency-builds
+just release-dependencies
 just ci
 just release-version-check
 just publish-check
 ```
+
+`release-dependencies` requires the checked-in `dependency-sources.toml`, which
+declares this repository's root Python package as release-owned. The universal
+lock must include build requirements as well as runtime and development
+dependencies; the `build` dependency group records the pinned backends and their
+requirements. `release-dependency-builds` rebuilds the explicitly configured
+source dependencies on this machine and installs their authenticated wheels.
+Repeat it after changes to the lock, policy, manifest, interpreter or builder.
+See [source-build provenance](../README.md#source-built-python-dependencies)
+for the local trust boundary and external input declarations.
+The check verifies registry sources and installed dependency provenance before
+the release PR is merged. Include the policy in the source distribution.
 
 `just ci` includes lockfile, Justfile, Python, workflow, test, package-build,
 PyPI metadata, and isolated wheel/sdist installation checks. `release-version-check` invokes
@@ -315,8 +331,11 @@ just tag "$TAG"
 git --no-pager tag -l --format='%(contents)' "$TAG"
 ```
 
-`just tag` first runs `release-version-check`, then builds the annotation from
-the matching active or archived changelog section. For release notes larger than
+`just tag` first runs `release-version-check`, rechecks the release dependency
+policy, then builds the annotation from the matching active or archived changelog
+section. A dependency failure stops before tag creation. If a correction is needed
+after the release PR merged, land it through a reviewed follow-up PR and repeat
+Step 2.1 for the new `main` commit before retrying. For release notes larger than
 125 kB of UTF-8 text, the annotation points to that section instead of embedding it.
 Use `just tag-preview "$TAG"` for an optional read-only preview. Confirm the tag
 resolves to the reviewed release commit; never move a published tag.

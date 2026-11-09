@@ -144,6 +144,10 @@ release-check tag:
 release-dependencies:
     uv run --locked research-repo-tools release dependencies
 
+# Rebuild configured source dependencies and authenticate local wheel outputs.
+release-dependency-builds:
+    uv run --locked research-repo-tools release dependency-builds
+
 # Inspect this release's signed CI evidence, or pass explicit shared evidence commands.
 release-evidence *args:
     if [ "$#" -eq 0 ]; then uv run --locked python scripts/release_assets.py evidence --format summary; else uv run --locked research-repo-tools release evidence "$@"; fi
