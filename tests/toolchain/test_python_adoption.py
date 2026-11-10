@@ -29,6 +29,7 @@ def test_314_to_315_preview_preserves_sources_and_applies_complete_migration(con
     assert SpecifierSet(document["project"]["requires-python"]) == SpecifierSet(">=3.14,>=3.15")
     assert document["dependency-groups"]["tooling"] == ["research-repo-tools==0.1.7"]
     assert document["dependency-groups"]["notebook"] == ["research-repo-tools[notebooks]==0.1.7"]
+    assert document["dependency-groups"]["dev"] == [{"include-group": "tooling"}, "ruff==0.16.9"]
     assert document["tool"]["ruff"]["line-length"] == 100
     assert document["tool"]["ruff"]["lint"]["per-file-ignores"] == {"negative.py": ["F821"]}
     assert "target-version" not in document["tool"]["ruff"]
@@ -115,6 +116,56 @@ def test_failed_resolution_does_not_publish_anything(consumer, monkeypatch):
     with pytest.raises(subprocess.CalledProcessError):
         adoption.plan_python_adoption(config.load(root=root))
     assert snapshot(root) == before
+
+
+def test_adoption_repins_runtime_extras_and_groups_with_rollback(consumer, monkeypatch):
+    root, _ = consumer
+    manifest = root / "pyproject.toml"
+    runtime = (
+        b'dependencies = ["packaging>=26.3", "research-repo-tools==0.1.6"]\r\n'
+        b"[project.optional-dependencies]\r\n"
+        b"visual = [\"research-repo-tools[notebooks]==0.1.6; sys_platform == 'win32'\",\r\n"
+        b"    \"research-repo-tools[notebooks]==0.1.6; sys_platform != 'win32'\"]\r\n"
+    )
+    manifest.write_bytes(manifest.read_bytes().replace(b"[dependency-groups]", runtime + b"[dependency-groups]"))
+    before = snapshot(root)
+    plan = adoption.plan_python_adoption(config.load(root=root))
+    assert snapshot(root) == before
+    document = tomllib.loads(dict(plan.replacements)["pyproject.toml"].decode())
+    assert document["project"]["dependencies"] == ["packaging>=26.3", "research-repo-tools==0.1.7"]
+    assert document["project"]["optional-dependencies"]["visual"] == [
+        'research-repo-tools[notebooks]==0.1.7; sys_platform == "win32"',
+        'research-repo-tools[notebooks]==0.1.7; sys_platform != "win32"',
+    ]
+    assert document["dependency-groups"]["tooling"] == ["research-repo-tools==0.1.7"]
+    assert document["dependency-groups"]["dev"] == [{"include-group": "tooling"}, "ruff==0.16.9"]
+
+    def fail(*_args, **_kwargs):
+        assert manifest.read_bytes() == dict(plan.replacements)["pyproject.toml"]
+        raise subprocess.CalledProcessError(1, ["uv", "sync"])
+
+    with monkeypatch.context() as patch:
+        patch.setattr(adoption, "_sync", fail)
+        with pytest.raises(subprocess.CalledProcessError):
+            adoption.apply_python_adoption(plan)
+    assert snapshot(root) == before
+    adoption.apply_python_adoption(plan)
+    assert manifest.read_bytes() == dict(plan.replacements)["pyproject.toml"]
+
+
+def test_adoption_rejects_direct_runtime_source_before_resolving(consumer):
+    root, calls = consumer
+    manifest = root / "pyproject.toml"
+    manifest.write_bytes(
+        manifest.read_bytes().replace(
+            b"[dependency-groups]",
+            b'dependencies = ["research-repo-tools @ https://example.invalid/tool.whl"]\r\n[dependency-groups]',
+        )
+    )
+    before = snapshot(root)
+    with pytest.raises(ValueError, match=r"adoption cannot repin.*project\.dependencies"):
+        adoption.plan_python_adoption(config.load(root=root))
+    assert not calls and snapshot(root) == before
 
 
 def test_stale_plan_fails_before_installs_or_replacement(consumer, monkeypatch):

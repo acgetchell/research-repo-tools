@@ -78,9 +78,11 @@ def parser() -> argparse.ArgumentParser:
     source = deps.add_parser("source", help="preview/apply a verified dependency-sources.toml selection")
     source.add_argument("name", help="configured source selection name")
     source.add_argument("--apply", action="store_true", help="apply the resolved manifest/lock candidate with recoverable multi-file publication")
-    deps.add_parser("update-python").add_argument(
-        "--all-projects", action="store_true", help="also upgrade locks and sync the main and declared independent Python projects"
-    )
+    python_update = deps.add_parser("update-python")
+    python_update.add_argument("--all-projects", action="store_true", help="also upgrade locks and sync the main and declared independent Python projects")
+    python_update.add_argument("--promote", metavar="SOURCE", help="promote a named exact Git source only if verified published artifacts contain the pin")
+    python_update.add_argument("--promotion-prereleases", action="store_true", help="allow prereleases when selecting a verified promotion")
+    python_update.add_argument("--promotion-versions", default="", help="PEP 440 version specifier restricting promotion candidates")
     tools = deps.add_parser("update-tools")
     tools.add_argument("--dry-run", action="store_true")
     deps.add_parser("update-uv", help="upgrade uv through its owner and reconcile its project pin").add_argument("--dry-run", action="store_true")
@@ -149,7 +151,9 @@ def parser() -> argparse.ArgumentParser:
     python = groups.add_parser("python", help="check, fix, or typecheck the complete Python inventory").add_subparsers(dest="action", required=True)
     for action in ("check", "fix", "typecheck"):
         python.add_parser(action).add_argument("--timeout", type=float, default=300, help="positive per-batch timeout in seconds (default: 300)")
-    release = groups.add_parser("release", help="prepare, check, publish, and verify reviewed releases").add_subparsers(dest="action", required=True)
+    release_group = groups.add_parser("release", help="prepare, check, publish, and verify reviewed releases")
+    release_group.add_argument("--isolated-runtime", action="store_true", help="select managed tools outside the observed checkout; requires Python -I")
+    release = release_group.add_subparsers(dest="action", required=True)
     from research_repo_tools.release_interfaces import add_commands as add_release_assets
     from research_repo_tools.release_interfaces import add_evidence_commands
 
@@ -726,10 +730,14 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         if args.action == "update-python":
             from research_repo_tools.dependencies import main
 
-            if args.all_projects:
+            if args.promote is None and (args.promotion_versions or args.promotion_prereleases):
+                raise ValueError("promotion options require --promote SOURCE")
+            if args.all_projects or args.promote is not None:
                 from research_repo_tools.python_updates import update
 
-                return update(settings)
+                if args.promote is None:
+                    return update(settings)
+                return update(settings, promote=args.promote, versions=args.promotion_versions, prereleases=args.promotion_prereleases)
             if settings.toolchain.inherit_python_tools:
                 from research_repo_tools.python_tools import check
 
@@ -914,7 +922,12 @@ def main(argv: list[str] | None = None) -> int:
         args = parser().parse_args(argv)
         expected_errors = (ExecutableNotFoundError, OSError, ValueError, TypeError, RuntimeError, subprocess.SubprocessError)
         try:
-            return run(args, config.load(args.config, args.root))
+            settings = config.load(args.config, args.root)
+            if args.group == "release" and args.isolated_runtime:
+                from research_repo_tools.release_runtime import isolated_release_runtime
+
+                streams.enter_context(isolated_release_runtime(settings, checkout=getattr(args, "checkout", None)))
+            return run(args, settings)
         except ExceptionGroup as error:
             expected, unexpected = error.split(expected_errors)
             if expected is not None:

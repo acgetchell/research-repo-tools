@@ -12,6 +12,7 @@ from urllib.parse import parse_qs, urlsplit
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
+from research_repo_tools._git_checkout import _in_checkout
 from research_repo_tools.dependency_policy import POLICY_FILE, DependencyProject, InputSnapshot, configuration_paths, inside, project_manifests
 from research_repo_tools.dependency_sources import (
     GitCommit,
@@ -46,6 +47,7 @@ class DependencyGraph:
     manifests: tuple[Path, ...]
     dependencies: tuple[LockedDependency, ...]
     owned: tuple[tuple[str, str, Path], ...]
+    checkout: Path
 
 
 def _records(value: object, context: str) -> tuple[dict[str, object], ...]:
@@ -140,14 +142,25 @@ def _git_source(ecosystem: str, name: str, value: str) -> GitCommit:
 
 def inspect_project(checkout: Path, project: DependencyProject, *, release: bool = True) -> DependencyGraph:
     """Reject non-registry declarations/locks before any native process or lookup."""
+    checkout = checkout.resolve(strict=True)
     root = inside(checkout, project.directory).resolve(strict=True)
+    owner = inspect_project(checkout, project.cargo_owner, release=release) if project.cargo_owner else None
+    if owner is not None and (
+        root == owner.root or not root.is_relative_to(owner.root) or root != checkout / project.directory or owner.root != checkout / owner.project.directory
+    ):
+        raise ValueError("Cargo helper and owner require distinct canonical paths inside the observed checkout")
     manifests = project_manifests(root, project.ecosystem)
     lock_path = root / ("uv.lock" if project.ecosystem == "python" else "Cargo.lock")
-    snapshot = InputSnapshot.capture((checkout / POLICY_FILE, *manifests, lock_path, *configuration_paths(root, project.ecosystem)))
+    owner_inputs = tuple(path for path, _ in owner.snapshot.files) if owner else ()
+    snapshot = InputSnapshot.capture((checkout / POLICY_FILE, *manifests, lock_path, *configuration_paths(root, project.ecosystem), *owner_inputs))
     _check_configuration(root, project.ecosystem)
     documents = {path: table(tomllib.loads(path.read_text(encoding="utf-8")), "manifest") for path in manifests}
     owned: list[tuple[str, str, Path]] = []
     root_document = documents[root / ("pyproject.toml" if project.ecosystem == "python" else "Cargo.toml")]
+    if owner is not None and (
+        len(manifests) != 1 or "workspace" not in root_document or table(root_document.get("package"), "Cargo helper package").get("publish") is not False
+    ):
+        raise ValueError("cargo-owner is only supported for a standalone unpublished Cargo helper workspace")
     for relative in project.owned:
         path = inside(root, relative).resolve() / ("pyproject.toml" if project.ecosystem == "python" else "Cargo.toml")
         if path not in documents:
@@ -169,10 +182,13 @@ def inspect_project(checkout: Path, project: DependencyProject, *, release: bool
                     "separately published workspace members require registry dependencies and upstream-first publication; only one published package is release-owned"
                 )
         owned.append((name, pin.version, path.parent))
+    if owner:
+        owned.extend(owner.owned)
     if len({name for name, _, _ in owned}) != len(owned):
         raise ValueError("ambiguous release-owned package names")
     owned_paths = {path for _, _, path in owned}
     owned_names = {name for name, _, _ in owned}
+    uses_owner = False
     for manifest, document in documents.items():
         if project.ecosystem == "python":
             uv = table(table(document.get("tool", {}), "tool").get("uv", {}), "uv")
@@ -193,13 +209,23 @@ def inspect_project(checkout: Path, project: DependencyProject, *, release: bool
                     raise ValueError("Cargo release proof supports only crates.io")
                 if release and set(dependency) & {"git", "branch", "tag", "rev"}:
                     raise ValueError("Cargo Git dependencies are development-only, including git plus version fallbacks")
-                if "path" in dependency and release:
-                    target = (manifest.parent / string(dependency["path"], "Cargo dependency path")).resolve()
+                if "path" in dependency and (release or owner):
+                    relative = Path(string(dependency["path"], "Cargo dependency path"))
+                    target = (manifest.parent / relative).resolve()
                     if target not in owned_paths:
                         raise ValueError("Cargo external path dependencies cannot become release-owned through a local path")
+                    if owner and target == owner.root:
+                        owner_name, _, _ = owner.owned[0]
+                        parent_path = ("..",) * len(root.relative_to(owner.root).parts)
+                        if relative.parts != parent_path or dependency.get("package", name) != owner_name:
+                            raise ValueError("Cargo helper path must directly identify its declared enclosing owner package")
+                        uses_owner = True
+    if owner and not uses_owner:
+        raise ValueError("Cargo helper must depend by path on its declared owner package")
     lock = table(tomllib.loads(lock_path.read_text(encoding="utf-8")), "dependency lock")
     dependencies: list[LockedDependency] = []
     seen: set[tuple[str, str, str]] = set()
+    helper_packages = {(name, version) for name, version, _ in owned} if owner else set()
     for item in _records(lock.get("package"), "locked packages"):
         name = package_name(project.ecosystem, string(item.get("name"), "locked name"))
         version = RegistryRelease(project.ecosystem, name, string(item.get("version"), "locked version")).version
@@ -245,9 +271,14 @@ def inspect_project(checkout: Path, project: DependencyProject, *, release: bool
                 raise ValueError("Cargo registry lock requires an archive SHA-256")
             dependencies.append(LockedDependency(RegistryRelease("cargo", name, version), version, checksum=checksum))
         elif source is None:
-            members = [path for path, data in documents.items() if table(data.get("package", {}), "package").get("name") == name]
-            if len(members) != 1:
-                raise ValueError("Cargo source-less lock package must be an unambiguous workspace member")
+            if owner:
+                if (name, version) not in helper_packages:
+                    raise ValueError("Cargo helper lock package differs from the declared helper and owner identities")
+                helper_packages.remove((name, version))
+            else:
+                members = [path for path, data in documents.items() if table(data.get("package", {}), "package").get("name") == name]
+                if len(members) != 1:
+                    raise ValueError("Cargo source-less lock package must be an unambiguous workspace member")
         elif not release and isinstance(source, str) and source.startswith("git+"):
             dependencies.append(LockedDependency(_git_source("cargo", name, source), version))
         else:
@@ -263,8 +294,12 @@ def inspect_project(checkout: Path, project: DependencyProject, *, release: bool
                     raise ValueError(
                         f"{name}: declaration/build requirement lacks a matching locked identity; include build dependencies in the universal lock"
                     )
+    if helper_packages:
+        raise ValueError("Cargo helper lock is missing the declared helper or owner package")
+    if owner:
+        owner.snapshot.verify()
     snapshot.verify()
-    return DependencyGraph(project, root, snapshot, manifests, tuple(dependencies), tuple(owned))
+    return DependencyGraph(project, root, snapshot, manifests, tuple(dependencies), tuple(owned), checkout)
 
 
 def _resolve_cargo(*, cwd: Path, environment: dict[str, str], checkouts: tuple[Path, ...]) -> Path:
@@ -272,7 +307,7 @@ def _resolve_cargo(*, cwd: Path, environment: dict[str, str], checkouts: tuple[P
     from research_repo_tools.process import ExecutableNotFoundError, resolve_executable, run_command
 
     def outside(executable: Path) -> Path:
-        if any(executable.resolve().is_relative_to(root.resolve()) for root in checkouts):
+        if any(_in_checkout(executable, root.resolve()) for root in checkouts):
             raise ValueError("Cargo executable must be outside dependency checkouts")
         return executable
 
@@ -297,6 +332,7 @@ def _resolve_cargo(*, cwd: Path, environment: dict[str, str], checkouts: tuple[P
 
 def check_native_graph(graph: DependencyGraph, *, sources: tuple[VerifiedSource, ...] = (), provider: SourceProvider | None = None) -> None:
     """Use uv/Cargo freshness semantics; never update a lock, fetch or build."""
+    graph.snapshot.verify()
     if graph.project.ecosystem == "python":
         from research_repo_tools.dependency_provenance import _check_lock
 
@@ -308,7 +344,7 @@ def check_native_graph(graph: DependencyGraph, *, sources: tuple[VerifiedSource,
         from research_repo_tools.process import run_command
 
         environment = {key: value for key, value in os.environ.items() if not key.upper().startswith(("CARGO_", "RUST"))}
-        environment["PATH"] = os.pathsep.join(p for p in os.get_exec_path() if Path(p).is_absolute() and not Path(p).resolve().is_relative_to(graph.root))
+        environment["PATH"] = os.pathsep.join(p for p in os.get_exec_path() if Path(p).is_absolute() and not _in_checkout(Path(p), graph.checkout))
         for key in ("CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"):
             if key in os.environ:
                 environment[key] = os.environ[key]
@@ -316,7 +352,7 @@ def check_native_graph(graph: DependencyGraph, *, sources: tuple[VerifiedSource,
         # and local .cargo configuration cannot select a consumer executable.
         with tempfile.TemporaryDirectory(prefix="dependency-graph-") as directory:
             cwd = Path(directory)
-            cargo = _resolve_cargo(cwd=cwd, environment=environment, checkouts=(graph.root,))
+            cargo = _resolve_cargo(cwd=cwd, environment=environment, checkouts=(graph.checkout,))
             result = run_command(
                 cargo,
                 ["metadata", "--manifest-path", str(graph.root / "Cargo.toml"), "--format-version", "1", "--all-features", "--locked", "--offline"],

@@ -21,6 +21,7 @@ from urllib.parse import urlsplit
 
 from research_repo_tools import (
     cli,
+    config,
     dependency_artifacts,
     dependency_graphs,
     dependency_policy,
@@ -28,7 +29,11 @@ from research_repo_tools import (
     dependency_workflows,
     files,
     process,
+    python_promotion,
+    python_updates,
     registry,
+    release_validation,
+    toolchain,
     tooling_runtime,
 )
 from research_repo_tools.dependency_policy import DependencyProject, load_policy, parse_policy
@@ -528,6 +533,132 @@ class TestSourceWorkflows(unittest.TestCase):
         self.assertEqual(self.provider.calls, [])
         self.native.assert_not_called()
 
+    def test_promotion_binds_artifacts_to_pin_and_rolls_back_failed_sync(self) -> None:
+        self.python(git=True)
+        manifest = self.root / "pyproject.toml"
+        manifest.write_bytes(
+            manifest.read_bytes()
+            + (
+                f'[tool.uv.sources]\nsample-pkg={{git="https://github.com/example/upstream.git",rev="{COMMIT}"}}\n'
+                '[dependency-groups]\ntooling=["sample-pkg[feature]==1.2.3"]\ndev=[{include-group="tooling"}]\n'
+                "[tool.research-repo-tools.toolchain]\ninherit-python=true\ninherit-python-tools=true\n"
+            ).encode()
+        )
+        self.provider.put("https://api.github.com/repos/example/upstream", {"id": 42, "full_name": "example/upstream"})
+        info = {"name": "sample-pkg", "version": "1.2.3"}
+        sdist_url = "https://files.pythonhosted.org/packages/fixture/sample_pkg-1.2.3.tar.gz"
+        uploads = [
+            {
+                "filename": url.rsplit("/", 1)[1],
+                "url": url,
+                "size": len(payload),
+                "digests": {"sha256": hashlib.sha256(payload).hexdigest()},
+                "yanked": False,
+                "packagetype": kind,
+            }
+            for url, payload, kind in ((PYTHON_URL, b"wheel fixture", "bdist_wheel"), (sdist_url, b"sdist fixture", "sdist"))
+        ]
+        self.provider.responses[PYTHON_URL] = b"wheel fixture"
+        self.provider.responses[sdist_url] = b"sdist fixture"
+        self.provider.put(PYTHON_API, {"info": info, "urls": uploads})
+        self.provider.put(
+            "https://pypi.org/pypi/sample-pkg/json",
+            {"info": info, "releases": {"1.2.3": uploads, "1.2.4": [{"yanked": True}], "1.3.0rc1": uploads}},
+        )
+        built = "d" * 40
+        self.provider.git("python", commit=built)
+        self.provider.put("https://api.github.com/repos/example/upstream", {"id": 42, "full_name": "example/upstream"})
+        comparison = f"https://api.github.com/repos/example/upstream/compare/{COMMIT}...{built}?per_page=1"
+
+        def comparison_result(status, behind, base):
+            self.provider.put(comparison, {"status": status, "behind_by": behind, "base_commit": {"sha": COMMIT}, "merge_base_commit": {"sha": base}})
+
+        comparison_result("diverged", 1, "e" * 40)
+        evidence = {
+            "commit": built,
+            "tag": "v1.2.3",
+            "promotion_run": 99,
+            "promotion_attempt": 1,
+            "manifest": json.dumps({"repository": "example/upstream", "repository_id": 42}),
+        }
+        asset = json.dumps(
+            {"schema": "https://github.com/example/upstream/attestations/release-promotion/v1", "evidence": evidence, "promotion_bundle": "fake bundle"}
+        ).encode()
+        release_url = "https://api.github.com/repos/example/upstream/releases/tags/v1.2.3"
+        self.provider.put(
+            release_url,
+            {
+                "tag_name": "v1.2.3",
+                "draft": False,
+                "prerelease": False,
+                "assets": [{"name": release_validation.BUNDLE, "id": 1, "size": len(asset), "digest": "sha256:" + hashlib.sha256(asset).hexdigest()}],
+            },
+        )
+        environment = self.root / ".venv"
+        environment.mkdir()
+        (environment / "pyvenv.cfg").write_bytes(b"original interpreter")
+        (environment / "user-file").write_bytes(b"original environment bytes")
+        before = self.snapshot()
+
+        def resolve(root, _verified, **_kwargs):
+            self.python_lock(root=root)
+            lock = root / "uv.lock"
+            wheel_digest = hashlib.sha256(self.provider.responses[PYTHON_URL]).hexdigest()
+            sdist_digest = hashlib.sha256(self.provider.responses[sdist_url]).hexdigest()
+            original = lock.read_bytes().replace(DIGEST.encode(), wheel_digest.encode()).replace(b"size=12", b"size=13")
+            lock.write_bytes(original + f'sdist={{url="{sdist_url}",hash="sha256:{sdist_digest}",size=13}}\n'.encode())
+
+        with (
+            patch.object(python_promotion, "HttpSourceProvider", return_value=self.provider),
+            patch.object(python_promotion, "_download", return_value=asset),
+            patch.object(release_validation, "verify_attestation") as verify,
+            patch.object(dependency_workflows, "_resolve_candidate", side_effect=resolve) as resolve_lock,
+            patch.object(toolchain.Runtime, "inspect", return_value=[]),
+            patch.object(toolchain.Runtime, "project_environment", return_value={}),
+            patch.object(python_updates.toolchain_config, "load"),
+        ):
+            settings = config.load(root=self.root)
+            self.assertEqual(python_updates.update(settings, promote="upstream"), 0)
+            verify.assert_not_called()
+            resolve_lock.assert_not_called()
+            self.assertEqual(self.snapshot(), before)
+            comparison_result("ahead", 0, COMMIT)
+            verify.side_effect = ValueError("signature mismatch")
+            with self.assertRaisesRegex(ValueError, "signature mismatch"):
+                python_updates.update(settings, promote="upstream")
+            verify.side_effect = None
+            self.assertEqual(self.snapshot(), before)
+            resolve_lock.assert_not_called()
+            verify.reset_mock()
+
+            def fail_sync(_uv, args, **_kwargs):
+                self.assertEqual(args[:2], ["sync", "--locked"])
+                self.assertNotIn(COMMIT.encode(), manifest.read_bytes())
+                self.assertIn(b'version = "1.2.3"', (self.root / "dependency-sources.toml").read_bytes())
+                environment.mkdir()
+                (environment / "partial").write_bytes(b"incomplete")
+                raise ValueError("injected install failure")
+
+            with patch.object(python_updates, "run_command_live", side_effect=fail_sync), self.assertRaisesRegex(ValueError, "injected install failure"):
+                python_updates.update(settings, promote="upstream")
+            self.assertEqual(self.snapshot(), before)
+            self.assertEqual(verify.call_count, 2)
+            with (
+                patch.object(python_updates, "run_command_live") as sync,
+                patch.object(python_promotion, "check_promoted_installation") as installed,
+            ):
+                self.assertEqual(python_updates.update(settings, promote="upstream"), 0)
+                sync.assert_called_once()
+                installed.assert_called_once()
+            final = tomllib.loads(manifest.read_text(encoding="utf-8"))
+            self.assertEqual(final["dependency-groups"]["dev"], [{"include-group": "tooling"}])
+            self.assertEqual(final["project"]["dependencies"], ['sample-pkg[feature]==1.2.3; python_version >= "3.15"'])
+            self.assertEqual(final["tool"]["uv"]["sources"], {})
+            self.assertEqual(final["tool"]["research-repo-tools"]["toolchain"], {"inherit-python": True, "inherit-python-tools": True})
+            policy = load_policy(self.root)
+            assert policy is not None
+            self.assertEqual(policy.selections[0].source, RegistryRelease("python", "sample-pkg", "1.2.3"))
+
     def test_preview_apply_commit_and_published_transition_preserve_options_and_evidence(self) -> None:
         for ecosystem in ("python", "cargo"):
             with self.subTest(ecosystem=ecosystem):
@@ -783,6 +914,62 @@ class TestSourceWorkflows(unittest.TestCase):
                 parse_policy(data)
         self.assertIsNone(load_policy(self.root))
 
+    def test_native_standalone_cargo_helpers_bind_enclosing_owner(self) -> None:
+        (self.root / "Cargo.toml").write_bytes(b'[package]\nname="main-crate"\nversion="1.2.3"\nedition="2024"\n')
+        (self.root / "Cargo.lock").write_bytes(b'version=4\n[[package]]\nname="main-crate"\nversion="1.2.3"\n')
+        helpers = {
+            "test-helper": ("tests/fixtures/roundtrip", 'main-crate={path="../../.."}'),
+            "benchmark-helper": ("benches/comparison", 'main={package="main-crate",path="../.."}'),
+        }
+        policy = {"main": {"ecosystem": "cargo"}}
+        for name, (directory, dependency) in helpers.items():
+            root = self.root / directory
+            root.mkdir(parents=True)
+            manifest = f'[package]\nname="{name}"\nversion="0.0.0"\nedition="2024"\npublish=false\n[workspace]\n[dependencies]\n{dependency}\n'
+            (root / "Cargo.toml").write_bytes(manifest.encode())
+            lock = f'version=4\n[[package]]\nname="main-crate"\nversion="1.2.3"\n[[package]]\nname="{name}"\nversion="0.0.0"\ndependencies=["main-crate"]\n'
+            (root / "Cargo.lock").write_bytes(lock.encode())
+            policy[name] = {"ecosystem": "cargo", "directory": directory, "cargo-owner": "main"}
+        for root in (self.root, *(self.root / directory for directory, _ in helpers.values())):
+            (root / "src").mkdir()
+            (root / "src/lib.rs").write_bytes(b'compile_error!("inspection must not compile");\n')
+
+        main, *projects = parse_policy({"schema": 1, "projects": policy}).projects
+        root_graph = dependency_graphs.inspect_project(self.root, main)
+        self.assertEqual(root_graph.owned, (("main-crate", "1.2.3", self.root),))
+        before = self.snapshot()
+        for project in projects:
+            with self.subTest(project=project.directory):
+                graph = dependency_graphs.inspect_project(self.root, project)
+                self.assertEqual(graph.owned[-1], root_graph.owned[0])
+                self.assertIn(self.root / "Cargo.toml", dict(graph.snapshot.files))
+                dependency_graphs.check_native_graph(graph)
+                self.assertEqual(self.snapshot(), before)
+                with self.assertRaisesRegex(ValueError, "external path dependencies"):
+                    dependency_graphs.inspect_project(self.root, DependencyProject("cargo", project.directory))
+                manifest = graph.root / "Cargo.toml"
+                original = manifest.read_bytes()
+                for old, new, message in (
+                    (b"publish=false", b"publish=true", "standalone unpublished"),
+                    (b"main-crate", b"wrong-crate", "directly identify"),
+                    (b'path="..', b'path="../..', "external path dependencies"),
+                ):
+                    manifest.write_bytes(original.replace(old, new))
+                    with self.assertRaisesRegex(ValueError, message):
+                        dependency_graphs.inspect_project(self.root, project)
+                manifest.write_bytes(original)
+                lock = graph.root / "Cargo.lock"
+                original_lock = lock.read_bytes()
+                lock.write_bytes(original_lock.replace(b'version="1.2.3"', b'version="1.2.4"'))
+                with self.assertRaisesRegex(ValueError, "lock package differs"):
+                    dependency_graphs.inspect_project(self.root, project)
+                lock.write_bytes(original_lock)
+        graph = dependency_graphs.inspect_project(self.root, projects[0])
+        owner_manifest = self.root / "Cargo.toml"
+        owner_manifest.write_bytes(owner_manifest.read_bytes() + b"\n# changed after verification\n")
+        with self.assertRaisesRegex(ValueError, "dependency inputs changed"):
+            graph.snapshot.verify()
+
     def test_native_uv_and_cargo_check_locks_without_startup_or_build_hooks(self) -> None:
         (self.root / "pyproject.toml").write_bytes(b'[project]\nname="consumer"\nversion="0.1.0"\nrequires-python=">=3.15"\n[tool.uv]\npackage=false\n')
         (self.root / "uv.lock").write_bytes(
@@ -873,6 +1060,33 @@ class TestSourceWorkflows(unittest.TestCase):
             (cached / "unpublished.rs").write_bytes(b"// unlisted source\n")
             with self.assertRaisesRegex(ValueError, "unpublished files"):
                 dependency_graphs.check_native_graph(graph, sources=verified, provider=self.provider)
+
+    def test_cargo_archive_accepts_64_mib_expanded_and_rejects_one_more_byte(self) -> None:
+        source = RegistryRelease("cargo", "sample-crate", "1.2.3")
+        cache = self.root / "registry cache"
+        cache.mkdir()
+        member_data = b"\0" * (32 * 1024 * 1024)
+        for index in range(2):
+            (cache / f"input-{index}").write_bytes(member_data)
+
+        for extra in (False, True):
+            with self.subTest(extra=extra):
+                output = io.BytesIO()
+                with tarfile.open(fileobj=output, mode="w:gz") as archive:
+                    for index, data in enumerate((member_data, member_data, b"x") if extra else (member_data, member_data)):
+                        member = tarfile.TarInfo(f"sample-crate-1.2.3/input-{index}")
+                        member.size = len(data)
+                        archive.addfile(member, io.BytesIO(data))
+                payload = output.getvalue()
+                self.provider.cargo(checksum=hashlib.sha256(payload).hexdigest(), crate_size=len(payload))
+                proof = verify_source(source, provider=self.provider, release=True)
+                self.provider.responses[proof.artifacts[0].url] = payload
+                if extra:
+                    with self.assertRaisesRegex(ValueError, "sample-crate-1.2.3: Cargo archive exceeds the 67108864-byte expanded limit"):
+                        dependency_artifacts.verify_cargo_input(cache, proof, provider=self.provider)
+                else:
+                    observed = dependency_artifacts.verify_cargo_input(cache, proof, provider=self.provider)
+                    self.assertEqual(tuple(path for path, _ in observed.files), (cache / "input-0", cache / "input-1"))
 
     def test_workspace_ownership_requires_explicit_private_members_and_registry_order(self) -> None:
         self.cargo()

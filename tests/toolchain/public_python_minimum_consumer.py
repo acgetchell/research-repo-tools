@@ -12,14 +12,76 @@ import unittest
 import zipfile
 from email.parser import BytesParser
 from pathlib import Path
+from unittest.mock import patch
 
 from packaging.specifiers import SpecifierSet
 
+from research_repo_tools import cli, python_adoption
 from research_repo_tools.changelog import template
 from research_repo_tools.python_baseline import baseline
 
 
 class TestPythonMinimumConsumer(unittest.TestCase):
+    def test_adopt_repins_runtime_extras_and_groups_in_one_resolution(self):
+        authority = baseline()
+        registry = os.environ["RRT_TEST_REGISTRY"]
+        uv_version = subprocess.run(["uv", "--version"], capture_output=True, encoding="utf-8", timeout=30, check=True).stdout.split()[1]
+        with tempfile.TemporaryDirectory(prefix="adoption runtime pins ") as directory:
+            root = Path(directory).resolve()
+            source = root / "pin_consumer"
+            source.mkdir()
+            (source / "__init__.py").write_bytes(b"import research_repo_tools\n")
+            manifest = root / "pyproject.toml"
+            original = (
+                '[build-system]\nrequires=["hatchling==1.32.4"]\nbuild-backend="hatchling.build"\n'
+                '[project]\nname="pin-consumer"\nversion="1.0.0"\n'
+                f"requires-python={json.dumps(authority.minimum_requirement)}\n"
+                'dependencies=["research-repo-tools==0.0.0"]\n'
+                "[project.optional-dependencies]\nchecks=[\"research-repo-tools[python-tools]==0.0.0; python_version >= '3.15'\"]\n"
+                '[dependency-groups]\ntooling=["research-repo-tools==0.0.0"]\ndev=[{include-group="tooling"}]\n'
+                f'[tool.uv]\nrequired-version="=={uv_version}"\nfind-links=[{json.dumps(registry)}]\n'
+            ).encode()
+            manifest.write_bytes(original)
+            (root / ".python-version").write_bytes(authority.selected.encode() + b"\n")
+            command = ["--root", str(root), "toolchain", "adopt"]
+            inventory = (".python-version", "pin_consumer/__init__.py", "pyproject.toml")
+            with patch.object(
+                python_adoption, "select_files", side_effect=lambda *_args, **_kwargs: (*inventory, "uv.lock") if (root / "uv.lock").exists() else inventory
+            ):
+                self.assertEqual(cli.main([*command, "--dry-run"]), 0)
+                self.assertEqual(manifest.read_bytes(), original)
+                self.assertFalse((root / "uv.lock").exists())
+                self.assertFalse((root / ".venv").exists())
+                self.assertEqual(cli.main([*command, "--apply"]), 0)
+            document = tomllib.loads(manifest.read_bytes().decode())
+            pin = f"research-repo-tools=={authority.package_version}"
+            self.assertEqual(document["project"]["dependencies"], [pin])
+            self.assertEqual(
+                document["project"]["optional-dependencies"]["checks"],
+                [f'research-repo-tools[python-tools]=={authority.package_version}; python_version >= "3.15"'],
+            )
+            self.assertEqual(document["dependency-groups"], {"tooling": [pin], "dev": [{"include-group": "tooling"}]})
+            packages = tomllib.loads((root / "uv.lock").read_text(encoding="utf-8"))["package"]
+            self.assertEqual([package["version"] for package in packages if package["name"] == "research-repo-tools"], [authority.package_version])
+            python = root / ".venv" / ("Scripts/python.exe" if os.name == "nt" else "bin/python")
+            result = subprocess.run(
+                [
+                    str(python),
+                    "-I",
+                    "-B",
+                    "-X",
+                    "utf8",
+                    "-c",
+                    "import pin_consumer; from importlib.metadata import version; print(version('research-repo-tools'))",
+                ],
+                cwd=root,
+                capture_output=True,
+                encoding="utf-8",
+                timeout=30,
+                check=True,
+            )
+            self.assertEqual(result.stdout.strip(), authority.package_version)
+
     def test_malformed_target_tables_have_installed_cli_diagnostics(self):
         authority = baseline()
         for invalid, field in (

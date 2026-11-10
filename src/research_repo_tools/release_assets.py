@@ -376,10 +376,10 @@ def require_draft(release: GitHubRelease) -> None:
         raise ValueError(f"release {release.tag} must be a mutable stable draft")
 
 
-def _download(root: Path, repository: str, identifier: int, limit: int, *, timeout: float = 600) -> bytes:
+def _download(root: Path, repository: str, identifier: int, limit: int, *, timeout: float = 600, environment: dict[str, str] | None = None) -> bytes:
     """Bound gh's byte output and deadline without decoding asset bytes."""
     command = [
-        str(resolve_executable("gh", cwd=root)),
+        str(resolve_executable("gh", cwd=root, env=environment)),
         "api",
         f"repos/{repository}/releases/assets/{identifier}",
         "--header",
@@ -389,7 +389,7 @@ def _download(root: Path, repository: str, identifier: int, limit: int, *, timeo
     # stderr stays outside the captured payload, so partial failure output can
     # never be accepted as an asset. Disk-backed stderr avoids pipe deadlocks.
     with tempfile.TemporaryFile("w+b") as errors:
-        with subprocess.Popen(command, cwd=root, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=errors) as child:
+        with subprocess.Popen(command, cwd=root, env=environment, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=errors) as child:
 
             def expire() -> None:
                 expired.set()
