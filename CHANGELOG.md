@@ -5,6 +5,22 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.8] - 2026-11-10
+
+### Merged Pull Requests
+
+- Verify dependency promotion and isolate releases [#221](https://github.com/acgetchell/research-repo-tools/pull/221)
+
+### Added
+
+- Verify dependency promotion and isolate releases [#221](https://github.com/acgetchell/research-repo-tools/pull/221)
+  [`99a9980`](https://github.com/acgetchell/research-repo-tools/commit/99a9980dcc85c92ec7bf36499f3b595a0cf2726e)
+
+  - Promote exact development pins when attested published artifacts contain the pinned commit.
+  - Adopt the selected Python version across runtime, optional, and group requirements.
+  - Verify larger Cargo archives and declared standalone Cargo helper workspaces.
+  - Scope release tool selection to a trusted external runtime.
+
 ## [0.2.7] - 2026-11-09
 
 ### ⚠️ Breaking Changes
@@ -22,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Merged Pull Requests
 
+- Verify source-built Python dependencies [#212](https://github.com/acgetchell/research-repo-tools/pull/212)
 - Preserve publication snapshots and Semgrep fixture lines [#210](https://github.com/acgetchell/research-repo-tools/pull/210)
 - Retrieve draft receipts, clean coverage, and refresh docs [#209](https://github.com/acgetchell/research-repo-tools/pull/209)
 - Prepare retained drafts, enforce typed states, and parallelize validation [#207](https://github.com/acgetchell/research-repo-tools/pull/207)
@@ -175,27 +192,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Reject input or output edits detected after publication staging.
   - Match Semgrep fixture annotations using native LF line boundaries.
   - Refresh the locked bracex dependency to 3.2.2.
-- Verify source-built Python dependencies [`a859edd`](https://github.com/acgetchell/research-repo-tools/commit/a859edd85c189ed3a4df3aca5c23ee0b1ffd9563)
+- Verify source-built Python dependencies [#212](https://github.com/acgetchell/research-repo-tools/pull/212)
+  [`4a8f53f`](https://github.com/acgetchell/research-repo-tools/commit/4a8f53f684dee2abb7c5b8a4beab40ef29212b4c)
 
+#### fix(release): verify source-built Python dependencies
   - Rebuild explicitly selected PyPI sources with hash-locked build tools
   - Authenticate retained native wheels and build evidence against current inputs
   - Verify pinned external executables, wheel relocation, and shared namespaces
   - Declare the release dependency graph and require native provenance in CI
   - Document source-build preparation and recovery before tagging v0.2.7
-- Restore native dependency validation [`b1c4950`](https://github.com/acgetchell/research-repo-tools/commit/b1c4950fd5cb68925c3c0ad44db52c0dd8b07cdb)
-
+#### chore(release): release v0.2.7
+  - Generate the release changelog with source-build provenance fixes
+#### fix(release): restore native dependency validation
   - Preserve Windows compiler discovery in isolated source builds
   - Verify large Linux dependency payloads within an explicit native byte bound
   - Retry transient immutable artifact downloads without accepting partial bytes
-- Preserve Windows compiler discovery data [`1a1886c`](https://github.com/acgetchell/research-repo-tools/commit/1a1886c5db0f6080918fefff91cd8ecc080ad834)
+#### chore(release): release v0.2.7
+  - Regenerate the release changelog with native validation corrections
+#### fix(release): preserve Windows compiler discovery data
 
   Preserve ProgramData so vswhere can locate installed MSVC toolchains in the isolated source-build environment.
-- Bound dependency provenance verification work [`f6add17`](https://github.com/acgetchell/research-repo-tools/commit/f6add17c3b2b9b94c9830308a3f428b9266db529)
-
+#### chore(release): release v0.2.7
+  - Regenerate the release changelog with the Windows discovery correction
+#### fix(release): bound dependency provenance verification work
   - Stream installed file hashes with bounded buffers
   - Reuse parsed distribution snapshots while retaining fresh identity and byte checks
   - Report provenance phase timings and allow 60 minutes for all native source jobs
   - Apply the same byte limit when rechecking authenticated source-built wheels
+#### chore(release): release v0.2.7
+  - Regenerate the release changelog with provenance verification fixes
 
 ### Maintenance
 
@@ -803,6 +828,7 @@ Older releases are archived by minor series:
 
 - [0.1.x](docs/archives/changelog/0.1.md)
 
+[0.2.8]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.4...v0.2.5
