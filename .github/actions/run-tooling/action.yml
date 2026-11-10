@@ -10,6 +10,12 @@ inputs:
   commit:
     description: Full lowercase 40-character commit SHA in github.
     default: ''
+  source-policy:
+    description: Trusted dependency-sources.toml supplying the exact version or GitHub commit.
+    default: ''
+  selection:
+    description: Named research-repo-tools source in source-policy.
+    default: ''
   arguments:
     description: Nonempty JSON array of research-repo-tools command arguments.
     required: true
@@ -33,6 +39,8 @@ runs:
         RRT_VERSION: ${{ inputs.version }}
         RRT_GITHUB: ${{ inputs.github }}
         RRT_COMMIT: ${{ inputs.commit }}
+        RRT_SOURCE_POLICY: ${{ inputs.source-policy }}
+        RRT_SELECTION: ${{ inputs.selection }}
         RRT_ARGUMENTS: ${{ inputs.arguments }}
         RRT_EXTRAS: ${{ inputs.extras }}
         RRT_ROOT: ${{ inputs.root }}
@@ -42,6 +50,8 @@ runs:
         if [[ -n "$RRT_VERSION" ]]; then selectors+=(--version "$RRT_VERSION"); fi
         if [[ -n "$RRT_GITHUB" ]]; then selectors+=(--github "$RRT_GITHUB"); fi
         if [[ -n "$RRT_COMMIT" ]]; then selectors+=(--commit "$RRT_COMMIT"); fi
+        if [[ -n "$RRT_SOURCE_POLICY" ]]; then selectors+=(--source-policy "$RRT_SOURCE_POLICY"); fi
+        if [[ -n "$RRT_SELECTION" ]]; then selectors+=(--selection "$RRT_SELECTION"); fi
         case "$RRT_RELEASE_INTENT" in
           true) selectors+=(--release-intent) ;;
           false) ;;

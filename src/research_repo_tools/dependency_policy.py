@@ -8,8 +8,8 @@ import hashlib
 import os
 import stat
 import tomllib
-from dataclasses import dataclass
-from pathlib import Path
+from dataclasses import dataclass, replace
+from pathlib import Path, PurePosixPath
 
 from research_repo_tools.dependency_build_policy import SourceBuildPolicy, parse_build_policy
 from research_repo_tools.dependency_sources import Ecosystem, Source, parse_source, relative_directory, string, table
@@ -25,6 +25,7 @@ class DependencyProject:
     ecosystem: Ecosystem
     directory: str = "."
     owned: tuple[str, ...] = (".",)
+    cargo_owner: DependencyProject | None = None
 
     def __post_init__(self) -> None:
         if self.ecosystem not in {"python", "cargo"}:
@@ -35,6 +36,17 @@ class DependencyProject:
             raise ValueError("release-owned must contain distinct workspace directories")
         for value in self.owned:
             relative_directory(value)
+        owner = self.cargo_owner
+        if owner is not None and (
+            self.ecosystem != "cargo"
+            or owner.ecosystem != "cargo"
+            or self.owned != (".",)
+            or owner.owned != (".",)
+            or owner.cargo_owner is not None
+            or self.directory == owner.directory
+            or not PurePosixPath(self.directory).is_relative_to(PurePosixPath(owner.directory))
+        ):
+            raise ValueError("cargo-owner must identify a separate enclosing Cargo project owning its root package")
 
 
 @dataclass(frozen=True, slots=True)
@@ -56,9 +68,10 @@ def parse_policy(value: object) -> DependencyPolicy:
     if set(data) - {"schema", "projects", "sources", "source-builds"} or type(data.get("schema")) is not int or data["schema"] != 1:
         raise ValueError("dependency policy requires schema = 1 and only projects/sources/source-builds")
     projects: dict[str, DependencyProject] = {}
+    owners: dict[str, str] = {}
     for name, raw in table(data.get("projects"), "projects").items():
         project = table(raw, "dependency project")
-        if set(project) - {"ecosystem", "directory", "release-owned"}:
+        if set(project) - {"cargo-owner", "ecosystem", "directory", "release-owned"}:
             raise ValueError("unknown dependency project field")
         ecosystem = project.get("ecosystem")
         if ecosystem not in ("python", "cargo"):
@@ -67,6 +80,12 @@ def parse_policy(value: object) -> DependencyPolicy:
         if not isinstance(owned, list) or any(not isinstance(path, str) for path in owned):
             raise ValueError("release-owned must be a list of workspace directories")
         projects[name] = DependencyProject("python" if ecosystem == "python" else "cargo", relative_directory(project.get("directory", ".")), tuple(owned))
+        if "cargo-owner" in project:
+            owners[name] = string(project["cargo-owner"], "cargo-owner")
+    for name, owner in owners.items():
+        if owner not in projects or owner in owners:
+            raise ValueError("cargo-owner must name a declared Cargo project without its own cargo-owner")
+        projects[name] = replace(projects[name], cargo_owner=projects[owner])
     if not projects or len(set(projects.values())) != len(projects):
         raise ValueError("dependency policy requires distinct projects")
     if len({(p.ecosystem, p.directory) for p in projects.values()}) != len(projects):
@@ -110,6 +129,8 @@ def project_manifests(root: Path, ecosystem: Ecosystem) -> tuple[Path, ...]:
     """Enumerate declared workspace membership without executing consumer code."""
     name = "pyproject.toml" if ecosystem == "python" else "Cargo.toml"
     manifest = root / name
+    if manifest.is_symlink():
+        raise ValueError("workspace manifest must be a regular file, not a symlink")
     document = tomllib.loads(manifest.read_text(encoding="utf-8"))
     workspace = (
         table(table(table(document.get("tool", {}), "tool").get("uv", {}), "uv").get("workspace", {}), "workspace")

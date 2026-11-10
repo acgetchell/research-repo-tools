@@ -13,6 +13,7 @@ import urllib.error
 from contextlib import redirect_stderr, redirect_stdout
 from dataclasses import replace
 from pathlib import Path
+from types import SimpleNamespace
 from typing import override
 from unittest.mock import patch
 
@@ -25,6 +26,9 @@ from research_repo_tools import (
     process,
     python_adoption,
     python_baseline,
+    release_interfaces,
+    release_runtime,
+    release_validation,
     toolchain,
     toolchain_clean,
     toolchain_upgrade,
@@ -34,6 +38,103 @@ from research_repo_tools.toolchain_config import CargoTool, RustToolchain, Toolc
 
 
 class TestToolchainConsumer(unittest.TestCase):
+    def test_isolated_release_runtime_filters_before_probe_and_preserves_dispatch(self):
+        with tempfile.TemporaryDirectory(prefix="release runtime café ") as directory:
+            parent = Path(directory).resolve()
+            root = parent / "observed checkout"
+            checked_bin = root / ".venv" / ("Scripts" if os.name == "nt" else "bin")
+            checked_bin.mkdir(parents=True)
+            uv = process.resolve_executable("uv")
+            gh = process.resolve_executable("gh")
+            version = process.run_command(uv, ["--version"], cwd=parent).stdout.split()[1]
+            (root / "pyproject.toml").write_bytes(f'[tool.uv]\nrequired-version="=={version}"\n'.encode())
+            (root / ".python-version").write_bytes(b"3.15\n")
+            for name in ("uv", "gh", "python", "git"):
+                checked = checked_bin / (name + (".exe" if os.name == "nt" else ""))
+                checked.write_bytes(b"must never execute\n")
+                checked.chmod(0o755)
+            (root / "sitecustomize.py").write_bytes(b'raise RuntimeError("checkout startup executed")\n')
+            legitimate = parent / "external tools"
+            legitimate.mkdir()
+            bad_entries = [checked_bin, checked_bin / ".." / checked_bin.name, Path(".")]
+            alias = parent / "aliased checkout"
+            if os.name == "nt":
+                process.run_command("cmd", ["/d", "/c", "mklink", "/J", str(alias), str(root)], cwd=parent)
+            else:
+                alias.symlink_to(root, target_is_directory=True)
+            bad_entries.append(alias / checked_bin.relative_to(root))
+            environment = {
+                "PATH": os.pathsep.join([*map(str, bad_entries), "", str(legitimate), os.environ["PATH"]]),
+                "PYTHONPATH": str(root),
+                "RESEARCH_REPO_TOOLS_HOME": str(parent / "managed tools"),
+                "GITHUB_OUTPUT": str(parent / "actions output"),
+                "GITHUB_RUN_ID": "123",
+                "GITHUB_RUN_ATTEMPT": "2",
+            }
+            isolated = SimpleNamespace(flags=SimpleNamespace(isolated=1), executable=sys.executable, prefix=sys.prefix, platform=sys.platform)
+            checkout = root / ".venv" / ".."
+            output = parent / "result output"
+
+            def dispatch(args, settings):
+                paths = os.environ["PATH"].split(os.pathsep)
+                self.assertIn(str(legitimate), paths)
+                self.assertTrue(all(Path(entry).is_absolute() and not Path(entry).resolve().is_relative_to(root) for entry in paths))
+                self.assertNotIn("PYTHONPATH", os.environ)
+                self.assertEqual(release_validation._GH_EXECUTABLE.get(), str(gh))
+                self.assertEqual(os.environ["GITHUB_RUN_ID"], "123")
+                self.assertEqual(os.environ["GITHUB_RUN_ATTEMPT"], "2")
+                self.assertEqual(os.environ["GITHUB_OUTPUT"], str(parent / "actions output"))
+                self.assertEqual(settings.root, root)
+                self.assertEqual(args.checkout, checkout)
+                self.assertEqual(args.output, output)
+                self.assertEqual(args.commit, "a" * 40)
+                self.assertEqual(args.configuration, "config with spaces.toml")
+                return 19
+
+            with (
+                patch.dict(os.environ, environment),
+                patch.object(release_runtime, "sys", isolated),
+                patch.object(toolchain.Runtime, "environment", side_effect=AssertionError("ordinary runtime must not probe checkout Python")),
+                patch.object(toolchain, "_probe", wraps=toolchain._probe) as probe,
+                patch.object(release_interfaces, "run", side_effect=dispatch),
+            ):
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "--root",
+                            str(root),
+                            "release",
+                            "--isolated-runtime",
+                            "evidence",
+                            "verify",
+                            "config with spaces.toml",
+                            "--checkout",
+                            str(checkout),
+                            "--commit",
+                            "a" * 40,
+                            "--version",
+                            "1.2.3",
+                            "--output",
+                            str(output),
+                        ]
+                    ),
+                    19,
+                )
+                self.assertEqual(Path(probe.call_args.args[0]).resolve(), uv.resolve())
+                self.assertFalse(probe.call_args.kwargs["cwd"].is_relative_to(root))
+                self.assertNotIn("PYTHONPATH", probe.call_args.kwargs["env"])
+                self.assertEqual(os.environ["PATH"], environment["PATH"])
+                self.assertEqual(os.environ["PYTHONPATH"], str(root))
+                self.assertEqual(release_validation._GH_EXECUTABLE.get(), "gh")
+                probe.reset_mock()
+                with (
+                    patch.dict(os.environ, {"UV_PYTHON_INSTALL_DIR": str(root / ".venv")}),
+                    self.assertRaisesRegex(ValueError, "UV_PYTHON_INSTALL_DIR must be an absolute managed location outside"),
+                    release_runtime.isolated_release_runtime(config.load(root=root)),
+                ):
+                    self.fail("unsafe runtime must never dispatch")
+                probe.assert_not_called()
+
     def test_cargo_build_cache_reuses_compilation_without_reusing_installations(self):
         with tempfile.TemporaryDirectory(prefix="cargo cache café ") as directory:
             root = Path(directory).resolve()

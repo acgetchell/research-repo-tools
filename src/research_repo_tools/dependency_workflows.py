@@ -98,9 +98,8 @@ def _python_arrays(document: dict[str, object]) -> Iterator[tuple[tuple[str, ...
             yield path, key, list[object](entries)
 
 
-def _python_selection(text: str, verified: VerifiedSource) -> str:
-    source = verified.source
-    document = table(tomllib.loads(text), "manifest")
+def _pin_python_requirements(text: str, document: dict[str, object], package: str, version: str, *, source_transition: bool = False) -> tuple[str, bool]:
+    """Repin existing declarations without changing extras, markers or group includes."""
     found = False
     for path, key, values in _python_arrays(document):
         replacements = {}
@@ -108,14 +107,24 @@ def _python_selection(text: str, verified: VerifiedSource) -> str:
             if not isinstance(value, str):
                 continue
             requirement = Requirement(value)
-            if canonicalize_name(requirement.name) != source.package:
+            if canonicalize_name(requirement.name) != package:
                 continue
+            if not source_transition and (requirement.url or path[0] not in {"project", "dependency-groups"}):
+                location = ".".join((*path, key))
+                raise ValueError(f"{package}: adoption cannot repin the source or constraint in {location}; reconcile it explicitly before adoption")
             found = True
             extras = "[" + ",".join(sorted(requirement.extras)) + "]" if requirement.extras else ""
             marker = f"; {requirement.marker}" if requirement.marker else ""
-            replacements[value] = f"{requirement.name}{extras}=={verified.version}{marker}"
+            replacements[value] = f"{requirement.name}{extras}=={version}{marker}"
         if replacements:
             text = toml_source.replace_array_strings(text, _table_name(path), key, replacements)
+    return text, found
+
+
+def _python_selection(text: str, verified: VerifiedSource) -> str:
+    source = verified.source
+    document = table(tomllib.loads(text), "manifest")
+    text, found = _pin_python_requirements(text, document, source.package, verified.version, source_transition=True)
     if not found:
         return text
     uv = table(table(document.get("tool", {}), "tool").get("uv", {}), "uv")
@@ -211,7 +220,7 @@ def _source_files(root: Path, manifests: tuple[Path, ...]) -> tuple[Path, ...]:
     return tuple(sorted(paths, key=str))
 
 
-def _resolve_candidate(root: Path, verified: VerifiedSource, *, checkout: Path, candidate_checkout: Path) -> None:
+def _resolve_candidate(root: Path, verified: VerifiedSource, *, checkout: Path, candidate_checkout: Path, allow_python_builds: bool = False) -> None:
     from research_repo_tools.process import resolve_executable, run_command
     from research_repo_tools.release_credentials import environment as without_credentials
 
@@ -241,7 +250,8 @@ def _resolve_candidate(root: Path, verified: VerifiedSource, *, checkout: Path, 
         raise ValueError("dependency resolver must be outside the candidate checkout")
     if source.ecosystem == "python":
         environment["UV_PROJECT_ENVIRONMENT"] = str(root.parent / "uncreated-environment")
-        arguments = ["lock", "--no-build", "--no-python-downloads", "--python", sys.executable, "--project", str(root)]
+        build_policy = [] if allow_python_builds else ["--no-build"]
+        arguments = ["lock", *build_policy, "--no-python-downloads", "--python", sys.executable, "--project", str(root)]
     else:
         arguments = [
             "update",
@@ -291,6 +301,12 @@ def plan_source(root: Path, name: str, *, provider: SourceProvider | None = None
         raise ValueError("source name must identify one dependency-sources.toml selection")
     selection = selections[0]
     verified = verify_source(selection.source, provider=provider)
+    return _plan_verified_source(root, selection, verified)
+
+
+def _plan_verified_source(
+    root: Path, selection: SourceSelection, verified: VerifiedSource, *, transition_policy: tuple[bytes, bytes] | None = None
+) -> SourcePlan:
     project_root = inside(root, selection.project.directory)
     # Capture all copied source/harness bytes so a plan cannot publish a lock
     # resolved against a different workspace or silently preserve old evidence.
@@ -302,6 +318,11 @@ def plan_source(root: Path, name: str, *, provider: SourceProvider | None = None
 
     _check_configuration(project_root, selection.project.ecosystem)
     changes: dict[Path, bytes] = {}
+    if transition_policy is not None:
+        original_policy, next_policy = transition_policy
+        if originals.get(root / POLICY_FILE) != original_policy:
+            raise ValueError("dependency source policy changed before promotion")
+        changes[root / POLICY_FILE] = next_policy
     declared = False
     transform = _python_selection if selection.project.ecosystem == "python" else _cargo_selection
     for path in manifests:
@@ -341,7 +362,8 @@ def plan_source(root: Path, name: str, *, provider: SourceProvider | None = None
             target.write_bytes(original)
         for path, content in changes.items():
             (candidate_root / path.relative_to(root)).write_bytes(content)
-        _resolve_candidate(inside(candidate_root, selection.project.directory), verified, checkout=root, candidate_checkout=candidate_root)
+        build_policy = {"allow_python_builds": True} if transition_policy is not None else {}
+        _resolve_candidate(inside(candidate_root, selection.project.directory), verified, checkout=root, candidate_checkout=candidate_root, **build_policy)
         graph = inspect_project(candidate_root, selection.project, release=False)
         matches = [dependency for dependency in graph.dependencies if dependency.source.package == selection.source.package]
         if not matches or any(not _matches(verified, item.source, item.version) for item in matches):

@@ -158,16 +158,16 @@ class Runtime:
             env.pop(name, None)
         return env
 
-    def _environment(self, python: Status | None = None) -> dict[str, str]:
-        """Build probe environments without recursively looking up Python."""
+    def _managed_environment(self) -> tuple[dict[str, str], list[Path]]:
+        """Compose managed locations without probing or installing tools."""
         env = dict(os.environ)
         # Private by default so shared cleanup can distinguish package-owned
         # interpreters from uv installations used by unrelated projects.
         env.setdefault("UV_PYTHON_INSTALL_DIR", str(self.base / "python"))
-        paths = [str(self.cargo_root(tool) / "bin") for tool in self.plan.cargo]
-        paths.extend(str(self.binary_path(tool).parent) for tool in self.plan.binaries)
+        paths = [self.cargo_root(tool) / "bin" for tool in self.plan.cargo]
+        paths.extend(self.binary_path(tool).parent for tool in self.plan.binaries)
         if self.plan.rust:
-            paths.append(str(self.rustup.parent))
+            paths.append(self.rustup.parent)
             env.update(
                 CARGO_HOME=str(self.manager / "cargo"),
                 RUSTUP_HOME=str(self.manager / "toolchains"),
@@ -175,12 +175,17 @@ class Runtime:
                 RUSTUP_AUTO_INSTALL="0",
                 RUSTUP_NO_UPDATE_CHECK="1",
             )
+        return env, paths
+
+    def _environment(self, python: Status | None = None) -> dict[str, str]:
+        """Build probe environments without recursively looking up Python."""
+        env, paths = self._managed_environment()
         if python is not None and python.ok:
-            paths.append(str(Path(python.path).parent))
+            paths.append(Path(python.path).parent)
         uv = self.uv_status()
         if uv.ok:
-            paths.append(str(Path(uv.path).parent))
-        env["PATH"] = os.pathsep.join([*paths, env.get("PATH", "")])
+            paths.append(Path(uv.path).parent)
+        env["PATH"] = os.pathsep.join([*map(str, paths), env.get("PATH", "")])
         return env
 
     def uv_status(self) -> Status:

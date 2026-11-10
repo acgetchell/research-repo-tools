@@ -25,6 +25,7 @@ import tomllib
 import zipfile
 import zlib
 from collections.abc import Callable
+from contextvars import ContextVar
 from dataclasses import dataclass
 from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
@@ -75,6 +76,7 @@ VALIDATION_BUNDLE = "validation.sigstore.json"
 SCHEMA = "research-repo-tools/validated-distributions/v1"
 PROMOTION = "https://github.com/acgetchell/research-repo-tools/attestations/release-promotion/v1"
 MAX_BYTES = 32 * 1024 * 1024
+_GH_EXECUTABLE = ContextVar("release_gh_executable", default="gh")
 RECOVERY = (
     "Rerun ALL jobs of the original main-push Package checks run for this exact commit within GitHub's 30-day rerun window, then retry preparation. "
     "After that window, land a new reviewed commit on main and follow the explicitly authorized unpublished-candidate correction procedure; preserve published releases. "
@@ -281,7 +283,7 @@ POLICY = ValidationPolicy(
 
 
 def gh(*args: str) -> str:
-    return subprocess.run(["gh", *args], check=True, capture_output=True, text=True, encoding="utf-8", timeout=120).stdout
+    return subprocess.run([_GH_EXECUTABLE.get(), *args], check=True, capture_output=True, text=True, encoding="utf-8", timeout=120).stdout
 
 
 def api(endpoint: str, *, repository: str = REPOSITORY) -> Any:
@@ -552,7 +554,11 @@ def download_artifact(
             stream.truncate()
             try:
                 subprocess.run(
-                    ["gh", "api", f"repos/{repository}/actions/artifacts/{identifier}/zip"], stdout=stream, stderr=subprocess.PIPE, check=True, timeout=120
+                    [_GH_EXECUTABLE.get(), "api", f"repos/{repository}/actions/artifacts/{identifier}/zip"],
+                    stdout=stream,
+                    stderr=subprocess.PIPE,
+                    check=True,
+                    timeout=120,
                 )
                 break
             except subprocess.CalledProcessError as error:
@@ -1053,7 +1059,7 @@ def verify(event: dict[str, Any], commit: str, output: Path) -> None:
             target = bundle if asset["name"] == BUNDLE else candidate / asset["name"]
             with target.open("xb") as stream:
                 subprocess.run(
-                    ["gh", "api", f"repos/{REPOSITORY}/releases/assets/{asset['id']}", "-H", "Accept: application/octet-stream"],
+                    [_GH_EXECUTABLE.get(), "api", f"repos/{REPOSITORY}/releases/assets/{asset['id']}", "-H", "Accept: application/octet-stream"],
                     stdout=stream,
                     stderr=subprocess.PIPE,
                     check=True,

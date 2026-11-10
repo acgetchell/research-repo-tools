@@ -5,6 +5,7 @@ for setup and ordinary workflows.
 
 - [Shared Python adoption API](#shared-python-adoption-api)
 - [Managed installation cleanup API](#managed-installation-cleanup-api)
+- [Isolated release runtime API](#isolated-release-runtime-api)
 
 ## Shared Python adoption API
 
@@ -90,3 +91,37 @@ uninstall commands for Rust. Failures stop subsequent removals and report partia
 progress; there is no rollback. Keep installers and other writers idle throughout
 planning and applying; revalidation is not a concurrency lock. See the
 [retention contract](INSTALLING.md#cleaning-obsolete-installations).
+
+## Isolated release runtime API
+
+Use `python -I -m research_repo_tools --root ROOT release --isolated-runtime ...`
+from an exact, externally installed distribution. The release command takes
+the same arguments, including independently supplied commit and version
+assertions, expected selections, output paths, and Actions run identifiers.
+The option scopes managed tool selection to the release command and leaves
+ordinary `toolchain run` behavior available for development.
+
+`research_repo_tools.release_runtime.isolated_release_runtime(settings, *, checkout=None)`
+is a context manager for a single-threaded release entry point. It selects
+declared managed tool directories, the external interpreter directory, and
+absolute inherited search paths, in that order. It excludes observed-checkout
+directories and aliases, checks selected launchers, and probes the pinned uv
+from a temporary directory outside the checkout. The observed project virtual
+environment is read only by the release proof and is never probed. Managed
+installation directories, the external tool installations and the controller
+environment must be trusted. Runtime preparation restores the process
+environment when the command exits and performs no project synchronization.
+
+Keep the exact `uvx` selection, `--no-config --isolated --managed-python`, the
+declared Python selector and any configured resolution cutoff in the caller.
+Keep repository policy and independent assertions in the owning repository.
+
+- la-stack can run `release --isolated-runtime assets` and
+  `release --isolated-runtime evidence verify` directly. The trusted
+  release-candidate controller can scope its locally reviewed orchestration
+  with the context manager and continue to own the approval decisions.
+- Delaunay can pass its existing asset or evidence operation, policy path,
+  checkout, commit, tag or version, and output to `release --isolated-runtime`.
+- MCMC can use `release --isolated-runtime evidence create` or `verify`
+  and continue to forward the run ID, attempt, expected selection and Actions
+  output path as applicable.

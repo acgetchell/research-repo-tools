@@ -10,12 +10,14 @@ from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 from research_repo_tools._archive_paths import ArchivePaths
-from research_repo_tools.dependency_policy import InputSnapshot
+from research_repo_tools.dependency_policy import MAX_SNAPSHOT_FILE_BYTES, MAX_SNAPSHOT_FILES, InputSnapshot
 from research_repo_tools.dependency_sources import HttpSourceProvider, SourceProvider, VerifiedSource, table
-from research_repo_tools.registry import MAX_BYTES
 
 if TYPE_CHECKING:
     from research_repo_tools.dependency_graphs import DependencyGraph
+
+CARGO_MAX_COMPRESSED_BYTES = 32 * 1024 * 1024
+CARGO_MAX_EXPANDED_BYTES = 64 * 1024 * 1024
 
 
 def _legacy_uv_hooks(site: Path) -> InputSnapshot:
@@ -48,32 +50,30 @@ def verify_cargo_input(path: Path, verified: VerifiedSource, *, provider: Source
 def _cargo_input(path: Path, verified: VerifiedSource, *, provider: SourceProvider | None) -> InputSnapshot:
     """Verify used extracted crate files against a downloaded locked .crate."""
     (artifact,) = verified.artifacts
-    if artifact.size > MAX_BYTES:
-        raise ValueError("Cargo dependency archive exceeds the byte limit")
+    prefix = f"{verified.source.package}-{verified.version}"
+    if artifact.size > CARGO_MAX_COMPRESSED_BYTES:
+        raise ValueError(f"{prefix}: Cargo archive exceeds the {CARGO_MAX_COMPRESSED_BYTES}-byte compressed limit")
     payload = (provider or HttpSourceProvider()).read(artifact.url)
     if len(payload) != artifact.size or hashlib.sha256(payload).hexdigest() != artifact.sha256:
         raise ValueError("Cargo dependency archive bytes differ from crates.io and the lock")
-    prefix = f"{verified.source.package}-{verified.version}"
     expected: set[str] = set()
     observed: list[tuple[Path, bytes]] = []
     paths = ArchivePaths()
     with tarfile.open(fileobj=io.BytesIO(payload), mode="r:gz") as archive:
         total = 0
         for index, member in enumerate(archive):
+            if index >= MAX_SNAPSHOT_FILES:
+                raise ValueError(f"{prefix}: Cargo archive exceeds the {MAX_SNAPSHOT_FILES}-member limit")
             if member.size < 0:
-                raise ValueError("Cargo archive has a negative member size")
+                raise ValueError(f"{prefix}: Cargo archive has a negative member size")
+            if member.size > MAX_SNAPSHOT_FILE_BYTES:
+                raise ValueError(f"{prefix}: Cargo archive exceeds the {MAX_SNAPSHOT_FILE_BYTES}-byte per-member limit")
             total += member.size
+            if total > CARGO_MAX_EXPANDED_BYTES:
+                raise ValueError(f"{prefix}: Cargo archive exceeds the {CARGO_MAX_EXPANDED_BYTES}-byte expanded limit")
             pure = paths.add(member.name, directory=member.isdir())
-            if (
-                index >= 10000
-                or total > MAX_BYTES
-                or pure.is_absolute()
-                or ".." in pure.parts
-                or "\\" in member.name
-                or not pure.parts
-                or pure.parts[0] != prefix
-            ):
-                raise ValueError("Cargo archive has unsafe paths or exceeds content limits")
+            if pure.is_absolute() or ".." in pure.parts or "\\" in member.name or not pure.parts or pure.parts[0] != prefix:
+                raise ValueError("Cargo archive has unsafe paths")
             if member.isdir():
                 continue
             relative = PurePosixPath(*pure.parts[1:]).as_posix()
@@ -87,7 +87,7 @@ def _cargo_input(path: Path, verified: VerifiedSource, *, provider: SourceProvid
             if stream is None:
                 raise ValueError("Cargo archive member cannot be read")
             with stream:
-                content = stream.read(MAX_BYTES + 1)
+                content = stream.read()
             if target.read_bytes() != content:
                 raise ValueError(f"Cargo dependency cache differs from published bytes: {relative}")
             observed.append((target, content))

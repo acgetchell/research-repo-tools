@@ -68,6 +68,41 @@ def parse_source(*, release: str | None = None, github: str | None = None, commi
     raise ValueError("select either --version VERSION or both --github OWNER/REPOSITORY and --commit SHA")
 
 
+def _policy_source(path: Path, name: str) -> Source:
+    if sys.version_info < (3, 11):
+        raise ValueError("source policy requires Python 3.11 or newer")
+    import tomllib
+
+    if not path.is_file() or path.is_symlink():
+        raise ValueError("source policy must be a regular file")
+    with path.open("rb") as stream:
+        payload = stream.read(_LIMIT + 1)
+    if len(payload) > _LIMIT:
+        raise ValueError("source policy exceeds the byte limit")
+    policy = tomllib.loads(payload.decode("utf-8"))
+    sources, projects = policy.get("sources"), policy.get("projects")
+    if type(policy.get("schema")) is not int or policy["schema"] != 1 or not isinstance(sources, dict) or not isinstance(projects, dict):
+        raise ValueError("source policy requires schema 1 and declared projects and sources")
+    selected = sources.get(name)
+    package = selected.get("package") if isinstance(selected, dict) else None
+    if (
+        not isinstance(selected, dict)
+        or not isinstance(package, str)
+        or re.sub(r"[-_.]+", "-", package).lower() != PACKAGE
+        or not isinstance(selected.get("project"), str)
+    ):
+        raise ValueError("source policy must name a research-repo-tools selection")
+    project = projects.get(selected["project"])
+    if not isinstance(project, dict) or project.get("ecosystem") != "python":
+        raise ValueError("source policy must select a declared Python project")
+    fields = set(selected) - {"project", "package"}
+    if fields == {"version"}:
+        return ReleasePin(selected["version"])
+    if fields in ({"github", "commit"}, {"github", "commit", "directory"}) and selected.get("directory", ".") == ".":
+        return GitHubPin(selected["github"], selected["commit"])
+    raise ValueError("source policy requires one exact registry version or root GitHub commit")
+
+
 class _NoRedirect(urllib.request.HTTPRedirectHandler):
     def redirect_request(self, req, fp, code, msg, headers, newurl):  # ty: ignore[missing-override-decorator]  Standalone Python 3.8 has no typing.override.
         return None
@@ -219,6 +254,7 @@ def _execute(resolved: _ResolvedSource, arguments: tuple[str, ...], *, root: Pat
     requirement = resolved.requirement
     if extras:
         requirement = PACKAGE + "[" + ",".join(sorted(extras)) + "]" + requirement[len(PACKAGE) :]
+    command = ["python", "-I", "-m", "research_repo_tools"] if arguments[:2] == ("release", "--isolated-runtime") else [PACKAGE]
     return subprocess.run(
         [
             "uvx",
@@ -231,7 +267,7 @@ def _execute(resolved: _ResolvedSource, arguments: tuple[str, ...], *, root: Pat
             "https://pypi.org/simple",
             "--from",
             requirement,
-            PACKAGE,
+            *command,
             "--root",
             str(root.resolve()),
             *arguments,
@@ -248,6 +284,8 @@ def main(argv=None):
     parser.add_argument("--version", dest="release", help="exact published research-repo-tools version")
     parser.add_argument("--github", help="public GitHub owner/repository")
     parser.add_argument("--commit", help="full lowercase 40-character Git commit SHA")
+    parser.add_argument("--source-policy", type=Path, help="trusted dependency-sources.toml supplying the exact runtime selection")
+    parser.add_argument("--selection", help="research-repo-tools source name in --source-policy")
     parser.add_argument("--root", type=Path, default=Path.cwd())
     parser.add_argument("--extras", default="", help="comma-separated optional package extras, such as python-tools")
     parser.add_argument("--release-intent", action="store_true")
@@ -260,7 +298,16 @@ def main(argv=None):
     try:
         if args.version is not None and args.release is not None:
             raise ValueError("supply the release once")
-        source = parse_source(release=args.version if args.version is not None else args.release, github=args.github, commit=args.commit)
+        if args.source_policy is not None or args.selection is not None:
+            if (
+                args.source_policy is None
+                or args.selection is None
+                or any(value is not None for value in (args.version, args.release, args.github, args.commit))
+            ):
+                raise ValueError("supply --source-policy and --selection together, without another source selector")
+            source = _policy_source(args.source_policy, args.selection)
+        else:
+            source = parse_source(release=args.version if args.version is not None else args.release, github=args.github, commit=args.commit)
         if args.arguments_json is not None:
             arguments = json.loads(args.arguments_json)
             if not isinstance(arguments, list):

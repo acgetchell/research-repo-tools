@@ -7,20 +7,21 @@ import shutil
 import sys
 import tempfile
 import tomllib
+from collections.abc import Iterator
+from contextlib import contextmanager
 from dataclasses import dataclass, replace
 from io import StringIO
 from pathlib import Path
 
-from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
-from packaging.utils import canonicalize_name
 
 from research_repo_tools import config, files, python_baseline, python_tools, toolchain, toolchain_config
 from research_repo_tools.config import _table
+from research_repo_tools.dependency_workflows import _pin_python_requirements
 from research_repo_tools.process import get_safe_executable, run_safe_command
 from research_repo_tools.release_policy import relative_path
 from research_repo_tools.selection import select_files
-from research_repo_tools.toml_source import key_line, replace_array_strings, set_value
+from research_repo_tools.toml_source import key_line, set_value
 
 
 @dataclass(frozen=True, slots=True)
@@ -121,13 +122,7 @@ def _manifest(text: str, authority: python_baseline.PythonBaseline, old_selector
     if problems := python_baseline.target_problems(document, selected):
         raise ValueError("; ".join(problems))
     groups = python_baseline.package_groups(document)
-    for group in groups:
-        updates = {}
-        for raw in document["dependency-groups"][group]:
-            if isinstance(raw, str) and canonicalize_name((item := Requirement(raw)).name) == python_baseline.PACKAGE:
-                extras = "[" + ",".join(sorted(item.extras)) + "]" if item.extras else ""
-                updates[raw] = f"{item.name}{extras}=={authority.package_version}"
-        text = replace_array_strings(text, "dependency-groups", group, updates)
+    text, _ = _pin_python_requirements(text, document, python_baseline.PACKAGE, authority.package_version)
     uv = _table(_table(document.get("tool", {}), "tool").get("uv", {}), "tool.uv")
     group_constraints = _table(uv.get("dependency-groups", {}), "tool.uv.dependency-groups")
     text = set_value(text, "project", "requires-python", json.dumps(requirement))
@@ -318,58 +313,60 @@ def apply_python_adoption(plan: PythonAdoptionPlan) -> None:
     # Versioned tool installations occur before declaration publication. Old
     # versions remain available if candidate verification or migration fails.
     toolchain.Runtime(plan.tools).sync()
-    backup = root / f".venv.rrt-backup-{secrets.token_hex(8)}"
+    with files.preserve_files(tuple(root / name for name, _ in plan.replacements)), _rebuild_environment(environment):
+        files.replace_many({root / name: payload for name, payload in plan.replacements})
+        _sync(uv, root, plan.tools.python_request, plan.groups, environment=toolchain.Runtime(plan.tools).environment())
+        _check_tools(root, plan.inherit_tools)
+        if plan.notebook_group:
+            python = toolchain_config.executable(environment / ("Scripts" if os.name == "nt" else "bin"), "python")
+            run_safe_command(
+                str(python),
+                [
+                    "-m",
+                    "ipykernel",
+                    "install",
+                    "--prefix",
+                    str(environment),
+                    "--name",
+                    "research-repo-tools",
+                    "--display-name",
+                    "Research project (locked Python)",
+                ],
+                cwd=root,
+                env=_environment(root),
+                timeout=60,
+            )
+
+
+@contextmanager
+def _rebuild_environment(environment: Path) -> Iterator[None]:
+    """Build at the final path while retaining the exact previous environment."""
+    backup = environment.with_name(f"{environment.name}.rrt-backup-{secrets.token_hex(8)}")
     saved = False
     started = False
-    with files.preserve_files(tuple(root / name for name, _ in plan.replacements)):
+    try:
+        if environment.exists():
+            environment.rename(backup)
+            saved = True
+        started = True
+        yield
+    except BaseException as error:
+        # An interrupt may arrive between a successful rename and its return.
+        saved = saved or backup.exists()
         try:
-            if environment.exists():
-                environment.rename(backup)
-                saved = True
-            started = True
-            files.replace_many({root / name: payload for name, payload in plan.replacements})
-            _sync(uv, root, plan.tools.python_request, plan.groups, environment=toolchain.Runtime(plan.tools).environment())
-            _check_tools(root, plan.inherit_tools)
-            if plan.notebook_group:
-                python = toolchain_config.executable(environment / ("Scripts" if os.name == "nt" else "bin"), "python")
-                run_safe_command(
-                    str(python),
-                    [
-                        "-m",
-                        "ipykernel",
-                        "install",
-                        "--prefix",
-                        str(environment),
-                        "--name",
-                        "research-repo-tools",
-                        "--display-name",
-                        "Research project (locked Python)",
-                    ],
-                    cwd=root,
-                    env=_environment(root),
-                    timeout=60,
-                )
-        except BaseException as error:
-            # A signal can arrive after rename succeeds but before saved is set.
-            # Recover from the actual backup as well as the recorded state.
-            saved = saved or backup.exists()
-            try:
-                # If rename itself failed, the original environment is intact.
-                if started or saved:
-                    if environment.exists():
-                        shutil.rmtree(environment)
-                    if saved:
-                        backup.rename(environment)
-            except BaseException as recovery:
-                # A completed restore consumes its backup, even if an interrupt
-                # arrives before rename returns. Otherwise retain its location.
-                if not (saved and not backup.exists() and environment.is_dir()):
-                    raise BaseExceptionGroup(
-                        "Python adoption failed; environment recovery required", [error, files.RecoveryError(environment, backup if saved else None, recovery)]
-                    ) from None
-            raise
+            if started or saved:
+                if environment.exists():
+                    shutil.rmtree(environment)
+                if saved:
+                    backup.rename(environment)
+        except BaseException as recovery:
+            if not (saved and not backup.exists() and environment.is_dir()):
+                raise BaseExceptionGroup(
+                    "Python environment recovery required", [error, files.RecoveryError(environment, backup if saved else None, recovery)]
+                ) from None
+        raise
     if saved:
         try:
             shutil.rmtree(backup)
         except OSError:
-            print(f"Adoption completed; old environment backup retained at {backup}", file=sys.stderr)
+            print(f"Old environment backup retained at {backup}", file=sys.stderr)

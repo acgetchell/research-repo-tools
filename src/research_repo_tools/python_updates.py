@@ -4,6 +4,8 @@ import shutil
 import sys
 import tomllib
 from collections.abc import Mapping
+from contextlib import ExitStack
+from dataclasses import replace
 from pathlib import Path
 
 from research_repo_tools import config, dependencies, files, python_locks, python_resolution, python_tools, toolchain, toolchain_config
@@ -61,12 +63,36 @@ def _projects(settings: config.Config) -> tuple[Path, ...]:
     return tuple(projects)
 
 
-def update(settings: config.Config) -> int:
+def update(settings: config.Config, *, promote: str | None = None, versions: str = "", prereleases: bool = False) -> int:
     """Validate all new locks, then sync; restore original declarations on failure."""
-    projects = _projects(settings)
-    if settings.toolchain.inherit_python_tools:
+    from research_repo_tools.python_promotion import NoSupplyingRelease, check_promoted_installation, check_promoted_lock, plan_promotion
+
+    # Promotion runs from an external controller that can have a different
+    # version than either project pin. Keep the project's declared toolchain
+    # and defer package identity to the verified promotion and final sync.
+    runtime_settings = (
+        settings if promote is None else replace(settings, toolchain=replace(settings.toolchain, inherit_python=False, inherit_python_tools=False))
+    )
+    projects = _projects(runtime_settings)
+    promotion = None
+    promotion_root = None
+    if promote is not None:
+        try:
+            promotion = plan_promotion(settings.root, promote, versions=versions, prereleases=prereleases)
+        except NoSupplyingRelease as reason:
+            print(f"Retained {promote}: {reason}.")
+            return 0
+        promotion_root = settings.root / promotion.selection.project.directory
+        if promotion_root not in projects:
+            raise ValueError("promotion must select the main or a declared Python update project")
+        environment = promotion_root / ".venv"
+        if Path(sys.prefix).resolve().is_relative_to(environment.resolve()):
+            raise ValueError("run promotion from an external installed runtime so the original project environment can be restored")
+        if environment.exists() and not (environment / "pyvenv.cfg").is_file():
+            raise ValueError("promotion requires .venv to be absent or a regular project virtual environment")
+    if runtime_settings.toolchain.inherit_python_tools:
         python_tools.check(settings.root, executables=False)
-    runtime = toolchain.Runtime(toolchain_config.load(settings))
+    runtime = toolchain.Runtime(toolchain_config.load(runtime_settings))
     if not toolchain.report(runtime.inspect(), stream=sys.stderr):
         raise ValueError("toolchain is incomplete; run toolchain sync before updating Python projects")
     env = runtime.project_environment()
@@ -75,8 +101,11 @@ def update(settings: config.Config) -> int:
     for name in ("UV_CONFIG_FILE", "UV_PROJECT_ENVIRONMENT", "UV_PYTHON", "VIRTUAL_ENV"):
         env.pop(name, None)
     uv = settings.executable(settings.deps.uv)
-    targets = tuple(project / name for project in projects for name in ("pyproject.toml", "uv.lock"))
-    had_environment = {project: (project / ".venv").exists() for project in projects}
+    active_projects = (promotion_root,) if promotion_root is not None else projects
+    targets = tuple(project / name for project in active_projects for name in ("pyproject.toml", "uv.lock"))
+    if promotion is not None:
+        targets = tuple(dict.fromkeys((*targets, *(path for path, _ in promotion.writes))))
+    had_environment = {project: (project / ".venv").exists() for project in active_projects}
     attempted_sync: list[Path] = []
     originals: Mapping[Path, bytes | None] = dict[Path, bytes | None]()
 
@@ -87,17 +116,30 @@ def update(settings: config.Config) -> int:
         run_command_live(uv, ["sync", "--locked", "--no-active", "--managed-python", *groups, *target], cwd=project, env=project_env, timeout=600)
 
     try:
-        with files.preserve_files(targets) as originals:
-            changes = dependencies.update_dev_pins(settings.path(settings.deps.pyproject), uv=uv, toolchain=settings.toolchain, env=env)
-            for project in projects:
-                print(f"Updating Python project: {project}", flush=True)
-                project_env = env | {"UV_PROJECT_ENVIRONMENT": str(project / ".venv")}
-                target = ["--directory", str(project), "--project", str(project)]
-                run_command_live(uv, ["lock", "--upgrade", *target], cwd=project, env=project_env, timeout=300)
-                python_locks.require_no_downgrades(originals[project / "uv.lock"], project / "uv.lock")
-            for project in projects:
-                attempted_sync.append(project)
+        with files.preserve_files(targets) as originals, ExitStack() as environments:
+            if promotion is not None:
+                files.replace_many(dict(promotion.writes), verify=promotion.snapshot.verify)
+                changes = {}
+                check_promoted_lock(promotion, active_projects[0])
+                python_locks.require_no_downgrades(originals[active_projects[0] / "uv.lock"], active_projects[0] / "uv.lock")
+            else:
+                changes = dependencies.update_dev_pins(settings.path(settings.deps.pyproject), uv=uv, toolchain=settings.toolchain, env=env)
+                for project in active_projects:
+                    print(f"Updating Python project: {project}", flush=True)
+                    project_env = env | {"UV_PROJECT_ENVIRONMENT": str(project / ".venv")}
+                    target = ["--directory", str(project), "--project", str(project)]
+                    run_command_live(uv, ["lock", "--upgrade", *target], cwd=project, env=project_env, timeout=300)
+                    python_locks.require_no_downgrades(originals[project / "uv.lock"], project / "uv.lock")
+            for project in active_projects:
+                if promotion is not None:
+                    from research_repo_tools.python_adoption import _rebuild_environment
+
+                    environments.enter_context(_rebuild_environment(project / ".venv"))
+                else:
+                    attempted_sync.append(project)
                 sync(project)
+            if promotion is not None and promotion_root is not None:
+                check_promoted_installation(promotion, promotion_root)
     except BaseException as error:
         # Restore environments only after preserve_files has restored the exact
         # original manifests/locks. A failed file rollback retains its backups.
@@ -117,4 +159,6 @@ def update(settings: config.Config) -> int:
         raise
     for name, (old, new) in changes.items():
         print(f"Updated {name}: {old} -> {new}")
+    if promotion is not None:
+        print(f"Promoted {promote} to verified PyPI release {promotion.verified.version}")
     return 0

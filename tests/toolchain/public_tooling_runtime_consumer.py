@@ -106,6 +106,37 @@ class TestToolingRuntime(unittest.TestCase):
                 arguments = self.launch.call_args.args[0]
                 self.assertEqual(arguments[arguments.index("--from") + 1], requirement)
 
+    def test_declared_runtime_follows_an_exact_source_transition(self):
+        policy = Path(self.enterContext(tempfile.TemporaryDirectory(prefix="trusted source policy "))) / "dependency-sources.toml"
+        header = 'schema=1\n[projects.python]\necosystem="python"\n[sources.tooling]\nproject="python"\npackage="research-repo-tools"\n'
+        policy.write_bytes((header + f'github="{REPOSITORY}"\ncommit="{SHA}"\n').encode())
+        selector = ["--source-policy", str(policy), "--selection", "tooling", "--root", str(self.root)]
+        self.assertEqual(runtime.main([*selector, "--arguments-json", '["toolchain","check"]']), 7)
+        command = self.launch.call_args.args[0]
+        self.assertEqual(command[command.index("--from") + 1], f"research-repo-tools @ git+https://github.com/{REPOSITORY}.git@{SHA}")
+        self.launch.reset_mock()
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(runtime.main([*selector, "--release-intent", "--arguments-json", '["release","dependencies"]']), 1)
+        self.assertIn("exact published version", errors.getvalue())
+        self.launch.assert_not_called()
+        policy.write_bytes((header + f'version="{VERSION}"\n').encode())
+        release_args = ["release", "--isolated-runtime", "dependencies"]
+        self.assertEqual(runtime.main([*selector, "--release-intent", "--arguments-json", json.dumps(release_args)]), 7)
+        command = self.launch.call_args.args[0]
+        self.assertEqual(
+            command[command.index("--from") + 1 :],
+            [
+                f"research-repo-tools=={VERSION}",
+                "python",
+                "-I",
+                "-m",
+                "research_repo_tools",
+                "--root",
+                str(self.root.resolve()),
+                *release_args,
+            ],
+        )
+
     def test_optional_github_credentials_are_sent_only_to_the_api(self):
         for lookup, primary, fallback, expected in (
             ("lookup-fixture", "primary-fixture", "fallback-fixture", "Bearer lookup-fixture"),

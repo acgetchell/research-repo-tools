@@ -59,8 +59,11 @@ executing package's installed metadata remains the support authority. An obsolet
 selector, lock, environment or Python on PATH cannot control startup. Preview
 resolves and installs a temporary candidate; it may download Python/packages
 and populate caches, but leaves consumer files and `.venv` unchanged. Apply
-updates all direct shared-package pins (including extras), application metadata,
-`uv.lock`, the environment, and the configured notebook group's project kernel.
+updates existing shared-package pins in runtime dependencies, optional extras,
+and dependency groups. It preserves extras, runtime and optional markers, group
+includes, and supported exact Git overrides. Explicit source transitions are
+separate. Apply also updates application metadata, `uv.lock`, the environment,
+and the configured notebook group's project kernel.
 Resolution and candidate installation must succeed before publication.
 
 For offline bootstrap or local wheel/sdist evaluation, the helper accepts
@@ -177,6 +180,40 @@ through candidate resolution, full-lock refresh and synchronization, including
 when inherited through `tooling`. They are not registry upgrade targets, even
 when the registry has the same version. Development Git pins remain prohibited
 at release acquisition, evidence and publication boundaries.
+
+### Promoting an exact development pin
+
+From an external installed RRT version that supports promotion, run
+`research-repo-tools --root ROOT deps update-python --promote tooling`, where
+`tooling` names the Git source in `dependency-sources.toml`. The policy, uv
+source override, and lock must agree on the exact repository and commit. Add
+`--promotion-versions SPEC` to restrict eligible PEP 440 versions or
+`--promotion-prereleases` to include prereleases.
+
+Promotion considers compatible, non-yanked PyPI releases at or above the
+locked version, newest version first. It requires each distribution's
+published bytes to match its signed GitHub release-promotion evidence from
+the declaring repository. The signed commit must equal or descend from the
+Git pin. Upload dates and version numbers alone cannot establish containment.
+The supported publisher uses `.github/workflows/prepare-release.yml` and
+retains its `release-attestation.json` asset. A missing eligible release
+retains the pin and reports why. Provider or proof errors fail the command.
+
+The updater resolves a private candidate using uv's ordinary source-build
+policy, then applies the source declaration,
+manifest pins and registry lock together and recreates the selected project
+environment. Failed synchronization or installed-byte verification restores
+the exact previous declarations and environment. Close consumers of the
+environment before applying. As with Python adoption, the rollback applies
+to caught failures and requires exclusive access during the update.
+
+To keep an isolated recipe or workflow aligned, point the bootstrap at the
+same trusted declaration using `--source-policy dependency-sources.toml
+--selection tooling`. The composite `run-tooling` Action accepts
+`source-policy` and `selection` inputs. A release-intent invocation still
+requires a published version. Keep the source policy under the release
+controller's trust boundary, and preserve independently supplied release
+assertions and the existing provenance gates.
 
 Relative paths, source directories, workspace, floating or conditional Git, direct URL, group/extra-scoped
 sources, scoped override tables, dynamic dependencies, legacy uv dev dependencies
@@ -517,6 +554,25 @@ workspace packages require upstream-first publication and registry dependencies
 before the dependent release. The package being released has no circular
 requirement to exist in its registry already.
 
+To include a standalone Cargo fixture or benchmark in the same verification,
+name its enclosing Cargo project as the owner:
+
+```toml
+[projects.rust]
+ecosystem = "cargo"
+
+[projects.roundtrip]
+ecosystem = "cargo"
+directory = "tests/fixtures/roundtrip"
+cargo-owner = "rust"
+```
+
+The helper must have its own `[workspace]`, `Cargo.lock`, and
+`publish = false`. Its direct relative path dependency must identify the
+enclosing project's root package. The verifier checks both package identities
+and verifies the helper's registry lock and native metadata separately. The
+owner's release graph keeps its own lock and ownership boundary.
+
 A preview verifies the selected upstream identity, copies the consumer to a
 disposable directory, preserves dependency aliases, extras/features, dependency
 kinds, target conditions and workspace inheritance, then asks uv or Cargo to
@@ -549,6 +605,9 @@ in an isolated build environment.
 Availability proof binds exact PyPI upload URLs, sizes and SHA-256 digests, or
 the crates.io archive checksum and size, and rejects yanked uploads. Cargo's
 resolved cached input files are compared with the downloaded published archive.
+Each Cargo archive is limited to 32 MiB compressed, 32 MiB per member, 64 MiB
+expanded in total, and 10,000 members. Size diagnostics identify the crate and
+the exceeded limit.
 Existing Python environments are inspected through static distribution metadata
 and compared with matching published wheels; packages are never imported into
 the controller. An absent Python environment is an acquisition input: sync the
