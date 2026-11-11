@@ -1110,6 +1110,10 @@ sys.exit(status)
         self.assertIn(b"After v1.1.0", before)
         if scheduled:
             self.assertIn(b"Trial 2", before)
+            evidence = parse_evidence((self.root / "target/run.json").read_bytes(), (self.root / "target/evidence.json").read_bytes())
+            self.assertIn(f"Complete run: `{run_identity(evidence)}`".encode(), before)
+            self.assertIn(b"Selected trial run (CSV/plot identity)", before)
+            self.assertIn(f"`{run_identity(select_trial(evidence, 2))}`".encode(), before)
         (self.root / "input-shared.json").write_bytes(b"changed")
         self.assertNotEqual(main([*args, "publish", "publication.toml"]), 0)
         self.assertEqual((self.root / "README.md").read_bytes(), before)
@@ -1317,6 +1321,26 @@ sys.exit(status)
         self.assertEqual(first["absent"]["source_sha256"], dict(evidence.sources)["current"].source_sha256)
         self.assertEqual(first["absent"]["harness_sha256"], "")
         self.assertEqual(first["present"]["status"], "available")
+
+    def test_working_tree_table_retains_observation_provenance(self) -> None:
+        original_sources = self.revisions["v1.1.0"]
+        for name, data in original_sources.items():
+            (self.root / name).write_bytes(data)
+        with patch("research_repo_tools.source_exports.select_files", return_value=tuple(sorted(original_sources))):
+            evidence = measure_pair(self.root, plan(self.log, ("shared",)), PAIR, working_tree=True, progress=self.quiet)
+        original = serialize_evidence(evidence)
+        layout = RunLayout(
+            (SeriesSelection("shared/current", "Current", (("case", "shared/case"),)),),
+            (RunRow("case", "Case"),),
+            "median",
+            "ns",
+        )
+        row = next(csv.DictReader(io.StringIO(serialize_run_csv(evidence, layout).decode())))
+        table = render_run_table(evidence, layout)
+        self.assertIn(f"working-tree snapshot based on commit {row['revision']}", table)
+        self.assertIn(f"measured source SHA-256 {row['source_sha256']}", table)
+        self.assertNotIn(f"v1.1.0, revision {row['revision']}", table)
+        self.assertEqual(serialize_evidence(evidence), original)
 
     def test_full_report_rejects_nonfinite_derived_ratios(self) -> None:
         evidence = measure_pair(self.root, plan(self.log, ("shared",)), PAIR, progress=self.quiet)

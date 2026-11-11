@@ -142,10 +142,18 @@ def _select(evidence: Evidence, layout: RunLayout) -> tuple[CompleteRun | SuiteR
     return run, selected
 
 
-def _attribution(evidence: Evidence, run: CompleteRun | SuiteRun, name: str) -> str:
-    phase = next(item.phase for item in run.series if item.name == name)
-    source = dict(evidence.sources)[phase]
-    return f"{phase} phase, {dict(source.context)['release']}, revision {source.revision}"
+def _attribution(evidence: Evidence, run: CompleteRun | SuiteRun, name: str, *, compact: bool = False) -> str:
+    view = next(item for item in run.series if item.name == name)
+    source = dict(evidence.sources)[view.phase]
+    if isinstance(run, SuiteRun) and view.rows:
+        _, _, source = run.observation(view.phase, view.rows[0][1])
+    context = dict(source.context)
+    attribution = f"{view.phase} phase, {context['release']}"
+    if context.get("mode") == "working-tree":
+        if compact:
+            return f"{attribution} working tree based on {source.revision[:12]}"
+        return f"{attribution} working-tree snapshot based on commit {source.revision}; measured source SHA-256 {source.source_sha256}"
+    return f"{attribution}, revision {source.revision}"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -460,7 +468,7 @@ def render_coordinate_svg(evidence: Evidence, layout: RunLayout, plot: Coordinat
         lines.extend(
             [
                 f'<path d="M 55 {legend_y - 5} H 72" fill="none"/>',
-                f'<text x="80" y="{legend_y}" stroke="none">{_xml(item.label)} — {_xml(_attribution(evidence, run, item.name))}</text>',
+                f'<text x="80" y="{legend_y}" stroke="none">{_xml(item.label)} — {_xml(_attribution(evidence, run, item.name, compact=True))}</text>',
                 f'<text x="80" y="{legend_y + 17}" stroke="none">{len(selected[item.name])} selected; {len(layout.rows) - len(selected[item.name])} unavailable rows</text>',
                 "</g>",
             ]
@@ -497,8 +505,8 @@ def render_run_ratios(evidence: Evidence, layout: RunLayout) -> bytes:
     labels = {item.name: item.label for item in layout.series}
     table = TableLayout(
         tuple((row.key, row.label) for row in keys),
-        f"{labels[a]} ({_attribution(evidence, run, a)})",
-        f"{labels[b]} ({_attribution(evidence, run, b)})",
+        f"{labels[a]} ({_attribution(evidence, run, a, compact=True)})",
+        f"{labels[b]} ({_attribution(evidence, run, b, compact=True)})",
         layout.unit,
     )
     identity = run_identity(evidence)

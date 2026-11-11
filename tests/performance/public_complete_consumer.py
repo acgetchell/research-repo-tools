@@ -1457,6 +1457,16 @@ ratio-suffix="×"
                 with patch("research_repo_tools.publication.run_git_bytes", return_value=subprocess.CompletedProcess([], 1, b"", b"")):
                     plan = load_publication(root, "publication.toml")
                     self.assertEqual(plan.git_checks[-1].tag, "v1.1.0")
+                    document = dict(plan.outputs)["README.md"]
+                    self.assertIn(b"working-tree snapshot based on commit " + b"b" * 40, document)
+                    self.assertRegex(document, rb"measured source SHA-256\s+" + digest.encode())
+                    svg = ET.fromstring(dict(plan.outputs)["figures/coordinates.svg"])
+                    description = svg.find("{http://www.w3.org/2000/svg}desc")
+                    assert description is not None and description.text is not None
+                    self.assertIn(digest, description.text)
+                    legends = [element.text for element in svg.iter("{http://www.w3.org/2000/svg}text") if element.text and "working tree" in element.text]
+                    self.assertEqual(len(legends), 3)
+                    self.assertTrue(all(len(text) < 120 and digest not in text for text in legends))
                     for artifact in ("figures/coordinates.svg", "figures/ratios.svg", "exports/timings.csv", "run.json", "envelope.json"):
                         self.assertIn(artifact, plan.git_checks[-1].paths)
                     (root / name).write_bytes(b"changed source\n")
