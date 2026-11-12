@@ -351,6 +351,48 @@ class TestDependencyProvenance(unittest.TestCase):
         self.command.assert_not_called()
         self.network.assert_not_called()
 
+    def test_candidate_usage_errors_precede_dependency_observation_and_policy_io(self):
+        base = [
+            "--root",
+            str(self.root),
+            "release",
+            "evidence",
+            "candidate",
+            "missing.toml",
+            "--checkout",
+            str(self.root),
+            "--acquisition-sha256",
+            "b" * 64,
+            "--manifest",
+            "manifest.json",
+            "--output",
+            "result.json",
+            "--payload",
+            "payload.json",
+            "--policy",
+            "candidate.json",
+        ]
+        cases = (
+            (["--attachment", "attachment.json"], "approval revalidation requires"),
+            (["--target", "target.json"], "approval revalidation requires"),
+            (["--attachment", "attachment.json", "--target", "target.json"], "approval revalidation requires"),
+            (["--commit", COMMIT], "final commit requires --policy-output"),
+            (["--output", "candidate.json"], "duplicate target paths"),
+            (["--native-output", "manifest.json"], "duplicate target paths"),
+        )
+        before = self.snapshot()
+        with (
+            patch.object(dependency_provenance, "check_release_dependencies", side_effect=AssertionError("unexpected dependency pass")) as check,
+            patch("research_repo_tools.release_interfaces._read_candidate_input", side_effect=AssertionError("unexpected handoff read")) as read,
+        ):
+            for options, diagnostic in cases:
+                with self.subTest(options=options), contextlib.redirect_stderr(io.StringIO()) as errors:
+                    self.assertEqual(cli.main([*base, *options]), 1)
+                    self.assertIn(diagnostic, errors.getvalue())
+            check.assert_not_called()
+            read.assert_not_called()
+        self.assertEqual(self.snapshot(), before)
+
     def test_public_asset_candidate_and_approval_apis_gate_before_network_or_writes(self):
         from research_repo_tools import candidate_reuse, release_assets, release_publishing
 

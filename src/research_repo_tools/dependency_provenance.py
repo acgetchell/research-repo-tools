@@ -27,9 +27,11 @@ from packaging.utils import canonicalize_name, parse_wheel_filename
 from packaging.version import Version
 
 from research_repo_tools._archive_paths import ArchivePaths
+from research_repo_tools._dependency_observation import retain_guard
 from research_repo_tools._dependency_probe import MAX_NATIVE_BYTES, inspect_installation
 from research_repo_tools._git_checkout import _in_checkout
-from research_repo_tools.evidence import _load_json
+from research_repo_tools.dependency_progress import DependencyProgress, report, reporting
+from research_repo_tools.evidence import _load_json, deterministic_json, sha256
 from research_repo_tools.release_policy import dependency_names
 
 __all__ = ["DependencyIdentity", "check_development_dependency", "check_release_dependencies"]
@@ -346,11 +348,9 @@ def _published_wheel(
             raise ValueError("published dependency wheel exceeds the byte limit")
         url = registry.pypi_destination(artifact["url"])
         if url not in payloads:
-            with registry.closing_http_errors(), registry._OPENER.open(url, timeout=30) as response:
-                payload = response.read(limit + 1)
-                if response.status != 200 or response.url != url:
-                    raise ValueError("published dependency wheel returned an unexpected status or redirect")
-            payloads[url] = payload
+            from research_repo_tools._registry_requests import read_registry
+
+            payloads[url] = read_registry(url, limit=limit)
         payload = payloads[url]
         if len(payload) != artifact["size"] or hashlib.sha256(payload).hexdigest() != artifact["hash"][7:]:
             raise ValueError("published dependency wheel bytes differ from the lock")
@@ -423,14 +423,22 @@ def _policy_identities(root: Path) -> tuple[DependencyIdentity, ...]:
     )
 
 
-def check_release_dependencies(root: Path, *, packages: tuple[str, ...] | None = None) -> tuple[DependencyIdentity, ...]:
+def check_release_dependencies(
+    root: Path, *, packages: tuple[str, ...] | None = None, progress: DependencyProgress | None = None
+) -> tuple[DependencyIdentity, ...]:
     """Enforce configured upstream dependencies before release effects.
 
     With no explicit packages, read release.published-dependencies from the
     observed checkout. Projects with dependencies also require the canonical
     source policy. A selected dependency may never name the project itself.
     """
+    with reporting(progress, "release dependencies"):
+        return _check_release_dependencies(root, packages=packages)
+
+
+def _check_release_dependencies(root: Path, *, packages: tuple[str, ...] | None) -> tuple[DependencyIdentity, ...]:
     try:
+        report("started", "local prerequisites")
         manifest = root / "pyproject.toml"
         if not manifest.is_file() and not packages:
             return _policy_identities(root)
@@ -470,13 +478,20 @@ def check_release_dependencies(root: Path, *, packages: tuple[str, ...] | None =
         # Offline freshness validates the effective entire uv project, including
         # group edges and index configuration. It cannot resolve or rewrite.
         _check_lock(root)
-        for name, version, locked, installed in pending:
+        for index, (name, version, locked, installed) in enumerate(pending):
+            report("started", "selected runtime", checked=index, total=len(pending), detail=name)
             _published_wheel(name, version, locked, installed)
-        if manifest.read_bytes() != original or (root / "uv.lock").read_bytes() != original_lock:
-            raise ValueError("dependency declarations or lock changed during verification")
-        for name, _, _, installed in pending:
-            if _installations(root, name) != installed:
-                raise ValueError(f"{name}: runtime changed during verification")
+            report("verified", "selected runtime", checked=index + 1, total=len(pending), detail=name)
+
+        def unchanged() -> None:
+            if manifest.read_bytes() != original or (root / "uv.lock").read_bytes() != original_lock:
+                raise ValueError("dependency declarations or lock changed during verification")
+            for name, _, _, installed in pending:
+                if _installations(root, name) != installed:
+                    raise ValueError(f"{name}: runtime changed during verification")
+
+        unchanged()
+        retain_guard(unchanged, sha256(deterministic_json({"manifest": sha256(original), "lock": sha256(original_lock), "runtime": pending})))
         generic = _policy_identities(root)
         return tuple(dict.fromkeys((*[DependencyIdentity(name, version, INDEX) for name, version, _, _ in pending], *generic)))
     except (ValueError, OSError, TypeError, subprocess.SubprocessError, zipfile.BadZipFile, http.client.HTTPException) as error:

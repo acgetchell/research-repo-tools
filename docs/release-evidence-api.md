@@ -412,6 +412,47 @@ or make it linearizable. Serialize all writers for the repository/tag with
 non-cancelling concurrency and preserve the same receipt across jobs/reruns.
 See the [workflow example and recovery procedure](PREPARING_DRAFTS.md).
 
+### Asset batch staging
+
+For several independently selected inert files, use
+`release_staging.stage_release_assets(root, target, assets, *, journal,
+destination, approve, checkout=None, dependencies=(), limits=ArchiveLimits(),
+progress=None, verify_inputs=None)`. It never creates a draft, moves a tag,
+measures, regenerates acceptance or publishes. `approve=True` authorizes asset
+uploads to the independently captured mutable draft. The optional checkout
+continues to enforce the clean source/tag/commit assertions at every live target
+observation. An additional `verify_inputs` callback may guard controller inputs.
+Standalone upload/revalidation APIs keep their full verification behavior.
+
+The batch owns fresh entry/final dependency passes and local guards with
+[bounded freshness](dependency-provenance-api.md). It still verifies live release
+identity and lifecycle around every upload, downloads exact bytes, and checks
+provider size, digest and unchanged asset ID. Up to 64 distinct portable names
+are supported within the per-asset archive and aggregate content byte limits.
+Inputs, journal and transfer must be distinct regular paths without links.
+Retain both outputs outside the observed checkout under exclusive writer control.
+
+The canonical `research-repo-tools/release-asset-batch/v1` journal binds the
+captured target, input names/sizes/SHA-256 values, dependency input/runtime digest,
+verified asset IDs/sizes/digests, and `staging` or `complete` state. The initial
+intent is durable before uploads; each verified asset updates progress. Only
+fresh final verification permits a complete journal and matching transfer to be
+retained together. The digest binds local paths/environment as well as bytes;
+recovery requires the original environment, not merely a relocated file copy.
+The journal is a retained assertion, not authentication or a permanent registry
+receipt. Authenticate it separately when transporting it between jobs.
+
+On interruption preserve the journal, original files and draft. Repeat the same
+`release assets stage` command with the same `--target`, repeated `--asset`,
+`--journal` and `--output` arguments. Matching existing assets are downloaded
+and verified without another upload. A lost upload response can therefore be
+recovered from a uniquely matching asset. Recorded IDs cannot be replaced;
+changed inputs, dependencies, receipts, duplicate names or ambiguous lifecycle
+state stop recovery for explicit reconciliation. The original transfer is never
+overwritten with conflicting evidence. Default human progress and `--progress
+json` report the current asset and checked/total count. CLI examples are in
+[README](../README.md#releases).
+
 ### Existing target and attachment commands
 
 Consumer commands are in the

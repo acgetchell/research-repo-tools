@@ -14,7 +14,8 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
 from research_repo_tools import toml_source
-from research_repo_tools.dependency_graphs import CRATES_IO, _resolve_cargo, check_native_graph, inspect_project, verify_graph
+from research_repo_tools._dependency_observation import retain_guard
+from research_repo_tools.dependency_graphs import CRATES_IO, DependencyGraph, _resolve_cargo, _verify_graph, check_native_graph, inspect_project
 from research_repo_tools.dependency_policy import (
     MAX_SNAPSHOT_FILES,
     POLICY_FILE,
@@ -411,7 +412,9 @@ def apply_source(plan: SourcePlan, *, provider: SourceProvider | None = None) ->
 
 def check_dependency_policy(root: Path, *, provider: SourceProvider | None = None) -> tuple[VerifiedSource, ...]:
     """Recheck every configured project before release effects, without mutation."""
+    policy_snapshot = InputSnapshot.capture((root / POLICY_FILE,))
     policy = load_policy(root)
+    retain_guard(policy_snapshot.verify, policy_snapshot.digest)
     if policy is None:
         _require_dependency_free(root)
         return ()
@@ -420,8 +423,14 @@ def check_dependency_policy(root: Path, *, provider: SourceProvider | None = Non
     if any(isinstance(selection.source, GitCommit) for selection in policy.selections):
         raise ValueError("release source policy still selects a development commit; transition to its published registry release and revalidate")
     graphs = [inspect_project(root, project) for project in policy.projects]
+    from research_repo_tools.dependency_artifacts import python_environment_layout
+
+    for graph in graphs:
+        if graph.project.ecosystem == "python":
+            python_environment_layout(graph)
     results: list[VerifiedSource] = []
     verified_graphs = []
+    sources: dict[Source, VerifiedSource] = {}
     for graph in graphs:
         for selection in policy.selections:
             if selection.project != graph.project:
@@ -430,13 +439,21 @@ def check_dependency_policy(root: Path, *, provider: SourceProvider | None = Non
             if not matches or any(item.source != selection.source for item in matches):
                 raise ValueError("declared source selection differs from the release lock")
         # Provider rejection precedes even a native graph-inspection subprocess.
-        verified = verify_graph(graph, provider=provider)
+        verified = _verify_graph(graph, provider=provider, release=True, sources=sources)
         verified_graphs.append((graph, verified))
         results.extend(verified)
     for graph, verified in verified_graphs:
         check_native_graph(graph, sources=verified, provider=provider)
     for graph in graphs:
-        graph.snapshot.verify()
+
+        def unchanged(graph: DependencyGraph = graph) -> None:
+            graph.snapshot.verify()
+            if project_manifests(graph.root, graph.project.ecosystem) != graph.manifests:
+                raise ValueError("dependency workspace membership changed; restore the original project inputs")
+
+        unchanged()
+        retain_guard(unchanged, graph.snapshot.digest)
+    policy_snapshot.verify()
     return tuple(results)
 
 
@@ -446,6 +463,7 @@ def _require_dependency_free(root: Path) -> None:
 
     paths = (root / POLICY_FILE, root / "pyproject.toml", root / "uv.lock", root / "Cargo.toml", root / "Cargo.lock")
     snapshot = InputSnapshot.capture((*paths, *configuration_paths(root, "python"), *configuration_paths(root, "cargo")))
+    retain_guard(snapshot.verify, snapshot.digest)
     for ecosystem, manifest, lock in (("python", paths[1], paths[2]), ("cargo", paths[3], paths[4])):
         if not manifest.exists():
             if lock.exists():

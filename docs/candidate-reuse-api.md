@@ -204,6 +204,7 @@ Import from `research_repo_tools.candidate_reuse`:
 | `CandidatePolicy` | Repository, canonical tag, final commit (`None` until selected), original owner/run identity, scheduled paired or unscheduled first-release measurement, original current envelope provenance, `(trial, suite, phase, Provenance)` assertions, and original `report` configuration when required |
 | `acquisition_assertion_digest(policy)` | Step 1 digest captured by the trusted acquisition owner; excludes only the future final commit |
 | `parse_candidate_policy`, `serialize_candidate_policy` | Strict versioned JSON handoff; serialization does not authenticate the assertions |
+| `retain_candidate_release(..., destination, policy_output=None, native_output=None, verify_inputs=None, verify_acceptance=None)` | Same verification with a fresh dependency pass in the final transaction guard; retain acceptance and optional final policy/native selection together. Matching existing bytes are accepted; conflicts preserve the original records. Callbacks add checks and cannot replace mandatory verification. |
 | `verify_candidate_release(root, evidence, policy, native_policy, read, *, acquisition_sha256, publication_receipt=None, publication_sha256=None, expected=None)` | Step 2 whole-tree binding plus existing native release verification; returns frozen acceptance bytes. When `policy.report` is set, both publication arguments are required as a pair, and `publication_sha256` must be independently trusted |
 | `plan_candidate_archive(root, payload, manifest, policy, acceptance, output)` | Offline immutable archive planning with stale-input checks and shared publication transactions |
 | `verify_candidate_archive(archive, policy, acceptance, *, target=None)` | Bounded verification of the exact frozen archive and every member, optionally bound to the independently captured draft target |
@@ -214,6 +215,30 @@ must be distinct. Original payload/envelope bytes and current raw samples from
 every trial remain exact, including CRLF and supplemental binary data. Projection
 paths include trial and suite identifiers; repeated measurements never overwrite
 one another or become a synthetic pooled sample.
+
+`retain_candidate_release` accepts the same root, evidence, final policy, native
+policy, provider and independent acquisition/publication assertions as
+`verify_candidate_release`. The composed path uses two fresh dependency passes:
+one before native evidence verification, and one inside the guard immediately
+before durable retention. Standalone verification retains its entry/return
+checks. The caller authenticates the independent inputs and retains exclusive
+writer control over all output paths; `verify_inputs` can guard external handoff
+files around the final check. `verify_acceptance` can add attachment approval
+verification before retention; that separate approval keeps its fresh checks.
+The CLI owns its entry observation before reading policy handoffs, preserving
+early rejection of development dependencies. It rechecks that observation's
+local inputs before native verification; preparation lasting five minutes
+requires another fresh pass. This entry observation is private to the command
+and cannot be supplied through the public API.
+
+The candidate CLI uses this composition. For an owner policy whose commit is
+still pending, pass `--commit FULL_SHA --policy-output FINAL_POLICY`; the command
+binds the final commit in memory and freezes the policy only after verification.
+`--native-output FILE` freezes the native selection in the same transaction as
+`--output ACCEPTANCE`. Existing committed policies must agree with `--commit`.
+All input/output paths must be distinct. Failed verification or a conflicting
+existing output leaves the original records intact. `--progress json` emits
+versioned dependency events on stderr; stdout keeps the selected result format.
 
 An operator can derive and verify the archive offline in a trusted handoff
 directory. Use the final policy and acceptance retained by the reviewer.
