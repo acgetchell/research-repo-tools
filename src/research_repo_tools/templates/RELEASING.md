@@ -81,6 +81,9 @@ just update-version "$TAG"
 The recipe discovers the previous published stable GitHub release and prepares
 today's UTC date. Pass `--previous-release TAG` or `--date YYYY-MM-DD` to select
 those inputs deliberately. Review the resulting metadata diff before continuing.
+For a first stable release, use `just release-first "$TAG" YYYY-MM-DD` instead;
+it verifies that no stable release has been published and prepares metadata
+without a predecessor. The date must be the intended release date in UTC.
 
 ### 3. Generate the release changelog
 
@@ -101,6 +104,10 @@ commands are `just performance-prepare tooling/performance-release.toml`,
 `just performance-release tooling/performance-release.toml`, and
 `just performance-readme tooling/performance-release.toml`, in that order.
 README retries consume retained results without repeating measurements.
+The acquisition-owner, `performance capture`, and `performance first-release`
+interfaces below require a supplying release after v0.2.8; check
+[release availability](https://github.com/acgetchell/research-repo-tools/blob/main/README.md#release-availability)
+before adopting them.
 For a scheduled candidate acquisition with a schema-2 report, add
 `--owner "$OWNER_RECORD"` to `just performance-release`. Choose a new trusted
 directory outside the checkout. Recover a completed acquisition with
@@ -110,7 +117,8 @@ using the same scratch evidence.
 For a first stable release, prepare the package version and an unscheduled
 schema-5 suite declaration. Use `just performance first-release` with the
 repository, schema-2 report declaration, scratch evidence paths and external
-owner directory. See the [candidate workflow example](https://github.com/acgetchell/research-repo-tools/blob/main/docs/candidate-reuse-api.md#committed-publisher-evidence).
+owner directory. See the
+[candidate workflow example](https://github.com/acgetchell/research-repo-tools/blob/main/docs/candidate-reuse-api.md#committed-publisher-evidence).
 
 Retain the acquisition and publication digests through separate trusted
 handoffs. Commit the generated run files, index/latest and reports. Keep

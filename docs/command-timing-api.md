@@ -82,7 +82,8 @@ The report retains:
   environment overlay, deadline, inherited streams, shell and cleanup semantics.
 - Every preflight, warmup and sample as a separate `observations` row with
   command identity, stage, zero-based index, integer `elapsed_ns`, `returncode`
-  and `status`. Accepted reports require every row to succeed with status 0.
+  and `status`. Accepted reports require `returncode = 0` and `status = "success"`
+  for every row.
 - `configuration`, selected root and sorted `source` inventory, with exact byte
   SHA-256 digests and sizes, including dirty/new files selected by the declaration.
   No Git revision or whole-repository identity is inferred.

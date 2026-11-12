@@ -1,7 +1,8 @@
 # Preparing an unpublished release draft
 
-This capability targets v0.2.7. Enable it only after verifying the published
-supplying version and its installed consumer integration. See
+Draft preparation and authenticated receipt retrieval are available from v0.2.7.
+Enable them only after verifying the published supplying version and its installed
+consumer integration. See
 [release availability](../README.md#release-availability); source availability
 does not establish that the example pin is published.
 

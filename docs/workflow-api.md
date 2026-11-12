@@ -6,7 +6,7 @@ Consumer commands and configuration examples are in the
 [task guide](RECORDING_PERFORMANCE.md#configured-benchmark-workflows).
 The [shared ownership map](shared-capability-migration.md#performance-and-release-helper-adoption)
 defines the helper boundary and downstream integration requirements.
-Schema-2/3 common-harness measurement, complete-run retention and reusable host/
+Schema-2 through schema-6 measurement, complete-run retention and reusable host/
 profiling capture are described in the [complete-run contract](complete-run-api.md).
 
 ## Measurement and pair selection
@@ -28,9 +28,13 @@ by discovery; missing predecessors, duplicate tags, or invalid identities fail.
 `releases.published_releases(root, *, repository=None)` supports an explicit
 GitHub `owner/name`. The inherited discovery bound is 1,000 releases.
 
-`measurement.load_measurement(root, configuration)` reads standalone schema-1
-TOML into frozen `MeasurementConfig`. Required fields are `command`, `sources`,
-and `harness`. Commands are argument arrays without a shell. Source/harness
+`measurement.load_measurement(root, configuration)` reads standalone measurement
+TOML. Schema 1 returns a frozen `MeasurementConfig`; schemas 2–4 return a
+`CompleteMeasurementPlan`, and schemas 5–6 return a `SuiteMeasurementPlan`.
+The fields below describe schema 1; the other schemas use the
+[complete-run contract](complete-run-api.md).
+Required schema-1 fields are `command`, `sources`, and `harness`.
+Commands are argument arrays without a shell. Source/harness
 entries are root-relative globs; each must match regular files. Traversal,
 symlinks, Windows directory junctions, portable aliases, and unmatched patterns
 fail. Inventories are sorted and deduplicated. Optional fields follow the packaged benchmark template:
@@ -44,6 +48,8 @@ fail. Inventories are sorted and deduplicated. Optional fields follow the packag
 - `context` supplies string metadata without replacing captured keys.
 - `compatible` selects provenance fields using `compare_provenance` syntax.
   Required unknown values fail. The consumer chooses scientific compatibility.
+- `minimum-release` optionally declares a stable tag, normalized to `vX.Y.Z`,
+  below which acquisition is rejected before measurement begins.
 
 `capture_provenance(root, config, tag, *, mode)` captures HEAD, versioned source
 and harness fingerprints, complete inventories, host OS/architecture/available

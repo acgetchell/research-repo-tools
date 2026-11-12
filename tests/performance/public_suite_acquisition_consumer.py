@@ -1070,6 +1070,22 @@ sys.exit(status)
             self.assertFalse(self.log.exists())
             self.assertFalse(owner.exists())
             provider.return_value = [{**prior, "draft": True}]
+            baseline_only = json.loads(json.dumps(declaration))
+            for suite in baseline_only["suites"]:
+                suite["measurement"]["series"] = [series for series in suite["measurement"]["series"] if series["phase"] == "baseline"]
+            (self.root / "measurement.toml").write_bytes(("schema=5\nsuites=" + toml(baseline_only["suites"]) + "\n").encode())
+            with (
+                patch("research_repo_tools.performance_acquisition.measure_and_retain", side_effect=AssertionError("invalid plan must not acquire")) as acquire,
+                patch("sys.stderr", new_callable=io.StringIO) as errors,
+            ):
+                self.assertNotEqual(main(command), 0)
+                self.assertIn("at least one current-phase series", errors.getvalue())
+                acquire.assert_not_called()
+            self.assertFalse(self.log.exists())
+            self.assertFalse(owner.exists())
+            self.assertFalse((self.root / "scratch/run.json").exists())
+            self.assertFalse((self.root / "scratch/evidence.json").exists())
+            (self.root / "measurement.toml").write_bytes(inventory["measurement.toml"])
             self.assertEqual(main(command), 0)
             self.assertEqual(self.log.read_bytes().count(b"shared measure"), 1)
             raw = ((owner / "run.json").read_bytes(), (owner / "evidence.json").read_bytes())
@@ -1081,6 +1097,13 @@ sys.exit(status)
             self.assertEqual(serialize_evidence(load_latest_run(self.root, "docs/runs")), raw)
             report = (self.root / "docs/first.md").read_bytes()
             self.assertIn(b"no published predecessor", report)
+            self.assertIn(b"measured source is a working-tree snapshot", report)
+            self.assertRegex(report, rb"listed revision is its base\s+commit")
+            self.assertIn(b"measured source SHA-256 identifies the snapshot", report)
+            for _, _, _, source in parse_suite_run(retained).observations:
+                assert source.source_sha256 is not None
+                self.assertIn(source.revision.encode(), report)
+                self.assertIn(source.source_sha256.encode(), report)
             self.assertNotIn(b"| Baseline |", report)
             policy = parse_candidate_policy((owner / "policy.json").read_bytes())
             self.assertTrue(policy.first_release)

@@ -203,6 +203,9 @@ contain no Git metadata and never fall back to worktrees.
 Schema-5 suites and schema-6 scheduled trials compose that acquisition boundary
 and produce complete-run v4 and v5 respectively; see the
 [complete-run APIs](complete-run-api.md).
+The separate first-release path uses an unscheduled schema-5 plan and emits
+current-only complete-run v6 evidence; it is pending a supplying release after
+v0.2.8. It does not fabricate a baseline or an acquisition-order receipt.
 
 `complete_runs.ratio_incompatibilities` returns retained diagnostic reasons
 without probing today's host. `validate_run_evidence` establishes acquisition

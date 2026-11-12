@@ -113,7 +113,9 @@ and include it in `check` alongside its Rust/domain gates:
 ```just
 # Validate every tracked and nonignored notebook with native notebook handling.
 notebooks-check:
-    notebook_group="$(uv run --locked --only-group tooling --inexact research-repo-tools notebooks group)" && uv run --locked --group dev --group "$notebook_group" research-repo-tools files run --include '*.ipynb' -- research-repo-tools notebooks lint
+    notebook_group="$(uv run --locked --only-group tooling --inexact research-repo-tools notebooks group)" && \
+        uv run --locked --group dev --group "$notebook_group" research-repo-tools files run \
+        --include '*.ipynb' -- research-repo-tools notebooks lint
 ```
 
 The canonical packaged `check: python-check semgrep-check zizmor-check` and `ci: check`

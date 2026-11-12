@@ -309,7 +309,9 @@ def render_suite_run(evidence: Evidence, *, title: str, links: str, identity: st
         links,
         "",
         (
-            "First-release benchmark acquisition. This release has no published predecessor."
+            "First-release benchmark acquisition. This release has no published predecessor. "
+            "The measured source is a working-tree snapshot. The listed revision is its base commit, "
+            "and the measured source SHA-256 identifies the snapshot."
             if run.first_release
             else "Ratios are point estimates within one accepted paired suite. Marginal timing intervals do not establish significance."
         ),

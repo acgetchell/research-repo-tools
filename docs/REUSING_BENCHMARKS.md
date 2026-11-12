@@ -6,6 +6,11 @@ extensions. Check [release availability](../README.md#release-availability) befo
 adoption. Consumers own workloads, scientific acceptance, output declarations, and thin recipe/workflow
 wiring. The shared package owns acquisition, trial receipts, validation, archive
 conversion, and evidence mechanics. See the [API and trust contract](candidate-reuse-api.md).
+The procedure below acquires scheduled pairs. For a first release without a
+predecessor, follow the [current-only procedure](candidate-reuse-api.md#committed-publisher-evidence)
+with unscheduled schema-5 measurement and complete-run v6 evidence. That procedure
+and the shared owner-capture commands below are pending a supplying release;
+published v0.2.8 does not include them.
 
 ## Step 1: prepare and acquire
 
@@ -66,11 +71,15 @@ receipt **before** promotion, then publish its returned plan. Independently reta
 both the receipt and its SHA-256. The existing content-addressed run files,
 indexes, pointer and reports may then be committed in the release PR.
 
-For existing `measure_release` adapters, use its `before_promotion` callback to
-capture the handoffs without changing the acquire/retain/promote order. The
-default CLI does not capture trusted assertions on the consumer's behalf; wire
-the callback in the trusted acquisition owner's thin adapter, or use the staged
-public APIs. Never rerun acquisition merely because capture or promotion failed.
+To capture the local handoff through the shared command, add `--owner "$owner"`
+to `just performance-release`, where the owner directory is new and outside the
+checkout. Each suite must declare the repository and `acquisition-owner = "local"`
+in its measurement context. This retains the original assertions and publisher
+receipt before promotion. Recover completed acquisition after capture or promotion
+failure with `just performance capture performance-release.toml --owner "$owner" --promote`.
+For existing Python adapters, `measure_release` also accepts `owner=...` or a
+custom `before_promotion` callback; these alternatives are mutually exclusive.
+Never rerun acquisition merely because capture or promotion failed.
 See the [committed publisher contract](candidate-reuse-api.md#committed-publisher-evidence).
 After report/README generation, review and merge the release-preparation PR.
 

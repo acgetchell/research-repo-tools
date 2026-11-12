@@ -5,6 +5,7 @@ The list below describes current source; [availability](../README.md#release-ava
 and the locked consumer version determine which interfaces can be used.
 
 - [Just recipes](#just-recipes)
+- [CLI families](#cli-families)
 
 ## Just recipes
 
@@ -112,9 +113,9 @@ global root/configuration options before the group; consult
 | File selection | `files check-lines`, `list`, `run` | Configurable raw line gate, tracked/nonignored inputs, exclusions and portable argument batching |
 | Notebooks | `notebooks advise`, `check`, `clear`, `execute`, `group`, `inspect`, `launch`, `lint`, `reset`, `sync` | Read-only review, locked JupyterLab, native Ruff/ty checks, execution reports, and explicit restoration |
 | Papers | `papers check`, `normalize`, `source-date` | Explicit UTC dates, optional PDF text/geometry checks and validated metadata normalization |
-| Performance | `performance assemble-suites`, `assets`, `baseline`, `command-time`, `compare`, `convert`, `discover`, `export`, `extract`, `fetch`, `host`, `measure`, `pack-suite`, `prepare`, `profile`, `promote`, `publish`, `readme`, `release`, `release-draft`, `release-upload`, `render`, `verify`, `verify-saved` | Complete configured measurement, retained evidence, release assets and publication |
+| Performance | `performance assemble-suites`, `assets`, `baseline`, `capture`, `command-time`, `compare`, `convert`, `discover`, `export`, `extract`, `fetch`, `first-release`, `host`, `measure`, `pack-suite`, `prepare`, `profile`, `promote`, `publish`, `readme`, `release`, `release-draft`, `release-upload`, `render`, `verify`, `verify-saved` | Complete configured measurement, retained evidence, release assets and publication |
 | Python | `python check`, `fix`, `typecheck` | Complete tracked/nonignored inventory; native Ruff/ty policy; explicit fixes only |
-| Releases | `release assets`, `check`, `dependencies`, `evidence`, `gate`, `publish`, `registry`, `reuse`, `update`, `verify` | Metadata preparation, published-only dependency gates and exact registry/GitHub verification |
+| Releases | `release assets`, `check`, `dependencies`, `dependency-builds`, `evidence`, `gate`, `publish`, `registry`, `reuse`, `update`, `verify` | Metadata preparation, published-only dependency gates and exact registry/GitHub verification |
 | Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
 | SARIF | `sarif split` | Consumer-selected drivers/namespaces, corrected rule indices and complete output generations |
 | Security | `security osv`, `secrets` | Managed OSV/Gitleaks, explicit inputs, full history, redacted native reports |

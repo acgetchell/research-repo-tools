@@ -2,11 +2,18 @@
 
 The candidate contract supports measurement before the release-preparation
 merge. It is separate from the unchanged [exact-tag v1 contract](benchmark-reuse-api.md).
-It requires measurement schema 6 and complete-run v5 evidence. Historical v1–v4
-evidence is not upgraded, assigned missing receipts, or silently measured again.
+Scheduled paired acquisitions require measurement schema 6 and complete-run v5
+evidence. A first release requires unscheduled schema-5 measurement and
+complete-run v6 evidence; see the [first-release procedure under committed publisher
+evidence](#committed-publisher-evidence). Historical v1–v4 evidence is not upgraded,
+assigned missing receipts, or silently measured again.
 This reference includes v0.2.7 extensions to the published v0.2.6 contract:
 committed publisher receipts, phase-specific source inputs, and typed trial
 orders. Check [release availability](../README.md#release-availability) before adoption.
+The owner-capture, hosted-retrieval, archive-attachment and first-release commands
+described below are pending a supplying release; published v0.2.8 does not include
+them. [Release tracker #236](https://github.com/acgetchell/research-repo-tools/issues/236)
+owns their release validation and publication.
 
 ## Source and trust contract
 
@@ -107,8 +114,9 @@ exist in the original measured tree. This selects the existing **schema-2 comple
 run publisher**, including configurable archive locations such as
 `docs/performance-runs` and `docs/performance/runs`. Schema-1 comparison histories
 require explicit adoption of schema 2; existing history is never rewritten or
-assigned missing acquisition receipts. The optional declaration serializes as
-candidate-policy v2. Policies without it retain their v1 bytes and behavior.
+assigned missing acquisition receipts. For paired acquisitions, the optional
+declaration serializes as candidate-policy v2; policies without it retain their
+v1 bytes and behavior. First-release policies use v3 as described below.
 
 After acquisition and before promotion, call
 `candidate_publication.plan_candidate_publication(root, payload, manifest, policy,
@@ -162,9 +170,13 @@ state. Each suite must declare its repository and acquisition owner in its conte
 
 A first release has no predecessor. Use `performance first-release` with an
 unscheduled schema-5 suite declaration and a schema-2 report configuration.
+Declare at least one current-phase series across the suites, and set each suite's
+measurement context to the selected repository and `acquisition-owner = "local"`.
 The command checks stable release history before acquisition, retains a
 current-only complete-run/v6 payload and records first-release intent in
-candidate-policy v3. The report contains absolute timings. Final verification
+candidate-policy v3. The report contains absolute timings from the working-tree
+snapshot; the listed revision is its base commit and the measured source SHA-256
+identifies the snapshot. Final verification
 still requires the exact clean source, original output receipt and signed native
 evidence. Provider errors and a newly published stable release require reviewing
 the selection again. Archive verification remains available offline after
@@ -180,6 +192,8 @@ just performance first-release tooling/suite-measurement.toml \
 After an interrupted measurement, use the original `--checkpoint` with
 `--resume`. If measurement completed and capture or promotion failed, repeat
 the command with `--retained` and the same scratch and owner paths.
+This publishes the complete-run report; paired schema-2 README publication
+rejects first-release v6 evidence.
 
 ## Public interfaces
 

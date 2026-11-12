@@ -73,7 +73,7 @@ including changelog and release recipes.
 | `just clean-coverage [--dry-run \| --apply]` | Preview/remove retained coverage shards and runs; preserve current reports |
 | `just coverage [PYTEST_ARGS...]` | Run tests with branch and subprocess coverage and write `coverage/cobertura.xml` |
 | `just dependency-source NAME [--apply]` | Preview or apply a configured verified dependency source and native lock |
-| `just help` | List recipes and arguments in lexicographic order, with arguments |
+| `just help` | List recipes and arguments in lexicographic order |
 | `just install-check` | Build and check isolated installations |
 | `just justfile-check` | Check maintainer and packaged recipes with the pinned Just formatter |
 | `just lock-check` | Verify the manifest and lock agree without changing dependencies |
@@ -83,9 +83,10 @@ including changelog and release recipes.
 | `just performance-release CONFIG [ARGS...]` | Measure a prepared pair and retain/promote its report |
 | `just publish-check` | Check the current built wheel and sdist with strict Twine validation; no build or upload |
 | `just python-check` | Check formatting, lint, and strict types for the complete Python inventory |
-| `just release-assets COMMAND...` | Prepare drafts, capture/revalidate release targets or explicitly upload attachments |
+| `just release-assets COMMAND...` | Prepare drafts, retrieve original receipts, verify release targets or explicitly upload attachments |
 | `just release-check TAG` | Check final release metadata and generated notes |
 | `just release-dependencies` | Verify configured upstream tooling provenance before release work |
+| `just release-dependency-builds` | Build selected source dependencies and retain authenticated wheel receipts |
 | `just release-evidence [COMMAND...]` | Inspect this checkout's signed CI evidence; explicit commands create/verify shared handoffs |
 | `just release-first TAG DATE` | Prepare a first release after checking stable published history |
 | `just release-notes TAG` | Print reviewed generated release notes |

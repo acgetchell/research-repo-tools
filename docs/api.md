@@ -6,9 +6,9 @@ Consumers pin an exact published version, or a verified full development commit,
 and lock dependencies. [Release dependency policy](dependency-provenance-api.md)
 requires selected upstream tooling to be published at release boundaries. Patch
 releases normally preserve these contracts; minor releases may introduce
-documented changes while the package is below 1.0. The planned v0.2.7 release is
-an explicit exception for the documented Python API redesign: update custom
-callers to the current signatures and typed variants before adopting it.
+documented changes while the package is below 1.0. Release v0.2.7 made
+an explicit exception for the documented Python API redesign: callers upgrading
+from earlier releases must adopt the current signatures and typed variants.
 Unlisted modules and private names are implementation details. Imports do not
 install tools, access the network or modify consumer files.
 

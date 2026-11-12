@@ -395,6 +395,8 @@ def _first_release(args: argparse.Namespace, settings: Config) -> None:
             context = dict(suite.measurement.measurement.context)
             if (context.get("repository"), context.get("acquisition-owner")) != (repository, "local"):
                 raise ValueError("first-release suite must declare its repository and local acquisition owner")
+        if not any(series.phase == "current" for suite in measurement.suites for series in suite.measurement.series):
+            raise ValueError("first-release acquisition requires at least one current-phase series")
         check_release_dependencies(root, packages=settings.release.published_dependencies)
         measure_and_retain(
             root,

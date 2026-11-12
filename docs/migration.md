@@ -70,9 +70,9 @@ a version; development pins support rehearsal but do not prove publication.
 
 ## Python API changes for v0.2.7
 
-The forthcoming v0.2.7 release intentionally changes these public Python
-constructors to represent valid alternatives explicitly. Update custom callers
-when changing the pin; do not depend on the old combinations of optional fields.
+Release v0.2.7 changed these public Python constructors to represent valid
+alternatives explicitly. Update custom callers when upgrading from earlier
+releases; do not depend on the old combinations of optional fields.
 
 | Previous Python call | v0.2.7 replacement | Contract |
 | --- | --- | --- |

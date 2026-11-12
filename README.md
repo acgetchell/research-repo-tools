@@ -20,17 +20,22 @@ then choose a [capability](#capability-index). Package development belongs in
 
 ## Release availability
 
-This README describes current `main`, including work intended for **v0.2.7**.
-The latest published package and quickstart pin are [v0.2.6][published-pin].
-Examples marked v0.2.7 require its publication or an exact supplying
-[development pin](#development-pins-and-release-dependencies) for rehearsal.
+This README describes the current source tree. The latest published package and
+quickstart pin are [v0.2.8][published-pin]. Features introduced in v0.2.7 are
+included in that release.
 
 The v0.2.7 additions include verified Python/Cargo dependency sources,
 published-dependency release gates, retained-evidence draft preparation and
 authenticated retrieval of original tag-push receipts,
-committed benchmark publication receipts, resumable scheduled suites, and
-reusable compilation for managed Cargo tool installs, and shared coverage cleanup. These are not supplied
-by the v0.2.6 registry pin.
+committed benchmark publication receipts, resumable scheduled suites,
+reusable compilation for managed Cargo tool installs, and shared coverage cleanup.
+
+The acquisition-owner workflow (`performance-release --owner`, `performance capture`,
+and `performance first-release`), candidate archive attachment, and the latest
+publisher provenance fixes are **unreleased**; v0.2.8 does not supply them. Their release
+validation is tracked in [#236][next-release]. Use an exact supplying
+[development pin](#development-pins-and-release-dependencies) for rehearsal,
+then adopt the published supplying release before release-intent use.
 
 **v0.2.7 includes breaking Python API changes.** Update callers to the documented
 typed variants, including [trial orders][complete-api] and
@@ -55,7 +60,7 @@ the published package requires Python 3.15 or newer.
 From the consumer root, add the exact published package:
 
 ```sh
-uv add --group tooling --no-sync "research-repo-tools==0.2.6"
+uv add --group tooling --no-sync "research-repo-tools==0.2.8"
 ```
 
 Include `tooling` from `dev`, retaining your other dependencies. Set
@@ -65,7 +70,7 @@ if the project currently requires an older interpreter.
 
 ```toml
 [dependency-groups]
-tooling = ["research-repo-tools==0.2.6"]
+tooling = ["research-repo-tools==0.2.8"]
 dev = [{include-group = "tooling"}]
 ```
 
@@ -113,7 +118,7 @@ coverage artifacts with `just clean`, then use `just clean --apply` to remove
 the listed entries. `just clean-coverage` previews only coverage cleanup;
 `just clean-coverage --apply` performs it. Stop coverage runs first. Both preserve
 the latest `.coverage` database and current reports. See the
-[coverage cleanup contract](docs/INSTALLING.md#cleaning-retained-coverage) for
+[coverage cleanup contract][coverage-cleanup] for
 the selected paths and adoption instructions.
 
 ## Development pins and release dependencies
@@ -163,11 +168,11 @@ automatic pin/lock rewrite is needed.
 Use the shared wrapper for isolated commands. Export the matching
 `python-bootstrap.py` template beside the consumer Justfile; it contains the
 same implementation as `research_repo_tools.tooling_runtime`. For example,
-after the supplying v0.2.7 release is published:
+with the published v0.2.8 release:
 
 ```sh
 just templates python-bootstrap.py --output python-bootstrap.py
-just tooling-run --version 0.2.7 --release-intent --arguments-json '["release","dependencies"]'
+just tooling-run --version 0.2.8 --release-intent --arguments-json '["release","dependencies"]'
 ```
 
 For development, replace `--version` with `--github acgetchell/research-repo-tools
@@ -179,9 +184,9 @@ missing commits and failed lookups stop before tooling starts; there is no fallb
 GitHub Actions can use the same implementation, with uv already installed:
 
 ```yaml
-- uses: acgetchell/research-repo-tools/.github/actions/run-tooling@v0.2.7
+- uses: acgetchell/research-repo-tools/.github/actions/run-tooling@v0.2.8
   with:
-    version: '0.2.7'
+    version: '0.2.8'
     release-intent: 'true'
     arguments: '["release", "dependencies"]'
 ```
@@ -290,7 +295,7 @@ Backends that package downloaded executables must declare each platform's input
 under `[[source-builds.external]]`: `package`, `platform`, exact GitHub release
 asset `url`, `sha256`, archive `member`, and destination `wheel-member`. The builder
 independently checks the archive hash and compares the packaged executable byte
-for byte. This repository's [policy](dependency-sources.toml) provides a complete
+for byte. This repository's [policy][dependency-policy] provides a complete
 actionlint example. Keep these pins synchronized when updating that dependency.
 
 Receipts and retained wheels live in `~/.research-repo-tools/source-builds`,
@@ -400,12 +405,13 @@ just performance-readme tooling/performance-release.toml --preview
 just performance-readme tooling/performance-release.toml
 ```
 
-For a scheduled release that reuses the acquisition at approval, pass
+With an unreleased supplying development pin, a scheduled release that reuses the
+acquisition at approval can pass
 `--owner "$owner"` to `just performance-release` to retain the original
 assertions outside the checkout before report promotion. For a repository's
 first stable release, `just performance first-release` acquires a single
 current-only run and publishes its absolute timing report. See the
-[candidate workflow](docs/candidate-reuse-api.md#committed-publisher-evidence)
+[candidate workflow][candidate-publication]
 for capture, recovery and draft attachment.
 
 For schema-5 measurement declarations, use a new ignored checkpoint directory
@@ -544,7 +550,7 @@ After the preparation workflow succeeds, Step 2 can retrieve its original
 authenticated target with `just release-assets retrieve`. The command freezes
 the original run/attempt/artifact ID/digest and revalidates that selection on
 retry. Configure the exact workflow and required steps as shown in the
-[retrieval guide](docs/PREPARING_DRAFTS.md#retrieve-original-preparation-output).
+[retrieval guide][draft-retrieval].
 
 For Python releases, set `package-kind = "python"` and
 `guarantee = "python-distributions"` in the evidence policy. Explicit selection
@@ -636,12 +642,15 @@ BSD-3-Clause. See [LICENSE][license].
 [complete-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/complete-run-api.md
 [configuration-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/configuration-api.md
 [contributing]: https://github.com/acgetchell/research-repo-tools/blob/main/CONTRIBUTING.md
+[coverage-cleanup]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/INSTALLING.md#cleaning-retained-coverage
 [dependabot]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/AUTOMATING_DEPENDABOT.md
 [dependency-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/dependency-provenance-api.md
+[dependency-policy]: https://github.com/acgetchell/research-repo-tools/blob/main/dependency-sources.toml
 [dependency-sources]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_DEPENDENCIES.md#verified-dependency-sources
 [doi]: https://doi.org/10.5281/zenodo.23744167
 [draft-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/release-evidence-api.md#draft-preparation
 [draft-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md
+[draft-retrieval]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md#retrieve-original-preparation-output
 [evidence-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/VERIFYING_RELEASE_EVIDENCE.md
 [evidence-recovery]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/VERIFYING_RELEASE_EVIDENCE.md#complete-run-recovery
 [files-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/files-api.md
@@ -652,6 +661,7 @@ BSD-3-Clause. See [LICENSE][license].
 [license-badge]: https://badgen.net/github/license/acgetchell/research-repo-tools
 [line-checks]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_CHECKS.md#raw-text-line-limits
 [migration]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/migration.md
+[next-release]: https://github.com/acgetchell/research-repo-tools/issues/236
 [notebooks-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/notebooks-api.md
 [notebooks-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_NOTEBOOKS.md
 [papers-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/papers-api.md
@@ -660,7 +670,7 @@ BSD-3-Clause. See [LICENSE][license].
 [performance-policy]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/DECLARING_PERFORMANCE.md
 [process-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/process-api.md
 [publication-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/publication-api.md
-[published-pin]: https://pypi.org/project/research-repo-tools/0.2.6/
+[published-pin]: https://pypi.org/project/research-repo-tools/0.2.8/
 [publishing]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RELEASING.md
 [publishing-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/publishing-api.md
 [pypi]: https://pypi.org/project/research-repo-tools/

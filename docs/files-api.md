@@ -50,7 +50,8 @@ is best effort. Ownership/ACL metadata is not preserved. Callers must own the
 whole destination exclusively: the two renames can briefly leave it absent,
 and neither concurrent-writer serialization nor crash atomicity is promised.
 
-`research_repo_tools.files.replace_many(updates: Mapping[Path, bytes], *, expected: Mapping[Path, bytes] | None = None, verify: Callable[[], None] | None = None) -> None`
+`research_repo_tools.files.replace_many(updates: Mapping[Path, bytes], *,
+expected: Mapping[Path, bytes] | None = None, verify: Callable[[], None] | None = None) -> None`
 publishes a mapping in iteration order. An empty mapping is a no-op. It is the
 supported named-file publication entry point; pass one entry for one file.
 
