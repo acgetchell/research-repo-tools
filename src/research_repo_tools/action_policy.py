@@ -26,7 +26,10 @@ def load_policy(path: Path) -> ActionPolicy:
         raise ValueError(f"{path}: expected [actions] and optional [compatibility]/[consistency] tables")
     targets: dict[str, str] = {}
     for action, tag in data["actions"].items():
-        key = identity(action)
+        try:
+            key = identity(action)
+        except ValueError as error:
+            raise ValueError(f"{path}: actions.{action}: {error}") from error
         if key in targets or not isinstance(tag, str) or tag != "latest" and TAG.fullmatch(tag) is None:
             raise ValueError(f"{path}: duplicate identity or unsupported target for {action}; use latest or a stable version tag")
         targets[key] = tag
@@ -35,7 +38,10 @@ def load_policy(path: Path) -> ActionPolicy:
         raise ValueError(f"{path}: compatibility must be a table")
     checks: dict[str, tuple[str, str]] = {}
     for action, value in compatibility.items():
-        key = identity(action)
+        try:
+            key = identity(action)
+        except ValueError as error:
+            raise ValueError(f"{path}: compatibility.{action}: {error}") from error
         if (
             key in checks
             or not isinstance(value, dict)

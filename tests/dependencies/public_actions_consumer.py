@@ -3,8 +3,10 @@
 import base64
 import io
 import json
+import os
 import shlex
 import subprocess
+import sys
 import tempfile
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
@@ -121,7 +123,67 @@ class TestActionsConsumer(unittest.TestCase):
                 self.assertEqual(status, 1)
                 self.assertIn("approved/action/Nested", error)
                 self.assertIn("configured scope", error)
-                self.assertIn(str(self.root / scope[0]), error)
+                # Config resolves the CLI root, including Windows short names.
+                self.assertIn(str(self.root.resolve() / scope[0]), error)
+
+    def test_missing_identity_reports_scope_from_a_resolved_root_alias(self):
+        (self.root / "nested").mkdir()
+        alias = self.root / "nested" / ".."
+        self.assertNotEqual(str(alias), str(alias.resolve()))
+        self.assertTrue(alias.samefile(self.root))
+        with patch.object(self, "root", alias):
+            self.test_missing_identity_names_the_declared_scan_scope()
+
+    def test_invalid_policy_identities_name_the_file_and_section(self):
+        for section, declaration in (
+            ("actions", '[actions]\n"approved/*"="latest"\n'),
+            ("compatibility", '[actions]\n[compatibility."approved/*"]\npath="support/versions"\ntool="scanner"\n'),
+        ):
+            with self.subTest(section=section):
+                self.update_policy.write_bytes(declaration.encode())
+                for command in ("check", "update"):
+                    status, output, error = self.invoke(command, "--policy", str(self.update_policy), "ci.yml")
+                    self.assertEqual(status, 1)
+                    self.assertEqual(output, "")
+                    self.assertIn(str(self.update_policy), error)
+                    self.assertIn(f"{section}.approved/*", error)
+                    self.assertIn("expected exact owner/repo", error)
+                    self.assertNotIn("Traceback", error)
+
+    def test_packaged_check_uses_provisioned_environment_without_sync(self):
+        self.consistency_policy()
+        workflows = self.root / ".github" / "workflows"
+        workflows.mkdir(parents=True)
+        (workflows / "ci.yml").write_bytes(self.workflow.read_bytes())
+        (workflows.parent / "action-updates.toml").write_bytes(self.update_policy.read_bytes())
+        (self.root / "justfile").write_text(template("justfile"), encoding="utf-8", newline="\n")
+        # Synchronizing this manifest would require unavailable dependencies.
+        (self.root / "pyproject.toml").write_bytes(
+            b'[project]\nname="offline-consumer"\nversion="0.0.0"\nrequires-python=">=3.15"\n'
+            b'[dependency-groups]\ntooling=["rrt-offline-fixture-unavailable==0.0.0"]\n[tool.uv]\npackage=false\n'
+        )
+        before = {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
+        with tempfile.TemporaryDirectory() as cache:
+            env = {
+                **os.environ,
+                "PYTHONDONTWRITEBYTECODE": "1",
+                "UV_CACHE_DIR": cache,
+                "UV_OFFLINE": "1",
+                "UV_PROJECT_ENVIRONMENT": sys.prefix,
+                "UV_PYTHON_DOWNLOADS": "never",
+            }
+            result = subprocess.run(
+                [get_safe_executable("just"), "--justfile", str(self.root / "justfile"), "actions-check"],
+                cwd=self.root,
+                env=env,
+                capture_output=True,
+                text=True,
+                encoding="utf-8",
+                check=False,
+            )
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn("Actions pin consistency passed", result.stdout)
+        self.assertEqual({path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}, before)
 
     def test_malformed_selected_pins_report_file_and_line(self):
         self.consistency_policy()

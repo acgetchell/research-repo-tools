@@ -490,27 +490,9 @@ an update selector: the check does not resolve it, contact GitHub, invoke `gh`,
 or verify that a tag actually names a SHA. Compatibility inventories are used
 only by the updater.
 
-Merge `actions_inputs`, `actions-check`, and `update-actions` from the packaged
-Justfile together. The default input is `.github/workflows`, so workflow-only
-repositories need no composites directory. For composites, extend the shared
-expression with explicit metadata paths (or a directory containing only workflow
-and composite YAML). Quote each path separately, including paths with spaces:
-
-```just
-actions_inputs := quote(".github/workflows") + " " + quote(".github/actions/setup-just/action.yml")
-
-actions-check:
-    uv run --locked --only-group tooling --inexact research-repo-tools actions check --policy .github/action-updates.toml {{ actions_inputs }}
-
-update-actions *args:
-    uv run --locked --only-group tooling --inexact research-repo-tools actions update --policy .github/action-updates.toml {{ actions_inputs }} "$@"
-```
-
-Add `actions-check` to the consumer's `check` prerequisites. After setup, run:
-
-```sh
-just actions-check
-```
+Follow the [consumer Actions wiring example](../README.md#actions-pin-consistency)
+to merge the shared scope and recipes into a provisioned project, enable argument
+forwarding, and add the offline check to the consumer's validation gate.
 
 The read-only check uses the same YAML parser and input expansion as the updater.
 It returns nonzero for drift, malformed selected pins, or absent declared

@@ -1,14 +1,38 @@
 """Generic YAML selection, policy rejection, tag peeling and publication failures."""
 
 import json
+import subprocess
 from pathlib import Path
 
 import pytest
 
 from research_repo_tools import action_policy, action_updates, cli, config, workflow_allowlist
+from research_repo_tools.process import get_safe_executable
 from research_repo_tools.workflow_uses import references, workflow_paths
 
 OLD, NEW = "a" * 40, "b" * 40
+
+
+@pytest.mark.parametrize("preview", ["--check", "--dry-run"])
+def test_readme_actions_recipe_forwards_preview_flags(tmp_path, preview):
+    readme = (Path(__file__).resolve().parents[2] / "README.md").read_text(encoding="utf-8")
+    section = readme.split("### Actions pin consistency", 1)[1].split("## Capability index", 1)[0]
+    example = section.split("```just\n", 1)[1].split("```", 1)[0]
+    # Execute the documented shell wiring with an inert argument recorder.
+    updater = "uv run --locked --only-group tooling --inexact research-repo-tools actions update"
+    assert example.count(updater) == 1
+    example = example.replace(updater, "printf '%s\\n'")
+    justfile = tmp_path / "justfile"
+    justfile.write_text(example, encoding="utf-8", newline="\n")
+    result = subprocess.run(
+        [get_safe_executable("just"), "--justfile", str(justfile), "update-actions", preview],
+        cwd=tmp_path,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        check=True,
+    )
+    assert result.stdout.splitlines() == ["--policy", ".github/action-updates.toml", ".github/workflows", ".github/actions/setup-just/action.yml", preview]
 
 
 @pytest.mark.parametrize(
