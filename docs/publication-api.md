@@ -181,6 +181,9 @@ checks, references, markers, tagged links, preview/check and transaction contrac
 as schema 1. The [task guide](PUBLISHING_REPORTS.md#complete-run-document-sections-and-coordinate-plots)
 owns commands and the packaged `complete-publication.toml` provides an editable
 configuration example. Schema 1 continues to require comparison evidence.
+First-release complete-run v6 evidence is explicitly rejected by this document
+publisher; use [schema-2 report promotion](complete-run-api.md#first-release-acquisition)
+for its current-only absolute timing report.
 Suite v4 evidence preserves availability and observation-level comparison rules.
 Scheduled v5 evidence requires an explicit one-based `trial`; validation checks
 the entire schedule before selecting that trial, labels the selected trial in

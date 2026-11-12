@@ -126,7 +126,7 @@ def _select(evidence: Evidence, layout: RunLayout) -> tuple[CompleteRun | SuiteR
     if not isinstance(run, (CompleteRun, SuiteRun)):
         raise ValueError("select an explicit trial before table/plot/CSV presentation")
     phases, views = dict(run.phases), {item.name: item for item in run.series}
-    policy = phases["baseline"].policy
+    policy = phases["current"].policy
     if layout.unit != policy.unit or layout.statistic not in policy.statistics:
         raise ValueError("selected statistic/unit must match the recorded measurement policy")
     selected = {}
@@ -142,10 +142,18 @@ def _select(evidence: Evidence, layout: RunLayout) -> tuple[CompleteRun | SuiteR
     return run, selected
 
 
-def _attribution(evidence: Evidence, run: CompleteRun | SuiteRun, name: str) -> str:
-    phase = next(item.phase for item in run.series if item.name == name)
-    source = dict(evidence.sources)[phase]
-    return f"{phase} phase, {dict(source.context)['release']}, revision {source.revision}"
+def _attribution(evidence: Evidence, run: CompleteRun | SuiteRun, name: str, *, compact: bool = False) -> str:
+    view = next(item for item in run.series if item.name == name)
+    source = dict(evidence.sources)[view.phase]
+    if isinstance(run, SuiteRun) and view.rows:
+        _, _, source = run.observation(view.phase, view.rows[0][1])
+    context = dict(source.context)
+    attribution = f"{view.phase} phase, {context['release']}"
+    if context.get("mode") == "working-tree":
+        if compact:
+            return f"{attribution} working tree based on {source.revision[:12]}"
+        return f"{attribution} working-tree snapshot based on commit {source.revision}; measured source SHA-256 {source.source_sha256}"
+    return f"{attribution}, revision {source.revision}"
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -206,7 +214,7 @@ def render_run_table(evidence: Evidence, layout: RunLayout, *, style: RunTableSt
     caption = f"Run: `{run_identity(evidence)}`. Statistic: {layout.statistic}. Unit: {layout.unit}."
     if style.timing_legend:
         # Whole-run validation above guarantees matching, complete intervals.
-        confidence_level = dict(run.phases)["baseline"].policy.confidence_level
+        confidence_level = dict(run.phases)["current"].policy.confidence_level
         # Shift the exact decimal digits without using the caller's precision,
         # exponent limits or traps. Only fractional trailing zeros are removable.
         sign, digits, exponent = Decimal(str(confidence_level)).as_tuple()
@@ -460,7 +468,7 @@ def render_coordinate_svg(evidence: Evidence, layout: RunLayout, plot: Coordinat
         lines.extend(
             [
                 f'<path d="M 55 {legend_y - 5} H 72" fill="none"/>',
-                f'<text x="80" y="{legend_y}" stroke="none">{_xml(item.label)} — {_xml(_attribution(evidence, run, item.name))}</text>',
+                f'<text x="80" y="{legend_y}" stroke="none">{_xml(item.label)} — {_xml(_attribution(evidence, run, item.name, compact=True))}</text>',
                 f'<text x="80" y="{legend_y + 17}" stroke="none">{len(selected[item.name])} selected; {len(layout.rows) - len(selected[item.name])} unavailable rows</text>',
                 "</g>",
             ]
@@ -497,12 +505,13 @@ def render_run_ratios(evidence: Evidence, layout: RunLayout) -> bytes:
     labels = {item.name: item.label for item in layout.series}
     table = TableLayout(
         tuple((row.key, row.label) for row in keys),
-        f"{labels[a]} ({_attribution(evidence, run, a)})",
-        f"{labels[b]} ({_attribution(evidence, run, b)})",
+        f"{labels[a]} ({_attribution(evidence, run, a, compact=True)})",
+        f"{labels[b]} ({_attribution(evidence, run, b, compact=True)})",
         layout.unit,
     )
     identity = run_identity(evidence)
     description = f"Run {identity}. Numerator time / denominator time, point estimates. Greater than one means less denominator time. No ratio interval or significance test. {len(keys)} paired rows; {len(layout.rows) - len(keys)} unavailable rows omitted."
+    description += f" Numerator: {labels[a]} ({_attribution(evidence, run, a)}). Denominator: {labels[b]} ({_attribution(evidence, run, b)})."
     # The comparison is presentation only; retain the originating run binding.
     return _render_ratio_svg(
         ComparisonSet(*samples), table, description=description, caption="Numerator/denominator point ratio; dashed line = 1", identity=identity

@@ -223,9 +223,10 @@ sync the same shared Python 3.15 environment used by fixture and production
 scans. `just semgrep-setup` checks manifest/lock freshness offline and matches
 the active lock version to the selected interpreter's distribution and
 executable. `just setup` synchronizes dev before verifying declared Semgrep use.
-The shared tooling checkout locks 1.182.1 on Intel macOS and 1.183.0 on the
-other native gates. Consumers select wheel availability policy for their own
-targets. Semgrep 1.183.0 has no native Intel macOS wheel.
+The maintained [lockfile](../uv.lock) identifies this checkout's exact scanner
+and wheel inventory. Consumer locks must cover each intended host; an Apple
+Silicon macOS run does not establish Intel macOS support. For example,
+Semgrep 1.183.0 has no native Intel macOS wheel.
 See the [Semgrep release files](https://pypi.org/project/semgrep/1.183.0/#files).
 
 Semgrep's published transitive pins need shared temporary overrides. The packaged

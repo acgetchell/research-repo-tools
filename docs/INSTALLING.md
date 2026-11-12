@@ -43,7 +43,7 @@ below are examples, not automatic upgrades:
 
 ```toml
 [dependency-groups]
-tooling = ["research-repo-tools==0.2.6"]
+tooling = ["research-repo-tools==0.2.8"]
 dev = [{include-group = "tooling"}]
 
 [tool.uv]

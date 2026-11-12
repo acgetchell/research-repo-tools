@@ -14,15 +14,31 @@ lazy from research_repo_tools.publication import _inventory, _path
 lazy from research_repo_tools.release_pairs import resolve_pair
 lazy from research_repo_tools.releases import published_releases
 
-COMMANDS = {"assets", "baseline", "convert", "export", "measure", "prepare", "promote", "readme", "release", "release-draft", "release-upload"}
+COMMANDS = {
+    "assets",
+    "baseline",
+    "capture",
+    "convert",
+    "export",
+    "first-release",
+    "measure",
+    "prepare",
+    "promote",
+    "readme",
+    "release",
+    "release-draft",
+    "release-upload",
+}
 
 
 def add_command(commands, name: str) -> None:
     help_text = {
         "assets": "compare authenticated published release assets without measuring",
         "baseline": "measure a checked-out tag and package a shared release baseline",
+        "capture": "freeze local candidate assertions and publisher receipt before report promotion",
         "convert": "convert verified historical CSV into new shared evidence paths",
         "export": "export verified comparison evidence as CSV",
+        "first-release": "retain and promote one complete acquisition before the first stable release",
         "measure": "measure configured benchmarks in read-only exports or authorized worktrees",
         "prepare": "save independent release assertions under ignored scratch storage",
         "promote": "promote/archive new evidence or rerender the retained current report offline",
@@ -32,19 +48,30 @@ def add_command(commands, name: str) -> None:
         "release-upload": "attach verified inert bytes, reuse identical retries, and optionally publish",
     }
     command = commands.add_parser(name, help=help_text[name])
-    if name in {"baseline", "convert", "measure", "prepare", "promote", "readme", "release"}:
+    if name in {"baseline", "capture", "convert", "first-release", "measure", "prepare", "promote", "readme", "release"}:
         command.add_argument("configuration")
+    if name == "capture":
+        command.add_argument("--hosted", action="store_true", help="record the original GitHub Actions producer from its environment")
+        command.add_argument("--owner", required=True, help="trusted owner directory outside the source checkout")
+        command.add_argument("--promote", action="store_true", help="promote the exact planned report after retaining the owner record")
+    if name == "first-release":
+        command.add_argument("--manifest", required=True, help="original evidence envelope in root-relative scratch storage")
+        command.add_argument("--owner", required=True, help="trusted owner directory outside the source checkout")
+        command.add_argument("--payload", required=True, help="original run payload in root-relative scratch storage")
+        command.add_argument("--report", required=True, help="root-relative schema-2 complete-run report declaration")
+        command.add_argument("--repository", required=True, help="GitHub repository whose stable release history must be empty")
+        command.add_argument("--retained", action="store_true", help="retry capture and promotion from the original scratch pair without measurement")
     if name in {"prepare", "release"}:
         command.add_argument("--allow-git-mutations", action="store_true", help="authorize only requested tag fetching or configured temporary worktrees")
     if name in {"measure", "prepare", "release"}:
         command.add_argument("--release-intent", action="store_true", help="require published upstream tooling before acquisition effects")
-    if name in {"measure", "release"}:
-        command.add_argument(
-            "--checkpoint", help="ignored root-relative checkpoint directory; schema 5 or 6; schedule comes from the prepared measurement declaration"
-        )
+    if name in {"first-release", "measure", "release"}:
+        command.add_argument("--checkpoint", help="ignored root-relative checkpoint directory for suite measurements")
         command.add_argument("--progress", choices=("human", "json", "none"), default="human", help="advisory status on stderr")
         command.add_argument("--progress-cadence", type=float, default=300.0, help="heartbeat interval in seconds (default: 300, at least 1)")
         command.add_argument("--resume", action="store_true", help="validate and reuse completed units from --checkpoint")
+    if name == "release":
+        command.add_argument("--owner", help="new external owner directory for the original candidate handoff")
     if name == "prepare":
         command.add_argument("--fetch-tags", action="store_true", help="fetch repository tags before selection; also requires --allow-git-mutations")
     if name == "readme":
@@ -154,17 +181,32 @@ def _asset_pair(args: argparse.Namespace, settings: Config) -> evidence.Evidence
 
 def run(args: argparse.Namespace, settings: Config) -> int:
     root = settings.root
-    if getattr(args, "release_intent", False):
+    if getattr(args, "release_intent", False) and not (args.action == "release" and args.owner is not None):
         from research_repo_tools.dependency_provenance import check_release_dependencies
 
         check_release_dependencies(root, packages=settings.release.published_dependencies)
-    if args.action in {"prepare", "readme", "release"}:
+    if args.action == "first-release":
+        _first_release(args, settings)
+        return 0
+    if args.action in {"capture", "prepare", "readme", "release"}:
         from research_repo_tools.performance import _write_stdout
         from research_repo_tools.performance_release import load_performance_release, load_readme_plan, measure_release, prepare_performance
         from research_repo_tools.publication import preview_publication, publish_publication
 
         workflow = load_performance_release(root, args.configuration)
-        if args.action == "prepare":
+        if args.action == "capture":
+            import os
+
+            from research_repo_tools.candidate_handoff import capture_candidate_handoff
+            from research_repo_tools.candidate_hosted import _actions_producer
+            from research_repo_tools.evidence import deterministic_json
+
+            owner = settings.path(args.owner)
+            plan, acquisition, publication = capture_candidate_handoff(root, workflow, owner, producer=_actions_producer(os.environ) if args.hosted else None)
+            if args.promote:
+                publish_publication(plan)
+            _write_stdout(deterministic_json({"owner_directory": str(owner.resolve()), "acquisition_sha256": acquisition, "publication_sha256": publication}))
+        elif args.action == "prepare":
             record = prepare_performance(root, workflow, fetch_tags=args.fetch_tags, allow_git_mutations=args.allow_git_mutations)
             _write_stdout(
                 (
@@ -174,7 +216,14 @@ def run(args: argparse.Namespace, settings: Config) -> int:
             )
         elif args.action == "release":
             measure_release(
-                root, workflow, allow_git_mutations=args.allow_git_mutations, checkpoint=args.checkpoint, resume=args.resume, progress=_progress(args)
+                root,
+                workflow,
+                allow_git_mutations=args.allow_git_mutations,
+                checkpoint=args.checkpoint,
+                resume=args.resume,
+                progress=_progress(args),
+                dependencies=settings.release.published_dependencies,
+                owner=settings.path(args.owner) if args.owner is not None else None,
             )
             print("Retained measurement and report. README publication is a separate step.")
         else:
@@ -301,6 +350,80 @@ def run(args: argparse.Namespace, settings: Config) -> int:
             for path in publish_publication(plan):
                 print(f"Updated {path.relative_to(root).as_posix()}")
     return 0
+
+
+def _first_release(args: argparse.Namespace, settings: Config) -> None:
+    from functools import partial
+
+    from research_repo_tools.candidate_handoff import capture_first_release_handoff
+    from research_repo_tools.dependency_provenance import check_release_dependencies
+    from research_repo_tools.evidence import deterministic_json
+    from research_repo_tools.files import _directory_target
+    from research_repo_tools.performance import _write_stdout
+    from research_repo_tools.performance_acquisition import measure_and_retain
+    from research_repo_tools.publication import publish_publication
+    from research_repo_tools.release_assets import _repository
+    from research_repo_tools.release_discovery import require_first_release_history
+    from research_repo_tools.release_metadata import read_package_info
+    from research_repo_tools.release_pairs import FirstRelease
+    from research_repo_tools.release_validation import api
+    from research_repo_tools.report_inventory import report_configuration
+    from research_repo_tools.suite_measurement import SuiteMeasurementPlan
+
+    root = settings.root
+    repository = _repository(args.repository)
+    selection = FirstRelease("v" + read_package_info(root).version)
+    owner = settings.path(args.owner).absolute()
+    target = _directory_target(owner)
+    _validate_distinct_paths((root, target))
+    paths = tuple(_path(root, name) for name in (args.configuration, args.report, args.payload, args.manifest))
+    _validate_distinct_paths(paths)
+    if args.retained and (args.resume or args.checkpoint is not None):
+        raise ValueError("retained promotion does not use acquisition checkpoints")
+    read = partial(api, repository=repository)
+    require_first_release_history(read)
+    if not args.retained:
+        if target.exists() or any(path.exists() for path in paths[2:]):
+            raise ValueError("original owner or scratch evidence already exists; recover it with --retained")
+        _, report = report_configuration(root, args.report)
+        if type(report["schema"]) is not int or report["schema"] != 2:
+            raise ValueError("first-release acquisition requires a schema-2 complete-run report")
+        measurement = load_measurement(root, args.configuration)
+        if not isinstance(measurement, SuiteMeasurementPlan) or measurement.schedule is not None:
+            raise ValueError("first-release acquisition requires an unscheduled suite measurement")
+        for suite in measurement.suites:
+            context = dict(suite.measurement.measurement.context)
+            if (context.get("repository"), context.get("acquisition-owner")) != (repository, "local"):
+                raise ValueError("first-release suite must declare its repository and local acquisition owner")
+        if not any(series.phase == "current" for suite in measurement.suites for series in suite.measurement.series):
+            raise ValueError("first-release acquisition requires at least one current-phase series")
+        check_release_dependencies(root, packages=settings.release.published_dependencies)
+        measure_and_retain(
+            root,
+            args.configuration,
+            selection,
+            payload=args.payload,
+            manifest=args.manifest,
+            working_tree=True,
+            checkpoint=args.checkpoint,
+            resume=args.resume,
+            progress=_progress(args),
+            read_release=read,
+        )
+    plan, acquisition, publication = capture_first_release_handoff(
+        root,
+        owner,
+        selection,
+        repository=repository,
+        measurement=args.configuration,
+        report=args.report,
+        payload=args.payload,
+        manifest=args.manifest,
+        read_release=read,
+    )
+    require_first_release_history(read)
+    publish_publication(plan)
+    _write_stdout(deterministic_json({"owner_directory": str(target), "acquisition_sha256": acquisition, "publication_sha256": publication}))
 
 
 def _progress(args: argparse.Namespace):

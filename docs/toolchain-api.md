@@ -28,8 +28,8 @@ ordinary release startup additionally verifies a non-yanked artifact exists.
 `research_repo_tools.python_baseline.baseline()` returns a frozen
 `PythonBaseline(requirement, selected, package_version)`. The requirement and
 package version come from installed distribution metadata; selected is the
-package-owned development minor. `minimum_requirement` extracts the installed
-lower bound independently of that selector. `reconcile_requirement(requirement,
+package-owned development minor. Its `minimum_requirement` property extracts the
+installed lower bound independently of that selector. `reconcile_requirement(requirement,
 authority)` adds the floor while preserving all consumer restrictions and rejects
 empty intersections. `check_minimum(root)` enforces application metadata without
 an opt-in or mutation; normal Python/toolchain/setup gates call it.

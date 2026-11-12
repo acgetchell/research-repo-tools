@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import quote
 
-from research_repo_tools.complete_runs import RUN_SCHEMA_V4
+from research_repo_tools.complete_runs import RUN_SCHEMA_V4, RUN_SCHEMA_V6, run_identity
 from research_repo_tools.criterion import COMPARISON_SCHEMA, _markdown_text, _unit, parse_comparison
 from research_repo_tools.evidence import Evidence, Provenance, _object, _string, compare_provenance, fingerprint_files, parse_evidence
 from research_repo_tools.files import _validate_distinct_paths
@@ -208,8 +208,6 @@ def load_publication(
         if configuration in history:
             raise ValueError("publication configuration must not alias retained history")
         inputs.update(history)
-        from research_repo_tools.complete_runs import run_identity
-
         run_checks.append(RunSelectionCheck(_string(raw["archive"], "archive"), run_identity(retained)))
     else:
         if not {"payload", "manifest"} <= raw.keys():
@@ -225,6 +223,8 @@ def load_publication(
     if schema == 2:
         from research_repo_tools.complete_runs import validate_run_evidence
 
+        if retained.payload_schema == RUN_SCHEMA_V6:
+            raise ValueError("first-release evidence requires complete-run report promotion")
         validate_run_evidence(retained)
         if "release" in raw and "measurement" not in raw:
             raise ValueError("publication release policy requires a measurement declaration")
@@ -258,8 +258,8 @@ def load_publication(
             raise ValueError("scheduled README publication requires an explicit trial")
         from research_repo_tools.complete_runs import _integer
 
-        selected_trial = _integer(raw["trial"], "trial")
-        retained = select_trial(retained, selected_trial)
+        selected_trial = (_integer(raw["trial"], "trial"), run_identity(retained))
+        retained = select_trial(retained, selected_trial[0])
     elif "trial" in raw:
         raise ValueError("trial selection requires scheduled evidence")
     pins = _table(raw["provenance"], "provenance", {"baseline", "current"})
@@ -418,7 +418,12 @@ def load_publication(
             path = _string(raw["csv"], "csv")
             artifact(path, serialize_run_csv(retained, run_layout))
     if selected_trial is not None:
-        content = f"Trial {selected_trial} (separate trial; no pooled significance claim).\n\n" + content
+        trial, complete_identity = selected_trial
+        content = (
+            f"Complete run: `{complete_identity}`.\n\n"
+            f"Trial {trial} of this complete run (separate trial; no pooled significance claim).\n\n"
+            + content.replace("Run: ", "Selected trial run (CSV/plot identity): ", 1)
+        )
     if artifacts_only:
         if not figures:
             raise ValueError("artifacts-only requires at least one plot, svg or csv output")

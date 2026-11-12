@@ -45,8 +45,8 @@ Use the packaged standalone bootstrap with the
 ```sh
 just templates python-bootstrap.py --output python-bootstrap.py
 # Merge the matching published Justfile recipes into the consumer's Justfile.
-just shared-python-plan 0.2.6
-just shared-python-update 0.2.6
+just shared-python-plan 0.2.8
+just shared-python-update 0.2.8
 just python-check
 ```
 
@@ -105,8 +105,8 @@ from `dev`. The same standalone adoption recipes prepare the extra, declarations
 lock and environment. This example targets the published quickstart pin:
 
 ```sh
-just shared-python-plan 0.2.6
-just shared-python-update 0.2.6
+just shared-python-plan 0.2.8
+just shared-python-update 0.2.8
 just tools-python-check
 just python-check
 ```

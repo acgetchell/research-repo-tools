@@ -164,3 +164,29 @@ def plan_candidate_publication(root: Path, payload: str, manifest: str, policy: 
     parsed = _parse_publication(deterministic_json(receipt), policy)
     _verify_plan(plan)
     return plan, parsed.payload
+
+
+def _resume_candidate_publication(root: Path, payload: str, manifest: str, policy: CandidatePolicy, receipt: bytes) -> PublicationPlan:
+    """Replan an original owner receipt from its prior or already-promoted state."""
+    from research_repo_tools.candidate_reuse import _eligible
+
+    frozen = _parse_publication(receipt, policy).document()
+    assert policy.report is not None
+    plan = load_run_report_plan(root, policy.report, payload=payload, manifest=manifest)
+    originals = dict(plan.originals)
+    retained_payload, retained_manifest = originals[payload], originals[manifest]
+    assert retained_payload is not None and retained_manifest is not None
+    _eligible(parse_evidence(retained_payload, retained_manifest), policy)
+    expected = {name: (item["size"], item["sha256"]) for name, item in frozen["outputs"].items()}
+    if {name: (len(data), sha256(data)) for name, data in plan.outputs} != expected:
+        raise ValueError("planned report differs from the frozen publication receipt")
+    observed = {name: sha256(data) if data is not None else None for name, data in originals.items()}
+    prior = frozen["prior"]
+    promoted = {**prior, **{name: digest for name, (_, digest) in expected.items()}}
+    actual = {name: observed.get(name) for name in prior}
+    if actual != prior and actual != promoted:
+        raise ValueError("current report and history differ from both frozen publication states")
+    if any((root / name).stat().st_mode & 0o111 for name in expected if originals[name] is not None):
+        raise ValueError("frozen publication output unexpectedly has executable permissions")
+    _verify_plan(plan)
+    return plan

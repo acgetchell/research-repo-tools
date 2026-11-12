@@ -9,8 +9,9 @@ from research_repo_tools.measurement import MeasurementConfig, load_measurement,
 from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.performance_reports import render_report
 from research_repo_tools.publication import _inventory, _path
-from research_repo_tools.release_pairs import ReleasePair
-from research_repo_tools.suite_measurement import SuiteMeasurementPlan
+from research_repo_tools.release_discovery import require_first_release_history
+from research_repo_tools.release_pairs import FirstRelease, ReleasePair
+from research_repo_tools.suite_measurement import SuiteMeasurementPlan, _measure_suites
 
 __all__ = ["measure_and_retain"]
 
@@ -18,7 +19,7 @@ __all__ = ["measure_and_retain"]
 def measure_and_retain(
     root: Path,
     configuration_path: str,
-    pair: ReleasePair,
+    pair: ReleasePair | FirstRelease,
     *,
     payload: str,
     manifest: str,
@@ -30,12 +31,19 @@ def measure_and_retain(
     checkpoint: str | None = None,
     resume: bool = False,
     progress: ProgressReporter | None = None,
+    read_release: Callable[[str], object] | None = None,
 ) -> None:
     """Acquire with controller/ref freshness checks and atomically retain outputs."""
     root = root.resolve(strict=True)
     reporter = progress or ProgressReporter()
     configuration_bytes = _path(root, configuration_path).read_bytes()
     configuration = load_measurement(root, configuration_path)
+    if isinstance(pair, FirstRelease):
+        if read_release is None or not isinstance(configuration, SuiteMeasurementPlan) or configuration.schedule is not None or not working_tree:
+            raise ValueError("first release requires a release history reader and an unscheduled working-tree suite declaration")
+        require_first_release_history(read_release)
+    elif read_release is not None:
+        raise ValueError("first-release history reader is only used for a first release")
     if isinstance(configuration, SuiteMeasurementPlan) and configuration_path in configuration.outputs:
         raise ValueError("measurement declaration cannot be an output exception")
     selected_backend = backend or (configuration.backend if not isinstance(configuration, MeasurementConfig) else "worktree")
@@ -46,7 +54,7 @@ def measure_and_retain(
     from research_repo_tools.source_exports import _files, capture_source
 
     settings_config = configuration if isinstance(configuration, MeasurementConfig) else configuration.measurement
-    if not isinstance(configuration, SuiteMeasurementPlan):
+    if not isinstance(configuration, SuiteMeasurementPlan) and isinstance(pair, ReleasePair):
         settings_config.validate_release(pair.baseline)
         settings_config.validate_release(pair.current)
     controller_patterns = (
@@ -59,7 +67,7 @@ def measure_and_retain(
     controller_host = capture_host(root, probes=settings_config.probes) if controller is not None else None
     captured_references = (
         {
-            "baseline": capture_source(root, pair.baseline),
+            **({"baseline": capture_source(root, pair.baseline)} if isinstance(pair, ReleasePair) else {}),
             # Acquisition verifies full working-tree receipts before returning.
             # Publication rechecks refs and declared inputs, not staged outputs.
             "current": capture_source(
@@ -95,18 +103,25 @@ def measure_and_retain(
         # even use the same path kinds/spellings across independently valid trees.
         for capture in captured_references.values():
             _validate_distinct_paths((*targets, *(root / name for name, _, _ in capture.files)))
-    retained = measure_pair(
-        root,
-        configuration,
-        pair,
-        working_tree=working_tree,
-        allow_git_mutations=allow_git_mutations,
-        backend=backend,
-        verify=verify_controller,
-        checkpoint=checkpoint_path,
-        resume=resume,
-        progress=reporter,
-    )
+    if isinstance(pair, FirstRelease):
+        assert isinstance(configuration, SuiteMeasurementPlan) and read_release is not None
+        retained = _measure_suites(
+            root, configuration, pair, working_tree=True, checkpoint=checkpoint_path, resume=resume, progress=reporter, verify=verify_controller
+        )
+        require_first_release_history(read_release)
+    else:
+        retained = measure_pair(
+            root,
+            configuration,
+            pair,
+            working_tree=working_tree,
+            allow_git_mutations=allow_git_mutations,
+            backend=backend,
+            verify=verify_controller,
+            checkpoint=checkpoint_path,
+            resume=resume,
+            progress=reporter,
+        )
     reports = {}
     if report:
         from research_repo_tools.complete_runs import RUN_SCHEMAS, render_run

@@ -98,6 +98,8 @@ def _parse_scheduled_run(evidence: Evidence, *, partial: bool = False) -> Schedu
             raise ValueError("trial intervals overlap or are reordered")
         original = parse_evidence(_decode(record["payload"]), _decode(record["manifest"]))
         run = validate_suite_policy(original, base)
+        if run.first_release:
+            raise ValueError("scheduled trials require paired suite runs")
         if original.sources != evidence.sources:
             raise ValueError("trial original source differs from envelope")
         identity = run_identity(original)

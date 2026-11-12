@@ -1,6 +1,6 @@
 # Upstream tooling provenance
 
-This capability targets v0.2.7. It separates reproducible development sources
+Introduced in v0.2.7, this capability separates reproducible development sources
 from published upstream tooling required for a consumer release. Select only
 tooling dependencies; scientific dependencies and native release gates remain
 consumer policy. See the [usage and transition example](../README.md#development-pins-and-release-dependencies).
@@ -105,7 +105,9 @@ source declarations follow [uv's dependency sources](https://docs.astral.sh/uv/c
   returns the verified Git identity, or `None` for registry-only development.
 - `check_release_dependencies(root, *, packages=None)`: returns a tuple of verified
   published identities. Explicit package selections add to the manifest policy.
-  An empty effective policy is a no-op. Failures raise `ValueError` with recovery
+  An empty selected-package policy still enforces the canonical
+  [dependency-source policy](api.md#dependency-sources); without that policy,
+  only dependency-free checkouts pass. Failures raise `ValueError` with recovery
   guidance; no dependency mutation is performed.
 
 The standalone `research_repo_tools.tooling_runtime` wrapper exports immutable

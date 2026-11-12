@@ -48,7 +48,7 @@ from research_repo_tools.release_assets import ReleaseTarget, require_release_ch
 from research_repo_tools.release_evidence import EvidencePolicy
 from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.release_validation import ValidationPolicy
-from research_repo_tools.run_presentation import RunLayout, RunRow, SeriesSelection, render_run_ratios, render_run_table, serialize_run_csv
+from research_repo_tools.run_presentation import RunLayout, RunRow, RunTableStyle, SeriesSelection, render_run_ratios, render_run_table, serialize_run_csv
 from research_repo_tools.run_reports import load_run_report_plan
 from research_repo_tools.scheduled_runs import ScheduledRun, parse_scheduled_run, select_trial
 from research_repo_tools.source_exports import export_source
@@ -1011,6 +1011,241 @@ sys.exit(status)
     def test_cli_scheduled_measurement_report_and_explicit_trial_readme(self) -> None:
         self._cli_checkpoint_offline_promotion_and_readme_retry(scheduled=True)
 
+    def test_first_release_retains_one_acquisition_and_reuses_exact_archive(self) -> None:
+        from research_repo_tools.complete_runs import RUN_SCHEMA_V6
+        from research_repo_tools.run_reports import load_latest_run
+
+        def toml(value):
+            if isinstance(value, dict):
+                return "{" + ", ".join(json.dumps(key) + "=" + toml(item) for key, item in value.items()) + "}"
+            if isinstance(value, (tuple, list)):
+                return "[" + ", ".join(toml(item) for item in value) + "]"
+            return json.dumps(value)
+
+        declaration = plan(self.log, ("shared",)).document()
+        declaration["suites"][0]["measurement"]["context"] = {"repository": "example/library", "acquisition-owner": "local"}
+        inventory = {
+            **self.revisions["v1.1.0"],
+            "measurement.toml": ("schema=5\nsuites=" + toml(declaration["suites"]) + "\n").encode(),
+            "report.toml": b'schema=2\ncurrent="docs/first.md"\narchive="docs/runs"\ntitle="First release timings"\n',
+        }
+        for name, data in inventory.items():
+            (self.root / name).write_bytes(data)
+        owner = Path(self.stack.enter_context(tempfile.TemporaryDirectory())).resolve() / "owner record"
+        command = [
+            "--root",
+            str(self.root),
+            "performance",
+            "first-release",
+            "measurement.toml",
+            "--repository",
+            "example/library",
+            "--report",
+            "report.toml",
+            "--payload",
+            "scratch/run.json",
+            "--manifest",
+            "scratch/evidence.json",
+            "--owner",
+            str(owner),
+            "--progress",
+            "none",
+        ]
+        prior = {"id": 1, "tag_name": "v1.0.0", "draft": False, "prerelease": False, "published_at": "2026-01-01T00:00:00Z"}
+        selected = set(inventory)
+        with (
+            patch("research_repo_tools.release_validation.api") as provider,
+            patch("research_repo_tools.source_exports.select_files", side_effect=lambda root, **kwargs: tuple(sorted(selected))),
+            patch("research_repo_tools.dependency_provenance.check_release_dependencies"),
+        ):
+            provider.side_effect = OSError("release history unavailable")
+            self.assertNotEqual(main(command), 0)
+            provider.side_effect = None
+            provider.return_value = [prior]
+            self.assertNotEqual(main(command), 0)
+            drafts = [{**prior, "draft": True, "id": index} for index in range(2, 102)]
+            provider.side_effect = [drafts, [prior]]
+            self.assertNotEqual(main(command), 0)
+            provider.side_effect = None
+            self.assertFalse(self.log.exists())
+            self.assertFalse(owner.exists())
+            provider.return_value = [{**prior, "draft": True}]
+            baseline_only = json.loads(json.dumps(declaration))
+            for suite in baseline_only["suites"]:
+                suite["measurement"]["series"] = [series for series in suite["measurement"]["series"] if series["phase"] == "baseline"]
+            (self.root / "measurement.toml").write_bytes(("schema=5\nsuites=" + toml(baseline_only["suites"]) + "\n").encode())
+            with (
+                patch("research_repo_tools.performance_acquisition.measure_and_retain", side_effect=AssertionError("invalid plan must not acquire")) as acquire,
+                patch("sys.stderr", new_callable=io.StringIO) as errors,
+            ):
+                self.assertNotEqual(main(command), 0)
+                self.assertIn("at least one current-phase series", errors.getvalue())
+                acquire.assert_not_called()
+            self.assertFalse(self.log.exists())
+            self.assertFalse(owner.exists())
+            self.assertFalse((self.root / "scratch/run.json").exists())
+            self.assertFalse((self.root / "scratch/evidence.json").exists())
+            (self.root / "measurement.toml").write_bytes(inventory["measurement.toml"])
+            self.assertEqual(main(command), 0)
+            self.assertEqual(self.log.read_bytes().count(b"shared measure"), 1)
+            raw = ((owner / "run.json").read_bytes(), (owner / "evidence.json").read_bytes())
+            retained = parse_evidence(*raw)
+            self.assertEqual(retained.payload_schema, RUN_SCHEMA_V6)
+            self.assertEqual(tuple(dict(retained.sources)), ("current",))
+            layout = RunLayout((SeriesSelection("shared/current", "Current", (("case", "shared/case"),)),), (RunRow("case", "Case"),), "median", "ns")
+            self.assertIn("Confidence level: 95%.", render_run_table(retained, layout, style=RunTableStyle(timing_legend=True)))
+            self.assertEqual(serialize_evidence(load_latest_run(self.root, "docs/runs")), raw)
+            report = (self.root / "docs/first.md").read_bytes()
+            self.assertIn(b"no published predecessor", report)
+            self.assertIn(b"measured source is a working-tree snapshot", report)
+            self.assertRegex(report, rb"listed revision is its base\s+commit")
+            self.assertIn(b"measured source SHA-256 identifies the snapshot", report)
+            for _, _, _, source in parse_suite_run(retained).observations:
+                assert source.source_sha256 is not None
+                self.assertIn(source.revision.encode(), report)
+                self.assertIn(source.source_sha256.encode(), report)
+            self.assertNotIn(b"| Baseline |", report)
+            policy = parse_candidate_policy((owner / "policy.json").read_bytes())
+            self.assertTrue(policy.first_release)
+            self.assertIsNone(policy.commit)
+            self.assertEqual(acquisition_assertion_digest(policy), (owner / "acquisition.sha256").read_text(encoding="ascii").strip())
+            receipt = (owner / "publication.json").read_bytes()
+            self.assertEqual(hashlib.sha256(receipt).hexdigest(), (owner / "publication.sha256").read_text(encoding="ascii").strip())
+            with patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("retained retry must not acquire")):
+                self.assertEqual(main([*command, "--retained"]), 0)
+                provider.return_value = [prior]
+                self.assertNotEqual(main([*command, "--retained"]), 0)
+                provider.return_value = []
+                selected.update(name for name in json.loads(receipt)["outputs"])
+                final = {name: (self.root / name).read_bytes() for name in selected}
+                policy = replace(policy, commit="c" * 40)
+                native = EvidencePolicy(
+                    ValidationPolicy("example/library", ".github/workflows/ci.yml", "CI", (("native", ("Checks",)),)),
+                    "fixture",
+                    "evidence",
+                    "signed-source",
+                    ("sign", ("Sign",)),
+                )
+                with (
+                    patch("research_repo_tools.source_exports._git", side_effect=git_model({**self.revisions, "final": final})),
+                    patch("research_repo_tools.candidate_reuse.require_release_checkout"),
+                    patch("research_repo_tools.candidate_reuse.verify_release_evidence", return_value=b"{}"),
+                ):
+                    accepted = verify_candidate_release(
+                        self.root,
+                        retained,
+                        policy,
+                        native,
+                        lambda endpoint: [],
+                        acquisition_sha256=acquisition_assertion_digest(policy),
+                        publication_receipt=receipt,
+                        publication_sha256=hashlib.sha256(receipt).hexdigest(),
+                    )
+                (owner / "final-policy.json").write_bytes(serialize_candidate_policy(policy))
+                (owner / "acceptance.json").write_bytes(accepted)
+                publish_publication(plan_candidate_archive(owner, "run.json", "evidence.json", "final-policy.json", "acceptance.json", "benchmark.tar.gz"))
+                self.assertEqual(serialize_evidence(verify_candidate_archive(owner / "benchmark.tar.gz", policy, accepted)), raw)
+                self._verify_candidate_attachment_commands(owner, policy)
+
+    def _verify_candidate_attachment_commands(self, owner: Path, policy: CandidatePolicy) -> None:
+        from research_repo_tools.criterion import Estimate, Sample
+        from research_repo_tools.evidence import Provenance
+        from research_repo_tools.release_assets import GitHubRelease, ReleaseTarget, package_baseline, serialize_release_target
+
+        assert policy.commit is not None
+        target = ReleaseTarget(policy.repository, policy.tag, 42, policy.commit)
+        (owner / "target.json").write_bytes(serialize_release_target(target))
+        archive = owner / "benchmark.tar.gz"
+        expected = archive.read_bytes()
+        digest = hashlib.sha256(expected).hexdigest()
+        transferred: list[tuple[str, int, int, str | None]] = []
+        downloaded = expected
+
+        def release(*args, **kwargs):
+            return GitHubRelease(
+                policy.repository,
+                policy.tag,
+                42,
+                True,
+                False,
+                False,
+                tuple(transferred),
+                asset_states=tuple((identifier, "uploaded") for _, identifier, _, _ in transferred),
+            )
+
+        def upload(root, arguments):
+            self.assertEqual(arguments[2], "POST")
+            self.assertIn("/releases/42/assets?name=benchmark.tar.gz", arguments[3])
+            self.assertEqual(Path(arguments[-1]).read_bytes(), expected)
+            self.assertEqual(transferred, [])
+            transferred.append(("benchmark.tar.gz", 121, len(expected), digest))
+            return b"{}"
+
+        def download(root, repository, identifier, limit):
+            self.assertEqual((repository, identifier), (policy.repository, 121))
+            return downloaded
+
+        args = ["--root", str(owner), "release", "evidence", "archive"]
+        assertions = ["--policy", "final-policy.json", "--acceptance", "acceptance.json", "--target", "target.json"]
+        with patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(main([*args, "inspect", *assertions[:4], "--archive", archive.name]), 0)
+            self.assertEqual(json.loads(output.getvalue())["run"], policy.identity)
+        package_baseline(Sample((("case", Estimate(3.0)),)), Provenance("a" * 40, context=(("release", "v1.0.0"),)), owner / "historical.tar.gz")
+        with patch("sys.stdout", new_callable=io.StringIO) as output:
+            self.assertEqual(main([*args, "inspect", "--tag", "v1.0.0", "--archive", "historical.tar.gz"]), 0)
+            self.assertEqual(json.loads(output.getvalue()), {"format": "baseline", "tag": "v1.0.0", "revision": "a" * 40, "benchmarks": 1})
+        attach = [*args, "attach", *assertions, "--archive", archive.name, "--output", "attachment.json", "--approve"]
+        verify = [*args, "verify-attachment", *assertions, "--expected", "attachment.json"]
+        (owner / "native.toml").write_bytes(
+            b'schema=1\nrepository="example/library"\npackage="fixture"\nworkflow=".github/workflows/ci.yml"\nworkflow-name="CI"\n'
+            b'artifact-prefix="evidence"\nguarantee="signed-source"\njobs=[{name="native",steps=["Checks"]}]\n[signing-job]\nname="sign"\nsteps=["Sign"]\n'
+        )
+        approval = [
+            *args[:-1],
+            "candidate",
+            "native.toml",
+            *assertions,
+            "--attachment",
+            "attachment.json",
+            "--checkout",
+            str(self.root),
+            "--payload",
+            "run.json",
+            "--manifest",
+            "evidence.json",
+            "--acquisition-sha256",
+            acquisition_assertion_digest(policy),
+            "--output",
+            "approval.json",
+        ]
+        frozen_acceptance = (owner / "acceptance.json").read_bytes()
+        with (
+            patch("research_repo_tools.release_assets._release_by_id", side_effect=release),
+            patch("research_repo_tools.release_assets._remote_commit", return_value=policy.commit),
+            patch("research_repo_tools.release_assets._gh", side_effect=upload) as post,
+            patch("research_repo_tools.release_assets._download", side_effect=download),
+            patch("research_repo_tools.candidate_attachment._download", side_effect=download),
+            patch("research_repo_tools.release_interfaces._checkout"),
+            patch("research_repo_tools.release_assets.require_release_checkout"),
+            patch("research_repo_tools.candidate_reuse.verify_candidate_release", return_value=frozen_acceptance) as acceptance_check,
+        ):
+            self.assertEqual(main(attach), 0)
+            self.assertEqual(main(verify), 0)
+            receipt = (owner / "attachment.json").read_bytes()
+            self.assertEqual(json.loads(receipt)["asset"]["id"], 121)
+            self.assertEqual(main(attach), 0)
+            self.assertEqual(post.call_count, 1)
+            self.assertEqual(main(approval), 0)
+            self.assertEqual(acceptance_check.call_args.kwargs["expected"], frozen_acceptance)
+            downloaded = expected + b"changed"
+            self.assertNotEqual(main(verify), 0)
+            downloaded = expected
+            transferred[0] = ("benchmark.tar.gz", 999, len(expected), digest)
+            self.assertNotEqual(main(verify), 0)
+            self.assertNotEqual(main(approval), 0)
+            self.assertEqual((owner / "approval.json").read_bytes(), frozen_acceptance)
+            self.assertEqual((owner / "attachment.json").read_bytes(), receipt)
+
     def _cli_checkpoint_offline_promotion_and_readme_retry(self, *, scheduled=False) -> None:
         def toml(value):
             if isinstance(value, dict):
@@ -1110,6 +1345,10 @@ sys.exit(status)
         self.assertIn(b"After v1.1.0", before)
         if scheduled:
             self.assertIn(b"Trial 2", before)
+            evidence = parse_evidence((self.root / "target/run.json").read_bytes(), (self.root / "target/evidence.json").read_bytes())
+            self.assertIn(f"Complete run: `{run_identity(evidence)}`".encode(), before)
+            self.assertIn(b"Selected trial run (CSV/plot identity)", before)
+            self.assertIn(f"`{run_identity(select_trial(evidence, 2))}`".encode(), before)
         (self.root / "input-shared.json").write_bytes(b"changed")
         self.assertNotEqual(main([*args, "publish", "publication.toml"]), 0)
         self.assertEqual((self.root / "README.md").read_bytes(), before)
@@ -1318,6 +1557,26 @@ sys.exit(status)
         self.assertEqual(first["absent"]["harness_sha256"], "")
         self.assertEqual(first["present"]["status"], "available")
 
+    def test_working_tree_table_retains_observation_provenance(self) -> None:
+        original_sources = self.revisions["v1.1.0"]
+        for name, data in original_sources.items():
+            (self.root / name).write_bytes(data)
+        with patch("research_repo_tools.source_exports.select_files", return_value=tuple(sorted(original_sources))):
+            evidence = measure_pair(self.root, plan(self.log, ("shared",)), PAIR, working_tree=True, progress=self.quiet)
+        original = serialize_evidence(evidence)
+        layout = RunLayout(
+            (SeriesSelection("shared/current", "Current", (("case", "shared/case"),)),),
+            (RunRow("case", "Case"),),
+            "median",
+            "ns",
+        )
+        row = next(csv.DictReader(io.StringIO(serialize_run_csv(evidence, layout).decode())))
+        table = render_run_table(evidence, layout)
+        self.assertIn(f"working-tree snapshot based on commit {row['revision']}", table)
+        self.assertIn(f"measured source SHA-256 {row['source_sha256']}", table)
+        self.assertNotIn(f"v1.1.0, revision {row['revision']}", table)
+        self.assertEqual(serialize_evidence(evidence), original)
+
     def test_full_report_rejects_nonfinite_derived_ratios(self) -> None:
         evidence = measure_pair(self.root, plan(self.log, ("shared",)), PAIR, progress=self.quiet)
         raw = json.loads(evidence.payload)
@@ -1334,7 +1593,7 @@ sys.exit(status)
         with self.assertRaisesRegex(ValueError, "finite"):
             render_run(retained)
 
-    def scheduled_fixture(self, schedule=None, *, outputs=(), working_tree=False, checkpoint=None, selected=None):
+    def scheduled_fixture(self, schedule=None, *, outputs=(), working_tree=False, checkpoint=None, selected=None, acquisition_owner="local"):
         selected = selected or plan(self.log, ("shared",))
         selected = replace(
             selected,
@@ -1345,7 +1604,9 @@ sys.exit(status)
                     suite,
                     measurement=replace(
                         suite.measurement,
-                        measurement=replace(suite.measurement.measurement, context=(("repository", "example/library"), ("acquisition-owner", "local"))),
+                        measurement=replace(
+                            suite.measurement.measurement, context=(("repository", "example/library"), ("acquisition-owner", acquisition_owner))
+                        ),
                     ),
                 )
                 for suite in selected.suites
@@ -1750,7 +2011,9 @@ sys.exit(status)
         ):
             measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
 
-    def candidate_fixture(self, *, generated=False, historical_readme=False, recovered=False, current_sources=()):
+    def candidate_fixture(
+        self, *, generated=False, historical_readme=False, recovered=False, current_sources=(), capture_owner=False, acquisition_owner="local"
+    ):
         if historical_readme:
             self.revisions["v1.0.0"]["README.md"] = b"immutable historical compiler input\r\n"
             self.revisions["v1.0.0"]["doc.rs"] = b'#![doc = include_str!("README.md")]\npub fn value() -> u8 { 1 }\n'
@@ -1836,7 +2099,7 @@ sys.exit(status)
             selected = selection
             evidence = measure_pair(self.root, selected, PAIR, working_tree=True, checkpoint=checkpoint, resume=True, progress=self.quiet)
         else:
-            selected, evidence = self.scheduled_fixture(outputs=exceptions, working_tree=True, selected=selection)
+            selected, evidence = self.scheduled_fixture(outputs=exceptions, working_tree=True, selected=selection, acquisition_owner=acquisition_owner)
         if generated:
             payload, envelope = serialize_evidence(evidence)
             self.original_evidence_bytes = (payload, b" \r\n" + envelope.replace(b"\n", b"\r\n"))
@@ -1847,7 +2110,7 @@ sys.exit(status)
             "example/library",
             PAIR.current,
             None,
-            "local",
+            acquisition_owner,
             run_identity(evidence),
             selected,
             dict(evidence.sources)["current"],
@@ -1875,7 +2138,52 @@ sys.exit(status)
                 self.publication_digest = hashlib.sha256(receipt).hexdigest()
                 self.prior_publication = dict(publication.originals)
                 self.prior_history = {name: data for name, data in original.items() if "/runs/" in name}
-                publish_publication(publication)
+                if capture_owner:
+                    from research_repo_tools.performance_release import Preparation
+
+                    (self.root / "release.toml").write_bytes(
+                        b'schema=1\nrepository="example/library"\nmeasurement="measure.toml"\nreport="report.toml"\n'
+                        b'publication="publish.toml"\npreparation="prepare.json"\npayload="run.json"\nmanifest="evidence.json"\n'
+                    )
+                    owner = Path(self.stack.enter_context(tempfile.TemporaryDirectory())).resolve() / "original"
+                    preparation = Preparation("example/library", "measure.toml", "0" * 64, "1.1.0", PAIR, "b" * 40, "a" * 40, True)
+                    cli = ["--root", str(self.root), "performance", "capture", "release.toml", "--owner", str(owner)]
+                    environment = {}
+                    if acquisition_owner == "github-actions":
+                        cli.append("--hosted")
+                        environment = {
+                            "GITHUB_ACTIONS": "true",
+                            "GITHUB_EVENT_NAME": "workflow_dispatch",
+                            "GITHUB_REF_NAME": "main",
+                            "GITHUB_REF_TYPE": "branch",
+                            "GITHUB_REPOSITORY": "example/library",
+                            "GITHUB_RUN_ATTEMPT": "2",
+                            "GITHUB_RUN_ID": "41",
+                            "GITHUB_SHA": "b" * 40,
+                            "GITHUB_WORKFLOW_REF": "example/library/.github/workflows/bench.yml@refs/heads/main",
+                        }
+                    with (
+                        patch("research_repo_tools.candidate_handoff.load_preparation", return_value=preparation),
+                        patch("research_repo_tools.candidate_handoff.load_measurement", return_value=selected),
+                        patch.dict(os.environ, environment),
+                    ):
+                        self.assertEqual(main(cli), 0)
+                        self.assertEqual((owner / "policy.json").read_bytes(), pending_bytes)
+                        self.assertEqual((owner / "publication.json").read_bytes(), receipt)
+                        self.assertEqual((owner / "run.json").read_bytes(), self.original_evidence_bytes[0])
+                        self.assertEqual((owner / "evidence.json").read_bytes(), self.original_evidence_bytes[1])
+                        if environment:
+                            self.hosted_producer = (owner / "producer.json").read_bytes()
+                        self.assertFalse((self.root / f"docs/performance-runs/runs/{policy.identity}").exists())
+                        digest = owner / "publication.sha256"
+                        original_digest = digest.read_bytes()
+                        digest.write_bytes(b"conflicting digest")
+                        self.assertNotEqual(main([*cli, "--promote"]), 0)
+                        self.assertEqual(digest.read_bytes(), b"conflicting digest")
+                        digest.write_bytes(original_digest)
+                        self.assertEqual(main([*cli, "--promote"]), 0)
+                else:
+                    publish_publication(publication)
                 inventory.update(name for name, _ in publication.outputs)
             report = render_run(evidence)
             (self.root / "README.md").write_bytes(report)
@@ -1923,6 +2231,120 @@ sys.exit(status)
         )
         self.assertEqual(before, self.log.read_bytes())
         return evidence, policy, native, provider, accepted, mapping
+
+    def test_receive_hosted_candidate_requires_original_provider_and_attempt(self) -> None:
+        from research_repo_tools.candidate_hosted import AcquisitionProducer, serialize_acquisition_producer
+
+        evidence, final, _, _, _, _ = self.candidate_fixture(generated=True, capture_owner=True, acquisition_owner="github-actions")
+        policy = replace(final, commit=None)
+        payload, envelope = serialize_evidence(evidence)
+        producer = AcquisitionProducer(policy.repository, ".github/workflows/bench.yml", "workflow_dispatch", "main", policy.candidate.revision, 41, 2)
+        files = {
+            "acquisition.sha256": (acquisition_assertion_digest(policy) + "\n").encode(),
+            "evidence.json": envelope,
+            "policy.json": serialize_candidate_policy(policy),
+            "producer.json": self.hosted_producer,
+            "publication.json": self.publication_receipt,
+            "publication.sha256": (self.publication_digest + "\n").encode(),
+            "run.json": payload,
+        }
+        self.assertEqual(files["producer.json"], serialize_acquisition_producer(producer))
+        repository = {"id": 19, "full_name": policy.repository}
+        run = {
+            "id": 41,
+            "run_attempt": 2,
+            "workflow_id": 17,
+            "path": producer.workflow,
+            "event": producer.event,
+            "head_branch": producer.branch,
+            "head_sha": producer.commit,
+            "status": "completed",
+            "conclusion": "success",
+            "repository": repository,
+            "head_repository": repository,
+        }
+        artifact = {
+            "id": 123,
+            "name": "benchmark-acquisition-41-2",
+            "digest": "sha256:" + "a" * 64,
+            "size_in_bytes": 500,
+            "expired": False,
+            "workflow_run": {
+                "id": 41,
+                "head_sha": producer.commit,
+                "head_branch": producer.branch,
+                "repository_id": 19,
+                "head_repository_id": 19,
+            },
+        }
+        responses = {
+            "actions/workflows/bench.yml": {"id": 17, "path": producer.workflow},
+            "actions/runs/41/attempts/2": run,
+            "actions/artifacts/123": artifact,
+        }
+
+        def read(endpoint, *, repository):
+            self.assertEqual(repository, producer.repository)
+            return responses[endpoint]
+
+        def download(repo, selected, destination, names, **kwargs):
+            self.assertEqual((repo, selected["id"], set(names)), (producer.repository, 123, set(files)))
+            destination.mkdir()
+            for name in names:
+                (destination / name).write_bytes(files[name])
+
+        owner = Path(self.stack.enter_context(tempfile.TemporaryDirectory())).resolve() / "hosted"
+        args = [
+            "--root",
+            str(self.root),
+            "release",
+            "evidence",
+            "receive-acquisition",
+            "--artifact-id",
+            "123",
+            "--artifact-prefix",
+            "benchmark-acquisition",
+            "--artifact-sha256",
+            "a" * 64,
+            "--attempt",
+            "2",
+            "--branch",
+            producer.branch,
+            "--commit",
+            producer.commit,
+            "--event",
+            producer.event,
+            "--output",
+            str(owner),
+            "--repository",
+            producer.repository,
+            "--run-id",
+            "41",
+            "--workflow",
+            producer.workflow,
+        ]
+        with (
+            patch("research_repo_tools.release_interfaces.api", side_effect=read) as provider,
+            patch("research_repo_tools.candidate_hosted.download_artifact", side_effect=download) as download_zip,
+            patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("receiver must not acquire")),
+        ):
+            run["run_attempt"] = 3
+            self.assertNotEqual(main(args), 0)
+            run["run_attempt"] = 2
+            artifact["expired"] = True
+            self.assertNotEqual(main(args), 0)
+            artifact["expired"] = False
+            download_zip.assert_not_called()
+            files["producer.json"] = serialize_acquisition_producer(replace(producer, attempt=1))
+            self.assertNotEqual(main(args), 0)
+            self.assertFalse(owner.exists())
+            files["producer.json"] = serialize_acquisition_producer(producer)
+            self.assertEqual(main(args), 0)
+            self.assertEqual({name: (owner / name).read_bytes() for name in files}, files)
+            self.assertEqual(main(args), 0)
+            provider.reset_mock()
+            self.assertNotEqual(main([*args, "--artifact-id", "124"]), 0)
+            provider.assert_not_called()
 
     def test_historical_compiler_input_and_recovered_candidate_publish_without_acquisition(self):
         evidence, policy, native, _, accepted, _ = self.candidate_fixture(generated=True, historical_readme=True, recovered=True)
@@ -2004,7 +2426,7 @@ sys.exit(status)
         validate_run_policy(evidence, selected, release=True)
 
     def test_committed_publisher_evidence_reuses_one_acquisition_and_preserves_history(self):
-        evidence, policy, native, provider, accepted, _ = self.candidate_fixture(generated=True)
+        evidence, policy, native, provider, accepted, _ = self.candidate_fixture(generated=True, capture_owner=True)
         receipt = json.loads(self.publication_receipt)
         run_directory = f"docs/performance-runs/runs/{policy.identity}"
         self.assertEqual(
@@ -2032,6 +2454,22 @@ sys.exit(status)
             (self.root / name).write_bytes(data)
         before = self.log.read_bytes()
         with patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("inspection/retry must not build, gate or measure")):
+            cli = ["--root", str(self.root), "release", "evidence", "archive"]
+            assertions = ["--policy", "policy.json", "--acceptance", "accepted.json"]
+            derive = [*cli, "derive", *assertions, "--payload", "run.json", "--manifest", "evidence.json", "--output", "cli-release.tar.gz"]
+            verify = [*cli, "verify", *assertions, "--archive", "cli-release.tar.gz"]
+            with patch("research_repo_tools.dependency_provenance.check_release_dependencies", side_effect=AssertionError("archive operations are offline")):
+                self.assertEqual(main(derive), 0)
+                self.assertEqual(main(verify), 0)
+                archive_path = self.root / "cli-release.tar.gz"
+                archive_bytes = archive_path.read_bytes()
+                self.assertEqual(hashlib.sha256(archive_bytes).hexdigest(), json.loads(accepted)["archive_sha256"])
+                self.assertEqual(main(derive), 0)
+                self.assertEqual(archive_path.read_bytes(), archive_bytes)
+                archive_path.write_bytes(archive_bytes + b"changed")
+                self.assertNotEqual(main(verify), 0)
+                self.assertNotEqual(main(derive), 0)
+                self.assertEqual(archive_path.read_bytes(), archive_bytes + b"changed")
             for _ in range(2):
                 self.assertEqual(
                     verify_candidate_release(

@@ -531,6 +531,22 @@ def publish_release_asset(
     executed. Prerequisite failures never publish; publication-response failures
     raise ReleasePublicationUnknownError and require inspection before retrying.
     """
+    _publish_release_asset(root, repository, tag, asset, target=target, checkout=checkout, publish=publish, limits=limits, dependencies=dependencies)
+
+
+def _publish_release_asset(
+    root: Path,
+    repository: str,
+    tag: str,
+    asset: Path,
+    *,
+    target: ReleaseTarget | None,
+    checkout: Path | None,
+    publish: bool,
+    limits: ArchiveLimits,
+    dependencies: tuple[str, ...],
+    expected_sha256: str | None = None,
+) -> tuple[str, int, int, str | None]:
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
     check_release_dependencies(checkout if checkout is not None else root, packages=dependencies)
@@ -547,9 +563,12 @@ def publish_release_asset(
         raise ValueError("release asset must be a regular file")
     if asset.stat().st_size > limits.archive_bytes:
         raise ValueError("release asset exceeds the archive byte limit")
-    original = asset.read_bytes()
+    with asset.open("rb") as stream:
+        original = stream.read(limits.archive_bytes + 1)
     if not original or len(original) > limits.archive_bytes:
         raise ValueError("release asset must be nonempty and within the archive byte limit")
+    if expected_sha256 is not None:
+        verify_sha256(original, expected_sha256)
     if target is None:
         target = preflight_release_target(root, repository, tag, _remote_commit(root, repository, tag), checkout=checkout, dependencies=dependencies)
     with tempfile.TemporaryDirectory(prefix="research-release-upload-") as directory:
@@ -593,3 +612,4 @@ def publish_release_asset(
                 raise ReleasePublicationUnknownError(
                     f"publication outcome unknown for {target.repository} release {target.release_id}: response did not confirm the verified asset; inspect before retrying"
                 ) from error
+    return attached

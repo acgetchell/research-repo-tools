@@ -29,6 +29,11 @@ measurement/report/publication paths, and ignore the declared scratch directory
 in Git. Use matching installed configuration/templates from a verified published
 supplying release before replacing a working consumer adapter.
 
+These prepared stages select a current/baseline pair. For a repository's first
+stable release, use the separate [first-release procedure](candidate-reuse-api.md#committed-publisher-evidence),
+which retains a current-only snapshot and report. Its command is pending a
+supplying release after v0.2.8.
+
 ```sh
 just performance-prepare tooling/performance-release.toml
 just performance-release tooling/performance-release.toml

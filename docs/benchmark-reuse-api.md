@@ -51,8 +51,10 @@ If the new README must be inside the release commit, prospective measurement
 precedes the README edit and final tag. That workflow still needs its existing
 exact-tag acquisition. A matching source subtree cannot turn the earlier commit
 into the final commit. Working-tree-to-tag equivalence is unsupported by this v1 API;
-the candidate contract requires new schema-6/v5 acquisition evidence, independent
-assertions and an explicit whole-tree binding. Release ordering and scientific
+the paired candidate contract requires new schema-6/v5 acquisition evidence,
+independent assertions and an explicit whole-tree binding. Its separate
+[first-release procedure](candidate-reuse-api.md#committed-publisher-evidence)
+uses schema-5/v6 evidence without inventing a predecessor. Release ordering and scientific
 acceptance remain consumer responsibilities.
 
 Both the envelope's current source and every projected current observation must
