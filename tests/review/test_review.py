@@ -183,3 +183,16 @@ def test_just_recipe_forwards_arguments_without_shell_expansion(
     prefix = ["run", "--locked", *(["--group", "dev"] if template else []), "research-repo-tools", "review"]
     assert args == [*prefix, *expected]
     assert not (tmp_path / "SHOULD_NOT_EXIST").exists()
+
+
+@pytest.mark.parametrize("status", [0, 1, 3, 7])
+@pytest.mark.parametrize("base", [None, "main"])
+def test_reviews_never_authorize_credits_or_retry(root: Path, commands: tuple[Mock, Mock], status: int, base: str | None) -> None:
+    """Provider failures/consent exits must not become an automatic paid retry."""
+    rabbit = commands[1]
+    rabbit.return_value = subprocess.CompletedProcess([], status)
+    assert review.run(root, base=base) == status
+    rabbit.assert_called_once()
+    assert "--use-credits" not in rabbit.call_args.args[1]
+    assert "--fresh" not in rabbit.call_args.args[1]
+    assert "--gate" not in rabbit.call_args.args[1]
