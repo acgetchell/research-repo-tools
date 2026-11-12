@@ -400,6 +400,14 @@ just performance-readme tooling/performance-release.toml --preview
 just performance-readme tooling/performance-release.toml
 ```
 
+For a scheduled release that reuses the acquisition at approval, pass
+`--owner "$owner"` to `just performance-release` to retain the original
+assertions outside the checkout before report promotion. For a repository's
+first stable release, `just performance first-release` acquires a single
+current-only run and publishes its absolute timing report. See the
+[candidate workflow](docs/candidate-reuse-api.md#committed-publisher-evidence)
+for capture, recovery and draft attachment.
+
 For schema-5 measurement declarations, use a new ignored checkpoint directory
 whose parent already exists. v0.2.7 also supports interruption recovery within
 schema-6 scheduled trials. Resume explicitly after an interruption:

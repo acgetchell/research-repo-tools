@@ -101,14 +101,22 @@ commands are `just performance-prepare tooling/performance-release.toml`,
 `just performance-release tooling/performance-release.toml`, and
 `just performance-readme tooling/performance-release.toml`, in that order.
 README retries consume retained results without repeating measurements.
-For v0.2.7 candidate reuse with committed schema-2 histories, the trusted acquisition
-adapter declares the original report configuration in `CandidatePolicy.report`
-and freezes `plan_candidate_publication`'s receipt and SHA-256 before promotion.
-Use the `measure_release(before_promotion=...)` hook or the staged APIs. Retain
-the acquisition and publication digests through separate trusted handoffs; commit
-only the generated run files, index/latest and reports. Final-commit acceptance
-and attestations remain release assets or trusted scratch files. The exact
-supplying package must be published and normally resolvable before adoption.
+For a scheduled candidate acquisition with a schema-2 report, add
+`--owner "$OWNER_RECORD"` to `just performance-release`. Choose a new trusted
+directory outside the checkout. Recover a completed acquisition with
+`just performance capture tooling/performance-release.toml --owner "$OWNER_RECORD" --promote`
+using the same scratch evidence.
+
+For a first stable release, prepare the package version and an unscheduled
+schema-5 suite declaration. Use `just performance first-release` with the
+repository, schema-2 report declaration, scratch evidence paths and external
+owner directory. See the [candidate workflow example](https://github.com/acgetchell/research-repo-tools/blob/main/docs/candidate-reuse-api.md#committed-publisher-evidence).
+
+Retain the acquisition and publication digests through separate trusted
+handoffs. Commit the generated run files, index/latest and reports. Keep
+final-commit acceptance and attestations as release assets or trusted scratch
+files. The supplying package must be published and normally resolvable before
+adoption.
 Fetching tags requires explicit `--fetch-tags --allow-git-mutations` during
 preparation.
 

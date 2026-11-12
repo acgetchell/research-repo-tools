@@ -7,14 +7,14 @@ Neither a self-authored policy nor this integrity receipt authenticates a run.
 import json
 import tempfile
 import unicodedata
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
 from research_repo_tools.archives import ArchiveLimits, extract_archive
 from research_repo_tools.candidate_publication import _acquisition_input_keys, _parse_publication, _PublicationReceipt
-from research_repo_tools.complete_runs import _array, _integer, run_identity
+from research_repo_tools.complete_runs import CompleteSample, _array, _integer, run_identity
 from research_repo_tools.criterion_suites import _archive
 from research_repo_tools.evidence import (
     Evidence,
@@ -31,11 +31,12 @@ from research_repo_tools.evidence import (
 from research_repo_tools.files import _validate_distinct_paths
 from research_repo_tools.publication import PublicationPlan, _path, plan_outputs
 from research_repo_tools.release_assets import ReleaseTarget, _repository, _sha, _stable_tag, require_release_checkout
+from research_repo_tools.release_discovery import require_first_release_history
 from research_repo_tools.release_evidence import EvidencePolicy, verify_release_evidence
 from research_repo_tools.scheduled_runs import ScheduledRun, validate_scheduled_policy
 from research_repo_tools.source_exports import capture_source, validate_source_record
 from research_repo_tools.suite_measurement import SuiteMeasurementPlan, parse_suite_plan
-from research_repo_tools.suite_runs import _source, parse_suite_run
+from research_repo_tools.suite_runs import SuiteRun, _source, parse_suite_run, validate_suite_policy
 
 __all__ = [
     "CandidatePolicy",
@@ -71,6 +72,7 @@ class CandidatePolicy:
     candidate: Provenance
     observations: tuple[tuple[int, str, str, Provenance], ...]
     report: str | None = None
+    first_release: bool = False
 
     def __post_init__(self) -> None:
         _repository(self.repository)
@@ -78,12 +80,15 @@ class CandidatePolicy:
         if self.commit is not None:
             _sha(self.commit)
         _digest(self.identity, "independent acquisition identity")
-        if (
-            self.acquisition_owner not in {"local", "github-actions"}
-            or not isinstance(self.measurement, SuiteMeasurementPlan)
-            or self.measurement.schedule is None
-        ):
-            raise ValueError("candidate reuse requires an explicit owner and schema-6 measurement")
+        if self.acquisition_owner not in {"local", "github-actions"} or not isinstance(self.measurement, SuiteMeasurementPlan):
+            raise ValueError("candidate reuse requires an explicit owner and a suite measurement declaration")
+        if type(self.first_release) is not bool:
+            raise ValueError("first_release must be a boolean")
+        schedule = self.measurement.schedule
+        if self.first_release and (schedule is not None or self.report is None):
+            raise ValueError("first-release candidate reuse requires a single acquisition and a declared report")
+        if not self.first_release and schedule is None:
+            raise ValueError("paired candidate reuse requires schema-6 measurement")
         if not isinstance(self.candidate, Provenance):
             raise ValueError("candidate requires independent original source provenance")
         receipt = dict(self.candidate.context).get("source-export", "")
@@ -103,9 +108,10 @@ class CandidatePolicy:
         for trial, suite, phase, source in observations:
             if (
                 type(trial) is not int
-                or not 1 <= trial <= self.measurement.schedule.trials
+                or not 1 <= trial <= (schedule.trials if schedule is not None else 1)
                 or suite not in {s.name for s in self.measurement.suites}
                 or phase not in {"baseline", "current"}
+                or (self.first_release and phase != "current")
                 or not isinstance(source, Provenance)
             ):
                 raise ValueError("invalid candidate observation assertion")
@@ -117,9 +123,13 @@ def _provenance(source: Provenance) -> dict[str, Any]:
 
 
 def serialize_candidate_policy(policy: CandidatePolicy) -> bytes:
+    schema = POLICY_SCHEMA if policy.report is None else "research-repo-tools/candidate-policy/v2"
+    if policy.first_release:
+        schema = "research-repo-tools/candidate-policy/v3"
     return deterministic_json(
         {
-            "schema": POLICY_SCHEMA if policy.report is None else "research-repo-tools/candidate-policy/v2",
+            "schema": schema,
+            **({"first_release": True} if policy.first_release else {}),
             **({"report": policy.report} if policy.report is not None else {}),
             "repository": policy.repository,
             "tag": policy.tag,
@@ -141,7 +151,12 @@ def parse_candidate_policy(payload: bytes) -> CandidatePolicy:
         "candidate policy",
     )
     fields = {"schema", "repository", "tag", "commit", "acquisition_owner", "identity", "measurement", "candidate", "observations"}
-    if raw.get("schema") == "research-repo-tools/candidate-policy/v2":
+    first = raw.get("schema") == "research-repo-tools/candidate-policy/v3"
+    if first:
+        fields.update(("first_release", "report"))
+        if raw.get("first_release") is not True:
+            raise ValueError("candidate policy v3 requires explicit first-release intent")
+    elif raw.get("schema") == "research-repo-tools/candidate-policy/v2":
         fields.add("report")
     elif raw.get("schema") != POLICY_SCHEMA:
         raise ValueError("unsupported candidate policy")
@@ -168,6 +183,7 @@ def parse_candidate_policy(payload: bytes) -> CandidatePolicy:
         source,
         tuple(observations),
         _string(raw["report"], "report") if "report" in raw else None,
+        first,
     )
 
 
@@ -183,22 +199,33 @@ def acquisition_assertion_digest(policy: CandidatePolicy) -> str:
     return sha256(deterministic_json(document))
 
 
-def _eligible(evidence: Evidence, policy: CandidatePolicy) -> ScheduledRun:
-    run = validate_scheduled_policy(evidence, policy.measurement)
+def _candidate_observations(run: ScheduledRun | SuiteRun) -> Iterator[tuple[int, str, str, CompleteSample, Provenance]]:
+    if isinstance(run, SuiteRun):
+        for suite, phase, sample, source in run.observations:
+            yield 1, suite, phase, sample, source
+    else:
+        for index, trial in enumerate(run.trials, 1):
+            for suite, phase, sample, source in parse_suite_run(trial).observations:
+                yield index, suite, phase, sample, source
+
+
+def _eligible(evidence: Evidence, policy: CandidatePolicy) -> ScheduledRun | SuiteRun:
+    run = validate_suite_policy(evidence, policy.measurement) if policy.first_release else validate_scheduled_policy(evidence, policy.measurement)
+    if isinstance(run, SuiteRun) and not run.first_release:
+        raise ValueError("first-release candidate requires evidence without a predecessor")
     if run_identity(evidence) != policy.identity or dict(evidence.sources)["current"] != policy.candidate:
         raise ValueError("candidate differs from independent acquisition assertions")
     actual = []
     current_count = 0
-    for index, trial in enumerate(run.trials):
-        for suite, phase, _, source in parse_suite_run(trial).observations:
-            actual.append((index + 1, suite, phase, source))
-            context = dict(source.context)
-            if context.get("repository") != policy.repository or context.get("acquisition-owner") != policy.acquisition_owner:
-                raise ValueError("candidate repository/acquisition owner differs")
-            if phase == "current":
-                current_count += 1
-                if context["source-export"] != dict(policy.candidate.context)["source-export"]:
-                    raise ValueError("candidate original capture differs across suites")
+    for trial, suite, phase, _, source in _candidate_observations(run):
+        actual.append((trial, suite, phase, source))
+        context = dict(source.context)
+        if context.get("repository") != policy.repository or context.get("acquisition-owner") != policy.acquisition_owner:
+            raise ValueError("candidate repository/acquisition owner differs")
+        if phase == "current":
+            current_count += 1
+            if context["source-export"] != dict(policy.candidate.context)["source-export"]:
+                raise ValueError("candidate original capture differs across suites")
     if tuple(sorted(actual)) != policy.observations or not current_count:
         raise ValueError("candidate observation inventory/provenance differs from assertions")
     return run
@@ -266,17 +293,16 @@ def _contents(evidence: Evidence, policy: CandidatePolicy, binding: dict[str, An
         raise ValueError("candidate binding differs")
     payload, manifest = serialize_evidence(evidence)
     files = {"evidence/run.json": payload, "evidence/evidence.json": manifest}
-    for index, trial in enumerate(run.trials):
-        for suite, phase, sample, _ in parse_suite_run(trial).observations:
-            if phase != "current":
-                continue
-            declaration = next(s for s in policy.measurement.suites if s.name == suite)
-            for case in sample.cases:
-                for name, data in (("benchmark.json", case.benchmark), ("estimates.json", case.estimates), ("sample.json", case.sample), *case.raw_files):
-                    path = f"criterion/trial-{index + 1}/{suite}/{case.storage_path}/{declaration.measurement.measurement.sample}/{name}"
-                    if path in files:
-                        raise ValueError("candidate archive storage collision")
-                    files[path] = data
+    for trial, suite, phase, sample, _ in _candidate_observations(run):
+        if phase != "current":
+            continue
+        declaration = next(s for s in policy.measurement.suites if s.name == suite)
+        for case in sample.cases:
+            for name, data in (("benchmark.json", case.benchmark), ("estimates.json", case.estimates), ("sample.json", case.sample), *case.raw_files):
+                path = f"criterion/trial-{trial}/{suite}/{case.storage_path}/{declaration.measurement.measurement.sample}/{name}"
+                if path in files:
+                    raise ValueError("candidate archive storage collision")
+                files[path] = data
     files["reuse.json"] = deterministic_json(
         {
             "schema": ARCHIVE_SCHEMA,
@@ -341,6 +367,8 @@ def verify_candidate_release(
     _eligible(evidence, policy)
     if native_policy.validation.repository != policy.repository:
         raise ValueError("native evidence repository differs")
+    if policy.first_release:
+        require_first_release_history(read)
     pinned = _acceptance(expected, policy) if expected is not None else None
     publication = None
     if policy.report is not None:
@@ -384,6 +412,8 @@ def verify_candidate_release(
     working.verify()
     require_release_checkout(root, commit)
     check_release_dependencies(root, packages=dependencies)
+    if policy.first_release:
+        require_first_release_history(read)
     if expected is not None and accepted != expected:
         raise ValueError("approved source, native selection, acquisition, or archive changed")
     return accepted

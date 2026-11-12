@@ -9,7 +9,17 @@ from research_repo_tools.release_discovery import PublishedRelease, _tag_version
 type PairMode = Literal["explicit", "published-latest", "infer-release", "current-vs-latest"]
 type ReleaseOrder = Literal["published", "version"]
 
-__all__ = ["PairMode", "ReleaseOrder", "ReleasePair", "resolve_pair"]
+__all__ = ["FirstRelease", "PairMode", "ReleaseOrder", "ReleasePair", "resolve_pair"]
+
+
+@dataclass(frozen=True, slots=True)
+class FirstRelease:
+    """A prospective release with no predecessor in the acquisition."""
+
+    current: str
+
+    def __post_init__(self) -> None:
+        object.__setattr__(self, "current", normalize_tag(self.current))
 
 
 @dataclass(frozen=True, slots=True)

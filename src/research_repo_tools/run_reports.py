@@ -9,7 +9,7 @@ from research_repo_tools.evidence import Evidence, _load_json, _object, _string,
 from research_repo_tools.files import _validate_distinct_paths
 from research_repo_tools.markdown import _GeneratedLinks
 from research_repo_tools.publication import PublicationPlan, _path, _publication_name, plan_outputs
-from research_repo_tools.release_pairs import ReleasePair
+from research_repo_tools.release_pairs import FirstRelease, ReleasePair
 from research_repo_tools.report_inventory import report_configuration
 
 __all__ = ["load_latest_run", "load_run_report_plan"]
@@ -32,11 +32,15 @@ def _entry(evidence: Evidence) -> dict[str, str]:
 
 
 def _parse_entry(value: object) -> dict[str, str]:
-    raw = _object(value, "run entry", {"id", "baseline", "current"})
+    raw = _object(value, "run entry")
+    _object(raw, "run entry", {"id", "current"} | ({"baseline"} if "baseline" in raw else set()))
     entry = {name: _string(value, name) for name, value in raw.items()}
     if re.fullmatch(r"[0-9a-f]{64}", entry["id"]) is None:
         raise ValueError("invalid run identity")
-    ReleasePair(entry["current"], entry["baseline"])
+    if "baseline" in entry:
+        ReleasePair(entry["current"], entry["baseline"])
+    elif FirstRelease(entry["current"]).current != entry["current"]:
+        raise ValueError("first-release run entry requires a canonical release")
     return entry
 
 
@@ -85,12 +89,16 @@ def _history(root: Path, archive: str) -> tuple[dict[str, dict[str, str]], dict[
         raise ValueError("invalid run index")
     for value in raw["runs"]:
         if raw["schema"] == _INDEX:
-            indexed = _object(value, "versioned run entry", {"id", "baseline", "current", "report_renderer"})
+            indexed = _object(value, "versioned run entry")
+            if "report_renderer" not in indexed:
+                raise ValueError("versioned run entry requires a report renderer")
             renderer = _report_renderer(indexed.pop("report_renderer"))
             entry = _parse_entry(indexed)
         else:
             renderer = 1
-            entry = _parse_entry(value)
+            entry = _parse_entry(_object(value, "legacy run entry", {"id", "baseline", "current"}))
+        if "baseline" not in entry and renderer != 3:
+            raise ValueError("first-release history requires the current report renderer")
         identity = entry["id"]
         if identity in entries:
             raise ValueError("duplicate run index entry")
@@ -199,7 +207,12 @@ def load_run_report_plan(root: Path, configuration: str, *, payload: str | None 
     outputs[f"{archive}/README.md"] = (
         "# Complete performance runs\n\n"
         + "\n".join(
-            links.render(f"{item['current']} vs {item['baseline']} — {key}", f"runs/{key}/report.md", prefix="- ") for key, item in sorted(entries.items())
+            links.render(
+                (f"{item['current']} vs {item['baseline']}" if "baseline" in item else f"{item['current']} (first release)") + f" — {key}",
+                f"runs/{key}/report.md",
+                prefix="- ",
+            )
+            for key, item in sorted(entries.items())
         )
         + "\n"
         + links.definitions()

@@ -21,7 +21,7 @@ from research_repo_tools.measurement_checkpoints import open_checkpoint
 from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.publication_config import _table
 from research_repo_tools.release_discovery import _tag_version, normalize_tag
-from research_repo_tools.release_pairs import ReleasePair
+from research_repo_tools.release_pairs import FirstRelease, ReleasePair
 from research_repo_tools.source_exports import capture_source, export_source
 from research_repo_tools.trial_schedule import TrialSchedule, parse_schedule
 
@@ -268,7 +268,7 @@ def measure_suites(
 def _measure_suites(
     root: Path,
     plan: SuiteMeasurementPlan,
-    pair: ReleasePair,
+    pair: ReleasePair | FirstRelease,
     *,
     working_tree: bool = False,
     checkpoint: Path | None = None,
@@ -284,14 +284,19 @@ def _measure_suites(
     on_event: Callable[[dict[str, Any]], None] | None = None,
 ) -> Evidence:
     """Resolve availability before native commands and resume whole complete units."""
-    from research_repo_tools.suite_runs import SUITE_RUN_SCHEMA, parse_suite_run, sample_document, validate_unit
+    from research_repo_tools.suite_runs import FIRST_RELEASE_RUN_SCHEMA, SUITE_RUN_SCHEMA, parse_suite_run, sample_document, validate_unit
 
     if resume and checkpoint is None:
         raise ValueError("resume requires an explicit checkpoint path")
+    first = isinstance(pair, FirstRelease)
+    if first and (plan.schedule is not None or not working_tree):
+        raise ValueError("first-release acquisition requires one working-tree acquisition without a trial schedule")
+    if first:
+        phase_order = ("current",)
     reporter = progress or ProgressReporter()
     with reporter.stage("availability"):
         captures = {
-            "baseline": capture_source(root, pair.baseline),
+            **({"baseline": capture_source(root, pair.baseline)} if isinstance(pair, ReleasePair) else {}),
             "current": capture_source(root, "HEAD" if working_tree else pair.current, working_tree=working_tree),
         }
         # A prospective label is an independent assertion, but must also match
@@ -369,7 +374,7 @@ def _measure_suites(
                 reporter.accept(_work_class(suite, source, policy), len(sample.cases), elapsed)
 
             return _prepare_phases(
-                directories["baseline"],
+                directories.get("baseline"),
                 directories["current"],
                 suite.measurement,
                 pair,
@@ -493,9 +498,10 @@ def _measure_suites(
                     reporter.state, reporter.phase = "checkpoint", phase
                     reporter.accept(_work_class(suite, declared[phase], policy), len(policy.expected), elapsed * len(policy.expected) / count, retained=reused)
         unchanged()
+        schema = FIRST_RELEASE_RUN_SCHEMA if first else SUITE_RUN_SCHEMA
         result = Evidence(
-            deterministic_json({"schema": SUITE_RUN_SCHEMA, "declaration": plan.document(), "units": units, "reused": sorted(retained)}),
-            SUITE_RUN_SCHEMA,
+            deterministic_json({"schema": schema, "declaration": plan.document(), "units": units, "reused": sorted(retained)}),
+            schema,
             envelope,
         )
         parse_suite_run(result)

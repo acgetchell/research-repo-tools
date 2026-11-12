@@ -341,6 +341,7 @@ def measure_release(
     before_promotion: Callable[[], None] | None = None,
     release_intent: bool = False,
     dependencies: tuple[str, ...] = (),
+    owner: Path | None = None,
 ) -> tuple[Path, ...]:
     """Measure a prepared pair, retain the raw evidence, then promote its report.
 
@@ -348,6 +349,9 @@ def measure_release(
     trusted acquisition owner to freeze candidate/publication handoffs. A hook
     failure preserves raw evidence and prevents promotion. Never retry this
     acquisition function solely to retry handoff capture or report publication.
+    Supply owner for the shared local candidate handoff. It must be a new
+    directory outside the checkout. Recover existing evidence with the capture
+    command instead of acquiring again.
     A report failure preserves successful raw acquisition. Retry promotion with
     the retained paths; README publication is an independent later operation.
     With release intent, dependencies supplements the checkout's manifest policy
@@ -358,7 +362,26 @@ def measure_release(
     from research_repo_tools.publication import publish_publication
 
     root = root.resolve(strict=True)
-    if release_intent:
+    if owner is not None:
+        from research_repo_tools.files import _directory_target
+        from research_repo_tools.report_inventory import report_configuration
+        from research_repo_tools.suite_measurement import SuiteMeasurementPlan
+
+        if before_promotion is not None:
+            raise ValueError("choose the shared owner handoff or a custom before-promotion hook")
+        target = _directory_target(owner.absolute())
+        _validate_distinct_paths((root, target))
+        if target.exists() or any(_path(root, name).exists() for name in (settings.payload, settings.manifest)):
+            raise ValueError("owner or retained scratch evidence already exists; use performance capture to recover it")
+        measurement = load_measurement(root, settings.measurement)
+        _, report = report_configuration(root, settings.report)
+        if not isinstance(measurement, SuiteMeasurementPlan) or measurement.schedule is None or type(report["schema"]) is not int or report["schema"] != 2:
+            raise ValueError("candidate capture requires a scheduled suite declaration and a schema-2 complete-run report")
+        for suite in measurement.suites:
+            context = dict(suite.measurement.measurement.context)
+            if (context.get("repository"), context.get("acquisition-owner")) != (settings.repository, "local"):
+                raise ValueError("candidate suite must declare its repository and local acquisition owner")
+    if release_intent or owner is not None:
         from research_repo_tools.dependency_provenance import check_release_dependencies
 
         check_release_dependencies(root, packages=dependencies)
@@ -380,4 +403,9 @@ def measure_release(
     if before_promotion is not None:
         before_promotion()
     with reporter.stage("publication"):
+        if owner is not None:
+            from research_repo_tools.candidate_handoff import capture_candidate_handoff
+
+            plan, _, _ = capture_candidate_handoff(root, settings, owner)
+            return publish_publication(plan)
         return publish_publication(load_report_plan(root, settings.report, payload=settings.payload, manifest=settings.manifest))

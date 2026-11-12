@@ -8,7 +8,7 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import quote
 
-from research_repo_tools.complete_runs import RUN_SCHEMA_V4, run_identity
+from research_repo_tools.complete_runs import RUN_SCHEMA_V4, RUN_SCHEMA_V6, run_identity
 from research_repo_tools.criterion import COMPARISON_SCHEMA, _markdown_text, _unit, parse_comparison
 from research_repo_tools.evidence import Evidence, Provenance, _object, _string, compare_provenance, fingerprint_files, parse_evidence
 from research_repo_tools.files import _validate_distinct_paths
@@ -223,6 +223,8 @@ def load_publication(
     if schema == 2:
         from research_repo_tools.complete_runs import validate_run_evidence
 
+        if retained.payload_schema == RUN_SCHEMA_V6:
+            raise ValueError("first-release evidence requires complete-run report promotion")
         validate_run_evidence(retained)
         if "release" in raw and "measurement" not in raw:
             raise ValueError("publication release policy requires a measurement declaration")

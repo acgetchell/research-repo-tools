@@ -48,7 +48,7 @@ from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.process import run_command_live
 from research_repo_tools.publication import _inventory, _path
 from research_repo_tools.publication_config import _table
-from research_repo_tools.release_pairs import ReleasePair
+from research_repo_tools.release_pairs import FirstRelease, ReleasePair
 from research_repo_tools.source_exports import CapturedSource, _files, verify_export
 
 __all__ = [
@@ -468,10 +468,10 @@ def _validate_phase_sample(plan: CompleteMeasurementPlan, phase: str, sample: Co
 
 
 def _prepare_phases(
-    baseline: Path,
+    baseline: Path | None,
     current: Path,
     plan: CompleteMeasurementPlan,
-    pair: ReleasePair,
+    pair: ReleasePair | FirstRelease,
     *,
     working_tree: bool = False,
     captured_sources: dict[str, CapturedSource] | None = None,
@@ -488,14 +488,15 @@ def _prepare_phases(
 ) -> tuple[dict[str, CompletePolicy], dict[str, Provenance], Callable[[], tuple[tuple[tuple[str, CompleteSample], ...], tuple[tuple[str, Provenance], ...]]]]:
     """Prepare a complete unit; return the same validated sampler used by v1-v3."""
     reporter = progress or ProgressReporter(mode="none")
-    if len(phase_order) != 2 or set(phase_order) != {"baseline", "current"}:
-        raise ValueError("phase order must contain baseline and current exactly once")
+    phases = {"current"} if isinstance(pair, FirstRelease) else {"baseline", "current"}
+    if len(phase_order) != len(phases) or set(phase_order) != phases:
+        raise ValueError("phase order must contain each selected source exactly once")
     for phase in active:
         plan.measurement.validate_release(getattr(pair, phase))
     roots = {
         phase: path.resolve(strict=True)
         for phase, path in (("baseline", baseline), ("current", current))
-        if phase in active or (phase == "current" and plan.harness_mode == "common")
+        if path is not None and (phase in active or (phase == "current" and plan.harness_mode == "common"))
     }
     if len(roots) == 2 and (
         roots["baseline"] == roots["current"]
@@ -505,8 +506,8 @@ def _prepare_phases(
     if plan.schema == 4 and (plan.backend == "export") != (captured_sources is not None):
         raise ValueError("prepared sources must match the declared export/worktree backend")
     if captured_sources is not None:
-        if set(captured_sources) != {"baseline", "current"}:
-            raise ValueError("captured sources must identify both phases")
+        if set(captured_sources) != phases:
+            raise ValueError("captured sources must identify all selected phases")
         for phase, root in roots.items():
             receipt = captured_sources[phase]
             verify_export(receipt, root)
@@ -643,7 +644,12 @@ def _prepare_phases(
     if plan.harness_mode == "common" and not compatibility.compatible:
         raise ValueError(f"required benchmark provenance differs or is unknown before timing: {compatibility.differences}")
     _series(plan, policies)
-    if len(active) == 2 and pair.current == pair.baseline and before["baseline"].source_sha256 == before["current"].source_sha256:
+    if (
+        isinstance(pair, ReleasePair)
+        and len(active) == 2
+        and pair.current == pair.baseline
+        and before["baseline"].source_sha256 == before["current"].source_sha256
+    ):
         raise ValueError("same-release comparisons require distinct source identities")
 
     for phase, root in roots.items():

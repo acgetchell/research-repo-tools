@@ -150,13 +150,44 @@ calling `measure_release` again is a new acquisition. The standalone
 also support explicit staged orchestration. README publication remains separate
 and uses the existing exact declared document exceptions.
 
+For a prepared scheduled release, use
+`just performance-release tooling/performance-release.toml --owner "$owner"`.
+The shared command writes the original payload, envelope, policy, publisher
+receipt and both assertion digests to the new external owner directory before
+promoting the report. After a capture or promotion failure, preserve the original
+scratch pair and retry with
+`just performance capture tooling/performance-release.toml --owner "$owner" --promote`.
+The retry checks the frozen receipt against the prior or already promoted report
+state. Each suite must declare its repository and acquisition owner in its context.
+
+A first release has no predecessor. Use `performance first-release` with an
+unscheduled schema-5 suite declaration and a schema-2 report configuration.
+The command checks stable release history before acquisition, retains a
+current-only complete-run/v6 payload and records first-release intent in
+candidate-policy v3. The report contains absolute timings. Final verification
+still requires the exact clean source, original output receipt and signed native
+evidence. Provider errors and a newly published stable release require reviewing
+the selection again. Archive verification remains available offline after
+publication.
+
+```sh
+just performance first-release tooling/suite-measurement.toml \
+  --repository owner/project --report tooling/performance-report.toml \
+  --payload target/performance/run.json --manifest target/performance/evidence.json \
+  --owner "$owner"
+```
+
+After an interrupted measurement, use the original `--checkpoint` with
+`--resume`. If measurement completed and capture or promotion failed, repeat
+the command with `--retained` and the same scratch and owner paths.
+
 ## Public interfaces
 
 Import from `research_repo_tools.candidate_reuse`:
 
 | Interface | Contract |
 | --- | --- |
-| `CandidatePolicy` | Repository, canonical tag, final commit (`None` until selected), original owner/run identity, schema-6 measurement, original current envelope provenance, `(trial, suite, phase, Provenance)` assertions, and optional original `report` configuration |
+| `CandidatePolicy` | Repository, canonical tag, final commit (`None` until selected), original owner/run identity, scheduled paired or unscheduled first-release measurement, original current envelope provenance, `(trial, suite, phase, Provenance)` assertions, and original `report` configuration when required |
 | `acquisition_assertion_digest(policy)` | Step 1 digest captured by the trusted acquisition owner; excludes only the future final commit |
 | `parse_candidate_policy`, `serialize_candidate_policy` | Strict versioned JSON handoff; serialization does not authenticate the assertions |
 | `verify_candidate_release(root, evidence, policy, native_policy, read, *, acquisition_sha256, publication_receipt=None, publication_sha256=None, expected=None)` | Step 2 whole-tree binding plus existing native release verification; returns frozen acceptance bytes. When `policy.report` is set, both publication arguments are required as a pair, and `publication_sha256` must be independently trusted |
@@ -169,6 +200,63 @@ must be distinct. Original payload/envelope bytes and current raw samples from
 every trial remain exact, including CRLF and supplemental binary data. Projection
 paths include trial and suite identifiers; repeated measurements never overwrite
 one another or become a synthetic pooled sample.
+
+An operator can derive and verify the archive offline in a trusted handoff
+directory. Use the final policy and acceptance retained by the reviewer.
+
+```sh
+research-repo-tools --root "$handoff" release evidence archive derive \
+  --policy policy.json --acceptance acceptance.json \
+  --payload run.json --manifest evidence.json --output benchmark.tar.gz
+research-repo-tools --root "$handoff" release evidence archive verify \
+  --policy policy.json --acceptance acceptance.json --archive benchmark.tar.gz
+```
+
+Derivation accepts an identical existing archive and rejects conflicting bytes.
+Verification can also take `--target` to compare the release identity against a
+separately captured draft target.
+
+Use `archive inspect` with the same candidate policy and acceptance to print the
+verified format, release, schema and run ID. For historical archives supply
+`--tag` and, for a legacy layout, the original `--legacy-configuration`.
+
+```sh
+research-repo-tools --root "$handoff" release evidence archive attach \
+  --policy policy.json --acceptance acceptance.json --archive benchmark.tar.gz \
+  --target target.json --output attachment.json --approve
+research-repo-tools --root "$handoff" release evidence archive verify-attachment \
+  --policy policy.json --acceptance acceptance.json \
+  --target target.json --expected attachment.json
+```
+
+Obtain `target.json` from the independently captured draft and retain the
+attachment receipt with the original acceptance. Before publication or
+deployment approval, rerun `release evidence candidate` with the original
+`--acceptance`, `--attachment` and `--target` to check both records together.
+An existing attachment
+receipt pins the asset ID on every retry. Verification downloads that exact
+asset and checks its bytes, metadata and captured draft again.
+
+For hosted paired acquisition, set the measurement owner to `github-actions`
+and use `performance capture --hosted` in the original trusted Actions job.
+Upload `producer.json` with `policy.json`, `run.json`, `evidence.json`,
+`publication.json`, `acquisition.sha256` and `publication.sha256` as the only
+members of an artifact named `PREFIX-RUN_ID-ATTEMPT`. Freeze the producer and
+provider artifact ID and digest through the trusted workflow output or approval
+handoff. A checkout-free receiver can use `release evidence receive-acquisition`
+with those independent assertions.
+
+```sh
+research-repo-tools release evidence receive-acquisition \
+  --repository owner/project --workflow .github/workflows/bench.yml \
+  --event workflow_dispatch --branch main --commit "$sha" \
+  --run-id "$run" --attempt "$attempt" --artifact-prefix benchmark-acquisition \
+  --artifact-id "$id" --artifact-sha256 "$digest" --output "$handoff"
+```
+
+Pass the lowercase hex SHA-256 without its provider prefix. Use the original IDs
+on retries. The receiver checks the successful attempt, same-repository producer,
+immutable ZIP digest and original evidence before retaining the external handoff.
 
 Use keyword arguments to distinguish the policy's independent assertions. The
 owner's Step 1 code supplies the observed values below through its trusted handoff:

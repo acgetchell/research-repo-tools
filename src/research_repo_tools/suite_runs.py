@@ -8,6 +8,7 @@ from typing import Any
 
 from research_repo_tools.common_measurement import DiscoveredSeries, _validate_phase_sample
 from research_repo_tools.complete_runs import (
+    RUN_SCHEMA_V6,
     CompleteCase,
     CompleteSample,
     _integer,
@@ -20,12 +21,13 @@ from research_repo_tools.criterion import Comparison, Statistic, Unit, _format_e
 from research_repo_tools.evidence import Evidence, Provenance, _load_json, _object, _string, compare_provenance, deterministic_json, fingerprint_files
 from research_repo_tools.host_metadata import parse_host
 from research_repo_tools.measurement import _strings
-from research_repo_tools.release_pairs import ReleasePair
+from research_repo_tools.release_pairs import FirstRelease, ReleasePair
 from research_repo_tools.source_exports import validate_source_record
 from research_repo_tools.suite_measurement import AcquisitionSuite, SuiteMeasurementPlan, _comparison_fields, parse_suite_plan
 
-__all__ = ["SUITE_RUN_SCHEMA", "SuiteRun", "comparison_incompatibilities", "parse_suite_run"]
+__all__ = ["FIRST_RELEASE_RUN_SCHEMA", "SUITE_RUN_SCHEMA", "SuiteRun", "comparison_incompatibilities", "parse_suite_run"]
 
+FIRST_RELEASE_RUN_SCHEMA = RUN_SCHEMA_V6
 SUITE_RUN_SCHEMA = "research-repo-tools/complete-run/v4"
 
 
@@ -124,10 +126,11 @@ class SuiteRun:
     plan: SuiteMeasurementPlan
     units: tuple[dict[str, Any], ...]
     observations: tuple[tuple[str, str, CompleteSample, Provenance], ...]
+    first_release: bool = False
 
     @property
     def schema(self) -> str:
-        return SUITE_RUN_SCHEMA
+        return FIRST_RELEASE_RUN_SCHEMA if self.first_release else SUITE_RUN_SCHEMA
 
     @property
     def harness_mode(self) -> str:
@@ -137,7 +140,7 @@ class SuiteRun:
     def phases(self) -> tuple[tuple[str, PhaseView], ...]:
         settings = self.plan.suites[0].measurement.baseline.policy
         result = []
-        for phase in ("baseline", "current"):
+        for phase in ("current",) if self.first_release else ("baseline", "current"):
             cases = tuple(sorted((case for _, side, sample, _ in self.observations if side == phase for case in sample.cases), key=lambda case: case.full_id))
             result.append(
                 (
@@ -162,6 +165,8 @@ class SuiteRun:
         result = []
         for suite in self.plan.suites:
             for series in suite.measurement.series:
+                if self.first_release and series.phase != "current":
+                    continue
                 sample = samples.get((suite.name, series.phase))
                 rows = () if sample is None else series.resolve(sample.policy.expected).rows if isinstance(series, DiscoveredSeries) else series.rows
                 result.append(SeriesView(f"{suite.name}/{series.name}", series.phase, rows))
@@ -175,19 +180,20 @@ class SuiteRun:
 
 
 def parse_suite_run(evidence: Evidence) -> SuiteRun:
-    if evidence.payload_schema != SUITE_RUN_SCHEMA:
-        raise ValueError("requires complete-run v4 evidence")
+    first = evidence.payload_schema == FIRST_RELEASE_RUN_SCHEMA
+    if evidence.payload_schema not in {SUITE_RUN_SCHEMA, FIRST_RELEASE_RUN_SCHEMA}:
+        raise ValueError("requires suite-run evidence")
     raw = _object(_load_json(evidence.payload, "suite run"), "suite run", {"schema", "declaration", "units", "reused"})
-    if raw["schema"] != SUITE_RUN_SCHEMA or not isinstance(raw["units"], list):
+    if raw["schema"] != evidence.payload_schema or not isinstance(raw["units"], list):
         raise ValueError("invalid suite run schema/units")
     plan = parse_suite_plan(_object(raw["declaration"], "suite declaration"))
     if plan.schedule is not None:
         raise ValueError("scheduled declarations require complete-run v5 receipts")
     sources = dict(evidence.sources)
-    if set(sources) != {"baseline", "current"}:
-        raise ValueError("suite run requires two independent source assertions")
+    if set(sources) != ({"current"} if first else {"baseline", "current"}):
+        raise ValueError("suite run source assertions differ from its release mode")
     releases = {phase: dict(source.context).get("release", "") for phase, source in sources.items()}
-    pair = ReleasePair(releases["current"], releases["baseline"])
+    selection = FirstRelease(releases["current"]) if first else ReleasePair(releases["current"], releases["baseline"])
     receipts = {}
     for phase, source in sources.items():
         context = dict(source.context)
@@ -199,12 +205,15 @@ def parse_suite_run(evidence: Evidence) -> SuiteRun:
         if record["sha256"] != source.source_sha256:
             raise ValueError("suite envelope source identity differs")
         receipts[phase] = receipt
-    if pair.current == pair.baseline and (
-        sources["current"].source_sha256 == sources["baseline"].source_sha256 or json.loads(receipts["current"])["mode"] != "working-tree"
-    ):
-        raise ValueError("same-release suite runs require a distinct working-tree source")
-    if json.loads(receipts["baseline"])["mode"] != "revision":
-        raise ValueError("baseline requires a revision source")
+    if isinstance(selection, ReleasePair):
+        if selection.current == selection.baseline and (
+            sources["current"].source_sha256 == sources["baseline"].source_sha256 or json.loads(receipts["current"])["mode"] != "working-tree"
+        ):
+            raise ValueError("same-release suite runs require a distinct working-tree source")
+        if json.loads(receipts["baseline"])["mode"] != "revision":
+            raise ValueError("baseline requires a revision source")
+    elif selection.current != releases["current"] or json.loads(receipts["current"])["mode"] != "working-tree":
+        raise ValueError("first-release evidence requires a canonical release and working-tree source")
     units = tuple(_object(item, "unit") for item in raw["units"])
     reused = raw["reused"]
     if (
@@ -227,7 +236,9 @@ def parse_suite_run(evidence: Evidence) -> SuiteRun:
                     raise ValueError("duplicate benchmark ownership across units")
                 owners.add(owner)
             observations.append((suite.name, phase, sample, source))
-    return SuiteRun(plan, units, tuple(observations))
+    if first and not observations:
+        raise ValueError("first-release evidence requires at least one complete suite observation")
+    return SuiteRun(plan, units, tuple(observations), first)
 
 
 def comparison_incompatibilities(evidence: Evidence, numerator: tuple[str, str], denominator: tuple[str, str]) -> tuple[str, ...]:
@@ -265,7 +276,7 @@ def validate_suite_policy(evidence: Evidence, plan: SuiteMeasurementPlan, *, rel
     run = parse_suite_run(evidence)
     if deterministic_json(run.plan.document()) != deterministic_json(plan.document()):
         raise ValueError("suite acquisition declaration changed")
-    if release:
+    if release and not run.first_release:
         sources = dict(evidence.sources)
         pair = ReleasePair(dict(sources["current"].context)["release"], dict(sources["baseline"].context)["release"])
         if pair.current == pair.baseline:
@@ -288,6 +299,7 @@ def validate_suite_policy(evidence: Evidence, plan: SuiteMeasurementPlan, *, rel
 
 def render_suite_run(evidence: Evidence, *, title: str, links: str, identity: str) -> bytes:
     run = parse_suite_run(evidence)
+    phases = ("current",) if run.first_release else ("baseline", "current")
     lines = [
         "<!-- research-repo-tools/run-report/v2 -->",
         f"# {_markdown_text(title)}",
@@ -296,7 +308,11 @@ def render_suite_run(evidence: Evidence, *, title: str, links: str, identity: st
         "",
         links,
         "",
-        "Ratios are point estimates within one accepted paired suite. Marginal timing intervals do not establish significance.",
+        (
+            "First-release benchmark acquisition. This release has no published predecessor."
+            if run.first_release
+            else "Ratios are point estimates within one accepted paired suite. Marginal timing intervals do not establish significance."
+        ),
     ]
     observations = {(name, phase): (sample, source) for name, phase, sample, source in run.observations}
     reused = _strings(_object(_load_json(evidence.payload, "suite run"), "suite run")["reused"], "reused units", nonempty=False)
@@ -311,7 +327,7 @@ def render_suite_run(evidence: Evidence, *, title: str, links: str, identity: st
                 "Acquisition: " + ("retained from validated checkpoint." if suite.name in reused else "newly collected."),
             ]
         )
-        for phase in ("baseline", "current"):
+        for phase in phases:
             decision = unit["availability"][phase]
             lines.append(f"- {phase}: {decision['state']} — {decision['reason']}; release {decision['release']}; revision `{decision['source']['revision']}`.")
             if (suite.name, phase) in observations:
@@ -320,12 +336,16 @@ def render_suite_run(evidence: Evidence, *, title: str, links: str, identity: st
         policy = suite.measurement.baseline.policy
         cases = {
             phase: {case.full_id: case for case in observations[(suite.name, phase)][0].cases} if (suite.name, phase) in observations else {}
-            for phase in ("baseline", "current")
+            for phase in phases
         }
         for statistic in policy.statistics:
-            lines.extend(
-                ["", f"### {statistic.title()} ({policy.unit})", "", "| Workload | Baseline | Current | Baseline / current |", "| --- | --- | --- | --- |"]
-            )
+            lines.extend(("", f"### {statistic.title()} ({policy.unit})", ""))
+            if run.first_release:
+                lines.extend(("| Workload | Current |", "| --- | --- |"))
+                for full_id, case in sorted(cases["current"].items()):
+                    lines.append(f"| {_markdown_text(full_id)} | {_format_estimate(case.estimate(statistic), policy.unit)} |")
+                continue
+            lines.extend(("| Workload | Baseline | Current | Baseline / current |", "| --- | --- | --- | --- |"))
             for full_id in sorted(set(cases["baseline"]) | set(cases["current"])):
                 cells = [_markdown_text(full_id)]
                 for phase in ("baseline", "current"):

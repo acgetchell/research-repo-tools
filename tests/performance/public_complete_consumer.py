@@ -1467,6 +1467,13 @@ ratio-suffix="×"
                     legends = [element.text for element in svg.iter("{http://www.w3.org/2000/svg}text") if element.text and "working tree" in element.text]
                     self.assertEqual(len(legends), 3)
                     self.assertTrue(all(len(text) < 120 and digest not in text for text in legends))
+                    ratio_svg = ET.fromstring(dict(plan.outputs)["figures/ratios.svg"])
+                    ratio_description = ratio_svg.findtext("{http://www.w3.org/2000/svg}desc", "")
+                    ratio_heading = ratio_svg.findtext(".//{http://www.w3.org/2000/svg}text", "")
+                    for role, label, revision in (("Numerator", "Library old", "a" * 40), ("Denominator", "Library <new> & fast", "b" * 40)):
+                        self.assertRegex(ratio_description, rf"{role}: {label} \([^)]*based on commit {revision}; measured source SHA-256 {digest}\)")
+                        self.assertIn(f"working tree based on {revision[:12]})", ratio_heading)
+                    self.assertNotIn(digest, ratio_heading)
                     for artifact in ("figures/coordinates.svg", "figures/ratios.svg", "exports/timings.csv", "run.json", "envelope.json"):
                         self.assertIn(artifact, plan.git_checks[-1].paths)
                     (root / name).write_bytes(b"changed source\n")

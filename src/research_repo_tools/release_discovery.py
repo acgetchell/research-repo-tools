@@ -1,6 +1,7 @@
 """Common stable GitHub release discovery and transactional text publication."""
 
 import re
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
@@ -56,6 +57,37 @@ def stable_published_releases(document: object) -> tuple[PublishedRelease, ...]:
             raise ValueError(f"duplicate published release: {tag}")
         releases.append(PublishedRelease(normalized, timestamp))
     return tuple(sorted(releases, key=lambda item: _tag_version(item.tag), reverse=True))
+
+
+def require_first_release_history(read: Callable[[str], object]) -> None:
+    """Prove absence of a stable release using the selected repository provider.
+
+    The reader must propagate provider failures. Pagination is bounded and
+    malformed or incomplete results are errors, never empty history.
+    """
+    from research_repo_tools.release_validation import _integer, read_pages
+
+    def page(endpoint: str) -> dict[str, object]:
+        entries = read(endpoint)
+        if not isinstance(entries, list) or len(entries) > 100:
+            raise ValueError("invalid stable release history page")
+        return {"releases": entries}
+
+    releases = read_pages(page, "releases", "releases")
+    identifiers = [_integer(release.get("id"), "release history ID") for release in releases]
+    if len(set(identifiers)) != len(identifiers):
+        raise ValueError("release history changed during pagination")
+    document = [
+        {
+            "tagName": release.get("tag_name"),
+            "isDraft": release.get("draft"),
+            "isPrerelease": release.get("prerelease"),
+            "publishedAt": release.get("published_at"),
+        }
+        for release in releases
+    ]
+    if stable_published_releases(document):
+        raise ValueError("first-release acquisition requires empty stable published release history; select the release again")
 
 
 def _published_releases(root: Path, *, repository: str | None = None) -> tuple[PublishedRelease, ...]:

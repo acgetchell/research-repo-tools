@@ -256,10 +256,45 @@ def add_evidence_commands(release) -> None:
     commands = release.add_parser("evidence", help="create or verify exact-commit release evidence and file-based approval handoffs").add_subparsers(
         dest="operation", required=True
     )
+    archive = commands.add_parser("archive", help="derive or verify the exact archive frozen by candidate acceptance").add_subparsers(
+        dest="archive_operation", required=True
+    )
+    attach = archive.add_parser("attach", help="attach an accepted archive to the independently captured draft")
+    attach.add_argument("--acceptance", type=Path, required=True)
+    attach.add_argument("--approve", action="store_true", required=True)
+    attach.add_argument("--archive", type=Path, required=True)
+    attach.add_argument("--checkout", type=Path, help="optional independently observed final source checkout")
+    attach.add_argument("--output", type=Path, required=True, help="immutable attachment identity receipt")
+    attach.add_argument("--policy", type=Path, required=True)
+    attach.add_argument("--target", type=Path, required=True)
+    derive = archive.add_parser("derive", help="derive the accepted archive from retained evidence without measuring")
+    derive.add_argument("--acceptance", required=True, help="frozen acceptance path relative to --root")
+    derive.add_argument("--manifest", required=True, help="original evidence envelope path relative to --root")
+    derive.add_argument("--output", required=True, help="archive destination relative to --root")
+    derive.add_argument("--payload", required=True, help="original run payload path relative to --root")
+    derive.add_argument("--policy", required=True, help="final candidate policy path relative to --root")
+    inspect = archive.add_parser("inspect", help="inspect an accepted candidate or a historical exact-tag benchmark archive")
+    inspect.add_argument("--acceptance", type=Path, help="original acceptance for a candidate archive")
+    inspect.add_argument("--archive", type=Path, required=True)
+    inspect.add_argument("--legacy-configuration", type=Path, help="explicit format declaration for a legacy baseline archive")
+    inspect.add_argument("--policy", type=Path, help="final policy for a candidate archive")
+    inspect.add_argument("--tag", help="expected tag for a historical baseline archive")
+    verify = archive.add_parser("verify", help="verify transferred archive bytes against independent acceptance")
+    verify.add_argument("--acceptance", type=Path, required=True, help="frozen acceptance from the trusted handoff")
+    verify.add_argument("--archive", type=Path, required=True, help="transferred candidate archive")
+    verify.add_argument("--policy", type=Path, required=True, help="final candidate policy from the trusted handoff")
+    verify.add_argument("--target", type=Path, help="independently captured draft target")
+    attached = archive.add_parser("verify-attachment", help="revalidate the original accepted draft attachment before approval")
+    attached.add_argument("--acceptance", type=Path, required=True)
+    attached.add_argument("--checkout", type=Path, help="optional independently observed final source checkout")
+    attached.add_argument("--expected", type=Path, required=True, help="original trusted attachment receipt")
+    attached.add_argument("--policy", type=Path, required=True)
+    attached.add_argument("--target", type=Path, required=True)
     candidate = commands.add_parser("candidate", help="bind a prepared benchmark acquisition to final native evidence without measuring")
     candidate.add_argument("configuration", help="native release evidence policy")
     candidate.add_argument("--acceptance", type=Path, help="frozen Step 2 approval record to revalidate")
     candidate.add_argument("--acquisition-sha256", required=True, help="independent Step 1 assertion digest from the trusted acquisition owner")
+    candidate.add_argument("--attachment", type=Path, help="original draft attachment receipt to revalidate with the acceptance")
     candidate.add_argument("--checkout", type=Path, required=True)
     candidate.add_argument("--format", choices=("json", "status", "summary"), default="status")
     candidate.add_argument("--manifest", type=Path, required=True)
@@ -268,8 +303,23 @@ def add_evidence_commands(release) -> None:
     candidate.add_argument("--policy", type=Path, required=True, help="independently trusted acquisition assertions and final commit")
     candidate.add_argument("--publication-receipt", type=Path, help="original shared-publisher receipt captured before promotion")
     candidate.add_argument("--publication-sha256", help="independent Step 1 publication digest from the trusted owner")
-    for operation in ("create", "published", "verify"):
+    candidate.add_argument("--target", type=Path, help="independently captured draft target for attachment revalidation")
+    for operation in ("create", "published", "receive-acquisition", "verify"):
         command = commands.add_parser(operation)
+        if operation == "receive-acquisition":
+            command.description = "Authenticate and retain one independently selected hosted benchmark acquisition."
+            command.add_argument("--artifact-id", type=int, required=True)
+            command.add_argument("--artifact-prefix", required=True)
+            command.add_argument("--artifact-sha256", required=True)
+            command.add_argument("--attempt", type=int, required=True)
+            command.add_argument("--branch", required=True)
+            command.add_argument("--commit", required=True)
+            command.add_argument("--event", choices=("push", "workflow_dispatch"), required=True)
+            command.add_argument("--output", type=Path, required=True)
+            command.add_argument("--repository", required=True)
+            command.add_argument("--run-id", type=int, required=True)
+            command.add_argument("--workflow", required=True)
+            continue
         command.add_argument("configuration")
         if operation == "create":
             command.add_argument("--archive", type=Path)
@@ -295,6 +345,12 @@ def add_evidence_commands(release) -> None:
 def run_evidence(args: argparse.Namespace, settings: Config) -> None:
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
+    if args.operation == "archive":
+        _run_candidate_archive(args, settings)
+        return
+    if args.operation == "receive-acquisition":
+        _receive_candidate_acquisition(args, settings)
+        return
     check_release_dependencies(args.checkout, packages=settings.release.published_dependencies)
     if args.operation == "candidate":
         _run_candidate(args, settings)
@@ -395,10 +451,154 @@ def _present_evidence(
         print("Saved verified candidate and final release evidence." if candidate else "Saved verified release evidence.")
 
 
+def _read_candidate_input(path: Path) -> bytes:
+    from research_repo_tools.archives import ArchiveLimits
+
+    _regular(path)
+    limit = ArchiveLimits().content_bytes
+    with path.open("rb") as stream:
+        data = stream.read(limit + 1)
+    if len(data) > limit:
+        raise ValueError("candidate handoff exceeds content limit")
+    return data
+
+
+def _receive_candidate_acquisition(args: argparse.Namespace, settings: Config) -> None:
+    from research_repo_tools.candidate_hosted import AcquisitionProducer, retrieve_candidate_handoff, serialize_acquisition_producer
+    from research_repo_tools.evidence import deterministic_json
+    from research_repo_tools.files import _directory_target
+
+    producer = AcquisitionProducer(args.repository, args.workflow, args.event, args.branch, args.commit, args.run_id, args.attempt)
+    destination = _directory_target(args.output)
+    _validate_distinct_paths((settings.root, destination))
+    selection = deterministic_json(
+        {
+            "schema": "research-repo-tools/acquisition-selection/v1",
+            "producer": parse_release_json(serialize_acquisition_producer(producer)),
+            "artifact_id": args.artifact_id,
+            "artifact_prefix": args.artifact_prefix,
+            "artifact_sha256": args.artifact_sha256,
+        }
+    )
+    selection_path = destination / "selection.json"
+    _regular(selection_path)
+    if selection_path.exists() and _read_candidate_input(selection_path) != selection:
+        raise ValueError("existing acquisition selection differs from the original producer or artifact")
+    records = retrieve_candidate_handoff(
+        producer,
+        partial(api, repository=producer.repository),
+        artifact_id=args.artifact_id,
+        artifact_prefix=args.artifact_prefix,
+        artifact_sha256=args.artifact_sha256,
+    )
+    updates = {destination / name: data for name, data in {**records, "selection.json": selection}.items()}
+
+    def unchanged() -> None:
+        if _directory_target(args.output) != destination:
+            raise ValueError("acquisition handoff output directory changed")
+        for path, data in updates.items():
+            _regular(path)
+            if path.exists() and _read_candidate_input(path) != data:
+                raise ValueError(f"existing acquisition handoff differs: {path.name}")
+
+    unchanged()
+    replace_many(updates, verify=unchanged)
+    print("Retained the original hosted acquisition and producer selection.")
+
+
+def _run_candidate_archive(args: argparse.Namespace, settings: Config) -> None:
+    from research_repo_tools.candidate_reuse import parse_candidate_policy, plan_candidate_archive, verify_candidate_archive
+    from research_repo_tools.publication import publish_publication
+
+    if args.archive_operation in {"attach", "verify-attachment"}:
+        _run_candidate_attachment(args, settings)
+        return
+    if args.archive_operation == "inspect":
+        _inspect_candidate_archive(args)
+        return
+    if args.archive_operation == "derive":
+        plan = plan_candidate_archive(settings.root, args.payload, args.manifest, args.policy, args.acceptance, args.output)
+        publish_publication(plan)
+        print("Retained the archive frozen by candidate acceptance.")
+        return
+    _validate_distinct_paths((args.archive, args.policy, args.acceptance, *([args.target] if args.target else [])))
+    _regular(args.archive)
+    policy = parse_candidate_policy(_read_candidate_input(args.policy))
+    target = parse_release_target(_read_candidate_input(args.target)) if args.target else None
+    verify_candidate_archive(args.archive, policy, _read_candidate_input(args.acceptance), target=target)
+    print("Verified the archive against the frozen candidate acceptance.")
+
+
+def _inspect_candidate_archive(args: argparse.Namespace) -> None:
+    from research_repo_tools.candidate_reuse import parse_candidate_policy, verify_candidate_archive
+    from research_repo_tools.evidence import deterministic_json
+    from research_repo_tools.release_assets import read_baseline
+
+    _regular(args.archive)
+    if args.policy is not None or args.acceptance is not None:
+        if args.policy is None or args.acceptance is None or args.tag is not None or args.legacy_configuration is not None:
+            raise ValueError("candidate inspection requires both policy and acceptance; historical inspection requires a tag")
+        _validate_distinct_paths((args.archive, args.policy, args.acceptance))
+        policy = parse_candidate_policy(_read_candidate_input(args.policy))
+        evidence = verify_candidate_archive(args.archive, policy, _read_candidate_input(args.acceptance))
+        result = {"format": "candidate", "tag": policy.tag, "run": policy.identity, "payload_schema": evidence.payload_schema}
+    else:
+        if args.tag is None:
+            raise ValueError("historical archive inspection requires the expected release tag")
+        configuration = _read_candidate_input(args.legacy_configuration) if args.legacy_configuration else None
+        if args.legacy_configuration is not None:
+            _validate_distinct_paths((args.archive, args.legacy_configuration))
+        sample, source = read_baseline(args.archive, legacy_configuration=configuration, expected_tag=args.tag)
+        result = {"format": "baseline", "tag": dict(source.context)["release"], "revision": source.revision, "benchmarks": len(sample.estimates)}
+    write_stdout(deterministic_json(result))
+
+
+def _run_candidate_attachment(args: argparse.Namespace, settings: Config) -> None:
+    from research_repo_tools.candidate_attachment import attach_candidate_archive, verify_candidate_attachment
+    from research_repo_tools.candidate_reuse import parse_candidate_policy, verify_candidate_archive
+
+    paths = (args.policy, args.acceptance, args.target)
+    attaching = args.archive_operation == "attach"
+    _validate_distinct_paths((*paths, args.archive, args.output) if attaching else (*paths, args.expected))
+    snapshots = {path: _read_candidate_input(path) for path in paths}
+    policy = parse_candidate_policy(snapshots[args.policy])
+    target = parse_release_target(snapshots[args.target])
+    acceptance = snapshots[args.acceptance]
+    checkout = args.checkout.resolve(strict=True) if args.checkout else None
+    dependencies = settings.release.published_dependencies
+    if checkout is not None and Path(__file__).resolve().is_relative_to(checkout):
+        raise ValueError("candidate attachment requires a trusted installed runtime outside the observed checkout")
+    if not attaching:
+        verify_candidate_attachment(
+            settings.root, policy, acceptance, target, _read_candidate_input(args.expected), checkout=checkout, dependencies=dependencies
+        )
+        print("Verified the original draft attachment.")
+        return
+    _regular(args.output)
+    _regular(args.archive)
+    if args.output.exists():
+        receipt = _read_candidate_input(args.output)
+        verify_candidate_archive(args.archive, policy, acceptance, target=target)
+        verify_candidate_attachment(settings.root, policy, acceptance, target, receipt, checkout=checkout, dependencies=dependencies)
+    else:
+        receipt = attach_candidate_archive(
+            settings.root, args.archive, policy, acceptance, target, approve=args.approve, checkout=checkout, dependencies=dependencies
+        )
+
+    def unchanged() -> None:
+        if any(_read_candidate_input(path) != content for path, content in snapshots.items()):
+            raise ValueError("candidate attachment assertions changed during verification")
+
+    write_release_outputs(args.output, receipt, verify=unchanged)
+    print(f"Verified candidate archive on draft {target.release_id}. Retain the attachment receipt for approval.")
+
+
 def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
     from research_repo_tools.candidate_reuse import parse_candidate_policy, verify_candidate_release
     from research_repo_tools.evidence import parse_evidence
 
+    if (args.attachment is None) != (args.target is None) or (args.attachment is not None and args.acceptance is None):
+        raise ValueError("approval revalidation requires the original acceptance, attachment receipt and independently captured target together")
     configuration = _path(settings.root, args.configuration)
     paths = (
         configuration,
@@ -406,19 +606,11 @@ def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
         args.payload,
         args.manifest,
         *([args.acceptance] if args.acceptance else []),
+        *([args.attachment, args.target] if args.attachment else []),
         *([args.publication_receipt] if args.publication_receipt else []),
     )
     _validate_distinct_paths((args.output, *paths))
-    inputs = {}
-    from research_repo_tools.archives import ArchiveLimits
-
-    for path in paths:
-        _regular(path)
-        with path.open("rb") as stream:
-            data = stream.read(ArchiveLimits().content_bytes + 1)
-        if len(data) > ArchiveLimits().content_bytes:
-            raise ValueError("candidate handoff exceeds content limit")
-        inputs[path] = data
+    inputs = {path: _read_candidate_input(path) for path in paths}
     policy = parse_candidate_policy(inputs[args.policy])
     commit = policy.commit
     if commit is None:
@@ -449,6 +641,18 @@ def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
         expected=inputs[args.acceptance] if args.acceptance else None,
         dependencies=settings.release.published_dependencies,
     )
+    if args.attachment is not None:
+        from research_repo_tools.candidate_attachment import verify_candidate_attachment
+
+        verify_candidate_attachment(
+            settings.root,
+            policy,
+            accepted,
+            parse_release_target(inputs[args.target]),
+            inputs[args.attachment],
+            checkout=checkout,
+            dependencies=settings.release.published_dependencies,
+        )
     write_release_outputs(args.output, accepted, verify=unchanged)
     _present_evidence(accepted, args.format, candidate=True, acquisition_owner=policy.acquisition_owner)
 
