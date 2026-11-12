@@ -1,6 +1,7 @@
 """Bounded retries for exact-URL public registry GETs, never mutations."""
 
 import math
+import socket
 import threading
 import time
 import urllib.error
@@ -108,14 +109,14 @@ def read_registry(
                     delay = max(delay, _retry_after(error.headers.get("Retry-After")))
                 finally:
                     error.close()
-        except TimeoutError, ConnectionError:
-            last_failure = "connection/read timeout"
-        except urllib.error.URLError as error:
-            if not isinstance(error.reason, (TimeoutError, ConnectionError)):
+        except OSError as error:
+            reason = error.reason if isinstance(error, urllib.error.URLError) else error
+            if isinstance(reason, socket.gaierror) and reason.errno == socket.EAI_AGAIN:
+                last_failure = "temporary DNS lookup failure"
+            elif isinstance(reason, (TimeoutError, ConnectionError)):
+                last_failure = "connection/read timeout"
+            else:
                 raise ValueError("registry GET failed; availability is unproven") from None
-            last_failure = "connection/read timeout"
-        except OSError:
-            raise ValueError("registry GET failed; availability is unproven") from None
         if attempt == 2 or delay >= deadline - clock():
             break
         report("retry", "registry", detail=f"{parsed.netloc}; attempt {attempt + 2}/3 after {delay:g}s")

@@ -609,10 +609,11 @@ retry. Configure the exact workflow and required steps as shown in the
 
 Stage a batch of original files on that captured draft with an asset policy
 containing `schema=1`, `repository="owner/repository"` and
-`expected-title="tag"`:
+`expected-title="tag"`. Run from the observed checkout using Python from a
+trusted, pinned installation outside it (shown as `/trusted/release-tools`):
 
 ```sh
-just release-assets stage tooling/release-assets.toml \
+/trusted/release-tools/bin/python -I -m research_repo_tools release assets stage tooling/release-assets.toml \
   --checkout . --commit FULL_COMMIT --tag v1.2.3 \
   --target /durable/target.json --asset /durable/final-policy.json \
   --asset /durable/accepted.json --asset /durable/benchmark.tar.gz \

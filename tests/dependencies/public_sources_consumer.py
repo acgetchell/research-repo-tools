@@ -7,6 +7,7 @@ import io
 import json
 import os
 import shutil
+import socket
 import subprocess
 import sys
 import tarfile
@@ -104,6 +105,33 @@ class Provider:
 
 
 class TestSources(unittest.TestCase):
+    def test_registry_retries_only_temporary_dns_failures(self) -> None:
+        for wrapped in (False, True):
+            for code in (socket.EAI_AGAIN, socket.EAI_NONAME):
+                with self.subTest(wrapped=wrapped, code=code):
+                    now = [0.0]
+                    failure = socket.gaierror(code, "private resolver detail")
+                    error = urllib.error.URLError(failure) if wrapped else failure
+
+                    def sleep(seconds: float) -> None:
+                        now[0] += seconds
+
+                    with patch.object(_registry_requests, "_request", side_effect=[error, b"{}"] if code == socket.EAI_AGAIN else error) as request:
+                        if code == socket.EAI_AGAIN:
+                            self.assertEqual(_registry_requests.read_registry(PYTHON_API, limit=1024, clock=lambda: now[0], sleep=sleep), b"{}")
+                            self.assertEqual((request.call_count, now[0]), (2, 1.0))
+                        else:
+                            with self.assertRaisesRegex(ValueError, "availability is unproven") as rejected:
+                                _registry_requests.read_registry(PYTHON_API, limit=1024, clock=lambda: now[0], sleep=sleep)
+                            self.assertNotIn("private resolver detail", str(rejected.exception))
+                            self.assertEqual((request.call_count, now[0]), (1, 0.0))
+            now = [0.0]
+            temporary = socket.gaierror(socket.EAI_AGAIN, "private")
+            with patch.object(_registry_requests, "_request", side_effect=urllib.error.URLError(temporary) if wrapped else temporary) as request:
+                with self.assertRaisesRegex(ValueError, "three attempts"):
+                    _registry_requests.read_registry(PYTHON_API, limit=1024, clock=lambda: now[0], sleep=sleep)
+                self.assertEqual(request.call_count, 3)
+
     def test_progress_observer_failures_restore_context_and_preserve_verification_error(self) -> None:
         def fail(event: dict[str, object]) -> None:
             raise RuntimeError("observer unavailable")

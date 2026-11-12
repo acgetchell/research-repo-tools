@@ -142,12 +142,15 @@ def _stage(
     if output_before is not None and (before != output_before or set(completed) != set(selection)):
         raise ValueError("existing transfer differs from the retained complete journal")
 
-    def unchanged() -> None:
-        if verify_inputs is not None:
-            verify_inputs()
-        for path in assets:
+    def compare_assets(selected: tuple[Path, ...]) -> None:
+        for path in selected:
             if _read(path, limits.archive_bytes) != payloads[path.name]:
                 raise ValueError("asset input changed; recover the original selected bytes")
+
+    def unchanged(selected: tuple[Path, ...] = ()) -> None:
+        if verify_inputs is not None:
+            verify_inputs()
+        compare_assets(selected)
         _regular(journal)
         if (_read(journal, 1024 * 1024) if journal.exists() else None) != before:
             raise ValueError("staging journal changed concurrently; inspect original receipts")
@@ -177,10 +180,11 @@ def _stage(
             {"schema": _SCHEMA, "target": captured, "inputs": selection, "assets": completed, "state": state, "dependencies_sha256": operation.digest}
         )
 
-    def retain(state: str, *, final: bool = False) -> bytes:
+    def retain(state: str, *, final: bool = False, selected: tuple[Path, ...] = ()) -> bytes:
         nonlocal before
         if output_before is not None and not final:
             observe()
+            unchanged(selected)
             return output_before
         data = receipt(state)
         updates = {journal: data}
@@ -193,6 +197,7 @@ def _stage(
             if final:
                 operation.refresh()
             observe()
+            unchanged(assets if final else selected)
 
         replace_many(updates, verify=guard)
         before = data
@@ -200,13 +205,23 @@ def _stage(
 
     observe()
     if before is None:
-        retain("staging")
+        retain("staging", selected=assets)
+    else:
+        unchanged(assets)
     try:
         for index, path in enumerate(assets):
             report("started", "asset", checked=index, total=len(assets), detail=path.name)
-            name, identifier, size, digest = _upload_asset(root, target, path.name, payloads[path.name], limits=limits, publish=False, observe=observe)
+
+            def observe_asset(path: Path = path) -> GitHubRelease:
+                release = observe()
+                # Check the active input after potentially slow observations,
+                # immediately before the uploader can use its captured bytes.
+                unchanged((path,))
+                return release
+
+            name, identifier, size, digest = _upload_asset(root, target, path.name, payloads[path.name], limits=limits, publish=False, observe=observe_asset)
             completed[name] = {"id": identifier, "size": size, "sha256": digest}
-            retain("staging")
+            retain("staging", selected=(path,))
             report("verified", "asset", checked=index + 1, total=len(assets), detail=name)
         return retain("complete", final=True)
     except Exception as error:

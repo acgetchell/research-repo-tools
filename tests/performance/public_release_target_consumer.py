@@ -15,7 +15,7 @@ from typing import Any, override
 from unittest.mock import patch
 from urllib.parse import parse_qs, urlsplit
 
-from research_repo_tools import cli, config, release_assets
+from research_repo_tools import cli, config, release_assets, release_staging
 from research_repo_tools.release_assets import (
     ReleasePublicationUnknownError,
     ReleaseTarget,
@@ -213,6 +213,109 @@ class TestReleaseStaging(unittest.TestCase):
                 self.assertTrue(original.items() <= {name: a["id"] for name, a in receipt["assets"].items()}.items())
                 self.assertEqual(len(receipt["assets"]), 3)
                 self.assertEqual(self.server.published, 0)
+
+    def test_batch_input_read_volume_is_linear_in_selected_bytes(self):
+        read = release_staging._read
+        for count in (1, 3):
+            with self.subTest(count=count):
+                self.journal.unlink(missing_ok=True)
+                self.destination.unlink(missing_ok=True)
+                self.server.release["assets"] = []
+                self.server.uploaded = []
+                selected = self.assets[:count]
+                observed = []
+
+                def counted(path, limit):
+                    payload = read(path, limit)
+                    if path in selected:
+                        observed.append(len(payload))
+                    return payload
+
+                with patch.object(release_staging, "_read", side_effect=counted):
+                    receipt = self.stage(selected)
+                expected = [path.read_bytes() for path in selected]
+                self.assertEqual(self.server.uploaded, expected)
+                self.assertLessEqual(sum(observed), 7 * sum(map(len, expected)))
+                self.assertEqual(self.destination.read_bytes(), receipt)
+
+    def test_changed_active_input_after_live_observation_blocks_upload(self):
+        upload = release_staging._upload_asset
+
+        def changed():
+            self.assets[0].write_bytes(b"changed before POST")
+
+        def armed(*args, **kwargs):
+            self.server.on_read = changed
+            return upload(*args, **kwargs)
+
+        with patch.object(release_staging, "_upload_asset", side_effect=armed), self.assertRaisesRegex(ValueError, "asset input changed"):
+            self.stage()
+        self.assertEqual(self.server.uploaded, [])
+        self.assertFalse(self.destination.exists())
+        self.assertEqual(json.loads(self.journal.read_bytes())["assets"], {})
+
+    def test_changed_next_input_stops_its_upload_and_original_bytes_allow_resume(self):
+        original = self.assets[1].read_bytes()
+
+        def changed():
+            self.assets[1].write_bytes(b"changed next input")
+
+        self.server.on_upload = changed
+        with self.assertRaisesRegex(ValueError, "asset input changed"):
+            self.stage()
+        self.assertEqual(self.server.uploaded, [self.assets[0].read_bytes()])
+        self.assertFalse(self.destination.exists())
+        original_id = self.server.release["assets"][0]["id"]
+        self.assets[1].write_bytes(original)
+        self.server.on_upload = lambda: None
+        self.stage()
+        self.assertEqual(len(self.server.uploaded), 3)
+        self.assertEqual(self.server.release["assets"][0]["id"], original_id)
+
+    def test_journal_change_during_active_input_comparison_blocks_upload(self):
+        read = release_staging._read
+
+        def changed(path, limit):
+            payload = read(path, limit)
+            if path == self.assets[0] and self.journal.exists():
+                self.journal.write_bytes(b"concurrent journal")
+            return payload
+
+        with patch.object(release_staging, "_read", side_effect=changed), self.assertRaisesRegex(ValueError, "journal changed concurrently"):
+            self.stage()
+        self.assertEqual(self.server.uploaded, [])
+        self.assertEqual(self.journal.read_bytes(), b"concurrent journal")
+        self.assertFalse(self.destination.exists())
+
+    def test_full_input_comparisons_guard_initial_intent_and_final_retention(self):
+        from research_repo_tools.dependency_provenance import check_release_dependencies
+
+        original = self.assets[-1].read_bytes()
+        for boundary in (1, 2):
+            with self.subTest(boundary=boundary):
+                self.journal.unlink(missing_ok=True)
+                self.destination.unlink(missing_ok=True)
+                self.server.release["assets"] = []
+                self.server.uploaded = []
+                calls = []
+
+                def check(*args, **kwargs):
+                    result = check_release_dependencies(*args, **kwargs)
+                    calls.append(None)
+                    if len(calls) == boundary:
+                        self.assets[-1].write_bytes(b"changed during dependency pass")
+                    return result
+
+                with patch("research_repo_tools.dependency_provenance.check_release_dependencies", side_effect=check):
+                    with self.assertRaisesRegex(ValueError, "asset input changed"):
+                        self.stage()
+                self.assertEqual(len(self.server.uploaded), 0 if boundary == 1 else 3)
+                self.assertFalse(self.destination.exists())
+                if boundary == 1:
+                    self.assertFalse(self.journal.exists())
+                else:
+                    self.assertEqual(json.loads(self.journal.read_bytes())["state"], "staging")
+                self.assets[-1].write_bytes(original)
 
     def test_replaced_asset_changed_input_and_conflicting_receipt_stop_without_effects(self):
         self.server.fail_after_upload = 2

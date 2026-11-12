@@ -617,11 +617,10 @@ def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
     from research_repo_tools.evidence import parse_evidence
 
     checkout = args.checkout.resolve(strict=True)
-    # The command owns this entry observation before reading policy handoffs.
-    # Only the private composition receives it; standalone APIs always check.
-    entry = DependencyOperation(checkout, settings.release.published_dependencies)
     if (args.attachment is None) != (args.target is None) or (args.attachment is not None and args.acceptance is None):
         raise ValueError("approval revalidation requires the original acceptance, attachment receipt and independently captured target together")
+    if args.commit is not None and args.policy_output is None:
+        raise ValueError("final commit requires --policy-output")
     configuration = _path(settings.root, args.configuration)
     paths = (
         configuration,
@@ -635,11 +634,14 @@ def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
     _validate_distinct_paths(
         (args.output, *paths, *([args.policy_output] if args.policy_output else []), *([args.native_output] if args.native_output else []))
     )
+    # The command owns this entry observation before reading policy handoffs.
+    # Only the private composition receives it; standalone APIs always check.
+    entry = DependencyOperation(checkout, settings.release.published_dependencies)
     inputs = {path: _read_candidate_input(path) for path in paths}
     policy = parse_candidate_policy(inputs[args.policy])
     if args.commit is not None:
-        if args.policy_output is None or policy.commit not in {None, args.commit}:
-            raise ValueError("final commit requires --policy-output and must not replace an existing different selection")
+        if policy.commit not in {None, args.commit}:
+            raise ValueError("final commit must not replace an existing different selection")
         policy = replace(policy, commit=args.commit)
     commit = policy.commit
     if commit is None:
