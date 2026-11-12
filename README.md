@@ -394,7 +394,8 @@ JupyterLab, explicit source reset and source-policy checks are in the same guide
 
 ### Performance
 
-Configure the installed `performance-release.toml` template with your
+For a release with a published predecessor, configure the installed
+`performance-release.toml` template with your
 measurement, retained-report and document-publication policies. Declare and ignore
 its scratch directory; keep the report archive outside scratch. Then run:
 
@@ -405,12 +406,17 @@ just performance-readme tooling/performance-release.toml --preview
 just performance-readme tooling/performance-release.toml
 ```
 
-With an unreleased supplying development pin, a scheduled release that reuses the
-acquisition at approval can pass
-`--owner "$owner"` to `just performance-release` to retain the original
-assertions outside the checkout before report promotion. For a repository's
-first stable release, `just performance first-release` acquires a single
-current-only run and publishes its absolute timing report. See the
+Owner capture runs the release dependency gate before acquisition, even without
+`--release-intent`. Packages selected in `published-dependencies` must use a
+published registry release; development source overrides are rejected. Rehearse
+an unreleased pin without `--owner` or `--release-intent`. After adopting the
+published supplying release, pass `--owner "$owner"` to `just performance-release`
+to retain the original assertions outside the checkout before report promotion.
+
+For a repository's first stable release, `just performance first-release` acquires
+a single current-only run and publishes its absolute timing report. Use this
+procedure instead of the paired preparation, release and README commands above;
+paired schema-2 README publication rejects first-release v6 evidence. See the
 [candidate workflow][candidate-publication]
 for capture, recovery and draft attachment.
 

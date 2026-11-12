@@ -97,10 +97,10 @@ The packaged configuration sets `changelog.date-source = "citation"`, so no
 separate date variable is needed. Use `just changelog-preview --tag "$TAG"` for
 a read-only preview with the same prepared date. Do not edit generated notes.
 
-If the repository requires release performance evidence, run its configured
-preparation, measurement, and README publication steps before validation.
-Consumers retain their scientific workload and benchmark policies. The shared
-commands are `just performance-prepare tooling/performance-release.toml`,
+If the repository requires release performance evidence, acquire and retain it
+before validation. Consumers retain their scientific workload and benchmark
+policies. For a release with a published predecessor, run
+`just performance-prepare tooling/performance-release.toml`,
 `just performance-release tooling/performance-release.toml`, and
 `just performance-readme tooling/performance-release.toml`, in that order.
 README retries consume retained results without repeating measurements.
@@ -117,7 +117,10 @@ using the same scratch evidence.
 For a first stable release, prepare the package version and an unscheduled
 schema-5 suite declaration. Use `just performance first-release` with the
 repository, schema-2 report declaration, scratch evidence paths and external
-owner directory. See the
+owner directory. This promotes the absolute timing report. Use this procedure
+instead of the paired preparation and measurement commands above, and do not run
+`just performance-readme`: paired schema-2 README publication rejects first-release
+v6 evidence. See the
 [candidate workflow example](https://github.com/acgetchell/research-repo-tools/blob/main/docs/candidate-reuse-api.md#committed-publisher-evidence).
 
 Retain the acquisition and publication digests through separate trusted
