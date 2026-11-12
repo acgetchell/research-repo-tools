@@ -35,6 +35,17 @@ class Use:
         return f"{self.path}:{self.line}:{self.column} ({self.context})"
 
 
+def version_comment(use: Use, text: str) -> re.Match[str]:
+    """Locate an inline version token, preserving offsets for the updater."""
+    line_end = text.find("\n", use.end)
+    line_end = len(text) if line_end < 0 else line_end
+    suffix = text[use.end : line_end]
+    comment = re.match(r"([ \t]*#[ \t]*)(v?\d+(?:\.\d+){0,2})(?=[ \t\r]|$)", suffix)
+    if use.node.style in {"|", ">"} or comment is None:
+        raise ValueError(f"{use.location}: selected uses requires an inline version comment such as '# v1.2.3'")
+    return comment
+
+
 def _mapping(node: Node, path: Path) -> dict[str, Node]:
     if not isinstance(node, MappingNode):
         raise ValueError(f"{path}:{node.start_mark.line + 1}: expected a YAML mapping")
@@ -101,7 +112,10 @@ def references(path: Path, text: str) -> tuple[Use, ...]:
             raw_action, separator, ref = value.partition("@")
             if not separator or not ref or re.search(r"\s|@|\$", ref):
                 raise ValueError(f"{path}:{node.start_mark.line + 1}: unsupported uses reference: {value!r}")
-            action = identity(raw_action)
+            try:
+                action = identity(raw_action)
+            except ValueError as error:
+                raise ValueError(f"{path}:{node.start_mark.line + 1}: {error}") from error
         uses.append(Use(path, node, context, action, ref, node.start_mark.line + 1, node.start_mark.column + 1, node.start_mark.index, node.end_mark.index))
 
     def collect_steps(steps: Node, context: str) -> None:

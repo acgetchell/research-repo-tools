@@ -27,11 +27,15 @@ def parser() -> argparse.ArgumentParser:
     result.add_argument("--config", type=Path, help="TOML config; defaults to [tool.research-repo-tools] in pyproject.toml")
     result.add_argument("--root", type=Path, help="consumer root; defaults to the configuration directory")
     groups = result.add_subparsers(dest="group", required=True)
-    actions = groups.add_parser("actions", help="check external allowlists and update explicitly selected commit pins").add_subparsers(
+    actions = groups.add_parser("actions", help="check external allowlists/pin consistency and update selected commit pins").add_subparsers(
         dest="action", required=True
     )
-    for name in ("allowlist", "update"):
-        command = actions.add_parser(name)
+    for name, help_text in {
+        "allowlist": "check references against consumer selected-actions settings",
+        "check": "check declared pin consistency offline without changing files",
+        "update": "resolve and update explicitly selected commit pins",
+    }.items():
+        command = actions.add_parser(name, help=help_text, description=help_text)
         command.add_argument("--policy", type=Path, required=True, help="consumer selected-actions JSON or Actions update TOML")
         command.add_argument("paths", nargs="+", help="explicit workflow/composite action files or YAML directories")
         if name == "update":
@@ -320,6 +324,10 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         return 0
     if args.group == "actions":
         policy = settings.path(str(args.policy))
+        if args.action == "check":
+            from research_repo_tools.action_checks import check
+
+            return check(settings.root, policy, args.paths)
         if args.action == "allowlist":
             from research_repo_tools.workflow_allowlist import check
 

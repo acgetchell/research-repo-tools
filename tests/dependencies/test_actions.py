@@ -5,10 +5,39 @@ from pathlib import Path
 
 import pytest
 
-from research_repo_tools import action_updates, cli, config, workflow_allowlist
+from research_repo_tools import action_policy, action_updates, cli, config, workflow_allowlist
 from research_repo_tools.workflow_uses import references, workflow_paths
 
 OLD, NEW = "a" * 40, "b" * 40
+
+
+@pytest.mark.parametrize(
+    "declaration",
+    [
+        "consistency = []\n[actions]",
+        '[actions]\n[consistency]\nactions = "a/b"',
+        "[actions]\n[consistency]\nactions = [42]",
+        '[actions]\n[consistency]\nactions = ["a/b", "A/B"]',
+        '[actions]\n[consistency]\nactions = ["a/b@v1"]',
+        '[actions]\n[consistency]\nactions = ["a/*"]',
+        '[actions]\n[consistency]\nactions = ["a/b/../c"]',
+        "[actions]\n[consistency]\nunknown = []",
+        "[actions]\n[consistency]\nactions = [",
+    ],
+)
+def test_invalid_consistency_policy_reports_its_path(tmp_path, declaration):
+    policy = tmp_path / "updates.toml"
+    policy.write_bytes(declaration.encode())
+    with pytest.raises(ValueError, match="updates.toml"):
+        action_policy.load_policy(policy)
+
+
+@pytest.mark.parametrize("declaration", ["[actions]\n", "[actions]\n[consistency]\nactions=[]\n"])
+def test_consistency_check_requires_explicit_nonempty_selection(tmp_path, capsys, declaration):
+    policy = tmp_path / "updates.toml"
+    policy.write_bytes(declaration.encode())
+    assert cli.main(["--root", str(tmp_path), "actions", "check", "--policy", str(policy), "ci.yml"]) == 1
+    assert "nonempty consistency.actions" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize("scalar", [f"approved/action@{OLD}", f"'approved/action@{OLD}'", f'"approved/action@{OLD}"', f">-\n          approved/action@{OLD}"])

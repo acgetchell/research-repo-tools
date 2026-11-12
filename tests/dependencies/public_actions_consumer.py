@@ -3,6 +3,7 @@
 import base64
 import io
 import json
+import shlex
 import subprocess
 import tempfile
 import unittest
@@ -12,6 +13,8 @@ from typing import override
 from unittest.mock import patch
 
 from research_repo_tools import action_updates, cli, files
+from research_repo_tools.changelog import template
+from research_repo_tools.process import get_safe_executable
 
 OLD = "1" * 40
 NEW = "2" * 40
@@ -41,6 +44,143 @@ class TestActionsConsumer(unittest.TestCase):
         with redirect_stdout(stdout), redirect_stderr(stderr):
             status = cli.main(["--root", str(self.root), "actions", *arguments])
         return status, stdout.getvalue(), stderr.getvalue()
+
+    def consistency_policy(self, target="latest"):
+        self.update_policy.write_bytes(f'[actions]\n"approved/action" = "{target}"\n[consistency]\nactions = ["APPROVED/Action"]\n'.encode())
+
+    def test_offline_consistency_accepts_synchronized_workflows_and_composites_without_writes(self):
+        self.consistency_policy()
+        composite = self.root / "composites" / "café setup" / "action.yaml"
+        composite.parent.mkdir(parents=True)
+        sha = "abcdef01" * 5
+        self.workflow.write_bytes(self.workflow.read_bytes().replace(OLD.encode(), sha.upper().encode()))
+        composite.write_bytes(
+            (
+                "\ufeffname: café setup\r\nruns:\r\n  using: composite\r\n  steps:\r\n"
+                f"    - uses: &pin approved/action@{sha} # v1.0.0 another explanation\r\n"
+                "    - uses: *pin\r\n"
+                f"    - uses: approved/action/nested@{NEW} # v2\r\n"
+                "    - uses: ./local\r\n    - uses: '$/.github/actions/setup'\r\n    - uses: docker://image:latest\r\n"
+            ).encode("utf-8")
+        )
+        before = {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
+        # No subprocess (including gh), sockets, or pin resolution may be used.
+        with (
+            patch.object(subprocess, "Popen", side_effect=AssertionError("offline check launched a process")),
+            patch("socket.socket", side_effect=AssertionError("offline check opened a socket")),
+            patch.object(action_updates, "resolve", side_effect=AssertionError("offline check resolved latest")),
+        ):
+            status, output, error = self.invoke("check", "--policy", str(self.update_policy), "ci.yml", "composites", str(composite))
+        self.assertEqual(status, 0, error)
+        self.assertIn("1 identities in 2 files", output)
+        self.assertEqual({path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}, before)
+
+    def test_workflow_only_bump_reports_stale_composite_and_each_kind_of_drift(self):
+        self.consistency_policy()
+        composite = self.root / "action.yml"
+        composite.write_bytes(f"runs:\n  using: composite\n  steps:\n    - uses: approved/action@{OLD} # v1.0.0\n".encode())
+        original = self.workflow.read_bytes()
+        for sha, tag in ((NEW, "v1.0.0"), (OLD, "v2.0.0"), (NEW, "v2.0.0")):
+            with self.subTest(sha=sha, tag=tag):
+                changed = original.replace(OLD.encode(), sha.encode()).replace(b"v1.0.0", tag.encode())
+                self.workflow.write_bytes(changed)
+                status, output, error = self.invoke("check", "--policy", str(self.update_policy), "ci.yml", "action.yml")
+                self.assertEqual(status, 1)
+                self.assertEqual(output, "")
+                for diagnostic in ("inconsistent approved/action", "ci.yml:7", "action.yml:4", OLD, sha, "v1.0.0", tag):
+                    self.assertIn(diagnostic, error)
+                self.assertEqual(self.workflow.read_bytes(), changed)
+                self.assertIn(f"approved/action@{OLD} # v1.0.0".encode(), composite.read_bytes())
+
+    def test_explicit_policy_tag_must_match_even_with_a_single_workflow_pin(self):
+        before = self.workflow.read_bytes()
+        for target, expected in (("v1.0.0", 0), ("latest", 0), ("v2.0.0", 1), ("1.0.0", 1)):
+            with self.subTest(target=target):
+                self.consistency_policy(target)
+                status, _, error = self.invoke("check", "--policy", str(self.update_policy), "ci.yml")
+                self.assertEqual(status, expected, error)
+                if expected:
+                    for diagnostic in ("ci.yml:7", "version comment 'v1.0.0'", f"explicit policy tag '{target}'", "updates.toml"):
+                        self.assertIn(diagnostic, error)
+                self.assertEqual(self.workflow.read_bytes(), before)
+
+    def test_consistency_identities_are_independent_of_update_and_compatibility_targets(self):
+        self.update_policy.write_bytes(
+            b'[actions]\n"unrelated/target"="v3"\n[consistency]\nactions=["approved/action"]\n'
+            b'[compatibility."unrelated/wrapper"]\npath="support/versions"\ntool="scanner"\n'
+        )
+        status, _, error = self.invoke("check", "--policy", str(self.update_policy), "ci.yml")
+        self.assertEqual(status, 0, error)
+
+    def test_missing_identity_names_the_declared_scan_scope(self):
+        self.update_policy.write_bytes(b'[actions]\n[consistency]\nactions=["approved/action/Nested"]\n')
+        for scope in (("ci.yml",), ("empty workflows",)):
+            with self.subTest(scope=scope):
+                (self.root / "empty workflows").mkdir(exist_ok=True)
+                status, _, error = self.invoke("check", "--policy", str(self.update_policy), *scope)
+                self.assertEqual(status, 1)
+                self.assertIn("approved/action/Nested", error)
+                self.assertIn("configured scope", error)
+                self.assertIn(str(self.root / scope[0]), error)
+
+    def test_malformed_selected_pins_report_file_and_line(self):
+        self.consistency_policy()
+        for scalar, diagnostic in (
+            ("approved/action@v1 # v1", "full commit SHA"),
+            (f"approved/action@{OLD[:7]} # v1", "full commit SHA"),
+            (f"approved/action@{'g' * 40} # v1", "full commit SHA"),
+            (f"approved/action@{OLD}", "inline version comment"),
+            (f"approved/action@{OLD} # v1-beta", "inline version comment"),
+            (f"approved/action@{OLD} # v01.0", "invalid stable version comment"),
+            (f">-\n        approved/action@{OLD}\n    # v1", "inline version comment"),
+            ("approved/action", "unsupported uses reference"),
+            (f"approved/action/../bad@{OLD} # v1", "expected exact"),
+        ):
+            with self.subTest(scalar=scalar):
+                before = f"jobs:\n  call:\n    uses: {scalar}\n".encode()
+                self.workflow.write_bytes(before)
+                status, output, error = self.invoke("check", "--policy", str(self.update_policy), "ci.yml")
+                self.assertEqual(status, 1)
+                self.assertEqual(output, "")
+                self.assertIn("ci.yml:3", error)
+                self.assertIn(diagnostic, error)
+                self.assertNotIn("Traceback", error)
+                self.assertEqual(self.workflow.read_bytes(), before)
+
+    def test_packaged_recipes_share_workflow_only_or_explicit_composite_scope(self):
+        source = template("justfile")
+        justfile = self.root / "justfile"
+        for composite in (None, ".github/actions/café setup/action.yml"):
+            with self.subTest(composite=composite):
+                configured = source
+                if composite is not None:
+                    configured = configured.replace(
+                        'actions_inputs := quote(".github/workflows")',
+                        f'actions_inputs := quote(".github/workflows") + " " + quote("{composite}")',
+                    )
+                justfile.write_text(configured, encoding="utf-8", newline="\n")
+                for recipe, command in (("actions-check", "check"), ("update-actions", "update")):
+                    result = subprocess.run(
+                        [get_safe_executable("just"), "--justfile", str(justfile), "--dry-run", recipe],
+                        cwd=self.root,
+                        capture_output=True,
+                        text=True,
+                        encoding="utf-8",
+                        check=True,
+                    )
+                    arguments = shlex.split(result.stderr)
+                    self.assertEqual(
+                        arguments[arguments.index("actions") :],
+                        [
+                            "actions",
+                            command,
+                            "--policy",
+                            ".github/action-updates.toml",
+                            ".github/workflows",
+                            *([composite] if composite else []),
+                            *(["$@"] if command == "update" else []),
+                        ],
+                    )
 
     def test_allowlist_checks_job_calls_and_sequence_steps(self):
         original = self.workflow.read_bytes()

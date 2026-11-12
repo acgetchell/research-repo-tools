@@ -354,7 +354,7 @@ for exhaustive arguments, configuration and Python contracts.
 | Select files, run commands and export CI values | [Consumer checks and integration][checks-guide] | [File APIs][files-api], [process/Just APIs][process-api], [workflow APIs][workflow-api] |
 | Set up or repair tools | [Installation and ownership][toolchain] | [Toolchain APIs][toolchain-api] |
 | Time external commands | [Exploratory command timing][timing-guide] | [Timing evidence contract][timing-api] |
-| Update dependencies and Actions pins | [Update and adoption workflows][updates-guide] | [CLI/configuration][configuration-api] |
+| Update dependencies and check/update Actions pins | [Update and adoption workflows][updates-guide] | [CLI/configuration][configuration-api] |
 
 ### Git inspection
 

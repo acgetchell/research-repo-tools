@@ -476,7 +476,53 @@ Action updates require separate, explicit opt-in targets in
 [actions]
 "actions/checkout" = "latest"
 "owner/repo/subpath" = "v2.1.0"
+
+[consistency]
+actions = ["actions/checkout", "owner/repo/subpath"]
 ```
+
+The optional `[consistency]` list declares exact identities that must use the
+same full commit SHA and version comment everywhere in the selected inputs.
+`actions check` requires a nonempty list. Checked identities need not be update
+targets. When a checked identity also has an explicit `[actions]` tag, its
+comment must match that tag exactly, including the `v` prefix. `latest` remains
+an update selector: the check does not resolve it, contact GitHub, invoke `gh`,
+or verify that a tag actually names a SHA. Compatibility inventories are used
+only by the updater.
+
+Merge `actions_inputs`, `actions-check`, and `update-actions` from the packaged
+Justfile together. The default input is `.github/workflows`, so workflow-only
+repositories need no composites directory. For composites, extend the shared
+expression with explicit metadata paths (or a directory containing only workflow
+and composite YAML). Quote each path separately, including paths with spaces:
+
+```just
+actions_inputs := quote(".github/workflows") + " " + quote(".github/actions/setup-just/action.yml")
+
+actions-check:
+    uv run --locked --only-group tooling --inexact research-repo-tools actions check --policy .github/action-updates.toml {{ actions_inputs }}
+
+update-actions *args:
+    uv run --locked --only-group tooling --inexact research-repo-tools actions update --policy .github/action-updates.toml {{ actions_inputs }} "$@"
+```
+
+Add `actions-check` to the consumer's `check` prerequisites. After setup, run:
+
+```sh
+just actions-check
+```
+
+The read-only check uses the same YAML parser and input expansion as the updater.
+It returns nonzero for drift, malformed selected pins, or absent declared
+identities. Drift reports both source locations and their SHA/comment pairs;
+malformed pins report file and line; absent identities name the configured
+scope. Repository names and SHA hex ignore case, while nested paths and version
+comments match exactly. Inline comments may retain trailing explanations, which
+do not participate in comparison. Read-only inspection supports aliases at their
+anchor locations; pins require inline version comments, so folded/block scalars
+are rejected. Keep the allowlist and zizmor gates for their separate policies.
+This offline check is distinct from `update-actions --check`, which resolves
+upstream versions and checks whether updates are available.
 
 `latest` selects GitHub's published stable release and permits major upgrades.
 An explicit stable version tag restricts the target. GitHub CLI (`gh`) is required
