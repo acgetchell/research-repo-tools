@@ -213,9 +213,21 @@ def add_commands(release) -> None:
     assets = release.add_parser("assets", help="prepare drafts, capture/revalidate targets and upload verified inert assets").add_subparsers(
         dest="operation", required=True
     )
-    for operation in ("preflight", "prepare", "retrieve", "upload", "verify"):
+    for operation in ("preflight", "prepare", "retrieve", "stage", "upload", "verify"):
         command = assets.add_parser(operation)
         command.add_argument("configuration")
+        if operation == "stage":
+            command.description = "Stage a frozen batch on one captured draft; repeat the same command and journal to recover matching assets."
+            command.add_argument("--approve", action="store_true", required=True)
+            command.add_argument("--asset", type=Path, action="append", required=True, help="original inert file; repeat for every batch member")
+            command.add_argument("--checkout", type=Path, help="optional clean source checkout, separate from the trusted writer")
+            command.add_argument("--commit", required=True)
+            command.add_argument("--journal", type=Path, required=True, help="durable per-asset progress; retain on interruption")
+            command.add_argument("--output", type=Path, required=True, help="complete immutable transfer, written only after final verification")
+            command.add_argument("--progress", choices=("human", "json", "none"), default="human")
+            command.add_argument("--tag", required=True)
+            command.add_argument("--target", type=Path, required=True)
+            continue
         if operation == "retrieve":
             command.description = "Retrieve the original authenticated tag-push receipt; existing outputs freeze every retry. No release mutation."
             command.add_argument("--commit", required=True, help="independent full peeled release commit")
@@ -296,11 +308,15 @@ def add_evidence_commands(release) -> None:
     candidate.add_argument("--acquisition-sha256", required=True, help="independent Step 1 assertion digest from the trusted acquisition owner")
     candidate.add_argument("--attachment", type=Path, help="original draft attachment receipt to revalidate with the acceptance")
     candidate.add_argument("--checkout", type=Path, required=True)
+    candidate.add_argument("--commit", help="independent final commit; bind a pending owner policy and retain it with --policy-output")
     candidate.add_argument("--format", choices=("json", "status", "summary"), default="status")
     candidate.add_argument("--manifest", type=Path, required=True)
+    candidate.add_argument("--native-output", type=Path, help="retain the frozen native selection with acceptance in one guarded update")
     candidate.add_argument("--output", type=Path, required=True)
     candidate.add_argument("--payload", type=Path, required=True)
     candidate.add_argument("--policy", type=Path, required=True, help="independently trusted acquisition assertions and final commit")
+    candidate.add_argument("--policy-output", type=Path, help="retain the final policy with acceptance in one guarded update")
+    candidate.add_argument("--progress", choices=("human", "json", "none"), default="none")
     candidate.add_argument("--publication-receipt", type=Path, help="original shared-publisher receipt captured before promotion")
     candidate.add_argument("--publication-sha256", help="independent Step 1 publication digest from the trusted owner")
     candidate.add_argument("--target", type=Path, help="independently captured draft target for attachment revalidation")
@@ -351,10 +367,10 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
     if args.operation == "receive-acquisition":
         _receive_candidate_acquisition(args, settings)
         return
-    check_release_dependencies(args.checkout, packages=settings.release.published_dependencies)
     if args.operation == "candidate":
         _run_candidate(args, settings)
         return
+    check_release_dependencies(args.checkout, packages=settings.release.published_dependencies)
     path = _path(settings.root, args.configuration)
     original = path.read_bytes()
     policy = load_evidence_policy(path)
@@ -594,9 +610,16 @@ def _run_candidate_attachment(args: argparse.Namespace, settings: Config) -> Non
 
 
 def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
-    from research_repo_tools.candidate_reuse import parse_candidate_policy, verify_candidate_release
+    from dataclasses import replace
+
+    from research_repo_tools._dependency_observation import DependencyOperation
+    from research_repo_tools.candidate_reuse import _retain_candidate_release, parse_candidate_policy
     from research_repo_tools.evidence import parse_evidence
 
+    checkout = args.checkout.resolve(strict=True)
+    # The command owns this entry observation before reading policy handoffs.
+    # Only the private composition receives it; standalone APIs always check.
+    entry = DependencyOperation(checkout, settings.release.published_dependencies)
     if (args.attachment is None) != (args.target is None) or (args.attachment is not None and args.acceptance is None):
         raise ValueError("approval revalidation requires the original acceptance, attachment receipt and independently captured target together")
     configuration = _path(settings.root, args.configuration)
@@ -609,51 +632,59 @@ def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
         *([args.attachment, args.target] if args.attachment else []),
         *([args.publication_receipt] if args.publication_receipt else []),
     )
-    _validate_distinct_paths((args.output, *paths))
+    _validate_distinct_paths(
+        (args.output, *paths, *([args.policy_output] if args.policy_output else []), *([args.native_output] if args.native_output else []))
+    )
     inputs = {path: _read_candidate_input(path) for path in paths}
     policy = parse_candidate_policy(inputs[args.policy])
+    if args.commit is not None:
+        if args.policy_output is None or policy.commit not in {None, args.commit}:
+            raise ValueError("final commit requires --policy-output and must not replace an existing different selection")
+        policy = replace(policy, commit=args.commit)
     commit = policy.commit
     if commit is None:
         raise ValueError("candidate release requires an independently selected final commit")
     native = load_evidence_policy(configuration)
-    checkout = args.checkout.resolve(strict=True)
 
     def unchanged() -> None:
-        from research_repo_tools.dependency_provenance import check_release_dependencies
-
-        check_release_dependencies(checkout, packages=settings.release.published_dependencies)
         for path, data in inputs.items():
             _regular(path)
             if path.read_bytes() != data:
                 raise ValueError("candidate handoff changed during verification")
         _checkout(checkout, native.package, policy.tag.removeprefix("v"), commit, path_in_vcs=native.path_in_vcs, package_kind=native.package_kind)
 
-    unchanged()
-    accepted = verify_candidate_release(
+    def verify_attachment(accepted: bytes) -> None:
+        if args.attachment is not None:
+            from research_repo_tools.candidate_attachment import verify_candidate_attachment
+
+            verify_candidate_attachment(
+                settings.root,
+                policy,
+                accepted,
+                parse_release_target(inputs[args.target]),
+                inputs[args.attachment],
+                checkout=checkout,
+                dependencies=settings.release.published_dependencies,
+            )
+
+    accepted = _retain_candidate_release(
         checkout,
         parse_evidence(inputs[args.payload], inputs[args.manifest]),
         policy,
         native,
         partial(api, repository=policy.repository),
         acquisition_sha256=args.acquisition_sha256,
+        destination=args.output,
+        policy_output=args.policy_output,
+        native_output=args.native_output,
+        verify_inputs=unchanged,
+        verify_acceptance=verify_attachment,
         publication_receipt=inputs[args.publication_receipt] if args.publication_receipt else None,
         publication_sha256=args.publication_sha256,
         expected=inputs[args.acceptance] if args.acceptance else None,
         dependencies=settings.release.published_dependencies,
+        entry=entry,
     )
-    if args.attachment is not None:
-        from research_repo_tools.candidate_attachment import verify_candidate_attachment
-
-        verify_candidate_attachment(
-            settings.root,
-            policy,
-            accepted,
-            parse_release_target(inputs[args.target]),
-            inputs[args.attachment],
-            checkout=checkout,
-            dependencies=settings.release.published_dependencies,
-        )
-    write_release_outputs(args.output, accepted, verify=unchanged)
     _present_evidence(accepted, args.format, candidate=True, acquisition_owner=policy.acquisition_owner)
 
 
@@ -714,6 +745,40 @@ def _retrieve_receipt(args: argparse.Namespace, settings: Config) -> None:
 def run_assets(args: argparse.Namespace, settings: Config) -> None:
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
+    if args.operation == "stage":
+        from research_repo_tools.release_staging import stage_release_assets
+
+        configuration = _path(settings.root, args.configuration)
+        _validate_distinct_paths((configuration, args.target, args.journal, args.output, *args.asset))
+        inputs = {path: _read_candidate_input(path) for path in (configuration, args.target)}
+        policy = load_asset_policy(configuration)
+        target = parse_release_target(inputs[args.target])
+        title = args.tag if policy.expected_title == "tag" else None
+        if (target.repository, target.tag, target.commit, target.expected_title) != (policy.repository, args.tag, args.commit, title):
+            raise ValueError("release assertions/policy differ from captured target")
+        checkout = args.checkout.resolve(strict=True) if args.checkout is not None else None
+        if checkout is not None and Path(__file__).resolve().is_relative_to(checkout):
+            raise ValueError("release assets require a trusted installed runtime outside the observed checkout")
+
+        def unchanged() -> None:
+            if any(_read_candidate_input(path) != data for path, data in inputs.items()):
+                raise ValueError("asset batch policy or captured target changed")
+            if checkout is not None and resolve_revision(checkout, args.tag) != args.commit:
+                raise ValueError("local release tag differs from the independent commit assertion")
+
+        stage_release_assets(
+            settings.root,
+            target,
+            args.asset,
+            journal=args.journal,
+            destination=args.output,
+            approve=args.approve,
+            checkout=checkout,
+            dependencies=settings.release.published_dependencies,
+            verify_inputs=unchanged,
+        )
+        print("Verified and retained the complete asset transfer; preserve its original staging journal.")
+        return
     if args.operation == "retrieve":
         _retrieve_receipt(args, settings)
         return
@@ -806,8 +871,20 @@ def run(args: argparse.Namespace, settings: Config) -> int:
     try:
         # Every Path-valued option in these commands names a consumer file or
         # checkout. Keep the parser namespace reusable and apply --root once.
-        args = argparse.Namespace(**{name: settings.path(str(value)) if isinstance(value, Path) else value for name, value in vars(args).items()})
-        (run_evidence if args.action == "evidence" else run_assets)(args, settings)
+        args = argparse.Namespace(
+            **{
+                name: settings.path(str(value))
+                if isinstance(value, Path)
+                else [settings.path(str(path)) for path in value]
+                if name == "asset" and isinstance(value, list)
+                else value
+                for name, value in vars(args).items()
+            }
+        )
+        from research_repo_tools.dependency_progress import DependencyProgress, reporting
+
+        with reporting(DependencyProgress(mode=getattr(args, "progress", "none")), "release " + args.action):
+            (run_evidence if args.action == "evidence" else run_assets)(args, settings)
     except Exception as error:
         diagnostic = redact_release_diagnostic(format_exception_diagnostics(error))
         if args.action == "evidence" and getattr(args, "format", None) == "summary":

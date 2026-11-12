@@ -12,8 +12,10 @@ from urllib.parse import parse_qs, urlsplit
 from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
+from research_repo_tools._dependency_observation import retain_guard
 from research_repo_tools._git_checkout import _in_checkout
 from research_repo_tools.dependency_policy import POLICY_FILE, DependencyProject, InputSnapshot, configuration_paths, inside, project_manifests
+from research_repo_tools.dependency_progress import report
 from research_repo_tools.dependency_sources import (
     GitCommit,
     RegistryRelease,
@@ -332,6 +334,7 @@ def _resolve_cargo(*, cwd: Path, environment: dict[str, str], checkouts: tuple[P
 
 def check_native_graph(graph: DependencyGraph, *, sources: tuple[VerifiedSource, ...] = (), provider: SourceProvider | None = None) -> None:
     """Use uv/Cargo freshness semantics; never update a lock, fetch or build."""
+    report("started", "native graph", graph=f"{graph.project.ecosystem}:{graph.project.directory}")
     graph.snapshot.verify()
     if graph.project.ecosystem == "python":
         from research_repo_tools.dependency_provenance import _check_lock
@@ -416,14 +419,27 @@ def check_native_graph(graph: DependencyGraph, *, sources: tuple[VerifiedSource,
             inputs.append(verify_cargo_input(Path(string(package.get("manifest_path"), "Cargo manifest")).parent, matches[0], provider=provider))
         for observed in inputs:
             observed.verify()
+            retain_guard(observed.verify, observed.digest)
     graph.snapshot.verify()
 
 
 def verify_graph(graph: DependencyGraph, *, provider: SourceProvider | None = None, release: bool = True) -> tuple[VerifiedSource, ...]:
     """Bind every locked external source to eligible registry/commit evidence."""
+    return _verify_graph(graph, provider=provider, release=release, sources={})
+
+
+def _verify_graph(
+    graph: DependencyGraph, *, provider: SourceProvider | None, release: bool, sources: dict[Source, VerifiedSource]
+) -> tuple[VerifiedSource, ...]:
+    """Private pass-owned reuse of verified sources; each graph checks its lock."""
     results = []
-    for dependency in graph.dependencies:
-        verified = verify_source(dependency.source, provider=provider, release=release)
+    scope = f"{graph.project.ecosystem}:{graph.project.directory}"
+    report("started", "registry graph", graph=scope, total=len(graph.dependencies))
+    for index, dependency in enumerate(graph.dependencies):
+        verified = sources.get(dependency.source)
+        if verified is None:
+            verified = verify_source(dependency.source, provider=provider, release=release)
+            sources[dependency.source] = verified
         if verified.version != dependency.version:
             raise ValueError("verified source version differs from the lock")
         artifacts = {(a.url, a.sha256, a.size) for a in verified.artifacts}
@@ -432,5 +448,6 @@ def verify_graph(graph: DependencyGraph, *, provider: SourceProvider | None = No
         if dependency.checksum is not None and (len(verified.artifacts) != 1 or verified.artifacts[0].sha256 != dependency.checksum):
             raise ValueError("locked Cargo checksum differs from crates.io")
         results.append(verified)
+        report("verified", "registry graph", graph=scope, checked=index + 1, total=len(graph.dependencies), detail=dependency.source.package)
     graph.snapshot.verify()
     return tuple(results)

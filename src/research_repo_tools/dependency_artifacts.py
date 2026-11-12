@@ -3,15 +3,16 @@
 import hashlib
 import io
 import os
-import sys
 import tarfile
-import time
 from pathlib import Path, PurePosixPath
 from typing import TYPE_CHECKING
 
 from research_repo_tools._archive_paths import ArchivePaths
+from research_repo_tools._dependency_observation import retain_guard
 from research_repo_tools.dependency_policy import MAX_SNAPSHOT_FILE_BYTES, MAX_SNAPSHOT_FILES, InputSnapshot
+from research_repo_tools.dependency_progress import report
 from research_repo_tools.dependency_sources import HttpSourceProvider, SourceProvider, VerifiedSource, table
+from research_repo_tools.evidence import deterministic_json, sha256
 
 if TYPE_CHECKING:
     from research_repo_tools.dependency_graphs import DependencyGraph
@@ -88,23 +89,52 @@ def _cargo_input(path: Path, verified: VerifiedSource, *, provider: SourceProvid
                 raise ValueError("Cargo archive member cannot be read")
             with stream:
                 content = stream.read()
+            if not target.is_file():
+                raise ValueError(f"{prefix}: missing Cargo cache input {target}; fetch this locked crate into the selected Cargo cache and retry")
             if target.read_bytes() != content:
-                raise ValueError(f"Cargo dependency cache differs from published bytes: {relative}")
+                raise ValueError(f"{prefix}: Cargo dependency cache differs from published bytes at {target}; restore this locked crate's cache entry")
             observed.append((target, content))
+
     # Cargo creates these bookkeeping files after extraction. Every compilable
     # input must be present in the published archive, not merely its checksum map.
-    actual: set[str] = set()
-    for index, item in enumerate(path.rglob("*")):
-        if item.is_symlink() or index >= 20000:
-            raise ValueError("Cargo dependency cache has links or exceeds file limits")
-        if item.is_file():
-            actual.add(item.relative_to(path).as_posix())
-    if actual - expected - {".cargo-ok", ".cargo-checksum.json"}:
-        raise ValueError("Cargo dependency cache contains unpublished files")
+    def inventory_unchanged() -> None:
+        actual: set[str] = set()
+        for index, item in enumerate(path.rglob("*")):
+            if item.is_symlink() or item.is_junction() or index >= 20000:
+                raise ValueError(f"Cargo dependency cache has links or exceeds file limits at {path}; restore this locked crate's cache entry")
+            if item.is_file():
+                actual.add(item.relative_to(path).as_posix())
+        if actual - expected - {".cargo-ok", ".cargo-checksum.json"}:
+            raise ValueError(f"Cargo dependency cache contains unpublished files at {path}; restore this locked crate's cache entry")
+
+    inventory_unchanged()
     environment = InputSnapshot.capture(()).environment
     snapshot = InputSnapshot(tuple(observed), environment)
     snapshot.verify()
+    retain_guard(inventory_unchanged, sha256(deterministic_json({"path": str(path), "files": sorted(expected)})))
     return snapshot
+
+
+def python_environment_layout(graph: DependencyGraph) -> tuple[Path, tuple[Path, ...]]:
+    """Fail cheap local environment prerequisites before registry traversal."""
+    environment = graph.root / os.environ.get("UV_PROJECT_ENVIRONMENT", ".venv")
+    if environment.is_symlink() or environment.is_junction() or not environment.resolve().is_relative_to(graph.root):
+        raise ValueError("dependency environment must be contained in the observed project")
+    if not environment.exists():
+        return environment, ()
+    configuration_path = environment / "pyvenv.cfg"
+    if not configuration_path.is_file():
+        raise ValueError(f"dependency environment lacks {configuration_path}; recreate this environment from its declared lock")
+    configuration = configuration_path.read_text(encoding="utf-8")
+    if any(line.strip().lower().replace(" ", "") == "include-system-site-packages=true" for line in configuration.splitlines()):
+        raise ValueError("system-site-packages cannot establish dependency provenance")
+    candidates: list[Path] = [environment / "Lib/site-packages"] if os.name == "nt" else list((environment / "lib").glob("python*/site-packages"))
+    sites = tuple(site for site in candidates if site.is_dir())
+    if len(sites) != 1:
+        raise ValueError(
+            f"dependency environment requires one native site-packages directory at {environment}; recreate this environment from its declared lock"
+        )
+    return environment, sites
 
 
 def verify_python_environment(graph: DependencyGraph, *, build_directory: Path | None = None) -> None:
@@ -121,25 +151,25 @@ def verify_python_environment(graph: DependencyGraph, *, build_directory: Path |
     from research_repo_tools.dependency_policy import load_policy
     from research_repo_tools.dependency_provenance import _check_installation, _published_wheel, verify_wheel_payload
 
-    environment = graph.root / os.environ.get("UV_PROJECT_ENVIRONMENT", ".venv")
-    if not environment.exists():
+    environment, sites = python_environment_layout(graph)
+    environment_snapshot = InputSnapshot.capture((environment / "pyvenv.cfg",))
+
+    def layout_unchanged() -> None:
+        environment_snapshot.verify()
+        if python_environment_layout(graph) != (environment, sites):
+            raise ValueError("dependency environment layout changed during verification")
+
+    retain_guard(layout_unchanged, environment_snapshot.digest)
+    if not sites:
         return
-    if environment.is_symlink() or not environment.resolve().is_relative_to(graph.root):
-        raise ValueError("dependency environment must be contained in the observed project")
-    configuration = (environment / "pyvenv.cfg").read_text(encoding="utf-8")
-    if any(line.strip().lower().replace(" ", "") == "include-system-site-packages=true" for line in configuration.splitlines()):
-        raise ValueError("system-site-packages cannot establish dependency provenance")
-    candidates = [environment / "Lib/site-packages"] if os.name == "nt" else list((environment / "lib").glob("python*/site-packages"))
-    sites = [site for site in candidates if site.is_dir()]
-    if len(sites) != 1:
-        raise ValueError("dependency environment requires one native site-packages directory")
     from packaging.utils import canonicalize_name
 
     inventory = distribution_inventory(tuple(sites))
     installed = set(inventory)
     owned = {name for name, _, _ in graph.owned}
-    if set(installed) - owned - {dependency.source.package for dependency in graph.dependencies}:
-        raise ValueError("dependency environment contains unlocked distributions")
+    unexpected = set(installed) - owned - {dependency.source.package for dependency in graph.dependencies}
+    if unexpected:
+        raise ValueError(f"dependency environment {sites[0]} contains unlocked distributions: {', '.join(sorted(unexpected))}; sync the declared lock")
     roots = set()
     shared_files = set()
     for dist in inventory.values():
@@ -149,8 +179,11 @@ def verify_python_environment(graph: DependencyGraph, *, build_directory: Path |
                 shared_files.add(record.as_posix())
     legacy = _legacy_uv_hooks(sites[0])
     recognized = {path.name for path, content in legacy.files if content is not None}
-    if {path.name for path in sites[0].iterdir()} - roots - {"__pycache__"} - recognized:
-        raise ValueError("dependency environment contains unpublished files or startup hooks")
+    unexpected_files = {path.name for path in sites[0].iterdir()} - roots - {"__pycache__"} - recognized
+    if unexpected_files:
+        raise ValueError(
+            f"dependency environment contains unpublished files or startup hooks at {sites[0]}: {', '.join(sorted(unexpected_files))}; repair this environment"
+        )
     import tomllib
 
     locked = tomllib.loads((graph.root / "uv.lock").read_text(encoding="utf-8"))["package"]
@@ -162,14 +195,13 @@ def verify_python_environment(graph: DependencyGraph, *, build_directory: Path |
     observations = []
     source_wheels = []
     scripts = environment / ("Scripts" if os.name == "nt" else "bin")
-    print(f"Verifying {len(installed - owned)} installed dependencies", file=sys.stderr, flush=True)
-    for name in sorted(set(installed) - owned):
-        started = time.perf_counter()
-        print(f"Verifying installed dependency: {name}", file=sys.stderr, flush=True)
+    scope = f"python:{graph.project.directory}"
+    report("started", "installed bytes", graph=scope, total=len(installed - owned))
+    for index, name in enumerate(sorted(set(installed) - owned)):
+        report("started", "installed bytes", graph=scope, checked=index, total=len(installed - owned), detail=name)
         # Every RECORD is checked below. Shared namespace files belong to their
         # own distribution; unrecorded additions still fail their namespace scan.
         observed = inspect_distribution(inventory[name], limit=native_limit, shared_files=frozenset(shared_files))
-        observed_at = time.perf_counter()
         matches = [item for item in locked if canonicalize_name(item["name"]) == name and item["version"] == observed.get("version")]
         if len(matches) != 1 or observed.get("direct_url") is not None:
             raise ValueError("installed dependency differs from the registry lock or has development provenance")
@@ -184,23 +216,24 @@ def verify_python_environment(graph: DependencyGraph, *, build_directory: Path |
                 name, matches[0]["version"], table(matches[0], "locked package"), (observed,), require_sdist=False, limit=native_limit, scripts=scripts
             )
         observations.append((name, observed))
-        print(
-            f"Verified {name}: installed files {observed_at - started:.2f}s, artifact {time.perf_counter() - observed_at:.2f}s",
-            file=sys.stderr,
-            flush=True,
-        )
+        report("verified", "installed bytes", graph=scope, checked=index + 1, total=len(installed - owned), detail=name)
     # Discover identities again; a retained inventory must not hide additions,
     # removals or duplicate distributions introduced during verification.
-    started = time.perf_counter()
-    print("Rechecking installed identities and bytes", file=sys.stderr, flush=True)
-    current = distribution_inventory(tuple(sites))
-    if current.keys() != inventory.keys():
-        raise ValueError("installed dependency inventory changed during verification")
-    for name, observed in observations:
-        if inspect_distribution(current[name], limit=native_limit, shared_files=frozenset(shared_files)) != observed:
-            raise ValueError("installed dependency changed during verification")
-    legacy.verify()
-    for name, version, source, observed in source_wheels:
-        receipt = verify_build_receipt(graph.root, name, version, source, directory=build_directory)
-        verify_wheel_payload(name, receipt.payload, observed, scripts=scripts, limit=MAX_WHEEL_BYTES)
-    print(f"Rechecked installed identities and bytes in {time.perf_counter() - started:.2f}s", file=sys.stderr, flush=True)
+
+    def unchanged() -> None:
+        current = distribution_inventory(tuple(sites))
+        if current.keys() != inventory.keys():
+            raise ValueError("installed dependency inventory changed during verification")
+        if {path.name for path in sites[0].iterdir()} - roots - {"__pycache__"} - recognized:
+            raise ValueError(f"dependency environment contains unpublished files or startup hooks at {sites[0]}")
+        for name, observed in observations:
+            if inspect_distribution(current[name], limit=native_limit, shared_files=frozenset(shared_files)) != observed:
+                raise ValueError(f"installed dependency changed during verification: {name}")
+        legacy.verify()
+        for name, version, source, observed in source_wheels:
+            receipt = verify_build_receipt(graph.root, name, version, source, directory=build_directory)
+            verify_wheel_payload(name, receipt.payload, observed, scripts=scripts, limit=MAX_WHEEL_BYTES)
+
+    unchanged()
+    retain_guard(unchanged, sha256(deterministic_json({"observations": observations, "inventory": sorted(inventory), "roots": sorted(roots)})))
+    report("completed", "installed bytes", graph=scope, checked=len(observations), total=len(installed - owned))

@@ -134,16 +134,23 @@ def _json(url: str) -> object:
         url, headers={"Accept": "application/json", "User-Agent": "research-repo-tools (https://github.com/acgetchell/research-repo-tools)"}
     )
     try:
-        with closing_http_errors(), _OPENER.open(request, timeout=15) as response:
-            payload = response.read(LIMIT + 1)
-            if response.status != 200 or response.url != url:
-                raise RegistryLookupError("registry returned an unexpected status or redirect")
+        if urlsplit(url).netloc in {"pypi.org", "crates.io"}:
+            from research_repo_tools._registry_requests import read_registry
+
+            payload = read_registry(url, limit=LIMIT)
+        else:
+            with closing_http_errors(), _OPENER.open(request, timeout=15) as response:
+                payload = response.read(LIMIT + 1)
+                if response.status != 200 or response.url != url:
+                    raise RegistryLookupError("registry returned an unexpected status or redirect")
     except urllib.error.HTTPError as error:
         if error.code == 404 and error.url == url:
             return _NOT_FOUND
         raise RegistryLookupError(f"registry lookup failed with HTTP {error.code}; absence is unproven") from error
     except (OSError, urllib.error.URLError) as error:
         raise RegistryLookupError("registry lookup failed; absence is unproven") from error
+    except ValueError as error:
+        raise RegistryLookupError(str(error)) from error
     if len(payload) > LIMIT:
         raise RegistryLookupError("registry response exceeds the byte limit")
     try:
@@ -198,10 +205,11 @@ def lookup_version(registry: Literal["pypi", "crates-io"], package: str, version
 
 
 def wait_for_version(registry: Literal["pypi", "crates-io"], package: str, version: str, *, attempts: int = 1, interval: int = 10) -> RegistryVersion:
-    """Retry only proven absence, for at most 31 requests and 300 seconds of delay.
+    """Poll proven absence at most 31 times with up to 300s total inter-poll delay.
 
-    Each request has a 15-second timeout. Authentication, rate-limit, transport,
-    and parsing failures stop immediately. This function never retries uploads.
+    Public registry GETs separately allow three transient attempts within a
+    60-second retry budget. Exhausted lookups and permanent/integrity failures
+    stop polling; only an exact 404 permits the next poll. Never retry uploads.
     """
     if type(attempts) is not int or not 1 <= attempts <= 31 or type(interval) is not int or not 0 <= interval <= 10:
         raise ValueError("registry wait requires 1..31 attempts and a 0..10 second interval")

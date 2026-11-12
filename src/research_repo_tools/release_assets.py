@@ -336,6 +336,11 @@ def revalidate_release_target(root: Path, target: ReleaseTarget, *, checkout: Pa
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
     check_release_dependencies(checkout if checkout is not None else root, packages=dependencies)
+    return _observe_release_target(root, target, checkout=checkout)
+
+
+def _observe_release_target(root: Path, target: ReleaseTarget, *, checkout: Path | None) -> GitHubRelease:
+    """Live identity observation inside an independently verified operation."""
     if not isinstance(target, ReleaseTarget):
         raise TypeError("release target must be a ReleaseTarget")
     if checkout is not None:
@@ -571,10 +576,31 @@ def _publish_release_asset(
         verify_sha256(original, expected_sha256)
     if target is None:
         target = preflight_release_target(root, repository, tag, _remote_commit(root, repository, tag), checkout=checkout, dependencies=dependencies)
+    return _upload_asset(
+        root,
+        target,
+        name,
+        original,
+        limits=limits,
+        publish=publish,
+        observe=lambda: revalidate_release_target(root, target, checkout=checkout, dependencies=dependencies),
+    )
+
+
+def _upload_asset(
+    root: Path,
+    target: ReleaseTarget,
+    name: str,
+    original: bytes,
+    *,
+    limits: ArchiveLimits,
+    publish: bool,
+    observe: Callable[[], GitHubRelease],
+) -> tuple[str, int, int, str | None]:
     with tempfile.TemporaryDirectory(prefix="research-release-upload-") as directory:
         staged = Path(directory) / name
         staged.write_bytes(original)
-        release = revalidate_release_target(root, target, checkout=checkout, dependencies=dependencies)
+        release = observe()
         existing = any(entry[0] == name for entry in release.assets)
         if existing:
             _verified_asset(release, name, original)
@@ -593,14 +619,14 @@ def _publish_release_asset(
                     str(staged),
                 ],
             )
-        current = revalidate_release_target(root, target, checkout=checkout, dependencies=dependencies)
+        current = observe()
         attached = _verified_asset(current, name, original)
         downloaded = _download(root, target.repository, attached[1], limits.archive_bytes)
         if downloaded != original:
             raise ValueError("downloaded release asset differs; refusing to publish")
         # Recheck after the potentially slow byte verification, immediately before
         # publication. Require the same completed asset ID as the verified bytes.
-        final = revalidate_release_target(root, target, checkout=checkout, dependencies=dependencies)
+        final = observe()
         if _verified_asset(final, name, original) != attached:
             raise ValueError("release asset identity changed after byte verification")
         if publish:

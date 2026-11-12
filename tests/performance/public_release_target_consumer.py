@@ -7,11 +7,13 @@ import io
 import json
 import subprocess
 import sys
+import tarfile
 import tempfile
 import unittest
 from pathlib import Path
 from typing import Any, override
 from unittest.mock import patch
+from urllib.parse import parse_qs, urlsplit
 
 from research_repo_tools import cli, config, release_assets
 from research_repo_tools.release_assets import (
@@ -25,6 +27,7 @@ from research_repo_tools.release_assets import (
     serialize_release_target,
 )
 from research_repo_tools.release_publishing import publish_reviewed_release
+from research_repo_tools.release_staging import stage_release_assets
 
 REPOSITORY = "example/project"
 TAG = "v1.2.3"
@@ -114,6 +117,278 @@ class GitHubFixture:
         assert repository == REPOSITORY and identifier == 8
         self.on_download()
         return self.downloaded
+
+
+class BatchGitHubFixture(GitHubFixture):
+    def __init__(self):
+        super().__init__()
+        self.payloads = {}
+        self.fail_after_upload = None
+
+    @override
+    def run(self, program, args, **kwargs):
+        if "POST" not in args:
+            return super().run(program, args, **kwargs)
+        self.calls.append(args)
+        parsed = urlsplit(args[3])
+        assert parsed.netloc == "uploads.github.com" and parsed.path == f"/repos/{REPOSITORY}/releases/9/assets"
+        name = parse_qs(parsed.query)["name"][0]
+        payload = Path(args[7]).read_bytes()
+        identifier = 100 + len(self.uploaded)
+        self.uploaded.append(payload)
+        self.payloads[identifier] = payload
+        asset = {"id": identifier, "name": name, "state": "uploaded", "size": len(payload), "digest": "sha256:" + hashlib.sha256(payload).hexdigest()}
+        self.release["assets"].append(asset)
+        self.on_upload()
+        if self.fail_after_upload == len(self.uploaded):
+            raise OSError("connection lost after upload")
+        return subprocess.CompletedProcess([program, *args], 0, json.dumps(asset).encode(), b"")
+
+    @override
+    def download(self, root, repository, identifier, limit):
+        assert repository == REPOSITORY
+        self.on_download()
+        return self.payloads[identifier]
+
+
+class TestReleaseStaging(unittest.TestCase):
+    @override
+    def setUp(self):
+        temporary = tempfile.TemporaryDirectory(prefix="release staging café ")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.assets = tuple(self.root / name for name in ("acceptance.json", "policy.json", "payload.tar.gz"))
+        for index, asset in enumerate(self.assets):
+            asset.write_bytes(PAYLOAD + bytes([index]))
+        self.journal = self.root / "journal.json"
+        self.destination = self.root / "transfer.json"
+        self.target = ReleaseTarget(REPOSITORY, TAG, 9, SHA, TAG)
+        self.server = BatchGitHubFixture()
+        self.enterContext(patch("research_repo_tools.release_assets.run_command_bytes", side_effect=self.server.run))
+        self.enterContext(patch("research_repo_tools.release_assets._download", side_effect=self.server.download))
+
+    def stage(self, assets=None):
+        return stage_release_assets(
+            self.root, self.target, self.assets if assets is None else assets, journal=self.journal, destination=self.destination, approve=True
+        )
+
+    def test_batch_checks_dependencies_twice_for_one_or_several_assets_and_retries_exact_bytes(self):
+        from research_repo_tools.dependency_provenance import check_release_dependencies
+
+        for count in (1, 3):
+            with self.subTest(count=count):
+                self.journal.unlink(missing_ok=True)
+                self.destination.unlink(missing_ok=True)
+                self.server.release["assets"] = []
+                self.server.uploaded = []
+                with patch("research_repo_tools.dependency_provenance.check_release_dependencies", wraps=check_release_dependencies) as checks:
+                    receipt = self.stage(self.assets[:count])
+                self.assertEqual(checks.call_count, 2)
+                self.assertEqual(self.server.uploaded, [p.read_bytes() for p in self.assets[:count]])
+                self.assertEqual(self.journal.read_bytes(), receipt)
+                self.assertEqual(self.destination.read_bytes(), receipt)
+                self.assertEqual(json.loads(receipt)["state"], "complete")
+                identifiers = {a["name"]: a["id"] for a in self.server.release["assets"]}
+                self.assertEqual(self.stage(self.assets[:count]), receipt)
+                self.assertEqual(len(self.server.uploaded), count)
+                self.assertEqual({a["name"]: a["id"] for a in self.server.release["assets"]}, identifiers)
+                self.assertEqual(self.server.published, 0)
+
+    def test_interruption_after_each_upload_resumes_original_ids_without_duplicate_effects(self):
+        for count in (1, 2, 3):
+            with self.subTest(count=count):
+                self.journal.unlink(missing_ok=True)
+                self.destination.unlink(missing_ok=True)
+                self.server.release["assets"] = []
+                self.server.uploaded = []
+                self.server.fail_after_upload = count
+                with self.assertRaisesRegex(ValueError, "repeat release assets stage"):
+                    self.stage()
+                self.assertTrue(self.journal.is_file())
+                self.assertFalse(self.destination.exists())
+                original = {a["name"]: a["id"] for a in self.server.release["assets"]}
+                self.server.fail_after_upload = None
+                receipt = json.loads(self.stage())
+                self.assertEqual(len(self.server.uploaded), 3)
+                self.assertTrue(original.items() <= {name: a["id"] for name, a in receipt["assets"].items()}.items())
+                self.assertEqual(len(receipt["assets"]), 3)
+                self.assertEqual(self.server.published, 0)
+
+    def test_replaced_asset_changed_input_and_conflicting_receipt_stop_without_effects(self):
+        self.server.fail_after_upload = 2
+        with self.assertRaises(ValueError):
+            self.stage()
+        original = self.journal.read_bytes()
+        self.server.fail_after_upload = None
+        self.server.release["assets"][0]["id"] = 900
+        with self.assertRaisesRegex(ValueError, "asset ID was replaced"):
+            self.stage()
+        self.server.release["assets"][0]["id"] = 100
+        before = self.assets[0].read_bytes()
+        self.assets[0].write_bytes(before + b"changed")
+        with self.assertRaisesRegex(ValueError, "original target or input bytes"):
+            self.stage()
+        self.assets[0].write_bytes(before)
+        damaged = json.loads(original)
+        damaged["target"]["release_id"] = 9.0
+        from research_repo_tools.evidence import deterministic_json
+
+        self.journal.write_bytes(deterministic_json(damaged))
+        with self.assertRaisesRegex(ValueError, "original target or input bytes"):
+            self.stage()
+        self.journal.write_bytes(original)
+        self.destination.write_bytes(b"conflicting transfer")
+        with self.assertRaisesRegex(ValueError, "existing transfer"):
+            self.stage()
+        self.assertEqual(len(self.server.uploaded), 2)
+        self.assertEqual(self.journal.read_bytes(), original)
+        self.assertEqual(self.destination.read_bytes(), b"conflicting transfer")
+
+    def test_local_dependency_drift_stops_uploads_and_original_bytes_allow_resume(self):
+        manifest = self.root / "pyproject.toml"
+        original = b'[project]\nname="fixture"\nversion="1.0.0"\n'
+        manifest.write_bytes(original)
+
+        def changed():
+            manifest.write_bytes(original + b"# drift\n")
+
+        self.server.on_upload = changed
+        with self.assertRaisesRegex(ValueError, "interrupted"):
+            self.stage()
+        self.assertEqual(len(self.server.uploaded), 1)
+        with self.assertRaisesRegex(ValueError, "local inputs or installed runtime changed"):
+            self.stage()
+        self.assertEqual(len(self.server.uploaded), 1)
+        self.assertFalse(self.destination.exists())
+        manifest.write_bytes(original)
+        self.server.on_upload = lambda: None
+        self.stage()
+        self.assertEqual(len(self.server.uploaded), 3)
+
+    def test_final_fresh_failure_preserves_progress_and_no_transfer(self):
+        from research_repo_tools.dependency_provenance import check_release_dependencies
+
+        calls = []
+
+        def dependencies(*args, **kwargs):
+            calls.append(None)
+            if len(calls) == 2:
+                raise ValueError("registry release yanked")
+            return check_release_dependencies(*args, **kwargs)
+
+        with patch("research_repo_tools.dependency_provenance.check_release_dependencies", side_effect=dependencies), self.assertRaises(ValueError):
+            self.stage()
+        self.assertEqual(len(calls), 2)
+        self.assertEqual(len(self.server.uploaded), 3)
+        self.assertEqual(len(json.loads(self.journal.read_bytes())["assets"]), 3)
+        self.assertFalse(self.destination.exists())
+        self.stage()
+        self.assertEqual(len(self.server.uploaded), 3)
+
+    def test_batch_registry_requests_are_bounded_and_fresh_yank_blocks_transfer(self):
+        cache = self.root / "crate cache"
+        content = {"Cargo.toml": b'[package]\nname="upstream"\nversion="1.2.3"\n', "src/lib.rs": b"// published\r\n"}
+        buffer = io.BytesIO()
+        with tarfile.open(fileobj=buffer, mode="w:gz") as archive:
+            for name, payload in content.items():
+                member = tarfile.TarInfo("upstream-1.2.3/" + name)
+                member.size = len(payload)
+                archive.addfile(member, io.BytesIO(payload))
+                path = cache / name
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(payload)
+        payload = buffer.getvalue()
+        digest = hashlib.sha256(payload).hexdigest()
+        origin = "registry+https://github.com/rust-lang/crates.io-index"
+        (self.root / "dependency-sources.toml").write_bytes(b'schema=1\n[projects.main]\necosystem="cargo"\n')
+        (self.root / "Cargo.toml").write_bytes(b'[package]\nname="fixture"\nversion="1.2.3"\n[dependencies]\nupstream="=1.2.3"\n')
+        (self.root / "Cargo.lock").write_bytes(
+            (
+                f'version=4\n[[package]]\nname="fixture"\nversion="1.2.3"\n[[package]]\nname="upstream"\nversion="1.2.3"\nsource="{origin}"\nchecksum="{digest}"\n'
+            ).encode()
+        )
+        metadata = {
+            "workspace_root": str(self.root),
+            "packages": [
+                {"id": "owner", "name": "fixture", "version": "1.2.3", "source": None, "manifest_path": str(self.root / "Cargo.toml")},
+                {"id": "dep", "name": "upstream", "version": "1.2.3", "source": origin, "manifest_path": str(cache / "Cargo.toml")},
+            ],
+            "resolve": {"nodes": [{"id": "owner", "dependencies": ["dep"]}, {"id": "dep", "dependencies": []}]},
+        }
+        calls = []
+        yank = False
+
+        def read(url):
+            calls.append(url)
+            if url == "https://static.crates.io/crates/upstream/upstream-1.2.3.crate":
+                return payload
+            self.assertEqual(url, "https://crates.io/api/v1/crates/upstream/1.2.3")
+            return json.dumps({"version": {"crate": "upstream", "num": "1.2.3", "yanked": yank, "checksum": digest, "crate_size": len(payload)}}).encode()
+
+        with (
+            patch("research_repo_tools.dependency_sources.HttpSourceProvider.read", side_effect=read),
+            patch("research_repo_tools.dependency_graphs._resolve_cargo", return_value=Path(sys.executable)),
+            patch("research_repo_tools.process.run_command", return_value=subprocess.CompletedProcess([], 0, json.dumps(metadata), "")),
+        ):
+            for count in (1, 3):
+                with self.subTest(count=count):
+                    self.journal.unlink(missing_ok=True)
+                    self.destination.unlink(missing_ok=True)
+                    self.server.release["assets"] = []
+                    self.server.uploaded = []
+                    calls.clear()
+                    self.stage(self.assets[:count])
+                    self.assertEqual(len(calls), 4)  # Two metadata + two verified archives, independent of asset count.
+            self.journal.unlink()
+            self.destination.unlink()
+            self.server.release["assets"] = []
+            self.server.uploaded = []
+
+            def uploaded():
+                nonlocal yank
+                yank = True
+
+            self.server.on_upload = uploaded
+            with self.assertRaises(ValueError) as failure:
+                self.stage()
+            self.assertIn("yanked", str(failure.exception.__cause__))
+            self.assertEqual(len(self.server.uploaded), 3)
+            self.assertFalse(self.destination.exists())
+            self.assertEqual(len(json.loads(self.journal.read_bytes())["assets"]), 3)
+
+    def test_cli_stage_resolves_relative_inputs_and_emits_json_progress(self):
+        (self.root / "assets.toml").write_bytes(b'schema=1\nrepository="example/project"\nexpected-title="tag"\n')
+        (self.root / "target.json").write_bytes(serialize_release_target(self.target))
+        args = [
+            "--root",
+            str(self.root),
+            "release",
+            "assets",
+            "stage",
+            "assets.toml",
+            "--approve",
+            "--commit",
+            SHA,
+            "--tag",
+            TAG,
+            "--target",
+            "target.json",
+            "--journal",
+            "journal.json",
+            "--output",
+            "transfer.json",
+            "--progress",
+            "json",
+        ]
+        for asset in self.assets:
+            args.extend(("--asset", asset.name))
+        with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as progress:
+            self.assertEqual(cli.main(args), 0)
+        events = [json.loads(line) for line in progress.getvalue().splitlines()]
+        self.assertEqual(sum(e["event"] == "verified" and e["phase"] == "asset" for e in events), 3)
+        self.assertTrue(all(e["schema"] == "research-repo-tools/dependency-progress/v1" for e in events))
+        self.assertTrue(self.destination.is_file())
+        self.assertEqual(self.server.published, 0)
 
 
 class TestReleaseTargetConsumer(unittest.TestCase):

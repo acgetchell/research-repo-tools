@@ -7,9 +7,8 @@ The provider boundary transports bytes, never executable consumer metadata.
 import hashlib
 import json
 import re
-import threading
-import time
 import tomllib
+import urllib.error
 from dataclasses import asdict, dataclass
 from pathlib import PurePosixPath
 from typing import Literal, Protocol, TypeIs
@@ -27,8 +26,6 @@ type Ecosystem = Literal["python", "cargo"]
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _REPOSITORY = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*")
-_CRATES_IO_LOCK = threading.Lock()
-_crates_io_requested_at: float | None = None
 
 
 def package_name(ecosystem: Ecosystem, name: str) -> str:
@@ -138,24 +135,15 @@ class SourceProvider(Protocol):
 class HttpSourceProvider:
     def read(self, url: str) -> bytes:
         from research_repo_tools import registry
+        from research_repo_tools._registry_requests import read_registry
         from research_repo_tools.tooling_runtime import _read
 
-        if urlsplit(url).netloc in {"files.pythonhosted.org", "static.crates.io"}:
-            with registry.closing_http_errors(), registry._OPENER.open(url, timeout=30) as response:
-                payload: object = response.read(registry.MAX_BYTES + 1)
-                if not isinstance(payload, bytes) or response.status != 200 or response.url != url or len(payload) > registry.MAX_BYTES:
-                    raise ValueError("dependency artifact returned an unexpected status, redirect or oversized payload")
-            return payload
-        parsed = urlsplit(url)
-        if parsed.netloc == "crates.io" and parsed.path.startswith("/api/"):
-            # Share pacing across providers, graphs and repeated verifications.
-            # Do not cache observations or delay static.crates.io downloads.
-            global _crates_io_requested_at
-            with _CRATES_IO_LOCK:
-                while _crates_io_requested_at is not None and (remaining := 1 - (time.monotonic() - _crates_io_requested_at)) > 0:
-                    time.sleep(remaining)
-                _crates_io_requested_at = time.monotonic()
-                return _read(url)
+        host = urlsplit(url).netloc
+        if host in {"pypi.org", "crates.io", "files.pythonhosted.org", "static.crates.io"}:
+            try:
+                return read_registry(url, limit=registry.MAX_BYTES if host in {"files.pythonhosted.org", "static.crates.io"} else 1024 * 1024)
+            except urllib.error.HTTPError as error:
+                raise ValueError(f"registry GET failed with HTTP {error.code}; availability is unproven") from None
         return _read(url)
 
 

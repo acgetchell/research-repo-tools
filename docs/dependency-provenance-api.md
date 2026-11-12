@@ -150,6 +150,53 @@ the observed checkout, even when the controller runtime lives elsewhere.
 Asset and `verify_candidate_release` APIs accept `dependencies=()` to carry
 additional explicit selections through every revalidation, including the final
 upload/publication checks.
+
+`check_release_dependencies(..., progress=DependencyProgress(mode="json"))`
+accepts the reporter from `research_repo_tools.dependency_progress`; an observer
+callback can receive the same versioned event dictionaries. CLI dependency
+checks and asset batches default to human progress on stderr; candidate checks
+default to `none`. All three accept `--progress human|json|none`. JSON events use
+`research-repo-tools/dependency-progress/v1` and include phase, graph, checked,
+total (null when unknown), elapsed seconds, request and retry counts, and a
+bounded diagnostic. They contain no provider URLs, exception payloads or ETA.
+Progress is advisory; only a successful verification establishes provenance.
+Observers receive independent dictionaries; changing one cannot rewrite the
+serialized event. Observer or stream errors abort the operation and restore the
+prior reporter. If verification is already failing, its original error takes
+precedence over a failure to report it.
+
+One dependency-policy pass shares verified metadata for an exact source identity
+across configured graphs. Every graph still compares its own lock checksums and
+artifacts. A later pass fetches fresh metadata, including current yank status.
+Local policy, manifest, lock and environment layout checks precede remote graph
+traversal where their inputs are available. Cargo cache errors identify the
+affected locked crate/path; repair that cache entry. Unexpected installed files
+require repair of the named environment from its declared lock. Preserve the
+original benchmark evidence and release handoffs while repairing dependencies.
+
+Public PyPI/crates.io metadata and dependency-artifact GETs allow at most three
+attempts for connection/read timeouts, connection failures and HTTP 408, 429,
+500, 502, 503 or 504. Each attempt preserves the original HTTPS URL, redirect
+rejection and byte bounds. The retry window is 60 seconds with a maximum
+30-second I/O timeout; it is not a whole-graph completion estimate or a hard
+wall-clock bound on system DNS resolution or a slowly streaming response.
+Waiting for the shared crates.io pacing lock consumes the same retry budget.
+Backoff is one then two seconds. A valid `Retry-After` can extend a delay to at
+most ten seconds; larger or malformed values stop verification for a later
+operator retry. Every crates.io API attempt retains process-wide one-second
+pacing. Parsing, authentication, source/identity/hash errors and mutations are
+never retried. Exhaustion is unavailable evidence, never absence or success.
+
+The composed candidate retention API runs fresh checks before native verification
+and immediately before retaining outputs. Standalone candidate verification keeps
+entry and return checks. Asset staging owns a separate synchronous dependency
+observation: fresh at entry, refreshed at the next observation after five minutes
+since the last pass completed, and always fresh before final transfer retention.
+Between passes it rechecks original local inputs, environment and installed bytes
+while live target/asset observations continue. Neither API exposes a caller
+verification override or shares observations across operations. Approval and
+publication still obtain their own fresh checks.
+
 Low-level rootless evidence functions still verify their explicit provider and
 artifact inputs; callers composing those primitives must call the dependency gate
 with the observed root before effects.

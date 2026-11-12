@@ -1219,6 +1219,14 @@ sys.exit(status)
             "approval.json",
         ]
         frozen_acceptance = (owner / "acceptance.json").read_bytes()
+
+        def verified(*args, retain=None, **kwargs):
+            # This fixture isolates attachment approval. Keep the real retention
+            # transaction and its attachment callback around the frozen verifier.
+            if retain is not None:
+                retain(frozen_acceptance, lambda: None)
+            return frozen_acceptance
+
         with (
             patch("research_repo_tools.release_assets._release_by_id", side_effect=release),
             patch("research_repo_tools.release_assets._remote_commit", return_value=policy.commit),
@@ -1227,7 +1235,7 @@ sys.exit(status)
             patch("research_repo_tools.candidate_attachment._download", side_effect=download),
             patch("research_repo_tools.release_interfaces._checkout"),
             patch("research_repo_tools.release_assets.require_release_checkout"),
-            patch("research_repo_tools.candidate_reuse.verify_candidate_release", return_value=frozen_acceptance) as acceptance_check,
+            patch("research_repo_tools.candidate_reuse._verify_candidate_release", side_effect=verified) as acceptance_check,
         ):
             self.assertEqual(main(attach), 0)
             self.assertEqual(main(verify), 0)
@@ -2604,6 +2612,115 @@ sys.exit(status)
             self.assertEqual((self.root / "approval.json").read_bytes(), accepted)
             self.assertEqual(serialize_evidence(evidence)[1], (self.root / "evidence.json").read_bytes())
             self.assertEqual(diagnostic.getvalue(), "")
+            (self.root / "policy.json").write_bytes(serialize_candidate_policy(replace(policy, commit=None)))
+            from research_repo_tools.dependency_provenance import check_release_dependencies
+
+            with patch("research_repo_tools.dependency_provenance.check_release_dependencies", wraps=check_release_dependencies) as checks:
+                self.assertEqual(
+                    main(
+                        [
+                            *args,
+                            "--commit",
+                            policy.commit,
+                            "--policy-output",
+                            "final-policy.json",
+                            "--native-output",
+                            "native.json",
+                            "--output",
+                            "pending-accepted.json",
+                        ]
+                    ),
+                    0,
+                )
+            self.assertEqual(checks.call_count, 2)
+            self.assertEqual((self.root / "pending-accepted.json").read_bytes(), accepted)
+            self.assertEqual((self.root / "final-policy.json").read_bytes(), serialize_candidate_policy(policy))
+            self.assertEqual(json.loads((self.root / "native.json").read_bytes()), json.loads(accepted)["native"])
+            self.assertIsNone(parse_candidate_policy((self.root / "policy.json").read_bytes()).commit)
+
+    def test_candidate_retention_uses_two_fresh_checks_and_preserves_originals_on_failure(self):
+        from research_repo_tools.candidate_reuse import retain_candidate_release
+        from research_repo_tools.dependency_provenance import check_release_dependencies
+
+        evidence, policy, native, _, accepted, _ = self.candidate_fixture(generated=True)
+        destination = self.root / "retained space" / "acceptance.json"
+        policy_output = destination.parent / "policy.json"
+        native_output = destination.parent / "native.json"
+        options: dict[str, Any] = dict(
+            destination=destination,
+            policy_output=policy_output,
+            native_output=native_output,
+            acquisition_sha256=acquisition_assertion_digest(policy),
+            publication_receipt=self.publication_receipt,
+            publication_sha256=self.publication_digest,
+        )
+        with patch("research_repo_tools.dependency_provenance.check_release_dependencies", wraps=check_release_dependencies) as checks:
+            result = retain_candidate_release(self.root, evidence, policy, native, lambda endpoint: {}, **options)
+        self.assertEqual(result, accepted)
+        self.assertEqual(checks.call_count, 2)
+        self.assertEqual(destination.read_bytes(), accepted)
+        self.assertEqual(policy_output.read_bytes(), serialize_candidate_policy(policy))
+        self.assertEqual(json.loads(native_output.read_bytes()), json.loads(accepted)["native"])
+        before = {path: path.read_bytes() for path in (destination, policy_output, native_output)}
+        calls = []
+
+        def changed_registry(*args, **kwargs):
+            calls.append(None)
+            if len(calls) == 2:
+                raise ValueError("published Cargo package identity differs or is yanked")
+            return check_release_dependencies(*args, **kwargs)
+
+        with (
+            patch("research_repo_tools.dependency_provenance.check_release_dependencies", side_effect=changed_registry),
+            self.assertRaisesRegex(ValueError, "yanked"),
+        ):
+            retain_candidate_release(self.root, evidence, policy, native, lambda endpoint: {}, **options)
+        self.assertEqual(len(calls), 2)
+        self.assertEqual({path: path.read_bytes() for path in before}, before)
+        policy_output.write_bytes(b"conflicting original")
+        with self.assertRaisesRegex(ValueError, "different evidence"):
+            retain_candidate_release(self.root, evidence, policy, native, lambda endpoint: {}, **options)
+        self.assertEqual(destination.read_bytes(), before[destination])
+        self.assertEqual(policy_output.read_bytes(), b"conflicting original")
+
+    def test_candidate_retention_checks_handoff_again_after_final_dependency_guard(self):
+        from research_repo_tools.candidate_reuse import retain_candidate_release
+        from research_repo_tools.dependency_provenance import check_release_dependencies
+
+        evidence, policy, native, _, _, _ = self.candidate_fixture(generated=True)
+        destination = self.root / "guarded acceptance.json"
+        source = self.root / "external handoff.json"
+        source.write_bytes(b"original")
+        calls = []
+
+        def dependencies(*args, **kwargs):
+            calls.append(None)
+            result = check_release_dependencies(*args, **kwargs)
+            if len(calls) == 2:
+                source.write_bytes(b"changed")
+            return result
+
+        def unchanged():
+            if source.read_bytes() != b"original":
+                raise ValueError("handoff changed")
+
+        with (
+            patch("research_repo_tools.dependency_provenance.check_release_dependencies", side_effect=dependencies),
+            self.assertRaisesRegex(ValueError, "handoff changed"),
+        ):
+            retain_candidate_release(
+                self.root,
+                evidence,
+                policy,
+                native,
+                lambda endpoint: {},
+                destination=destination,
+                acquisition_sha256=acquisition_assertion_digest(policy),
+                publication_receipt=self.publication_receipt,
+                publication_sha256=self.publication_digest,
+                verify_inputs=unchanged,
+            )
+        self.assertFalse(destination.exists())
 
     def test_committed_evidence_rejects_tampering_inputs_history_indexes_and_approval_drift(self):
         evidence, policy, native, provider, accepted, mapping = self.candidate_fixture(generated=True)

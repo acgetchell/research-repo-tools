@@ -528,6 +528,15 @@ revalidate that selection. Obtain `STEP1_ASSERTION_SHA256` from the trusted
 acquisition owner's separate handoff. Never derive it from the candidate being
 checked. These operations perform no benchmark acquisition or preflight.
 
+When Step 1's policy has a pending final commit, add
+`--commit FULL_COMMIT --policy-output /durable/final-policy.json` and optionally
+`--native-output /durable/native.json`. Verification keeps the final policy in
+memory, then retains it with the acceptance in one guarded update. The composed
+path checks dependencies before native verification and again immediately before
+retention. Keep output paths outside the observed checkout. Use `--progress
+human` or `--progress json` for dependency phases and request/retry counts;
+`release dependencies` supports the same modes and defaults to human progress.
+
 For committed schema-2 publisher histories, v0.2.7 adds a publication receipt.
 Declare the original report configuration in
 `CandidatePolicy(report="tooling/performance-report.toml", ...)`.
@@ -597,6 +606,26 @@ authenticated target with `just release-assets retrieve`. The command freezes
 the original run/attempt/artifact ID/digest and revalidates that selection on
 retry. Configure the exact workflow and required steps as shown in the
 [retrieval guide][draft-retrieval].
+
+Stage a batch of original files on that captured draft with an asset policy
+containing `schema=1`, `repository="owner/repository"` and
+`expected-title="tag"`:
+
+```sh
+just release-assets stage tooling/release-assets.toml \
+  --checkout . --commit FULL_COMMIT --tag v1.2.3 \
+  --target /durable/target.json --asset /durable/final-policy.json \
+  --asset /durable/accepted.json --asset /durable/benchmark.tar.gz \
+  --journal /durable/staging.json --output /durable/transfer.json --approve
+```
+
+Keep the journal and original files on interruption, then repeat the same
+command. It verifies matching assets without uploading them again; replaced IDs,
+changed inputs and conflicting receipts stop recovery. The complete transfer is
+retained only after every asset and a fresh dependency pass are verified. Staging
+never publishes the draft or reacquires measurements. `--progress json` provides
+machine-readable status. See the [batch contract][evidence-api] for freshness,
+input bounds and environment requirements.
 
 For Python releases, set `package-kind = "python"` and
 `guarantee = "python-distributions"` in the evidence policy. Explicit selection
@@ -698,6 +727,7 @@ BSD-3-Clause. See [LICENSE][license].
 [draft-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md
 [draft-retrieval]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md#retrieve-original-preparation-output
 [evidence-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/VERIFYING_RELEASE_EVIDENCE.md
+[evidence-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/release-evidence-api.md#asset-batch-staging
 [evidence-recovery]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/VERIFYING_RELEASE_EVIDENCE.md#complete-run-recovery
 [files-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/files-api.md
 [git-inspection-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/process-api.md#python-git-inspection-api

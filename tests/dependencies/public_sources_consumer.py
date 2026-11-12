@@ -1,6 +1,7 @@
 """Public source selection and release graph contracts, also run installed."""
 
 import contextlib
+import contextvars
 import hashlib
 import io
 import json
@@ -12,14 +13,17 @@ import tarfile
 import tempfile
 import tomllib
 import unittest
+import urllib.error
 import zipfile
 from dataclasses import FrozenInstanceError
+from email.message import Message
 from pathlib import Path
 from typing import override
-from unittest.mock import patch
+from unittest.mock import MagicMock, patch
 from urllib.parse import urlsplit
 
 from research_repo_tools import (
+    _registry_requests,
     cli,
     config,
     dependency_artifacts,
@@ -34,9 +38,10 @@ from research_repo_tools import (
     registry,
     release_validation,
     toolchain,
-    tooling_runtime,
 )
+from research_repo_tools._dependency_observation import DependencyOperation
 from research_repo_tools.dependency_policy import DependencyProject, load_policy, parse_policy
+from research_repo_tools.dependency_progress import DependencyProgress, reporting
 from research_repo_tools.dependency_provenance import check_release_dependencies
 from research_repo_tools.dependency_sources import GitCommit, RegistryRelease, VerifiedSource, parse_source, verify_source
 from research_repo_tools.dependency_workflows import apply_source, check_dependency_policy, plan_source
@@ -99,6 +104,139 @@ class Provider:
 
 
 class TestSources(unittest.TestCase):
+    def test_progress_observer_failures_restore_context_and_preserve_verification_error(self) -> None:
+        def fail(event: dict[str, object]) -> None:
+            raise RuntimeError("observer unavailable")
+
+        def scenario() -> None:
+            with tempfile.TemporaryDirectory() as temporary:
+                root = Path(temporary)
+                with self.assertRaisesRegex(RuntimeError, "observer unavailable"):
+                    check_release_dependencies(root, progress=DependencyProgress(mode="none", observer=fail))
+                self.assertEqual(check_release_dependencies(root), ())
+
+        contextvars.copy_context().run(scenario)
+
+        def fail_on_error(event: dict[str, object]) -> None:
+            if event["event"] == "failed":
+                raise RuntimeError("observer unavailable")
+
+        with self.assertRaisesRegex(ValueError, "original verification failure"):
+            with reporting(DependencyProgress(mode="none", observer=fail_on_error), "fixture"):
+                raise ValueError("original verification failure")
+
+    def test_progress_observer_cannot_rewrite_serialized_event(self) -> None:
+        stream = io.StringIO()
+        progress = DependencyProgress(mode="json", stream=stream, observer=dict.clear)
+        with reporting(progress, "fixture"):
+            pass
+        self.assertEqual([json.loads(line)["event"] for line in stream.getvalue().splitlines()], ["started", "completed"])
+
+    def test_registry_pacing_lock_wait_consumes_retry_budget(self) -> None:
+        now = [0.0]
+        lock = MagicMock()
+
+        def acquire(*, timeout: float) -> bool:
+            now[0] += timeout
+            return False
+
+        lock.acquire.side_effect = acquire
+        with (
+            patch.object(_registry_requests, "_LOCK", lock),
+            patch.object(_registry_requests, "_requested_at", None),
+            patch.object(_registry_requests, "_request", return_value=b"{}") as request,
+        ):
+            with self.assertRaisesRegex(ValueError, "60-second"):
+                _registry_requests.read_registry(CARGO_API, limit=1024, clock=lambda: now[0])
+        self.assertEqual(now[0], 60.0)
+        lock.acquire.assert_called_once_with(timeout=60.0)
+        lock.release.assert_not_called()
+        request.assert_not_called()
+
+    def test_registry_retries_are_bounded_paced_and_reported_without_secrets(self) -> None:
+        now = [0.0]
+        calls = []
+        events = []
+        stream = io.StringIO()
+        progress = DependencyProgress(mode="json", stream=stream, observer=events.append, clock=lambda: now[0])
+
+        def sleep(seconds: float) -> None:
+            now[0] += seconds
+
+        headers = Message()
+        headers["Retry-After"] = "2"
+        response = io.BytesIO(b"secret response")
+        failure = urllib.error.HTTPError(CARGO_API, 429, "secret detail", headers, response)
+
+        def transport(url: str, timeout: float, limit: int) -> bytes:
+            calls.append((url, now[0], timeout, limit))
+            if len(calls) == 1:
+                raise failure
+            if len(calls) == 2:
+                raise TimeoutError("signed?token=SECRET")
+            return self.provider.responses[url]
+
+        with patch.object(_registry_requests, "_requested_at", None), reporting(progress, "fixture"):
+            payload = _registry_requests.read_registry(CARGO_API, limit=1024, transport=transport, clock=lambda: now[0], sleep=sleep)
+        self.assertEqual(payload, self.provider.responses[CARGO_API])
+        self.assertEqual([row[1] for row in calls], [0.0, 2.0, 4.0])
+        self.assertTrue(response.closed)
+        self.assertEqual((progress.requests, progress.retries), (3, 2))
+        self.assertNotIn("secret", stream.getvalue().lower())
+        self.assertNotIn("SECRET", stream.getvalue())
+        self.assertEqual(events[-1]["event"], "completed")
+        self.assertIsNone(events[0]["total"])
+        self.assertNotIn("eta_seconds", events[-1])
+
+    def test_registry_retry_deadline_and_permanent_failures(self) -> None:
+        now = [0.0]
+        timeouts = []
+
+        def sleep(seconds: float) -> None:
+            now[0] += seconds
+
+        def transport(url: str, timeout: float, limit: int) -> bytes:
+            timeouts.append(timeout)
+            now[0] += timeout
+            raise TimeoutError("private detail")
+
+        with self.assertRaisesRegex(ValueError, "60-second"):
+            _registry_requests.read_registry(PYTHON_API, limit=1024, transport=transport, clock=lambda: now[0], sleep=sleep)
+        self.assertEqual(timeouts, [30.0, 29.0])
+        self.assertEqual(now[0], 60.0)
+        for status in (301, 400, 401, 403, 404, 422):
+            response = io.BytesIO()
+            failure = urllib.error.HTTPError(PYTHON_API, status, "secret", Message(), response)
+            with patch.object(_registry_requests, "_request", side_effect=failure) as request, self.assertRaisesRegex(ValueError, f"HTTP {status}") as rejected:
+                dependency_sources.HttpSourceProvider().read(PYTHON_API)
+            self.assertEqual(request.call_count, 1)
+            self.assertNotIn("secret", str(rejected.exception))
+            self.assertTrue(response.closed)
+        for value in (b"malformed", json.dumps({"info": {"name": "wrong", "version": "1.2.3"}}).encode()):
+            with patch.object(_registry_requests, "_request", return_value=value) as request, self.assertRaises(ValueError):
+                verify_source(RegistryRelease("python", "sample-pkg", "1.2.3"))
+            self.assertEqual(request.call_count, 1)
+        for url in ("https://user:SECRET@pypi.org/x", PYTHON_API + "?token=SECRET"):
+            with patch.object(_registry_requests, "_request") as request, self.assertRaises(ValueError):
+                _registry_requests.read_registry(url, limit=1024)
+            request.assert_not_called()
+
+    def test_retry_after_bound_and_failed_progress_do_not_leak_provider_details(self) -> None:
+        events = []
+        progress = DependencyProgress(mode="none", observer=events.append)
+        headers = Message()
+        headers["Retry-After"] = "600"
+        failure = urllib.error.HTTPError(PYTHON_API, 503, "SECRET", headers, io.BytesIO())
+        with (
+            patch.object(_registry_requests, "_request", side_effect=failure) as request,
+            self.assertRaisesRegex(ValueError, "retry bound"),
+            reporting(progress, "fixture"),
+        ):
+            dependency_sources.HttpSourceProvider().read(PYTHON_API)
+        self.assertEqual(request.call_count, 1)
+        self.assertEqual(events[-1]["event"], "failed")
+        self.assertNotIn("SECRET", json.dumps(events))
+
     @override
     def setUp(self) -> None:
         self.provider = Provider()
@@ -353,14 +491,91 @@ class TestSourceWorkflows(unittest.TestCase):
                 self.assertEqual(self.snapshot(), before)
                 self.native.assert_called()
 
+    def test_two_graphs_share_one_observation_per_pass_but_check_each_lock(self) -> None:
+        self.cargo()
+        fixture = self.root / "fixture space"
+        fixture.mkdir()
+        (fixture / "Cargo.toml").write_bytes((self.root / "Cargo.toml").read_bytes())
+        self.cargo_lock(root=fixture)
+        (self.root / "dependency-sources.toml").write_bytes(
+            b'schema=1\n[projects.main]\necosystem="cargo"\n[projects.fixture]\necosystem="cargo"\ndirectory="fixture space"\n'
+        )
+        original = self.snapshot()
+        proofs = check_dependency_policy(self.root, provider=self.provider)
+        self.assertEqual(len(proofs), 2)
+        self.assertEqual(self.provider.calls, [CARGO_API])
+        check_dependency_policy(self.root, provider=self.provider)
+        self.assertEqual(self.provider.calls, [CARGO_API, CARGO_API])
+        self.provider.cargo(yanked=True)
+        with self.assertRaisesRegex(ValueError, "yanked"):
+            check_dependency_policy(self.root, provider=self.provider)
+        self.assertEqual(self.snapshot(), original)
+        self.provider.cargo()
+        (fixture / "Cargo.lock").write_bytes((fixture / "Cargo.lock").read_bytes().replace(DIGEST.encode(), b"c" * 64))
+        self.provider.calls.clear()
+        with self.assertRaisesRegex(ValueError, "checksum"):
+            check_dependency_policy(self.root, provider=self.provider)
+        self.assertEqual(self.provider.calls, [CARGO_API])
+
+    def test_operation_expiry_rechecks_registry_and_local_drift_fails_before_network(self) -> None:
+        self.cargo()
+        now = [0.0]
+        with (
+            patch.object(dependency_sources, "HttpSourceProvider", return_value=self.provider),
+            patch("research_repo_tools._dependency_observation.time.monotonic", side_effect=lambda: now[0]),
+        ):
+            operation = DependencyOperation(self.root, ())
+            self.assertEqual(self.provider.calls, [CARGO_API])
+            now[0] = 299.0
+            operation.verify()
+            self.assertEqual(self.provider.calls, [CARGO_API])
+            now[0] = 300.0
+            operation.verify()
+            self.assertEqual(self.provider.calls, [CARGO_API, CARGO_API])
+            self.provider.cargo(yanked=True)
+            now[0] = 600.0
+            with self.assertRaisesRegex(ValueError, "yanked"):
+                operation.verify()
+            self.assertEqual(len(self.provider.calls), 3)
+            for name in ("Cargo.lock", "Cargo.toml", "dependency-sources.toml"):
+                path = self.root / name
+                before = path.read_bytes()
+                path.write_bytes(before + b"# changed\n")
+                with self.subTest(name=name), self.assertRaisesRegex(ValueError, "dependency inputs changed"):
+                    operation.verify()
+                path.write_bytes(before)
+                self.assertEqual(len(self.provider.calls), 3)
+
+    def test_invalid_environment_layout_fails_before_registry_traversal(self) -> None:
+        self.python()
+        environment = self.root / ".venv"
+        environment.mkdir()
+        with self.assertRaisesRegex(ValueError, "pyvenv.cfg.*recreate this environment"):
+            check_dependency_policy(self.root, provider=self.provider)
+        self.assertEqual(self.provider.calls, [])
+        self.native.assert_not_called()
+
+        environment.rmdir()
+        with (
+            patch.object(dependency_sources.HttpSourceProvider, "read", side_effect=self.provider.read),
+            patch.object(self.native, "side_effect", dependency_graphs.check_native_graph),
+            patch("research_repo_tools.dependency_provenance._check_lock"),
+        ):
+            operation = DependencyOperation(self.root, ())
+        environment.mkdir()
+        with self.assertRaisesRegex(ValueError, "pyvenv.cfg"):
+            operation.verify()
+
     def test_crates_metadata_is_fresh_and_paced_across_graphs_and_providers_only(self) -> None:
         self.cargo()
         graph = dependency_graphs.inspect_project(self.root, DependencyProject("cargo"))
         now = [0.0]
         requests = []
 
-        def read(url: str) -> bytes:
+        def read(url: str, timeout: float, limit: int) -> bytes:
             requests.append((url, now[0]))
+            if url == Response.url:
+                return b"archive"
             return self.provider.read(url)
 
         def sleep(seconds: float) -> None:
@@ -371,11 +586,10 @@ class TestSourceWorkflows(unittest.TestCase):
             url = "https://static.crates.io/crates/sample-crate/sample-crate-1.2.3.crate"
 
         with (
-            patch.object(dependency_sources, "_crates_io_requested_at", None),
-            patch.object(dependency_sources.time, "monotonic", side_effect=lambda: now[0]),
-            patch.object(dependency_sources.time, "sleep", side_effect=sleep),
-            patch.object(tooling_runtime, "_read", side_effect=read),
-            patch.object(registry._OPENER, "open", side_effect=lambda *_args, **_kwargs: Response(b"archive")),
+            patch.object(_registry_requests, "_requested_at", None),
+            patch.object(_registry_requests.time, "monotonic", side_effect=lambda: now[0]),
+            patch.object(_registry_requests.time, "sleep", side_effect=sleep),
+            patch.object(_registry_requests, "_request", side_effect=read),
         ):
             dependency_graphs.verify_graph(graph)
             dependency_graphs.verify_graph(graph)
@@ -421,8 +635,13 @@ class TestSourceWorkflows(unittest.TestCase):
         with patch.object(dependency_sources, "HttpSourceProvider", return_value=self.provider):
             identities = check_release_dependencies(self.root)
         self.assertEqual([(item.name, item.version) for item in identities], [("sample-pkg", "1.2.3")])
-        self.assertEqual(self.provider.calls, [PYTHON_API, PYTHON_API])
+        # One pass reuses identical metadata; a later pass must fetch afresh.
+        self.assertEqual(self.provider.calls, [PYTHON_API])
         self.assertEqual(self.native.call_count, 2)
+        with patch.object(dependency_sources, "HttpSourceProvider", return_value=self.provider):
+            self.assertEqual(check_release_dependencies(self.root), identities)
+        self.assertEqual(self.provider.calls, [PYTHON_API, PYTHON_API])
+        self.assertEqual(self.native.call_count, 4)
 
     def test_missing_policy_accepts_dependency_free_root_with_inherited_cargo_version(self) -> None:
         (self.root / "Cargo.toml").write_bytes(b'[package]\nname="consumer"\nversion.workspace=true\n[workspace.package]\nversion="1.2.3"\n')
@@ -1046,12 +1265,19 @@ class TestSourceWorkflows(unittest.TestCase):
             patch.object(process, "run_command", return_value=subprocess.CompletedProcess([], 0, json.dumps(metadata), "")) as command,
         ):
             dependency_graphs.check_native_graph(graph, sources=verified, provider=self.provider)
+            with (
+                patch.object(dependency_sources.HttpSourceProvider, "read", side_effect=self.provider.read),
+                patch.object(self.native, "side_effect", dependency_graphs.check_native_graph),
+            ):
+                operation = DependencyOperation(self.root, ())
             arguments = command.call_args.args[1]
             self.assertIn("--all-features", arguments)
             self.assertIn("--locked", arguments)
             self.assertIn("--offline", arguments)
             self.assertNotIn("--filter-platform", arguments)
             (cached / "src/lib.rs").write_bytes(b"// unpublished change with identical version\n")
+            with self.assertRaisesRegex(ValueError, "dependency inputs changed"):
+                operation.verify()
             before = self.snapshot()
             with self.assertRaisesRegex(ValueError, "differs from published bytes"):
                 dependency_graphs.check_native_graph(graph, sources=verified, provider=self.provider)
@@ -1059,6 +1285,12 @@ class TestSourceWorkflows(unittest.TestCase):
             (cached / "src/lib.rs").write_bytes(content["src/lib.rs"])
             (cached / "unpublished.rs").write_bytes(b"// unlisted source\n")
             with self.assertRaisesRegex(ValueError, "unpublished files"):
+                operation.verify()
+            with self.assertRaisesRegex(ValueError, "unpublished files"):
+                dependency_graphs.check_native_graph(graph, sources=verified, provider=self.provider)
+            (cached / "unpublished.rs").unlink()
+            (cached / "src/lib.rs").unlink()
+            with self.assertRaisesRegex(ValueError, "missing Cargo cache input.*lib.rs.*fetch this locked crate"):
                 dependency_graphs.check_native_graph(graph, sources=verified, provider=self.provider)
 
     def test_cargo_archive_accepts_64_mib_expanded_and_rejects_one_more_byte(self) -> None:
@@ -1161,13 +1393,23 @@ class TestSourceWorkflows(unittest.TestCase):
                     dependency_artifacts.verify_python_environment(graph)
                 self.assertEqual(self.snapshot(), before)
                 target.write_bytes(original)
+            with (
+                patch.object(dependency_sources.HttpSourceProvider, "read", side_effect=self.provider.read),
+                patch.object(self.native, "side_effect", dependency_graphs.check_native_graph),
+                patch("research_repo_tools.dependency_provenance._check_lock"),
+            ):
+                operation = DependencyOperation(self.root, ())
             hook = site / "injected.pth"
             hook.write_bytes(b"import unpublished_hook\n")
             with self.assertRaisesRegex(ValueError, "startup hooks"):
                 dependency_artifacts.verify_python_environment(graph)
+            with self.assertRaisesRegex(ValueError, "startup hooks"):
+                operation.verify()
             hook.unlink()
             installed = site / "sample_pkg/__init__.py"
             installed.write_bytes(b"# same version, unpublished bytes\n")
+            with self.assertRaisesRegex(ValueError, "installed dependency changed"):
+                operation.verify()
             with self.assertRaisesRegex(ValueError, "differ from the published wheel"):
                 dependency_artifacts.verify_python_environment(graph)
             installed.write_bytes(contents["sample_pkg/__init__.py"])

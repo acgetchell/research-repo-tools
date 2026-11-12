@@ -12,6 +12,7 @@ from dataclasses import asdict, dataclass
 from pathlib import Path
 from typing import Any
 
+from research_repo_tools._dependency_observation import DependencyOperation
 from research_repo_tools.archives import ArchiveLimits, extract_archive
 from research_repo_tools.candidate_publication import _acquisition_input_keys, _parse_publication, _PublicationReceipt
 from research_repo_tools.complete_runs import CompleteSample, _array, _integer, run_identity
@@ -28,7 +29,7 @@ from research_repo_tools.evidence import (
     serialize_evidence,
     sha256,
 )
-from research_repo_tools.files import _validate_distinct_paths
+from research_repo_tools.files import _validate_distinct_paths, replace_many
 from research_repo_tools.publication import PublicationPlan, _path, plan_outputs
 from research_repo_tools.release_assets import ReleaseTarget, _repository, _sha, _stable_tag, require_release_checkout
 from research_repo_tools.release_discovery import require_first_release_history
@@ -43,6 +44,7 @@ __all__ = [
     "acquisition_assertion_digest",
     "parse_candidate_policy",
     "plan_candidate_archive",
+    "retain_candidate_release",
     "serialize_candidate_policy",
     "verify_candidate_archive",
     "verify_candidate_release",
@@ -347,6 +349,170 @@ def verify_candidate_release(
     limits: ArchiveLimits = ArchiveLimits(),
     dependencies: tuple[str, ...] = (),
 ) -> bytes:
+    """Verify without retention; obtain fresh dependency proof at entry and return."""
+    return _verify_candidate_release(
+        root,
+        evidence,
+        policy,
+        native_policy,
+        read,
+        acquisition_sha256=acquisition_sha256,
+        publication_receipt=publication_receipt,
+        publication_sha256=publication_sha256,
+        expected=expected,
+        reproduced_archive=reproduced_archive,
+        reproduced_tools=reproduced_tools,
+        limits=limits,
+        dependencies=dependencies,
+    )
+
+
+def retain_candidate_release(
+    root: Path,
+    evidence: Evidence,
+    policy: CandidatePolicy,
+    native_policy: EvidencePolicy,
+    read: Callable[[str], Any],
+    *,
+    destination: Path,
+    acquisition_sha256: str,
+    publication_receipt: bytes | None = None,
+    publication_sha256: str | None = None,
+    expected: bytes | None = None,
+    policy_output: Path | None = None,
+    native_output: Path | None = None,
+    reproduced_archive: Path | None = None,
+    reproduced_tools: Mapping[str, str] | None = None,
+    verify_inputs: Callable[[], None] | None = None,
+    verify_acceptance: Callable[[bytes], None] | None = None,
+    dependencies: tuple[str, ...] = (),
+    limits: ArchiveLimits = ArchiveLimits(),
+) -> bytes:
+    """Verify and freeze acceptance, optional final policy and native selection.
+
+    Two fresh dependency passes bracket native verification and guarded durable
+    retention. An in-memory final policy need not be published beforehand. All
+    destinations are immutable: matching retries succeed, conflicting bytes fail.
+    The caller owns exclusive writer control and independent input authentication.
+    ``verify_inputs`` adds a guard; it cannot replace the built-in checks.
+    """
+    return _retain_candidate_release(
+        root,
+        evidence,
+        policy,
+        native_policy,
+        read,
+        destination=destination,
+        acquisition_sha256=acquisition_sha256,
+        publication_receipt=publication_receipt,
+        publication_sha256=publication_sha256,
+        expected=expected,
+        policy_output=policy_output,
+        native_output=native_output,
+        reproduced_archive=reproduced_archive,
+        reproduced_tools=reproduced_tools,
+        verify_inputs=verify_inputs,
+        verify_acceptance=verify_acceptance,
+        dependencies=dependencies,
+        limits=limits,
+    )
+
+
+def _retain_candidate_release(
+    root: Path,
+    evidence: Evidence,
+    policy: CandidatePolicy,
+    native_policy: EvidencePolicy,
+    read: Callable[[str], Any],
+    *,
+    destination: Path,
+    acquisition_sha256: str,
+    publication_receipt: bytes | None = None,
+    publication_sha256: str | None = None,
+    expected: bytes | None = None,
+    policy_output: Path | None = None,
+    native_output: Path | None = None,
+    reproduced_archive: Path | None = None,
+    reproduced_tools: Mapping[str, str] | None = None,
+    verify_inputs: Callable[[], None] | None = None,
+    verify_acceptance: Callable[[bytes], None] | None = None,
+    dependencies: tuple[str, ...] = (),
+    limits: ArchiveLimits = ArchiveLimits(),
+    entry: DependencyOperation | None = None,
+) -> bytes:
+    paths = (destination, *(() if policy_output is None else (policy_output,)), *(() if native_output is None else (native_output,)))
+    _validate_distinct_paths(paths)
+
+    def original(path: Path) -> bytes | None:
+        if any(item.is_symlink() or item.is_junction() for item in (path, *path.parents)) or (path.exists() and not path.is_file()):
+            raise ValueError("candidate retention requires regular destinations without links")
+        return path.read_bytes() if path.exists() else None
+
+    originals = {path: original(path) for path in paths}
+
+    def retain(accepted: bytes, verify: Callable[[], None]) -> None:
+        if verify_acceptance is not None:
+            verify_acceptance(accepted)
+        outputs = {destination: accepted}
+        if policy_output is not None:
+            outputs[policy_output] = serialize_candidate_policy(policy)
+        if native_output is not None:
+            outputs[native_output] = deterministic_json(_object(_load_json(accepted, "candidate acceptance"), "acceptance")["native"])
+        if any(before is not None and before != outputs[path] for path, before in originals.items()):
+            raise ValueError("candidate retention already contains different evidence; preserve the original selection")
+
+        def guard() -> None:
+            if any(original(path) != before for path, before in originals.items()):
+                raise ValueError("candidate retention changed during verification")
+            if verify_inputs is not None:
+                verify_inputs()
+            verify()
+            if verify_inputs is not None:
+                verify_inputs()
+            if any(original(path) != before for path, before in originals.items()):
+                raise ValueError("candidate retention changed during verification")
+
+        replace_many(outputs, verify=guard)
+
+    if verify_inputs is not None:
+        verify_inputs()
+    return _verify_candidate_release(
+        root,
+        evidence,
+        policy,
+        native_policy,
+        read,
+        acquisition_sha256=acquisition_sha256,
+        publication_receipt=publication_receipt,
+        publication_sha256=publication_sha256,
+        expected=expected,
+        dependencies=dependencies,
+        reproduced_archive=reproduced_archive,
+        reproduced_tools=reproduced_tools,
+        limits=limits,
+        retain=retain,
+        entry=entry,
+    )
+
+
+def _verify_candidate_release(
+    root: Path,
+    evidence: Evidence,
+    policy: CandidatePolicy,
+    native_policy: EvidencePolicy,
+    read: Callable[[str], Any],
+    *,
+    acquisition_sha256: str,
+    publication_receipt: bytes | None = None,
+    publication_sha256: str | None = None,
+    expected: bytes | None = None,
+    reproduced_archive: Path | None = None,
+    reproduced_tools: Mapping[str, str] | None = None,
+    limits: ArchiveLimits = ArchiveLimits(),
+    dependencies: tuple[str, ...] = (),
+    retain: Callable[[bytes, Callable[[], None]], None] | None = None,
+    entry: DependencyOperation | None = None,
+) -> bytes:
     """Step 2 and approval revalidation; never measure, gate, or resolve a new schedule.
 
     Pass the frozen returned bytes as expected at every later gate. Existing
@@ -359,7 +525,12 @@ def verify_candidate_release(
     """
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
-    check_release_dependencies(root, packages=dependencies)
+    if entry is None:
+        check_release_dependencies(root, packages=dependencies)
+    else:
+        if entry.root != root or entry.packages != dependencies:
+            raise ValueError("candidate dependency entry differs from the observed source")
+        entry.verify()
     _digest(acquisition_sha256, "trusted Step 1 assertion digest")
     if acquisition_assertion_digest(policy) != acquisition_sha256:
         raise ValueError("candidate assertions differ from trusted Step 1 handoff")
@@ -408,14 +579,21 @@ def verify_candidate_release(
             "archive_sha256": sha256(archive),
         }
     )
-    final.verify()
-    working.verify()
-    require_release_checkout(root, commit)
-    check_release_dependencies(root, packages=dependencies)
-    if policy.first_release:
-        require_first_release_history(read)
     if expected is not None and accepted != expected:
         raise ValueError("approved source, native selection, acquisition, or archive changed")
+
+    def guard() -> None:
+        check_release_dependencies(root, packages=dependencies)
+        final.verify()
+        working.verify()
+        require_release_checkout(root, commit)
+        if policy.first_release:
+            require_first_release_history(read)
+
+    if retain is None:
+        guard()
+    else:
+        retain(accepted, guard)
     return accepted
 
 
