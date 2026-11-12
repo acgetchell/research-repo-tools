@@ -17,6 +17,7 @@ arguments in lexicographic order.
 
 | Consumer recipe | Purpose |
 | --- | --- |
+| `just actions-check` | Check declared workflow/composite pin consistency and explicit policy tags offline |
 | `just audit` | Audit every maintained lockfile explicitly selected by the consumer |
 | `just cargo-docs PACKAGE [ARGS...]` | Validate public library docs from a packaged crate on declared stable Rust |
 | `just changelog` | Generate, normalize, and archive completed minor series |
@@ -103,7 +104,7 @@ global root/configuration options before the group; consult
 
 | Capability | Commands | Contract |
 | --- | --- | --- |
-| Actions | `actions allowlist`, `update` | [Strict consumer allowlists and opt-in commit pin updates](UPDATING_DEPENDENCIES.md#actions-allowlists-and-opt-in-pin-updates) |
+| Actions | `actions allowlist`, `check`, `update` | [Strict consumer allowlists, offline pin consistency, and opt-in updates](UPDATING_DEPENDENCIES.md#actions-allowlists-and-opt-in-pin-updates) |
 | Changelog | `changelog archive`, `check`, `generate`, `normalize`, `notes`, `tag` | Root `CHANGELOG.md`; completed minor series in `docs/archives/changelog/` |
 | CI environment | `ci export` | Validate all single-line values before appending a GitHub environment command file |
 | Cleanup | `clean` | Compose tool-installation and coverage cleanup; preview by default; `--keep-root` retains other consumers' tool pins |

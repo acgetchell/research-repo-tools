@@ -3,6 +3,14 @@
 # Select dev explicitly, including when the consumer disables default groups.
 set positional-arguments
 
+# Shared by the offline checker and updater. For composites, append e.g.
+# + " " + quote(".github/actions/setup-just/action.yml") to this expression.
+actions_inputs := quote(".github/workflows")
+
+# Check Actions pins offline using the provisioned environment without syncing.
+actions-check:
+    uv run --no-sync --no-python-downloads --offline research-repo-tools actions check --policy .github/action-updates.toml {{ actions_inputs }}
+
 # Audit the maintained lockfiles selected here; add independent Python/Cargo roots.
 audit: (security-osv "uv.lock")
 
@@ -257,7 +265,7 @@ update: update-tools update-dependencies
 
 # Explicit opt-in: append this stage after update-dependencies to check final tool pins.
 update-actions *args:
-    uv run --locked --only-group tooling --inexact research-repo-tools actions update --policy .github/action-updates.toml .github/workflows "$@"
+    uv run --locked --only-group tooling --inexact research-repo-tools actions update --policy .github/action-updates.toml {{ actions_inputs }} "$@"
 
 # Upgrade root Cargo requirements and resolution; retain consumer exclusions/extra roots here.
 update-cargo-dependencies:

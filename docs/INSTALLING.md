@@ -151,6 +151,7 @@ rerun it. Setup does not rewrite declarations, locks, or existing recipes.
 
 The consumer template provides:
 
+- `just actions-check`: check declared Actions pin consistency offline, using the same `actions_inputs` as the updater.
 - `just changelog`: run the shared generator with the checked managed git-cliff.
 - `just clean`: preview obsolete tool installations and retained coverage; pass `--apply` to remove them.
 - `just clean-coverage`: preview retained coverage only; pass `--apply` to remove it, preserving current reports.

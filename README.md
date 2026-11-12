@@ -321,6 +321,7 @@ consumer configuration or optional dependencies described in their guides.
 
 | Command | Use |
 | --- | --- |
+| `just actions-check` | Check declared workflow/composite pin consistency offline after setup |
 | `just changelog-preview --tag v1.2.3 --date YYYY-MM-DD` | Inspect prospective notes without replacing files |
 | `just check` | Run your configured local checks and native/domain gates |
 | `just files check-lines --limit 160 --include '*.md'` | Check selected raw text without formatting |
@@ -334,6 +335,45 @@ The [complete command and capability reference][commands] is organized lexicogra
 `just help` remains the authority for the recipes actually merged into your project.
 The [packaged templates][just-template] provide thin wrappers; consumers extend
 checks with their own Rust, scientific and deployment requirements.
+
+### Actions pin consistency
+
+Declare the identities to check in `.github/action-updates.toml` using the
+[Actions consistency policy](docs/UPDATING_DEPENDENCIES.md#actions-allowlists-and-opt-in-pin-updates).
+Merge `actions_inputs`, `actions-check`, and `update-actions` from the packaged
+Justfile together. Retain `set positional-arguments` so preview flags passed to
+`update-actions` reach its shell command.
+
+The default shared input is `.github/workflows`, so workflow-only repositories
+need no composites directory. For composites, extend the expression with explicit
+metadata paths (or a directory containing only workflow and composite YAML).
+Quote each path separately, including paths with spaces:
+
+```just
+set positional-arguments
+
+actions_inputs := quote(".github/workflows") + " " + quote(".github/actions/setup-just/action.yml")
+
+actions-check:
+    uv run --no-sync --no-python-downloads --offline research-repo-tools actions check --policy .github/action-updates.toml {{ actions_inputs }}
+
+update-actions *args:
+    uv run --locked --only-group tooling --inexact research-repo-tools actions update --policy .github/action-updates.toml {{ actions_inputs }} "$@"
+```
+
+Add `actions-check` to the consumer's `check` prerequisites. Provision the
+environment through setup, then run the checker:
+
+```sh
+just setup
+just actions-check
+```
+
+The check uses the existing environment without synchronizing dependencies or
+downloading Python. It does not validate the dependency lock; keep lock validation
+in the consumer's normal validation gate. Rerun setup if the required tooling is
+missing. Use `just update-actions --dry-run` or `just update-actions --check` to
+preview upstream updates before explicitly applying them with `just update-actions`.
 
 ## Capability index
 
@@ -354,7 +394,7 @@ for exhaustive arguments, configuration and Python contracts.
 | Select files, run commands and export CI values | [Consumer checks and integration][checks-guide] | [File APIs][files-api], [process/Just APIs][process-api], [workflow APIs][workflow-api] |
 | Set up or repair tools | [Installation and ownership][toolchain] | [Toolchain APIs][toolchain-api] |
 | Time external commands | [Exploratory command timing][timing-guide] | [Timing evidence contract][timing-api] |
-| Update dependencies and Actions pins | [Update and adoption workflows][updates-guide] | [CLI/configuration][configuration-api] |
+| Update dependencies and check/update Actions pins | [Update and adoption workflows][updates-guide] | [CLI/configuration][configuration-api] |
 
 ### Git inspection
 

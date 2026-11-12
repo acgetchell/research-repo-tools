@@ -476,7 +476,35 @@ Action updates require separate, explicit opt-in targets in
 [actions]
 "actions/checkout" = "latest"
 "owner/repo/subpath" = "v2.1.0"
+
+[consistency]
+actions = ["actions/checkout", "owner/repo/subpath"]
 ```
+
+The optional `[consistency]` list declares exact identities that must use the
+same full commit SHA and version comment everywhere in the selected inputs.
+`actions check` requires a nonempty list. Checked identities need not be update
+targets. When a checked identity also has an explicit `[actions]` tag, its
+comment must match that tag exactly, including the `v` prefix. `latest` remains
+an update selector: the check does not resolve it, contact GitHub, invoke `gh`,
+or verify that a tag actually names a SHA. Compatibility inventories are used
+only by the updater.
+
+Follow the [consumer Actions wiring example](../README.md#actions-pin-consistency)
+to merge the shared scope and recipes into a provisioned project, enable argument
+forwarding, and add the offline check to the consumer's validation gate.
+
+The read-only check uses the same YAML parser and input expansion as the updater.
+It returns nonzero for drift, malformed selected pins, or absent declared
+identities. Drift reports both source locations and their SHA/comment pairs;
+malformed pins report file and line; absent identities name the configured
+scope. Repository names and SHA hex ignore case, while nested paths and version
+comments match exactly. Inline comments may retain trailing explanations, which
+do not participate in comparison. Read-only inspection supports aliases at their
+anchor locations; pins require inline version comments, so folded/block scalars
+are rejected. Keep the allowlist and zizmor gates for their separate policies.
+This offline check is distinct from `update-actions --check`, which resolves
+upstream versions and checks whether updates are available.
 
 `latest` selects GitHub's published stable release and permits major upgrades.
 An explicit stable version tag restricts the target. GitHub CLI (`gh`) is required

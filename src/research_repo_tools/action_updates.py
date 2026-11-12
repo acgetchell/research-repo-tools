@@ -12,14 +12,13 @@ from packaging.requirements import Requirement
 from packaging.utils import canonicalize_name
 
 from research_repo_tools import config
+from research_repo_tools.action_policy import TAG, load_policy
 from research_repo_tools.dependencies import _group_requirements
 from research_repo_tools.files import replace_many
 from research_repo_tools.process import run_safe_command
 from research_repo_tools.release_validation import parse_release_json
 from research_repo_tools.tool_pins import STABLE
-from research_repo_tools.workflow_uses import SHA, identity, references, workflow_paths
-
-TAG = re.compile(r"v?(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){0,2}")
+from research_repo_tools.workflow_uses import SHA, references, version_comment, workflow_paths
 
 
 def _api(endpoint: str, root: Path) -> object:
@@ -57,38 +56,6 @@ def resolve(action: str, target: str, root: Path) -> tuple[str, str]:
         data = _api(f"repos/{repository}/git/tags/{sha}", root)
         obj = data.get("object") if isinstance(data, dict) else None
     raise ValueError(f"{action}: annotated tag depth exceeds limit")
-
-
-def _policy(path: Path) -> tuple[dict[str, str], dict[str, tuple[str, str]]]:
-    data = tomllib.loads(path.read_bytes().decode("utf-8"))
-    if set(data) - {"actions", "compatibility"} or not isinstance(data.get("actions"), dict):
-        raise ValueError(f"{path}: expected [actions] and optional [compatibility] tables")
-    targets: dict[str, str] = {}
-    for action, tag in data["actions"].items():
-        key = identity(action)
-        if key in targets or not isinstance(tag, str) or tag != "latest" and TAG.fullmatch(tag) is None:
-            raise ValueError(f"{path}: duplicate identity or unsupported target for {action}; use latest or a stable version tag")
-        targets[key] = tag
-    compatibility = data.get("compatibility", {})
-    if not isinstance(compatibility, dict):
-        raise ValueError(f"{path}: compatibility must be a table")
-    checks: dict[str, tuple[str, str]] = {}
-    for action, value in compatibility.items():
-        key = identity(action)
-        if (
-            key in checks
-            or not isinstance(value, dict)
-            or set(value) != {"path", "tool"}
-            or not isinstance(value["path"], str)
-            or not value["path"]
-            or any(part in {"", ".", ".."} for part in value["path"].split("/"))
-            or "\\" in value["path"]
-            or not isinstance(value["tool"], str)
-            or re.fullmatch(r"[A-Za-z0-9_-]+", value["tool"]) is None
-        ):
-            raise ValueError(f"{path}: compatibility.{action} requires a relative upstream path and tool name")
-        checks[key] = value["path"], value["tool"]
-    return targets, checks
 
 
 def _tool_version(settings: config.Config, name: str) -> str:
@@ -142,7 +109,8 @@ def _compatible(action: str, sha: str, path: str, version: str, root: Path) -> N
 
 
 def update(settings: config.Config, policy: Path, inputs: list[str], *, dry_run: bool = False, check: bool = False) -> int:
-    targets, checks = _policy(policy)
+    declaration = load_policy(policy)
+    targets, checks = declaration.targets, declaration.compatibility
     paths = workflow_paths(settings.root, inputs)
     originals = {path: path.read_bytes() for path in paths}
     texts = {path: payload.decode("utf-8") for path, payload in originals.items()}
@@ -183,12 +151,7 @@ def update(settings: config.Config, policy: Path, inputs: list[str], *, dry_run:
                 raise ValueError(f"{use.location}: updater requires single-line, unaliased uses scalars")
             if scalar not in {use.node.value, f"'{use.node.value}'", f'"{use.node.value}"'}:
                 raise ValueError(f"{use.location}: updater requires an ordinary scalar without anchors, tags, or escapes")
-            line_end = text.find("\n", end)
-            line_end = len(text) if line_end < 0 else line_end
-            suffix = text[end:line_end]
-            comment = re.match(r"([ \t]*#[ \t]*)(v?\d+(?:\.\d+){0,2})(?=[ \t\r]|$)", suffix)
-            if comment is None:
-                raise ValueError(f"{use.location}: selected uses requires a version comment such as '# v1.2.3'")
+            comment = version_comment(use, text)
             old_comment = comment[2]
             ref_start = scalar.rfind("@") + 1
             updated = scalar[:ref_start] + sha + scalar[ref_start + len(use.ref) :]

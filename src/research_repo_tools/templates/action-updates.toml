@@ -4,6 +4,11 @@
 [actions]
 "actions/checkout" = "latest"
 
+# Require identical full SHAs and version comments across the explicit inputs.
+# Identities here need not be update targets; explicit [actions] tags must match.
+[consistency]
+actions = ["actions/checkout"]
+
 # Prefer invoking the shared zizmor scanner directly. If retaining a wrapper,
 # verify its upstream supported-version inventory at the selected/retained SHA.
 # The tool version comes from the consumer's existing authoritative declaration.
