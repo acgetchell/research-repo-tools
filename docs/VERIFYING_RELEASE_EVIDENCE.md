@@ -71,7 +71,13 @@ Neither interface acquires a registry token or runs scientific workloads. See th
 ## Complete-run recovery
 
 Pending evidence requires waiting for the selected run to complete and then
-retrying. Failed, cancelled, incomplete, expired or ambiguous evidence rejects;
+retrying. Use the shared `release evidence wait` command before the verifier or
+draft planner, with an explicit polling budget sized for the complete producer
+workflow and sufficient additional time in the enclosing job. The
+[consumer command example](../README.md#releases) shows the
+wait followed by strict verification. A pending timeout preserves the original
+run and does not require rerunning main CI. Failed, cancelled, incomplete,
+expired or ambiguous evidence rejects;
 no PR, dispatch, local rebuild or different commit is selected as a fallback.
 For a recoverable exact push within the provider's rerun window and the policy's
 age limit, rerun **all jobs**, including the original distribution producer and

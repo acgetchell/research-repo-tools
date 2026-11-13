@@ -76,6 +76,9 @@ VALIDATION_BUNDLE = "validation.sigstore.json"
 SCHEMA = "research-repo-tools/validated-distributions/v1"
 PROMOTION = "https://github.com/acgetchell/research-repo-tools/attestations/release-promotion/v1"
 MAX_BYTES = 32 * 1024 * 1024
+_DEFAULT_WAIT_ATTEMPTS = 241
+_DEFAULT_WAIT_INTERVAL = 30
+_MAX_WAIT_ATTEMPTS = 721
 _GH_EXECUTABLE = ContextVar("release_gh_executable", default="gh")
 RECOVERY = (
     "Rerun ALL jobs of the original main-push Package checks run for this exact commit within GitHub's 30-day rerun window, then retry preparation. "
@@ -363,9 +366,15 @@ def validate_run(policy: ValidationPolicy, run: dict[str, Any], commit: str, wor
 
 
 def select_main_run(
-    policy: ValidationPolicy, commit: str, read: Callable[[str], Any], *, attempts: int = 30, interval: int = 20, sleep: Callable[[float], None] = time.sleep
+    policy: ValidationPolicy,
+    commit: str,
+    read: Callable[[str], Any],
+    *,
+    attempts: int = _DEFAULT_WAIT_ATTEMPTS,
+    interval: int = _DEFAULT_WAIT_INTERVAL,
+    sleep: Callable[[float], None] = time.sleep,
 ) -> dict[str, Any]:
-    """Poll one unambiguous exact run, with at most 580s of default retry delay.
+    """Poll one unambiguous exact run, with at most two hours of default retry delay.
 
     read is repository-scoped authenticated JSON transport. Only pending matching
     main-push runs are waited on. The caller's read/sleep callbacks own their
@@ -373,14 +382,17 @@ def select_main_run(
     Missing/failed evidence never causes a fallback.
     """
     _commit(commit)
-    if type(attempts) is not int or not 1 <= attempts <= 120 or type(interval) is not int or not 0 <= interval <= 30:
-        raise ValueError("wait requires 1..120 attempts and an interval of 0..30 seconds")
+    if type(attempts) is not int or not 1 <= attempts <= _MAX_WAIT_ATTEMPTS or type(interval) is not int or not 0 <= interval <= 30:
+        raise ValueError(f"wait requires 1..{_MAX_WAIT_ATTEMPTS} attempts and an interval of 0..30 seconds")
     workflow = _object(read(f"actions/workflows/{Path(policy.workflow).name}"), "workflow")
     workflow_id = _workflow_id(policy, workflow)
+    pending: list[dict[str, Any]] = []
     for index in range(attempts):
         runs = read_pages(read, f"actions/workflows/{workflow_id}/runs?event=push&branch={quote(policy.branch, safe='')}&head_sha={commit}", "workflow_runs")
         for run in runs:
             validate_run(policy, run, commit, workflow, completed=False)
+            if run.get("status") not in ("queued", "in_progress", "waiting", "requested", "pending", "completed"):
+                raise ValueError(f"invalid validation run status for run {run['id']} attempt {run['run_attempt']}")
         pending = [run for run in runs if run.get("status") != "completed"]
         successful = [run for run in runs if run.get("status") == "completed" and run.get("conclusion") == "success"]
         if len(successful) > 1:
@@ -392,7 +404,11 @@ def select_main_run(
         if index + 1 < attempts:
             print(f"Waiting for exact main validation of {commit} ({index + 1}/{attempts}).", file=sys.stderr)
             sleep(interval)
-    raise ValueError(f"exact main validation is still pending after the bounded wait; wait for that run, then retry preparation. {RECOVERY}")
+    pending_urls = ", ".join(f"https://github.com/{policy.repository}/actions/runs/{run['id']} (attempt {run['run_attempt']})" for run in pending)
+    raise ValueError(
+        f"exact main validation is still pending after the bounded wait: {pending_urls}; "
+        "wait for the original run to succeed, then retry preparation. Preserve its run/attempt and artifacts; pending validation does not require a rerun."
+    )
 
 
 def validate_jobs(policy: ValidationPolicy, run: dict[str, Any], jobs: list[dict[str, Any]]) -> dict[str, int]:
@@ -969,7 +985,7 @@ def inspect_evidence(root: Path) -> dict[str, Any]:
     }
 
 
-def promote(tag: str, commit: str, dist: Path, evidence: Path, *, attempts: int = 30, interval: int = 20) -> None:
+def promote(tag: str, commit: str, dist: Path, evidence: Path, *, attempts: int = _DEFAULT_WAIT_ATTEMPTS, interval: int = _DEFAULT_WAIT_INTERVAL) -> None:
     promotion_run = _integer(int(os.environ.get("GITHUB_RUN_ID", "0")), "promotion run")
     promotion_attempt = _integer(int(os.environ.get("GITHUB_RUN_ATTEMPT", "0")), "promotion attempt")
     with tempfile.TemporaryDirectory() as temporary:
@@ -1142,8 +1158,8 @@ def main() -> int:
     command.add_argument("--commit", default=os.environ.get("GITHUB_SHA", ""))
     command.add_argument("--dist", type=Path, default=Path("dist"))
     command.add_argument("--evidence", type=Path, default=Path("promotion.json"))
-    command.add_argument("--attempts", type=int, default=30)
-    command.add_argument("--interval", type=int, default=20)
+    command.add_argument("--attempts", type=int, default=_DEFAULT_WAIT_ATTEMPTS, help="maximum validation polls (default: 241)")
+    command.add_argument("--interval", type=int, default=_DEFAULT_WAIT_INTERVAL, help="seconds between validation polls (default: 30)")
     command = commands.add_parser("seal")
     command.add_argument("--run", type=int, default=os.environ.get("GITHUB_RUN_ID", "0"))
     command.add_argument("--attempt", type=int, default=os.environ.get("GITHUB_RUN_ATTEMPT", "0"))

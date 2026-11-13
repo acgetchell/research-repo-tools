@@ -403,9 +403,13 @@ These commands inspect the workflow started by step 3; they do not start another
 run. If it has not appeared, repeat the listing. If it already succeeded,
 continue to draft review. Otherwise, wait for the complete workflow, including
 staging, to succeed.
-Its pending-validation wait is bounded to 30 polls at 20-second intervals;
-missing, failed, expired, ambiguous or mismatched evidence fails with recovery
-instructions. For a wait timeout, follow
+Its pending-validation wait permits 241 polls at 30-second intervals: up to
+two hours of retry delay, plus authenticated request time. The staging job has
+a 150-minute limit, leaving time for setup, requests, signing and attachment.
+Successful validation proceeds immediately at the next poll; the budget is not
+a fixed delay. Missing, failed, expired, ambiguous or mismatched evidence fails
+with recovery instructions.
+For a wait timeout, follow
 [preparation timeout recovery](#preparation-timed-out-waiting-for-main-ci).
 It never rebuilds or falls back to another commit.
 

@@ -14,7 +14,7 @@ from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
-from typing import Literal, cast
+from typing import Any, Literal, cast
 
 from packaging.utils import canonicalize_name
 
@@ -41,7 +41,7 @@ lazy from research_repo_tools.release_assets import (
 lazy from research_repo_tools.release_evidence import EvidencePolicy, PythonDistributionPolicy, create_evidence_manifest, verify_release_evidence
 lazy from research_repo_tools.release_metadata import read_package_info
 lazy from research_repo_tools.release_receipts import TagPushPolicy
-lazy from research_repo_tools.release_validation import ValidationPolicy, api, parse_release_json, redact_release_diagnostic
+lazy from research_repo_tools.release_validation import ValidationPolicy, api, parse_release_json, redact_release_diagnostic, select_main_run
 
 __all__ = ["AssetPolicy", "load_asset_policy", "load_evidence_policy", "load_receipt_policy", "write_release_outputs"]
 
@@ -388,11 +388,34 @@ def add_evidence_commands(release) -> None:
             command.add_argument("--run-id", type=int, required=True)
         command.add_argument("--tools", type=Path, help="JSON object containing independently observed cargo and rustc producer identities")
         command.add_argument("--version", required=True, help="independent stable package version without v")
+    wait = commands.add_parser("wait", help="wait for the exact main validation workflow before verifying its evidence")
+    wait.add_argument("configuration", help="native release evidence policy")
+    wait.add_argument("--attempts", type=int, required=True, help="maximum polls, 1..721; choose a budget for the producer workflow")
+    wait.add_argument("--commit", required=True)
+    wait.add_argument("--interval", type=int, default=30, help="seconds between polls, 0..30 (default: 30); transport time is additional")
 
 
 def run_evidence(args: argparse.Namespace, settings: Config) -> None:
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
+    if args.operation == "wait":
+        path = _path(settings.root, args.configuration)
+        original = path.read_bytes()
+        policy = load_evidence_policy(path)
+
+        def read(endpoint: str) -> Any:
+            if path.read_bytes() != original:
+                raise ValueError("release evidence policy changed while waiting")
+            return api(endpoint, repository=policy.validation.repository)
+
+        selected = select_main_run(policy.validation, args.commit, read, attempts=args.attempts, interval=args.interval)
+        if path.read_bytes() != original:
+            raise ValueError("release evidence policy changed while waiting")
+        print(
+            f"Main validation workflow completed: https://github.com/{policy.validation.repository}/actions/runs/{selected['id']} "
+            f"(attempt {selected['run_attempt']}). Verify its release evidence before preparation."
+        )
+        return
     if args.operation in ("approve-python", "published-python", "verify-python-approval"):
         _run_python_approval(args, settings)
         return

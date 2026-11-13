@@ -106,6 +106,17 @@ selection bytes only after all verification succeeds. It performs one selection
 attempt; pending CI rejects with a manual-retry diagnostic. Missing, expired,
 ambiguous, wrong-context and incomplete evidence never select a fallback commit.
 
+Orchestrators may first call `select_main_run(policy.validation, commit, read,
+attempts=241, interval=30, sleep=time.sleep)`, or use the installed
+`release evidence wait` command with an explicit `--attempts` budget. The shared
+default permits two hours of retry delay; supported bounds are 1–721 polls and
+0–30 seconds between polls. Transport time is additional, so the enclosing job
+must also budget for requests, bootstrap and subsequent verification. Waiting
+checks the workflow and exact main-push identity; it does not authenticate
+artifacts or grant publication approval. Always run the complete evidence
+verifier afterward. A pending timeout identifies the original run and preserves
+its attempt; it does not instruct the caller to rerun healthy main CI.
+
 The `read(endpoint)` callable must return parsed JSON from authenticated,
 repository-scoped GitHub GETs. `release_validation.api(endpoint,
 repository=...)` supplies that transport through `gh`. For example:

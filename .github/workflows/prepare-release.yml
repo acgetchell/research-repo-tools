@@ -39,7 +39,8 @@ jobs:
   stage:
     needs: preflight
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # Up to two hours for main validation, plus setup, transport and promotion.
+    timeout-minutes: 150
     permissions:
       contents: write # Create a draft release and attach the validated distributions.
       actions: read # Retrieve exact main-run artifacts by immutable identity.

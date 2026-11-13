@@ -163,7 +163,7 @@ def crate(*, extra=None, vcs=None, manifest=None, kind=tarfile.REGTYPE):
 class Provider:
     def __init__(self, policy):
         self.policy = policy
-        self.run = {
+        self.run: dict[str, Any] = {
             "id": 123,
             "run_attempt": 2,
             "head_sha": COMMIT,
@@ -703,6 +703,91 @@ class TestEvidenceInterfaces(unittest.TestCase):
             "--github-output",
             str(self.command_file),
         ]
+
+    def test_cli_wait_uses_exact_main_run_without_setup_or_evidence_effects(self):
+        provider = Provider(SOURCE)
+        polls = 0
+
+        def read(endpoint, **kwargs):
+            nonlocal polls
+            self.assertEqual(kwargs, {"repository": "example/package"})
+            if endpoint.startswith("actions/workflows/13/runs?"):
+                polls += 1
+                provider.run.update(status="completed" if polls == 3 else "in_progress", conclusion="success" if polls == 3 else None)
+            return provider.read(endpoint)
+
+        before = {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
+        output = io.StringIO()
+        with (
+            patch("research_repo_tools.release_interfaces.api", side_effect=read),
+            patch("research_repo_tools.dependency_provenance.check_release_dependencies", side_effect=AssertionError("waiting must not run setup")),
+            patch("subprocess.run", side_effect=AssertionError("waiting must not execute commands beyond the supplied read transport")),
+            contextlib.redirect_stdout(output),
+            contextlib.redirect_stderr(io.StringIO()) as errors,
+        ):
+            self.assertEqual(
+                cli.main(["--root", str(self.root), "release", "evidence", "wait", "evidence.toml", "--commit", COMMIT, "--attempts", "3", "--interval", "0"]),
+                0,
+            )
+        self.assertEqual(polls, 3)
+        self.assertIn("https://github.com/example/package/actions/runs/123 (attempt 2)", output.getvalue())
+        self.assertIn("Verify its release evidence", output.getvalue())
+        self.assertIn("Waiting for exact main validation", errors.getvalue())
+        self.assertNotIn("Waiting", output.getvalue())
+        self.assertTrue(all(endpoint.startswith("actions/workflows/") for endpoint in provider.requests))
+        self.assertEqual({path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}, before)
+        self.assertEqual(provider.commands, [])
+
+    def test_cli_wait_rejects_failed_wrong_context_pending_and_changed_policy(self):
+        diagnostics = {
+            "failure": "missing or failed main-push validation",
+            "cancelled": "missing or failed main-push validation",
+            "wrong-commit": "expected the exact commit's trusted main-push",
+            "pull_request": "expected the exact commit's trusted main-push",
+            "pending": "still pending after the bounded wait",
+            "status": "invalid validation run status",
+            "policy": "release evidence policy changed while waiting",
+            "policy-before-poll": "release evidence policy changed while waiting",
+        }
+        for defect, diagnostic in diagnostics.items():
+            with self.subTest(defect=defect):
+                interface_policy(self.root)
+                provider = Provider(SOURCE)
+                if defect in ("failure", "cancelled"):
+                    provider.run["conclusion"] = defect
+                elif defect == "wrong-commit":
+                    provider.run["head_sha"] = "b" * 40
+                elif defect == "pull_request":
+                    provider.run["event"] = defect
+                elif defect == "pending":
+                    provider.run.update(status="in_progress", conclusion=None)
+                elif defect == "status":
+                    provider.run.pop("status")
+
+                def read(endpoint, **kwargs):
+                    result = provider.read(endpoint)
+                    if (defect == "policy" and endpoint.startswith("actions/workflows/13/runs?")) or (
+                        defect == "policy-before-poll" and endpoint == "actions/workflows/ci.yml"
+                    ):
+                        self.policy.write_bytes(self.policy.read_bytes() + b"\n# changed during observation\n")
+                    return result
+
+                with (
+                    patch("research_repo_tools.release_interfaces.api", side_effect=read),
+                    patch("research_repo_tools.dependency_provenance.check_release_dependencies", side_effect=AssertionError("waiting must not run setup")),
+                    patch("subprocess.run", side_effect=AssertionError("waiting must not execute commands beyond the supplied read transport")),
+                    contextlib.redirect_stdout(io.StringIO()) as output,
+                    contextlib.redirect_stderr(io.StringIO()) as errors,
+                ):
+                    self.assertEqual(
+                        cli.main(["--root", str(self.root), "release", "evidence", "wait", "evidence.toml", "--commit", COMMIT, "--attempts", "1"]), 1
+                    )
+                self.assertEqual(output.getvalue(), "")
+                self.assertIn(diagnostic, errors.getvalue())
+                self.assertNotIn("Traceback", errors.getvalue())
+                self.assertFalse(self.output.exists())
+                if defect == "policy-before-poll":
+                    self.assertEqual(provider.requests, ["actions/workflows/ci.yml"])
 
     def test_configured_guarantees_are_distinct_and_strict(self):
         for policy in (SOURCE, CARGO):
@@ -2969,6 +3054,7 @@ def workflow_fixture(arguments):
         patch("research_repo_tools.release_drafts.api", side_effect=lambda endpoint, **kw: provider.read(endpoint)),
         patch("research_repo_tools.draft_workflow.api", side_effect=lambda endpoint, **kw: provider.read(endpoint)),
         patch("research_repo_tools.release_validation.api", side_effect=lambda endpoint, **kw: provider.read(endpoint)),
+        patch("research_repo_tools.release_interfaces.api", side_effect=lambda endpoint, **kw: provider.read(endpoint)),
         patch("research_repo_tools.release_drafts._api", side_effect=lambda root, repo, endpoint, **kw: provider.read(endpoint)),
         patch("research_repo_tools.release_assets.run_command_bytes", provider.gh),
         patch("research_repo_tools.release_publishing._api", side_effect=lambda root, repo, endpoint, **kw: provider.read(endpoint)),
