@@ -184,6 +184,14 @@ release-version-check:
 review base="origin/main":
     uv run --locked research-repo-tools review branch --base="$1"
 
+# Decline a saved CodeRabbit quote without invoking the service.
+review-deny pending:
+    uv run --locked research-repo-tools review deny "$1"
+
+# Resume one approved quote; requires explicit identity and unenforced-price consent.
+review-resume *args:
+    uv run --locked research-repo-tools review resume "$@"
+
 # Review only staged, unstaged, and non-ignored untracked changes with CodeRabbit.
 review-uncommitted:
     uv run --locked research-repo-tools review uncommitted

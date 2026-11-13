@@ -96,6 +96,8 @@ including changelog and release recipes.
 | `just release-verify TAG [ARGS...]` | Verify the exact registry version and GitHub Release/assets |
 | `just release-version-check` | Check synchronized metadata and complete dated release notes |
 | `just review [base]` | Run opt-in CodeRabbit review of branch and local changes |
+| `just review-deny PENDING` | Consume a saved quote without a provider invocation |
+| `just review-resume PENDING ARGS...` | Attempt one explicitly approved review; the provider does not enforce the quote |
 | `just review-uncommitted` | Run opt-in CodeRabbit review of local changes only |
 | `just security` | Audit locked Python dependencies and scan history/current files for secrets |
 | `just security-secrets [ARGS...]` | Run the pinned managed Gitleaks scanner |

@@ -216,8 +216,24 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--interval", type=int, default=10)
     command.add_argument("--target", type=Path, help="independently captured release target to preserve through final verification")
     review = groups.add_parser("review", help="run an opt-in CodeRabbit review").add_subparsers(dest="action", required=True)
-    review.add_parser("branch", help="review branch and local changes against a verified base").add_argument("--base", default="origin/main")
-    review.add_parser("uncommitted", help="review only staged, unstaged, and untracked changes")
+    command = review.add_parser("branch", help="review branch and local changes against a verified base", allow_abbrev=False)
+    command.add_argument("--base", default="origin/main")
+    command.add_argument("--pending", type=Path, help="new consent-state file outside the worktree; default: a temporary directory")
+    command.add_argument("--timeout", type=float, help="positive seconds per invocation; default: no timeout")
+    review.add_parser("deny", help="consume a pending quote without starting a review", allow_abbrev=False).add_argument("pending", type=Path)
+    command = review.add_parser("resume", help="attempt one explicitly approved review; CodeRabbit cannot enforce the quoted cap", allow_abbrev=False)
+    command.add_argument("pending", type=Path)
+    command.add_argument("--approve", required=True, help="exact pending identity previously presented for approval")
+    command.add_argument("--currency", required=True, help="independently confirmed ISO currency; never inferred from '$'")
+    command.add_argument("--review-kind", required=True, choices=("initial", "incremental"))
+    command.add_argument("--terms-source", required=True, help="where currency and review kind were independently confirmed")
+    command.add_argument(
+        "--accept-unenforced-quote", required=True, action="store_true", help="acknowledge the provider does not enforce the quoted cap or content snapshot"
+    )
+    command.add_argument("--timeout", type=float, help="positive seconds per invocation; default: no timeout")
+    command = review.add_parser("uncommitted", help="review only staged, unstaged, and untracked changes", allow_abbrev=False)
+    command.add_argument("--pending", type=Path, help="new consent-state file outside the worktree; default: a temporary directory")
+    command.add_argument("--timeout", type=float, help="positive seconds per invocation; default: no timeout")
     sarif = groups.add_parser("sarif", help="filter and split consumer-selected SARIF runs").add_subparsers(dest="action", required=True)
     split = sarif.add_parser("split", help="publish a complete filtered SARIF generation")
     split.add_argument("source")
@@ -787,7 +803,14 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
     if args.group == "review":
         from research_repo_tools import review
 
-        return review.run(settings.root, base=args.base if args.action == "branch" else None)
+        if args.action == "deny":
+            return review.report(review.deny(args.pending))
+        if args.action == "resume":
+            from research_repo_tools.review_protocol import ReviewApproval
+
+            approval = ReviewApproval(args.approve, args.currency, args.review_kind, args.terms_source, args.accept_unenforced_quote)
+            return review.report(review.resume(args.pending, approval, timeout=args.timeout))
+        return review.run(settings.root, base=args.base if args.action == "branch" else None, pending_path=args.pending, timeout=args.timeout)
     if args.group == "release":
         if args.action == "runtime":
             from research_repo_tools.runtime_policy_cli import run as run_runtime
