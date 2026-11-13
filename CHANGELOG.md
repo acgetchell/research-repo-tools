@@ -5,6 +5,111 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.2.9] - 2026-11-13
+
+### Merged Pull Requests
+
+- Complete validation and tooling follow-ups [#246](https://github.com/acgetchell/research-repo-tools/pull/246)
+- Add native identities and scoped paid consent [#245](https://github.com/acgetchell/research-repo-tools/pull/245)
+- Verify reproducible isolated runtimes [#244](https://github.com/acgetchell/research-repo-tools/pull/244)
+- Select managed tools for release workflows [#243](https://github.com/acgetchell/research-repo-tools/pull/243)
+- Authenticate draft preparation and publication [#242](https://github.com/acgetchell/research-repo-tools/pull/242)
+- Bound verification and resume asset staging [#241](https://github.com/acgetchell/research-repo-tools/pull/241)
+- Check pin consistency offline [#238](https://github.com/acgetchell/research-repo-tools/pull/238)
+- Retain release acquisitions and provenance [#237](https://github.com/acgetchell/research-repo-tools/pull/237)
+
+### Added
+
+- Retain release acquisitions and provenance [#237](https://github.com/acgetchell/research-repo-tools/pull/237)
+  [`d001cd7`](https://github.com/acgetchell/research-repo-tools/commit/d001cd76016a8744fc9cb41405eac31b2c594604)
+
+#### fix(performance): preserve provenance in benchmark publication
+
+  Identify working-tree measurements by their base commit and measured source digest. Keep full attribution in the README and coordinate plot metadata while
+  shortening visible plot labels.
+
+  Distinguish the complete acquisition ID from the selected trial ID used by CSV and plots without changing retained measurements.
+#### feat(performance): retain release acquisitions and approval evidence
+  - Freeze acquisition assertions and publication receipts before promotion.
+  - Share hosted handoffs, exact archive attachment, and approval revalidation.
+  - Retain a complete pre-tag first-release run without inventing a predecessor.
+  - Preserve full source attribution in ratio SVG descriptions and compact labels.
+  - Refresh locked Python tooling dependencies.
+- Check pin consistency offline [#238](https://github.com/acgetchell/research-repo-tools/pull/238)
+  [`03e694f`](https://github.com/acgetchell/research-repo-tools/commit/03e694f4284ba66a3c3ac89860ce4f95c244638e)
+
+#### feat(actions): check pin consistency offline
+  - Check declared Actions identities for matching commit SHAs and version comments across workflows and composites.
+  - Validate explicit policy tags without resolving latest selectors or contacting GitHub.
+  - Share checker and updater recipe inputs and document consistency policy adoption.
+#### fix(actions): preserve offline checks and preview flags
+  - Run pin checks from the provisioned environment without syncing or downloads.
+  - Preserve update preview flags in the consumer wiring example in README.
+  - Include policy paths and sections in invalid identity diagnostics.
+  - Align consumer scope expectations with resolved Windows paths.
+- Bound verification and resume asset staging [#241](https://github.com/acgetchell/research-repo-tools/pull/241)
+  [`1a1dc96`](https://github.com/acgetchell/research-repo-tools/commit/1a1dc96384ad258437da828a04ab2be789d71c2e)
+
+  - Retain candidate acceptance, final policy and native selection with two fresh
+    dependency checks, reusing exact registry metadata only within each pass.
+  - Stage asset batches with guarded per-asset journals and original-ID recovery
+    while preserving live target, downloaded-byte and final freshness checks.
+  - Bound transient registry retries and pacing waits, expose human/JSON progress,
+    and identify scoped dependency-cache and environment repairs.
+  - Document per-review paid consent and the current no-credit, no-retry boundary.
+- Authenticate draft preparation and publication [#242](https://github.com/acgetchell/research-repo-tools/pull/242)
+  [`555016a`](https://github.com/acgetchell/research-repo-tools/commit/555016afc97a0c293aa583fce32b6bd33da64f1c)
+
+#### feat(release): authenticate draft preparation and publication
+  - Add shared tag-to-draft planning and an authenticated checkout-free writer
+    with durable original-handoff recovery.
+  - Enforce declared release titles, generated notes and published immutability
+    against the captured release identity.
+  - Support destination-undecided Python evidence and separate registry approval
+    bound to the original distribution selection and publication authority.
+
+- Select managed tools for release workflows [#243](https://github.com/acgetchell/research-repo-tools/pull/243)
+  [`46eeb1e`](https://github.com/acgetchell/research-repo-tools/commit/46eeb1eab41b59e88486809124701c4d7bfab97f)
+
+#### feat(toolchain): select managed tools for release workflows
+  - Select declared tools and required prerequisites consistently across sync,
+    check, export, and run while preserving full contributor setup by default.
+  - Use scoped Cargo setup in release workflows and preserve isolated draft
+    handoffs, recovery, and credential boundaries.
+  - Document consumer command migration and ownership of operational evidence.
+- Verify reproducible isolated runtimes [#244](https://github.com/acgetchell/research-repo-tools/pull/244)
+  [`3dcb0db`](https://github.com/acgetchell/research-repo-tools/commit/3dcb0db8b84e223eb9d1be7c98664b9ec01cddbf)
+
+  - Resolve dedicated runtime locks and retain authenticated registry wheels
+    and native build evidence in portable, digest-pinned bundles.
+  - Install approved wheels offline and verify the complete executing dependency
+    graph before isolated release effects.
+  - Document migration and bootstrap trust while preserving existing release
+    isolation and development rehearsal contracts.
+- Add native identities and scoped paid consent [#245](https://github.com/acgetchell/research-repo-tools/pull/245)
+  [`3ffbda6`](https://github.com/acgetchell/research-repo-tools/commit/3ffbda6e843033e1ace107c36164962dd711573a)
+
+#### feat(review): add native identities and scoped paid consent
+  - Add typed, versioned fingerprints for missing paths, regular bytes and
+    executable mode, and native symlink targets without changing existing hashes.
+  - Stream CodeRabbit outcomes and save content-bound quotes before stopping
+    for explicit consent.
+  - Support one-use denial and paid resume with refreshed inputs and terms,
+    explicit unenforced-price acknowledgment, and uncertain-outcome recovery.
+
+### Fixed
+
+- Complete validation and tooling follow-ups [#246](https://github.com/acgetchell/research-repo-tools/pull/246)
+  [`4dbaa32`](https://github.com/acgetchell/research-repo-tools/commit/4dbaa324fbfefabe60a63c7a28089c4ad4bd5eab)
+
+  - Recheck candidate attachments after the final dependency guard, require
+    explicit virtual-environment isolation, and preserve observer failures.
+  - Bound release-target handoff reads and reject scalar filename arguments.
+  - Preserve retained interpreter ownership across native configuration spellings
+    and reject ambiguous settings before cleanup or uv updates.
+  - Refresh the reviewed dependency pins, retain audit hashes, and clarify
+    trusted release execution and public API guidance.
+
 ## [0.2.8] - 2026-11-10
 
 ### Merged Pull Requests
@@ -828,6 +933,7 @@ Older releases are archived by minor series:
 
 - [0.1.x](docs/archives/changelog/0.1.md)
 
+[0.2.9]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.5...v0.2.6
