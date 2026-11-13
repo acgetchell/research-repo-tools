@@ -1,5 +1,6 @@
 """Installed evidence contracts using inert provider data and real archive bytes."""
 
+import base64
 import contextlib
 import copy
 import gzip
@@ -27,9 +28,10 @@ from pathlib import Path
 from typing import Any, override
 from unittest.mock import patch
 
-from research_repo_tools import cli, release_validation
+from research_repo_tools import cli, config, release_validation
 from research_repo_tools.archives import extract_archive
 from research_repo_tools.changelog import template
+from research_repo_tools.evidence import deterministic_json
 from research_repo_tools.files import RecoveryError
 from research_repo_tools.process import run_git_bytes
 from research_repo_tools.registry import lookup_version, verify_published_distributions
@@ -110,9 +112,10 @@ def interface_policy(root, policy=SOURCE):
         name, steps = policy.signing_job
         text += f"\n[signing-job]\nname={json.dumps(name)}\nsteps={json.dumps(steps)}\n"
     if policy.distributions:
+        destination = 'destination="undecided"' if policy.distributions.index_url is None else f"index-url={json.dumps(policy.distributions.index_url)}"
         text += (
             f"\n[distributions]\nfiles={json.dumps(policy.distributions.files)}\n"
-            f"index-url={json.dumps(policy.distributions.index_url)}\nmax-age-seconds={policy.distributions.max_age_seconds}\n"
+            f"{destination}\nmax-age-seconds={policy.distributions.max_age_seconds}\n"
             f"max-distribution-bytes={policy.distributions.max_distribution_bytes}\n"
         )
     path = root / "evidence.toml"
@@ -1154,6 +1157,173 @@ def python_distributions(*, package="example-app", version="1.2.3", extra=None, 
 
 
 class TestPythonDistributionEvidence(unittest.TestCase):
+    def test_registry_approval_rejects_unsupported_protocol_and_changed_local_bytes(self):
+        from research_repo_tools.python_publication import PythonRegistryAuthority, approve_python_publication, verify_python_publication
+
+        authority = PythonRegistryAuthority(
+            "https://test.pypi.org", "maintainer", PYTHON.package, "example/package", ".github/workflows/publish.yml", "approval"
+        )
+        for options in ({"protocol": "simple"}, {"authentication": "basic"}, {"index_url": "https://user:secret@example.com"}):
+            with self.subTest(options=options), self.assertRaises(ValueError):
+                replace(authority, **options)
+        assert PYTHON.distributions is not None
+        policy = replace(PYTHON, distributions=replace(PYTHON.distributions, index_url=None))
+        provider = self.provider(policy)
+        selected = self.verify(provider, distributions=self.dist)
+        with patch("research_repo_tools.release_validation.subprocess.run", provider.execute):
+            approved = approve_python_publication(
+                policy, "1.2.3", COMMIT, provider.read, selection=selected, authority=authority, distributions=self.dist, approve=True
+            )
+            for invalid in (b"", b"{}", approved + b"\n"):
+                with self.subTest(approval=invalid), self.assertRaisesRegex(ValueError, "new approval"):
+                    verify_python_publication(
+                        policy, "1.2.3", COMMIT, provider.read, selection=selected, authority=authority, approval=invalid, distributions=self.dist
+                    )
+
+            def changed_registry(*args, **kwargs):
+                (self.dist / "unexpected.whl").write_bytes(b"changed while checking registry")
+
+            with (
+                patch("research_repo_tools.python_publication.verify_published_distributions", side_effect=changed_registry),
+                self.assertRaisesRegex(ValueError, "exactly these distributions"),
+            ):
+                verify_python_publication(
+                    policy, "1.2.3", COMMIT, provider.read, selection=selected, authority=authority, approval=approved, distributions=self.dist, published=True
+                )
+            (self.dist / "unexpected.whl").unlink()
+            provider.artifact["expired"] = True
+            with self.assertRaises(ValueError):
+                verify_python_publication(
+                    policy, "1.2.3", COMMIT, provider.read, selection=selected, authority=authority, approval=approved, distributions=self.dist
+                )
+
+    def test_destination_undecided_requires_approval_of_original_bytes_and_authority(self):
+        from research_repo_tools.python_publication import PythonRegistryAuthority, approve_python_publication, verify_python_publication
+
+        assert PYTHON.distributions is not None
+        authority = PythonRegistryAuthority(
+            "https://test.pypi.org", "maintainer", PYTHON.package, PYTHON.validation.repository, ".github/workflows/publish.yml", "registry-approval"
+        )
+        for signing in (None, ("sign", ("Attest",))):
+            with self.subTest(signing=signing):
+                policy = replace(PYTHON, distributions=replace(PYTHON.distributions, index_url=None), signing_job=signing)
+                provider = self.provider(policy)
+                selected = self.verify(provider, distributions=self.dist)
+                self.assertIsNone(json.loads(selected)["policy"]["distributions"]["index_url"])
+                self.assertIn("not publishable", render_release_summary(json.loads(selected)))
+                from research_repo_tools.release_interfaces import _present_evidence
+
+                for candidate in (False, True):
+                    payload = deterministic_json({"native": json.loads(selected)}) if candidate else selected
+                    with self.subTest(candidate=candidate), contextlib.redirect_stdout(io.StringIO()) as status:
+                        _present_evidence(payload, "status", candidate=candidate)
+                    self.assertIn("destination undecided", status.getvalue())
+                with patch("research_repo_tools.release_validation.subprocess.run", provider.execute):
+                    with self.assertRaisesRegex(ValueError, "explicit approval"):
+                        approve_python_publication(policy, "1.2.3", COMMIT, provider.read, selection=selected, authority=authority, distributions=self.dist)
+                    approved = approve_python_publication(
+                        policy, "1.2.3", COMMIT, provider.read, selection=selected, authority=authority, distributions=self.dist, approve=True
+                    )
+                    self.assertEqual(
+                        verify_python_publication(
+                            policy, "1.2.3", COMMIT, provider.read, selection=selected, authority=authority, approval=approved, distributions=self.dist
+                        ),
+                        approved,
+                    )
+                    for changed in (
+                        replace(authority, account="another"),
+                        replace(authority, index_url="https://pypi.org"),
+                        replace(authority, workflow=".github/workflows/other.yml"),
+                        replace(authority, environment="other"),
+                    ):
+                        with self.subTest(authority=changed), self.assertRaisesRegex(ValueError, "new approval"):
+                            verify_python_publication(
+                                policy, "1.2.3", COMMIT, provider.read, selection=selected, authority=changed, approval=approved, distributions=self.dist
+                            )
+                    provider.run["run_attempt"] = 3
+                    with self.assertRaises(ValueError):
+                        verify_python_publication(
+                            policy, "1.2.3", COMMIT, provider.read, selection=selected, authority=authority, approval=approved, distributions=self.dist
+                        )
+
+    def test_installed_cli_separates_destination_free_evidence_from_registry_approval(self):
+        # Handoff inputs use canonical native parents, including macOS /var.
+        self.root, self.dist = self.root.resolve(), self.dist.resolve()
+        assert PYTHON.distributions is not None
+        policy = replace(PYTHON, distributions=replace(PYTHON.distributions, index_url=None))
+        provider = self.provider(policy)
+        selected = self.verify(provider, distributions=self.dist)
+        evidence_policy = interface_policy(self.root, policy)
+        selection = self.root / "selection.json"
+        selection.write_bytes(selected)
+        authority = self.root / "authority.toml"
+        authority.write_bytes(
+            (
+                f'schema=1\nindex-url="https://test.pypi.org"\naccount="maintainer"\nproject="{policy.package}"\n'
+                f'repository="{policy.validation.repository}"\nworkflow=".github/workflows/publish.yml"\n'
+                'environment="registry-approval"\nprotocol="pypi-json"\nauthentication="none"\n'
+            ).encode()
+        )
+        approved, verified = self.root / "approved.json", self.root / "verified.json"
+        common = [
+            str(evidence_policy.relative_to(self.root)),
+            "--authority",
+            str(authority),
+            "--commit",
+            COMMIT,
+            "--version",
+            "1.2.3",
+            "--distributions",
+            str(self.dist),
+            "--expected",
+            str(selection),
+        ]
+        with (
+            patch("research_repo_tools.release_interfaces.api", side_effect=lambda endpoint, **kwargs: provider.read(endpoint)),
+            patch("research_repo_tools.release_validation.subprocess.run", provider.execute),
+            patch("research_repo_tools.python_publication.verify_published_distributions", return_value=self.hashes) as registry_check,
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
+            self.assertEqual(cli.main(["--root", str(self.root), "release", "evidence", "approve-python", *common, "--approve", "--output", str(approved)]), 0)
+            self.assertEqual(
+                cli.main(
+                    ["--root", str(self.root), "release", "evidence", "verify-python-approval", *common, "--approval", str(approved), "--output", str(verified)]
+                ),
+                0,
+            )
+            registry_check.assert_not_called()
+            self.assertEqual(approved.read_bytes(), verified.read_bytes())
+            self.assertEqual(
+                cli.main(
+                    ["--root", str(self.root), "release", "evidence", "published-python", *common, "--approval", str(approved), "--output", str(verified)]
+                ),
+                0,
+            )
+            registry_check.assert_called_once_with(policy.package, "1.2.3", self.hashes, index_url="https://test.pypi.org")
+            original = approved.read_bytes()
+            authority.write_bytes(authority.read_bytes().replace(b"test.pypi.org", b"pypi.org"))
+            with contextlib.redirect_stderr(io.StringIO()) as errors:
+                self.assertEqual(
+                    cli.main(
+                        [
+                            "--root",
+                            str(self.root),
+                            "release",
+                            "evidence",
+                            "verify-python-approval",
+                            *common,
+                            "--approval",
+                            str(approved),
+                            "--output",
+                            str(verified),
+                        ]
+                    ),
+                    1,
+                )
+            self.assertIn("new approval", errors.getvalue())
+            self.assertEqual(approved.read_bytes(), original)
+            self.assertEqual(verified.read_bytes(), original)
+
     @override
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="python evidence café ")
@@ -1947,6 +2117,429 @@ class DraftProvider(Provider):
         if isinstance(value, Exception):
             raise value
         return subprocess.CompletedProcess(args, 0, value if isinstance(value, bytes) else encode(value), b"")
+
+
+class WorkflowProvider(DraftProvider):
+    def __init__(self):
+        super().__init__()
+        self.tag_workflow: dict[str, Any] = {"id": 7, "path": ".github/workflows/prepare.yml", "name": "Prepare draft", "state": "active"}
+        self.workflow_text = b'name: Prepare draft\non:\n  push:\n    tags: ["v*"]\njobs: {}\n'
+        self.tag_run = dict(
+            self.run,
+            id=101,
+            run_attempt=1,
+            workflow_id=7,
+            path=self.tag_workflow["path"],
+            name="Prepare draft",
+            head_branch="v1.2.3",
+            status="in_progress",
+            conclusion=None,
+            pull_requests=[],
+        )
+        self.tag_jobs = [
+            dict(
+                self.jobs[0],
+                id=201,
+                name="verify",
+                run_id=101,
+                run_attempt=1,
+                head_branch="v1.2.3",
+                steps=[{"name": "Verify source", "status": "completed", "conclusion": "success"}],
+            )
+        ]
+        self.history = [self.tag_run]
+        self.recovery_run = {**self.tag_run, "id": 999}
+        self.handoff_artifact: dict[str, Any] = {
+            "id": 301,
+            "name": "draft-handoff-101-1",
+            "expired": False,
+            "workflow_run": {"id": 101, "head_sha": COMMIT, "head_branch": "v1.2.3", "repository_id": 7, "head_repository_id": 7},
+        }
+        self.after_handoff = lambda: None
+        self.check_conclusion = "success"
+
+    def handoff(self, payload):
+        stream = io.BytesIO()
+        with zipfile.ZipFile(stream, "w") as archive:
+            archive.writestr("handoff.json", payload)
+        self.handoff_zip = stream.getvalue()
+        self.handoff_artifact.update(digest="sha256:" + hashlib.sha256(self.handoff_zip).hexdigest(), size_in_bytes=len(self.handoff_zip))
+
+    @override
+    def read(self, endpoint):
+        if not hasattr(self, "tag_workflow"):
+            return super().read(endpoint)
+        self.requests.append(endpoint)
+        if endpoint == "":
+            return {"full_name": "example/package", "default_branch": "main"}
+        if endpoint == "branches/main":
+            return {"name": "main", "protected": True}
+        if endpoint == f"compare/{COMMIT}...main":
+            return {"status": "ahead"}
+        if endpoint == f"commits/{COMMIT}/check-runs?filter=latest&per_page=100":
+            return [
+                {
+                    "total_count": 1,
+                    "check_runs": [
+                        {"id": 501, "name": "native", "app": {"id": 15368}, "head_sha": COMMIT, "status": "completed", "conclusion": self.check_conclusion}
+                    ],
+                }
+            ]
+        if endpoint == f"actions/workflows/{Path(self.tag_workflow['path']).name}":
+            return copy.deepcopy(self.tag_workflow)
+        if endpoint == "actions/runs/101":
+            return copy.deepcopy(self.tag_run)
+        if endpoint == "actions/runs/999":
+            return copy.deepcopy(self.recovery_run)
+        if endpoint.startswith("actions/runs/101/attempts/1/jobs?"):
+            return {"total_count": 1, "jobs": copy.deepcopy(self.tag_jobs)}
+        if endpoint.startswith("actions/workflows/7/runs?"):
+            page = int(endpoint.rsplit("=", 1)[1])
+            return {"total_count": len(self.history), "workflow_runs": copy.deepcopy(self.history[(page - 1) * 100 : page * 100])}
+        if endpoint == "actions/artifacts/301":
+            return copy.deepcopy(self.handoff_artifact)
+        if endpoint == f"contents/{self.tag_workflow['path']}?ref={COMMIT}":
+            return {
+                "type": "file",
+                "path": self.tag_workflow["path"],
+                "encoding": "base64",
+                "size": len(self.workflow_text),
+                "content": base64.b64encode(self.workflow_text).decode(),
+                "sha": hashlib.sha1(b"blob " + str(len(self.workflow_text)).encode() + b"\0" + self.workflow_text).hexdigest(),
+            }
+        return super().read(endpoint)
+
+    @override
+    def execute(self, args, **kwargs):
+        if args == ["gh", "api", "repos/example/package/actions/artifacts/301/zip"]:
+            kwargs["stdout"].write(self.handoff_zip)
+            self.after_handoff()
+            return subprocess.CompletedProcess(args, 0)
+        return super().execute(args, **kwargs)
+
+
+class TestAuthenticatedDraftWorkflow(unittest.TestCase):
+    @override
+    def setUp(self):
+        from research_repo_tools.draft_workflow import DraftHandoffArtifact, plan_release_draft
+        from research_repo_tools.release_receipts import TagPushPolicy, TagSource
+
+        temporary = tempfile.TemporaryDirectory(prefix="authenticated draft café ")
+        self.addCleanup(temporary.cleanup)
+        self.root = Path(temporary.name).resolve()
+        self.checkout, self.writer = self.root / "observed", self.root / "writer"
+        self.checkout.mkdir()
+        self.writer.mkdir()
+        self.state = self.root / "durable-state"
+        self.provider = WorkflowProvider()
+        self.enterContext(patch.dict(os.environ, {"GITHUB_REPOSITORY": "example/package", "GITHUB_RUN_ID": "101", "GITHUB_RUN_ATTEMPT": "1"}))
+        self.source = TagSource("refs/tags/v1.2.3", COMMIT)
+        self.policy = TagPushPolicy(
+            "example/package", ".github/workflows/prepare.yml", "Prepare draft", (("verify", ("Verify source",)),), artifact_prefix="draft-handoff"
+        )
+        self.enterContext(patch("research_repo_tools.release_validation.subprocess.run", self.provider.execute))
+        self.enterContext(patch("research_repo_tools.release_drafts.api", side_effect=lambda endpoint, **kw: self.provider.read(endpoint)))
+        self.enterContext(patch("research_repo_tools.draft_workflow.api", side_effect=lambda endpoint, **kw: self.provider.read(endpoint)))
+        self.enterContext(patch("research_repo_tools.release_validation.api", side_effect=lambda endpoint, **kw: self.provider.read(endpoint)))
+        self.enterContext(patch("research_repo_tools.release_drafts._api", side_effect=lambda root, repo, endpoint, **kw: self.provider.read(endpoint)))
+        self.enterContext(patch("research_repo_tools.release_assets.run_command_bytes", self.provider.gh))
+        self.enterContext(patch("research_repo_tools.release_publishing._api", side_effect=lambda root, repo, endpoint, **kw: self.provider.read(endpoint)))
+        self.enterContext(patch("research_repo_tools.release_interfaces.require_release_checkout"))
+        self.enterContext(patch("research_repo_tools.release_publishing.require_release_checkout"))
+        self.enterContext(patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, COMMIT, "")))
+        (self.checkout / "pyproject.toml").write_bytes(b'[project]\nname="sample"\nversion="1.2.3"\n')
+        (self.checkout / "CHANGELOG.md").write_bytes(b"# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Verified notes.\n")
+        self.settings = config.parse(
+            {
+                "publishing": {
+                    "registry": "pypi",
+                    "package": "sample",
+                    "repository": "example/package",
+                    "required-checks": [{"name": "native", "app-id": 15368}],
+                }
+            },
+            root=self.checkout,
+        )
+        self.configuration = interface_policy(self.checkout)
+        self.payload = plan_release_draft(self.settings, self.configuration, self.source, event="push")
+        self.provider.handoff(self.payload)
+        self.selected = DraftHandoffArtifact(101, 1, 301, self.provider.handoff_artifact["digest"][7:])
+
+    def prepare(self, **changes):
+        from research_repo_tools.draft_workflow import prepare_authenticated_draft
+
+        options: dict[str, Any] = dict(output=self.state, executing_run_id=101, executing_attempt=1, approve=True)
+        options.update(changes)
+        return prepare_authenticated_draft(self.writer, self.policy, self.source, self.selected, **options)
+
+    def test_authenticated_creation_and_restored_original_journal_reuse_original_id(self):
+        pending = []
+        self.provider.on_create = lambda: pending.append({path.name: path.read_bytes() for path in self.state.iterdir()})
+        target = self.prepare()
+        self.assertEqual(set(pending[0]), {"producer.json", "handoff.json", "draft-receipt.json"})
+        self.assertEqual(pending[0]["handoff.json"], self.payload)
+        self.assertEqual(json.loads(pending[0]["draft-receipt.json"])["state"], "pending")
+        self.assertEqual(target.release_id, 91)
+        self.assertEqual(self.provider.posts[0]["name"], "v1.2.3")
+        self.assertEqual(self.provider.posts[0]["body"], json.loads(self.payload)["notes"])
+        before = {p.name: p.read_bytes() for p in self.state.iterdir()}
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}):
+            self.assertEqual(self.prepare(executing_run_id=999), target)
+        self.assertEqual({p.name: p.read_bytes() for p in self.state.iterdir()}, before)
+        self.assertEqual(len(self.provider.posts), 1)
+        self.provider.release = None
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}), self.assertRaises(ValueError):
+            self.prepare(executing_run_id=999)
+        self.assertEqual(len(self.provider.posts), 1)
+
+    def test_existing_matching_draft_retains_assets_and_captured_state_without_post(self):
+        self.provider.release = self.provider.draft(assets=[{"id": 17, "name": "transfer.json", "size": 5, "state": "uploaded", "digest": None}])
+        self.provider.release.update(name="v1.2.3", body=json.loads(self.payload)["notes"])
+        original = copy.deepcopy(self.provider.release)
+        target = self.prepare()
+        self.assertEqual(target.release_id, 91)
+        self.assertEqual(self.provider.release, original)
+        self.assertEqual(self.provider.posts, [])
+        self.assertEqual(json.loads((self.state / "draft-receipt.json").read_bytes())["state"], "captured")
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}):
+            self.assertEqual(self.prepare(executing_run_id=999), target)
+        self.assertEqual(self.provider.posts, [])
+
+    def test_missing_journal_new_run_and_ambiguous_creation_never_create_replacement(self):
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}), self.assertRaisesRegex(ValueError, "original handoff and journal"):
+            self.prepare(executing_run_id=999)
+        self.assertFalse(self.state.exists())
+
+        def timeout():
+            raise TimeoutError("POST outcome unknown")
+
+        self.provider.on_create = timeout
+        with self.assertRaises(DraftPreparationUnknownError):
+            self.prepare()
+        self.assertEqual(json.loads((self.state / "draft-receipt.json").read_bytes())["state"], "pending")
+        self.provider.on_create = lambda: None
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}), self.assertRaises(DraftPreparationUnknownError):
+            self.prepare(executing_run_id=999)
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}):
+            self.assertEqual(self.prepare(executing_run_id=999, recover_release_id=91).release_id, 91)
+        (self.state / "draft-receipt.json").unlink()
+        with self.assertRaisesRegex(ValueError, "journal is missing"):
+            self.prepare()
+        self.assertEqual(len(self.provider.posts), 1)
+
+    def test_execution_arguments_cannot_impersonate_original_run_without_journal(self):
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}), self.assertRaisesRegex(ValueError, "executing run.*differs"):
+            self.prepare()
+        self.assertEqual(self.provider.posts, [])
+        self.assertFalse(self.state.exists())
+
+    def test_execution_environment_and_live_identity_must_agree_before_effects(self):
+        self.prepare()
+        before = {path.name: path.read_bytes() for path in self.state.iterdir()}
+        for environment, changes in (
+            ({"GITHUB_RUN_ID": ""}, {}),
+            ({"GITHUB_RUN_ID": "invalid"}, {}),
+            ({"GITHUB_RUN_ATTEMPT": ""}, {}),
+            ({"GITHUB_RUN_ATTEMPT": "2"}, {}),
+            ({"GITHUB_REPOSITORY": "other/package"}, {}),
+            ({}, {"id": 998}),
+            ({}, {"run_attempt": 2}),
+            ({}, {"run_attempt": True}),
+            ({}, {"repository": {"full_name": "other/package", "id": 8}}),
+        ):
+            with self.subTest(environment=environment, changes=changes):
+                original = copy.deepcopy(self.provider.recovery_run)
+                self.provider.recovery_run.update(changes)
+                try:
+                    with patch.dict(os.environ, {"GITHUB_RUN_ID": "999", **environment}), self.assertRaises(ValueError):
+                        self.prepare(executing_run_id=999)
+                    self.assertEqual(len(self.provider.posts), 1)
+                    self.assertEqual({path.name: path.read_bytes() for path in self.state.iterdir()}, before)
+                finally:
+                    self.provider.recovery_run = original
+
+    def test_handoff_drift_and_failed_checks_reject_before_mutation(self):
+        def change():
+            self.provider.tag_run["run_attempt"] = 2
+
+        self.provider.after_handoff = change
+        with self.assertRaises(ValueError):
+            self.prepare()
+        self.assertEqual(self.provider.posts, [])
+        self.assertFalse(self.state.exists())
+        self.provider.after_handoff = lambda: None
+        self.provider.tag_run["run_attempt"] = 1
+        self.provider.after_handoff = lambda: self.provider.history.append({**self.provider.tag_run, "id": 100})
+        with self.assertRaises(ValueError):
+            self.prepare()
+        self.assertEqual(self.provider.posts, [])
+        self.assertFalse(self.state.exists())
+        self.provider.history = [self.provider.tag_run]
+        self.provider.after_handoff = lambda: None
+        self.provider.check_conclusion = "failure"
+        with self.assertRaisesRegex(ValueError, "Unmet release checks"):
+            self.prepare()
+        self.assertEqual(self.provider.posts, [])
+        self.assertFalse(self.state.exists())
+        self.provider.check_conclusion = "success"
+        self.assertEqual(self.prepare().release_id, 91)
+        self.assertEqual(len(self.provider.posts), 1)
+
+    def test_final_target_retention_rejects_release_drift_and_preserves_captured_journal(self):
+        from research_repo_tools.files import replace_many
+
+        def drift(updates, *, verify):
+            assert self.provider.release is not None
+            self.provider.release["body"] = "changed after preparation"
+            return replace_many(updates, verify=verify)
+
+        with patch("research_repo_tools.draft_workflow.replace_many", side_effect=drift), self.assertRaisesRegex(ValueError, "body"):
+            self.prepare()
+        self.assertEqual(len(self.provider.posts), 1)
+        self.assertEqual(json.loads((self.state / "draft-receipt.json").read_bytes())["release_id"], 91)
+        self.assertFalse((self.state / "target.json").exists())
+
+    def test_planner_rejects_notes_exceeding_the_writer_contract(self):
+        from research_repo_tools.draft_workflow import plan_release_draft
+
+        (self.checkout / "CHANGELOG.md").write_bytes(b"# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- " + b"x" * (1024 * 1024) + b"\n")
+        with self.assertRaisesRegex(ValueError, "notes.*1 MiB"):
+            plan_release_draft(self.settings, self.configuration, self.source, event="push")
+        self.assertEqual(self.provider.posts, [])
+        self.assertFalse(self.state.exists())
+
+    def test_replanning_preserves_original_selection_and_rejects_changed_notes(self):
+        from research_repo_tools.draft_workflow import plan_release_draft
+
+        self.assertEqual(plan_release_draft(self.settings, self.configuration, self.source, event="push", expected=self.payload), self.payload)
+        (self.checkout / "CHANGELOG.md").write_bytes(b"# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Changed notes.\n")
+        with self.assertRaisesRegex(ValueError, "handoff changed"):
+            plan_release_draft(self.settings, self.configuration, self.source, event="push", expected=self.payload)
+        self.assertEqual(self.provider.posts, [])
+
+    def test_installed_cli_plans_and_authenticates_original_handoff(self):
+        from research_repo_tools.release_assets import parse_release_target
+
+        project = self.checkout / "pyproject.toml"
+        project.write_bytes(
+            project.read_bytes() + b'\n[tool.research-repo-tools.publishing]\nregistry="pypi"\npackage="sample"\nrepository="example/package"\n'
+            b'required-checks=[{name="native", app-id=15368}]\n'
+        )
+        handoff, command_file = self.root / "handoff.json", self.root / "github-output"
+        command_file.write_bytes(b"")
+        configuration = self.writer / "handoff-policy.toml"
+        configuration.write_bytes(
+            b'schema=1\nrepository="example/package"\nworkflow=".github/workflows/prepare.yml"\nworkflow-name="Prepare draft"\n'
+            b'artifact-prefix="draft-handoff"\n[[jobs]]\nname="verify"\nsteps=["Verify source"]\n'
+        )
+        self.state = self.root / "state \u03c0"
+        captured = io.BytesIO()
+        terminal = io.TextIOWrapper(captured, encoding="ascii", newline="\n", write_through=True)
+        self.addCleanup(terminal.close)
+        with contextlib.redirect_stdout(terminal), contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(
+                cli.main(
+                    [
+                        "--root",
+                        str(self.checkout),
+                        "release",
+                        "assets",
+                        "plan",
+                        str(self.configuration.relative_to(self.checkout)),
+                        "--repository",
+                        "example/package",
+                        "--tag",
+                        "v1.2.3",
+                        "--commit",
+                        COMMIT,
+                        "--event",
+                        "push",
+                        "--output",
+                        str(handoff),
+                        "--github-output",
+                        str(command_file),
+                    ]
+                ),
+                0,
+                errors.getvalue(),
+            )
+            self.assertEqual(handoff.read_bytes(), self.payload)
+            self.assertEqual(command_file.read_bytes(), f"commit={COMMIT}\n".encode())
+            self.assertEqual(
+                cli.main(
+                    [
+                        "--root",
+                        str(self.writer),
+                        "release",
+                        "assets",
+                        "prepare-authenticated",
+                        configuration.name,
+                        "--repository",
+                        "example/package",
+                        "--tag",
+                        "v1.2.3",
+                        "--commit",
+                        COMMIT,
+                        "--run-id",
+                        "101",
+                        "--attempt",
+                        "1",
+                        "--artifact-id",
+                        "301",
+                        "--artifact-sha256",
+                        self.selected.sha256,
+                        "--executing-run-id",
+                        "101",
+                        "--executing-attempt",
+                        "1",
+                        "--output",
+                        str(self.state),
+                        "--approve",
+                    ]
+                ),
+                0,
+                errors.getvalue(),
+            )
+        self.assertEqual(parse_release_target((self.state / "target.json").read_bytes()).release_id, 91)
+        self.assertEqual(len(self.provider.posts), 1)
+        self.assertEqual(self.provider.posts[0]["body"], json.loads(self.payload)["notes"])
+        self.assertIn(b"state \\u03c0", captured.getvalue())
+
+    def test_changed_or_expired_producer_and_artifact_reject_without_effect(self):
+        for field, changes in (
+            ("handoff_artifact", {"id": 999}),
+            ("handoff_artifact", {"expired": True}),
+            ("handoff_artifact", {"digest": "sha256:" + "f" * 64}),
+            ("handoff_artifact", {"workflow_run": {"id": 102, "head_sha": COMMIT}}),
+            ("tag_run", {"head_sha": "f" * 40}),
+            ("tag_run", {"workflow_id": 8}),
+            ("tag_run", {"head_repository": {"full_name": "fork/package", "id": 8}}),
+            ("tag_workflow", {"state": "disabled_manually"}),
+        ):
+            with self.subTest(field=field, changes=changes):
+                original = copy.deepcopy(getattr(self.provider, field))
+                getattr(self.provider, field).update(changes)
+                try:
+                    with self.assertRaises(ValueError):
+                        self.prepare()
+                    self.assertEqual(self.provider.posts, [])
+                    self.assertFalse(self.state.exists())
+                finally:
+                    setattr(self.provider, field, original)
+
+    def test_authenticated_payload_rejects_wrong_source_and_unknown_fields(self):
+        from research_repo_tools.draft_workflow import DraftHandoffArtifact
+
+        for changes in ({"source": {"ref": "refs/tags/v1.2.4", "commit": COMMIT}}, {"event": "workflow_dispatch"}, {"extra": "untrusted"}):
+            with self.subTest(changes=changes):
+                record = json.loads(self.payload)
+                record.update(changes)
+                self.provider.handoff(deterministic_json(record))
+                self.selected = DraftHandoffArtifact(101, 1, 301, self.provider.handoff_artifact["digest"][7:])
+                with self.assertRaises(ValueError):
+                    self.prepare()
+                self.assertEqual(self.provider.posts, [])
+                self.assertFalse(self.state.exists())
 
 
 class TestDraftPreparation(unittest.TestCase):

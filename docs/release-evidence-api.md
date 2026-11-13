@@ -255,6 +255,78 @@ installation verified; source-only availability does not satisfy that gate.
 
 ## Shared primitives and asset composition
 
+### Python registry approval
+
+In v0.2.9, `PythonDistributionPolicy(..., index_url=None)` explicitly freezes an
+undecided destination (`destination="undecided"` in TOML, mutually exclusive with
+`index-url`). Evidence remains verifiable, with status and summaries identifying
+it as not publishable. The original `published` command rejects this state.
+Omitted fields retain the existing PyPI-bound default.
+
+`python_publication.PythonRegistryAuthority(index_url, account, project,
+repository, workflow, environment, protocol="pypi-json", authentication="none")`
+declares a separately approved destination and publisher. Only unauthenticated
+HTTPS PyPI JSON verification is supported; credentials in URLs, other protocols
+and private authentication modes reject before requests. This protocol declaration
+does not configure the consumer's upload credentials. `load_registry_authority`
+loads the strict schema-1 policy shown in the [README](../README.md#releases).
+
+`approve_python_publication(policy, version, commit, read, *, selection,
+authority, distributions, approve=False)` returns deterministic approval bytes
+only after explicit approval and live verification of the original selection and
+local distribution inventory. `verify_python_publication` takes the same inputs
+plus `approval` and optional `published=False`; it revalidates the frozen source,
+run/attempt, gates, artifact, signature when configured, and exact local bytes.
+`published=True` also checks the destination's exact inventory and downloaded
+bytes, then revalidates evidence and local bytes again. No command requests
+credentials, rebuilds, uploads or selects replacement evidence.
+
+The versioned approval binds the SHA-256 of the original selection and all authority
+fields. Callers independently supply and authenticate both authority and approval;
+records are assertions, not offline authorization. Changed authority requires new
+approval, and registry-bound evidence cannot change its endpoint. Retain exclusive
+control of original files and verify immediately before credential acquisition.
+After an uncertain upload, inspect with `published=True` before considering a
+consumer-owned retry. CLI equivalents are `approve-python`,
+`verify-python-approval` and `published-python` under `release evidence`.
+
+### Authenticated tag-to-draft workflow
+
+In v0.2.9, `draft_workflow.plan_release_draft(config, evidence_policy, source, *,
+event, expected=None)` returns a deterministic inert handoff. `source` is an
+independently observed `TagSource`; `event` must be `push`. Planning checks clean
+source/package metadata, protected-default-branch ancestry, required checks and
+signed native evidence, then freezes generated notes and the original selection.
+Repeat with `expected` to retain that selection and reject changed inputs.
+Planning enforces the writer's 1 MiB note/selection limits and the complete
+handoff's 4 MiB bound before returning it.
+The CLI `release assets plan` also requires independent `--repository` and writes
+outside the observed checkout, revalidating before retaining the handoff.
+
+`DraftHandoffArtifact(run_id, attempt, artifact_id, sha256)` requires original
+attempt 1 and independently trusted immutable artifact ID/digest. The shared
+`prepare_authenticated_draft(root, policy, source, selected, *, output,
+executing_run_id, executing_attempt, approve=False, recover_release_id=None)`
+uses `TagPushPolicy` to authenticate the exact workflow, tag-only trigger,
+repository, source, run/attempt, completed verification gates and artifact before
+extracting the single `handoff.json`. The containing workflow may still run its
+writer job. Both the ZIP and expanded handoff are bounded to 4 MiB.
+
+The writer rejects execution within a checkout and composes the existing draft
+writer with repeated producer, source and check revalidation. It reserves the
+original `producer.json`, `handoff.json` and first `draft-receipt.json` together
+after pre-effect checks, before any creation request. Failed pre-effect checks
+leave no incomplete state directory. Final `target.json` retention rechecks the
+same draft after producer verification. Receipt and target formats are unchanged.
+The supplied executing run/attempt must match `GITHUB_RUN_ID` and
+`GITHUB_RUN_ATTEMPT`, verified against the current API run in `GITHUB_REPOSITORY`.
+Fresh state requires the original execution's
+first attempt and unambiguous retained tag-run history. Recovery restores all
+original state, including its journal, and reuses the captured ID. Missing journals,
+changed producers, expired artifacts and deleted/replaced drafts reject without
+creating replacements. The [two-job guide](PREPARING_DRAFTS.md) covers CLI arguments,
+durability, serialization, ambiguous POST recovery and consumer migration.
+
 ### Tag-push receipt retrieval
 
 The v0.2.7 module `research_repo_tools.release_receipts` retrieves the original
@@ -342,7 +414,8 @@ a frozen selection into a new output directory. They are mutually exclusive.
 
 The v0.2.7 public function is
 `release_drafts.prepare_release_draft(root, repository, tag, commit, *, policy,
-expected, title, notes, receipt, approve=False, recover_release_id=None)`.
+expected, title, notes, receipt, approve=False, recover_release_id=None,
+source_checks=())`.
 It returns the existing `release_assets.ReleaseTarget`; serialize it with
 `serialize_release_target` for later attachment/revalidation. The CLI is
 `release assets prepare EVIDENCE_POLICY`, with independent `--repository`,
@@ -350,6 +423,10 @@ It returns the existing `release_assets.ReleaseTarget`; serialize it with
 `--receipt`, `--output TARGET`, and mandatory `--approve`. It requires no checkout.
 Retrieval uses its separate tag-push policy above; preflight/upload/verify retain
 their existing asset-policy/checkout contracts.
+Optional `source_checks` is a tuple of `RequiredCheck` values; when supplied,
+preparation also rechecks protected-default-branch ancestry and exact source
+checks around evidence verification. The authenticated composition supplies the
+checks frozen by its read-only planner.
 
 `policy` is an `EvidencePolicy` for the asserted repository with a signing job.
 `expected` must be the original canonical selection bytes returned by

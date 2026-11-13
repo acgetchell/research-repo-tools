@@ -8,6 +8,7 @@ storage and serialize every writer for a repository/tag across invocations.
 import hashlib
 import os
 import tempfile
+from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
 from pathlib import Path
@@ -31,6 +32,7 @@ from research_repo_tools.release_assets import (
     require_draft,
 )
 from research_repo_tools.release_evidence import EvidencePolicy, verify_release_evidence
+from research_repo_tools.release_publishing import RequiredCheck, _api, _protected_source, require_checks
 from research_repo_tools.release_validation import api
 
 __all__ = ["DraftPreparationUnknownError", "prepare_release_draft"]
@@ -188,6 +190,46 @@ def prepare_release_draft(
     receipt: Path,
     approve: bool = False,
     recover_release_id: int | None = None,
+    source_checks: tuple[RequiredCheck, ...] = (),
+) -> ReleaseTarget:
+    """Prepare once from frozen signed evidence; preserve the journal on every retry.
+
+    No checkout code, signing, build or upload runs. Explicit approval is required.
+    Optional declarative source checks revalidate protected-branch provenance at
+    every evidence boundary. Ambiguous creation requires reviewed-ID recovery.
+    """
+    return _prepare_release_draft(
+        root,
+        repository,
+        tag,
+        commit,
+        policy=policy,
+        expected=expected,
+        title=title,
+        notes=notes,
+        receipt=receipt,
+        approve=approve,
+        recover_release_id=recover_release_id,
+        source_checks=source_checks,
+    )
+
+
+def _prepare_release_draft(
+    root: Path,
+    repository: str,
+    tag: str,
+    commit: str,
+    *,
+    policy: EvidencePolicy,
+    expected: bytes,
+    title: str,
+    notes: bytes,
+    receipt: Path,
+    approve: bool = False,
+    recover_release_id: int | None = None,
+    source_checks: tuple[RequiredCheck, ...] = (),
+    verify_inputs: Callable[[], None] | None = None,
+    reserve_receipt: Callable[[bytes], None] | None = None,
 ) -> ReleaseTarget:
     """Create once or retain a matching stable draft; return its captured target.
 
@@ -210,17 +252,29 @@ def prepare_release_draft(
         raise ValueError("draft preparation requires a matching signed release evidence policy")
     if recover_release_id is not None:
         assertions.target(recover_release_id)  # Reject booleans and invalid IDs before effects.
+    if not isinstance(source_checks, tuple) or any(not isinstance(check, RequiredCheck) for check in source_checks):  # ty: ignore[redundant-condition-strict]  Protect untyped API callers.
+        raise ValueError("draft source checks must be a tuple of RequiredCheck declarations")
     # Ordinary native parent aliases (including macOS /var -> /private/var)
     # select the same storage. Preserve the leaf so links still reject.
-    receipt = receipt.parent.resolve(strict=True) / receipt.name
+    # The authenticated composition reserves its entire new state directory
+    # with the first journal. Until then, failed checks leave no partial state.
+    receipt = receipt.parent.resolve(strict=reserve_receipt is None) / receipt.name
     _regular_receipt(receipt)
     state = _parse_receipt(receipt.read_bytes(), assertions) if receipt.exists() else _Fresh()
     target = _resume_target(state, assertions, recover_release_id)
+    reserve = partial(_reserve, receipt) if reserve_receipt is None else reserve_receipt
 
     def evidence() -> None:
+        if verify_inputs is not None:
+            verify_inputs()
         verified = verify_release_evidence(policy, tag.removeprefix("v"), commit, partial(api, repository=repository), expected=expected)
         if verified != expected:
             raise ValueError("retained evidence selection changed")
+        if source_checks:
+            _protected_source(root, repository, tag, commit)
+            require_checks(_api(root, repository, f"commits/{commit}/check-runs?filter=latest&per_page=100", paginate=True), commit, source_checks)
+        if verify_inputs is not None:
+            verify_inputs()
 
     evidence()
     _require_tag(root, assertions)
@@ -246,7 +300,7 @@ def prepare_release_draft(
                 raise ValueError("release appeared during preparation; inspect before retrying")
             _require_tag(root, assertions)
             pending = assertions.record(None)
-            _reserve(receipt, pending)
+            reserve(pending)
             try:
                 payload = _gh(root, ["api", "--method", "POST", f"repos/{repository}/releases", "--input", str(request)])
                 data = _object(_load_json(payload, "draft creation response"), "release")
@@ -269,7 +323,7 @@ def prepare_release_draft(
     _require_draft(root, assertions, target)
     match state:
         case _Fresh():
-            _capture(receipt, assertions, target, None)
+            reserve(assertions.record(target.release_id))
         case _Pending(payload=previous):
             _capture(receipt, assertions, target, previous)
         case _Captured():

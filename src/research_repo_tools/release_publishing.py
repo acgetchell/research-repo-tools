@@ -34,6 +34,7 @@ __all__ = [
     "RequiredCheck",
     "ReviewedRelease",
     "check_metadata",
+    "check_release_source",
     "check_reviewed_release",
     "parse_publishing",
     "publish_reviewed_release",
@@ -63,10 +64,17 @@ class PublishingSettings:
     required_checks: tuple[RequiredCheck, ...]
     required_assets: tuple[str, ...] = ()
     reuse: ReusePolicy | None = None
+    expected_title: Literal["tag"] | None = None
+    generated_notes: bool = False
+    require_immutable: bool = False
 
     def __post_init__(self) -> None:
         identity(self.registry, self.package, "0.0.0")
         _repository(self.repository)
+        if self.expected_title not in (None, "tag"):
+            raise ValueError("publishing.expected-title must be 'tag'")
+        if type(self.generated_notes) is not bool or type(self.require_immutable) is not bool:
+            raise ValueError("publishing generated-notes and require-immutable must be booleans")
         object.__setattr__(self, "required_checks", tuple(self.required_checks))
         object.__setattr__(self, "required_assets", tuple(self.required_assets))
         if not self.required_checks or any(not isinstance(check, RequiredCheck) for check in self.required_checks):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
@@ -88,7 +96,17 @@ class PublishingSettings:
 
 def parse_publishing(data: dict[str, object]) -> PublishingSettings:
     """Parse one explicit registry/repository policy; never select shell commands."""
-    if data.keys() - {"registry", "package", "repository", "required-checks", "required-assets", "reuse"}:
+    if data.keys() - {
+        "registry",
+        "package",
+        "repository",
+        "required-checks",
+        "required-assets",
+        "reuse",
+        "expected-title",
+        "generated-notes",
+        "require-immutable",
+    }:
         raise ValueError("unknown publishing field")
     values = [data.get(name) for name in ("registry", "package", "repository")]
     if any(not isinstance(value, str) or not value for value in values):
@@ -106,7 +124,17 @@ def parse_publishing(data: dict[str, object]) -> PublishingSettings:
         raise ValueError("publishing.required-assets must be an array of filenames")
     repository = cast(str, values[2])
     reuse = parse_reuse_policy(cast(dict[str, object], data["reuse"]), repository) if "reuse" in data else None
-    return PublishingSettings(cast(Literal["pypi", "crates-io"], values[0]), cast(str, values[1]), repository, tuple(parsed), tuple(assets), reuse)
+    return PublishingSettings(
+        cast(Literal["pypi", "crates-io"], values[0]),
+        cast(str, values[1]),
+        repository,
+        tuple(parsed),
+        tuple(assets),
+        reuse,
+        cast(Literal["tag"] | None, data.get("expected-title")),
+        cast(bool, data.get("generated-notes", False)),
+        cast(bool, data.get("require-immutable", False)),
+    )
 
 
 def _settings(config: Config) -> PublishingSettings:
@@ -247,14 +275,44 @@ def _assets(release: GitHubRelease, settings: PublishingSettings, version: str) 
             raise ValueError(f"required release asset {name!r} is missing or empty")
 
 
-def check_reviewed_release(
-    config: "Config", tag: str, *, event: ReviewedRelease | None = None, draft: bool = False, reuse_evidence: bytes | None = None
-) -> GitHubRelease:
-    """Read-only final gate: clean checkout, tag, ancestry, checks, lifecycle/assets.
+def _release_assertions(config: "Config", release: GitHubRelease, tag: str, *, draft: bool) -> None:
+    from research_repo_tools.changelog import notes
 
-    Fetch evidence through authenticated gh. No fetch, checkout, ref mutation,
-    packaging, or upload occurs here. The caller owns native package verification.
-    """
+    settings = _settings(config)
+    if release.draft is not draft or release.prerelease is not False or type(release.immutable) is not bool:
+        raise ValueError("GitHub release lifecycle fields differ or are malformed")
+    if draft:
+        require_draft(release)
+    elif settings.require_immutable and release.immutable is not True:
+        raise ValueError("published release must be immutable")
+    if settings.expected_title == "tag" and release.title != tag:
+        raise ValueError("release title differs from the declared tag title")
+    if settings.generated_notes:
+        # GitHub may use CRLF and add one terminal LF. Preserve all other
+        # whitespace, including extra blank lines and lone carriage returns.
+        expected = notes(config, tag)[0].replace("\r\n", "\n").removesuffix("\n")
+        if not isinstance(release.body, str) or release.body.replace("\r\n", "\n").removesuffix("\n") != expected:
+            raise ValueError("release body differs from generated changelog notes")
+    _assets(release, settings, _tag(tag))
+
+
+def _protected_source(root: Path, repository: str, tag: str, head: str) -> None:
+    if _remote_commit(root, repository, tag) != head:
+        raise ValueError("remote release tag and checkout commit differ")
+    repo = _api(root, repository, "")
+    if not isinstance(repo, dict) or repo.get("full_name") != repository or not isinstance(repo.get("default_branch"), str) or not repo["default_branch"]:
+        raise ValueError("GitHub repository identity or default branch is unavailable")
+    branch = quote(repo["default_branch"], safe="")
+    protection = _api(root, repository, f"branches/{branch}")
+    if not isinstance(protection, dict) or protection.get("name") != repo["default_branch"] or protection.get("protected") is not True:
+        raise ValueError("publication requires a protected default branch")
+    ancestry = _api(root, repository, f"compare/{head}...{branch}")
+    if not isinstance(ancestry, dict) or not isinstance(ancestry.get("status"), str) or ancestry["status"] not in {"ahead", "identical"}:
+        raise ValueError("release commit is not an ancestor of the protected default branch")
+
+
+def check_release_source(config: "Config", tag: str, *, commit: str | None = None, reuse_evidence: bytes | None = None) -> str:
+    """Verify clean metadata/source, protected-branch ancestry and exact checks."""
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
     check_release_dependencies(config.root, packages=config.release.published_dependencies)
@@ -262,25 +320,9 @@ def check_reviewed_release(
     check_metadata(config, tag)
     head = _sha(run_git_command(["--no-pager", "rev-parse", "HEAD"], cwd=config.root).stdout.strip())
     require_release_checkout(config.root, head)
-    if event is not None and (event.tag != tag or event.commit != head):
+    if commit is not None and commit != head:
         raise ValueError("release event and checkout tag/commit differ")
-    if _remote_commit(config.root, settings.repository, tag) != head:
-        raise ValueError("remote release tag and checkout commit differ")
-    repo = _api(config.root, settings.repository, "")
-    if (
-        not isinstance(repo, dict)
-        or repo.get("full_name") != settings.repository
-        or not isinstance(repo.get("default_branch"), str)
-        or not repo["default_branch"]
-    ):
-        raise ValueError("GitHub repository identity or default branch is unavailable")
-    branch = quote(repo["default_branch"], safe="")
-    protection = _api(config.root, settings.repository, f"branches/{branch}")
-    if not isinstance(protection, dict) or protection.get("name") != repo["default_branch"] or protection.get("protected") is not True:
-        raise ValueError("publication requires a protected default branch")
-    ancestry = _api(config.root, settings.repository, f"compare/{head}...{branch}")
-    if not isinstance(ancestry, dict) or not isinstance(ancestry.get("status"), str) or ancestry["status"] not in {"ahead", "identical"}:
-        raise ValueError("release commit is not an ancestor of the protected default branch")
+    _protected_source(config.root, settings.repository, tag, head)
     evidence = _api(config.root, settings.repository, f"commits/{head}/check-runs?filter=latest&per_page=100", paginate=True)
     required = settings.required_checks
     if reuse_evidence is not None:
@@ -296,42 +338,60 @@ def check_reviewed_release(
         )
         required = tuple(check for check in required if check not in reused or check.name in observed)
     require_checks(evidence, head, required)
+    return head
+
+
+def check_reviewed_release(
+    config: "Config",
+    tag: str,
+    *,
+    event: ReviewedRelease | None = None,
+    draft: bool = False,
+    reuse_evidence: bytes | None = None,
+    target: ReleaseTarget | None = None,
+) -> GitHubRelease:
+    """Read-only final source gate plus captured release lifecycle and assertions."""
+    if event is not None and event.tag != tag:
+        raise ValueError("release event and checkout tag/commit differ")
+    head = check_release_source(config, tag, commit=None if event is None else event.commit, reuse_evidence=reuse_evidence)
+    settings = _settings(config)
+    if target is not None and (target.repository, target.tag, target.commit) != (settings.repository, tag, head):
+        raise ValueError("captured release target differs from configured repository/tag/source")
     release = lookup_release(config.root, settings.repository, tag)
     if release.prerelease or release.draft != draft or (event is not None and release.identifier != event.release_id):
         raise ValueError("GitHub release lifecycle or identity differs from the reviewed release")
-    _require_identity(release, ReleaseTarget(settings.repository, tag, event.release_id if event is not None else release.identifier, head))
-    _assets(release, settings, _tag(tag))
+    _require_identity(release, target or ReleaseTarget(settings.repository, tag, event.release_id if event is not None else release.identifier, head))
+    _release_assertions(config, release, tag, draft=draft)
     return release
 
 
-def publish_reviewed_release(config: "Config", tag: str, *, reuse_evidence: bytes | None = None) -> None:
+def publish_reviewed_release(config: "Config", tag: str, *, reuse_evidence: bytes | None = None, target: ReleaseTarget | None = None) -> None:
     """Publish a validated draft as the invoking maintainer, triggering its workflow.
 
     Invocation is approval of the draft. This never uploads registry packages,
     creates tags, replaces assets, or configures a trusted publisher.
     """
     head = _sha(run_git_command(["--no-pager", "rev-parse", "HEAD"], cwd=config.root).stdout.strip())
-    reuse_options = {"reuse_evidence": reuse_evidence} if reuse_evidence is not None else {}
-    release = check_reviewed_release(config, tag, draft=True, **reuse_options)
+    release = check_reviewed_release(config, tag, draft=True, reuse_evidence=reuse_evidence, target=target)
     require_draft(release)
     # Recheck immediately before the one lifecycle mutation, including tag/checks.
-    current = check_reviewed_release(config, tag, draft=True, **reuse_options)
+    current = check_reviewed_release(config, tag, draft=True, reuse_evidence=reuse_evidence, target=target)
     require_draft(current)
     if current.identifier != release.identifier:
         raise ValueError("draft release identity changed before publication")
-    target = ReleaseTarget(release.repository, tag, release.identifier, head)
+    target = target or ReleaseTarget(release.repository, tag, release.identifier, head)
     final = revalidate_release_target(config.root, target, dependencies=config.release.published_dependencies)
-    _assets(final, _settings(config), _tag(tag))
+    _release_assertions(config, final, tag, draft=True)
     published = _publish_release(config.root, target)
     try:
-        _assets(published, _settings(config), _tag(tag))
+        _release_assertions(config, published, tag, draft=False)
     except ValueError as error:
         raise ReleasePublicationUnknownError(
-            f"publication outcome unknown for {target.repository} release {target.release_id}: response did not confirm required assets; inspect before retrying"
+            f"publication outcome unknown for {target.repository} release {target.release_id}: response did not confirm declared release assertions; inspect before retrying"
         ) from error
 
 
-def verify_publication(config: "Config", tag: str, *, attempts: int = 1, interval: int = 10) -> None:
+def verify_publication(config: "Config", tag: str, *, attempts: int = 1, interval: int = 10, target: ReleaseTarget | None = None) -> None:
     """Require the published stable GitHub release/assets and exact registry version."""
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
@@ -339,8 +399,20 @@ def verify_publication(config: "Config", tag: str, *, attempts: int = 1, interva
     settings = _settings(config)
     version = _tag(tag)
     release = lookup_release(config.root, settings.repository, tag)
-    if release.draft or release.prerelease:
-        raise ValueError("publication verification requires a published stable GitHub release")
-    _assets(release, settings, version)
+    if target is not None:
+        if target.repository != settings.repository or target.tag != tag:
+            raise ValueError("publication target differs from configured repository/tag")
+        _require_identity(release, target)
+        if _remote_commit(config.root, target.repository, tag) != target.commit:
+            raise ValueError("published tag differs from captured source")
+    _release_assertions(config, release, tag, draft=False)
     if not wait_for_version(settings.registry, settings.package, version, attempts=attempts, interval=interval).present:
         raise ValueError("exact registry version is not yet visible; inspect the upload before retrying")
+    current = lookup_release(config.root, settings.repository, tag)
+    if current.identifier != release.identifier:
+        raise ValueError("published release identity changed during registry verification")
+    if target is not None:
+        _require_identity(current, target)
+        if _remote_commit(config.root, target.repository, tag) != target.commit:
+            raise ValueError("published tag changed during registry verification")
+    _release_assertions(config, current, tag, draft=False)

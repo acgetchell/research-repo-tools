@@ -829,15 +829,27 @@ def seal(run_id: int, attempt: int, artifact_id: int, output: Path) -> None:
     replace_many({output: _bytes(manifest)})
 
 
+def _executing_run(repository: str) -> dict[str, Any]:
+    """Bind the runner environment to its current provider run and attempt."""
+    if _repository(os.environ.get("GITHUB_REPOSITORY", "")) != repository:
+        raise ValueError("executing repository differs from the expected repository")
+    identifier = _integer(int(os.environ.get("GITHUB_RUN_ID", "0")), "run ID")
+    attempt = _integer(int(os.environ.get("GITHUB_RUN_ATTEMPT", "0")), "attempt")
+    run = _object(api(f"actions/runs/{identifier}", repository=repository), "executing run")
+    if _object(run.get("repository"), "executing repository").get("full_name") != repository:
+        raise ValueError("artifact validation run differs from the executing repository")
+    if _integer(run.get("id"), "executing run ID") != identifier:
+        raise ValueError("executing run ID differs from the runner environment")
+    if _integer(run.get("run_attempt"), "executing attempt") != attempt:
+        raise ValueError("validation attempt changed before artifact retrieval")
+    return run
+
+
 def consume(artifact_id: int, dist: Path) -> None:
     """Give each normal PR/main validator the exact producer's verified bytes."""
     repository = _repository(os.environ.get("GITHUB_REPOSITORY", ""))
-    run = api(f"actions/runs/{_integer(int(os.environ.get('GITHUB_RUN_ID', '0')), 'run ID')}", repository=repository)
-    if _object(run.get("repository"), "executing repository").get("full_name") != repository:
-        raise ValueError("artifact validation run differs from the executing repository")
-    attempt = _integer(int(os.environ.get("GITHUB_RUN_ATTEMPT", "0")), "attempt")
-    if run.get("run_attempt") != attempt:
-        raise ValueError("validation attempt changed before artifact retrieval")
+    run = _executing_run(repository)
+    attempt = run["run_attempt"]
     artifact = _artifact(api(f"actions/artifacts/{_integer(artifact_id, 'artifact ID')}", repository=repository), run, f"distributions-{attempt}")
     version = tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
     names = distribution_names(f"v{version}")

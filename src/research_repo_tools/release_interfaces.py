@@ -7,6 +7,7 @@ Cargo gates, approval environments and token acquisition.
 import argparse
 import json
 import os
+import sys
 import tempfile
 import tomllib
 from collections.abc import Callable, Mapping
@@ -17,7 +18,7 @@ from typing import Literal, cast
 
 from packaging.utils import canonicalize_name
 
-from research_repo_tools._console import write_stdout
+from research_repo_tools._console import console_text, write_stdout
 from research_repo_tools.process import format_exception_diagnostics
 lazy from research_repo_tools.ci import export_environment
 lazy from research_repo_tools.config import Config
@@ -80,10 +81,12 @@ def load_evidence_policy(path: Path) -> EvidencePolicy:
         signing = (_string(signer["name"], "signing job"), _strings(signer["steps"], "signing steps"))
     distributions = None
     if "distributions" in raw:
-        options = _table(raw["distributions"], "distributions", {"files"}, {"index-url", "max-age-seconds", "max-distribution-bytes"})
+        options = _table(raw["distributions"], "distributions", {"files"}, {"destination", "index-url", "max-age-seconds", "max-distribution-bytes"})
+        if "destination" in options and (options["destination"] != "undecided" or "index-url" in options):
+            raise ValueError("distribution destination must be 'undecided' without index-url, or an explicit index-url")
         distributions = PythonDistributionPolicy(
             _strings(options["files"], "distribution files"),
-            _string(options.get("index-url", "https://pypi.org"), "PyPI index URL"),
+            None if "destination" in options else _string(options.get("index-url", "https://pypi.org"), "PyPI index URL"),
             cast(int, options.get("max-age-seconds", 30 * 24 * 60 * 60)),
             cast(int, options.get("max-distribution-bytes", 256 * 1024 * 1024)),
         )
@@ -213,9 +216,33 @@ def add_commands(release) -> None:
     assets = release.add_parser("assets", help="prepare drafts, capture/revalidate targets and upload verified inert assets").add_subparsers(
         dest="operation", required=True
     )
-    for operation in ("preflight", "prepare", "retrieve", "stage", "upload", "verify"):
+    for operation in ("plan", "preflight", "prepare", "prepare-authenticated", "retrieve", "stage", "upload", "verify"):
         command = assets.add_parser(operation)
         command.add_argument("configuration")
+        if operation == "plan":
+            command.description = "Verify a tag-push source and freeze its signed evidence and generated notes; no release mutation."
+            command.add_argument("--commit", required=True)
+            command.add_argument("--event", choices=("push",), required=True)
+            command.add_argument("--github-output", type=Path)
+            command.add_argument("--output", type=Path, required=True)
+            command.add_argument("--repository", required=True)
+            command.add_argument("--tag", required=True)
+            continue
+        if operation == "prepare-authenticated":
+            command.description = "Authenticate the original handoff and prepare its draft outside a checkout; preserve the complete state directory."
+            command.add_argument("--approve", action="store_true", required=True)
+            command.add_argument("--artifact-id", type=int, required=True)
+            command.add_argument("--artifact-sha256", required=True)
+            command.add_argument("--attempt", type=int, required=True)
+            command.add_argument("--commit", required=True)
+            command.add_argument("--executing-attempt", type=int, required=True)
+            command.add_argument("--executing-run-id", type=int, required=True)
+            command.add_argument("--output", type=Path, required=True, help="durable original state directory; restore it intact for recovery")
+            command.add_argument("--recover-release-id", type=int)
+            command.add_argument("--repository", required=True)
+            command.add_argument("--run-id", type=int, required=True)
+            command.add_argument("--tag", required=True)
+            continue
         if operation == "stage":
             command.description = "Stage a frozen batch on one captured draft; repeat the same command and journal to recover matching assets."
             command.add_argument("--approve", action="store_true", required=True)
@@ -268,6 +295,7 @@ def add_evidence_commands(release) -> None:
     commands = release.add_parser("evidence", help="create or verify exact-commit release evidence and file-based approval handoffs").add_subparsers(
         dest="operation", required=True
     )
+    _add_python_approval_command(commands, "approve-python")
     archive = commands.add_parser("archive", help="derive or verify the exact archive frozen by candidate acceptance").add_subparsers(
         dest="archive_operation", required=True
     )
@@ -320,7 +348,10 @@ def add_evidence_commands(release) -> None:
     candidate.add_argument("--publication-receipt", type=Path, help="original shared-publisher receipt captured before promotion")
     candidate.add_argument("--publication-sha256", help="independent Step 1 publication digest from the trusted owner")
     candidate.add_argument("--target", type=Path, help="independently captured draft target for attachment revalidation")
-    for operation in ("create", "published", "receive-acquisition", "verify"):
+    for operation in ("create", "published", "published-python", "receive-acquisition", "verify", "verify-python-approval"):
+        if operation in ("published-python", "verify-python-approval"):
+            _add_python_approval_command(commands, operation)
+            continue
         command = commands.add_parser(operation)
         if operation == "receive-acquisition":
             command.description = "Authenticate and retain one independently selected hosted benchmark acquisition."
@@ -361,6 +392,9 @@ def add_evidence_commands(release) -> None:
 def run_evidence(args: argparse.Namespace, settings: Config) -> None:
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
+    if args.operation in ("approve-python", "published-python", "verify-python-approval"):
+        _run_python_approval(args, settings)
+        return
     if args.operation == "archive":
         _run_candidate_archive(args, settings)
         return
@@ -376,6 +410,8 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
     policy = load_evidence_policy(path)
     if args.operation == "published" and policy.distributions is None:
         raise ValueError("published evidence verification requires Python distribution policy")
+    if args.operation == "published" and policy.distributions is not None and policy.distributions.index_url is None:
+        raise ValueError("Python evidence destination is undecided; use explicit publication approval and its registry verification command")
     checkout = args.checkout.resolve(strict=True)
     inputs = [
         path,
@@ -428,6 +464,7 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
         )
         if args.operation == "published":
             assert policy.distributions is not None
+            assert policy.distributions.index_url is not None
             verify_published_distributions(policy.package, args.version, parse_release_json(payload)["files"], index_url=policy.distributions.index_url)
             # Network downloads may outlast gates/retention. Revalidate the same
             # selection once more before saving a published-byte receipt.
@@ -465,6 +502,86 @@ def _present_evidence(
         )
     else:
         print("Saved verified candidate and final release evidence." if candidate else "Saved verified release evidence.")
+        record = parse_release_json(payload)
+        policy = (record["native"] if candidate else record).get("policy", {})
+        if policy.get("distributions", {}).get("index_url", "legacy") is None:
+            print("Registry destination undecided; this evidence does not authorize publication.")
+
+
+def _add_python_approval_command(commands, operation: str) -> None:
+    command = commands.add_parser(operation, help="bind or revalidate explicit registry approval without builds, uploads or credentials")
+    command.add_argument("configuration", help="original evidence policy")
+    if operation == "approve-python":
+        command.add_argument("--approve", action="store_true", required=True)
+    else:
+        command.add_argument("--approval", type=Path, required=True, help="trusted original approval record")
+    command.add_argument("--authority", type=Path, required=True, help="independently approved registry endpoint/account/project/workflow policy")
+    command.add_argument("--commit", required=True)
+    command.add_argument("--distributions", type=Path, required=True)
+    command.add_argument("--expected", type=Path, required=True, help="original frozen evidence selection")
+    command.add_argument("--output", type=Path, required=True)
+    command.add_argument("--version", required=True)
+
+
+def _run_python_approval(args: argparse.Namespace, settings: Config) -> None:
+    from research_repo_tools.python_publication import approve_python_publication, load_registry_authority, verify_python_publication
+
+    configuration = _path(settings.root, args.configuration)
+    original_configuration = _read_candidate_input(configuration)
+    policy = load_evidence_policy(configuration)
+    if policy.distributions is None:
+        raise ValueError("Python approval requires Python distribution evidence")
+    paths = (
+        configuration,
+        args.authority,
+        args.expected,
+        *([args.approval] if args.operation != "approve-python" else []),
+    )
+    _validate_distinct_paths((args.output, *paths, *(args.distributions / name for name in policy.distributions.filenames(policy.package, args.version))))
+    inputs = {path: _read_candidate_input(path) for path in paths}
+    if inputs[configuration] != original_configuration:
+        raise ValueError("Python publication evidence policy changed while loading")
+    authority = load_registry_authority(args.authority)
+    read = partial(api, repository=policy.validation.repository)
+
+    def unchanged() -> None:
+        if any(_read_candidate_input(path) != data for path, data in inputs.items()):
+            raise ValueError("Python publication inputs changed; preserve the original approval")
+
+    unchanged()
+    if args.operation == "approve-python":
+        payload = approve_python_publication(
+            policy,
+            args.version,
+            args.commit,
+            read,
+            selection=inputs[args.expected],
+            authority=authority,
+            distributions=args.distributions,
+            approve=args.approve,
+        )
+    else:
+        payload = inputs[args.approval]
+
+    def verify() -> None:
+        unchanged()
+        verify_python_publication(
+            policy,
+            args.version,
+            args.commit,
+            read,
+            selection=inputs[args.expected],
+            authority=authority,
+            approval=payload,
+            distributions=args.distributions,
+            published=args.operation == "published-python",
+        )
+        unchanged()
+
+    if args.output.exists() and _read_candidate_input(args.output) != payload:
+        raise ValueError("existing Python approval output differs; preserve the original authority and selection")
+    write_release_outputs(args.output, payload, verify=verify)
+    print("Verified original registry publication approval and exact distribution bytes; no credentials or upload requested.")
 
 
 def _read_candidate_input(path: Path) -> bytes:
@@ -747,6 +864,43 @@ def _retrieve_receipt(args: argparse.Namespace, settings: Config) -> None:
 def run_assets(args: argparse.Namespace, settings: Config) -> None:
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
+    if args.operation in ("plan", "prepare-authenticated"):
+        from research_repo_tools.draft_workflow import DraftHandoffArtifact, plan_release_draft, prepare_authenticated_draft
+        from research_repo_tools.release_receipts import TagSource
+
+        source = TagSource(f"refs/tags/{args.tag}", args.commit)
+        configuration = _path(settings.root, args.configuration)
+        if args.operation == "plan":
+            _validate_distinct_paths((configuration, args.output, *([args.github_output] if args.github_output is not None else [])))
+            if settings.publishing is None or settings.publishing.repository != args.repository:
+                raise ValueError("draft source repository differs from independent assertion")
+            if args.output.resolve().is_relative_to(settings.root.resolve()):
+                raise ValueError("retain draft handoff outside the observed checkout")
+            original = _read_candidate_input(args.output) if args.output.exists() else None
+            payload = plan_release_draft(settings, configuration, source, event=args.event, expected=original)
+
+            def verify_plan() -> None:
+                plan_release_draft(settings, configuration, source, event=args.event, expected=payload)
+
+            write_release_outputs(args.output, payload, github_output=args.github_output, values={"commit": args.commit}, verify=verify_plan)
+            print("Saved verified tag-source handoff; retain and authenticate its original artifact before draft preparation.")
+        else:
+            policy = load_receipt_policy(configuration)
+            if policy.repository != args.repository:
+                raise ValueError("draft handoff repository differs from independent assertion")
+            target = prepare_authenticated_draft(
+                settings.root,
+                policy,
+                source,
+                DraftHandoffArtifact(args.run_id, args.attempt, args.artifact_id, args.artifact_sha256),
+                output=args.output,
+                executing_run_id=args.executing_run_id,
+                executing_attempt=args.executing_attempt,
+                approve=args.approve,
+                recover_release_id=args.recover_release_id,
+            )
+            print(console_text(f"Prepared authenticated draft {target.release_id}; preserve the complete original state directory {args.output}.", sys.stdout))
+        return
     if args.operation == "stage":
         from research_repo_tools.release_staging import stage_release_assets
 

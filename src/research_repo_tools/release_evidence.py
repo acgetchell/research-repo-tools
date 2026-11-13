@@ -91,15 +91,17 @@ def _relative(value: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class PythonDistributionPolicy:
-    """Exact filename templates and destination, frozen into Python evidence.
+    """Exact filename templates and destination state, frozen into Python evidence.
 
+    ``index_url=None`` is explicitly undecided and requires separate publication
+    approval; omission retains the existing PyPI-bound default.
     Only {version} substitution is supported. Freshness bounds the original
     push run and artifact creation; a rerun cannot refresh an old source run.
     max_distribution_bytes bounds payloads separately from the artifact envelope.
     """
 
     files: tuple[str, ...]
-    index_url: str = "https://pypi.org"
+    index_url: str | None = "https://pypi.org"
     max_age_seconds: int = 30 * 24 * 60 * 60
     max_distribution_bytes: int = 256 * 1024 * 1024
 
@@ -107,7 +109,8 @@ class PythonDistributionPolicy:
         object.__setattr__(self, "files", tuple(self.files))
         if not self.files or any(not isinstance(name, str) or "{version}" not in name for name in self.files):  # ty: ignore[redundant-condition-strict]  Validate untyped policy input.
             raise ValueError("Python distribution files require explicit {version} filename templates")
-        pypi_destination(self.index_url)
+        if self.index_url is not None:
+            pypi_destination(self.index_url)
         if type(self.max_age_seconds) is not int or self.max_age_seconds <= 0:
             raise ValueError("Python evidence max_age_seconds must be a positive integer")
         if type(self.max_distribution_bytes) is not int or not 0 < self.max_distribution_bytes <= 2 * 1024 * 1024 * 1024:

@@ -177,6 +177,7 @@ def parser() -> argparse.ArgumentParser:
     )
     command.add_argument("tag")
     command.add_argument("--reuse-evidence", type=Path, help="revalidate a saved CI reuse approval under the configured opt-in policy")
+    command.add_argument("--target", type=Path, help="original captured release target; must also match the published event")
     command = release.add_parser(
         "publish",
         help="approve a validated draft GitHub Release and trigger its publication workflow",
@@ -185,6 +186,7 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("tag")
     command.add_argument("--approve", action="store_true", required=True, help="explicit approval of the reviewed draft")
     command.add_argument("--reuse-evidence", type=Path, help="revalidate a saved CI reuse approval under the configured opt-in policy")
+    command.add_argument("--target", type=Path, help="original captured draft target; never substitute a replacement release")
     command = release.add_parser("registry", help="require an absent or present exact registry version; never uploads")
     command.add_argument("tag")
     command.add_argument("--expect", choices=("absent", "present"), required=True)
@@ -206,6 +208,7 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("tag")
     command.add_argument("--attempts", type=int, default=1)
     command.add_argument("--interval", type=int, default=10)
+    command.add_argument("--target", type=Path, help="independently captured release target to preserve through final verification")
     review = groups.add_parser("review", help="run an opt-in CodeRabbit review").add_subparsers(dest="action", required=True)
     review.add_parser("branch", help="review branch and local changes against a verified base").add_argument("--base", default="origin/main")
     review.add_parser("uncommitted", help="review only staged, unstaged, and untracked changes")
@@ -831,6 +834,16 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
                 stream.write(payload)
             print("Saved verified CI reuse selection; revalidate it with --reuse-evidence at the release gate.")
             return 0
+        target = None
+        if args.action in {"gate", "publish", "verify"} and args.target is not None:
+            from research_repo_tools.release_assets import parse_release_target
+
+            with settings.path(str(args.target)).open("rb") as stream:
+                payload = stream.read(1024 * 1024 + 1)
+            if len(payload) > 1024 * 1024:
+                raise ValueError("release target exceeds the byte limit")
+            target = parse_release_target(payload)
+        target_options = {"target": target} if target is not None else {}
         if args.action == "gate":
             from research_repo_tools.evidence import _load_json
 
@@ -846,10 +859,10 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             event = release_publishing.validate_event(
                 _load_json(payload, "GitHub release event"), os.environ["GITHUB_REPOSITORY"], os.environ.get("GITHUB_SHA", ""), os.environ.get("GITHUB_REF", "")
             )
-            release_publishing.check_reviewed_release(settings, args.tag, event=event, reuse_evidence=reuse_payload)
+            release_publishing.check_reviewed_release(settings, args.tag, event=event, reuse_evidence=reuse_payload, **target_options)
             return 0
         if args.action == "publish":
-            release_publishing.publish_reviewed_release(settings, args.tag, reuse_evidence=reuse_payload)
+            release_publishing.publish_reviewed_release(settings, args.tag, reuse_evidence=reuse_payload, **target_options)
             return 0
         if args.action == "registry":
             from research_repo_tools.registry import lookup_version
@@ -860,7 +873,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
                 raise ValueError(f"registry version is {'already present; inspect before retrying uploads' if result.present else 'not yet visible'}")
             return 0
         if args.action == "verify":
-            release_publishing.verify_publication(settings, args.tag, attempts=args.attempts, interval=args.interval)
+            release_publishing.verify_publication(settings, args.tag, attempts=args.attempts, interval=args.interval, target=target)
             print(f"Verified published GitHub Release and registry version {args.tag}.")
             return 0
         if args.action == "check" and args.tag:

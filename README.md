@@ -579,10 +579,15 @@ is an explicit reviewed option with its own eligibility and revalidation;
 package and artifact checks still apply. Approval, registry publication,
 attachment uploads and downstream adoption remain distinct actions.
 
-For the v0.2.7 draft-preparation capability, a read-only job verifies the tagged
-source and generates notes. CI writers with repository-write credentials use
+The v0.2.9 `release assets plan` command verifies independent repository/tag/commit
+and push-event assertions, protected-default-branch ancestry, required checks,
+metadata, generated notes and original signed evidence.
+`release assets prepare-authenticated` authenticates the retained handoff's
+workflow/run/attempt and immutable artifact ID/digest before composing the
+existing draft writer. CI writers use
 the isolated, exactly pinned, no-checkout invocation in the
-[workflow and recovery guide][draft-guide].
+[two-job workflow and recovery guide][draft-guide]. Preserve the complete original
+state for recovery; a new run or missing journal cannot authorize another draft.
 
 The following recipe is for a trusted local project environment. It executes
 the project's Justfile and uses its uv environment:
@@ -600,6 +605,24 @@ its assets. Preserve the original receipt for every retry: missing or replaced
 captured IDs reject, and ambiguous creation requires explicit recovery. The
 guide covers immutable handoff authentication, least privilege, and the
 supplying-release adoption gate.
+
+Consumers can declare the following assertions alongside their existing
+`[tool.research-repo-tools.publishing]` settings:
+
+```toml
+expected-title = "tag"
+generated-notes = true
+require-immutable = true
+```
+
+The draft gate and immediate publication check require the tag title and generated
+changelog notes. Comparison permits CRLF and one terminal newline, preserving all
+other whitespace. Drafts remain mutable; published-event and final verification
+require immutability when declared. Pass the same `--target /durable/target.json`
+to `just release-publish TAG`, the workflow's `release gate TAG`, and
+`just release-verify TAG` to preserve the captured release ID across all stages.
+These assertions reject drift without editing the release; omitted settings
+preserve existing title/notes/immutability policy.
 
 After the preparation workflow succeeds, Step 2 can retrieve its original
 authenticated target with `just release-assets retrieve`. The command freezes
@@ -679,6 +702,52 @@ and [complete-run recovery][evidence-recovery].
 These Python interfaces require an exact published supplying version containing
 this contract, verified through ordinary wheel/sdist and locked consumer installs
 before adoption; a merged source change or editable checkout is insufficient.
+
+To retain Python evidence before choosing a registry, replace `index-url` with
+`destination = "undecided"` in `[distributions]`. This explicit state is not
+publishable and `published` rejects it. Omitting both fields retains the existing
+PyPI-bound default. Later, approve the original selection and unchanged files
+using a separate trusted authority policy, for example `tooling/registry.toml`:
+
+```toml
+schema = 1
+index-url = "https://test.pypi.org"
+account = "publishing-account"
+project = "example-app"
+repository = "owner/repository"
+workflow = ".github/workflows/publish.yml"
+environment = "registry-approval"
+protocol = "pypi-json"
+authentication = "none"
+```
+
+`authentication` declares the registry verification protocol. Authenticated
+private registry APIs and arbitrary Simple indexes are unsupported and fail
+without falling back to PyPI. The consumer owns upload credentials and verifies
+that its approval environment and publisher match the declared authority.
+
+```sh
+just release-evidence approve-python tooling/release-evidence.toml \
+  --authority tooling/registry.toml --commit FULL_COMMIT --version 1.2.3 \
+  --distributions /path/to/dist --expected /trusted/selection.json \
+  --output /trusted/approval.json --approve
+# Immediately before the consumer requests credentials:
+just release-evidence verify-python-approval tooling/release-evidence.toml \
+  --authority tooling/registry.toml --commit FULL_COMMIT --version 1.2.3 \
+  --distributions /path/to/dist --expected /trusted/selection.json \
+  --approval /trusted/approval.json --output /trusted/verified-approval.json
+# After upload, including an uncertain outcome, inspect before any retry:
+just release-evidence published-python tooling/release-evidence.toml \
+  --authority tooling/registry.toml --commit FULL_COMMIT --version 1.2.3 \
+  --distributions /path/to/dist --expected /trusted/selection.json \
+  --approval /trusted/approval.json --output /trusted/published-approval.json
+```
+
+These commands revalidate the original provider run, attempt, gates, artifact and
+distribution bytes. A different endpoint or publisher requires new approval;
+registry-bound evidence cannot change its original endpoint. Approval records
+must cross a trusted handoff, and never authorize rebuilding, selecting newer
+evidence or automatically retrying uploads.
 
 ## Contributing
 
