@@ -115,6 +115,8 @@ store, host, declaration byte snapshots and `removals`. Each `Removal` identifie
 the installation kind, path, directory identity and optional manager command.
 Planning inventories existing installations without installing or deleting them.
 Private Python inventory requires the declared uv version.
+Environment ownership uses normalized `pyvenv.cfg` keys and rejects duplicate
+settings before selecting an interpreter for removal.
 Relative `keep_roots` resolve against the settings' consumer root, independently
 of the caller's current directory.
 
@@ -136,7 +138,7 @@ assertions, expected selections, output paths, and Actions run identifiers.
 The option scopes managed tool selection to the release command and leaves
 ordinary `toolchain run` behavior available for development.
 
-`research_repo_tools.release_runtime.isolated_release_runtime(settings, *, checkout=None)`
+`research_repo_tools.release_runtime.isolated_release_runtime(settings, *, checkout=None, policy=None, artifacts=None)`
 is a context manager for a single-threaded release entry point. It selects
 declared managed tool directories, the external interpreter directory, and
 absolute inherited search paths, in that order. It excludes observed-checkout
@@ -146,6 +148,12 @@ environment is read only by the release proof and is never probed. Managed
 installation directories, the external tool installations and the controller
 environment must be trusted. Runtime preparation restores the process
 environment when the command exits and performs no project synchronization.
+
+Supply `policy` and `artifacts` together to verify a dedicated locked runtime
+before tool probes or release operations. This stronger option requires `-I -B`
+and an independently approved policy digest; see the
+[runtime policy contract](runtime-policy-api.md). Omitting both retains the
+external-runtime behavior described above.
 
 Keep the exact `uvx` selection, `--no-config --isolated --managed-python`, the
 declared Python selector and any configured resolution cutoff in the caller.

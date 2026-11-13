@@ -30,10 +30,12 @@ authenticated retrieval of original tag-push receipts,
 committed benchmark publication receipts, resumable scheduled suites,
 reusable compilation for managed Cargo tool installs, and shared coverage cleanup.
 
-The acquisition-owner workflow (`performance-release --owner`, `performance capture`,
-and `performance first-release`), candidate archive attachment, and the latest
-publisher provenance fixes are **unreleased**; v0.2.8 does not supply them. Their release
-validation is tracked in [#236][next-release]. Use an exact supplying
+The v0.2.9 additions are **unreleased**: the acquisition-owner workflow
+(`performance-release --owner`, `performance capture`, and `performance first-release`),
+candidate archive attachment, authenticated draft planning, selected managed tools,
+dedicated runtime policies, native path identity, and CodeRabbit quote/resume/deny
+contracts. v0.2.8 does not supply these additions or the latest publisher provenance
+fixes. Their release validation is tracked in [#236][next-release]. Use an exact supplying
 [development pin](#development-pins-and-release-dependencies) for rehearsal,
 then adopt the published supplying release before release-intent use.
 
@@ -136,7 +138,7 @@ uv run --locked --managed-python --only-group tooling research-repo-tools toolch
 
 Keep the scanner allowlist, declared pins, authentication, managed-home
 and build-cache settings, workflow permissions and scheduling in MCMC. Verify
-the installed supplier before removing that adapter. The [API contract](docs/toolchain-api.md#selected-managed-tools)
+the installed supplier before removing that adapter. The [API contract][selected-tools-api]
 supports the same selection for Python callers.
 
 ### Additional setup and cleanup
@@ -320,7 +322,7 @@ The same prefix supports candidate/native evidence, authenticated draft preparat
 and checkout-free attachment writers. Keep standalone controller configuration
 outside the observed checkout and pass its existing `--checkout` argument where
 required. The Python API accepts `policy=` and `artifacts=` on
-`isolated_release_runtime`; [runtime policy API](docs/runtime-policy-api.md)
+`isolated_release_runtime`; [runtime policy API][runtime-policy-api]
 describes all public functions and trust boundaries.
 
 This is an additional opt-in runtime guarantee. Existing dependency, native
@@ -518,7 +520,7 @@ instructions are cooperative controls; they do not prevent direct CLI bypasses.
 ### Actions pin consistency
 
 Declare the identities to check in `.github/action-updates.toml` using the
-[Actions consistency policy](docs/UPDATING_DEPENDENCIES.md#actions-allowlists-and-opt-in-pin-updates).
+[Actions consistency policy][actions-policy].
 Merge `actions_inputs`, `actions-check`, and `update-actions` from the packaged
 Justfile together. Retain `set positional-arguments` so preview flags passed to
 `update-actions` reach its shell command.
@@ -692,17 +694,22 @@ The derived archive preserves original evidence and does not authenticate CI ori
 attachment and approval retain the existing release safeguards. Verify the
 supplying PyPI release before adoption.
 
-For the pre-tag contract, the consumer's Step 2 recipe can compose native evidence
-and independently retained benchmark assertions through the shared CLI:
+For the pre-tag contract, compose native evidence and independently retained
+benchmark assertions through the shared CLI. Run from the observed checkout using
+a trusted, pinned installation outside it (shown as `/trusted/release-tools`), and
+retain acceptance outside the checkout. Use this invocation in the consumer's
+Step 2 recipe; the packaged `release-evidence` recipe normally uses the checkout's
+`.venv`, which cannot verify that same checkout. On Windows, select
+`Scripts/python.exe` instead of `bin/python`:
 
 ```sh
-just release-evidence candidate tooling/release-evidence.toml \
+/trusted/release-tools/bin/python -I -B -m research_repo_tools release evidence candidate tooling/release-evidence.toml \
   --checkout . --payload target/run.json --manifest target/evidence.json \
   --policy target/candidate-policy.json --acquisition-sha256 "$STEP1_ASSERTION_SHA256" \
-  --output target/accepted.json
+  --output /durable/accepted.json
 ```
 
-At approval, pass `--acceptance target/accepted.json` and a new output path to
+At approval, pass `--acceptance /durable/accepted.json` and a new output path outside the checkout to
 revalidate that selection. Obtain `STEP1_ASSERTION_SHA256` from the trusted
 acquisition owner's separate handoff. Never derive it from the candidate being
 checked. These operations perform no benchmark acquisition or preflight.
@@ -844,8 +851,11 @@ max-age-seconds = 86400
 ```
 
 The consumer builds once and runs its native installed-package, scientific and
-security checks against those files. In a subsequent evidence job of the same
-trusted push attempt, capture the manifest before any tag exists:
+security checks against those files. Run the following evidence commands from a
+separate trusted controller project, with its installed recipes and policies;
+`/path/to/source` is the observed checkout, not the controller's project environment.
+In a subsequent evidence job of the same trusted push attempt, capture the manifest
+before any tag exists:
 
 ```sh
 just release-evidence create tooling/release-evidence.toml \
@@ -945,6 +955,7 @@ the corresponding Zenodo record when citing an exact release.
 
 BSD-3-Clause. See [LICENSE][license].
 
+[actions-policy]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_DEPENDENCIES.md#actions-allowlists-and-opt-in-pin-updates
 [api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/api.md
 [audit-badge]: https://github.com/acgetchell/research-repo-tools/actions/workflows/audit.yml/badge.svg?branch=main
 [audit-workflow]: https://github.com/acgetchell/research-repo-tools/actions/workflows/audit.yml
@@ -1006,8 +1017,10 @@ BSD-3-Clause. See [LICENSE][license].
 [reports-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/PUBLISHING_REPORTS.md
 [reuse-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_CI.md
 [review-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/review-api.md
+[runtime-policy-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/runtime-policy-api.md
 [rust-scans]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_CHECKS.md#rust-documentation-scans
 [security-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/security-api.md
+[selected-tools-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/toolchain-api.md#selected-managed-tools
 [timing-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/command-timing-api.md
 [timing-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/TIMING_COMMANDS.md
 [toolchain]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/INSTALLING.md

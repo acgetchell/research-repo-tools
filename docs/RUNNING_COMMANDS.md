@@ -59,6 +59,7 @@ arguments in lexicographic order.
 | `just release-notes TAG` | Print release notes from the root changelog or an archive |
 | `just release-publish TAG [ARGS...]` | Approve a validated draft GitHub Release and trigger its registry workflow |
 | `just release-reuse COMMIT ARGS...` | Save explicitly selected, verified PR source-check evidence for a squash release |
+| `just release-runtime COMMAND...` | Resolve, record, install or verify a dedicated isolated runtime |
 | `just release-verify TAG [ARGS...]` | Verify the exact stable registry version and GitHub Release/assets |
 | `just release-version-check` | Check synchronized metadata and complete dated release notes |
 | `just review [base]` | Review branch and local changes; default to verified `origin/main` |
@@ -120,7 +121,7 @@ global root/configuration options before the group; consult
 | Papers | `papers check`, `normalize`, `source-date` | Explicit UTC dates, optional PDF text/geometry checks and validated metadata normalization |
 | Performance | `performance assemble-suites`, `assets`, `baseline`, `capture`, `command-time`, `compare`, `convert`, `discover`, `export`, `extract`, `fetch`, `first-release`, `host`, `measure`, `pack-suite`, `prepare`, `profile`, `promote`, `publish`, `readme`, `release`, `release-draft`, `release-upload`, `render`, `verify`, `verify-saved` | Complete configured measurement, retained evidence, release assets and publication |
 | Python | `python check`, `fix`, `typecheck` | Complete tracked/nonignored inventory; native Ruff/ty policy; explicit fixes only |
-| Releases | `release assets`, `check`, `dependencies`, `dependency-builds`, `evidence`, `gate`, `publish`, `registry`, `reuse`, `update`, `verify` | Metadata preparation, published-only dependency gates and exact registry/GitHub verification |
+| Releases | `release assets`, `check`, `dependencies`, `dependency-builds`, `evidence`, `gate`, `publish`, `registry`, `reuse`, `runtime`, `update`, `verify` | Metadata preparation, published-only dependency gates, isolated runtime policies and exact registry/GitHub verification |
 | Review | `review branch`, `review deny`, `review resume`, `review uncommitted` | Opt-in review, typed quote-and-stop and one-use explicit paid resume |
 | SARIF | `sarif split` | Consumer-selected drivers/namespaces, corrected rule indices and complete output generations |
 | Security | `security osv`, `secrets` | Managed OSV/Gitleaks, explicit inputs, full history, redacted native reports |

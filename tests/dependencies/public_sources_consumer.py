@@ -105,6 +105,33 @@ class Provider:
 
 
 class TestSources(unittest.TestCase):
+    def test_registry_request_observer_errors_are_not_transport_failures(self) -> None:
+        for url in (PYTHON_API, CARGO_API):
+            for failure in (TimeoutError("observer timeout"), ConnectionError("observer disconnected"), OSError("observer unavailable")):
+                with self.subTest(url=url, failure=type(failure).__name__):
+                    events = []
+
+                    def observe(event: dict[str, object]) -> None:
+                        events.append(event["event"])
+                        if event["event"] == "request":
+                            raise failure
+
+                    progress = DependencyProgress(mode="none", observer=observe)
+                    transport = MagicMock(return_value=b"{}")
+                    sleep = MagicMock()
+                    with (
+                        patch.object(_registry_requests, "_requested_at", None),
+                        self.assertRaises(type(failure)) as rejected,
+                        reporting(progress, "fixture"),
+                    ):
+                        _registry_requests.read_registry(url, limit=1024, transport=transport, clock=lambda: 0.0, sleep=sleep)
+                    self.assertIs(rejected.exception, failure)
+                    self.assertEqual(events, ["started", "request", "failed"])
+                    self.assertEqual((progress.requests, progress.retries), (1, 0))
+                    transport.assert_not_called()
+                    sleep.assert_not_called()
+                    self.assertFalse(_registry_requests._LOCK.locked())
+
     def test_registry_retries_only_temporary_dns_failures(self) -> None:
         for wrapped in (False, True):
             for code in (socket.EAI_AGAIN, socket.EAI_NONAME):
@@ -593,6 +620,36 @@ class TestSourceWorkflows(unittest.TestCase):
         environment.mkdir()
         with self.assertRaisesRegex(ValueError, "pyvenv.cfg"):
             operation.verify()
+
+    def test_environment_requires_explicit_unambiguous_system_site_isolation(self) -> None:
+        self.python()
+        environment = self.root / ".venv"
+        site = environment / ("Lib/site-packages" if os.name == "nt" else "lib/python3.15/site-packages")
+        site.mkdir(parents=True)
+        configuration = environment / "pyvenv.cfg"
+        for text in (
+            "home = interpreter\n",
+            " include-system-site-packages\t=\ttrue\n",
+            "include-system-site-packages = \n",
+            "include-system-site-packages = false # comment\n",
+            "include-system-site-packages=false\ninclude-system-site-packages=true\n",
+            "include-system-site-packages=true\ninclude-system-site-packages=false\n",
+            "include-ſystem-site-packages=false\n",
+            "home=interpreter\u2028include-system-site-packages=false\n",
+        ):
+            with self.subTest(configuration=text):
+                configuration.write_bytes(text.encode("utf-8"))
+                before = self.snapshot()
+                with self.assertRaisesRegex(ValueError, "site-packages|duplicate"):
+                    check_dependency_policy(self.root, provider=self.provider)
+                self.assertEqual(self.snapshot(), before)
+                self.assertEqual(self.provider.calls, [])
+                self.native.assert_not_called()
+
+        configuration.write_bytes(b"home = interpreter\r\n \tINCLUDE-SYSTEM-SITE-PACKAGES\t=\tFaLsE \r\n")
+        check_dependency_policy(self.root, provider=self.provider)
+        self.assertTrue(self.provider.calls)
+        self.native.assert_called()
 
     def test_crates_metadata_is_fresh_and_paced_across_graphs_and_providers_only(self) -> None:
         self.cargo()

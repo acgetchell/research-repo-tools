@@ -467,6 +467,8 @@ def _retain_candidate_release(
             if verify_inputs is not None:
                 verify_inputs()
             verify()
+            if verify_acceptance is not None:
+                verify_acceptance(accepted)
             if verify_inputs is not None:
                 verify_inputs()
             if any(original(path) != before for path, before in originals.items()):

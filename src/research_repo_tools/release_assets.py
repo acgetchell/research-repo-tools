@@ -139,6 +139,15 @@ def parse_release_target(payload: bytes) -> ReleaseTarget:
     )
 
 
+def _read_target(path: Path) -> ReleaseTarget:
+    """Bound local target handoffs before decoding or parsing their contents."""
+    with path.open("rb") as stream:
+        payload = stream.read(1024 * 1024 + 1)
+    if len(payload) > 1024 * 1024:
+        raise ValueError("release target exceeds the byte limit")
+    return parse_release_target(payload)
+
+
 def _remote_commit(root: Path, repository: str, tag: str) -> str:
     """Resolve only refs/tags, with bounded annotated-tag peeling and no checkout."""
     return _resolve_tag_commit(tag, lambda endpoint: _load_json(_gh(root, ["api", f"repos/{repository}/{endpoint}"]), "GitHub tag"))

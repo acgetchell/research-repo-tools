@@ -142,7 +142,6 @@ The module exports these frozen dataclasses:
 - `ReleaseContext(tag, previous_tag, release_date)` also exposes `version` without
   the `v` prefix. During checks, `previous_tag` can be `None` when no rule or
   explicit argument requires it.
-
 - `ReleaseDiscovery(root, package, files, references, policy)` exposes an absolute
   root, `PackageInfo(name, version)`, sorted relative file paths, and standard
   `VersionReference(path, line, version, kind, text)` records. Reference paths are

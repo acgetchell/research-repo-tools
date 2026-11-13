@@ -71,7 +71,6 @@ def read_registry(
         remaining = deadline - clock()
         if remaining <= 0:
             raise TimeoutError("registry retry deadline exhausted")
-        report("request", "registry", detail=parsed.netloc)
         payload = transport(url, min(30.0, remaining), limit)
         if clock() >= deadline:
             raise TimeoutError("registry retry deadline exhausted")
@@ -82,6 +81,10 @@ def read_registry(
     last_failure = "connection/read timeout"
     for attempt in range(3):
         delay = float(2**attempt)
+        # Observer failures belong to the caller, never to transport retries.
+        # Report before taking the pacing lock; request() includes callback and
+        # pacing time in the remaining I/O budget.
+        report("request", "registry", detail=parsed.netloc)
         try:
             if parsed.netloc == "crates.io" and parsed.path.startswith("/api/"):
                 global _requested_at

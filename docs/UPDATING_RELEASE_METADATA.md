@@ -62,7 +62,6 @@ These commands prepare local files. Changelog generation, tagging, dependency
 updates, and publication are separate operations. Repository profiles and command hooks are not supported. Explicit selectors and
 Python adapters extend preparation as described below.
 
-
 ## First-release preparation
 
 First-release mode prepares metadata without inventing a predecessor. Run

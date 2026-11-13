@@ -116,8 +116,10 @@ work; reconcile usage externally, then explicitly obtain a new quote and approva
 
 Review identity uses [native path observations](path-identity-api.md) over all
 tracked HEAD/index paths and non-ignored untracked files, plus instruction files.
-HEAD-only names are bound as `MissingPath` staged deletions; replacement files
-and directory contents retain their own current observations. This supports
+HEAD-only names are bound as `MissingPath` staged deletions unless they alias a
+current observation under Windows path normalization. A case-only rename retains
+both HEAD/index spellings in Git metadata without a duplicate native observation.
+Replacement files and directory contents retain their own current observations. This supports
 staged file/directory replacements without treating directories as file leaves.
 It binds staged object IDs/modes, HEAD, branch, base/merge-base commits, Git directory and
 effective configuration, provider version/executable bytes, options and inherited
@@ -141,8 +143,9 @@ inspects nor changes billing settings and cannot prevent charges under other mod
 
 Pending JSON (`research-repo-tools/pending-review/v1`) and the `.used` receipt
 (`research-repo-tools/review-use/v1`) live outside the Git worktree. Creation is
-exclusive, receipt contents are flushed before an attempt, reads are bounded,
-and moving or editing a pending file invalidates its identity. Parent directories
+exclusive, receipt contents are flushed before an attempt, and pending JSON is
+limited to 2 MiB on both write and read, including JSON escaping. Moving or
+editing a pending file invalidates its identity. Parent directories
 and local storage are trusted. A caller who can alter state can bypass this
 cooperative control; it is not a tamper-resistant ledger. Default pending files
 use an OS temporary directory outside the checkout. The stdout spool uses the

@@ -292,7 +292,9 @@ tracked/nonignored untracked paths, omitting deleted files. Includes are Git
 pathspecs; excludes are POSIX glob patterns. Git discovery is read-only and
 NUL-delimited. Links, traversal and portable aliases fail. `argument_batches`
 validates complete filename input before making bounded argument tuples; paths
-receive `./` to prevent option interpretation. Bounds account for quoted Windows
+receive `./` to prevent option interpretation. Pass an iterable of filenames;
+a scalar string or bytes value is rejected instead of splitting it into characters.
+Bounds account for quoted Windows
 UTF-16 command size and POSIX byte size. `run_selected` inherits live streams
 and returns the selected file count after all batches succeed. An empty selection
 returns zero without launching a command. A failed batch raises the process

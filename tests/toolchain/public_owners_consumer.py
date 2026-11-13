@@ -21,6 +21,51 @@ class TestOwnersConsumer(unittest.TestCase):
             status = cli.main(["--root", str(root), *arguments])
         return status, stdout.getvalue(), stderr.getvalue()
 
+    def test_cleanup_preserves_case_variant_home_and_rejects_duplicate_ownership(self):
+        from research_repo_tools import config, toolchain, toolchain_clean, toolchain_config
+
+        with tempfile.TemporaryDirectory(prefix="cleanup café ") as directory:
+            root = Path(directory).resolve()
+            (root / "pyproject.toml").write_bytes(b'[tool.uv]\nrequired-version="==0.13.7"\n')
+            (root / ".python-version").write_bytes(b"3.15\n")
+            tools = root / "uv tools"
+            tools.mkdir()
+            with patch.dict(os.environ, {"RESEARCH_REPO_TOOLS_HOME": str(root / "managed"), "VIRTUAL_ENV": "", "UV_PROJECT_ENVIRONMENT": ""}):
+                settings = config.load(root=root)
+                runtime = toolchain.Runtime(toolchain_config.load(settings))
+                system = {"apple-darwin": "macos", "unknown-linux-gnu": "linux", "pc-windows-msvc": "windows"}
+                native_os = next(value for suffix, value in system.items() if runtime.host.endswith(suffix))
+                arch = runtime.host.split("-", 1)[0]
+                entries = []
+                for version in ("3.13.7", "3.15.1"):
+                    key = f"cpython-{version}-{native_os}-{arch}-none"
+                    path = runtime.base / "python" / key / "interpreter"
+                    path.parent.mkdir(parents=True)
+                    path.write_bytes(b"retained interpreter")
+                    entries.append(dict(key=key, version=version, path=str(path), os=native_os, arch=arch, implementation="cpython", variant="default"))
+                old, current = (Path(entry["path"]).parent for entry in entries)
+                environment = root / ".venv"
+                environment.mkdir()
+                configuration = environment / "pyvenv.cfg"
+
+                def inventory(command, args, **kwargs):
+                    self.assertIn(args[:2], (["python", "list"], ["tool", "dir"]))
+                    return subprocess.CompletedProcess([], 0, json.dumps(entries) if args[:2] == ["python", "list"] else str(tools), "")
+
+                with (
+                    patch.object(toolchain.Runtime, "uv_status", return_value=toolchain.Status("uv", "0.13.7", "0.13.7", "mock-uv", True)),
+                    patch.object(toolchain_clean, "run_safe_command", side_effect=inventory),
+                ):
+                    configuration.write_bytes(f"HoMe = {old}\r\nexecutable = {current / 'interpreter'}\r\n".encode("utf-8"))
+                    plan = toolchain_clean.plan_clean(settings)
+                    self.assertEqual(plan.removals, ())
+                    toolchain_clean.apply_clean(plan, settings)
+                    for duplicate in ("home", "HOME"):
+                        configuration.write_bytes(f"home = {old}\n{duplicate} = {current}\n".encode("utf-8"))
+                        with self.subTest(duplicate=duplicate), self.assertRaisesRegex(ValueError, "duplicate"):
+                            toolchain_clean.plan_clean(settings)
+                    self.assertTrue(all(Path(entry["path"]).is_file() for entry in entries))
+
     def test_uv_tool_receipt_preview_stale_pin_apply_and_noop(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -33,7 +78,8 @@ class TestOwnersConsumer(unittest.TestCase):
             scripts.mkdir(parents=True)
             binary = scripts / ("uv.exe" if os.name == "nt" else "uv")
             binary.write_bytes(b"native uv fixture")
-            (environment / "pyvenv.cfg").write_bytes(b"home = interpreter\n")
+            configuration = environment / "pyvenv.cfg"
+            configuration.write_bytes(b"HoMe = interpreter\r\n")
             receipt = environment / "uv-receipt.toml"
             # JSON string quoting is also valid TOML for paths.
             receipt.write_bytes(
@@ -66,6 +112,13 @@ class TestOwnersConsumer(unittest.TestCase):
                 patch.object(tool_pins, "run_safe_command", side_effect=run),
                 patch.dict(os.environ, {"UV_PYTHON": "unrelated interpreter", "AXOUPDATER_CONFIG_PATH": str(root / "standalone")}),
             ):
+                configuration.write_bytes(b"HoMe = interpreter\r\nhome = other interpreter\r\n")
+                status, _, error = self.invoke(root, "deps", "update-uv", "--dry-run")
+                self.assertEqual(status, 1)
+                self.assertIn("duplicate", error)
+                self.assertEqual(operations, [])
+                self.assertEqual(manifest.read_bytes(), before)
+                configuration.write_bytes(b"HoMe = interpreter\r\n")
                 status, output, error = self.invoke(root, "deps", "update-uv", "--dry-run")
                 self.assertEqual(status, 0, error)
                 self.assertIn("uv owner: uv-tool", output)

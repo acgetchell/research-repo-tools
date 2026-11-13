@@ -63,7 +63,7 @@ Normal Git rules still apply: assume-unchanged/skip-worktree entries and trusted
 non-racy metadata can suppress comparisons, and clean filters define content
 equality. This is not an independent hash of every raw worktree byte.
 Status preserves native Git status semantics: for example, a worktree-size
-discrepancy can report ` M` even when a size-changing clean filter produces the
+discrepancy can report a space followed by `M` even when a size-changing clean filter produces the
 indexed content. Use the diff query for content-based changed-path selection.
 
 The guarantee assumes a trusted Git executable, repository and configured clean
