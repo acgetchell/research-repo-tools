@@ -10,11 +10,40 @@ for setup and ordinary workflows.
 
 `research_repo_tools.release_publishing` exposes immutable `PublishingSettings`,
 `RequiredCheck`, and `ReviewedRelease` values, `parse_publishing`, `validate_event`,
-`require_checks`, `check_metadata`, `check_reviewed_release`,
+`require_checks`, `check_metadata`, `check_release_source`, `check_reviewed_release`,
 `publish_reviewed_release`, and `verify_publication`. Configuration declares one
 registry (`pypi` or `crates-io`), package, GitHub repository, a nonempty list of
 check name/provider IDs, and optional required asset filenames. Unknown fields,
 invalid identities, duplicates, and missing checks raise `ValueError`.
+
+Optional `expected-title="tag"`, `generated-notes=true`, and
+`require-immutable=true` map to `expected_title`, `generated_notes`, and
+`require_immutable` on `PublishingSettings`. Defaults preserve existing policy.
+The same assertions run at the draft gate, immediately before publication,
+on the publication response, during published-event checking and final registry
+verification. Notes comparison normalizes CRLF and removes at most one terminal
+LF on each side; meaningful whitespace remains significant. Missing or malformed
+asserted fields reject. Drafts must be mutable; only published releases require
+immutability when configured. These are assertions, never permission to rewrite.
+
+`check_release_source(config, tag, *, commit=None, reuse_evidence=None)` provides
+the source/metadata/protected-default-branch/check gate without looking up a
+release, returning the observed full commit. The authenticated draft planner
+uses it before any draft exists.
+
+`check_reviewed_release`, `publish_reviewed_release` and `verify_publication`
+accept the original `ReleaseTarget` as optional `target` to
+bind the configured repository/tag and remote commit to its captured release ID.
+The event gate also requires its event ID to match this target. Final verification
+checks assertions before and after registry verification and rejects changed
+release IDs. Pass the same `--target TARGET.json` to `release publish TAG`,
+`release gate TAG`, and `release verify TAG` in a composed publication workflow.
+Omitting the target preserves existing callers and binds the ID observed at entry
+for that verification operation.
+
+For MCMC adoption, declare these publishing settings and remove the redundant
+`_release-notes-check` and separate immutability query after installed integration
+passes. Keep consumer registry credentials, approval and workflow policy.
 
 `check_metadata(config, tag, *, previous_tag=None)` reuses final release metadata and
 changelog checks. An explicit predecessor is validated and passed through to

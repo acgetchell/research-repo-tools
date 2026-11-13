@@ -11,6 +11,7 @@ import tempfile
 import tomllib
 import unittest
 import urllib.error
+from dataclasses import replace
 from email.message import Message
 from pathlib import Path
 from typing import Any, cast, override
@@ -18,9 +19,10 @@ from unittest.mock import patch
 
 from research_repo_tools import changelog, cli, config, registry, release_metadata, toolchain, toolchain_config, update_release
 from research_repo_tools.just_inspect import dry_run, inspect_justfile
-from research_repo_tools.release_assets import GitHubRelease
+from research_repo_tools.release_assets import GitHubRelease, ReleaseTarget, serialize_release_target
 from research_repo_tools.release_publishing import (
     RequiredCheck,
+    ReviewedRelease,
     check_metadata,
     check_reviewed_release,
     publish_reviewed_release,
@@ -31,6 +33,126 @@ from research_repo_tools.release_publishing import (
 
 
 class TestPublishingConsumer(unittest.TestCase):
+    def test_captured_draft_id_is_preserved_through_publication_and_event_gate(self):
+        settings = self.settings("pypi")
+        settings = replace(settings, publishing=replace(settings.publishing, expected_title="tag", generated_notes=True, require_immutable=True))
+        sha = "a" * 40
+        target = ReleaseTarget("example/project", "v1.2.3", 9, sha, "v1.2.3")
+        draft = GitHubRelease("example/project", "v1.2.3", 9, True, False, False, (), title="v1.2.3", body="notes\n")
+        with (
+            patch("research_repo_tools.release_publishing.check_release_source", return_value=sha),
+            patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, sha, "")),
+            patch("research_repo_tools.changelog.notes", return_value=("notes\n", self.root / "CHANGELOG.md", "heading")),
+            patch("research_repo_tools.release_publishing.lookup_release", return_value=replace(draft, identifier=10)) as lookup,
+            patch("research_repo_tools.release_publishing.revalidate_release_target", return_value=draft),
+            patch("research_repo_tools.release_publishing._publish_release", return_value=replace(draft, draft=False, immutable=True)) as publish,
+        ):
+            with self.assertRaises(ValueError):
+                publish_reviewed_release(settings, "v1.2.3", target=target)
+            publish.assert_not_called()
+            lookup.return_value = draft
+            publish_reviewed_release(settings, "v1.2.3", target=target)
+            publish.assert_called_once_with(settings.root, target)
+            lookup.return_value = replace(draft, identifier=10, draft=False, immutable=True)
+            with self.assertRaises(ValueError):
+                check_reviewed_release(settings, "v1.2.3", event=ReviewedRelease("v1.2.3", sha, 10), target=target)
+            lookup.return_value = replace(draft, draft=False, immutable=True)
+            self.assertEqual(check_reviewed_release(settings, "v1.2.3", event=ReviewedRelease("v1.2.3", sha, 9), target=target).identifier, 9)
+            for changed in (replace(target, commit="b" * 40), replace(target, repository="other/project"), replace(target, tag="v1.2.4")):
+                with self.subTest(target=changed), self.assertRaises(ValueError):
+                    check_reviewed_release(settings, "v1.2.3", target=changed)
+
+    def test_installed_cli_final_verification_keeps_target_relative_to_explicit_root(self):
+        target = ReleaseTarget("example/project", "v1.2.3", 9, "a" * 40, "v1.2.3")
+        (self.root / "captured.json").write_bytes(serialize_release_target(target))
+        with patch("research_repo_tools.release_publishing.verify_publication") as verify, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["--root", str(self.root), "release", "verify", "v1.2.3", "--target", "captured.json"]), 0)
+        self.assertEqual(verify.call_args.kwargs["target"], target)
+        self.assertTrue(verify.call_args.args[0].root.samefile(self.root))
+        with patch("research_repo_tools.release_publishing.publish_reviewed_release") as publish, contextlib.redirect_stdout(io.StringIO()):
+            self.assertEqual(cli.main(["--root", str(self.root), "release", "publish", "v1.2.3", "--target", "captured.json", "--approve"]), 0)
+        self.assertEqual(publish.call_args.kwargs["target"], target)
+
+    def test_declared_release_assertions_preserve_note_content_and_lifecycle(self):
+        settings = self.settings("pypi")
+        settings = replace(settings, publishing=replace(settings.publishing, expected_title="tag", generated_notes=True, require_immutable=True))
+        sha = "a" * 40
+        release = GitHubRelease("example/project", "v1.2.3", 9, False, True, False, (), title="v1.2.3", body="- Authored notes.\n")
+        remote = {
+            "": {"full_name": "example/project", "default_branch": "main"},
+            "branches/main": {"name": "main", "protected": True},
+            f"compare/{sha}...main": {"status": "identical"},
+            f"commits/{sha}/check-runs?filter=latest&per_page=100": [
+                {
+                    "total_count": 1,
+                    "check_runs": [
+                        {"id": 7, "name": "native", "app": {"id": 15368}, "head_sha": sha, "status": "completed", "conclusion": "success"},
+                    ],
+                }
+            ],
+        }
+        with (
+            patch("research_repo_tools.release_publishing.check_metadata"),
+            patch("research_repo_tools.release_publishing.require_release_checkout"),
+            patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, sha, "")),
+            patch("research_repo_tools.release_publishing._remote_commit", return_value=sha),
+            patch("research_repo_tools.release_publishing._api", side_effect=lambda root, repo, endpoint, **kwargs: remote[endpoint]),
+            patch("research_repo_tools.changelog.notes", return_value=("- Authored notes.\n", self.root / "CHANGELOG.md", "heading")),
+        ):
+            for body in ("- Authored notes.", "- Authored notes.\n", "- Authored notes.\r\n"):
+                current = replace(release, body=body)
+                with self.subTest(body=body), patch("research_repo_tools.release_publishing.lookup_release", return_value=current):
+                    self.assertEqual(check_reviewed_release(settings, "v1.2.3"), current)
+            for changed in (
+                replace(release, title="changed"),
+                replace(release, title=None),
+                replace(release, body=None),
+                replace(release, body="- Authored notes. \n"),
+                replace(release, body="- Authored notes.\n\n"),
+                replace(release, body="- Authored\rnotes.\n"),
+                replace(release, immutable=False),
+                replace(release, immutable=None),
+                replace(release, immutable=1),
+            ):
+                with self.subTest(changed=changed), patch("research_repo_tools.release_publishing.lookup_release", return_value=changed):
+                    with self.assertRaises(ValueError):
+                        check_reviewed_release(settings, "v1.2.3")
+            for immutable in (False, True):
+                draft = replace(release, draft=True, immutable=immutable)
+                with self.subTest(immutable=immutable), patch("research_repo_tools.release_publishing.lookup_release", return_value=draft):
+                    if immutable:
+                        with self.assertRaises(ValueError):
+                            check_reviewed_release(settings, "v1.2.3", draft=True)
+                    else:
+                        self.assertEqual(check_reviewed_release(settings, "v1.2.3", draft=True), draft)
+
+    def test_final_publication_assertions_reject_drift_before_effect_and_after_registry(self):
+        settings = self.settings("pypi")
+        settings = replace(settings, publishing=replace(settings.publishing, expected_title="tag", generated_notes=True, require_immutable=True))
+        sha = "a" * 40
+        draft = GitHubRelease("example/project", "v1.2.3", 9, True, False, False, (), title="v1.2.3", body="notes\n")
+        with (
+            patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, sha, "")),
+            patch("research_repo_tools.release_publishing.check_reviewed_release", return_value=draft),
+            patch("research_repo_tools.release_publishing.revalidate_release_target", return_value=replace(draft, body="edited")),
+            patch("research_repo_tools.changelog.notes", return_value=("notes\n", self.root / "CHANGELOG.md", "heading")),
+            patch("research_repo_tools.release_publishing._publish_release") as publish,
+        ):
+            with self.assertRaisesRegex(ValueError, "generated changelog"):
+                publish_reviewed_release(settings, "v1.2.3")
+            publish.assert_not_called()
+        published = replace(draft, draft=False, immutable=True)
+        for changed in (replace(published, identifier=10), replace(published, body="edited"), replace(published, immutable=False)):
+            with (
+                self.subTest(changed=changed),
+                patch("research_repo_tools.release_publishing.lookup_release", side_effect=[published, changed]),
+                patch("research_repo_tools.release_publishing._remote_commit", return_value=sha),
+                patch("research_repo_tools.release_publishing.wait_for_version", return_value=registry.RegistryVersion("pypi", "sample", "1.2.3", True)),
+                patch("research_repo_tools.changelog.notes", return_value=("notes\n", self.root / "CHANGELOG.md", "heading")),
+            ):
+                with self.assertRaises(ValueError):
+                    verify_publication(settings, "v1.2.3", target=ReleaseTarget("example/project", "v1.2.3", 9, sha))
+
     def test_all_unmet_checks_have_actionable_exact_commit_diagnostics(self):
         sha = "a" * 40
         checks = tuple(RequiredCheck(name, 15368) for name in ("running", "queued", "failed", "cancelled", "missing", "ambiguous", "wrong-provider", "passed"))

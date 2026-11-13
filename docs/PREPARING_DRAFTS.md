@@ -1,6 +1,7 @@
 # Preparing an unpublished release draft
 
-Draft preparation and authenticated receipt retrieval are available from v0.2.7.
+The shared planning and authenticated-writer commands below target v0.2.9.
+The underlying draft and receipt primitives are available from v0.2.7.
 Enable them only after verifying the published supplying version and its installed
 consumer integration. See
 [release availability](../README.md#release-availability); source availability
@@ -22,9 +23,11 @@ from the handoff or tagged checkout.
 
 The read-only job independently peels the local tag, requires main ancestry,
 observes the clean source/package, verifies the retained selection, and generates
-notes using the installed runtime. The handoff contains only policy, selection
-and note bytes. The writer authenticates its immutable artifact ID and original
-ZIP digest against trusted job outputs, then binds its provider run and
+notes using the installed runtime. The handoff contains only declarative
+source/check assertions, policy, selection and note bytes. Configure the observed project’s publishing policy with its
+repository, package and exact required check names/app IDs. Replace OWNER/REPO
+in the trusted writer policy below; keep that policy in reviewed workflow code.
+The writer authenticates its immutable artifact ID and original ZIP digest against trusted job outputs, then binds its provider run and
 attempt-specific name before extraction. The native evidence selection inside
 that handoff has its own exact main-push run/attempt, signer and artifact, which
 the preparation API revalidates live.
@@ -65,27 +68,18 @@ jobs:
         run: |
           set -euo pipefail
           commit=$(git --no-pager rev-parse "$GITHUB_REF^{commit}")
-          git --no-pager merge-base --is-ancestor "$commit" origin/main
           mkdir "$RUNNER_TEMP/handoff"
-          cp tooling/release-evidence.toml "$RUNNER_TEMP/handoff/evidence.toml"
           uv run --no-config --no-project --isolated --no-cache --python 3.15 \
-            --with research-repo-tools==0.2.7 python -I -c \
-            'import sys; from research_repo_tools.cli import main; sys.exit(main())' \
-            --root "$GITHUB_WORKSPACE" release evidence verify \
-            "$RUNNER_TEMP/handoff/evidence.toml" --checkout "$GITHUB_WORKSPACE" \
-            --commit "$commit" --version "${RELEASE_TAG#v}" \
-            --output "$RUNNER_TEMP/handoff/selection.json"
-          uv run --no-config --no-project --isolated --no-cache --python 3.15 \
-            --with research-repo-tools==0.2.7 python -I -c \
-            'import sys; from research_repo_tools.cli import main; sys.exit(main())' \
-            --root "$GITHUB_WORKSPACE" changelog notes "$RELEASE_TAG" \
-            > "$RUNNER_TEMP/handoff/notes.md"
-          printf 'commit=%s\n' "$commit" >> "$GITHUB_OUTPUT"
+            --with research-repo-tools==0.2.9 python -I -m research_repo_tools \
+            --root "$GITHUB_WORKSPACE" release assets plan tooling/release-evidence.toml \
+            --repository "$GITHUB_REPOSITORY" --event "$GITHUB_EVENT_NAME" \
+            --tag "$RELEASE_TAG" --commit "$commit" \
+            --output "$RUNNER_TEMP/handoff/handoff.json" --github-output "$GITHUB_OUTPUT"
       - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         id: handoff
         with:
           name: draft-handoff-${{ github.run_id }}-${{ github.run_attempt }}
-          path: ${{ runner.temp }}/handoff/*
+          path: ${{ runner.temp }}/handoff/handoff.json
           if-no-files-found: error
           retention-days: 30
   prepare:
@@ -109,97 +103,49 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          # Reruns must recover the original journal; never use a fresh path.
-          test "$GITHUB_RUN_ATTEMPT" = 1
           cd "$RUNNER_TEMP"
+          cat >handoff-policy.toml <<'TOML'
+          schema = 1
+          repository = "OWNER/REPO"
+          workflow = ".github/workflows/prepare-draft.yml"
+          workflow-name = "Prepare consumer draft"
+          artifact-prefix = "draft-handoff"
+          [[jobs]]
+          name = "verify"
+          steps = ["Assert source and verify original signed evidence"]
+          runner-labels = ["ubuntu-24.04"]
+          TOML
           uv run --no-config --no-project --isolated --no-cache --python 3.15 \
-            --with research-repo-tools==0.2.7 python -I - <<'PY'
-          import os
-          from functools import partial
-          from pathlib import Path
-          from research_repo_tools.files import replace_many
-          from research_repo_tools.release_assets import serialize_release_target
-          from research_repo_tools.release_drafts import prepare_release_draft
-          from research_repo_tools.release_interfaces import load_evidence_policy
-          from research_repo_tools.release_validation import api, download_artifact, read_pages
-
-          root = Path.cwd()
-          repository = os.environ["GITHUB_REPOSITORY"]
-          run = int(os.environ["GITHUB_RUN_ID"])
-          attempt = int(os.environ["GITHUB_RUN_ATTEMPT"])
-          identifier = int(os.environ["HANDOFF_ID"])
-          artifact = api(f"actions/artifacts/{identifier}", repository=repository)
-          producer = artifact.get("workflow_run", {})
-          if not (
-              type(artifact.get("id")) is int and artifact["id"] == identifier
-              and artifact.get("expired") is False
-              and artifact.get("name") == f"draft-handoff-{run}-{attempt}"
-              and artifact.get("digest") == "sha256:" + os.environ["HANDOFF_SHA256"]
-              and type(producer.get("id")) is int and producer["id"] == run
-              and producer.get("head_sha") == os.environ["GITHUB_SHA"]
-          ):
-              raise ValueError("handoff artifact/run/digest identity differs")
-          current = api(f"actions/runs/{run}", repository=repository)
-          workflow = current.get("workflow_id")
-          if (type(current.get("id")) is not int or current["id"] != run
-              or type(workflow) is not int or workflow <= 0
-              or type(current.get("run_attempt")) is not int
-              or current["run_attempt"] != attempt
-              or attempt != 1
-              or current.get("event") != "push"
-              or current.get("head_branch") != os.environ["RELEASE_TAG"]
-              or os.environ["GITHUB_REF"] != "refs/tags/" + os.environ["RELEASE_TAG"]
-              or current.get("head_sha") != os.environ["GITHUB_SHA"]):
-              raise ValueError("handoff producer attempt or event changed")
-          # A new run is not a fresh intent for a previously prepared tag.
-          # Unfiltered pagination avoids the filtered workflow-run result cap.
-          history = read_pages(partial(api, repository=repository),
-                               f"actions/workflows/{workflow}/runs", "workflow_runs")
-          same_tag = []
-          seen = set()
-          for previous in history:
-              if (type(previous.get("id")) is not int or previous["id"] <= 0
-                  or type(previous.get("workflow_id")) is not int
-                  or previous["workflow_id"] != workflow
-                  or not isinstance(previous.get("event"), str)
-                  or not isinstance(previous.get("head_branch"), str)):
-                  raise ValueError("workflow history identity is incomplete")
-              if previous["id"] in seen:
-                  raise ValueError("workflow history contains duplicate runs")
-              seen.add(previous["id"])
-              if previous["event"] == "push" and previous["head_branch"] == os.environ["RELEASE_TAG"]:
-                  same_tag.append(previous["id"])
-          if same_tag != [run]:
-              raise ValueError("tag has prior or unproven preparation intent; recover the original journal")
-          handoff = root / "handoff"
-          download_artifact(repository, artifact, handoff,
-                            ("evidence.toml", "selection.json", "notes.md"))
-          latest = api(f"actions/runs/{run}", repository=repository)
-          if any(type(latest.get(key)) is not type(current.get(key)) or latest.get(key) != current.get(key)
-                 for key in ("id", "workflow_id", "run_attempt", "event", "head_branch", "head_sha")):
-              raise ValueError("handoff producer changed during download")
-          target = prepare_release_draft(
-              root, repository, os.environ["RELEASE_TAG"],
-              os.environ["RELEASE_COMMIT"],
-              policy=load_evidence_policy(handoff / "evidence.toml"),
-              expected=(handoff / "selection.json").read_bytes(),
-              title=os.environ["RELEASE_TAG"],
-              notes=(handoff / "notes.md").read_bytes(),
-              receipt=root / "draft-receipt.json", approve=True,
-          )
-          replace_many({root / "target.json": serialize_release_target(target)})
-          PY
+            --with research-repo-tools==0.2.9 python -I -m research_repo_tools \
+            release assets prepare-authenticated handoff-policy.toml \
+            --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" \
+            --run-id "$GITHUB_RUN_ID" --attempt 1 \
+            --artifact-id "$HANDOFF_ID" --artifact-sha256 "$HANDOFF_SHA256" \
+            --executing-run-id "$GITHUB_RUN_ID" --executing-attempt "$GITHUB_RUN_ATTEMPT" \
+            --output "$RUNNER_TEMP/draft-state" --approve
       - name: Retain journal even after an unconfirmed creation
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: draft-receipt-${{ github.run_id }}-${{ github.run_attempt }}
           path: |
-            ${{ runner.temp }}/draft-receipt.json
-            ${{ runner.temp }}/target.json
+            ${{ runner.temp }}/draft-state/draft-receipt.json
+            ${{ runner.temp }}/draft-state/target.json
+          if-no-files-found: ignore
+          retention-days: 30
+      - name: Retain complete preparation state
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: draft-state-${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/draft-state/*
           if-no-files-found: ignore
           retention-days: 30
 ```
+
+The writer invokes shared installed commands and never imports or executes the
+observed checkout. The example pin is a target supplying version, not a claim
+that v0.2.9 is already published; adopt it only after verified publication.
 
 Keep the read-only handoff's producer run/attempt and artifact ID/digest with the
 preparation journal. The writer's final receipt artifact is a different handoff:
@@ -219,9 +165,15 @@ remove or bypass this guard. Consumers that allow those operations must use a
 durable repository/tag intent ledger and require reconciliation whenever its
 history is unavailable, before authorizing a fresh receipt.
 
-A recovery workflow
-must retrieve the original handoff and journal before calling preparation again;
-it cannot regenerate notes, reselect evidence or start with an empty receipt.
+A recovery workflow must authenticate and restore all four original state files (producer.json,
+handoff.json, draft-receipt.json and target.json when captured) before repeating
+prepare-authenticated with the original producer/artifact assertions and its
+current executing-run/attempt assertions. Missing journals stop automation.
+The writer reserves a new state directory together with its first journal only
+after pre-effect checks pass. A rejected check before reservation leaves no
+partial directory. While the original execution remains active, retry with the
+same original handoff. A later run still requires original retained state.
+Recovery cannot regenerate notes, reselect evidence or start with an empty receipt.
 It needs the same repository/tag serialization group as every other writer.
 Upload-on-failure cannot guarantee durability after hard runner termination or
 artifact upload failure. If the journal was not retained, stop automation and
@@ -331,7 +283,7 @@ Retain these consumer-owned steps and boundaries:
 | --- | --- |
 | Pre-tag `release-evidence` | Keep the exact final-main signed selection; preparation revalidates it without builds or a new test matrix |
 | Generated release notes | Generate with read-only credentials; freeze original bytes in the authenticated handoff |
-| Manual draft creation | Replace with `release assets prepare`; retain receipt and captured `ReleaseTarget` |
+| Manual draft creation | Replace with `release assets prepare-authenticated`; retain receipt and captured `ReleaseTarget` |
 | Manually copied preparation run/artifact IDs | Use `release assets retrieve` once, then retain its frozen selection and captured target for every retry |
 | Owner-selected `transfer.json` | Keep independent explicit selection and its original provenance; preparation never acquires measurements |
 | Draft-first attachment | Attach only to the captured ID using the existing asset API and trusted target handoff |
@@ -344,3 +296,16 @@ Scientific workloads, retained measurements, Cargo publication and account
 configuration remain consumer-owned. Record the supplying package version and
 installed integration results in the consumer's adoption issue; upstream source
 validation alone does not establish downstream release readiness.
+
+## MCMC controller migration
+
+After verified v0.2.9 publication and consumer integration checks, replace the
+generic source-event/protected-main/check/evidence/notes controller in
+`tooling/prepare_release.py` with `release assets plan` and
+`release assets prepare-authenticated`.
+Retain package identity, stable-tag triggers, named checks and app IDs, evidence
+and signing policies, concurrency and approval decisions in reviewed consumer
+configuration. Preserve original state artifacts and the explicit recovery path.
+The existing retrieve command still consumes the separate two-file receipt
+artifact; full writer recovery uses the four-file state artifact. Publication,
+benchmark acquisition and domain tests remain separate consumer operations.

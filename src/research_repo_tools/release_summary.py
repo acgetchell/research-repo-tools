@@ -35,6 +35,8 @@ def render_release_summary(
     ]
     if guarantee == "cargo-archive":
         lines.append("Cargo reproduction: passed; exact archive and tools matched" if cargo_reproduced else "Cargo reproduction: not requested")
+    if guarantee == "python-distributions" and policy.get("distributions", {}).get("index_url", "legacy") is None:
+        lines.append("Registry destination: undecided; not publishable without separate explicit approval")
     if "freshness" in selection:
         lines.append("Freshness: passed; selected run age and artifact retention checked")
     if published:

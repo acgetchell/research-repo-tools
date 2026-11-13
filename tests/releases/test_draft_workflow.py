@@ -1,17 +1,21 @@
 """Execute the documented writer against inert handoff/provider fixtures."""
 
+import contextlib
+import copy
+import io
+import os
+import shlex
 from pathlib import Path
 
 import pytest
 import yaml
 
-from research_repo_tools import release_drafts, release_interfaces, release_validation
+from research_repo_tools import cli, release_interfaces, release_validation
 from research_repo_tools.release_assets import ReleaseTarget, parse_release_target
 from research_repo_tools.release_receipts import TagSource, retrieve_draft_receipt
-from tests.releases import public_receipts_consumer
+from tests.releases import public_evidence_consumer, public_receipts_consumer
 
 SHA = "a" * 40
-REPOSITORY = "example/consumer"
 
 
 def test_documented_receipt_policy_retrieves_the_example_target(tmp_path, monkeypatch):
@@ -44,33 +48,40 @@ def test_documented_receipt_policy_retrieves_the_example_target(tmp_path, monkey
         "attempt-changed-during-download",
     ),
 )
-def test_documented_writer_requires_original_handoff_and_first_tag_intent(tmp_path, monkeypatch, scenario):
+def test_documented_writer_requires_original_handoff_and_first_tag_intent(request, monkeypatch, scenario):
     guide = Path(__file__).resolve().parents[2] / "docs/PREPARING_DRAFTS.md"
-    workflow = yaml.safe_load(guide.read_text(encoding="utf-8").split("```yaml\n", 1)[1].split("\n```", 1)[0])
+    source = guide.read_text(encoding="utf-8").split("```yaml\n", 1)[1].split("\n```", 1)[0]
+    workflow = yaml.safe_load(source)
     command = workflow["jobs"]["prepare"]["steps"][1]["run"]
-    source = command.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0]
-    monkeypatch.chdir(tmp_path)
+    case = public_evidence_consumer.TestAuthenticatedDraftWorkflow()
+    request.addfinalizer(case.doCleanups)
+    case.setUp()
+    provider = case.provider
+    monkeypatch.chdir(case.writer)
+    policy_file = case.writer / "handoff-policy.toml"
+    policy_file.write_text(command.split("<<'TOML'\n", 1)[1].split("\nTOML", 1)[0].replace("OWNER/REPO", "example/package"), encoding="utf-8", newline="\n")
+    policy = release_interfaces.load_receipt_policy(policy_file)
+    provider.tag_workflow.update(path=policy.workflow, name=policy.workflow_name)
+    provider.tag_run.update(path=policy.workflow, name=policy.workflow_name)
+    provider.tag_jobs[0].update(
+        name=policy.required_steps[0][0],
+        steps=[{"name": step, "status": "completed", "conclusion": "success"} for step in policy.required_steps[0][1]],
+        labels=["ubuntu-24.04"],
+    )
+    provider.workflow_text = source.encode("utf-8")
     for name, value in {
-        "GITHUB_REPOSITORY": REPOSITORY,
+        "GITHUB_REPOSITORY": policy.repository,
         "GITHUB_RUN_ID": "101",
         "GITHUB_RUN_ATTEMPT": "1",
-        "GITHUB_REF": "refs/tags/v1.2.3",
-        "GITHUB_SHA": SHA,
         "RELEASE_TAG": "v1.2.3",
-        "RELEASE_COMMIT": SHA,
-        "HANDOFF_ID": "31",
-        "HANDOFF_SHA256": "b" * 64,
+        "RELEASE_COMMIT": public_evidence_consumer.COMMIT,
+        "HANDOFF_ID": "301",
+        "HANDOFF_SHA256": case.selected.sha256,
+        "RUNNER_TEMP": str(case.writer),
     }.items():
         monkeypatch.setenv(name, value)
-    current = {"id": 101, "workflow_id": 7, "run_attempt": 1, "event": "push", "head_branch": "v1.2.3", "head_sha": SHA}
-    artifact = {
-        "id": 31,
-        "expired": False,
-        "name": "draft-handoff-101-1",
-        "digest": "sha256:" + "b" * 64,
-        "workflow_run": {"id": 101, "head_sha": SHA},
-    }
-    history = [dict(current)]
+    current = provider.tag_run
+    history = [copy.deepcopy(current)]
     if scenario == "prior-run":
         history.append({**current, "id": 100})
     elif scenario == "prior-run-next-page":
@@ -83,59 +94,32 @@ def test_documented_writer_requires_original_handoff_and_first_tag_intent(tmp_pa
     elif scenario == "wrong-workflow":
         history[0]["workflow_id"] = 8
     elif scenario == "artifact-digest":
-        artifact["digest"] = "sha256:" + "c" * 64
-    calls = []
+        provider.handoff_artifact["digest"] = "sha256:" + "c" * 64
+    elif scenario == "attempt-changed-during-download":
+        provider.after_handoff = lambda: current.update(run_attempt=2)
+    provider.history = history
+    original_read = provider.read
 
-    def api(endpoint, *, repository):
-        assert repository == REPOSITORY
-        calls.append(endpoint)
-        if endpoint == "actions/artifacts/31":
-            return dict(artifact)
-        if endpoint == "actions/runs/101":
-            return dict(current)
-        assert endpoint.startswith("actions/workflows/7/runs?per_page=100&page=")
-        page = int(endpoint.rsplit("=", 1)[1])
-        total = len(history) + (1 if scenario == "incomplete-history" else 0)
-        return {"total_count": total, "workflow_runs": history[(page - 1) * 100 : page * 100]}
+    def read(endpoint):
+        result = original_read(endpoint)
+        if scenario == "incomplete-history" and endpoint.startswith("actions/workflows/7/runs?"):
+            result["total_count"] += 1
+        return result
 
-    def download(repository, selected, destination, names):
-        assert repository == REPOSITORY and selected == artifact
-        assert names == ("evidence.toml", "selection.json", "notes.md")
-        destination.mkdir()
-        for name in names:
-            (destination / name).write_bytes(name.encode("ascii"))
-        if scenario == "attempt-changed-during-download":
-            current["run_attempt"] = 2
-
-    prepared = []
-    policy = object()
-
-    def prepare(root, repository, tag, commit, **kwargs):
-        assert root == tmp_path and repository == REPOSITORY and tag == "v1.2.3" and commit == SHA
-        assert kwargs == {
-            "policy": policy,
-            "expected": b"selection.json",
-            "title": "v1.2.3",
-            "notes": b"notes.md",
-            "receipt": tmp_path / "draft-receipt.json",
-            "approve": True,
-        }
-        prepared.append(tag)
-        return ReleaseTarget(repository, tag, 91, commit, tag)
-
-    monkeypatch.setattr(release_validation, "api", api)
-    monkeypatch.setattr(release_validation, "download_artifact", download)
-    monkeypatch.setattr(release_interfaces, "load_evidence_policy", lambda path: policy)
-    monkeypatch.setattr(release_drafts, "prepare_release_draft", prepare)
+    monkeypatch.setattr(provider, "read", read)
+    arguments = command.split("python -I -m research_repo_tools", 1)[1].replace("\\\n", "")
+    args = [os.path.expandvars(value) for value in shlex.split(arguments)]
+    with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as errors:
+        status = cli.main(["--root", str(case.writer), *args])
+    state = case.writer / "draft-state"
     if scenario == "first-run":
-        exec(compile(source, str(guide), "exec"), {})
-        assert prepared == ["v1.2.3"]
-        assert (tmp_path / "target.json").is_file()
+        assert status == 0, errors.getvalue()
+        assert len(provider.posts) == 1
+        assert parse_release_target((state / "target.json").read_bytes()).release_id == 91
     else:
-        with pytest.raises(ValueError):
-            exec(compile(source, str(guide), "exec"), {})
-        assert not prepared
-        assert not (tmp_path / "draft-receipt.json").exists()
-        assert not (tmp_path / "target.json").exists()
+        assert status == 1
+        assert provider.posts == []
+        assert not (state / "draft-receipt.json").exists()
+        assert not (state / "target.json").exists()
     if scenario == "prior-run-next-page":
-        assert "actions/workflows/7/runs?per_page=100&page=2" in calls
+        assert "actions/workflows/7/runs?per_page=100&page=2" in provider.requests

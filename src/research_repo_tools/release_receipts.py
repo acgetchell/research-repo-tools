@@ -172,7 +172,9 @@ def _workflow_source(policy: TagPushPolicy, source: TagSource, read: Callable[[s
     return {"blob": blob, "sha256": hashlib.sha256(payload).hexdigest()}
 
 
-def _current(policy: TagPushPolicy, source: TagSource, identifier: int, workflow: dict[str, Any], read: Callable[[str], Any]) -> dict[str, Any]:
+def _current(
+    policy: TagPushPolicy, source: TagSource, identifier: int, workflow: dict[str, Any], read: Callable[[str], Any], *, completed: bool = True
+) -> dict[str, Any]:
     run = _object(read(f"actions/runs/{identifier}"), "tag-push run")
     repository = _object(run.get("repository"), "run repository")
     head = _object(run.get("head_repository"), "run head repository")
@@ -196,8 +198,10 @@ def _current(policy: TagPushPolicy, source: TagSource, identifier: int, workflow
         or run["run_attempt"] != 1
     ):
         raise ValueError(f"expected the exact source's original tag-push run, attempt 1; {RECOVERY}")
-    if run.get("status") != "completed" or run.get("conclusion") != "success":
+    if completed and (run.get("status") != "completed" or run.get("conclusion") != "success"):
         raise ValueError(f"original tag-push run has not completed successfully; wait for that run before retrying. {RECOVERY}")
+    if run.get("status") not in ("queued", "in_progress", "completed"):
+        raise ValueError("tag-push producer lifecycle is unavailable")
     return run
 
 
