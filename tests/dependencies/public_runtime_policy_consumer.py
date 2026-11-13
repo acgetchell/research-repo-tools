@@ -259,6 +259,26 @@ class TestRuntimePolicy(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "external package location"):
             runtime_policy.verify_executing_runtime(policy, artifacts=self.bundle)
 
+    def test_executing_runtime_accepts_standard_zip_in_platform_library_directory(self) -> None:
+        policy = self.record()
+        executing = self.executing_context()
+        base = self.base / "base interpreter"
+        executing.base_prefix = str(base)
+        native_paths = executing.path.copy()
+        abi_thread = "t" if sysconfig.get_config_var("Py_GIL_DISABLED") and os.name != "nt" else ""
+        filename = f"python{sys.version_info.major}{sys.version_info.minor}{abi_thread}.zip"
+        for library in ("lib", "lib64"):
+            with self.subTest(library=library):
+                executing.platlibdir = library
+                standard_zip = (base if os.name == "nt" else base / library) / filename
+                # CPython adds this entry even when the ZIP does not exist.
+                self.assertFalse(standard_zip.exists())
+                executing.path = [*native_paths, str(standard_zip)]
+                self.assertEqual(runtime_policy.verify_executing_runtime(policy, artifacts=self.bundle), ("application", "dependency"))
+                executing.path.append(str(base / "unapproved-library" / filename))
+                with self.assertRaisesRegex(ValueError, "external package location"):
+                    runtime_policy.verify_executing_runtime(policy, artifacts=self.bundle)
+
     def test_release_context_checks_policy_before_probes_and_writer_effects(self) -> None:
         from research_repo_tools import release_runtime
         from research_repo_tools.config import load

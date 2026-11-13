@@ -178,7 +178,7 @@ def _layout(environment: Path) -> Path:
         for value in versions
     ):
         raise ValueError("runtime pyvenv.cfg Python version differs from the selected policy context")
-    sites = [environment / "Lib/site-packages"] if os.name == "nt" else list((environment / "lib").glob("python*/site-packages"))
+    sites: list[Path] = [environment / "Lib/site-packages"] if os.name == "nt" else list((environment / "lib").glob("python*/site-packages"))
     sites = [site for site in sites if site.is_dir()]
     if len(sites) != 1 or not sites[0].resolve().is_relative_to(environment.resolve()):
         raise ValueError("runtime requires one contained native site-packages directory")
@@ -363,7 +363,7 @@ def verify_executing_runtime(policy: RuntimePolicy, *, artifacts: Path) -> tuple
     native_library = Path(sys.base_prefix) / "DLLs"
     abi_thread = "t" if sysconfig.get_config_var("Py_GIL_DISABLED") and os.name != "nt" else ""
     standard_zip = (
-        Path(sys.base_prefix) if os.name == "nt" else Path(sys.base_prefix) / "lib"
+        Path(sys.base_prefix) if os.name == "nt" else Path(sys.base_prefix) / sys.platlibdir
     ) / f"python{sys.version_info.major}{sys.version_info.minor}{abi_thread}.zip"
     # CPython's Windows getpath also inserts the base executable directory.
     # These exact interpreter roots are bootstrap trust, not package locations.
