@@ -147,6 +147,26 @@ checks. Both branches must pass. Use `just --jobs 1 ci` to serialize them on a
 resource-constrained host. Installation checks exercise the console entry
 point, public process/file-publication/release-plan/performance/document-publication consumer contracts,
 imports, packaged templates, runtime dependencies, and the bundled `just` executable.
+
+For release workflow changes, execute the actual shipped shell blocks and
+transitive command arguments against isolated wheel and sdist installations.
+Keep CLI dispatch, configuration parsing and orchestration real; substitute
+bootstrap/provider transports at their external boundaries. Assert successful
+completion, retained input/output identities and supported recovery, including
+rejection of unrelated installation, builds or acquisition in inspection/retry
+phases. A YAML substring assertion alone does not establish command execution.
+Preserve root-relative configuration containment and test invalid arguments;
+do not add compatibility paths for incorrect consumer calls.
+
+Shared regressions own representative command contracts. Consumers own their
+actual recipes, workflows, configuration and published-package integration.
+Record source/package identities, native results and authorized hosted cold/warm
+setup and complete-job timings in the owning PR or release/adoption tracker.
+Provider fixtures and request counts do not establish hosted duration. Keep
+unperformed checks pending and reuse evidence only when its inputs and execution
+context still match. See the [consumer adoption checks](docs/PREPARING_DRAFTS.md#consumer-adoption-checks)
+for release workflow migration requirements.
+
 Installed public suites also cover complete-directory rollback/recovery, SARIF
 selection/indexing, and batched Semgrep policy and paired-report coverage.
 Git inspection consumers run from source and both installed formats. Disposable

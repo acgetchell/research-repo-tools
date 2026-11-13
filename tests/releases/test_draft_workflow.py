@@ -14,6 +14,7 @@ from research_repo_tools import cli, release_interfaces, release_validation
 from research_repo_tools.release_assets import ReleaseTarget, parse_release_target
 from research_repo_tools.release_receipts import TagSource, retrieve_draft_receipt
 from tests.releases import public_evidence_consumer, public_receipts_consumer
+from tests.releases.public_evidence_consumer import TestDraftWorkflowShell as TestDraftWorkflowShell
 
 SHA = "a" * 40
 

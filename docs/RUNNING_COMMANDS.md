@@ -76,9 +76,11 @@ arguments in lexicographic order.
 | `just tectonic COMMAND...` | Discover or export existing native dependency environments |
 | `just templates ARGS...` | Export a packaged configuration or workflow template |
 | `just tooling-run ARGS...` | Verify a released version or GitHub commit and run isolated tooling |
-| `just tools-check` | Check installed tools and versions without installing them |
-| `just tools-export` | Verify tools and append their environment to `GITHUB_ENV` |
+| `just tools-check [--tool NAME]... [--json]` | Check installed tools and versions without installing them |
+| `just tools-export [--tool NAME]... [--file PATH]` | Verify tools and append their environment to `GITHUB_ENV` or an explicit file |
 | `just tools-python-check` | Check inherited Python tool declarations, lock, and executable versions without changes |
+| `just tools-run [--tool NAME]... -- COMMAND...` | Run a command with verified managed tools |
+| `just tools-sync [--tool NAME]... [--dry-run]` | Install and verify the catalog or selected tools without synchronizing Python groups |
 | `just tools-sync-binaries` | Install and verify pinned release binaries without package synchronization or dependency builds |
 | `just update` | Upgrade tools, then dependencies and environments, and audit the final locks |
 | `just update-actions [ARGS...]` | Opt-in Actions pin update; use `--dry-run` or `--check` to preview the selected scope |

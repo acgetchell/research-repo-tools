@@ -104,6 +104,43 @@ With v0.2.7, managed Cargo tool installs reuse compilation output across setup
 and update runs while retaining exact-version installation and executable checks.
 See [local and CI cache configuration][cargo-cache] before adopting it downstream.
 
+### Selecting tools for a job
+
+After verified v0.2.9 publication, a narrow CI job can select exact keys from its
+existing tool catalog. After the one-time setup and adopting the matching Just
+template, use the same repeatable `--tool` selection for setup, verification,
+export and execution. For example, with a declared `zizmor` pin:
+
+```sh
+just tools-sync --tool zizmor
+just tools-check --tool zizmor
+just tools-export --tool zizmor
+just tools-run --tool zizmor -- zizmor .github/workflows
+```
+
+Export appends checked assignments to `GITHUB_ENV`; locally pass `--file PATH`.
+Repeat `--tool` for multiple tools. `--tool cargo` selects only pinned minimal
+Rust/Cargo for packaging; `--tool cargo-edit` selects the package providing
+`cargo upgrade`. Binary selections such as `gitleaks` need no Rust; Cargo tools
+add minimal Rust without the catalog's extra components or targets. Omission
+keeps full contributor behavior. Selection does not install native libraries or
+synchronize project Python groups; retain those prerequisites in the owning job.
+
+MCMC can replace its scanner-filtering Python heredoc with these bootstrap-safe
+CI commands, passing its existing validated scanner name to both selections:
+
+```sh
+uv run --locked --managed-python --only-group tooling research-repo-tools toolchain sync --tool "$SCANNER"
+uv run --locked --managed-python --only-group tooling research-repo-tools toolchain export --tool "$SCANNER"
+```
+
+Keep the scanner allowlist, declared pins, authentication, managed-home
+and build-cache settings, workflow permissions and scheduling in MCMC. Verify
+the installed supplier before removing that adapter. The [API contract](docs/toolchain-api.md#selected-managed-tools)
+supports the same selection for Python callers.
+
+### Additional setup and cleanup
+
 Semgrep consumers request the `semgrep` extra on their shared package pin,
 retain the shared Python 3.15 selector, and adopt the package's
 [shared dependency overrides][rust-scans]
