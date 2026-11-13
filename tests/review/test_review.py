@@ -2,14 +2,20 @@
 
 import subprocess
 import sys
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from unittest.mock import Mock
 
 import pytest
+from packaging.version import Version
 
 from research_repo_tools import cli, process, review
+from research_repo_tools._review_identity import ReviewIdentity
+from research_repo_tools._review_stream import stream_review
+from research_repo_tools.review_protocol import CompletedReview, ConsentRequired, FailedReview
 
 SHA = "a" * 40
+REAL_PROVIDER = review._provider
 
 
 @pytest.fixture
@@ -22,10 +28,12 @@ def root(tmp_path: Path) -> Path:
 @pytest.fixture
 def commands(monkeypatch: pytest.MonkeyPatch) -> tuple[Mock, Mock]:
     git = Mock(side_effect=lambda args, **kwargs: subprocess.CompletedProcess(args, 0, SHA + ("\trefs/heads/main\n" if "ls-remote" in args else "\n")))
-    rabbit = Mock(return_value=subprocess.CompletedProcess([], 0))
+    rabbit = Mock(return_value=CompletedReview(0, ()))
     monkeypatch.setattr(review, "get_safe_executable", lambda name: "/tools/coderabbit")
     monkeypatch.setattr(review, "run_git_command", git)
-    monkeypatch.setattr(review, "run_safe_command", rabbit)
+    monkeypatch.setattr(review, "_provider", lambda: review._Provider(Path("/tools/coderabbit"), Version("0.9.5"), "0" * 64))
+    monkeypatch.setattr(review, "_observe", lambda root, base, provider, env: ReviewIdentity(root, "0" * 64, SHA, SHA if base else None, 2))
+    monkeypatch.setattr(review, "stream_review", rabbit)
     return git, rabbit
 
 
@@ -37,14 +45,14 @@ def test_default_branch_verifies_remote_and_streams(root: Path, commands: tuple[
         ["--no-pager", "ls-remote", "--exit-code", "origin", "refs/heads/main"],
     ]
     assert all(call.kwargs["cwd"] == root for call in git.call_args_list)
-    rabbit.assert_called_once_with(
-        "/tools/coderabbit",
+    rabbit.assert_called_once()
+    assert rabbit.call_args.args == (
+        Path("/tools/coderabbit"),
         ["review", "--agent", "--include-untracked", "--base=origin/main", "--config", str(root / "AGENTS.md"), str(root / ".coderabbit.yaml")],
-        cwd=root,
-        capture_output=False,
-        check=False,
-        timeout=None,
     )
+    assert rabbit.call_args.kwargs["cwd"] == root
+    assert rabbit.call_args.kwargs["timeout"] is None
+    assert callable(rabbit.call_args.kwargs["output"])
 
 
 @pytest.mark.parametrize("base", ["main", "feature/$(touch-pwned);literal", "a" * 40])
@@ -56,7 +64,7 @@ def test_explicit_base_is_one_argument_and_never_queries_remote(root: Path, comm
     assert f"--base={base}" in rabbit.call_args.args[1]
 
 
-def test_uncommitted_skips_git_and_accepts_yml(root: Path, commands: tuple[Mock, Mock]) -> None:
+def test_uncommitted_skips_base_lookup_and_accepts_yml(root: Path, commands: tuple[Mock, Mock]) -> None:
     (root / ".coderabbit.yaml").rename(root / ".coderabbit.yml")
     git, rabbit = commands
     assert cli.main(["--root", str(root), "review", "uncommitted"]) == 0
@@ -118,6 +126,7 @@ def test_instruction_errors_stop_before_commands(root: Path, commands: tuple[Moc
 def test_missing_cli_is_actionable(root: Path, commands: tuple[Mock, Mock], monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
     missing = Mock(side_effect=process.ExecutableNotFoundError("missing"))
     monkeypatch.setattr(review, "get_safe_executable", missing)
+    monkeypatch.setattr(review, "_provider", REAL_PROVIDER)
     assert cli.main(["--root", str(root), "review", "branch"]) == 1
     assert "Install and authenticate it explicitly" in capsys.readouterr().err
     commands[0].assert_not_called()
@@ -126,7 +135,7 @@ def test_missing_cli_is_actionable(root: Path, commands: tuple[Mock, Mock], monk
 
 @pytest.mark.parametrize("status,expected", [(0, 0), (7, 7), (-15, 143)])
 def test_exit_status(root: Path, commands: tuple[Mock, Mock], status: int, expected: int) -> None:
-    commands[1].return_value = subprocess.CompletedProcess([], status)
+    commands[1].return_value = CompletedReview(0, ()) if status == 0 else FailedReview(status, "provider failure")
     assert cli.main(["--root", str(root), "review", "uncommitted"]) == expected
 
 
@@ -141,14 +150,17 @@ def test_real_child_inherits_streams_and_has_no_default_timeout(
 ) -> None:
     script = root / "fake_coderabbit.py"
     script.write_text(
-        "import sys, time\nprint('progress', flush=True)\ntime.sleep(0.1)\nprint('service unavailable', file=sys.stderr)\nsys.exit(9)\n", newline="\n"
+        'import sys, time\nprint(\'{"type":"status","message":"progress"}\', flush=True)\ntime.sleep(0.1)\nprint(\'service unavailable\', file=sys.stderr)\nsys.exit(9)\n',
+        newline="\n",
     )
     monkeypatch.setattr(process, "DEFAULT_COMMAND_TIMEOUT_SECONDS", 0.001)
 
-    def child(command: str, args: list[str], *, cwd: Path, **kwargs: object) -> subprocess.CompletedProcess[str]:
-        return process.run_safe_command(sys.executable, [str(script), *args], cwd=cwd, **kwargs)
+    def child(
+        command: Path, args: list[str], *, cwd: Path, env: Mapping[str, str], output: Callable[[bytes], None], timeout: float | None
+    ) -> CompletedReview | ConsentRequired | FailedReview:
+        return stream_review(Path(sys.executable), [str(script), *args], cwd=cwd, env=env, output=output, timeout=timeout)
 
-    monkeypatch.setattr(review, "run_safe_command", child)
+    monkeypatch.setattr(review, "stream_review", child)
     assert cli.main(["--root", str(root), "review", "uncommitted"]) == 9
     output = capfd.readouterr()
     assert "progress" in output.out
@@ -163,6 +175,11 @@ def test_real_child_inherits_streams_and_has_no_default_timeout(
         (["review"], ["branch", "--base=origin/main"]),
         (["review", "topic/$(touch SHOULD_NOT_EXIST);literal"], ["branch", "--base=topic/$(touch SHOULD_NOT_EXIST);literal"]),
         (["review-uncommitted"], ["uncommitted"]),
+        (["review-deny", "pending $(touch SHOULD_NOT_EXIST).json"], ["deny", "pending $(touch SHOULD_NOT_EXIST).json"]),
+        (
+            ["review-resume", "pending.json", "--terms-source", "confirmed $(touch SHOULD_NOT_EXIST)"],
+            ["resume", "pending.json", "--terms-source", "confirmed $(touch SHOULD_NOT_EXIST)"],
+        ),
     ],
 )
 def test_just_recipe_forwards_arguments_without_shell_expansion(
@@ -190,7 +207,7 @@ def test_just_recipe_forwards_arguments_without_shell_expansion(
 def test_reviews_never_authorize_credits_or_retry(root: Path, commands: tuple[Mock, Mock], status: int, base: str | None) -> None:
     """Provider failures/consent exits must not become an automatic paid retry."""
     rabbit = commands[1]
-    rabbit.return_value = subprocess.CompletedProcess([], status)
+    rabbit.return_value = CompletedReview(0, ()) if status == 0 else FailedReview(status, "provider failure")
     assert review.run(root, base=base) == status
     rabbit.assert_called_once()
     assert "--use-credits" not in rabbit.call_args.args[1]

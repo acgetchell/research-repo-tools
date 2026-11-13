@@ -146,9 +146,13 @@ Review commands require Git and an externally installed, authenticated CodeRabbi
 CLI. `review branch --base origin/main` verifies the cached base against the remote;
 `review uncommitted` does not query a remote. Both use the configured consumer root
 and require its `AGENTS.md` and exactly one CodeRabbit YAML configuration. See the
-[review contract and recipes](RUNNING_CHECKS.md#coderabbit-review). CodeRabbit output is
-streamed without a wrapper timeout. Its exit status propagates; signal termination
-maps to 128 plus the signal number, and keyboard interruption returns 130.
+[review contract](review-api.md) and [consumer recipes](../README.md#coderabbit-reviews).
+CodeRabbit output streams without a timeout by default; branch/uncommitted accept
+`--pending PATH` and `--timeout SECONDS`. `review deny PENDING` consumes a quote
+without a provider call. `review resume PENDING` requires the exact `--approve`
+identity, independently confirmed `--currency`, `--review-kind`, `--terms-source`
+and explicit `--accept-unenforced-quote`. It cannot enforce a server price cap.
+Review-specific terminal JSON and exit states are documented in the contract.
 
 File-changing commands operate only when invoked: dependency and release updates,
 changelog generation/normalization/archiving, template output, local tagging,

@@ -438,6 +438,12 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             just_suite = consumer / "public_just_consumer.py"
             just_suite.write_bytes((ROOT / "tests/utilities/public_just_consumer.py").read_bytes())
             run_consumer_suite(python, [str(just_suite)], cwd=consumer, env=local_env)
+            paths_suite = consumer / "public_path_identity_consumer.py"
+            paths_suite.write_bytes((ROOT / "tests/utilities/public_path_identity_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(paths_suite)], cwd=consumer, env=local_env)
+            review_suite = consumer / "public_review_consumer.py"
+            review_suite.write_bytes((ROOT / "tests/review/public_review_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(review_suite)], cwd=consumer, env=local_env)
             release_suite = consumer / "public_release_consumer.py"
             release_suite.write_bytes((ROOT / "tests/releases/public_release_consumer.py").read_bytes())
             run_consumer_suite(python, [str(release_suite)], cwd=consumer, env=local_env)

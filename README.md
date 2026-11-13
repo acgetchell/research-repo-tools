@@ -453,6 +453,10 @@ consumer configuration or optional dependencies described in their guides.
 | `just files check-lines --limit 160 --include '*.md'` | Check selected raw text without formatting |
 | `just help` | Discover recipes supplied by your installed template |
 | `just notebook-inspect notebooks/analysis.ipynb --no-preview` | Inspect notebook structure without executing cells |
+| `just review` | Run an opt-in CodeRabbit review; stop when paid consent is required |
+| `just review-deny PENDING` | Decline a saved review quote |
+| `just review-resume PENDING ARGS...` | Attempt one explicitly approved paid review with an unenforced quote |
+| `just review-uncommitted` | Review staged, unstaged and non-ignored untracked changes |
 | `just setup` | Recreate the environment from existing declarations |
 | `just tools-check` | Verify installed tools and versions without installing |
 | `just update` | Upgrade declared tools and dependencies, then audit final locks |
@@ -461,6 +465,55 @@ The [complete command and capability reference][commands] is organized lexicogra
 `just help` remains the authority for the recipes actually merged into your project.
 The [packaged templates][just-template] provide thin wrappers; consumers extend
 checks with their own Rust, scientific and deployment requirements.
+
+### CodeRabbit reviews
+
+Install and authenticate [CodeRabbit](https://docs.coderabbit.ai/cli) separately;
+RRT does neither. Keep usage-based continuation **On demand**. Ordinary reviews
+never enable credits or automatically retry. The opt-in recipes are outside
+`just check` and `just ci`:
+
+```sh
+just review
+just review main
+just review-uncommitted
+```
+
+The default branch base is verified against origin; explicit bases are checked
+locally. The consumer root needs regular `AGENTS.md` and exactly one CodeRabbit
+YAML configuration. Output streams as agent NDJSON. Completion requires CodeRabbit
+0.7.7 or newer; 0.7.6 supports quote-and-stop only.
+
+A consent-required result returns status 3 and prints the repository, base,
+content identity, original provider quote, saved `pending_path` and
+`pending_identity`. The local selected-path count is not a billable count. Show
+the person the scope, initial/incremental kind, quoted billable files and maximum
+charge with currency. The currently verified consent event omits currency and
+review kind; independently confirm those facts or remain stopped. Consumer
+instructions own per-review approval and restrictions on large paid reviews.
+
+Paid resume is a **new invocation without a provider-enforced price cap or
+content snapshot**. Only after explicit approval of that limitation and the exact
+saved quote, use the following form (the currency and kind here are examples,
+not values RRT infers):
+
+```sh
+just review-resume /absolute/pending.json --approve SAVED_PENDING_SHA256 \
+  --currency USD --review-kind incremental \
+  --terms-source 'Where this currency and review kind were confirmed' \
+  --accept-unenforced-quote
+```
+
+It consumes approval once, refreshes without credits, and checks current inputs
+and quote before enabling credits. Changes require a new quote and approval.
+If a hard cap is required, do not resume. For refusal, run
+`just review-deny /absolute/pending.json`. After uncertain paid completion,
+reconcile CodeRabbit usage before requesting another review; retain the pending
+file and its `.used` receipt. Do not remove the receipt to reuse approval.
+
+See the [review API and protocol contract][review-api] for compatibility,
+limits, typed results, state retention and residual races. Local checks and agent
+instructions are cooperative controls; they do not prevent direct CLI bypasses.
 
 ### Actions pin consistency
 
@@ -952,6 +1005,7 @@ BSD-3-Clause. See [LICENSE][license].
 [release]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_RELEASE_METADATA.md
 [reports-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/PUBLISHING_REPORTS.md
 [reuse-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_CI.md
+[review-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/review-api.md
 [rust-scans]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_CHECKS.md#rust-documentation-scans
 [security-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/security-api.md
 [timing-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/command-timing-api.md

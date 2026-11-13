@@ -62,6 +62,8 @@ arguments in lexicographic order.
 | `just release-verify TAG [ARGS...]` | Verify the exact stable registry version and GitHub Release/assets |
 | `just release-version-check` | Check synchronized metadata and complete dated release notes |
 | `just review [base]` | Review branch and local changes; default to verified `origin/main` |
+| `just review-deny PENDING` | Consume a saved quote without invoking CodeRabbit |
+| `just review-resume PENDING ARGS...` | Attempt one explicitly approved review with an unenforced quote |
 | `just review-uncommitted` | Review staged, unstaged, and non-ignored untracked changes |
 | `just security` | Audit selected lockfiles, then scan for secrets |
 | `just security-osv LOCKFILE...` | Audit explicitly selected uv.lock/Cargo.lock files |
@@ -119,7 +121,7 @@ global root/configuration options before the group; consult
 | Performance | `performance assemble-suites`, `assets`, `baseline`, `capture`, `command-time`, `compare`, `convert`, `discover`, `export`, `extract`, `fetch`, `first-release`, `host`, `measure`, `pack-suite`, `prepare`, `profile`, `promote`, `publish`, `readme`, `release`, `release-draft`, `release-upload`, `render`, `verify`, `verify-saved` | Complete configured measurement, retained evidence, release assets and publication |
 | Python | `python check`, `fix`, `typecheck` | Complete tracked/nonignored inventory; native Ruff/ty policy; explicit fixes only |
 | Releases | `release assets`, `check`, `dependencies`, `dependency-builds`, `evidence`, `gate`, `publish`, `registry`, `reuse`, `update`, `verify` | Metadata preparation, published-only dependency gates and exact registry/GitHub verification |
-| Review | `review branch`, `review uncommitted` | Opt-in CodeRabbit review with verified default base and streamed findings |
+| Review | `review branch`, `review deny`, `review resume`, `review uncommitted` | Opt-in review, typed quote-and-stop and one-use explicit paid resume |
 | SARIF | `sarif split` | Consumer-selected drivers/namespaces, corrected rule indices and complete output generations |
 | Security | `security osv`, `secrets` | Managed OSV/Gitleaks, explicit inputs, full history, redacted native reports |
 | Semgrep | `semgrep check-fixtures`, `check-reports`, `scan`, `setup` | Validate consumer rules, explicit inventory, reports and fixture expectations |

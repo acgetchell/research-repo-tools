@@ -3,8 +3,15 @@
 Part of the [supported interface contract](api.md). Use the [task guides](../README.md#capability-index)
 for setup and ordinary workflows.
 
+- [Native path observations](#native-path-observations)
 - [Raw text API](#raw-text-api)
 - [Python file-publication API](#python-file-publication-api)
+
+## Native path observations
+
+For missing paths, exact regular-file bytes and executable mode, or literal
+symlink targets, use the separate [path identity API](path-identity-api.md).
+It does not broaden `evidence.fingerprint_files` or perform Git selection.
 
 ## Raw text API
 
