@@ -455,6 +455,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             builds_suite = consumer / "public_builds_consumer.py"
             builds_suite.write_bytes((ROOT / "tests/dependencies/public_builds_consumer.py").read_bytes())
             run_consumer_suite(python, [str(builds_suite)], cwd=consumer, env=local_env)
+            policy_suite = consumer / "public_runtime_policy_consumer.py"
+            policy_suite.write_bytes((ROOT / "tests/dependencies/public_runtime_policy_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(policy_suite)], cwd=consumer, env=local_env)
             runtime_suite = consumer / "public_tooling_runtime_consumer.py"
             runtime_suite.write_bytes((ROOT / "tests/toolchain/public_tooling_runtime_consumer.py").read_bytes())
             run_consumer_suite(python, [str(runtime_suite)], cwd=consumer, env=local_env)

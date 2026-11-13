@@ -11,6 +11,7 @@ from research_repo_tools import release_credentials, release_validation, toolcha
 from research_repo_tools._git_checkout import _in_checkout
 from research_repo_tools.config import Config
 from research_repo_tools.process import ExecutableNotFoundError, resolve_executable
+lazy from research_repo_tools.runtime_policy import RuntimePolicy
 
 __all__ = ["isolated_release_runtime"]
 
@@ -72,14 +73,26 @@ def _prepare(settings: Config, checkout: Path) -> tuple[dict[str, str], Path]:
 
 
 @contextmanager
-def isolated_release_runtime(settings: Config, *, checkout: Path | None = None) -> Iterator[None]:
+def isolated_release_runtime(
+    settings: Config, *, checkout: Path | None = None, policy: RuntimePolicy | None = None, artifacts: Path | None = None
+) -> Iterator[None]:
     """Scope managed tool selection around a single-threaded release entry point.
 
     Call from Python -I launched in a trusted installed environment outside the
     observed checkout. The caller still owns the exact package selection and
-    independent release assertions. No project setup or sync runs here.
+    independent release assertions. With policy/artifacts, verify the complete
+    executing graph against an independently approved runtime manifest first.
+    No project setup or sync runs here.
     """
     root = (settings.root if checkout is None else checkout).resolve(strict=True)
+    if (policy is None) != (artifacts is None):
+        raise ValueError("runtime policy and artifact directory must be supplied together")
+    if policy is not None and artifacts is not None:
+        from research_repo_tools.runtime_policy import verify_executing_runtime
+
+        if not _external(artifacts.absolute(), root):
+            raise ValueError("runtime policy artifacts must be outside the observed checkout")
+        verify_executing_runtime(policy, artifacts=artifacts)
     env, gh = _prepare(settings, root)
     originals = dict(os.environ)
     token = release_validation._GH_EXECUTABLE.set(str(gh))

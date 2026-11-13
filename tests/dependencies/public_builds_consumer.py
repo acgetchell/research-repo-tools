@@ -184,6 +184,63 @@ class TestSourceBuilds(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "missing"):
             verify_python_environment(self.graph)
 
+    def test_runtime_bundle_exports_verified_native_wheel_without_signing_key(self) -> None:
+        from research_repo_tools import runtime_policy_build
+        from research_repo_tools.runtime_policy import verify_runtime
+        from research_repo_tools.runtime_policy_build import record_runtime_policy
+
+        self.build()
+        destination = self.root.parent / "runtime bundle"
+        with patch.object(runtime_policy_build, "_check_lock"):
+            policy = record_runtime_policy(self.root, destination, provider=self.provider)
+        self.assertEqual(verify_runtime(policy, environment=self.root / ".venv", artifacts=destination), ("sample-pkg",))
+        self.assertNotIn("key", {path.name for path in destination.iterdir()})
+        self.assertNotIn(str(self.store).encode(), policy.payload)
+        receipt = next(self.store.glob("*.json"))
+        receipt.unlink()
+        # The already approved portable bundle needs no machine-local key, but
+        # a new recording cannot substitute wheel/version equality for evidence.
+        self.assertEqual(len(verify_runtime(policy, environment=self.root / ".venv", artifacts=destination)), 1)
+        retained = next(destination.glob("*.receipt.json"))
+        retained_bytes = retained.read_bytes()
+        retained.unlink()
+        with self.assertRaisesRegex(ValueError, "regular file"):
+            verify_runtime(policy, environment=self.root / ".venv", artifacts=destination)
+        retained.write_bytes(retained_bytes + b" ")
+        with self.assertRaisesRegex(ValueError, "SHA-256"):
+            verify_runtime(policy, environment=self.root / ".venv", artifacts=destination)
+        retained.write_bytes(retained_bytes)
+        with patch.object(runtime_policy_build, "_check_lock"), self.assertRaisesRegex(ValueError, "missing"):
+            record_runtime_policy(self.root, self.root.parent / "missing receipt bundle", provider=self.provider)
+
+    def test_runtime_bundle_rejects_stale_native_build_evidence(self) -> None:
+        from research_repo_tools import runtime_policy_build
+        from research_repo_tools.runtime_policy_build import record_runtime_policy
+
+        self.build()
+        with (self.root / "pyproject.toml").open("ab") as stream:
+            stream.write(b"\n# changed build inputs\n")
+        with patch.object(runtime_policy_build, "_check_lock"), self.assertRaisesRegex(ValueError, "stale"):
+            record_runtime_policy(self.root, self.root.parent / "stale runtime bundle", provider=self.provider)
+
+    def test_runtime_bundle_authenticates_the_copied_build_log_bytes(self) -> None:
+        from research_repo_tools import runtime_policy_build
+
+        self.build()
+        destination = self.root.parent / "changed log bundle"
+        original = runtime_policy_build.read_regular
+
+        def changed_copy(path, limit):
+            payload = original(path, limit)
+            # The receipt verifier read the real authenticated log. Model a
+            # changed observation at the subsequent retained-byte read only.
+            return payload + b"changed between reads" if path.suffix == ".log" else payload
+
+        with patch.object(runtime_policy_build, "_check_lock"), patch.object(runtime_policy_build, "read_regular", side_effect=changed_copy):
+            with self.assertRaisesRegex(ValueError, "SHA-256"):
+                runtime_policy_build.record_runtime_policy(self.root, destination, provider=self.provider)
+        self.assertFalse(destination.exists())
+
     def test_bad_source_hash_never_installs_or_issues_receipt(self) -> None:
         self.provider.source += b"tampered"
         with patch.object(dependency_builds, "_build_environment") as build, self.assertRaisesRegex(ValueError, "differs|missing"):

@@ -241,6 +241,95 @@ The wrapper centralizes availability checks and isolated uv invocation;
 normal dependency pins remain in the manifest/lock, and release gates verify
 both installations. It never rewrites a consumer's pins or upgrades tooling.
 
+### Reproducible isolated release runtimes
+
+The stronger runtime-policy capability selects a **dedicated runtime lock**,
+independent of the consumer's development lock. A reviewed manifest binds the
+complete installed dependency graph, exact wheel bytes, Python/platform, and
+any required native source-build evidence. The ordinary isolated wrapper above
+continues to resolve its transitive dependencies independently; `--locked` with
+`--no-project` does not turn that environment into a locked runtime.
+
+Use a trusted bootstrap installation outside the consumer checkout, with the
+matching `release-runtime` recipe from the shipped Justfile. After the supplying
+v0.2.9 release is published, resolve the dedicated project there:
+
+```sh
+just release-runtime resolve --directory /trusted/runtime-project --require 'research-repo-tools==0.2.9'
+```
+
+Keep uv as a prerequisite. Add these bootstrap recipes alongside the trusted
+Justfile; uv details remain inside recipes. `runtime-sync` installs only wheels
+from the lock. `runtime-builds` supports the existing explicit native-build
+policy, using the bootstrap interpreter rather than executing the target venv:
+
+```just
+runtime-builds project:
+    uv run --locked research-repo-tools --root "$1" release dependency-builds
+
+runtime-lock project:
+    uv lock --no-config --no-build --project "$1"
+
+runtime-sync project *args:
+    runtime_project="$1"; shift; uv sync --locked --no-config --no-default-groups --no-build --project "$runtime_project" "$@"
+```
+
+For a wheel-only graph, run `just runtime-sync /trusted/runtime-project`. If
+native source builds are required, first configure the dedicated project's
+`dependency-sources.toml` and build group using the
+[source-build contract](#source-built-python-dependencies). Run
+`just runtime-lock /trusted/runtime-project`, then `just runtime-sync` with
+that project and `--no-install-package NAME` for each selected source build.
+This creates the venv and installs the remaining locked dependencies. Then run
+`just runtime-builds /trusted/runtime-project` to build/install the selected
+native wheels and authenticate their evidence.
+Record from the separate bootstrap installation; do not launch the target venv
+or compile bytecode before recording:
+
+```sh
+just release-runtime record --project /trusted/runtime-project --output /trusted/runtime-bundle
+```
+
+Review the dedicated lock, `runtime.json`, retained wheels and native receipts/logs.
+Pin the printed SHA-256 in protected workflow configuration or another independently
+authenticated handoff. A digest supplied alongside an untrusted bundle is not
+authentication. Transfer the bundle, **never the machine-local signing key**.
+The selected Python patch version and platform must match on the receiving host:
+
+```sh
+just release-runtime install --policy /trusted/runtime-bundle/runtime.json --sha256 APPROVED_SHA256 --directory /trusted/writer
+just release-runtime verify --policy /trusted/runtime-bundle/runtime.json --sha256 APPROVED_SHA256 --environment /trusted/writer
+```
+
+Installation uses the approved manifest's hashes and retained wheels offline,
+then verifies the installed graph; it does not trust an editable requirements file.
+An existing destination is never overwritten. If installation fails, preserve it
+for inspection and retry with a new directory after repairing the reported input.
+
+Launch release writers through a recipe using the exact installed interpreter,
+`-I -B`, and the approved manifest. On Windows, select `Scripts/python.exe` in
+place of `bin/python`. For example, define the following in the trusted Justfile:
+
+```just
+runtime-release python policy digest root +args:
+    runtime_python="$1"; runtime_policy="$2"; runtime_digest="$3"; runtime_root="$4"; shift 4; "$runtime_python" -I -B -m research_repo_tools.cli --root "$runtime_root" release --isolated-runtime --runtime-policy "$runtime_policy" --runtime-policy-sha256 "$runtime_digest" "$@"
+```
+
+Pass the existing `assets`, `evidence` or other release arguments unchanged.
+The same prefix supports candidate/native evidence, authenticated draft preparation,
+and checkout-free attachment writers. Keep standalone controller configuration
+outside the observed checkout and pass its existing `--checkout` argument where
+required. The Python API accepts `policy=` and `artifacts=` on
+`isolated_release_runtime`; [runtime policy API](docs/runtime-policy-api.md)
+describes all public functions and trust boundaries.
+
+This is an additional opt-in runtime guarantee. Existing dependency, native
+validation, release-identity and publication-approval gates still apply. Exact
+Git-source development rehearsal remains supported through `tooling-run` without
+`--release-intent`; it does not produce a registry runtime policy or publication
+authorization. Consumer migration and hosted setup timing follow the supplying
+package's verified publication in their own adoption trackers.
+
 ## First workflow
 
 After setup, list your recipes and check Markdown source lines in the consumer:

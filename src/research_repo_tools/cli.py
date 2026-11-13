@@ -157,9 +157,14 @@ def parser() -> argparse.ArgumentParser:
         python.add_parser(action).add_argument("--timeout", type=float, default=300, help="positive per-batch timeout in seconds (default: 300)")
     release_group = groups.add_parser("release", help="prepare, check, publish, and verify reviewed releases")
     release_group.add_argument("--isolated-runtime", action="store_true", help="select managed tools outside the observed checkout; requires Python -I")
+    release_group.add_argument(
+        "--runtime-policy", type=Path, help="independently approved runtime.json beside its wheels; requires --isolated-runtime and Python -I -B"
+    )
+    release_group.add_argument("--runtime-policy-sha256", help="independently trusted digest of the runtime policy")
     release = release_group.add_subparsers(dest="action", required=True)
     from research_repo_tools.release_interfaces import add_commands as add_release_assets
     from research_repo_tools.release_interfaces import add_evidence_commands
+    from research_repo_tools.runtime_policy_cli import add_commands as add_runtime_commands
 
     add_release_assets(release)
     command = release.add_parser("check")
@@ -196,6 +201,7 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--output", type=Path, required=True, help="new approval file outside the reviewed checkout; never overwrite an existing selection")
     command.add_argument("--pull-request", type=int, required=True)
     command.add_argument("--run-id", type=int, required=True)
+    add_runtime_commands(release)
     command = release.add_parser("update")
     command.add_argument("version")
     command.add_argument("--date")
@@ -783,6 +789,10 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
 
         return review.run(settings.root, base=args.base if args.action == "branch" else None)
     if args.group == "release":
+        if args.action == "runtime":
+            from research_repo_tools.runtime_policy_cli import run as run_runtime
+
+            return run_runtime(args, settings)
         if args.action == "dependency-builds":
             from research_repo_tools.dependency_builds import prepare_dependency_builds
 
@@ -946,10 +956,26 @@ def main(argv: list[str] | None = None) -> int:
         expected_errors = (ExecutableNotFoundError, OSError, ValueError, TypeError, RuntimeError, subprocess.SubprocessError)
         try:
             settings = config.load(args.config, args.root)
+            runtime_policy = None
+            runtime_artifacts = None
+            if args.group == "release" and (args.runtime_policy is not None or args.runtime_policy_sha256 is not None):
+                from research_repo_tools.dependency_build_receipts import read_regular
+                from research_repo_tools.runtime_policy import MAX_POLICY_BYTES, parse_runtime_policy
+
+                if not args.isolated_runtime or args.runtime_policy is None or args.runtime_policy_sha256 is None:
+                    raise ValueError("--runtime-policy and --runtime-policy-sha256 require each other and --isolated-runtime")
+                policy_path = settings.path(str(args.runtime_policy))
+                runtime_policy = parse_runtime_policy(read_regular(policy_path, MAX_POLICY_BYTES), expected_sha256=args.runtime_policy_sha256)
+                runtime_artifacts = policy_path.parent
             if args.group == "release" and args.isolated_runtime:
                 from research_repo_tools.release_runtime import isolated_release_runtime
 
-                streams.enter_context(isolated_release_runtime(settings, checkout=getattr(args, "checkout", None)))
+                if runtime_policy is None:
+                    streams.enter_context(isolated_release_runtime(settings, checkout=getattr(args, "checkout", None)))
+                else:
+                    streams.enter_context(
+                        isolated_release_runtime(settings, checkout=getattr(args, "checkout", None), policy=runtime_policy, artifacts=runtime_artifacts)
+                    )
             return run(args, settings)
         except ExceptionGroup as error:
             expected, unexpected = error.split(expected_errors)

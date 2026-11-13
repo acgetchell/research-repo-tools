@@ -92,6 +92,7 @@ including changelog and release recipes.
 | `just release-notes TAG` | Print reviewed generated release notes |
 | `just release-publish TAG` | Approve a validated draft GitHub Release and trigger its registry workflow |
 | `just release-reuse COMMIT ARGS...` | Save verified PR source-check evidence for an explicit squash release commit |
+| `just release-runtime COMMAND...` | Resolve, record, install or verify a dedicated isolated runtime |
 | `just release-verify TAG [ARGS...]` | Verify the exact registry version and GitHub Release/assets |
 | `just release-version-check` | Check synchronized metadata and complete dated release notes |
 | `just review [base]` | Run opt-in CodeRabbit review of branch and local changes |
