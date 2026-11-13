@@ -26,6 +26,7 @@ from packaging.utils import canonicalize_name, parse_wheel_filename
 from packaging.version import Version
 
 from research_repo_tools._dependency_probe import MAX_NATIVE_BYTES, distribution_inventory, inspect_distribution
+from research_repo_tools._venv_config import isolated_configuration
 from research_repo_tools.dependency_build_receipts import read_regular
 from research_repo_tools.dependency_provenance import verify_wheel_payload
 from research_repo_tools.evidence import _digest, _load_json, sha256, verify_sha256
@@ -156,16 +157,7 @@ def _layout(environment: Path) -> Path:
     if environment.is_symlink() or environment.is_junction():
         raise ValueError("runtime environment must not be a link")
     configuration = read_regular(environment / "pyvenv.cfg", 65536).decode("utf-8")
-    fields: dict[str, str] = {}
-    for line in configuration.splitlines():
-        key, separator, value = line.partition("=")
-        if separator:
-            key, value = key.strip().casefold(), value.strip()
-            if key in fields:
-                raise ValueError("runtime pyvenv.cfg contains duplicate settings")
-            fields[key] = value
-    if fields.get("include-system-site-packages", "").casefold() != "false":
-        raise ValueError("runtime requires include-system-site-packages explicitly set to false")
+    fields = isolated_configuration(configuration)
     versions = [fields[key] for key in ("version_info", "version") if key in fields]
     base_home = Path(getattr(sys, "_base_executable", sys.executable)).resolve().parent
     home = Path(fields.get("home", ""))

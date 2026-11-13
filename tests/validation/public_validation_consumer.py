@@ -260,6 +260,17 @@ class TestGitDiscovery(unittest.TestCase):
 
 
 class TestSelectionPreflight(unittest.TestCase):
+    def test_batching_rejects_scalar_filenames_and_preserves_iterable_names(self) -> None:
+        from research_repo_tools.selection import argument_batches
+
+        for value in ("file.py", "", b"file.py", b""):
+            with self.subTest(value=value), self.assertRaisesRegex(ValueError, "file arguments"):
+                argument_batches(["lint"], cast(Any, value))
+        self.assertEqual(
+            argument_batches(["lint"], iter(("café file.py", "-option.py")), batch_size=1),
+            (("lint", "./café file.py"), ("lint", "./-option.py")),
+        )
+
     def test_alias_identity_changes_are_not_reused_between_public_cli_calls(self) -> None:
         with tempfile.TemporaryDirectory(prefix="selection café ") as directory:
             root = Path(directory).resolve()

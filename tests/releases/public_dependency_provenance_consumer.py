@@ -503,6 +503,21 @@ class TestDependencyProvenance(unittest.TestCase):
         self.command.side_effect = execute
         return site
 
+    def test_normal_environment_requires_explicit_isolation_before_registry_access(self):
+        environment = self.root / ".venv"
+        self.normal_environment(environment)
+        configuration = environment / "pyvenv.cfg"
+        for payload in (b"home = interpreter\n", b" include-system-site-packages\t=\ttrue\n", b"include-system-site-packages =\n"):
+            with self.subTest(configuration=payload):
+                configuration.write_bytes(payload)
+                before = self.snapshot()
+                with self.assertRaisesRegex(ValueError, "include-system-site-packages explicitly set to false"):
+                    check_release_dependencies(self.root)
+                self.assertEqual(self.snapshot(), before)
+                self.network.assert_not_called()
+        configuration.write_bytes(b" \tINCLUDE-SYSTEM-SITE-PACKAGES\t=\tFaLsE \r\n")
+        self.assertTrue(check_release_dependencies(self.root))
+
     def test_normal_environment_is_observed_even_when_python_symlinks_match(self):
         site = self.normal_environment(self.root / ".venv")
         (site / "research_repo_tools/__init__.py").write_bytes(b"# different normal environment, identical version\n")

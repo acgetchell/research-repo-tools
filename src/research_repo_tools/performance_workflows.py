@@ -261,7 +261,7 @@ def run(args: argparse.Namespace, settings: Config) -> int:
     elif args.action == "release-upload":
         if args.target is not None and not args.target.strip():
             raise ValueError("--target must be a nonempty path")
-        target = release_assets.parse_release_target(settings.path(args.target).read_bytes()) if args.target is not None else None
+        target = release_assets._read_target(settings.path(args.target)) if args.target is not None else None
         release_assets.publish_release_asset(root, args.repository, args.tag, settings.path(args.asset), target=target, publish=args.publish)
     elif args.action == "baseline":
         from research_repo_tools.release_discovery import normalize_tag

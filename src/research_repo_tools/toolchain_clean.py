@@ -13,6 +13,7 @@ from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
 from research_repo_tools import config, toolchain, toolchain_config
+from research_repo_tools._venv_config import configuration_fields
 from research_repo_tools.process import ExecutableNotFoundError, run_safe_command
 from research_repo_tools.tool_pins import SEMVER, STABLE
 
@@ -90,11 +91,7 @@ def _venv_interpreters(directory: Path) -> tuple[Path, ...]:
     path = directory / "pyvenv.cfg"
     if not path.is_file():
         return ()
-    values = {}
-    for line in path.read_text(encoding="utf-8").splitlines():
-        key, separator, value = line.partition("=")
-        if separator:
-            values[key.strip()] = value.strip()
+    values = configuration_fields(path.read_text(encoding="utf-8"))
     result = []
     for key in ("home", "executable", "base-executable"):
         if value := values.get(key):

@@ -22,10 +22,12 @@ Install the verified supplying release before composing these jobs.
 
 The packaged `release-evidence.toml` declares exact repository/workflow/native
 job/step/signer policy; `release-assets.toml` declares repository and optional
-release-title policy. Merge the `release-evidence` and `release-assets` recipes.
-Keep the trusted installed runtime and policy separate from the source checkout
-in release workflows. The observed checkout must be clean at the independently
-asserted commit and package version.
+release-title policy. Merge the `release-evidence` and `release-assets` recipes
+into a separate trusted controller project. Run the examples below there, using
+its installed tooling and policy files. Its uv environment must be outside
+`/path/to/source`, the observed checkout, which must be clean at the independently
+asserted commit and package version. The same recipes cannot verify the checkout
+that contains their executing uv environment.
 
 ```sh
 just release-evidence verify tooling/release-evidence.toml \

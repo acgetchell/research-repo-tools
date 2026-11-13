@@ -29,6 +29,7 @@ lazy from research_repo_tools.publication import _path
 lazy from research_repo_tools.publication_config import _table
 lazy from research_repo_tools.registry import verify_published_distributions
 lazy from research_repo_tools.release_assets import (
+    _read_target,
     _repository,
     parse_release_target,
     preflight_release_target,
@@ -953,7 +954,7 @@ def run_assets(args: argparse.Namespace, settings: Config) -> None:
             assertions = _Assertions(args.repository, args.tag, args.commit, args.expected_title, args.notes.read_bytes(), args.expected.read_bytes())
             _regular(args.receipt)
             retained = _parse_receipt(args.receipt.read_bytes(), assertions) if args.receipt.exists() else None
-            if not isinstance(retained, _Captured) or retained.target != parse_release_target(args.output.read_bytes()):
+            if not isinstance(retained, _Captured) or retained.target != _read_target(args.output):
                 raise ValueError("existing draft target does not match the original captured receipt")
         target = prepare_release_draft(
             settings.root,
@@ -1005,7 +1006,7 @@ def run_assets(args: argparse.Namespace, settings: Config) -> None:
         )
         print("Saved verified release target.")
     else:
-        target = parse_release_target(args.target.read_bytes())
+        target = _read_target(args.target)
         if (target.repository, target.tag, target.commit, target.expected_title) != (policy.repository, args.tag, args.commit, title):
             raise ValueError("release assertions/policy differ from captured target")
         revalidate_release_target(settings.root, target, checkout=checkout, dependencies=settings.release.published_dependencies)

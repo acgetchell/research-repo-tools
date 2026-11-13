@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING
 
 from research_repo_tools._archive_paths import ArchivePaths
 from research_repo_tools._dependency_observation import retain_guard
+from research_repo_tools._venv_config import isolated_configuration
 from research_repo_tools.dependency_policy import MAX_SNAPSHOT_FILE_BYTES, MAX_SNAPSHOT_FILES, InputSnapshot
 from research_repo_tools.dependency_progress import report
 from research_repo_tools.dependency_sources import HttpSourceProvider, SourceProvider, VerifiedSource, table
@@ -126,8 +127,7 @@ def python_environment_layout(graph: DependencyGraph) -> tuple[Path, tuple[Path,
     if not configuration_path.is_file():
         raise ValueError(f"dependency environment lacks {configuration_path}; recreate this environment from its declared lock")
     configuration = configuration_path.read_text(encoding="utf-8")
-    if any(line.strip().lower().replace(" ", "") == "include-system-site-packages=true" for line in configuration.splitlines()):
-        raise ValueError("system-site-packages cannot establish dependency provenance")
+    isolated_configuration(configuration)
     candidates: list[Path] = [environment / "Lib/site-packages"] if os.name == "nt" else list((environment / "lib").glob("python*/site-packages"))
     sites = tuple(site for site in candidates if site.is_dir())
     if len(sites) != 1:

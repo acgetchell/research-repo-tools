@@ -867,13 +867,9 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             return 0
         target = None
         if args.action in {"gate", "publish", "verify"} and args.target is not None:
-            from research_repo_tools.release_assets import parse_release_target
+            from research_repo_tools.release_assets import _read_target
 
-            with settings.path(str(args.target)).open("rb") as stream:
-                payload = stream.read(1024 * 1024 + 1)
-            if len(payload) > 1024 * 1024:
-                raise ValueError("release target exceeds the byte limit")
-            target = parse_release_target(payload)
+            target = _read_target(settings.path(str(args.target)))
         target_options = {"target": target} if target is not None else {}
         if args.action == "gate":
             from research_repo_tools.evidence import _load_json

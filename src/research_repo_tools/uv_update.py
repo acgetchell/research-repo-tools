@@ -10,6 +10,7 @@ from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
 
+from research_repo_tools._venv_config import configuration_fields
 from research_repo_tools.files import replace_if_unchanged
 from research_repo_tools.process import run_safe_command
 from research_repo_tools.tool_pins import STABLE, check_uv
@@ -125,14 +126,11 @@ def _uv_tool_installation(executable: Path) -> _ToolInstallation | None:
     configuration = environment / "pyvenv.cfg"
     if not configuration.is_file():
         raise ValueError("uv tool receipt has no owning Python environment")
-    interpreter: dict[str, str] = {}
-    for line in configuration.read_text(encoding="utf-8").splitlines():
-        key, separator, value = line.partition("=")
-        key = key.strip()
-        if key in {"home", "implementation", "version_info", "executable", "include-system-site-packages"}:
-            if not separator or key in interpreter:
-                raise ValueError("uv tool environment has malformed interpreter identity")
-            interpreter[key] = value.strip()
+    interpreter = {
+        key: value
+        for key, value in configuration_fields(configuration.read_text(encoding="utf-8")).items()
+        if key in {"home", "implementation", "version_info", "executable", "include-system-site-packages"}
+    }
     if not interpreter.get("home"):
         raise ValueError("uv tool environment has no interpreter home")
     return _ToolInstallation(receipt, tool, tuple(sorted(interpreter.items())))

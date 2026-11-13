@@ -162,6 +162,8 @@ class TestRuntimePolicy(unittest.TestCase):
             current,
             current + "include-system-site-packages\t=\ttrue\n",
             current + "include-system-site-packages=false\ninclude-system-site-packages=false\n",
+            current + "include-ſystem-site-packages=false\n",
+            current + "home=interpreter\u2028include-system-site-packages=false\n",
             "version_info=3.14.0\ninclude-system-site-packages=false\n",
             "include-system-site-packages=false\n",
         ):

@@ -2683,6 +2683,61 @@ sys.exit(status)
         self.assertEqual(destination.read_bytes(), before[destination])
         self.assertEqual(policy_output.read_bytes(), b"conflicting original")
 
+    def test_candidate_retention_rechecks_attachment_after_final_dependency_guard(self):
+        from research_repo_tools.candidate_reuse import retain_candidate_release
+        from research_repo_tools.dependency_provenance import check_release_dependencies
+
+        evidence, policy, native, _, accepted, _ = self.candidate_fixture(generated=True)
+        attachment = self.root / "attachment.json"
+        attachment.write_bytes(b"original")
+        destination = self.root / "retained" / "acceptance.json"
+        policy_output = destination.parent / "policy.json"
+        native_output = destination.parent / "native.json"
+        options: dict[str, Any] = dict(
+            destination=destination,
+            policy_output=policy_output,
+            native_output=native_output,
+            acquisition_sha256=acquisition_assertion_digest(policy),
+            publication_receipt=self.publication_receipt,
+            publication_sha256=self.publication_digest,
+        )
+        phases = []
+        change_attachment = False
+
+        def dependencies(*args, **kwargs):
+            result = check_release_dependencies(*args, **kwargs)
+            phases.append("dependencies")
+            if change_attachment and phases.count("dependencies") == 2:
+                attachment.write_bytes(b"changed")
+            return result
+
+        def verify_attachment(payload):
+            self.assertEqual(payload, accepted)
+            phases.append("attachment")
+            if attachment.read_bytes() != b"original":
+                raise ValueError("attachment changed")
+
+        with patch("research_repo_tools.dependency_provenance.check_release_dependencies", side_effect=dependencies):
+            result = retain_candidate_release(self.root, evidence, policy, native, lambda endpoint: {}, verify_acceptance=verify_attachment, **options)
+            self.assertEqual(result, accepted)
+            self.assertEqual(phases, ["dependencies", "attachment", "dependencies", "attachment"])
+            self.assertEqual(destination.read_bytes(), accepted)
+            self.assertEqual(policy_output.read_bytes(), serialize_candidate_policy(policy))
+            self.assertEqual(json.loads(native_output.read_bytes()), json.loads(accepted)["native"])
+            change_attachment = True
+            for existing in (True, False):
+                with self.subTest(existing=existing):
+                    if not existing:
+                        for path in (destination, policy_output, native_output):
+                            path.unlink()
+                    before = {path: path.read_bytes() if path.exists() else None for path in (destination, policy_output, native_output)}
+                    attachment.write_bytes(b"original")
+                    phases.clear()
+                    with self.assertRaisesRegex(ValueError, "attachment changed"):
+                        retain_candidate_release(self.root, evidence, policy, native, lambda endpoint: {}, verify_acceptance=verify_attachment, **options)
+                    self.assertEqual(phases, ["dependencies", "attachment", "dependencies", "attachment"])
+                    self.assertEqual({path: path.read_bytes() if path.exists() else None for path in before}, before)
+
     def test_candidate_retention_checks_handoff_again_after_final_dependency_guard(self):
         from research_repo_tools.candidate_reuse import retain_candidate_release
         from research_repo_tools.dependency_provenance import check_release_dependencies

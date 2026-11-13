@@ -53,6 +53,7 @@ type namespace; signature display does not require resolving them.
 | Publication | [Document markers, tables, plots and evidence selection](publication-api.md) |
 | Releases | [Metadata planning and registry publication](publishing-api.md), [evidence/assets](release-evidence-api.md) ([workflow](VERIFYING_RELEASE_EVIDENCE.md)) |
 | Review | [CodeRabbit outcomes, content identity and one-use consent](review-api.md) |
+| Runtime policies | [Dedicated locked graphs, retained wheels and isolated verification](runtime-policy-api.md) |
 | Security and SARIF | [Scanners, Rust documentation and SARIF generations](security-api.md) |
 | Toolchains | [Python adoption and managed-install cleanup](toolchain-api.md) |
 | Upstream tooling | [Development identity and published release dependencies](dependency-provenance-api.md) |

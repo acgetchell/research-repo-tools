@@ -256,7 +256,6 @@ scientific coverage assertions. Shared failure tests and isolated wheel/sdist
 consumer suites live here; native Linux, macOS and Windows jobs remain required
 package evidence.
 
-
 ## Parallel Criterion suite adoption
 
 Use [suite verification and archive assembly](criterion-api.md#parallel-suite-transport)

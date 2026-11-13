@@ -96,10 +96,12 @@ Criterion samples does not create independent trials or significance evidence.
 
 On the final clean main commit, independently supply the final commit in the
 candidate policy. The separately retained Step 1 digest must remain unchanged.
-The consumer's `just release-evidence` invokes the shared `release evidence
-candidate` command, supplying its native evidence configuration, clean checkout,
+The consumer's Step 2 recipe invokes the shared `release evidence candidate`
+command using a trusted installed interpreter outside the observed checkout;
+the [README invocation](../README.md#performance) shows this boundary. Do not use
+that checkout's uv environment. Supply the native evidence configuration, clean checkout,
 original payload/envelope, independent candidate policy, trusted
-`--acquisition-sha256`, and a new `--output` acceptance file. When committing
+`--acquisition-sha256`, and a new `--output` acceptance file outside the checkout. When committing
 publisher evidence, also supply the original `--publication-receipt` and separately
 trusted `--publication-sha256`. Add `--format summary` for a concise verification
 result; the acceptance bytes are unchanged. This may run before

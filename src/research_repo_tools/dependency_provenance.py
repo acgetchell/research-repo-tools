@@ -30,6 +30,7 @@ from research_repo_tools._archive_paths import ArchivePaths
 from research_repo_tools._dependency_observation import retain_guard
 from research_repo_tools._dependency_probe import MAX_NATIVE_BYTES, inspect_installation
 from research_repo_tools._git_checkout import _in_checkout
+from research_repo_tools._venv_config import isolated_configuration
 from research_repo_tools.dependency_progress import DependencyProgress, report, reporting
 from research_repo_tools.evidence import _load_json, deterministic_json, sha256
 from research_repo_tools.release_policy import dependency_names
@@ -186,8 +187,7 @@ def _installations(root: Path, name: str) -> tuple[dict[str, Any], ...]:
             # Static metadata paths only: -I still executes .pth/sitecustomize,
             # and even -S cannot make a checkout-owned executable trustworthy.
             configuration = (environment / "pyvenv.cfg").read_text(encoding="utf-8")
-            if re.search(r"(?im)^include-system-site-packages\s*=\s*true\s*$", configuration):
-                raise ValueError("normal environment with system site packages is unsupported")
+            isolated_configuration(configuration)
             candidates = [environment / "Lib/site-packages"] if sys.platform == "win32" else list((environment / "lib").glob("python*/site-packages"))
             sites = [site for site in candidates if site.is_dir()]
             if len(sites) != 1:

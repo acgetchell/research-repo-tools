@@ -108,22 +108,53 @@ class TestPublishingConsumer(unittest.TestCase):
             "GITHUB_SHA": "a" * 40,
             "GITHUB_REF": "refs/tags/v1.2.3",
         }
+        commands = []
         for action, handler in (("gate", "check_reviewed_release"), ("publish", "publish_reviewed_release"), ("verify", "verify_publication")):
             arguments = ["release", action, "v1.2.3", "--target", target.name]
             if action == "publish":
                 arguments.append("--approve")
+            commands.append((arguments, f"research_repo_tools.release_publishing.{handler}"))
+        commands.append(
+            (
+                ["performance", "release-upload", "example/project", "v1.2.3", "asset.tar.gz", "--target", target.name],
+                "research_repo_tools.release_assets.publish_release_asset",
+            )
+        )
+        (self.root / "assets.toml").write_bytes(b'schema=1\nrepository="example/project"\n')
+        for operation in ("verify", "upload"):
+            arguments = [
+                "release",
+                "assets",
+                operation,
+                "assets.toml",
+                "--checkout",
+                str(self.root),
+                "--commit",
+                "a" * 40,
+                "--tag",
+                "v1.2.3",
+                "--target",
+                target.name,
+            ]
+            if operation == "upload":
+                arguments.extend(["--asset", "asset.tar.gz", "--approve"])
+            commands.append((arguments, "research_repo_tools.release_interfaces.revalidate_release_target"))
+        for arguments, handler in commands:
             with (
-                self.subTest(action=action),
+                self.subTest(arguments=arguments),
                 patch.dict(os.environ, environment),
                 patch.object(Path, "open", tracked_open),
                 patch("research_repo_tools.release_assets.parse_release_target") as parse,
-                patch(f"research_repo_tools.release_publishing.{handler}") as effect,
+                patch("research_repo_tools.dependency_provenance.check_release_dependencies"),
+                patch("research_repo_tools.release_interfaces.resolve_revision", return_value="a" * 40),
+                patch("research_repo_tools.release_interfaces.require_release_checkout"),
+                patch(handler) as effect,
                 self.assertRaisesRegex(ValueError, "release target exceeds the byte limit"),
             ):
                 cli.run(cli.parser().parse_args(arguments), self.settings("pypi"))
             self.assertEqual(parse.call_count, 0)
             effect.assert_not_called()
-        self.assertEqual(reads, [1024 * 1024 + 1] * 3)
+        self.assertEqual(reads, [1024 * 1024 + 1] * len(commands))
 
     def test_cli_release_handlers_preserve_optional_and_maximum_size_targets(self):
         target = ReleaseTarget("example/project", "v1.2.3", 9, "a" * 40, "v1.2.3")

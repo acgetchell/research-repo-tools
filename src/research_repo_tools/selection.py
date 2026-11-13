@@ -63,6 +63,8 @@ def argument_batches(command: Sequence[str], files: Iterable[str], *, batch_size
     """
     if not command or isinstance(command, (str, bytes)) or any(not isinstance(arg, str) or "\0" in arg for arg in command):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
         raise ValueError("command must be a nonempty argument vector without NUL")
+    if isinstance(files, (str, bytes)):
+        raise ValueError("file arguments must be an iterable of filenames, not a single string")
     if type(batch_size) is not int or batch_size < 1 or type(argument_limit) is not int or argument_limit < 1:
         raise ValueError("batch size and argument limit must be positive integers")
     base_windows, base_posix = _argument_sizes(command)

@@ -43,7 +43,9 @@ git pull --ff-only
 Install or verify the declared development tools before running maintenance
 recipes. Install uv, keep an exact published research-repo-tools pin in the
 locked tooling group, and start with a clean working tree. Setup installs
-user-level Just; use `just` without activating an environment:
+user-level Just. If `just` is not on PATH yet, complete the
+[one-time consumer setup](https://github.com/acgetchell/research-repo-tools/blob/main/README.md#install-with-uv)
+first. Subsequent setup runs need no environment activation:
 
 ```bash
 just setup
@@ -216,10 +218,13 @@ git pull --ff-only
 
 Use a clean checkout of the reviewed release commit. Require its configured
 native checks and trusted main-push evidence before any tag-triggered promotion.
-For consumers adopting candidate reuse, run the configured `just release-evidence`
-composition here, before tagging. Pass the original policy, acquisition digest,
+For consumers adopting candidate reuse, run the configured Step 2 composition
+here, before tagging, using a trusted installed interpreter outside this checkout.
+The packaged `release-evidence` recipe uses its project's uv environment; use
+the [external-runtime invocation](https://github.com/acgetchell/research-repo-tools/blob/main/README.md#performance)
+when observing that same project. Pass the original policy, acquisition digest,
 publication receipt/digest and `--format summary` to the shared candidate verifier.
-Save its acceptance outside committed history. Step 2 and publication retries
+Save its acceptance outside the checkout. Step 2 and publication retries
 derive and verify archives from that acquisition without measuring or repeating
 build/test gates. At approval, pass the original `--acceptance` and revalidate the
 same native selection before acquiring publication credentials. Missing or changed
