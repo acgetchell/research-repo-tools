@@ -177,6 +177,10 @@ release-publish tag *args:
 release-reuse commit +args:
     uv run --locked --group dev research-repo-tools release reuse "$@"
 
+# Resolve, record, install or verify an independently selected release runtime.
+release-runtime +args:
+    uv run --locked --group dev research-repo-tools release runtime "$@"
+
 # Require the stable GitHub Release/assets and exact published registry version.
 release-verify tag *args:
     uv run --locked --group dev research-repo-tools release verify --attempts 7 --interval 10 "$@"
