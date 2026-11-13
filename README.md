@@ -20,9 +20,8 @@ then choose a [capability](#capability-index). Package development belongs in
 
 ## Release availability
 
-This README describes the current source tree. The latest published package and
-quickstart pin are [v0.2.8][published-pin]. Features introduced in v0.2.7 are
-included in that release.
+This README documents **v0.2.9**. Installation examples use that exact version
+and require it to be available on [PyPI][pypi].
 
 The v0.2.7 additions include verified Python/Cargo dependency sources,
 published-dependency release gates, retained-evidence draft preparation and
@@ -30,13 +29,12 @@ authenticated retrieval of original tag-push receipts,
 committed benchmark publication receipts, resumable scheduled suites,
 reusable compilation for managed Cargo tool installs, and shared coverage cleanup.
 
-The v0.2.9 additions are **unreleased**: the acquisition-owner workflow
+The v0.2.9 additions include the acquisition-owner workflow
 (`performance-release --owner`, `performance capture`, and `performance first-release`),
 candidate archive attachment, authenticated draft planning, selected managed tools,
 dedicated runtime policies, native path identity, and CodeRabbit quote/resume/deny
-contracts. v0.2.8 does not supply these additions or the latest publisher provenance
-fixes. Their release validation is tracked in [#236][next-release]. Use an exact supplying
-[development pin](#development-pins-and-release-dependencies) for rehearsal,
+contracts. Release validation and publication are tracked in [#236][release-tracker].
+Use an exact supplying [development pin](#development-pins-and-release-dependencies) for rehearsal,
 then adopt the published supplying release before release-intent use.
 
 **v0.2.7 includes breaking Python API changes.** Update callers to the documented
@@ -62,7 +60,7 @@ the published package requires Python 3.15 or newer.
 From the consumer root, add the exact published package:
 
 ```sh
-uv add --group tooling --no-sync "research-repo-tools==0.2.8"
+uv add --group tooling --no-sync "research-repo-tools==0.2.9"
 ```
 
 Include `tooling` from `dev`, retaining your other dependencies. Set
@@ -72,7 +70,7 @@ if the project currently requires an older interpreter.
 
 ```toml
 [dependency-groups]
-tooling = ["research-repo-tools==0.2.8"]
+tooling = ["research-repo-tools==0.2.9"]
 dev = [{include-group = "tooling"}]
 ```
 
@@ -108,7 +106,7 @@ See [local and CI cache configuration][cargo-cache] before adopting it downstrea
 
 ### Selecting tools for a job
 
-After verified v0.2.9 publication, a narrow CI job can select exact keys from its
+With v0.2.9 installed, a narrow CI job can select exact keys from its
 existing tool catalog. After the one-time setup and adopting the matching Just
 template, use the same repeatable `--tool` selection for setup, verification,
 export and execution. For example, with a declared `zizmor` pin:
@@ -207,11 +205,11 @@ automatic pin/lock rewrite is needed.
 Use the shared wrapper for isolated commands. Export the matching
 `python-bootstrap.py` template beside the consumer Justfile; it contains the
 same implementation as `research_repo_tools.tooling_runtime`. For example,
-with the published v0.2.8 release:
+with v0.2.9:
 
 ```sh
 just templates python-bootstrap.py --output python-bootstrap.py
-just tooling-run --version 0.2.8 --release-intent --arguments-json '["release","dependencies"]'
+just tooling-run --version 0.2.9 --release-intent --arguments-json '["release","dependencies"]'
 ```
 
 For development, replace `--version` with `--github acgetchell/research-repo-tools
@@ -223,9 +221,9 @@ missing commits and failed lookups stop before tooling starts; there is no fallb
 GitHub Actions can use the same implementation, with uv already installed:
 
 ```yaml
-- uses: acgetchell/research-repo-tools/.github/actions/run-tooling@v0.2.8
+- uses: acgetchell/research-repo-tools/.github/actions/run-tooling@v0.2.9
   with:
-    version: '0.2.8'
+    version: '0.2.9'
     release-intent: 'true'
     arguments: '["release", "dependencies"]'
 ```
@@ -253,8 +251,8 @@ continues to resolve its transitive dependencies independently; `--locked` with
 `--no-project` does not turn that environment into a locked runtime.
 
 Use a trusted bootstrap installation outside the consumer checkout, with the
-matching `release-runtime` recipe from the shipped Justfile. After the supplying
-v0.2.9 release is published, resolve the dedicated project there:
+matching `release-runtime` recipe from the shipped Justfile. With v0.2.9 installed,
+resolve the dedicated project there:
 
 ```sh
 just release-runtime resolve --directory /trusted/runtime-project --require 'research-repo-tools==0.2.9'
@@ -997,7 +995,6 @@ BSD-3-Clause. See [LICENSE][license].
 [license-badge]: https://badgen.net/github/license/acgetchell/research-repo-tools
 [line-checks]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_CHECKS.md#raw-text-line-limits
 [migration]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/migration.md
-[next-release]: https://github.com/acgetchell/research-repo-tools/issues/236
 [notebooks-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/notebooks-api.md
 [notebooks-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_NOTEBOOKS.md
 [papers-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/papers-api.md
@@ -1006,7 +1003,6 @@ BSD-3-Clause. See [LICENSE][license].
 [performance-policy]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/DECLARING_PERFORMANCE.md
 [process-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/process-api.md
 [publication-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/publication-api.md
-[published-pin]: https://pypi.org/project/research-repo-tools/0.2.8/
 [publishing]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RELEASING.md
 [publishing-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/publishing-api.md
 [pypi]: https://pypi.org/project/research-repo-tools/
@@ -1014,6 +1010,7 @@ BSD-3-Clause. See [LICENSE][license].
 [python-adoption]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_DEPENDENCIES.md#shared-python-adoption
 [python-evidence]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/release-evidence-api.md#python-distribution-evidence
 [release]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_RELEASE_METADATA.md
+[release-tracker]: https://github.com/acgetchell/research-repo-tools/issues/236
 [reports-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/PUBLISHING_REPORTS.md
 [reuse-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_CI.md
 [review-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/review-api.md
