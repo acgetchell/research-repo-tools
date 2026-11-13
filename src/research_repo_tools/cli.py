@@ -269,15 +269,21 @@ def parser() -> argparse.ArgumentParser:
     mode = adoption.add_mutually_exclusive_group(required=True)
     mode.add_argument("--dry-run", action="store_true")
     mode.add_argument("--apply", action="store_true")
-    toolchain.add_parser("check", help="inspect installed tools without installing anything").add_argument("--json", action="store_true")
+    check_tools = toolchain.add_parser("check", help="inspect installed tools without installing anything")
+    check_tools.add_argument("--json", action="store_true")
     clean = toolchain.add_parser("clean", help="preview obsolete package-owned installations; --apply removes them")
     _clean_mode(clean)
     clean.add_argument("--keep-root", type=Path, action="append", default=[], help="also retain this consumer's pins (repeatable)")
-    toolchain.add_parser("export", help="verify tools and export their environment to GITHUB_ENV").add_argument("--file", type=Path)
+    export_tools = toolchain.add_parser("export", help="verify tools and export their environment to GITHUB_ENV")
+    export_tools.add_argument("--file", type=Path)
     toolchain.add_parser("python-check", help="check mandatory shared Python support and optional development mirrors without mutation")
     toolchain.add_parser("python-tools-check", help="check opt-in Python tool declarations, lock, and executable versions without changes")
-    toolchain.add_parser("run", help="run a command with verified managed tools; never installs").add_argument("command", nargs=argparse.REMAINDER)
-    toolchain.add_parser("sync", help="install and verify declared versions").add_argument("--dry-run", action="store_true")
+    run_tools = toolchain.add_parser("run", help="run a command with verified managed tools; never installs")
+    run_tools.add_argument("command", nargs=argparse.REMAINDER)
+    sync_tools = toolchain.add_parser("sync", help="install and verify declared versions")
+    sync_tools.add_argument("--dry-run", action="store_true")
+    for selected_tools in (check_tools, export_tools, run_tools, sync_tools):
+        selected_tools.add_argument("--tool", action="append", help="select an exact catalog name or cargo for minimal Rust/Cargo (repeatable)")
     toolchain.add_parser("sync-binaries", help="install and verify pinned release binaries without package synchronization or builds")
     toolchain.add_parser("upgrade", help="upgrade declared Cargo tools and release binaries, then publish verified pins").add_argument(
         "--dry-run", action="store_true"
@@ -567,28 +573,20 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
 
             upgrade(settings, source=args.config, dry_run=args.dry_run)
             return 0
-        if settings.toolchain.inherit_python_tools and args.action in {"check", "export", "run"}:
+        selected_tools = getattr(args, "tool", None)
+        if selected_tools is None and settings.toolchain.inherit_python_tools and args.action in {"check", "export", "run"}:
             from research_repo_tools.python_tools import check
 
             check(settings.root)
         plan = toolchain_config.load(settings)
-        runtime = toolchain.Runtime(plan)
+        runtime = toolchain.Runtime(plan) if selected_tools is None else toolchain.Runtime(plan, tools=selected_tools)
         if args.action == "sync-binaries":
             return 0 if toolchain.report(runtime.sync_binaries()) else 1
         if args.action == "export":
-            from research_repo_tools.ci import export_environment
-
             destination = settings.path(str(args.file)) if args.file is not None else os.environ.get("GITHUB_ENV")
             if not destination:
                 raise ValueError("toolchain export requires --file or GITHUB_ENV")
-            if not toolchain.report(runtime.inspect(), stream=sys.stderr):
-                raise ValueError("toolchain is incomplete; run toolchain sync before exporting")
-            environment = runtime.environment()
-            environment["RESEARCH_REPO_TOOLS_HOME"] = str(runtime.base)
-            names = ["RESEARCH_REPO_TOOLS_HOME", "UV_PYTHON_INSTALL_DIR", "PATH"]
-            if plan.rust:
-                names.extend(["CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "RUSTUP_AUTO_INSTALL", "RUSTUP_NO_UPDATE_CHECK"])
-            export_environment(Path(destination), names, environment=environment)
+            runtime.export_environment(Path(destination))
             return 0
         if args.action == "run":
             return toolchain.run_command(runtime, args.command)

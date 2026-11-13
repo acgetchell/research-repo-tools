@@ -462,6 +462,7 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             dates_suite.write_bytes((ROOT / "tests/changelog/public_dates_consumer.py").read_bytes())
             run_consumer_suite(python, [str(dates_suite)], cwd=consumer, env=local_env)
             evidence_suite.write_bytes((ROOT / "tests/releases/public_evidence_consumer.py").read_bytes())
+            (consumer / "PREPARING_DRAFTS.md").write_bytes((ROOT / "docs/PREPARING_DRAFTS.md").read_bytes())
             receipts_suite = consumer / "public_receipts_consumer.py"
             receipts_suite.write_bytes((ROOT / "tests/releases/public_receipts_consumer.py").read_bytes())
             run_consumer_suite(python, [str(receipts_suite)], cwd=consumer, env=local_env)
@@ -529,6 +530,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             toolchain_suite = consumer / "public_toolchain_consumer.py"
             toolchain_suite.write_bytes((ROOT / "tests/toolchain/public_toolchain_consumer.py").read_bytes())
             run_consumer_suite(python, [str(toolchain_suite)], cwd=consumer, env=local_env)
+            selected_suite = consumer / "public_selected_tools_consumer.py"
+            selected_suite.write_bytes((ROOT / "tests/toolchain/public_selected_tools_consumer.py").read_bytes())
+            run_consumer_suite(python, [str(selected_suite)], cwd=consumer, env=local_env)
             text_suite = consumer / "public_text_consumer.py"
             text_suite.write_bytes((ROOT / "tests/validation/public_text_consumer.py").read_bytes())
             run_consumer_suite(python, [str(text_suite)], cwd=consumer, env=local_env)

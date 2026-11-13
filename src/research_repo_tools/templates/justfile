@@ -245,16 +245,24 @@ tooling-run +args:
     uv run --no-config --no-project --isolated --managed-python --python 3.15 --script python-bootstrap.py "$@"
 
 # The environment must already exist; checking never syncs or downloads Python.
-tools-check:
-    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain check
+tools-check *args:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain check "$@"
 
 # Export verified managed paths to the current GitHub Actions environment file.
-tools-export:
-    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain export
+tools-export *args:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain export "$@"
 
 # Check opted-in Python tool declarations, lock, and executable versions without sync.
 tools-python-check:
     uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain python-tools-check
+
+# Run with the verified catalog or repeatable --tool selection before -- COMMAND.
+tools-run +args:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain run "$@"
+
+# Install declared tools or a repeatable --tool selection without project sync.
+tools-sync *args:
+    uv run --locked --no-sync --no-python-downloads research-repo-tools toolchain sync "$@"
 
 # Install and verify pinned release binaries in the existing locked environment.
 tools-sync-binaries:

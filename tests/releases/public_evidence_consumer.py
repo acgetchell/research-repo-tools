@@ -8,6 +8,7 @@ import hashlib
 import io
 import json
 import os
+import runpy
 import shlex
 import shutil
 import subprocess
@@ -27,6 +28,8 @@ from email.message import Message
 from pathlib import Path
 from typing import Any, override
 from unittest.mock import patch
+
+import yaml
 
 from research_repo_tools import cli, config, release_validation
 from research_repo_tools.archives import extract_archive
@@ -2161,7 +2164,7 @@ class WorkflowProvider(DraftProvider):
     def handoff(self, payload):
         stream = io.BytesIO()
         with zipfile.ZipFile(stream, "w") as archive:
-            archive.writestr("handoff.json", payload)
+            archive.writestr(zipfile.ZipInfo("handoff.json", date_time=(2000, 1, 1, 0, 0, 0)), payload)
         self.handoff_zip = stream.getvalue()
         self.handoff_artifact.update(digest="sha256:" + hashlib.sha256(self.handoff_zip).hexdigest(), size_in_bytes=len(self.handoff_zip))
 
@@ -2925,5 +2928,165 @@ class TestDraftPreparation(unittest.TestCase):
         self.assertEqual(len(self.provider.posts), 1)
 
 
+def workflow_fixture(arguments):
+    """Execute the installed module, substituting only bootstrap/provider/Git I/O."""
+    expected = [
+        "run",
+        "--no-config",
+        "--no-project",
+        "--isolated",
+        "--no-cache",
+        "--python",
+        "3.15",
+        "--with",
+        "research-repo-tools==0.2.9",
+        "python",
+        "-I",
+        "-m",
+        "research_repo_tools",
+    ]
+    assert arguments[: len(expected)] == expected, arguments
+    root = Path(os.environ["FIXTURE_ROOT"])
+    provider = WorkflowProvider()
+    guide = (root / "guide.yml").read_bytes()
+    provider.workflow_text = guide
+    provider.tag_workflow.update(path=".github/workflows/prepare-draft.yml", name="Prepare consumer draft")
+    provider.tag_run.update(path=provider.tag_workflow["path"], name=provider.tag_workflow["name"])
+    provider.tag_jobs[0]["steps"] = [{"name": "Assert source and verify original signed evidence", "status": "completed", "conclusion": "success"}]
+    provider.tag_jobs[0]["labels"] = ["ubuntu-24.04"]
+    record = root / "provider.json"
+    if record.exists():
+        state = json.loads(record.read_bytes())
+        provider.release, provider.posts = state["release"], state["posts"]
+    handoff = root / "runner temp" / "handoff" / "handoff.json"
+    if handoff.exists():
+        provider.handoff(handoff.read_bytes())
+    if os.environ.get("FIXTURE_DOWNLOAD_DRIFT"):
+        provider.handoff_artifact["digest"] = "sha256:" + "f" * 64
+    provider.recovery_run.update(path=provider.tag_workflow["path"], name=provider.tag_workflow["name"])
+    with (
+        patch("research_repo_tools.release_validation.subprocess.run", provider.execute),
+        patch("research_repo_tools.release_drafts.api", side_effect=lambda endpoint, **kw: provider.read(endpoint)),
+        patch("research_repo_tools.draft_workflow.api", side_effect=lambda endpoint, **kw: provider.read(endpoint)),
+        patch("research_repo_tools.release_validation.api", side_effect=lambda endpoint, **kw: provider.read(endpoint)),
+        patch("research_repo_tools.release_drafts._api", side_effect=lambda root, repo, endpoint, **kw: provider.read(endpoint)),
+        patch("research_repo_tools.release_assets.run_command_bytes", provider.gh),
+        patch("research_repo_tools.release_publishing._api", side_effect=lambda root, repo, endpoint, **kw: provider.read(endpoint)),
+        patch("research_repo_tools.release_interfaces.require_release_checkout"),
+        patch("research_repo_tools.release_publishing.require_release_checkout"),
+        patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, COMMIT, "")),
+        patch("research_repo_tools.toolchain.Runtime.sync", side_effect=AssertionError("draft workflow must not install contributor tools")),
+        patch("research_repo_tools.toolchain.Runtime.inspect", side_effect=AssertionError("draft workflow must not probe contributor tools")),
+    ):
+        sys.argv = ["research_repo_tools", *arguments[len(expected) :]]
+        try:
+            runpy.run_module("research_repo_tools", run_name="__main__")
+        finally:
+            record.write_bytes(encode({"release": provider.release, "posts": provider.posts}))
+
+
+class TestDraftWorkflowShell(unittest.TestCase):
+    def test_shipped_shell_blocks_preserve_handoff_and_original_recovery(self):
+        guide = Path(__file__).with_name("PREPARING_DRAFTS.md")
+        if not guide.exists():
+            guide = Path(__file__).resolve().parents[2] / "docs/PREPARING_DRAFTS.md"
+        source = guide.read_text(encoding="utf-8").split("```yaml\n", 1)[1].split("\n```", 1)[0].replace("OWNER/REPO", "example/package")
+        jobs = yaml.safe_load(source)["jobs"]
+        verify = next(step["run"] for step in jobs["verify"]["steps"] if "run" in step)
+        writer = next(step["run"] for step in jobs["prepare"]["steps"] if "run" in step)
+        self.assertFalse(any("checkout@" in step.get("uses", "") for step in jobs["prepare"]["steps"]))
+        with tempfile.TemporaryDirectory(prefix="workflow shell café ") as directory:
+            root = Path(directory).resolve()
+            checkout, temporary = root / "observed checkout", root / "runner temp"
+            checkout.mkdir()
+            temporary.mkdir()
+            (root / "guide.yml").write_text(source, encoding="utf-8", newline="\n")
+            (checkout / "pyproject.toml").write_bytes(
+                b'[project]\nname="sample"\nversion="1.2.3"\n'
+                b'[tool.research-repo-tools.publishing]\nregistry="pypi"\npackage="sample"\nrepository="example/package"\n'
+                b'required-checks=[{name="native", app-id=15368}]\n'
+                b'[tool.research-repo-tools.toolchain.cargo]\ntectonic="0.15.0"\ngit-cliff="2.14.1"\n'
+            )
+            (checkout / "CHANGELOG.md").write_bytes(b"# Changelog\r\n\r\n## [1.2.3] - 2026-09-01\r\n\r\n- Verified notes.\r\n")
+            (checkout / "tooling").mkdir()
+            interface_policy(checkout / "tooling").rename(checkout / "tooling/release-evidence.toml")
+            (checkout / "sitecustomize.py").write_bytes(b'raise AssertionError("checkout code must not execute")\n')
+            (root / "command output").write_bytes(b"")
+            env = dict(
+                os.environ,
+                FIXTURE_ROOT=str(root),
+                FIXTURE_PYTHON=Path(sys.executable).as_posix(),
+                FIXTURE_SCRIPT=Path(__file__).resolve().as_posix(),
+                GITHUB_WORKSPACE=str(checkout),
+                RUNNER_TEMP=str(temporary),
+                GITHUB_REPOSITORY="example/package",
+                GITHUB_EVENT_NAME="push",
+                GITHUB_REF="refs/tags/v1.2.3",
+                RELEASE_TAG="v1.2.3",
+                GITHUB_RUN_ID="101",
+                GITHUB_RUN_ATTEMPT="1",
+                GITHUB_OUTPUT=str(root / "command output"),
+                PYTHONPATH=str(checkout),
+                MSYS2_ARG_CONV_EXCL="*",
+            )
+            prefix = (
+                """uv() { "$FIXTURE_PYTHON" -I -X utf8 "$FIXTURE_SCRIPT" --workflow-fixture "$@"; }
+git() { test "$*" = "--no-pager rev-parse refs/tags/v1.2.3^{commit}" || return 99; printf '%s\\n' """
+                + COMMIT
+                + "; }\n"
+            )
+            shell = shutil.which("bash")
+            if os.name == "nt":
+                # Resolve Git for Windows Bash, excluding the WSL launcher.
+                sh = shutil.which("sh")
+                shell = str(Path(sh).with_name("bash.exe")) if sh else None
+            self.assertIsNotNone(shell, "supported workflow tests require bash (Git for Windows supplies it)")
+
+            def execute(block, *, cwd, environment=env):
+                return subprocess.run(
+                    [str(shell), "-euo", "pipefail"],
+                    input=(prefix + block).encode("utf-8"),
+                    cwd=cwd,
+                    env=environment,
+                    capture_output=True,
+                    timeout=120,
+                )
+
+            result = execute(verify, cwd=checkout)
+            self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode("utf-8"))
+            payload = (temporary / "handoff/handoff.json").read_bytes()
+            provider = WorkflowProvider()
+            provider.handoff(payload)
+            env.update(RELEASE_COMMIT=COMMIT, HANDOFF_ID="301", HANDOFF_SHA256=provider.handoff_artifact["digest"][7:])
+            self.assertIn(f"commit={COMMIT}\n".encode(), (root / "command output").read_bytes())
+            self.assertNotIn(b"\r", (root / "command output").read_bytes())
+            bad = execute(writer, cwd=temporary, environment={**env, "FIXTURE_DOWNLOAD_DRIFT": "1"})
+            self.assertEqual(bad.returncode, 1, (bad.stdout + bad.stderr).decode("utf-8"))
+            self.assertIn("digest", bad.stderr.decode("utf-8"))
+            self.assertEqual(json.loads((root / "provider.json").read_bytes())["posts"], [])
+            result = execute(writer, cwd=temporary)
+            self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode("utf-8"))
+            state = temporary / "draft-state"
+            retained = {p.name: p.read_bytes() for p in state.iterdir()}
+            self.assertEqual(retained["handoff.json"], payload)
+            self.assertEqual(json.loads(retained["target.json"])["release_id"], 91)
+            # The guide requires original producer assertions and current
+            # execution assertions for recovery; pass both through the shell.
+            recovery = writer.replace('--run-id "$GITHUB_RUN_ID"', '--run-id "101"')
+            result = execute(recovery, cwd=temporary, environment={**env, "GITHUB_RUN_ID": "999"})
+            self.assertEqual(result.returncode, 0, (result.stdout + result.stderr).decode("utf-8"))
+            self.assertEqual({p.name: p.read_bytes() for p in state.iterdir()}, retained)
+            self.assertEqual(len(json.loads((root / "provider.json").read_bytes())["posts"]), 1)
+            (state / "draft-receipt.json").unlink()
+            result = execute(writer, cwd=temporary)
+            self.assertEqual(result.returncode, 1, (result.stdout + result.stderr).decode("utf-8"))
+            self.assertIn("journal is missing", result.stderr.decode("utf-8"))
+            self.assertEqual(len(json.loads((root / "provider.json").read_bytes())["posts"]), 1)
+            self.assertEqual((state / "handoff.json").read_bytes(), payload)
+
+
 if __name__ == "__main__":
-    unittest.main()
+    if sys.argv[1:2] == ["--workflow-fixture"]:
+        workflow_fixture(sys.argv[2:])
+    else:
+        unittest.main()

@@ -184,13 +184,13 @@ The underlying commands are:
 | `coverage clean [--dry-run \| --apply]` | Preview/remove retained coverage shards and runs, preserving current database and reports |
 | `setup` | Install user Just and declared tools, configure PATH, and sync the locked Python environment |
 | `toolchain adopt (--dry-run \| --apply)` | Plan or apply migration to the executing shared package and its mandatory Python minimum, plus enabled development mirrors |
-| `toolchain check [--json]` | Report expected/actual versions and selected paths; nonzero if incomplete |
+| `toolchain check [--tool NAME]... [--json]` | Report expected/actual versions and selected paths; nonzero if incomplete |
 | `toolchain clean [--dry-run \| --apply] [--keep-root PATH]...` | Preview obsolete package-owned installations; explicitly apply removals while retaining the selected consumers |
-| `toolchain export [--file PATH]` | Verify tools and append their environment to an explicit file or `GITHUB_ENV` |
+| `toolchain export [--tool NAME]... [--file PATH]` | Verify tools and append their environment to an explicit file or `GITHUB_ENV` |
 | `toolchain python-check` | Enforce the installed shared Python minimum and check enabled development mirrors |
 | `toolchain python-tools-check` | Reject inherited tool declaration, lock, and executable drift without synchronization |
-| `toolchain run -- COMMAND ...` | Check tools, then run with their selected paths; propagate failure/exit status |
-| `toolchain sync [--dry-run]` | Install declared versions and verify results; dry run reports without installation |
+| `toolchain run [--tool NAME]... -- COMMAND ...` | Check tools, then run with their selected paths; propagate failure/exit status |
+| `toolchain sync [--tool NAME]... [--dry-run]` | Install declared versions and verify results; dry run reports without installation |
 | `toolchain sync-binaries` | Verify and repair only pinned release binaries; no uv prerequisite probe, package synchronization, or dependency builds |
 | `toolchain upgrade [--dry-run]` | Resolve stable managed Cargo and release-binary upgrades, install and verify them, then publish the exact pins |
 

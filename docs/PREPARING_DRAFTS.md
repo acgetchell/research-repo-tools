@@ -12,6 +12,37 @@ signed evidence with existing captured release targets. Consumer policy owns
 package identity, required checks, benchmark selection, registry and triggers.
 Preparation reads inert records and creates only an unpublished stable draft.
 
+## Consumer adoption checks
+
+Adopting a supplying package also requires reviewing the consumer's existing
+Just recipes, composite actions and workflow commands. A package upgrade does
+not replace copied examples or embedded orchestration. Use the shared public
+commands for generic release operations and keep consumer package, native
+dependency, scientific and permission policy in the consumer.
+
+Pass configuration paths relative to the command's declared root. For example,
+source evidence verification uses `tooling/release-evidence.toml` under the
+source `--root`; an external handoff copy is input to the isolated writer.
+Preserve this distinction and path containment when migrating older examples.
+Full contributor setup remains supported for development. Release phases must
+declare their required tools and carry the same explicit selection through
+sync, check, export and run; a later full-catalog check would reintroduce the
+unrelated prerequisites. See [selecting tools for a job](../README.md#selecting-tools-for-a-job).
+
+Before using the adopted workflow for a release, exercise its actual commands
+against the published installed package with inert provider boundaries. Check
+successful policy parsing, original handoff/journal identities and recovery;
+make inspection and retry fixtures reject unexpected setup, builds or benchmark
+acquisition. Preserve required native dependency preparation as a separate phase.
+Tag-only writes and live publishing still require their normal authorization
+and live evidence; fixtures do not establish those results.
+
+The supplying release owns shared installed/native acceptance and representative
+hosted measurements. Each consumer's adoption issue owns its workflow changes
+and focused regressions; its release tracker owns actual handoff, native and
+operational evidence. Complete consumer adoption before declaring that consumer
+ready to release. Consumer migration does not block the supplying publication.
+
 ## Read-only verification and an isolated writer
 
 The following consumer workflow example has a source-observing read-only job
@@ -46,6 +77,7 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     outputs:
       commit: ${{ steps.source.outputs.commit }}
       artifact: ${{ steps.handoff.outputs.artifact-id }}
@@ -85,6 +117,7 @@ jobs:
   prepare:
     needs: verify
     runs-on: ubuntu-24.04
+    timeout-minutes: 30
     permissions:
       actions: read
       contents: write
@@ -146,6 +179,27 @@ jobs:
 The writer invokes shared installed commands and never imports or executes the
 observed checkout. The example pin is a target supplying version, not a claim
 that v0.2.9 is already published; adopt it only after verified publication.
+
+Neither job installs the contributor tool catalog. Verification and extraction of
+existing changelog notes need the exact shared Python package and runner Git/gh;
+the writer needs that package and gh to authenticate inert evidence and create
+the draft. Neither phase compiles Cargo tools, regenerates the changelog with
+git-cliff, builds a package or synchronizes project Python groups. Later Cargo
+packaging/upload uses the [scoped publication template](../src/research_repo_tools/templates/publish-crates.yml)
+and retains consumer-owned native prerequisites. Attachment of already selected
+bytes uses the trusted installed release runtime, with no compiler requirement.
+
+Each 30-minute budget includes isolated Python/package bootstrap, bounded provider
+reads and artifact downloads, verification, and handoff/state upload. It excludes
+source builds and benchmark acquisition. Measure cold and warm setup plus complete
+job time on the adopting hosted workflow and adjust the budget for actual artifact
+sizes; this budget is an operational limit, not a measured duration. If the writer
+times out, use the original retained state and recovery procedure below.
+Record the workflow/source revision, supplying package version and artifact
+identity, runner, cache state, run/attempt, setup and operation durations, total
+job duration and configured timeout in the owning tracker or CI record. Include
+approval waits where applicable, distinguish queue time from execution, and
+justify the remaining budget margin. Unmeasured timing remains pending.
 
 Keep the read-only handoff's producer run/attempt and artifact ID/digest with the
 preparation journal. The writer's final receipt artifact is a different handoff:

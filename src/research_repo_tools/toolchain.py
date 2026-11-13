@@ -9,16 +9,17 @@ import subprocess
 import sys
 import tempfile
 import urllib.request
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Sequence
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from importlib.metadata import version
 from pathlib import Path
 
 from packaging.specifiers import SpecifierSet
 
 from research_repo_tools import release_credentials
+from research_repo_tools._console import console_text
 from research_repo_tools.process import ExecutableNotFoundError, resolve_executable, run_safe_command
 from research_repo_tools.tool_pins import SEMVER
 from research_repo_tools.toolchain_config import RUSTUP_VERSION, BinaryTool, CargoTool, Toolchain, executable, home, host_target
@@ -75,16 +76,44 @@ def _probe(
         return Status(name, required, release_credentials.diagnostics(error, single_line=True), selected, False)
 
 
+def _select(plan: Toolchain, tools: Sequence[str]) -> Toolchain:
+    """Resolve exact catalog names before any discovery or installation effects."""
+    if not isinstance(tools, Sequence) or isinstance(tools, (str, bytes)) or not tools:
+        raise ValueError("tool selection must be a nonempty sequence of catalog names")
+    selected: set[str] = set()
+    for name in tools:
+        if not isinstance(name, str) or not re.fullmatch(r"[a-z][a-z0-9-]*", name):
+            raise ValueError("tool selections must be exact catalog names, or cargo for the pinned Rust toolchain")
+        if name in selected:
+            raise ValueError(f"duplicate tool selection: {name}")
+        matches = sum(tool.package == name for tool in plan.cargo) + sum(tool.name == name for tool in plan.binaries)
+        matches += int(name == "cargo" and plan.rust is not None)
+        if matches != 1:
+            raise ValueError(f"tool selection {name!r} must resolve to exactly one declared tool; found {matches}")
+        selected.add(name)
+    cargo = tuple(tool for tool in plan.cargo if tool.package in selected)
+    needs_rust = bool(cargo) or "cargo" in selected
+    if needs_rust and plan.rust is None:
+        raise ValueError("selected Cargo tools require a declared Rust toolchain")
+    rust = replace(plan.rust, profile="minimal", components=(), targets=()) if needs_rust and plan.rust else None
+    return replace(plan, rust=rust, cargo=cargo, binaries=tuple(tool for tool in plan.binaries if tool.name in selected))
+
+
 class Runtime:
     """Keep manager homes and Cargo installations separate from user-owned tools.
 
     Construction and inspection do not create directories or install anything.
     Installations are keyed by host, toolchain, package, and package version.
     Cargo compilation is shared per host/toolchain with Cargo fingerprinting.
+    ``tools=None`` retains full contributor setup. Explicit catalog names select
+    only those tools; ``cargo`` selects the pinned minimal Rust/Cargo toolchain.
+    Cargo packages also include that prerequisite, without extra components or
+    targets. Selection never synchronizes the consumer's Python environment.
     """
 
-    def __init__(self, plan: Toolchain):
-        self.plan = plan
+    def __init__(self, plan: Toolchain, *, tools: Sequence[str] | None = None):
+        self.plan = plan if tools is None else _select(plan, tools)
+        self._selected = tools is not None
         self.base = home()
         build_home = os.environ.get("RESEARCH_REPO_TOOLS_CARGO_BUILD_HOME")
         self.build_home = Path(build_home).expanduser() if build_home else self.base / "cargo-build"
@@ -144,8 +173,24 @@ class Runtime:
 
     def environment(self) -> dict[str, str]:
         with self._operation():
-            python = self.python_status(self.uv_status())
+            python = None if self._selected else self.python_status(self.uv_status())
             return self._environment(python)
+
+    def export_environment(self, destination: Path) -> None:
+        """Verify this selection, then append checked assignments to a command file."""
+        from research_repo_tools.ci import export_environment
+
+        if not report(self.inspect(), stream=sys.stderr):
+            raise ValueError("toolchain is incomplete; run toolchain sync before exporting")
+        environment = self.environment()
+        environment["RESEARCH_REPO_TOOLS_HOME"] = str(self.base)
+        names = ["RESEARCH_REPO_TOOLS_HOME"]
+        if not self._selected:
+            names.append("UV_PYTHON_INSTALL_DIR")
+        names.append("PATH")
+        if self.plan.rust:
+            names.extend(["CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "RUSTUP_AUTO_INSTALL", "RUSTUP_NO_UPDATE_CHECK"])
+        export_environment(destination, names, environment=environment)
 
     def setup_environment(self) -> dict[str, str]:
         """Select managed tools while withholding release-lookup credentials."""
@@ -163,7 +208,8 @@ class Runtime:
         env = dict(os.environ)
         # Private by default so shared cleanup can distinguish package-owned
         # interpreters from uv installations used by unrelated projects.
-        env.setdefault("UV_PYTHON_INSTALL_DIR", str(self.base / "python"))
+        if not self._selected:
+            env.setdefault("UV_PYTHON_INSTALL_DIR", str(self.base / "python"))
         paths = [self.cargo_root(tool) / "bin" for tool in self.plan.cargo]
         paths.extend(self.binary_path(tool).parent for tool in self.plan.binaries)
         if self.plan.rust:
@@ -182,9 +228,10 @@ class Runtime:
         env, paths = self._managed_environment()
         if python is not None and python.ok:
             paths.append(Path(python.path).parent)
-        uv = self.uv_status()
-        if uv.ok:
-            paths.append(Path(uv.path).parent)
+        if not self._selected:
+            uv = self.uv_status()
+            if uv.ok:
+                paths.append(Path(uv.path).parent)
         env["PATH"] = os.pathsep.join([*map(str, paths), env.get("PATH", "")])
         return env
 
@@ -254,6 +301,8 @@ class Runtime:
             except FAILURES as error:
                 statuses.append(Status(binary, rust.channel, release_credentials.diagnostics(error, single_line=True), "", False))
         for kind, names in (("component", rust.components), ("target", rust.targets)):
+            if not names:
+                continue
             try:
                 installed = self._rustup([kind, "list", "--installed", "--toolchain", rust.channel]).stdout.splitlines()
                 for name in names:
@@ -295,6 +344,12 @@ class Runtime:
             return self._inspect()
 
     def _inspect(self) -> list[Status]:
+        if self._selected:
+            return [
+                *self.rust_statuses(),
+                *(self.cargo_status(tool) for tool in self.plan.cargo),
+                *(self.binary_status(tool) for tool in self.plan.binaries),
+            ]
         uv = self.uv_status()
         just = _probe("just", "just", version("rust-just"), env=release_credentials.environment(), cwd=self.plan.root)
         # Git is a system prerequisite; no implicit installation or repository mutation.
@@ -321,19 +376,20 @@ class Runtime:
             self._sync()
 
     def _sync(self) -> None:
-        uv = self.uv_status()
-        if not uv.ok:
-            raise RuntimeError(f"uv {self.plan.uv} must be installed and available on PATH before setup; found {uv.actual}")
-        shell = self.shell_status()
-        if not shell.ok:
-            raise RuntimeError(
-                f"Just recipes require a working POSIX sh on PATH before setup; found {shell.actual}. "
-                "On Windows, add Git for Windows' bin directory (containing sh.exe) to PATH, then rerun setup."
-            )
-        if not self.python_status(uv).ok:
-            self._install(uv.path, ["python", "install", "--no-bin", "--no-registry", self.plan.python_request])
+        if not self._selected:
+            uv = self.uv_status()
+            if not uv.ok:
+                raise RuntimeError(f"uv {self.plan.uv} must be installed and available on PATH before setup; found {uv.actual}")
+            shell = self.shell_status()
+            if not shell.ok:
+                raise RuntimeError(
+                    f"Just recipes require a working POSIX sh on PATH before setup; found {shell.actual}. "
+                    "On Windows, add Git for Windows' bin directory (containing sh.exe) to PATH, then rerun setup."
+                )
             if not self.python_status(uv).ok:
-                raise RuntimeError("Python installation did not supply the declared interpreter")
+                self._install(uv.path, ["python", "install", "--no-bin", "--no-registry", self.plan.python_request])
+                if not self.python_status(uv).ok:
+                    raise RuntimeError("Python installation did not supply the declared interpreter")
         rust = self.plan.rust
         if rust:
             if not _probe(self.rustup, "rustup", RUSTUP_VERSION, env=self.setup_environment(), cwd=self.plan.root).ok:
@@ -397,7 +453,7 @@ class Runtime:
         return statuses
 
     def _install(self, command: str, args: list[str]) -> None:
-        print(f"Installing: {Path(command).name} {' '.join(args)}", file=sys.stderr, flush=True)
+        print(console_text(f"Installing: {Path(command).name} {' '.join(args)}", sys.stderr), file=sys.stderr, flush=True)
         try:
             run_safe_command(command, args, cwd=self.plan.root, env=self.setup_environment(), timeout=INSTALL_TIMEOUT, capture_output=False)
         except FAILURES as error:
@@ -440,12 +496,17 @@ class Runtime:
 
 
 def report(statuses: list[Status], *, json_output: bool = False, stream=None) -> bool:
+    if stream is None:
+        stream = sys.stdout
     if json_output:
         print(json.dumps([asdict(status) for status in statuses], indent=2), file=stream)
     else:
         for status in statuses:
             print(
-                f"{'OK' if status.ok else 'FAIL'} {status.name}: expected {status.required or 'available'}; found {status.actual}; path {status.path or '(none)'}",
+                console_text(
+                    f"{'OK' if status.ok else 'FAIL'} {status.name}: expected {status.required or 'available'}; found {status.actual}; path {status.path or '(none)'}",
+                    stream,
+                ),
                 file=stream,
             )
     return all(status.ok for status in statuses)

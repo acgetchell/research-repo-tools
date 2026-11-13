@@ -3,9 +3,44 @@
 Part of the [supported interface contract](api.md). Use the [task guides](../README.md#capability-index)
 for setup and ordinary workflows.
 
+- [Selected managed tools](#selected-managed-tools)
 - [Shared Python adoption API](#shared-python-adoption-api)
 - [Managed installation cleanup API](#managed-installation-cleanup-api)
 - [Isolated release runtime API](#isolated-release-runtime-api)
+
+## Selected managed tools
+
+`research_repo_tools.toolchain.Runtime(plan, *, tools=None)` accepts the catalog
+from `toolchain_config.load(config.load(...))`. With no selection, existing full
+contributor setup and verification are unchanged. A nonempty sequence of exact
+catalog keys selects only those Cargo packages or release binaries. The reserved
+name `cargo` selects the pinned Rust/Cargo toolchain itself. Names are not executable
+aliases: select `cargo-edit` for `cargo upgrade`. Unknown, duplicate, malformed,
+missing and ambiguous selections raise `ValueError` at construction, before
+discovery or installation. Cargo selections require a declared Rust toolchain.
+
+`sync()`, `inspect()`, `environment()`, `export_environment(destination)` and
+`toolchain.run_command(runtime, command)` share the selection. Cargo tools use the
+declared Rust channel with the minimal profile, no extra components or targets;
+binary-only selections need no Rust. Selected operations neither probe nor install
+unselected tools, uv, Python, Just or Git, and do not synchronize Python groups.
+The executing Python package and any native compiler/library dependencies remain
+caller prerequisites. Version pins, authenticated binary lookup, managed homes,
+Cargo compilation caches and installation recovery use the existing installers.
+
+`export_environment(Path(...))` reports selected tool status to stderr and verifies
+every selection before appending via the checked GitHub environment writer.
+Failure leaves the file unchanged unless
+the underlying append itself fails. It exports the managed home and PATH, plus
+Rust homes/channel when needed; only full setup exports the Python installation
+home. PATH retains inherited entries. Selection is dependency setup, not a sandbox
+for the explicitly executed command. Install/probe environments withhold GitHub
+lookup credentials; explicit commands retain the caller's credential environment.
+`environment()` alone composes paths and does not certify tool readiness; use
+`inspect()`, checked export or `run_command()` before relying on selected tools.
+
+See [consumer selection and migration](../README.md#selecting-tools-for-a-job)
+for the equivalent repeatable CLI `--tool` option and MCMC adapter replacement.
 
 ## Shared Python adoption API
 
