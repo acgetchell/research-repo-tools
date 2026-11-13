@@ -16,7 +16,16 @@ from research_repo_tools.release_drafts import _Assertions, _prepare_release_dra
 from research_repo_tools.release_evidence import _run_identity, verify_release_evidence
 from research_repo_tools.release_publishing import RequiredCheck, _settings, check_release_source
 from research_repo_tools.release_receipts import TagPushPolicy, TagSource, _current, _discover, _workflow_source
-from research_repo_tools.release_validation import _artifact_identity, _integer, _validate_jobs, api, download_artifact, parse_release_json, read_pages
+from research_repo_tools.release_validation import (
+    _artifact_identity,
+    _executing_run,
+    _integer,
+    _validate_jobs,
+    api,
+    download_artifact,
+    parse_release_json,
+    read_pages,
+)
 
 __all__ = ["DraftHandoffArtifact", "plan_release_draft", "prepare_authenticated_draft"]
 
@@ -163,6 +172,9 @@ def prepare_authenticated_draft(
     output = output.parent.resolve(strict=True) / output.name
     if output.is_symlink() or output.is_junction() or (output.exists() and not output.is_dir()):
         raise ValueError("draft state must be an owned directory without links")
+    executing = _executing_run(policy.repository)
+    if (executing["id"], executing["run_attempt"]) != (executing_run_id, executing_attempt):
+        raise ValueError("executing run identity differs from the independently supplied run and attempt")
     read = partial(api, repository=policy.repository)
     observed = _producer(policy, source, selected, read)
     frozen = deterministic_json(observed)

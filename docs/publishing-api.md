@@ -36,8 +36,7 @@ accept the original `ReleaseTarget` as optional `target` to
 bind the configured repository/tag and remote commit to its captured release ID.
 The event gate also requires its event ID to match this target. Final verification
 checks assertions before and after registry verification and rejects changed
-release IDs. Pass the same `--target TARGET.json` to `release publish TAG`,
-`release gate TAG`, and `release verify TAG` in a composed publication workflow.
+release IDs. See the [publication workflow](../README.md#releases) for CLI usage.
 Omitting the target preserves existing callers and binds the ID observed at entry
 for that verification operation.
 

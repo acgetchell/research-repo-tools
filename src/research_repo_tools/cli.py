@@ -834,9 +834,18 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
                 stream.write(payload)
             print("Saved verified CI reuse selection; revalidate it with --reuse-evidence at the release gate.")
             return 0
+        target = None
+        if args.action in {"gate", "publish", "verify"} and args.target is not None:
+            from research_repo_tools.release_assets import parse_release_target
+
+            with settings.path(str(args.target)).open("rb") as stream:
+                payload = stream.read(1024 * 1024 + 1)
+            if len(payload) > 1024 * 1024:
+                raise ValueError("release target exceeds the byte limit")
+            target = parse_release_target(payload)
+        target_options = {"target": target} if target is not None else {}
         if args.action == "gate":
             from research_repo_tools.evidence import _load_json
-            from research_repo_tools.release_assets import parse_release_target
 
             if os.environ.get("GITHUB_EVENT_NAME") != "release" or os.environ.get("GITHUB_REPOSITORY") != release_publishing._settings(settings).repository:
                 raise ValueError("release gate requires the configured repository's GitHub release event")
@@ -850,13 +859,9 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             event = release_publishing.validate_event(
                 _load_json(payload, "GitHub release event"), os.environ["GITHUB_REPOSITORY"], os.environ.get("GITHUB_SHA", ""), os.environ.get("GITHUB_REF", "")
             )
-            target_options = {"target": parse_release_target(settings.path(str(args.target)).read_bytes())} if args.target is not None else {}
             release_publishing.check_reviewed_release(settings, args.tag, event=event, reuse_evidence=reuse_payload, **target_options)
             return 0
         if args.action == "publish":
-            from research_repo_tools.release_assets import parse_release_target
-
-            target_options = {"target": parse_release_target(settings.path(str(args.target)).read_bytes())} if args.target is not None else {}
             release_publishing.publish_reviewed_release(settings, args.tag, reuse_evidence=reuse_payload, **target_options)
             return 0
         if args.action == "registry":
@@ -868,9 +873,6 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
                 raise ValueError(f"registry version is {'already present; inspect before retrying uploads' if result.present else 'not yet visible'}")
             return 0
         if args.action == "verify":
-            from research_repo_tools.release_assets import parse_release_target
-
-            target = parse_release_target(settings.path(str(args.target)).read_bytes()) if args.target is not None else None
             release_publishing.verify_publication(settings, args.tag, attempts=args.attempts, interval=args.interval, target=target)
             print(f"Verified published GitHub Release and registry version {args.tag}.")
             return 0

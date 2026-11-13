@@ -73,6 +73,91 @@ class TestPublishingConsumer(unittest.TestCase):
             self.assertEqual(cli.main(["--root", str(self.root), "release", "publish", "v1.2.3", "--target", "captured.json", "--approve"]), 0)
         self.assertEqual(publish.call_args.kwargs["target"], target)
 
+    def test_cli_target_reads_are_bounded_before_parsing_or_release_effects(self):
+        target = self.root / "large target café.json"
+        target.write_bytes(b" " * (2 * 1024 * 1024))
+        original_open = Path.open
+        reads = []
+
+        @contextlib.contextmanager
+        def tracked_open(path, *args, **kwargs):
+            with original_open(path, *args, **kwargs) as stream:
+                if path.samefile(target):
+                    original_read = stream.read
+
+                    def bounded_read(size=-1):
+                        self.assertGreater(size, 0, "target must never be read without a byte bound")
+                        self.assertLessEqual(size, 1024 * 1024 + 1)
+                        payload = original_read(size)
+                        reads.append(len(payload))
+                        return payload
+
+                    with patch.object(stream, "read", side_effect=bounded_read):
+                        yield stream
+                else:
+                    yield stream
+
+        event = self.root / "event.json"
+        event.write_bytes(
+            b'{"action":"published","repository":{"full_name":"example/project"},"release":{"id":9,"tag_name":"v1.2.3","draft":false,"prerelease":false}}'
+        )
+        environment = {
+            "GITHUB_EVENT_NAME": "release",
+            "GITHUB_REPOSITORY": "example/project",
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_SHA": "a" * 40,
+            "GITHUB_REF": "refs/tags/v1.2.3",
+        }
+        for action, handler in (("gate", "check_reviewed_release"), ("publish", "publish_reviewed_release"), ("verify", "verify_publication")):
+            arguments = ["release", action, "v1.2.3", "--target", target.name]
+            if action == "publish":
+                arguments.append("--approve")
+            with (
+                self.subTest(action=action),
+                patch.dict(os.environ, environment),
+                patch.object(Path, "open", tracked_open),
+                patch("research_repo_tools.release_assets.parse_release_target") as parse,
+                patch(f"research_repo_tools.release_publishing.{handler}") as effect,
+                self.assertRaisesRegex(ValueError, "release target exceeds the byte limit"),
+            ):
+                cli.run(cli.parser().parse_args(arguments), self.settings("pypi"))
+            self.assertEqual(parse.call_count, 0)
+            effect.assert_not_called()
+        self.assertEqual(reads, [1024 * 1024 + 1] * 3)
+
+    def test_cli_release_handlers_preserve_optional_and_maximum_size_targets(self):
+        target = ReleaseTarget("example/project", "v1.2.3", 9, "a" * 40, "v1.2.3")
+        (self.root / "captured.json").write_bytes(serialize_release_target(target).ljust(1024 * 1024, b" "))
+        event = self.root / "event.json"
+        event.write_bytes(
+            b'{"action":"published","repository":{"full_name":"example/project"},"release":{"id":9,"tag_name":"v1.2.3","draft":false,"prerelease":false}}'
+        )
+        environment = {
+            "GITHUB_EVENT_NAME": "release",
+            "GITHUB_REPOSITORY": "example/project",
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_SHA": "a" * 40,
+            "GITHUB_REF": "refs/tags/v1.2.3",
+        }
+        for action, handler in (("gate", "check_reviewed_release"), ("publish", "publish_reviewed_release"), ("verify", "verify_publication")):
+            for selected in (False, True):
+                arguments = ["release", action, "v1.2.3"]
+                if action == "publish":
+                    arguments.append("--approve")
+                if selected:
+                    arguments.extend(["--target", "captured.json"])
+                with (
+                    self.subTest(action=action, selected=selected),
+                    patch.dict(os.environ, environment),
+                    patch(f"research_repo_tools.release_publishing.{handler}") as effect,
+                    contextlib.redirect_stdout(io.StringIO()),
+                ):
+                    self.assertEqual(cli.run(cli.parser().parse_args(arguments), self.settings("pypi")), 0)
+                effect.assert_called_once()
+                self.assertEqual(effect.call_args.kwargs.get("target"), target if selected else None)
+                if not selected and action != "verify":
+                    self.assertNotIn("target", effect.call_args.kwargs)
+
     def test_declared_release_assertions_preserve_note_content_and_lifecycle(self):
         settings = self.settings("pypi")
         settings = replace(settings, publishing=replace(settings.publishing, expected_title="tag", generated_notes=True, require_immutable=True))

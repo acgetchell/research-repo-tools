@@ -318,6 +318,8 @@ original `producer.json`, `handoff.json` and first `draft-receipt.json` together
 after pre-effect checks, before any creation request. Failed pre-effect checks
 leave no incomplete state directory. Final `target.json` retention rechecks the
 same draft after producer verification. Receipt and target formats are unchanged.
+The supplied executing run/attempt must match `GITHUB_RUN_ID` and
+`GITHUB_RUN_ATTEMPT`, verified against the current API run in `GITHUB_REPOSITORY`.
 Fresh state requires the original execution's
 first attempt and unambiguous retained tag-run history. Recovery restores all
 original state, including its journal, and reuses the captured ID. Missing journals,

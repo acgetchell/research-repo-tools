@@ -2148,6 +2148,7 @@ class WorkflowProvider(DraftProvider):
             )
         ]
         self.history = [self.tag_run]
+        self.recovery_run = {**self.tag_run, "id": 999}
         self.handoff_artifact: dict[str, Any] = {
             "id": 301,
             "name": "draft-handoff-101-1",
@@ -2188,6 +2189,8 @@ class WorkflowProvider(DraftProvider):
             return copy.deepcopy(self.tag_workflow)
         if endpoint == "actions/runs/101":
             return copy.deepcopy(self.tag_run)
+        if endpoint == "actions/runs/999":
+            return copy.deepcopy(self.recovery_run)
         if endpoint.startswith("actions/runs/101/attempts/1/jobs?"):
             return {"total_count": 1, "jobs": copy.deepcopy(self.tag_jobs)}
         if endpoint.startswith("actions/workflows/7/runs?"):
@@ -2229,6 +2232,7 @@ class TestAuthenticatedDraftWorkflow(unittest.TestCase):
         self.writer.mkdir()
         self.state = self.root / "durable-state"
         self.provider = WorkflowProvider()
+        self.enterContext(patch.dict(os.environ, {"GITHUB_REPOSITORY": "example/package", "GITHUB_RUN_ID": "101", "GITHUB_RUN_ATTEMPT": "1"}))
         self.source = TagSource("refs/tags/v1.2.3", COMMIT)
         self.policy = TagPushPolicy(
             "example/package", ".github/workflows/prepare.yml", "Prepare draft", (("verify", ("Verify source",)),), artifact_prefix="draft-handoff"
@@ -2236,6 +2240,7 @@ class TestAuthenticatedDraftWorkflow(unittest.TestCase):
         self.enterContext(patch("research_repo_tools.release_validation.subprocess.run", self.provider.execute))
         self.enterContext(patch("research_repo_tools.release_drafts.api", side_effect=lambda endpoint, **kw: self.provider.read(endpoint)))
         self.enterContext(patch("research_repo_tools.draft_workflow.api", side_effect=lambda endpoint, **kw: self.provider.read(endpoint)))
+        self.enterContext(patch("research_repo_tools.release_validation.api", side_effect=lambda endpoint, **kw: self.provider.read(endpoint)))
         self.enterContext(patch("research_repo_tools.release_drafts._api", side_effect=lambda root, repo, endpoint, **kw: self.provider.read(endpoint)))
         self.enterContext(patch("research_repo_tools.release_assets.run_command_bytes", self.provider.gh))
         self.enterContext(patch("research_repo_tools.release_publishing._api", side_effect=lambda root, repo, endpoint, **kw: self.provider.read(endpoint)))
@@ -2278,11 +2283,12 @@ class TestAuthenticatedDraftWorkflow(unittest.TestCase):
         self.assertEqual(self.provider.posts[0]["name"], "v1.2.3")
         self.assertEqual(self.provider.posts[0]["body"], json.loads(self.payload)["notes"])
         before = {p.name: p.read_bytes() for p in self.state.iterdir()}
-        self.assertEqual(self.prepare(executing_run_id=999), target)
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}):
+            self.assertEqual(self.prepare(executing_run_id=999), target)
         self.assertEqual({p.name: p.read_bytes() for p in self.state.iterdir()}, before)
         self.assertEqual(len(self.provider.posts), 1)
         self.provider.release = None
-        with self.assertRaises(ValueError):
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}), self.assertRaises(ValueError):
             self.prepare(executing_run_id=999)
         self.assertEqual(len(self.provider.posts), 1)
 
@@ -2295,11 +2301,12 @@ class TestAuthenticatedDraftWorkflow(unittest.TestCase):
         self.assertEqual(self.provider.release, original)
         self.assertEqual(self.provider.posts, [])
         self.assertEqual(json.loads((self.state / "draft-receipt.json").read_bytes())["state"], "captured")
-        self.assertEqual(self.prepare(executing_run_id=999), target)
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}):
+            self.assertEqual(self.prepare(executing_run_id=999), target)
         self.assertEqual(self.provider.posts, [])
 
     def test_missing_journal_new_run_and_ambiguous_creation_never_create_replacement(self):
-        with self.assertRaisesRegex(ValueError, "original handoff and journal"):
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}), self.assertRaisesRegex(ValueError, "original handoff and journal"):
             self.prepare(executing_run_id=999)
         self.assertFalse(self.state.exists())
 
@@ -2311,13 +2318,45 @@ class TestAuthenticatedDraftWorkflow(unittest.TestCase):
             self.prepare()
         self.assertEqual(json.loads((self.state / "draft-receipt.json").read_bytes())["state"], "pending")
         self.provider.on_create = lambda: None
-        with self.assertRaises(DraftPreparationUnknownError):
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}), self.assertRaises(DraftPreparationUnknownError):
             self.prepare(executing_run_id=999)
-        self.assertEqual(self.prepare(executing_run_id=999, recover_release_id=91).release_id, 91)
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}):
+            self.assertEqual(self.prepare(executing_run_id=999, recover_release_id=91).release_id, 91)
         (self.state / "draft-receipt.json").unlink()
         with self.assertRaisesRegex(ValueError, "journal is missing"):
             self.prepare()
         self.assertEqual(len(self.provider.posts), 1)
+
+    def test_execution_arguments_cannot_impersonate_original_run_without_journal(self):
+        with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}), self.assertRaisesRegex(ValueError, "executing run.*differs"):
+            self.prepare()
+        self.assertEqual(self.provider.posts, [])
+        self.assertFalse(self.state.exists())
+
+    def test_execution_environment_and_live_identity_must_agree_before_effects(self):
+        self.prepare()
+        before = {path.name: path.read_bytes() for path in self.state.iterdir()}
+        for environment, changes in (
+            ({"GITHUB_RUN_ID": ""}, {}),
+            ({"GITHUB_RUN_ID": "invalid"}, {}),
+            ({"GITHUB_RUN_ATTEMPT": ""}, {}),
+            ({"GITHUB_RUN_ATTEMPT": "2"}, {}),
+            ({"GITHUB_REPOSITORY": "other/package"}, {}),
+            ({}, {"id": 998}),
+            ({}, {"run_attempt": 2}),
+            ({}, {"run_attempt": True}),
+            ({}, {"repository": {"full_name": "other/package", "id": 8}}),
+        ):
+            with self.subTest(environment=environment, changes=changes):
+                original = copy.deepcopy(self.provider.recovery_run)
+                self.provider.recovery_run.update(changes)
+                try:
+                    with patch.dict(os.environ, {"GITHUB_RUN_ID": "999", **environment}), self.assertRaises(ValueError):
+                        self.prepare(executing_run_id=999)
+                    self.assertEqual(len(self.provider.posts), 1)
+                    self.assertEqual({path.name: path.read_bytes() for path in self.state.iterdir()}, before)
+                finally:
+                    self.provider.recovery_run = original
 
     def test_handoff_drift_and_failed_checks_reject_before_mutation(self):
         def change():
