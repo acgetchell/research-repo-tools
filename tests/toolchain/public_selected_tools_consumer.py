@@ -73,8 +73,8 @@ class SelectedTools:
                     raise subprocess.CalledProcessError(17, [command, *args], stderr="inert install failure")
                 self.add(executable(Path(args[args.index("--root") + 1]) / "bin", "zizmor"), "zizmor 1.23.1")
                 return subprocess.CompletedProcess([], 0, "", "")
-        if args == ["--version"] or (path.name.removesuffix(".exe") == "gitleaks" and args == ["version"]):
-            assert path.name.removesuffix(".exe") in {"rustup", "rustc", "cargo", "zizmor", "gitleaks"}, f"unselected probe: {command}"
+        if args == ["--version"] or (path == executable(path.parent, "gitleaks") and args == ["version"]):
+            assert any(path == executable(path.parent, name) for name in ("rustup", "rustc", "cargo", "zizmor", "gitleaks")), f"unselected probe: {command}"
             return subprocess.CompletedProcess([], 0, "wrong version" if self.fail == "probe" else path.read_text(encoding="utf-8"), "")
         if path == executable(self.runtime.rustup.parent, "cargo") and args[:1] == ["publish"]:
             assert "--locked" in args and args[-2:] == ["--registry", "crates-io"]
