@@ -20,7 +20,7 @@ from packaging.version import Version
 from research_repo_tools import _review_identity, _review_pending, cli, process, review
 from research_repo_tools._review_stream import stream_review
 from research_repo_tools.evidence import deterministic_json
-from research_repo_tools.path_identity import MissingPath, RegularFile
+from research_repo_tools.path_identity import MissingPath, NativePathPolicy, RegularFile
 from research_repo_tools.review_protocol import (
     AgentEvents,
     CompletedReview,
@@ -450,6 +450,65 @@ class TestReviewConsumer(unittest.TestCase):
         self.assertEqual(json.loads(payload)["root"], str(root))
         self.assertEqual(saved.repository, str(root))
 
+    def test_pending_serialized_size_is_checked_before_publication(self) -> None:
+        identity = _review_identity.ReviewIdentity(self.root, "f" * 64, SHA, None, 1)
+        quote = ReviewQuote(deterministic_json(QUOTE | {"promotionTerms": "é" * 400_000}))
+        with self.assertRaisesRegex(ValueError, "pending review.*byte limit"):
+            _review_pending.save(self.pending, root=self.root, base=None, observed=identity, quote=quote)
+        self.assertFalse(self.pending.exists())
+        quote = ReviewQuote(deterministic_json(QUOTE | {"promotionTerms": "é" * 300_000}))
+        saved = _review_pending.save(self.pending, root=self.root, base=None, observed=identity, quote=quote)
+        self.assertEqual(_review_pending.load(self.pending).quote, quote)
+        assert saved.pending_identity is not None
+        self.assertEqual(review.deny(self.pending), ReviewDenied(saved.pending_identity))
+
+    def test_pending_and_temporary_storage_reject_filesystem_aliases(self) -> None:
+        alias = self.area / "alias"
+        parent = alias / "nested"
+        parent.mkdir(parents=True)
+        original = Path.samefile
+
+        def samefile(path: Path, other: Path) -> bool:
+            return (path == alias and other == self.root) or original(path, other)
+
+        # An identity model exercises the guard even on case-sensitive hosts.
+        with patch.object(Path, "samefile", samefile):
+            with self.assertRaisesRegex(ValueError, "outside the Git worktree"):
+                _review_pending.destination(parent / "pending.json", self.root)
+            with patch.object(tempfile, "gettempdir", return_value=str(parent)), self.assertRaisesRegex(ValueError, "outside the Git worktree"):
+                self.start()
+        self.assertEqual(self.calls, [])
+        self.assertFalse((parent / "pending.json").exists())
+
+    def test_native_case_alias_cannot_store_review_state(self) -> None:
+        alias = self.root.with_name(self.root.name.upper())
+        if not alias.exists() or not alias.samefile(self.root):
+            self.skipTest("native filesystem is case-sensitive")
+        with self.assertRaisesRegex(ValueError, "outside the Git worktree"):
+            _review_pending.destination(alias / "pending.json", self.root)
+        with patch.object(tempfile, "gettempdir", return_value=str(alias)), self.assertRaisesRegex(ValueError, "outside the Git worktree"):
+            self.start()
+        self.assertEqual(self.calls, [])
+
+    def test_windows_case_only_staged_rename(self) -> None:
+        self.git.tree_paths.append(b"Name.py")
+        self.git.tracked.append(b"name.py")
+        (self.root / "name.py").write_bytes(b"renamed\r\n")
+        observe = _review_identity.observe_paths
+
+        def windows_inventory(root, paths):
+            return replace(observe(root, paths), policy=NativePathPolicy.WINDOWS)
+
+        with patch.object(_review_identity, "observe_paths", windows_inventory):
+            selected = self.start()
+            self.results = [QUOTE, COMPLETE]
+            self.assertIsInstance(review.resume(self.pending, self.approval(selected), output=self.output.append), CompletedReview)
+            self.git.tree_paths.remove(b"Name.py")
+            self.git.tree_paths.append(b"name.py")
+            self.results = [QUOTE]
+            self.pending = self.area / "changed-head-spelling.json"
+            self.assertNotEqual(selected.content_identity, self.start().content_identity)
+
     @unittest.skipIf(os.name == "nt", "Windows path policy requires UTF-8")
     def test_non_utf8_checkout_quote_and_resume_when_supported(self) -> None:
         moved = self.root.with_name(os.fsdecode(b"consumer-\xff"))
@@ -583,20 +642,41 @@ class TestAgentEvents(unittest.TestCase):
                 ReviewQuote(deterministic_json({**QUOTE, key: value})).terms()
 
     def test_timeout_and_interrupt_cleanup_real_child(self) -> None:
+        children: list[subprocess.Popen[bytes] | subprocess.Popen[str]] = []
+        popen = subprocess.Popen
+
+        def launch(*args, **kwargs):
+            child = popen(*args, **kwargs)
+            children.append(child)
+            return child
+
+        self.enterContext(patch("research_repo_tools._review_stream.subprocess.Popen", launch))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             script = root / "child.py"
-            script.write_text('import time\nprint(\'{"type":"heartbeat"}\', flush=True)\ntime.sleep(60)\n', newline="\n")
+            script.write_text('import os,time\nprint(\'{"type":"heartbeat","pid":%d}\' % os.getpid(), flush=True)\ntime.sleep(60)\n', newline="\n")
+            # Windows venv Python is a launcher with a second process. This
+            # contract limits the direct child; run the stdlib-only workload
+            # in the base interpreter, as the command-timing consumers do.
+            python = Path(getattr(sys, "_base_executable", sys.executable))
             output: list[bytes] = []
-            result = stream_review(Path(sys.executable), [str(script)], cwd=root, env=dict(os.environ), output=output.append, timeout=1)
+            result = stream_review(python, [str(script)], cwd=root, env=dict(os.environ), output=output.append, timeout=1)
             self.assertEqual(result, FailedReview(124, "CodeRabbit timed out; review is unavailable"))
             self.assertIn(b'"heartbeat"', b"".join(output))
+            self.assertEqual(json.loads(b"".join(output))["pid"], children[-1].pid)
+            self.assertIsNotNone(children[-1].poll())
+
+            interrupted_output = bytearray()
 
             def interrupt(chunk: bytes) -> None:
-                raise KeyboardInterrupt
+                interrupted_output.extend(chunk)
+                if b"\n" in interrupted_output:
+                    self.assertEqual(json.loads(interrupted_output)["pid"], children[-1].pid)
+                    raise KeyboardInterrupt
 
-            result = stream_review(Path(sys.executable), [str(script)], cwd=root, env=dict(os.environ), output=interrupt, timeout=10)
+            result = stream_review(python, [str(script)], cwd=root, env=dict(os.environ), output=interrupt, timeout=10)
             self.assertEqual(result, FailedReview(130, "CodeRabbit review interrupted"))
+            self.assertIsNotNone(children[-1].poll())
 
 
 @unittest.skipIf(os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1", "disposable Git fixture mutations disabled")

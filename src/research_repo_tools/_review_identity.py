@@ -1,12 +1,13 @@
 """Read-only Git scope selection over the native path observation capability."""
 
+import ntpath
 import os
 from dataclasses import dataclass
 from pathlib import Path
 
 from research_repo_tools._git_checkout import READ_ONLY_OPTIONS
 from research_repo_tools.evidence import deterministic_json, sha256
-from research_repo_tools.path_identity import MissingPath, PathInventory, PathObservation, fingerprint_paths, observe_paths
+from research_repo_tools.path_identity import MissingPath, NativePathPolicy, PathInventory, PathObservation, fingerprint_paths, observe_paths
 from research_repo_tools.process import run_git_bytes
 
 
@@ -92,6 +93,11 @@ def capture(root: Path, base: str | None, instructions: list[str], *, provider: 
     if len(paths) + len(deleted) > 100000:
         raise ValueError("review inventory exceeds the path budget")
     current = observe_paths(worktree, sorted(paths))
+    if current.policy is NativePathPolicy.WINDOWS:
+        # Case-only renames have one native path. HEAD/index metadata still
+        # binds both Git spellings; do not add an alias as a missing leaf.
+        native_names = {ntpath.normcase(item.name.decode("utf-8")) for item in current.observations}
+        deleted = {name for name in deleted if ntpath.normcase(name.decode("utf-8")) not in native_names}
     # HEAD-only names are staged deletions, even when a replacement now uses
     # that name as a directory or a file replaces one of its former parents.
     inventory = PathInventory(current.policy, (*current.observations, *(PathObservation(name, MissingPath()) for name in deleted)))

@@ -8,9 +8,10 @@ import sys
 import tempfile
 import unittest
 from dataclasses import FrozenInstanceError, replace
+from functools import partial
 from pathlib import Path
-from typing import override
-from unittest.mock import patch
+from typing import cast, override
+from unittest.mock import create_autospec, patch
 
 from research_repo_tools import path_identity
 from research_repo_tools.evidence import fingerprint_files
@@ -76,6 +77,40 @@ class TestPathIdentity(unittest.TestCase):
         self.assertTrue(all(item.value == RegularFile(b"\x00\xfforiginal\r\n", False) for item in inventory.observations))
         (self.root / names[0]).write_bytes(b"\x00\xfforiginal\n")
         self.assertNotEqual(fingerprint_paths(inventory), fingerprint_paths(observe_paths(self.root, names)))
+
+    def test_edited_files_with_executable_extensions(self) -> None:
+        for suffix in (".txt", ".exe", ".com", ".bat", ".cmd"):
+            with self.subTest(suffix=suffix):
+                path = self.root / ("edited" + suffix)
+                path.write_bytes(b"original")
+                path.write_bytes(b"edited\r\n\xff")
+                path.chmod(0o644)
+                self.assertEqual(observe_paths(self.root, [path.name]).observations[0].value, RegularFile(b"edited\r\n\xff", False))
+
+    def test_windows_stat_sources_and_descriptor_changes(self) -> None:
+        path = self.root / "edited.exe"
+        path.write_bytes(b"edited\r\n")
+        fields = dict(st_dev=1, st_ino=2, st_mode=0o100666, st_size=8, st_mtime_ns=30, st_ctime_ns=20, st_birthtime_ns=10)
+
+        def modeled_stat(**changes: int) -> os.stat_result:
+            result = create_autospec(os.stat_result, instance=True)
+            result.configure_mock(**(fields | changes))
+            return cast(os.stat_result, result)
+
+        opened = modeled_stat()
+        named = modeled_stat(st_mode=0o100777, st_ctime_ns=10)
+        stamp = path_identity._stamp
+        self.assertNotEqual(stamp(opened, windows=False), stamp(named, windows=False))
+        # Model CPython's Windows lstat creation time / extension-derived mode,
+        # versus fstat metadata-change time / mode without a filename.
+        with patch.object(path_identity, "_stamp", partial(stamp, windows=True)):
+            expected = path_identity._stamp(named)
+            with patch.object(path_identity.os, "fstat", return_value=opened):
+                self.assertEqual(path_identity._read_file(path, b"edited.exe", expected, 8), b"edited\r\n")
+            changed = modeled_stat(st_ctime_ns=21)
+            with patch.object(path_identity.os, "fstat", side_effect=[opened, changed]), self.assertRaises(PathObservationError) as rejected:
+                path_identity._read_file(path, b"edited.exe", expected, 8)
+            self.assertEqual(rejected.exception.problem, PathProblem.CHANGED)
 
     @unittest.skipIf(os.name == "nt", "Windows native filename policy requires UTF-8")
     def test_non_utf8_native_filename_when_filesystem_supports_it(self) -> None:

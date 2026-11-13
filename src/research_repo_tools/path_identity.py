@@ -12,7 +12,7 @@ from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 from pathlib import Path
-from typing import assert_never
+from typing import assert_never, cast
 
 __all__ = [
     "MissingPath",
@@ -139,8 +139,13 @@ def _name(path: bytes | str | Path, policy: NativePathPolicy) -> bytes:
     return raw
 
 
-def _stamp(info: os.stat_result) -> tuple[int, ...]:
-    return info.st_dev, info.st_ino, info.st_mode, info.st_size, info.st_mtime_ns, info.st_ctime_ns
+def _stamp(info: os.stat_result, *, windows: bool = os.name == "nt") -> tuple[int, ...]:
+    # Windows pathname stat adds extension-derived execute bits, and its ctime
+    # can mean creation time where fstat's means metadata-change time. Birth
+    # time has the same meaning from both sources; retain fstat ctime separately.
+    mode = info.st_mode & ~0o111 if windows else info.st_mode
+    timestamp = cast(int, getattr(info, "st_birthtime_ns")) if windows else info.st_ctime_ns
+    return info.st_dev, info.st_ino, mode, info.st_size, info.st_mtime_ns, timestamp
 
 
 def _chain(root: Path, name: bytes) -> tuple[tuple[Path, tuple[int, ...]], ...]:
@@ -166,7 +171,8 @@ def _read_file(path: Path, name: bytes, expected: tuple[int, ...], limit: int) -
     flags = os.O_RDONLY | getattr(os, "O_BINARY", 0) | getattr(os, "O_NOFOLLOW", 0) | getattr(os, "O_NONBLOCK", 0)
     descriptor = os.open(path, flags)
     try:
-        if _stamp(os.fstat(descriptor)) != expected:
+        opened = os.fstat(descriptor)
+        if _stamp(opened) != expected:
             raise PathObservationError(PathProblem.CHANGED, name, "opened file differs from the observed leaf")
         chunks = []
         remaining = limit + 1
@@ -178,7 +184,8 @@ def _read_file(path: Path, name: bytes, expected: tuple[int, ...], limit: int) -
             remaining -= len(chunk)
         if not remaining:
             raise PathObservationError(PathProblem.LIMIT, name, "file exceeds the byte budget")
-        if _stamp(os.fstat(descriptor)) != expected:
+        finished = os.fstat(descriptor)
+        if _stamp(finished) != _stamp(opened) or finished.st_ctime_ns != opened.st_ctime_ns:
             raise PathObservationError(PathProblem.CHANGED, name, "file changed while being read")
         content = b"".join(chunks)
         if len(content) != expected[3]:

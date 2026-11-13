@@ -17,6 +17,7 @@ from research_repo_tools.path_identity import RegularFile, observe_paths
 from research_repo_tools.review_protocol import ConsentRequired, ReviewApproval, ReviewQuote
 
 _SCHEMA = "research-repo-tools/pending-review/v1"
+_MAX_RECORD_BYTES = 2 * 1024 * 1024
 
 
 @dataclass(frozen=True, slots=True)
@@ -30,9 +31,15 @@ class PendingReview:
     quote: ReviewQuote
 
 
+def _contained(parent: Path, worktree: Path) -> bool:
+    # Both are existing, resolved directories. Identity also catches alternate
+    # case/Unicode spellings that POSIX lexical path comparisons cannot detect.
+    return any(ancestor.samefile(worktree) for ancestor in (parent, *parent.parents))
+
+
 def temporary_parent(worktree: Path) -> Path:
     parent = Path(tempfile.gettempdir()).resolve(strict=True)
-    if parent.is_relative_to(worktree):
+    if _contained(parent, worktree):
         raise ValueError("review temporary storage must be outside the Git worktree; select an outside system temporary directory")
     return parent
 
@@ -44,7 +51,7 @@ def destination(path: Path | None, worktree: Path) -> Path:
     if path.is_symlink() or path.is_junction():
         raise ValueError("pending review must not be a link")
     selected = path.parent.resolve(strict=True) / path.name
-    if selected.is_relative_to(worktree):
+    if _contained(selected.parent, worktree):
         raise ValueError("save pending review state outside the Git worktree")
     return selected
 
@@ -78,6 +85,8 @@ def save(path: Path, *, root: Path, base: str | None, observed: ReviewIdentity, 
         ).encode("ascii")
         + b"\n"
     )
+    if len(payload) > _MAX_RECORD_BYTES:
+        raise ValueError("serialized pending review exceeds the byte limit")
     _create(path, payload)
     return ConsentRequired(
         quote, str(path), sha256(payload), str(root), base, observed.head, observed.base_commit, observed.digest, observed.selected_paths, observed.branch
@@ -88,7 +97,7 @@ def load(path: Path) -> PendingReview:
     if path.is_symlink() or path.is_junction():
         raise ValueError("pending review must not be a link")
     path = path.parent.resolve(strict=True) / path.name
-    observed = observe_paths(path.parent, [path.name], max_file_bytes=2 * 1024 * 1024).observations[0].value
+    observed = observe_paths(path.parent, [path.name], max_file_bytes=_MAX_RECORD_BYTES).observations[0].value
     if not isinstance(observed, RegularFile):
         raise ValueError("pending review requires a regular file")
     data = _load_json(observed.content, "pending review")
