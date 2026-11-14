@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Merged Pull Requests
 
+- Wait for complete main validation before staging [#248](https://github.com/acgetchell/research-repo-tools/pull/248)
 - Complete validation and tooling follow-ups [#246](https://github.com/acgetchell/research-repo-tools/pull/246)
 - Add native identities and scoped paid consent [#245](https://github.com/acgetchell/research-repo-tools/pull/245)
 - Verify reproducible isolated runtimes [#244](https://github.com/acgetchell/research-repo-tools/pull/244)
@@ -109,6 +110,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
     and reject ambiguous settings before cleanup or uv updates.
   - Refresh the reviewed dependency pins, retain audit hashes, and clarify
     trusted release execution and public API guidance.
+- Wait for complete main validation before staging [#248](https://github.com/acgetchell/research-repo-tools/pull/248)
+  [`7603da3`](https://github.com/acgetchell/research-repo-tools/commit/7603da3d46fd6aaf15871dc6dad5207101bb3a9f)
+
+  - Add explicit consumer evidence waiting and align promotion and staging budgets
+    with long-running main validation.
+  - Preserve the original run and artifacts when pending validation times out,
+    and reject malformed workflow statuses before polling.
+  - Document consumer polling budgets and recovery without rerunning healthy CI.
 
 ## [0.2.8] - 2026-11-10
 

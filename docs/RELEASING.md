@@ -7,8 +7,9 @@ attaches the validated wheel, sdist, and signed evidence. Review and publish
 the draft with `just release-publish`. Publishing the GitHub release starts
 `Publish to PyPI`; approve its `pypi` deployment to permit the package upload.
 
-The changelog is generated for the target tag before the tag exists, so the
-release process does not require a temporary local tag.
+For a new candidate, the changelog is generated before the tag exists; no
+temporary local tag is needed. If a tag or draft already exists, start with
+[Choose where to resume](#choose-where-to-resume).
 
 Release recipes are content-idempotent where their inputs permit it. Repeating
 `update-version` on the same UTC date produces no file changes. Rerunning
@@ -20,11 +21,29 @@ dates agree. With unchanged history and configuration, repeating
 
 ## Contents
 
+- [Choose where to resume](#choose-where-to-resume)
 - [Reusable CI evidence](#reusable-ci-evidence)
 - [Prepare the environment](#prepare-the-environment)
 - [Step 1: Prepare the release PR](#step-1-prepare-the-release-pr)
 - [Step 2: Publish after the PR is merged](#step-2-publish-after-the-pr-is-merged)
 - [Configure or verify Trusted Publishing](#configure-trusted-publishing-before-the-next-release)
+
+## Choose where to resume
+
+| Your situation | Next step |
+| --- | --- |
+| Preparing a new release with no tag or draft | [Prepare the environment](#prepare-the-environment), then Step 1. |
+| Release PR merged; no tag or draft yet | [Step 2.1: wait for main CI](#1-synchronize-main-and-wait-for-ci). |
+| Existing tag; preparation only timed out waiting for main CI; commit unchanged | [Wait and retry preparation](#preparation-timed-out-waiting-for-main-ci). Keep the tag. |
+| Existing tag or draft; another PR must be included | [Replace an unpublished candidate](RECOVERING_RELEASES.md#replace-an-unpublished-candidate). Keep the old candidate while finishing corrected notes and main CI. |
+| Partial draft, uncertain upload, or another failure | [Recovering a failed run](#recovering-a-failed-run). Inspect the existing state before retrying. |
+| GitHub release or PyPI version already published | Preserve it. Verify or finish publication of the same bytes; use a new version for corrected contents. |
+
+Replacing an unpublished candidate needs a new annotated tag object and draft
+for the **same version**, plus signed CI evidence for the final corrected commit.
+This package needs no benchmark rerun. Consumer repositories should use the
+[shared recovery guide](RECOVERING_RELEASES.md), including its benchmark reuse
+decision. Do not repeat dependency updates or the version bump just to recover.
 
 ## Reusable CI evidence
 
@@ -57,6 +76,7 @@ The release commands share Delaunay's operator-facing roles:
 | `release-evidence` | Verify the clean checkout's retained signed main CI evidence without rebuilding |
 | `release-notes TAG` | Print the generated notes for the tag and GitHub release |
 | `release-publish TAG` | Check the reviewed draft and approve GitHub publication |
+| `release-registry TAG --expect absent\|present` | Check exact version visibility using the configured package and registry |
 | `release-verify TAG` | Verify GitHub assets and the exact PyPI version |
 | `release-version-check` | Require synchronized metadata and matching final changelog and citation dates |
 | `tag TAG` | Create the annotated tag after the final version check |
@@ -274,16 +294,18 @@ advances it with `update-version` and regenerates the matching changelog.
 
 A corrective PR can include the affected preparation steps: regenerate the
 changelog and validate. Do not repeat the version bump or dependency updates
-solely because another PR is needed. Once the corrected artifacts merge, resume
+solely because another PR is needed. Commit required source, recipe, and
+documentation changes first, then generate and commit notes in that same PR.
+Once the corrected artifacts merge, resume
 Step 2 from the new clean `main` commit and require its successful main-push
 validation.
 
 If the tag or draft already exists, follow the
-[unpublished-candidate recovery procedure](#other-preparation-and-publication-failures).
-This package's tag push starts signed artifact promotion, so cancel superseded
-preparation runs and reconcile their evidence before replacing an unpublished
-candidate. Never use this recovery path for a published release; publish a new
-version instead.
+[unpublished-candidate recovery procedure](RECOVERING_RELEASES.md#replace-an-unpublished-candidate)
+instead of starting Step 2's tag commands. It covers temporary local tag removal
+for note generation, final main validation, and guarded replacement of the
+superseded draft and tag. Keep the existing remote candidate until the correction
+and generated notes have merged and that final commit's complete main CI passes.
 
 ## Step 2: Publish after the PR is merged
 
@@ -556,8 +578,8 @@ and inspect the new artifact IDs before retrying preparation. If the original
 main-push run itself is unavailable or is older than the 30-day rerun window,
 stop: rerunning it cannot recover the evidence. Land a new reviewed commit on
 `main` through normal native CI, regenerate notes with the owning workflow, and
-follow the explicitly authorized unpublished-candidate correction procedure
-below. This creates a new candidate with its own complete main-push validation;
+follow the [unpublished-candidate correction procedure](RECOVERING_RELEASES.md#replace-an-unpublished-candidate).
+This creates a new candidate with its own complete main-push validation;
 it never silently substitutes another commit for the existing tag. Preserve any
 published release and use a new version if correcting published contents.
 The workflow cannot manufacture equivalent evidence from an unrelated run. For a staging failure,
@@ -582,29 +604,11 @@ preparation run with `gh run rerun PREPARATION_RUN_ID`.
   has assets. Inspect partial uploads; if the draft is incomplete, a maintainer
   must remove that incomplete draft before retrying preparation for the unchanged
   tag. Existing assets are never overwritten. Keep a complete draft for review.
-- **The candidate is still unpublished and needs a source correction:** only
-  with explicit maintainer authorization, cancel superseded preparation runs
-  and confirm their final state before proceeding. Check both the exact PyPI
-  version and all GitHub Releases, including drafts; lookup or access errors are
-  not proof of absence. If either is published, stop and preserve it. Merge the
-  correction and workflow-generated notes through the normal native CI and
-  review gates, retaining the intended package version. Validate the corrected
-  commit in a complete trusted main-push attempt. Record the old and corrected
-  full SHAs and tag object IDs. Remove only a reviewed superseded unpublished
-  draft and its assets, then reconcile the unpublished tag with an explicit
-  expected-old-ref guard, recreate its annotation through `just tag`,
-  and verify the remote tag resolves to the corrected commit before preparation.
-  Never reuse superseded assets, validation, or signed evidence. Do not move a
-  published tag, release, or registry artifact.
-
-  An existing local candidate tag already delimits git-cliff history. While
-  regenerating notes for an explicitly authorized unpublished correction,
-  record its tag object ID, temporarily remove only that local ref with
-  `git update-ref -d "refs/tags/$TAG" "$OLD_TAG_OBJECT"`, and restore that exact
-  object with an exit trap. Run the ordinary `changelog-preview` and
-  `changelog-release` commands during that interval. Keep the remote ref
-  unchanged until the corrected reviewed commit passes main validation. This
-  avoids duplicate prospective headings without hand-editing generated notes.
+- **The candidate is still unpublished and needs a source correction:** follow
+  [Replace an unpublished candidate](RECOVERING_RELEASES.md#replace-an-unpublished-candidate)
+  from inventory through corrected notes, final CI, and guarded replacement.
+  That procedure preserves the old remote candidate until the correction is
+  ready and requires explicit authorization for tag and draft mutations.
 - **Publication is blocked:** check the reported checkout, tag, CI, or asset
   mismatch. If the workflow is waiting for approval, approve the `pypi`
   deployment in GitHub. Provenance failures require investigation of the original

@@ -58,6 +58,7 @@ arguments in lexicographic order.
 | `just release-first TAG DATE` | Prepare a first release after checking published stable history |
 | `just release-notes TAG` | Print release notes from the root changelog or an archive |
 | `just release-publish TAG [ARGS...]` | Approve a validated draft GitHub Release and trigger its registry workflow |
+| `just release-registry TAG --expect absent\|present` | Check exact version visibility using the configured package and registry |
 | `just release-reuse COMMIT ARGS...` | Save explicitly selected, verified PR source-check evidence for a squash release |
 | `just release-runtime COMMAND...` | Resolve, record, install or verify a dedicated isolated runtime |
 | `just release-verify TAG [ARGS...]` | Verify the exact stable registry version and GitHub Release/assets |
