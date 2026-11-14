@@ -77,7 +77,8 @@ concurrency:
 jobs:
   verify:
     runs-on: ubuntu-24.04
-    timeout-minutes: 30
+    # Two hours for producer validation, plus runtime setup and verification.
+    timeout-minutes: 150
     outputs:
       commit: ${{ steps.source.outputs.commit }}
       artifact: ${{ steps.handoff.outputs.artifact-id }}
@@ -101,6 +102,10 @@ jobs:
           set -euo pipefail
           commit=$(git --no-pager rev-parse "$GITHUB_REF^{commit}")
           mkdir "$RUNNER_TEMP/handoff"
+          uv run --no-config --no-project --isolated --no-cache --python 3.15 \
+            --with research-repo-tools==0.2.9 python -I -m research_repo_tools \
+            --root "$GITHUB_WORKSPACE" release evidence wait tooling/release-evidence.toml \
+            --commit "$commit" --attempts 241 --interval 30
           uv run --no-config --no-project --isolated --no-cache --python 3.15 \
             --with research-repo-tools==0.2.9 python -I -m research_repo_tools \
             --root "$GITHUB_WORKSPACE" release assets plan tooling/release-evidence.toml \
@@ -189,12 +194,21 @@ packaging/upload uses the [scoped publication template](../src/research_repo_too
 and retains consumer-owned native prerequisites. Attachment of already selected
 bytes uses the trusted installed release runtime, with no compiler requirement.
 
-Each 30-minute budget includes isolated Python/package bootstrap, bounded provider
-reads and artifact downloads, verification, and handoff/state upload. It excludes
-source builds and benchmark acquisition. Measure cold and warm setup plus complete
-job time on the adopting hosted workflow and adjust the budget for actual artifact
-sizes; this budget is an operational limit, not a measured duration. If the writer
-times out, use the original retained state and recovery procedure below.
+The read-only job waits for the exact main-push workflow before planning the
+draft. Its explicit 241 polls at 30-second intervals allow two hours of retry
+delay, plus provider request time. The 150-minute job limit leaves 30 minutes
+for bootstrap, requests, verification and handoff upload. The writer retains a
+separate 30-minute budget. Neither waiting nor verification rebuilds source or
+reacquires benchmarks. Failed or mismatched runs stop; the subsequent planner
+still authenticates the artifacts and rechecks the original source.
+
+Size the polling and outer job budgets together for the consumer's complete
+producer path, including signing and queue delays. Longer pipelines may select
+more polls (up to 721) while leaving outer-job time for bootstrap and verification.
+Measure cold and warm setup plus complete job time on the adopting hosted
+workflow and adjust for actual artifact sizes; these budgets are operational
+limits, not measured durations. If the writer times out, use the original
+retained state and recovery procedure below.
 Record the workflow/source revision, supplying package version and artifact
 identity, runner, cache state, run/attempt, setup and operation durations, total
 job duration and configured timeout in the owning tracker or CI record. Include

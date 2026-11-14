@@ -2,6 +2,7 @@
 
 import copy
 import hashlib
+import inspect
 import io
 import json
 import os
@@ -843,6 +844,23 @@ def test_workflows_preserve_native_gates_and_promote_without_rebuilding():
     assert final["needs"] == "verify" and final["environment"]["name"] == "pypi"
     assert final["permissions"] == {"id-token": "write"}
     assert len(final["steps"]) == 2 and final["steps"][1]["uses"].startswith("pypa/gh-action-pypi-publish@")
+
+
+def test_preparation_wait_covers_the_producer_critical_path_and_leaves_promotion_time():
+    ci = yaml.load((ROOT / ".github/workflows/ci.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+    prepare = yaml.load((ROOT / ".github/workflows/prepare-release.yml").read_text(encoding="utf-8"), Loader=yaml.BaseLoader)
+
+    def budget(name):
+        job = ci["jobs"][name]
+        needs = job.get("needs", [])
+        if isinstance(needs, str):
+            needs = [needs]
+        return int(job["timeout-minutes"]) + max((budget(parent) for parent in needs), default=0)
+
+    defaults = inspect.signature(release.promote).parameters
+    delay = (defaults["attempts"].default - 1) * defaults["interval"].default
+    assert delay >= budget("release-evidence") * 60
+    assert int(prepare["jobs"]["stage"]["timeout-minutes"]) * 60 >= delay + 30 * 60
 
 
 @pytest.mark.parametrize("defect", ["run-changed", "tag-moved"])

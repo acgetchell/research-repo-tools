@@ -8,6 +8,7 @@ import tempfile
 import unittest
 import zipfile
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import patch
 
 from research_repo_tools import files
@@ -36,6 +37,96 @@ def run():
 
 
 class TestValidationConsumer(unittest.TestCase):
+    def test_wait_rejects_malformed_status_before_sleeping(self):
+        for status in (None, "", "unknown", "success", [], {}):
+            with self.subTest(status=status):
+                candidate = {**run(), "status": status, "conclusion": None}
+
+                def read(endpoint):
+                    return WORKFLOW if endpoint == "actions/workflows/package.yml" else {"workflow_runs": [candidate]}
+
+                with self.assertRaisesRegex(ValueError, "invalid validation run status"):
+                    select_main_run(POLICY, COMMIT, read, sleep=lambda _: self.fail("malformed status must not wait"))
+
+    def test_wait_accepts_supported_pending_states_and_budget_endpoints(self):
+        for status in ("queued", "in_progress", "waiting", "requested", "pending"):
+            with self.subTest(status=status):
+                candidate = {**run(), "status": status, "conclusion": None}
+                waits = []
+
+                def read(endpoint):
+                    return WORKFLOW if endpoint == "actions/workflows/package.yml" else {"workflow_runs": [candidate]}
+
+                def sleep(seconds):
+                    waits.append(seconds)
+                    candidate.update(status="completed", conclusion="success")
+
+                self.assertEqual(select_main_run(POLICY, COMMIT, read, attempts=721, interval=30, sleep=sleep), run())
+                self.assertEqual(waits, [30])
+                self.assertEqual(select_main_run(POLICY, COMMIT, read, attempts=1, interval=0, sleep=sleep), run())
+                self.assertEqual(waits, [30])
+
+    def test_wait_rejects_invalid_budgets_before_provider_reads(self):
+        # Deliberately untyped boundary values exercise runtime rejection too.
+        budgets = ((0, 30), (722, 30), (True, 30), (1.5, 30), (1, -1), (1, 31), (1, True), (1, 0.5))
+        for attempts, interval in budgets:
+            with self.subTest(attempts=attempts, interval=interval), self.assertRaisesRegex(ValueError, "wait requires"):
+                select_main_run(
+                    POLICY,
+                    COMMIT,
+                    lambda _: self.fail("invalid budget must not query the provider"),
+                    attempts=cast(Any, attempts),
+                    interval=cast(Any, interval),
+                )
+
+    def test_default_wait_accepts_a_long_running_exact_main_validation(self):
+        elapsed = 0
+        candidate = {**run(), "status": "in_progress", "conclusion": None}
+
+        def read(endpoint):
+            return WORKFLOW if endpoint == "actions/workflows/package.yml" else {"workflow_runs": [candidate]}
+
+        def sleep(seconds):
+            nonlocal elapsed
+            elapsed += seconds
+            # A complete build/native/signing path can exceed an hour.
+            if elapsed >= 95 * 60:
+                candidate.update(status="completed", conclusion="success")
+
+        selected = select_main_run(POLICY, COMMIT, read, sleep=sleep)
+        self.assertEqual((selected["id"], selected["run_attempt"]), (123, 2))
+        self.assertGreaterEqual(elapsed, 95 * 60)
+        self.assertLessEqual(elapsed, 96 * 60)
+
+    def test_pending_timeout_keeps_the_original_run_without_requesting_a_rerun(self):
+        candidate = {**run(), "status": "in_progress", "conclusion": None}
+
+        def read(endpoint):
+            return WORKFLOW if endpoint == "actions/workflows/package.yml" else {"workflow_runs": [candidate]}
+
+        with self.assertRaisesRegex(ValueError, "bounded wait") as caught:
+            select_main_run(POLICY, COMMIT, read, attempts=1, interval=0)
+        message = str(caught.exception)
+        self.assertIn("https://github.com/example/package/actions/runs/123", message)
+        self.assertIn("retry preparation", message)
+        self.assertNotIn("Rerun ALL", message)
+        self.assertEqual(candidate["run_attempt"], 2)
+
+    def test_longer_consumer_budget_stops_as_soon_as_validation_fails(self):
+        candidate = {**run(), "status": "in_progress", "conclusion": None}
+        waits = []
+
+        def read(endpoint):
+            return WORKFLOW if endpoint == "actions/workflows/package.yml" else {"workflow_runs": [candidate]}
+
+        def sleep(seconds):
+            waits.append(seconds)
+            candidate.update(status="completed", conclusion="failure")
+
+        with self.assertRaisesRegex(ValueError, "missing or failed"):
+            select_main_run(POLICY, COMMIT, read, attempts=721, interval=30, sleep=sleep)
+        self.assertEqual(waits, [30])
+
     def test_repository_api_root_and_nested_endpoints(self):
         for repository in ("acgetchell/research-repo-tools", "example/package"):
             for endpoint, expected_path in (

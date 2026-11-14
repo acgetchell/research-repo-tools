@@ -864,10 +864,12 @@ just release-evidence create tooling/release-evidence.toml \
 
 Retain the manifest and exact distributions in the attempt-specific artifact
 declared by the policy. Add a signature bundle only when a signing job is
-configured. After the complete run succeeds, select and approve that evidence,
-then revalidate the original selection and publication files before credentials:
+configured. Wait for the exact main-push workflow, then select and approve that
+evidence. Revalidate the original selection and publication files before credentials:
 
 ```sh
+just release-evidence wait tooling/release-evidence.toml \
+  --commit FULL_COMMIT --attempts 241 --interval 30
 just release-evidence verify tooling/release-evidence.toml \
   --checkout /path/to/source --commit FULL_COMMIT --version 1.2.3 \
   --distributions /path/to/dist --output /trusted/selection.json
@@ -881,6 +883,13 @@ just release-evidence published tooling/release-evidence.toml \
   --checkout /path/to/source --commit FULL_COMMIT --version 1.2.3 \
   --expected /trusted/selection.json --output /trusted/published.json
 ```
+
+`wait` only observes the declared workflow and exact commit; it does not install
+tools, build, download artifacts or approve evidence. Choose its polling budget
+for the complete producer pipeline and allow additional time in the enclosing
+job for setup, API requests and verification. The example permits two hours of
+retry delay; longer pipelines can select up to 721 polls. The verifier remains
+a fresh, single-pass check after waiting and before publication.
 
 `published` checks registry inventory, metadata, hashes and downloaded bytes;
 version presence alone does not prove byte identity. It performs no upload.
