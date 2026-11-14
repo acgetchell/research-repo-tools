@@ -162,10 +162,14 @@ its name instead of creating another one.
 
 #### Validate and commit any remaining corrections
 
-**Skip this subsection when all corrections are already on `main` and only
-generated notes remain.** Otherwise finish the source, recipe, or documentation
-changes first. For benchmark consumers, decide whether fresh Step 1 acquisition
-is required using the
+**When all corrections are already on `main` and only generated notes remain,
+set `RECOVERY_TITLE="chore(release): prepare $TAG notes"` and skip this subsection.**
+If corrections are already committed on the existing
+corrective branch, retain those commits and validate the branch below. When no
+new source, recipe, or documentation changes remain, skip the staging and commit
+block and continue to note regeneration. Otherwise finish those changes first.
+For benchmark consumers, decide whether fresh Step 1 acquisition is required using
+the
 [benchmark recovery decision table](REUSING_BENCHMARKS.md#release-recovery-decisions).
 Include any new benchmark outputs in the reviewed correction.
 
@@ -173,16 +177,18 @@ Use `just check` while editing. Once the corrections are ready, run RRT's local
 validation below; consumers use their repository's corresponding required checks:
 
 ```bash
+RECOVERY_TITLE="fix(release): correct recovery for $TAG"
 just ci
 just security
-just review-uncommitted
+just review
 ```
 
+`just review` covers the branch's committed corrections and local changes together.
 Inspect the completed review and fix valid findings before committing. A review
 that reports findings can still exit successfully. Stop on an incomplete review
 or a paid-consent request; follow the repository's review policy before continuing.
 
-Stage only the reviewed corrections in the interactive patch selection. Leave
+Stage only new reviewed corrections in the interactive patch selection. Leave
 generated changelog changes unstaged for the next subsection; add reviewed new
 files by their explicit paths if needed:
 
@@ -191,7 +197,6 @@ git --no-pager diff
 git add --patch
 git --no-pager diff --cached --check
 git --no-pager diff --cached
-RECOVERY_TITLE="fix(release): correct recovery for $TAG"
 git commit -m "$RECOVERY_TITLE"
 ```
 
@@ -285,8 +290,10 @@ notes-only PR. A PR containing corrections keeps its corrective title.
 
 Require all intended changes to be committed. Batch the reviewed commits into
 one push, then open the PR; `gh pr create` prompts for its description. If this
-branch already has a PR, push to it and update its description instead of running
-`gh pr create` again:
+branch already has a PR, push to it and update its description. For a PR containing
+corrections, retain a specific corrective title that still describes the changes;
+replace an outdated notes-only preparation title with the chosen `RECOVERY_TITLE`.
+For a notes-only PR, use the preparation title. Do not run `gh pr create` again:
 
 ```bash
 git push -u origin "$RECOVERY_BRANCH"
