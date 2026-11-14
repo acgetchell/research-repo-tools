@@ -144,6 +144,68 @@ bump is unnecessary. If the source correction already merged, include only the
 remaining recipe/documentation corrections and generated notes. Merge the whole
 PR and wait for its final main CI before replacing the remote candidate.
 
+#### Create the corrective branch
+
+From the current `main` checkout, create the branch before staging or committing:
+
+```bash
+git --no-pager status --short --branch
+RECOVERY_BRANCH="fix/recover-$TAG"
+RECOVERY_TITLE="chore(release): prepare $TAG notes"
+git switch -c "$RECOVERY_BRANCH"
+```
+
+If you already generated the notes on `main`, this carries those uncommitted
+changes onto the new branch. Do not discard them or pull over local changes.
+If you already have a corrective branch, keep it and set `RECOVERY_BRANCH` to
+its name instead of creating another one.
+
+#### Validate and commit any remaining corrections
+
+**When all corrections are already on `main` and only generated notes remain,
+set `RECOVERY_TITLE="chore(release): prepare $TAG notes"` and skip this subsection.**
+If corrections are already committed on the existing
+corrective branch, retain those commits and validate the branch below. When no
+new source, recipe, or documentation changes remain, skip the staging and commit
+block and continue to note regeneration. Otherwise finish those changes first.
+For benchmark consumers, decide whether fresh Step 1 acquisition is required using
+the
+[benchmark recovery decision table](REUSING_BENCHMARKS.md#release-recovery-decisions).
+Include any new benchmark outputs in the reviewed correction.
+
+Use `just check` while editing. Once the corrections are ready, run RRT's local
+validation below; consumers use their repository's corresponding required checks:
+
+```bash
+RECOVERY_TITLE="fix(release): correct recovery for $TAG"
+just ci
+just security
+just review
+```
+
+`just review` covers the branch's committed corrections and local changes together.
+Inspect the completed review and fix valid findings before committing. A review
+that reports findings can still exit successfully. Stop on an incomplete review
+or a paid-consent request; follow the repository's review policy before continuing.
+
+Stage only new reviewed corrections in the interactive patch selection. Leave
+generated changelog changes unstaged for the next subsection; add reviewed new
+files by their explicit paths if needed:
+
+```bash
+git --no-pager diff
+git add --patch
+git --no-pager diff --cached --check
+git --no-pager diff --cached
+git commit -m "$RECOVERY_TITLE"
+```
+
+Choose a more specific corrective title when appropriate. Keep that title for
+the PR so its substantive changes remain visible in release history. If notes
+were generated before this commit, regenerate them below to include it.
+
+#### Regenerate the notes
+
 An existing local tag delimits git-cliff history. Temporarily remove **only that
 local ref**, generate prospective notes, and restore the original object even if
 generation fails. With `TAG` and `OLD_TAG_OBJECT` from step 1:
@@ -171,14 +233,90 @@ If the shell was forcibly killed, inspect the local ref before continuing. When
 it is absent, `git update-ref "refs/tags/$TAG" "$OLD_TAG_OBJECT" ""` restores it
 only if it remains absent. Never overwrite an unexpected local object.
 
-Review the generated changelog and any archives, run `just release-version-check`
-and the repository's required validation, and commit the generated changes.
-Merge through normal PR checks and review. Do not hand-edit generated notes.
+#### Validate and commit the generated notes
 
-For benchmark consumers, decide whether the correction requires fresh Step 1
-acquisition **before finishing this PR**. Use the
-[benchmark recovery decision table](REUSING_BENCHMARKS.md#release-recovery-decisions).
-Any new benchmark outputs belong in the reviewed release preparation.
+Review the generated changelog and any archives. The paths below are RRT's
+configured outputs; consumers use their configured changelog and archive paths.
+Do not hand-edit generated notes.
+
+```bash
+git --no-pager status --short
+git --no-pager diff -- CHANGELOG.md docs/archives/changelog
+just changelog-check
+just release-version-check
+```
+
+Inspect any new archive files listed by `status` as well; unstaged diffs do not
+show untracked files.
+
+For a notes-only PR that skipped the earlier validation subsection, run these now:
+
+```bash
+just ci
+just security
+```
+
+If those checks already passed for the corrective commit and only generated
+notes changed afterward, retain those results and run the note checks above
+plus any additional checks required by the repository. Further source, recipe,
+or documentation edits require their affected checks before proceeding.
+
+Review the complete branch and remaining local changes together:
+
+```bash
+just review
+```
+
+Resolve valid findings and require a completed review before committing. If
+generation produced no changes, skip the notes commit. Otherwise, after
+reviewing every generated output, stage and commit them:
+
+```bash
+git add -- CHANGELOG.md
+if [ -d docs/archives/changelog ]; then
+  git add -- docs/archives/changelog
+fi
+git --no-pager diff --cached --check
+git --no-pager diff --cached
+git commit -m "chore(release): prepare $TAG notes"
+git --no-pager status --short
+```
+
+The shared changelog template excludes this preparation title. Use it as the PR
+title only when the PR contains generated notes alone, avoiding another refresh just to record the
+notes-only PR. A PR containing corrections keeps its corrective title.
+
+#### Push the branch and merge the PR
+
+Require all intended changes to be committed. Batch the reviewed commits into
+one push, then open the PR; `gh pr create` prompts for its description. If this
+branch already has a PR, push to it and update its description. For a PR containing
+corrections, retain a specific corrective title that still describes the changes;
+replace an outdated notes-only preparation title with the chosen `RECOVERY_TITLE`.
+For a notes-only PR, use the preparation title. Do not run `gh pr create` again:
+
+```bash
+git push -u origin "$RECOVERY_BRANCH"
+gh pr create --repo "$REPO" --base main --head "$RECOVERY_BRANCH" \
+  --title "$RECOVERY_TITLE"
+```
+
+Describe the corrections and generated notes, record actual validation results
+and pending native checks, and reference the release tracker without closing it.
+For RRT, enable squash automerge and watch the checks:
+
+```bash
+RECOVERY_PR=$(gh pr view "$RECOVERY_BRANCH" --repo "$REPO" --json url --jq .url)
+gh pr merge "$RECOVERY_PR" --repo "$REPO" --auto --squash
+gh pr checks "$RECOVERY_PR" --repo "$REPO" --watch
+gh pr view "$RECOVERY_PR" --repo "$REPO" --json state,mergeCommit
+```
+
+Consumers use their required merge policy. Collect all checks and reviews before
+batching any corrective push. Passing checks or enabling automerge does not mean
+the PR has merged: require `state` to be `MERGED`, then continue to step 3 for the
+new main commit's validation. Keep the publication freeze, old remote tag, and
+old draft throughout this step.
 
 ### 3. Wait for evidence for the final commit
 

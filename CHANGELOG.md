@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Merged Pull Requests
 
+- Bump the github-actions group with 3 updates [#250](https://github.com/acgetchell/research-repo-tools/pull/250)
+- Clarify unpublished candidate recovery [#249](https://github.com/acgetchell/research-repo-tools/pull/249)
 - Wait for complete main validation before staging [#248](https://github.com/acgetchell/research-repo-tools/pull/248)
 - Complete validation and tooling follow-ups [#246](https://github.com/acgetchell/research-repo-tools/pull/246)
 - Add native identities and scoped paid consent [#245](https://github.com/acgetchell/research-repo-tools/pull/245)
@@ -118,6 +120,38 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Preserve the original run and artifacts when pending validation times out,
     and reject malformed workflow statuses before polling.
   - Document consumer polling budgets and recovery without rerunning healthy CI.
+- Clarify unpublished candidate recovery [#249](https://github.com/acgetchell/research-repo-tools/pull/249)
+  [`1a87849`](https://github.com/acgetchell/research-repo-tools/commit/1a878490c4a392c838ac62d7faffa2c023883bf5)
+
+#### fix(release): clarify unpublished candidate recovery
+  - Separate unchanged-candidate retries from corrected tag and draft replacement.
+  - Preserve benchmark provenance and require fresh final-commit acceptance.
+  - Expose configured registry checks and refresh v0.2.9 notes through #248.
+- Correct recovery for v0.2.9 [`808771a`](https://github.com/acgetchell/research-repo-tools/commit/808771a3739e8b83a47cb80cea39bd7c935570d2)
+
+### Maintenance
+
+- Bump the github-actions group with 3 updates [#250](https://github.com/acgetchell/research-repo-tools/pull/250)
+  [`1ec04ca`](https://github.com/acgetchell/research-repo-tools/commit/1ec04caed843c6c7fc42f52230ca4b36b3c03094)
+
+  Bumps the github-actions group with 3 updates: [github/codeql-action/init](https://github.com/github/codeql-action),
+  [github/codeql-action/analyze](https://github.com/github/codeql-action) and [github/codeql-action/upload-sarif](https://github.com/github/codeql-action).
+
+  Updates `github/codeql-action/init` from 4.39.1 to 4.39.3
+
+  - [Release notes](https://github.com/github/codeql-action/releases)
+  - [Changelog](https://github.com/github/codeql-action/blob/main/CHANGELOG.md)
+  - [Commits](https://github.com/github/codeql-action/compare/9b3254085494b55a0f7c4c2b3d2d52cc712ce370...33d7b85da1a04171e211befe2c739303b9a4c066)
+
+  Updates `github/codeql-action/analyze` from 4.39.1 to 4.39.3
+  - [Release notes](https://github.com/github/codeql-action/releases)
+  - [Changelog](https://github.com/github/codeql-action/blob/main/CHANGELOG.md)
+  - [Commits](https://github.com/github/codeql-action/compare/9b3254085494b55a0f7c4c2b3d2d52cc712ce370...33d7b85da1a04171e211befe2c739303b9a4c066)
+
+  Updates `github/codeql-action/upload-sarif` from 4.39.1 to 4.39.3
+  - [Release notes](https://github.com/github/codeql-action/releases)
+  - [Changelog](https://github.com/github/codeql-action/blob/main/CHANGELOG.md)
+  - [Commits](https://github.com/github/codeql-action/compare/9b3254085494b55a0f7c4c2b3d2d52cc712ce370...33d7b85da1a04171e211befe2c739303b9a4c066)
 
 ## [0.2.8] - 2026-11-10
 
