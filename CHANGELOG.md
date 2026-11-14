@@ -127,6 +127,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Separate unchanged-candidate retries from corrected tag and draft replacement.
   - Preserve benchmark provenance and require fresh final-commit acceptance.
   - Expose configured registry checks and refresh v0.2.9 notes through #248.
+- Correct recovery for v0.2.9 [`808771a`](https://github.com/acgetchell/research-repo-tools/commit/808771a3739e8b83a47cb80cea39bd7c935570d2)
 
 ### Maintenance
 
