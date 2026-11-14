@@ -69,9 +69,11 @@ REPO=$(gh repo view "$(git --no-pager remote get-url origin)" --json nameWithOwn
 Confirm `origin` is the named repository and the account can see its drafts.
 Record a publication freeze in the release tracker and coordinate it with every
 maintainer: do not publish this tag or the recorded draft (`OLD_RELEASE_ID` below)
-until replacement completes and the new candidate passes step 5. Disable every
-workflow that can publish this candidate. For RRT, the workflow is `publish.yml`;
-consumers must use their own publication workflow names:
+until replacement completes and the new candidate passes step 5. Do not publish
+any other release while its publication workflow is disabled: those release
+events will not start an upload run. Disable every workflow that can publish
+this candidate. For RRT, the workflow is `publish.yml`; consumers must use their
+own publication workflow names:
 
 ```bash
 gh workflow disable publish.yml --repo "$REPO"
