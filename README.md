@@ -763,6 +763,22 @@ is an explicit reviewed option with its own eligibility and revalidation;
 package and artifact checks still apply. Approval, registry publication,
 attachment uploads and downstream adoption remain distinct actions.
 
+For an existing tag or draft, use the [release recovery guide][recovery-guide]
+to choose a retry or unpublished-candidate replacement. Its benchmark decision
+table distinguishes retained measurements from final-commit acceptance.
+The shared `release-registry` recipe checks the package and registry already
+declared in your publication configuration, without uploading. Set `TAG` to the
+intended stable release tag in canonical `vX.Y.Z` format, such as `v1.2.3`:
+
+```sh
+TAG=v1.2.3
+just release-registry "$TAG" --expect absent
+```
+
+Use `--expect present` to require an existing version. Lookup failures stop the
+check; they never count as absence. Full publication verification still requires
+`just release-verify "$TAG"` and the repository's post-publication checks.
+
 The v0.2.9 `release assets plan` command verifies independent repository/tag/commit
 and push-event assertions, protected-default-branch ancestry, required checks,
 metadata, generated notes and original signed evidence.
@@ -1018,6 +1034,7 @@ BSD-3-Clause. See [LICENSE][license].
 [pypi-badge]: https://badgen.net/pypi/v/research-repo-tools
 [python-adoption]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_DEPENDENCIES.md#shared-python-adoption
 [python-evidence]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/release-evidence-api.md#python-distribution-evidence
+[recovery-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RECOVERING_RELEASES.md
 [release]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_RELEASE_METADATA.md
 [release-tracker]: https://github.com/acgetchell/research-repo-tools/issues/236
 [reports-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/PUBLISHING_REPORTS.md

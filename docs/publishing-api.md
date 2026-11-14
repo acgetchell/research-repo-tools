@@ -96,7 +96,8 @@ crates.io requires an archive checksum. Neither lookup retries uploads.
 
 The canonical release recipe surface is identical in root and consumer templates:
 `release-check TAG`, `release-first TAG DATE`, `release-notes TAG`,
-`release-publish TAG [ARGS...]`, `release-reuse COMMIT ARGS...`,
+`release-publish TAG [ARGS...]`, `release-registry TAG --expect absent|present`,
+`release-reuse COMMIT ARGS...`,
 `release-verify TAG [ARGS...]`, `release-version-check`, `tag TAG`,
 `tag-preview TAG`, and `update-version TAG [ARGS...]`.
 `release-verify` defaults to seven attempts at ten-second intervals; optional

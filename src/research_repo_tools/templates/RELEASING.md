@@ -5,11 +5,30 @@ create the annotated tag and a draft GitHub release. Review and publish the
 draft with `just release-publish`, then approve the registry deployment to
 permit the package upload.
 
-The changelog is generated for the target tag before the tag exists, so the
-release process does not require a temporary local tag. Repeating
+For a new candidate, the changelog is generated before the tag exists; no
+temporary local tag is needed. Repeating
 `changelog-release` with unchanged history and configuration reuses the prepared
 citation date. The `declared` date policy permits preparation and tagging on
 different UTC days when citation and changelog dates agree.
+
+## Choose where to resume
+
+| Your situation | Next step |
+| --- | --- |
+| New release; no tag or draft | Prepare the environment and follow Step 1. |
+| Release PR merged; no tag or draft | Start Step 2 with the final commit's complete main CI and any benchmark acceptance. |
+| Existing candidate; commit unchanged; preparation or upload failed | Follow [Recovering a failed run](#recovering-a-failed-run). Preserve the tag and original receipts while inspecting the failure. |
+| Existing tag or draft; another PR must be included | Start with the shared [recovery guide's writer check](https://github.com/acgetchell/research-repo-tools/blob/main/docs/RECOVERING_RELEASES.md#check-the-consumers-draft-writer), then prepare the correction and replacement. |
+| GitHub or registry publication already exists | Preserve it. Finish verification/publication of the same bytes; use a new version for corrected contents. |
+
+An unpublished replacement keeps the version while replacing the annotated tag,
+draft, and final-commit evidence. Keep the old remote candidate until corrected
+source and generated notes merge and final main CI succeeds. Do not rerun
+dependency updates or the version bump solely to recover. Benchmark consumers
+must separately apply the
+[benchmark recovery decision table](https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_BENCHMARKS.md#release-recovery-decisions):
+original measurements may remain usable, but acceptance must bind the final
+commit and current native evidence.
 
 ## Prepare the environment
 
@@ -202,10 +221,15 @@ advances it with `update-version` and regenerates the matching changelog.
 
 A corrective PR can regenerate affected artifacts and validate them. Do not
 repeat the version bump or dependency updates solely because another PR is
-needed. After merge, resume Step 2 from the corrected clean `main` commit and
-require its complete validation. Reconcile any existing unpublished tag, draft,
-and superseded workflow runs through the repository's recovery procedure.
-Never replace a published release; use a new version.
+needed. Commit required source, recipe, and documentation changes first, then
+generate and commit notes in the same corrective PR. With no tag or draft,
+resume Step 2 after merge from the corrected clean
+`main` commit and require its complete validation. With an existing candidate,
+follow the shared
+[recovery guide](https://github.com/acgetchell/research-repo-tools/blob/main/docs/RECOVERING_RELEASES.md),
+including local tag handling during note generation and the benchmark reuse
+decision. Apply the repository's draft receipt and preparation workflow rules.
+Never replace a published release; use a new version for corrected contents.
 
 ## Step 2: Publish after the PR is merged
 
@@ -306,10 +330,24 @@ the release PR or tracking issue.
 
 ### Recovering a failed run
 
-For retained CI evidence, rerun all jobs of the original trusted main-push run,
-including the producer and every required validation gate. A partial rerun cannot
-establish a complete attempt. Require new attempt-specific artifacts and a new
-reviewed evidence selection; do not silently replace an approved handoff.
+If preparation only timed out while healthy main CI was still running, wait for
+that complete attempt and keep its successful, unexpired evidence. Resume using
+the owning writer's recovery contract. RRT permits a failed-job retry; the shared
+authenticated writer requires its original attempt-1 handoff and retained state,
+so an automatic Actions rerun cannot create fresh state. Follow its
+[recovery procedure](https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md#retry-and-recovery).
+If main CI itself failed or retained evidence needs recovery,
+rerun all jobs of the original trusted main-push run within its rerun window,
+including the producer and every required validation gate. A partial main rerun
+cannot establish a complete attempt. Require new attempt-specific artifacts and
+a new reviewed evidence selection; do not silently replace an approved handoff.
+The authenticated writer pins the original handoff's evidence selection. If
+that retained evidence has expired, a successful main rerun does not make a new
+selection valid with the original handoff. If the writer rejects that selection,
+or the original run cannot be recovered, use the shared
+[unpublished-candidate replacement procedure](https://github.com/acgetchell/research-repo-tools/blob/main/docs/RECOVERING_RELEASES.md#replace-an-unpublished-candidate),
+including its consumer writer check. Preserve the original handoff and journal;
+do not substitute the new selection to force a retry.
 Draft preparation retries must retain the original receipt and captured release
 ID. An uncertain creation requires explicit recovery before another attempt.
 

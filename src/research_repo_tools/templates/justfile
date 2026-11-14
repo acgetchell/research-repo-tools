@@ -173,6 +173,10 @@ release-notes tag:
 release-publish tag *args:
     uv run --locked --group dev research-repo-tools release publish "$@" --approve
 
+# Check the configured package's exact registry version without uploading.
+release-registry tag +args:
+    uv run --locked --group dev research-repo-tools release registry "$@"
+
 # Save verified PR source-check evidence for an explicit squash release commit.
 release-reuse commit +args:
     uv run --locked --group dev research-repo-tools release reuse "$@"

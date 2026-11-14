@@ -143,6 +143,41 @@ same commit. Implementation, maintainer-approved patch publication, and consumer
 adoption are separate gates. Verify the supplying published package before
 adoption; consumer migrations do not block upstream publication.
 
+## Release recovery decisions
+
+Use this table when an existing release candidate fails or needs another PR.
+The [release recovery guide](RECOVERING_RELEASES.md) owns tag/draft replacement;
+this section determines what happens to the measurements. A new tag object or
+draft does not by itself require new timing, but a corrected commit must pass
+the original acquisition contract before its raw data can be reused.
+
+| What changed or failed? | Acquisition | Final acceptance and publication |
+| --- | --- | --- |
+| Preparation wait, rendering, capture, promotion, or upload failed; selected inputs and commit are unchanged | Preserve the original raw data and owner receipts. Retry the owning recovery/derivation operation. | Verify final acceptance and live native evidence before publication. Retain the captured target for an upload retry. |
+| New commit changes only exact predeclared, eligible output paths or matches the frozen publisher receipt | Reuse only after whole-tree and original-policy verification succeeds. | Require complete native CI for the new commit and a newly reviewed Step 2 acceptance outside the checkout. |
+| Source, dependency, lockfile, harness, workflow, script, command, tool, plan, fixture, or another nonexempt path changed | Finish those changes, then perform a new Step 1 acquisition under a newly frozen policy. | Generate/review outputs and obtain final-commit native evidence and Step 2 acceptance. |
+| Native artifacts expired or the selected run/attempt changed; acquisition inputs remain valid | Existing raw data may still qualify. CI evidence recovery does not itself measure again. | Obtain a complete trusted producer/validation attempt and explicitly review a new selection into a new acceptance file. |
+| Independent acquisition digest, owner evidence, or required publication receipt is missing or corrupt | Recover the authentic original handoff. If it cannot be recovered, reacquire with a new trusted handoff. | Never manufacture an independent digest from the candidate being checked. |
+| Draft replaced for an otherwise accepted candidate | Preserve raw evidence if its reuse contract still passes. | Capture the new draft target and derive/reverify its attachment. Old target and upload receipts belong to the old draft. |
+
+The original policy compares the **whole tree**, including file names, bytes,
+and executable bits. Its output exceptions must already name exact eligible
+nonexecutable Markdown, reStructuredText, CSV, or SVG paths. A document consumed
+by a build, gate, or workload is an input; its extension cannot exempt it.
+Committed shared-publisher evidence has a separate frozen exact-byte receipt.
+Do not widen output exceptions after acquisition to accommodate a fix.
+“Documentation-only” and “release-workflow-only” are not sufficient evidence for
+reuse. See the [binding contract](candidate-reuse-api.md#source-and-trust-contract).
+
+Preserve original revisions, dirty state, hosts, tools, sessions, timestamps, and
+raw bytes. A new acceptance binds that historical acquisition to the corrected
+final commit; it does not relabel the measurements as having run on that commit.
+Save new acceptances separately and retain superseded approvals for audit.
+After a required fresh acquisition, use its new independently frozen handoff
+for Step 2; the old acquisition's policy and approval remain historical evidence.
+The older [exact-tag v1 transport](benchmark-reuse-api.md) retains its own identity
+rules; it does not acquire these candidate output exceptions automatically.
+
 ## Interrupted acquisition and limitations
 
 Schema-6 recovery retains a contiguous completed trial prefix and the contiguous
