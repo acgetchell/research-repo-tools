@@ -341,9 +341,13 @@ rerun all jobs of the original trusted main-push run within its rerun window,
 including the producer and every required validation gate. A partial main rerun
 cannot establish a complete attempt. Require new attempt-specific artifacts and
 a new reviewed evidence selection; do not silently replace an approved handoff.
-If that original run cannot be recovered, use the shared
-[recovery guide](https://github.com/acgetchell/research-repo-tools/blob/main/docs/RECOVERING_RELEASES.md)
-to prepare and validate a replacement unpublished candidate.
+The authenticated writer pins the original handoff's evidence selection. If
+that retained evidence has expired, a successful main rerun does not make a new
+selection valid with the original handoff. If the writer rejects that selection,
+or the original run cannot be recovered, use the shared
+[unpublished-candidate replacement procedure](https://github.com/acgetchell/research-repo-tools/blob/main/docs/RECOVERING_RELEASES.md#replace-an-unpublished-candidate),
+including its consumer writer check. Preserve the original handoff and journal;
+do not substitute the new selection to force a retry.
 Draft preparation retries must retain the original receipt and captured release
 ID. An uncertain creation requires explicit recovery before another attempt.
 

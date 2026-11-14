@@ -768,9 +768,10 @@ to choose a retry or unpublished-candidate replacement. Its benchmark decision
 table distinguishes retained measurements from final-commit acceptance.
 The shared `release-registry` recipe checks the package and registry already
 declared in your publication configuration, without uploading. Set `TAG` to the
-intended release version first:
+intended stable release tag in canonical `vX.Y.Z` format, such as `v1.2.3`:
 
 ```sh
+TAG=v1.2.3
 just release-registry "$TAG" --expect absent
 ```
 

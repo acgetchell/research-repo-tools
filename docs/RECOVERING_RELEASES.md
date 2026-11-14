@@ -49,12 +49,12 @@ The replacement uses the same version name, a new annotated tag object pointing
 to the corrected commit, and a new draft with new assets and promotion evidence.
 
 These commands are an operator procedure, not an automatic retry. Obtain the
-repository's required authorization for local tag changes, draft deletion, and
-remote tag replacement. Run from the repository root in Bash or Zsh (Git Bash
-on Windows). Stop after any
-failed command and inspect the resulting state before continuing.
+repository's required authorization for the publication freeze, local tag changes,
+draft deletion, and remote tag replacement. Run from the repository root in Bash
+or Zsh (Git Bash on Windows). Stop after any failed command and inspect the
+resulting state before continuing.
 
-### 1. Record the existing candidate
+### Freeze publication before step 1
 
 Set the intended tag and derive the repository from this checkout:
 
@@ -67,6 +67,26 @@ REPO=$(gh repo view "$(git --no-pager remote get-url origin)" --json nameWithOwn
 ```
 
 Confirm `origin` is the named repository and the account can see its drafts.
+Record a publication freeze in the release tracker and coordinate it with every
+maintainer: do not publish this tag or the recorded draft (`OLD_RELEASE_ID` below)
+until replacement completes and the new candidate passes step 5. Disable every
+workflow that can publish this candidate. For RRT, the workflow is `publish.yml`;
+consumers must use their own publication workflow names:
+
+```bash
+gh workflow disable publish.yml --repo "$REPO"
+gh api "repos/$REPO/actions/workflows/publish.yml" --jq .state
+```
+
+Require `disabled_manually`. Inspect queued and active publication runs for
+`$TAG`, cancel those candidate runs, and confirm they have stopped before
+proceeding. Leave runs for other tags unchanged. Disabling a workflow
+does not prevent manual GitHub publication through the UI or API, so maintain
+the coordinated freeze throughout replacement. Keep the preparation workflow
+enabled for step 5. See [GitHub CLI workflow disable](https://cli.github.com/manual/gh_workflow_disable).
+
+### 1. Record the existing candidate
+
 Record the annotated tag object and the commit it names, then compare the remote
 ref with that exact object:
 
@@ -168,6 +188,12 @@ git pull --ff-only
 RELEASE_COMMIT=$(git --no-pager rev-parse HEAD)
 ```
 
+Before accepting `RELEASE_COMMIT`, confirm the generated release notes cover the
+final main history under the repository's changelog policy, including intervening
+merges. If required entries are missing, stop before step 4: regenerate the notes
+through a PR using step 2, merge it, then repeat this step's checkout selection
+and complete final-main CI wait for the new commit.
+
 Review any intervening changes before selecting this commit. Require its exact
 successful **push-to-main** producer, all configured native/package checks, and
 signed evidence from one complete attempt. Record the new run, attempt, immutable
@@ -236,12 +262,21 @@ gh api "repos/$REPO/releases/$OLD_RELEASE_ID" \
   --jq '{id, tag_name, draft, published_at, immutable, assets: [.assets[] | {id, name, digest}]}'
 ```
 
-After reviewing that output, remove the draft and its assets:
+After reviewing that output, recheck its unpublished draft state immediately
+before deleting it. A failed lookup or a changed state stops this block:
 
 ```bash
-gh api --method DELETE "repos/$REPO/releases/$OLD_RELEASE_ID"
+(
+  set -eu
+  RELEASE_IS_DRAFT=$(gh api "repos/$REPO/releases/$OLD_RELEASE_ID" \
+    --jq '.draft == true and .published_at == null and .immutable == false')
+  test "$RELEASE_IS_DRAFT" = true
+  gh api --method DELETE "repos/$REPO/releases/$OLD_RELEASE_ID"
+)
 ```
 
+Keep the publication freeze in force: this check and deletion are separate API
+requests, so the check cannot eliminate the concurrent-publication race window.
 Use the [release-ID deletion endpoint](https://docs.github.com/en/rest/releases/releases#delete-a-release).
 Leave the remote tag in place until the guarded replacement push. In particular,
 do not combine draft removal with an unconditional remote tag deletion.
@@ -290,5 +325,14 @@ the new commit and draft. RRT itself has no release benchmark.
 
 Return to the normal guide's draft review and publication steps. For RRT, start
 with [retained evidence verification](RELEASING.md#4-verify-the-release-commit)
-and continue through draft review. Keep the release tracker open until registry
+and continue through draft review. After the replacement passes these checks,
+coordinate lifting the freeze and re-enable the publication workflows before
+publishing the new draft. For RRT:
+
+```bash
+gh workflow enable publish.yml --repo "$REPO"
+gh api "repos/$REPO/actions/workflows/publish.yml" --jq .state
+```
+
+Require `active` before publication. Keep the release tracker open until registry
 publication and required post-publication verification succeed.
