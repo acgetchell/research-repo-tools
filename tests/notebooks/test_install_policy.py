@@ -222,6 +222,46 @@ def test_shell_heredocs_preserve_literal_bodies_and_later_command_lines(tmp_path
     assert item.path.read_bytes() == item.original
 
 
+@pytest.mark.parametrize("newline", ["\n", "\r\n"])
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        ("cat <<EOF\n$(\npip install numpy\n)\nEOF", [4]),
+        ("cat <<EOF\ntext $(uv sync) text\nEOF", [3]),
+        ("cat <<EOF\n`\npip install numpy\n`\nEOF", [4]),
+        ("cat <<EOF\n'$(pip install numpy)'\nEOF", [3]),
+        ('cat <<EOF\n$(echo "$(pip install numpy)")\nEOF', [3]),
+        ("cat <<EOF\n\\$(pip install ignored)\nEOF", []),
+        ("cat <<'EOF'\n$(pip install ignored)\nEOF", []),
+        ("cat <<EOF\npip install documentation-only\nEOF", []),
+        ("bash <<'EOF'\npip install numpy\nEOF", [3]),
+        ("sh <<EOF\nuv sync\nEOF", [3]),
+        ("/bin/bash -eu <<'EOF'\npip install numpy\nEOF", [3]),
+        ("bash -s -- argument <<'EOF'\npip install numpy\nEOF", [3]),
+        ("bash -c 'echo safe' <<'EOF'\npip install ignored\nEOF", []),
+        ("bash script.sh <<'EOF'\npip install ignored\nEOF", []),
+        ("bash -n <<'EOF'\npip install ignored\nEOF", []),
+        ("bash 3<<'EOF'\npip install ignored\nEOF", []),
+        ("bash 0<<'EOF'\nuv sync\nEOF", [3]),
+        ("bash <<ONE <<'TWO'\npip install ignored\nONE\nuv sync\nTWO", [5]),
+        ("bash <<'EOF'\ncat <<'INNER'\npip install documentation-only\nINNER\nuv sync\nEOF", [6]),
+        ("bash <<-'OUTER'\n\tcat <<'INNER'\n\tpip install documentation-only\n\tINNER\n\tuv sync\nOUTER", [6]),
+        ("bash >install.log <<'EOF'\npip install numpy\nEOF", [3]),
+        ("bash <<'EOF' 2>>'install log'\npip install numpy\nEOF", [3]),
+        ("bash >install.log script.sh <<'EOF'\npip install ignored\nEOF", []),
+        ("bash <<'EOF' <script.sh\npip install ignored\nEOF", []),
+        ("bash '>' <<'EOF'\npip install ignored\nEOF", []),
+        ("cat <<'DOC'; bash <<'SCRIPT'\npip install documentation-only\nDOC\nuv sync\nSCRIPT", [5]),
+        ("pip install numpy\nprintf '%s\\n' $'it\\'s'", [2]),
+        ("printf '%s\\n' $'it\\'s'\nuv sync", [3]),
+    ],
+)
+def test_shell_executed_heredoc_content_and_independent_segments(tmp_path, body, expected, newline):
+    item = notebook(tmp_path, ("%%bash\n" + body).replace("\n", newline))
+    assert [diagnostic.line for diagnostic in install_diagnostics(item)] == expected
+    assert item.path.read_bytes() == item.original
+
+
 @pytest.mark.parametrize("separator", ["\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"])
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
 def test_string_separators_preserve_physical_lines_and_token_offsets(tmp_path, separator, newline):

@@ -51,10 +51,6 @@ def _argument_sizes(args: Sequence[str]) -> tuple[int, int]:
     return windows, sum(len(os.fsencode(arg)) + 1 for arg in args)
 
 
-def _argument_size(args: Sequence[str]) -> int:
-    return max(_argument_sizes(args))
-
-
 def argument_batches(command: Sequence[str], files: Iterable[str], *, batch_size: int = 100, argument_limit: int = 24000) -> tuple[tuple[str, ...], ...]:
     """Append whole file arguments without shell quoting or splitting names.
 

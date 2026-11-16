@@ -629,6 +629,12 @@ class TestInstallPolicy(Consumer):
             ("%%script bash\ncat <<-'END'\n\t'unclosed literal\n\tEND\nuv sync", 5),
             ('%%bash\necho \\"\npip install never-executed', 3),
             ("%%sh\npip install never-executed\\", 2),
+            ("%%bash\nbash <<'EOF'\npip install never-executed\nEOF", 3),
+            ("%%bash\nbash <<-'OUTER'\n\tcat <<'INNER'\n\tpip install documentation-only\n\tINNER\n\tuv sync\nOUTER", 6),
+            ("%%bash\nbash >install.log <<'EOF'\npip install never-executed\nEOF", 3),
+            ("%%sh\ncat <<EOF\n$(\npip install never-executed\n)\nEOF", 4),
+            ("%%bash\ncat <<'EOF'\n$(pip install documentation-only)\nEOF", None),
+            ("%%bash\npip install never-executed\nprintf '%s\\n' $'it\\'s'", 2),
         )
         for source, line in cases:
             with self.subTest(source=source):

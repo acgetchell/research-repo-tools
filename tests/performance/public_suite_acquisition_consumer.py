@@ -88,6 +88,14 @@ HOST = HostMetadata("fixture-os", "fixture-arch", "fixture-cpu", 4, 8, 1024, (("
 PAIR = ReleasePair("v1.1.0", "v1.0.0")
 
 
+def _toml(value):
+    if isinstance(value, dict):
+        return "{" + ", ".join(json.dumps(key) + "=" + _toml(item) for key, item in value.items()) + "}"
+    if isinstance(value, (tuple, list)):
+        return "[" + ", ".join(_toml(item) for item in value) + "]"
+    return json.dumps(value)
+
+
 def sources(apis: tuple[str, ...], revision: str) -> dict[str, bytes]:
     return {
         "bench.py": PROGRAM.encode(),
@@ -1091,18 +1099,11 @@ sys.exit(status)
         from research_repo_tools.complete_runs import RUN_SCHEMA_V6
         from research_repo_tools.run_reports import load_latest_run
 
-        def toml(value):
-            if isinstance(value, dict):
-                return "{" + ", ".join(json.dumps(key) + "=" + toml(item) for key, item in value.items()) + "}"
-            if isinstance(value, (tuple, list)):
-                return "[" + ", ".join(toml(item) for item in value) + "]"
-            return json.dumps(value)
-
         declaration = plan(self.log, ("shared",)).document()
         declaration["suites"][0]["measurement"]["context"] = {"repository": "example/library", "acquisition-owner": "local"}
         inventory = {
             **self.revisions["v1.1.0"],
-            "measurement.toml": ("schema=5\nsuites=" + toml(declaration["suites"]) + "\n").encode(),
+            "measurement.toml": ("schema=5\nsuites=" + _toml(declaration["suites"]) + "\n").encode(),
             "report.toml": b'schema=2\ncurrent="docs/first.md"\narchive="docs/runs"\ntitle="First release timings"\n',
         }
         for name, data in inventory.items():
@@ -1149,7 +1150,7 @@ sys.exit(status)
             baseline_only = json.loads(json.dumps(declaration))
             for suite in baseline_only["suites"]:
                 suite["measurement"]["series"] = [series for series in suite["measurement"]["series"] if series["phase"] == "baseline"]
-            (self.root / "measurement.toml").write_bytes(("schema=5\nsuites=" + toml(baseline_only["suites"]) + "\n").encode())
+            (self.root / "measurement.toml").write_bytes(("schema=5\nsuites=" + _toml(baseline_only["suites"]) + "\n").encode())
             with (
                 patch("research_repo_tools.performance_acquisition.measure_and_retain", side_effect=AssertionError("invalid plan must not acquire")) as acquire,
                 patch("sys.stderr", new_callable=io.StringIO) as errors,
@@ -1331,20 +1332,13 @@ sys.exit(status)
             self.assertEqual((owner / "attachment.json").read_bytes(), receipt)
 
     def _cli_checkpoint_offline_promotion_and_readme_retry(self, *, scheduled=False) -> None:
-        def toml(value):
-            if isinstance(value, dict):
-                return "{" + ", ".join(json.dumps(key) + "=" + toml(item) for key, item in value.items()) + "}"
-            if isinstance(value, (tuple, list)):
-                return "[" + ", ".join(toml(item) for item in value) + "]"
-            return json.dumps(value)
-
         selected = self.dependency_plan(names=("shared", "new", "removed"), mode="common")
         if scheduled:
             selected = replace(selected, schedule=TrialSchedule())
         for name, data in self.revisions["v1.1.0"].items():
             (self.root / name).write_bytes(data)
         (self.root / "target").mkdir()
-        configuration = f"schema={selected.schema}\nsuites=" + toml(selected.document()["suites"]) + "\n"
+        configuration = f"schema={selected.schema}\nsuites=" + _toml(selected.document()["suites"]) + "\n"
         if scheduled:
             configuration += 'schedule={order="alternating",trials=2}\n'
         (self.root / "measurement.toml").write_text(configuration, encoding="utf-8", newline="\n")
