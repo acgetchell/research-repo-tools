@@ -150,6 +150,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   1.100.0 toolchain pin.
 
 - Correct recovery for v0.2.9 [`7e492e2`](https://github.com/acgetchell/research-repo-tools/commit/7e492e2c1ef38c3d5293b6681a0299b4b3c3de10)
+- Skip recovery PRs for merged work [`60c677f`](https://github.com/acgetchell/research-repo-tools/commit/60c677fe362ee56416e04525821ed230371ef076)
+
+  Skip PR creation when the refreshed main branch already contains the current commits. Recognize exact branch heads delivered by squash merges and verify their
+  merge commits on main before resuming recovery.
 
 ### Maintenance
 
