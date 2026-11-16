@@ -9,6 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Merged Pull Requests
 
+- Correct release recovery and validation [#252](https://github.com/acgetchell/research-repo-tools/pull/252)
+- Correct recovery for v0.2.9 [#251](https://github.com/acgetchell/research-repo-tools/pull/251)
 - Bump the github-actions group with 3 updates [#250](https://github.com/acgetchell/research-repo-tools/pull/250)
 - Clarify unpublished candidate recovery [#249](https://github.com/acgetchell/research-repo-tools/pull/249)
 - Wait for complete main validation before staging [#248](https://github.com/acgetchell/research-repo-tools/pull/248)
@@ -127,7 +129,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   - Separate unchanged-candidate retries from corrected tag and draft replacement.
   - Preserve benchmark provenance and require fresh final-commit acceptance.
   - Expose configured registry checks and refresh v0.2.9 notes through #248.
-- Correct recovery for v0.2.9 [`808771a`](https://github.com/acgetchell/research-repo-tools/commit/808771a3739e8b83a47cb80cea39bd7c935570d2)
+- Correct recovery for v0.2.9 [#251](https://github.com/acgetchell/research-repo-tools/pull/251)
+  [`c7abe15`](https://github.com/acgetchell/research-repo-tools/commit/c7abe15a91c6a57db3120016a1be6e131256fda7)
+
+#### fix(release): correct recovery for v0.2.9
+#### chore(release): prepare v0.2.9 notes
+#### fix(release): resume existing corrective branches safely
+  - Retain and review committed corrections without creating an empty commit.
+  - Initialize notes-only titles and preserve accurate corrective titles.
+  - Update existing PR titles and descriptions when their scope changes.
+- Correct release recovery and validation [#252](https://github.com/acgetchell/research-repo-tools/pull/252)
+  [`b995630`](https://github.com/acgetchell/research-repo-tools/commit/b995630bb74154b0f24b9b117573d6d34f8b6a20)
+
+#### fix: correct release recovery and validation
+
+  Verify local dependency receipts before candidate tag recovery, make release and review paths honor consumer roots and filesystem identity, and preserve
+  notebook shell syntax and citation metadata during validation.
+
+  Isolate native fixtures, simplify installed-consumer execution without dropping regression coverage, and align actual Rust builds and CI with the shared
+  1.100.0 toolchain pin.
+
+- Correct recovery for v0.2.9 [`7e492e2`](https://github.com/acgetchell/research-repo-tools/commit/7e492e2c1ef38c3d5293b6681a0299b4b3c3de10)
+- Skip recovery PRs for merged work [`60c677f`](https://github.com/acgetchell/research-repo-tools/commit/60c677fe362ee56416e04525821ed230371ef076)
+
+  Skip PR creation when the refreshed main branch already contains the current commits. Recognize exact branch heads delivered by squash merges and verify their
+  merge commits on main before resuming recovery.
 
 ### Maintenance
 
