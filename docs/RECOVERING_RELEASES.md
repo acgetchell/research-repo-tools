@@ -301,8 +301,43 @@ just to record the notes-only PR. A PR containing corrections keeps its correcti
 #### 2.5. Push once, then create or update the PR
 
 Require all intended changes to be committed and the checks/review above to be
-complete. Collect all results from any existing PR before a corrective push.
-Batch the reviewed commits into this single push:
+complete. First refresh `origin/main` and check whether this branch has any
+commits left to merge:
+
+```bash
+(
+  set -eu
+  git fetch origin refs/heads/main:refs/remotes/origin/main
+  RECOVERY_COMMITS=$(git --no-pager rev-list --count origin/main..HEAD)
+  if [ "$RECOVERY_COMMITS" -eq 0 ]; then
+    printf 'No commits to merge. Skip the rest of step 2.5 and continue to step 3.\n'
+  else
+    RECOVERY_HEAD=$(git --no-pager rev-parse HEAD)
+    MERGED_COMMIT=$(gh api --method GET --paginate "repos/$REPO/pulls" \
+      -f state=closed -f base=main -f "head=${REPO%%/*}:$RECOVERY_BRANCH" -f per_page=100 \
+      --jq ".[] | select(.merged_at != null and .head.sha == \"$RECOVERY_HEAD\") | .merge_commit_sha")
+    if [ -n "$MERGED_COMMIT" ]; then
+      git --no-pager merge-base --is-ancestor "$MERGED_COMMIT" origin/main
+      printf 'This branch head was already merged. Skip the rest of step 2.5 and continue to step 3.\n'
+    else
+      printf '%s commits to merge. Continue with the push and PR instructions below.\n' "$RECOVERY_COMMITS"
+    fi
+  fi
+)
+```
+
+If a lookup or ancestry check fails, stop; do not infer that there is nothing
+left to merge. Squash merging changes commit IDs, so a nonzero count alone does
+not prove that another PR is needed. The block also checks for a merged PR with
+this exact branch head and verifies its merge commit is on the refreshed `main`.
+
+**Either skip message: continue directly to step 3**, skipping the push, both PR
+blocks, and the automerge/watch commands below. Step 3 switches to and updates
+`main`; keep the old branch intact. **The message says to continue with the push:
+follow the remaining instructions below.**
+
+Collect all results from any existing PR before a corrective push. Batch the
+reviewed commits into this single push:
 
 ```bash
 git push -u origin "$RECOVERY_BRANCH"
@@ -346,7 +381,8 @@ old draft throughout this step.
 
 ### 3. Wait for evidence for the final commit
 
-Synchronize a clean `main` checkout after the corrective PR merges:
+Synchronize a clean `main` checkout after the corrective PR merges, or after
+step 2.5 confirms no commits remain or this branch head was already merged:
 
 ```bash
 git switch main
