@@ -34,8 +34,7 @@ from research_repo_tools.release_publishing import (
 
 class TestPublishingConsumer(unittest.TestCase):
     def test_captured_draft_id_is_preserved_through_publication_and_event_gate(self):
-        settings = self.settings("pypi")
-        settings = replace(settings, publishing=replace(settings.publishing, expected_title="tag", generated_notes=True, require_immutable=True))
+        settings = self.settings("pypi", **{"expected-title": "tag", "generated-notes": True, "require-immutable": True})
         sha = "a" * 40
         target = ReleaseTarget("example/project", "v1.2.3", 9, sha, "v1.2.3")
         draft = GitHubRelease("example/project", "v1.2.3", 9, True, False, False, (), title="v1.2.3", body="notes\n")
@@ -190,8 +189,7 @@ class TestPublishingConsumer(unittest.TestCase):
                     self.assertNotIn("target", effect.call_args.kwargs)
 
     def test_declared_release_assertions_preserve_note_content_and_lifecycle(self):
-        settings = self.settings("pypi")
-        settings = replace(settings, publishing=replace(settings.publishing, expected_title="tag", generated_notes=True, require_immutable=True))
+        settings = self.settings("pypi", **{"expected-title": "tag", "generated-notes": True, "require-immutable": True})
         sha = "a" * 40
         release = GitHubRelease("example/project", "v1.2.3", 9, False, True, False, (), title="v1.2.3", body="- Authored notes.\n")
         remote = {
@@ -243,8 +241,7 @@ class TestPublishingConsumer(unittest.TestCase):
                         self.assertEqual(check_reviewed_release(settings, "v1.2.3", draft=True), draft)
 
     def test_final_publication_assertions_reject_drift_before_effect_and_after_registry(self):
-        settings = self.settings("pypi")
-        settings = replace(settings, publishing=replace(settings.publishing, expected_title="tag", generated_notes=True, require_immutable=True))
+        settings = self.settings("pypi", **{"expected-title": "tag", "generated-notes": True, "require-immutable": True})
         sha = "a" * 40
         draft = GitHubRelease("example/project", "v1.2.3", 9, True, False, False, (), title="v1.2.3", body="notes\n")
         with (
@@ -321,7 +318,7 @@ class TestPublishingConsumer(unittest.TestCase):
         self.addCleanup(self.temporary.cleanup)
         self.root = Path(self.temporary.name)
 
-    def settings(self, registry_name):
+    def settings(self, registry_name, **fields):
         return config.parse(
             {
                 "publishing": {
@@ -329,10 +326,40 @@ class TestPublishingConsumer(unittest.TestCase):
                     "package": "sample",
                     "repository": "example/project",
                     "required-checks": [{"name": "native", "app-id": 15368}],
+                    **fields,
                 }
             },
             root=self.root,
         )
+
+    def test_release_assertions_load_from_standalone_and_pyproject_toml(self):
+        policy = (
+            'registry="pypi"\npackage="sample"\nrepository="example/project"\n'
+            'required-checks=[{name="native",app-id=15368}]\n'
+            'expected-title="tag"\ngenerated-notes=true\nrequire-immutable=true\n'
+        )
+        for filename, section in (("research.toml", "publishing"), ("pyproject.toml", "tool.research-repo-tools.publishing")):
+            with self.subTest(filename=filename):
+                path = self.root / filename
+                path.write_text(f"[{section}]\n" + policy, encoding="utf-8", newline="\n")
+                settings = config.load(path, root=self.root).publishing
+                self.assertIsNotNone(settings)
+                assert settings is not None
+                self.assertEqual(settings.expected_title, "tag")
+                self.assertIs(settings.generated_notes, True)
+                self.assertIs(settings.require_immutable, True)
+
+    def test_release_assertions_reject_invalid_public_configuration_values(self):
+        for field, value in (
+            ("expected-title", "release"),
+            ("generated-notes", 1),
+            ("generated-notes", "true"),
+            ("require-immutable", 0),
+            ("require-immutable", "false"),
+        ):
+            diagnostic = "expected-title must be 'tag'" if field == "expected-title" else "must be booleans"
+            with self.subTest(field=field, value=value), self.assertRaisesRegex(ValueError, diagnostic):
+                self.settings("pypi", **{field: value})
 
     def test_release_gate_rejects_hidden_checkout_changes_before_remote_queries(self):
         sha = "a" * 40

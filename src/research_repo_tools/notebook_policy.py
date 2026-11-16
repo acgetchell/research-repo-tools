@@ -139,9 +139,10 @@ COMMAND_START = re.compile(r"^\s*(?:[A-Za-z_]\w*\s*=\s*)?(?:!|%(?:pip|conda|mamb
 _WINDOWS = sys.platform == "win32"
 
 
-def _arguments(command: str, *, windows: bool) -> list[str]:
+def _arguments(command: str, *, windows: bool, posix_escapes: bool = False) -> list[str]:
     lexer = shlex.shlex(command, posix=True)
-    lexer.escape = ""  # Preserve Windows executable path separators.
+    if not posix_escapes:
+        lexer.escape = ""  # Preserve Windows executable path separators.
     lexer.whitespace_split = True
     if windows:
         lexer.quotes = '"'
@@ -149,32 +150,138 @@ def _arguments(command: str, *, windows: bool) -> list[str]:
     return list(lexer)
 
 
-def _shell_segments(command: str, *, windows: bool) -> list[list[str]]:
-    """Split literal unquoted shell operators before discarding argument quotes."""
-    parts = []
-    start = index = 0
+def _heredoc_word(command: str, index: int) -> tuple[str, int, bool]:
+    """Read one literal delimiter with shell quote removal, without expansion."""
+    word: list[str] = []
     quote = ""
+    started = False
+    quoted = False
     while index < len(command):
         character = command[index]
+        if not started and character in " \t":
+            index += 1
+            continue
+        if not quote and character in " \t\r\n;&|<>()":
+            break
+        if character == "\\" and quote != "'" and index + 1 < len(command):
+            following = command[index + 1]
+            if not quote or following in '$`"\\\n':
+                if following != "\n":
+                    word.append(following)
+                    started = True
+                    quoted = True
+                index += 2
+                continue
+        started = True
+        if character == quote:
+            quote = ""
+        elif not quote and character in "\"'":
+            quote = character
+            quoted = True
+        else:
+            word.append(character)
+        index += 1
+    if quote or not started:
+        raise ValueError("incomplete heredoc delimiter")
+    return "".join(word), index, quoted
+
+
+def _shell_segments(command: str, *, windows: bool, posix_escapes: bool = False) -> list[tuple[int, list[str]]]:
+    """Retain physical command lines while parsing quotes and continuations."""
+    parts = []
+    part: list[str] = []
+    index = 0
+    line = start_line = 1
+    quote = ""
+    arithmetic_depth = 0
+    heredocs: list[tuple[str, bool, bool]] = []
+    while index < len(command):
+        character = command[index]
+        if character == "\n" and not quote and heredocs:
+            parts.append((start_line, "".join(part)))
+            part = []
+            index += 1
+            line += 1
+            for delimiter, strip_tabs, quoted in heredocs:
+                body_parts: list[str] = []
+                while index < len(command):
+                    end = command.find("\n", index)
+                    end = len(command) if end < 0 else end
+                    body_line = command[index:end]
+                    index = end + (end < len(command))
+                    line += end < len(command)
+                    if not quoted and end < len(command) and (len(body_line) - len(body_line.rstrip("\\"))) % 2:
+                        body_parts.append(body_line[:-1])
+                        continue
+                    body_line = "".join([*body_parts, body_line])
+                    if (body_line.lstrip("\t") if strip_tabs else body_line) == delimiter:
+                        break
+                    body_parts.clear()
+            heredocs.clear()
+            continue
         if character == ("^" if windows else "\\") and (not quote if windows else quote != "'"):
+            escaped = command[index : index + 2]
+            if not windows and escaped == "\\\n":
+                line += 1
+                index += 2
+                continue
+            if not part:
+                start_line = line
+            if posix_escapes and escaped == "\\" and not quote:
+                escaped = ""  # Bash/sh discard an unpaired escape at EOF.
+            part.append(escaped)
+            line += escaped.count("\n")
             index += 2
             continue
+        if not part and character.isspace():
+            line += character == "\n"
+            index += 1
+            continue
+        if not part:
+            start_line = line
         if quote:
             if character == quote:
                 quote = ""
         elif character in ('"' if windows else "\"'"):
             quote = character
-        elif character == "#" and not windows and (index == start or command[index - 1].isspace()):
-            parts.append(command[start:index])
+        elif not windows and command.startswith("((", index):
+            arithmetic_depth += 2
+            part.append("((")
+            index += 2
+            continue
+        elif not windows and arithmetic_depth and character in "()":
+            arithmetic_depth += 1 if character == "(" else -1
+        elif not windows and not arithmetic_depth and command.startswith("<<", index):
+            if command.startswith("<<<", index):
+                part.append("<<<")
+                index += 3
+                continue
+            strip_tabs = command.startswith("<<-", index)
+            delimiter, end, quoted = _heredoc_word(command, index + 2 + strip_tabs)
+            heredocs.append((delimiter, strip_tabs, quoted))
+            # Redirection syntax is not an argument, and its quoting must not
+            # reach the host-oriented argument parser or affect body parsing.
+            part.append(" ")
+            line += command[index:end].count("\n")
+            index = end
+            continue
+        elif character == "#" and not windows and (not part or command[index - 1].isspace()):
+            parts.append((start_line, "".join(part)))
+            part = []
             newline = command.find("\n", index)
-            start = index = len(command) if newline < 0 else newline + 1
+            index = len(command) if newline < 0 else newline
             continue
         elif character in ("&|\r\n" if windows else ";&|\r\n"):
-            parts.append(command[start:index])
-            start = index + 1
+            parts.append((start_line, "".join(part)))
+            part = []
+            line += character == "\n"
+            index += 1
+            continue
+        part.append(character)
+        line += character == "\n"
         index += 1
-    parts.append(command[start:])
-    return [_arguments(part, windows=windows) for part in parts]
+    parts.append((start_line, "".join(part)))
+    return [(line, _arguments(part, windows=windows, posix_escapes=posix_escapes)) for line, part in parts]
 
 
 def _command_arguments(arguments: list[str], kind: str, *, uv_run: bool = False) -> list[str]:
@@ -243,7 +350,7 @@ def _installer_mutates(segment: list[str]) -> bool:
 
 def _mutates(command: str | list[str], *, windows: bool = False) -> bool:
     try:
-        segments = _shell_segments(command, windows=windows) if isinstance(command, str) else [command]
+        segments = [arguments for _, arguments in _shell_segments(command, windows=windows)] if isinstance(command, str) else [command]
     except ValueError:
         return False  # Native syntax checks own malformed commands.
     return any(_installer_mutates(segment) for segment in segments)
@@ -304,10 +411,19 @@ def install_diagnostics(notebook: Notebook) -> list[Diagnostic]:
         shell = bool(lines and SHELL_CELL.match(lines[0]))
         masked = lines if shell else _masked(source).split("\n")
         failures: set[int] = set()
+        if shell:
+            try:
+                # Explicit Bash/sh cells use POSIX quoting on every host;
+                # native command heuristics still preserve Windows paths.
+                failures.update(
+                    line + 1 for line, arguments in _shell_segments("\n".join(lines[1:]), windows=False, posix_escapes=True) if _installer_mutates(arguments)
+                )
+            except ValueError:
+                pass  # Native syntax checks own malformed commands.
         for line, (original, visible) in enumerate(zip(lines, masked, strict=True), 1):
-            if shell and line > 1 or COMMAND_START.match(visible):
+            if not shell and COMMAND_START.match(visible):
                 command = re.sub(r"^\s*(?:[A-Za-z_]\w*\s*=\s*)?!+", "", original).lstrip().removeprefix("%")
-                if _mutates(command, windows=_WINDOWS and not shell):
+                if _mutates(command, windows=_WINDOWS):
                     failures.add(line)
         tree = _python_tree(lines, masked)
         if tree is not None:

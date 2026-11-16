@@ -7,7 +7,7 @@ No user-wide tools, sibling repositories, or project lockfiles are modified.
 import argparse
 import json
 import os
-import platform
+import runpy
 import shutil
 import subprocess
 import sys
@@ -259,8 +259,7 @@ def check_semgrep_update(consumer: Path, artifact: Path, version: str, uv: str, 
     consumer.mkdir()
     uv_version = run([uv, "--version"], cwd=consumer, env=env).split()[1]
     manifest = consumer / "pyproject.toml"
-    intel_macos = sys.platform == "darwin" and platform.machine() == "x86_64"
-    expected = "1.182.1" if intel_macos else "1.183.0"
+    expected = "1.183.0"
     policy = (
         '[project]\nname="scanner-consumer"\nversion="0.1.0"\nrequires-python=">=3.15"\n'
         f'[dependency-groups]\ntooling=["research-repo-tools=={version}"]\n'
@@ -283,7 +282,7 @@ def check_semgrep_update(consumer: Path, artifact: Path, version: str, uv: str, 
     lock = consumer / "uv.lock"
     original_lock = lock.read_bytes()
     locked = {package["version"] for package in tomllib.loads(original_lock.decode())["package"] if package["name"] == "semgrep"}
-    assert locked == {expected}
+    assert locked == {expected}, locked
     assert f"Semgrep {expected}" in run([*cli, "semgrep", "setup"], cwd=consumer, env=env)
     scripts = consumer / ".venv" / ("Scripts" if os.name == "nt" else "bin")
     python = scripts / ("python.exe" if os.name == "nt" else "python")
@@ -366,8 +365,10 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
         "UV_WORKING_DIR",
         "UV_WORKING_DIRECTORY",
     }
-    env = {key: value for key, value in os.environ.items() if key not in external_locations}
+    fixture_environment = runpy.run_path(str(ROOT / "tests/fixture_environment.py"))
+    env = {key: value for key, value in fixture_environment["git_environment"]().items() if key not in external_locations}
     env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env["RUSTUP_TOOLCHAIN"] = fixture_environment["rust_channel"]()
     if env.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1":
         print("Git-mutating consumer tests are skipped by RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS=1 (wheel and sdist).")
     with tempfile.TemporaryDirectory(prefix="research-repo-tools-installed-") as directory:
@@ -379,14 +380,22 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             name = "wheel" if artifact == wheel else "sdist"
             consumer = temporary / name
             consumer.mkdir()
+            shutil.copyfile(ROOT / "tests/fixture_environment.py", consumer / "fixture_environment.py")
+            shutil.copyfile(ROOT / "rust-toolchain.toml", consumer / "rust-toolchain.toml")
             environment = consumer / "environment"
             run([uv, "venv", "--python", "3.15", str(environment)], cwd=consumer, env=env)
             scripts = environment / ("Scripts" if os.name == "nt" else "bin")
             python = scripts / ("python.exe" if os.name == "nt" else "python")
             run([uv, "pip", "install", "--python", str(python), str(artifact)], cwd=consumer, env=env)
             local_env = {**env, "PATH": str(scripts) + os.pathsep + env.get("PATH", "")}
-            publishing_suite = consumer / "public_publishing_consumer.py"
-            publishing_suite.write_bytes((ROOT / "tests/releases/public_publishing_consumer.py").read_bytes())
+
+            def copy_suite(relative: str) -> Path:
+                source = ROOT / "tests" / relative
+                target = consumer / source.name
+                target.write_bytes(source.read_bytes())
+                return target
+
+            publishing_suite = copy_suite("releases/public_publishing_consumer.py")
             if changelog_only:
                 run_consumer_suite(
                     python,
@@ -397,168 +406,96 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
                 print(f"PASS: installed {name} changelog CLI with real git-cliff")
                 return
             run_isolated(python, ["-c", BASE_SMOKE, str(ROOT)], cwd=consumer, env=local_env)
-            import_suite = consumer / "public_import_consumer.py"
-            import_suite.write_bytes((ROOT / "tests/validation/public_import_consumer.py").read_bytes())
+            import_suite = copy_suite("validation/public_import_consumer.py")
             run_consumer_suite(python, [str(import_suite)], cwd=consumer, env=local_env)
-            notebook_suite = consumer / "public_notebook_consumer.py"
-            notebook_suite.write_bytes((ROOT / "tests/notebooks/public_notebook_consumer.py").read_bytes())
+            notebook_suite = copy_suite("notebooks/public_notebook_consumer.py")
             run_consumer_suite(python, [str(notebook_suite), *NOTEBOOK_BASE_TESTS], cwd=consumer, env=local_env)
-            workflows_suite = consumer / "public_workflows_consumer.py"
-            workflows_suite.write_bytes((ROOT / "tests/notebooks/public_workflows_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(workflows_suite)], cwd=consumer, env=local_env)
             # Run the same consumer suite against each installed artifact, using
             # only documented imports and no source checkout or pytest dependency.
-            public_suite = consumer / "public_api_consumer.py"
-            public_suite.write_bytes((ROOT / "tests/utilities/public_api_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(public_suite)], cwd=consumer, env=local_env)
-            git_suite = consumer / "public_git_inspection_consumer.py"
-            git_suite.write_bytes((ROOT / "tests/utilities/public_git_inspection_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(git_suite)], cwd=consumer, env=local_env)
-            cargo_suite = consumer / "public_cargo_examples_consumer.py"
-            cargo_suite.write_bytes((ROOT / "tests/cargo_examples/public_cargo_examples_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(cargo_suite)], cwd=consumer, env=local_env)
-            cargo_docs_suite = consumer / "public_cargo_docs_consumer.py"
-            cargo_docs_suite.write_bytes((ROOT / "tests/cargo_docs/public_cargo_docs_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(cargo_docs_suite)], cwd=consumer, env=local_env)
-            timing_suite = consumer / "public_command_timing_consumer.py"
-            timing_suite.write_bytes((ROOT / "tests/performance/public_command_timing_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(timing_suite)], cwd=consumer, env=local_env)
-            actions_suite = consumer / "public_actions_consumer.py"
-            actions_suite.write_bytes((ROOT / "tests/dependencies/public_actions_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(actions_suite)], cwd=consumer, env=local_env)
-            updates_suite = consumer / "public_python_updates_consumer.py"
-            updates_suite.write_bytes((ROOT / "tests/dependencies/public_python_updates_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(updates_suite)], cwd=consumer, env=local_env)
-            recipes_suite = consumer / "public_dependency_recipes_consumer.py"
-            recipes_suite.write_bytes((ROOT / "tests/dependencies/public_dependency_recipes_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(recipes_suite)], cwd=consumer, env=local_env)
-            owners_suite = consumer / "public_owners_consumer.py"
-            owners_suite.write_bytes((ROOT / "tests/toolchain/public_owners_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(owners_suite)], cwd=consumer, env=local_env)
-            just_suite = consumer / "public_just_consumer.py"
-            just_suite.write_bytes((ROOT / "tests/utilities/public_just_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(just_suite)], cwd=consumer, env=local_env)
-            paths_suite = consumer / "public_path_identity_consumer.py"
-            paths_suite.write_bytes((ROOT / "tests/utilities/public_path_identity_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(paths_suite)], cwd=consumer, env=local_env)
-            review_suite = consumer / "public_review_consumer.py"
-            review_suite.write_bytes((ROOT / "tests/review/public_review_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(review_suite)], cwd=consumer, env=local_env)
-            release_suite = consumer / "public_release_consumer.py"
-            release_suite.write_bytes((ROOT / "tests/releases/public_release_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(release_suite)], cwd=consumer, env=local_env)
+            for suite in (
+                "notebooks/public_workflows_consumer.py",
+                "utilities/public_api_consumer.py",
+                "utilities/public_git_inspection_consumer.py",
+                "cargo_examples/public_cargo_examples_consumer.py",
+                "cargo_docs/public_cargo_docs_consumer.py",
+                "performance/public_command_timing_consumer.py",
+                "dependencies/public_actions_consumer.py",
+                "dependencies/public_python_updates_consumer.py",
+                "dependencies/public_dependency_recipes_consumer.py",
+                "toolchain/public_owners_consumer.py",
+                "utilities/public_just_consumer.py",
+                "utilities/public_path_identity_consumer.py",
+                "review/public_review_consumer.py",
+                "releases/public_release_consumer.py",
+            ):
+                run_consumer_suite(python, [str(copy_suite(suite))], cwd=consumer, env=local_env)
             validation_release_suite = consumer / "public_validation_release_consumer.py"
             validation_release_suite.write_bytes((ROOT / "tests/releases/public_validation_consumer.py").read_bytes())
             run_consumer_suite(python, [str(validation_release_suite)], cwd=consumer, env=local_env)
-            evidence_suite = consumer / "public_evidence_consumer.py"
-            dependency_suite = consumer / "public_dependency_provenance_consumer.py"
-            dependency_suite.write_bytes((ROOT / "tests/releases/public_dependency_provenance_consumer.py").read_bytes())
+            dependency_suite = copy_suite("releases/public_dependency_provenance_consumer.py")
             run_consumer_suite(python, [str(dependency_suite)], cwd=consumer, env=local_env)
-            source_suite = consumer / "public_sources_consumer.py"
-            source_suite.write_bytes((ROOT / "tests/dependencies/public_sources_consumer.py").read_bytes())
+            source_suite = copy_suite("dependencies/public_sources_consumer.py")
             shutil.copytree(ROOT / "tests/dependencies/fixtures", consumer / "fixtures")
             run_consumer_suite(python, [str(source_suite)], cwd=consumer, env=local_env)
-            builds_suite = consumer / "public_builds_consumer.py"
-            builds_suite.write_bytes((ROOT / "tests/dependencies/public_builds_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(builds_suite)], cwd=consumer, env=local_env)
-            policy_suite = consumer / "public_runtime_policy_consumer.py"
-            policy_suite.write_bytes((ROOT / "tests/dependencies/public_runtime_policy_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(policy_suite)], cwd=consumer, env=local_env)
-            runtime_suite = consumer / "public_tooling_runtime_consumer.py"
-            runtime_suite.write_bytes((ROOT / "tests/toolchain/public_tooling_runtime_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(runtime_suite)], cwd=consumer, env=local_env)
-            dates_suite = consumer / "public_dates_consumer.py"
-            dates_suite.write_bytes((ROOT / "tests/changelog/public_dates_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(dates_suite)], cwd=consumer, env=local_env)
-            evidence_suite.write_bytes((ROOT / "tests/releases/public_evidence_consumer.py").read_bytes())
+            for suite in (
+                "dependencies/public_builds_consumer.py",
+                "dependencies/public_runtime_policy_consumer.py",
+                "toolchain/public_tooling_runtime_consumer.py",
+                "changelog/public_dates_consumer.py",
+            ):
+                run_consumer_suite(python, [str(copy_suite(suite))], cwd=consumer, env=local_env)
+            evidence_suite = copy_suite("releases/public_evidence_consumer.py")
             (consumer / "PREPARING_DRAFTS.md").write_bytes((ROOT / "docs/PREPARING_DRAFTS.md").read_bytes())
-            receipts_suite = consumer / "public_receipts_consumer.py"
-            receipts_suite.write_bytes((ROOT / "tests/releases/public_receipts_consumer.py").read_bytes())
+            receipts_suite = copy_suite("releases/public_receipts_consumer.py")
             run_consumer_suite(python, [str(receipts_suite)], cwd=consumer, env=local_env)
             run_consumer_suite(python, [str(evidence_suite)], cwd=consumer, env=local_env)
-            host_suite = consumer / "public_host_consumer.py"
-            host_suite.write_bytes((ROOT / "tests/performance/public_host_consumer.py").read_bytes())
+            host_suite = copy_suite("performance/public_host_consumer.py")
             run_consumer_suite(python, [str(host_suite)], cwd=consumer, env=local_env)
-            reuse_suite = consumer / "public_reuse_consumer.py"
-            reuse_suite.write_bytes((ROOT / "tests/releases/public_reuse_consumer.py").read_bytes())
+            reuse_suite = copy_suite("releases/public_reuse_consumer.py")
             run_consumer_suite(python, [str(reuse_suite)], cwd=consumer, env=local_env)
             run_consumer_suite(python, [str(publishing_suite)], cwd=consumer, env=local_env)
-            performance_suite = consumer / "public_performance_consumer.py"
-            preparation_suite = consumer / "public_preparation_consumer.py"
-            preparation_suite.write_bytes((ROOT / "tests/performance/public_preparation_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(preparation_suite)], cwd=consumer, env=local_env)
-            inventory_suite = consumer / "public_report_inventory_consumer.py"
-            inventory_suite.write_bytes((ROOT / "tests/performance/public_report_inventory_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(inventory_suite)], cwd=consumer, env=local_env)
-            performance_suite.write_bytes((ROOT / "tests/performance/public_performance_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(performance_suite)], cwd=consumer, env=local_env)
-            workflows_suite = consumer / "public_workflows_consumer.py"
-            workflows_suite.write_bytes((ROOT / "tests/performance/public_workflows_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(workflows_suite)], cwd=consumer, env=local_env)
-            release_target_suite = consumer / "public_release_target_consumer.py"
-            release_target_suite.write_bytes((ROOT / "tests/performance/public_release_target_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(release_target_suite)], cwd=consumer, env=local_env)
-            complete_suite = consumer / "public_complete_consumer.py"
-            complete_suite.write_bytes((ROOT / "tests/performance/public_complete_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(complete_suite)], cwd=consumer, env=local_env)
-            rendering_suite = consumer / "public_rendering_consumer.py"
-            rendering_suite.write_bytes((ROOT / "tests/performance/public_rendering_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(rendering_suite)], cwd=consumer, env=local_env)
-            acquisition_suite = consumer / "public_acquisition_consumer.py"
-            acquisition_suite.write_bytes((ROOT / "tests/performance/public_acquisition_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(acquisition_suite)], cwd=consumer, env=local_env)
-            suite_acquisition = consumer / "public_suite_acquisition_consumer.py"
-            suite_acquisition.write_bytes((ROOT / "tests/performance/public_suite_acquisition_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(suite_acquisition)], cwd=consumer, env=local_env)
-            criterion_suite = consumer / "public_criterion_consumer.py"
-            criterion_suite.write_bytes((ROOT / "tests/performance/public_criterion_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(criterion_suite)], cwd=consumer, env=local_env)
-            suites_suite = consumer / "public_suites_consumer.py"
-            suites_suite.write_bytes((ROOT / "tests/performance/public_suites_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(suites_suite)], cwd=consumer, env=local_env)
-            publication_suite = consumer / "public_publication_consumer.py"
-            publication_suite.write_bytes((ROOT / "tests/publication/public_publication_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(publication_suite)], cwd=consumer, env=local_env)
-            security_suite = consumer / "public_security_consumer.py"
-            security_suite.write_bytes((ROOT / "tests/security/public_security_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(security_suite)], cwd=consumer, env=local_env)
-            sarif_suite = consumer / "public_sarif_consumer.py"
-            sarif_suite.write_bytes((ROOT / "tests/security/public_sarif_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(sarif_suite)], cwd=consumer, env=local_env)
-            scan_suite = consumer / "public_scan_consumer.py"
-            scan_suite.write_bytes((ROOT / "tests/semgrep/public_scan_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(scan_suite)], cwd=consumer, env=local_env)
-            semgrep_tool_suite = consumer / "public_semgrep_tool_consumer.py"
-            semgrep_tool_suite.write_bytes((ROOT / "tests/semgrep/public_semgrep_tool_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(semgrep_tool_suite)], cwd=consumer, env=local_env)
+            for suite in (
+                "performance/public_preparation_consumer.py",
+                "performance/public_report_inventory_consumer.py",
+                "performance/public_performance_consumer.py",
+                "performance/public_workflows_consumer.py",
+                "performance/public_release_target_consumer.py",
+                "performance/public_complete_consumer.py",
+                "performance/public_rendering_consumer.py",
+                "performance/public_acquisition_consumer.py",
+                "performance/public_suite_acquisition_consumer.py",
+                "performance/public_criterion_consumer.py",
+                "performance/public_suites_consumer.py",
+                "publication/public_publication_consumer.py",
+                "security/public_security_consumer.py",
+                "security/public_sarif_consumer.py",
+                "semgrep/public_scan_consumer.py",
+                "semgrep/public_semgrep_tool_consumer.py",
+            ):
+                run_consumer_suite(python, [str(copy_suite(suite))], cwd=consumer, env=local_env)
             # Exercise a real locked update using the installed wheel or sdist.
             with zipfile.ZipFile(wheel) as archive:
                 scanner_constraints = archive.read("research_repo_tools/templates/semgrep-constraints.txt").decode("utf-8")
             overrides = [line for line in scanner_constraints.splitlines() if line and not line.startswith("#")]
             check_semgrep_update(consumer / "scanner consumer", artifact, version, uv, env, overrides)
-            toolchain_suite = consumer / "public_toolchain_consumer.py"
-            toolchain_suite.write_bytes((ROOT / "tests/toolchain/public_toolchain_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(toolchain_suite)], cwd=consumer, env=local_env)
-            selected_suite = consumer / "public_selected_tools_consumer.py"
-            selected_suite.write_bytes((ROOT / "tests/toolchain/public_selected_tools_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(selected_suite)], cwd=consumer, env=local_env)
-            text_suite = consumer / "public_text_consumer.py"
-            text_suite.write_bytes((ROOT / "tests/validation/public_text_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(text_suite)], cwd=consumer, env=local_env)
-            native_suite = consumer / "public_native_consumer.py"
-            native_suite.write_bytes((ROOT / "tests/papers/public_native_consumer.py").read_bytes())
-            run_consumer_suite(python, [str(native_suite)], cwd=consumer, env=local_env)
+            for suite in (
+                "toolchain/public_toolchain_consumer.py",
+                "toolchain/public_selected_tools_consumer.py",
+                "validation/public_text_consumer.py",
+                "papers/public_native_consumer.py",
+            ):
+                run_consumer_suite(python, [str(copy_suite(suite))], cwd=consumer, env=local_env)
             # Date/discovery APIs work in base installs; PDF operations fail
             # clearly until the opt-in extra from the same distribution resolves.
-            paper_suite = consumer / "public_paper_consumer.py"
-            paper_suite.write_bytes((ROOT / "tests/papers/public_paper_consumer.py").read_bytes())
+            paper_suite = copy_suite("papers/public_paper_consumer.py")
             run_consumer_suite(python, [str(paper_suite), *PAPER_BASE_TESTS], cwd=consumer, env=local_env)
             run([uv, "pip", "install", "--python", str(python), f"{artifact}[papers]"], cwd=consumer, env=env)
             run_consumer_suite(python, [str(paper_suite), *PAPER_EXTRA_TESTS], cwd=consumer, env=local_env)
             command = scripts / ("research-repo-tools.exe" if os.name == "nt" else "research-repo-tools")
             assert run([str(command), "--version"], cwd=consumer, env=local_env).strip() == version
-            assert "changelog" in run([str(command), "--help"], cwd=consumer, env=local_env)
-            assert "setup" in run([str(command), "--help"], cwd=consumer, env=local_env)
+            help_text = run([str(command), "--help"], cwd=consumer, env=local_env)
+            assert "changelog" in help_text
+            assert "setup" in help_text
             just = scripts / ("just.exe" if os.name == "nt" else "just")
             assert run([str(just), "--version"], cwd=consumer, env=local_env).strip() == f"just {expected_just}"
             # Exercise the installed recipe template after a default sync that
@@ -594,15 +531,12 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             run([str(just), "notebook-sync"], cwd=recipe_consumer, env=env)
             recipe_python = recipe_consumer / ".venv" / scripts.name / python.name
             run_consumer_suite(recipe_python, [str(notebook_suite), *NOTEBOOK_EXTRA_TESTS], cwd=recipe_consumer, env=env)
-            testing_suite = consumer / "public_testing_consumer.py"
-            testing_suite.write_bytes((ROOT / "tests/notebooks/public_testing_consumer.py").read_bytes())
+            testing_suite = copy_suite("notebooks/public_testing_consumer.py")
             run_consumer_suite(recipe_python, [str(testing_suite)], cwd=recipe_consumer, env=env)
-            validation_suite = consumer / "public_validation_consumer.py"
-            validation_suite.write_bytes((ROOT / "tests/validation/public_validation_consumer.py").read_bytes())
+            validation_suite = copy_suite("validation/public_validation_consumer.py")
             validation_env = {**env, "PATH": str(recipe_python.parent) + os.pathsep + env.get("PATH", "")}
             run_consumer_suite(recipe_python, [str(validation_suite)], cwd=recipe_consumer, env=validation_env)
-            tools_suite = consumer / "public_python_tools_consumer.py"
-            tools_suite.write_bytes((ROOT / "tests/validation/public_python_tools_consumer.py").read_bytes())
+            tools_suite = copy_suite("validation/public_python_tools_consumer.py")
             registry = consumer / "registry"
             registry.mkdir()
             if artifact == wheel:
@@ -619,8 +553,7 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
                 "UV_PYTHON_INSTALL_DIR": str(consumer / "profile python"),
             }
             run_consumer_suite(recipe_python, [str(tools_suite)], cwd=recipe_consumer, env=profile_env)
-            minimum_suite = consumer / "public_python_minimum_consumer.py"
-            minimum_suite.write_bytes((ROOT / "tests/toolchain/public_python_minimum_consumer.py").read_bytes())
+            minimum_suite = copy_suite("toolchain/public_python_minimum_consumer.py")
             run_consumer_suite(python, [str(minimum_suite)], cwd=consumer, env=profile_env)
             notebook = recipe_consumer / "notebooks" / "smoke.ipynb"
             notebook.parent.mkdir()

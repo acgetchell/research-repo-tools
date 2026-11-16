@@ -19,6 +19,7 @@ from typing import Any, Literal, cast
 from packaging.utils import canonicalize_name
 
 from research_repo_tools._console import console_text, write_stdout
+from research_repo_tools._git_checkout import _in_checkout
 from research_repo_tools.process import format_exception_diagnostics
 lazy from research_repo_tools.ci import export_environment
 lazy from research_repo_tools.config import Config
@@ -202,7 +203,7 @@ def write_release_outputs(
 def _checkout(
     checkout: Path, package: str, version: str, commit: str, *, path_in_vcs: str = "", package_kind: Literal["auto", "cargo", "python"] = "auto"
 ) -> None:
-    if Path(__file__).resolve().is_relative_to(checkout.resolve()):
+    if _in_checkout(Path(__file__), checkout.resolve()):
         raise ValueError("release verification requires a trusted installed runtime outside the observed checkout")
     require_release_checkout(checkout, commit)
     observed = read_package_info(checkout / path_in_vcs, kind=package_kind)
@@ -723,7 +724,7 @@ def _run_candidate_attachment(args: argparse.Namespace, settings: Config) -> Non
     acceptance = snapshots[args.acceptance]
     checkout = args.checkout.resolve(strict=True) if args.checkout else None
     dependencies = settings.release.published_dependencies
-    if checkout is not None and Path(__file__).resolve().is_relative_to(checkout):
+    if checkout is not None and _in_checkout(Path(__file__), checkout):
         raise ValueError("candidate attachment requires a trusted installed runtime outside the observed checkout")
     if not attaching:
         verify_candidate_attachment(
@@ -841,7 +842,7 @@ def _retrieve_receipt(args: argparse.Namespace, settings: Config) -> None:
     output = args.output if args.output.is_absolute() else settings.root / args.output
     if output.is_symlink() or output.is_junction():
         raise ValueError("receipt output must not be a link or junction")
-    if Path(os.path.abspath(output)).is_relative_to(settings.root) or output.resolve().is_relative_to(settings.root.resolve()):
+    if Path(os.path.abspath(output)).is_relative_to(settings.root) or _in_checkout(output, settings.root.resolve()):
         raise ValueError("retain draft receipts outside the consumer checkout")
     output = output.resolve()
     names = {"selection.json", "target.json", "draft-receipt.json"}
@@ -898,7 +899,7 @@ def run_assets(args: argparse.Namespace, settings: Config) -> None:
             _validate_distinct_paths((configuration, args.output, *([args.github_output] if args.github_output is not None else [])))
             if settings.publishing is None or settings.publishing.repository != args.repository:
                 raise ValueError("draft source repository differs from independent assertion")
-            if args.output.resolve().is_relative_to(settings.root.resolve()):
+            if _in_checkout(args.output, settings.root.resolve()):
                 raise ValueError("retain draft handoff outside the observed checkout")
             original = _read_candidate_input(args.output) if args.output.exists() else None
             payload = plan_release_draft(settings, configuration, source, event=args.event, expected=original)
@@ -937,7 +938,7 @@ def run_assets(args: argparse.Namespace, settings: Config) -> None:
         if (target.repository, target.tag, target.commit, target.expected_title) != (policy.repository, args.tag, args.commit, title):
             raise ValueError("release assertions/policy differ from captured target")
         checkout = args.checkout.resolve(strict=True) if args.checkout is not None else None
-        if checkout is not None and Path(__file__).resolve().is_relative_to(checkout):
+        if checkout is not None and _in_checkout(Path(__file__), checkout):
             raise ValueError("release assets require a trusted installed runtime outside the observed checkout")
 
         def unchanged() -> None:
@@ -999,7 +1000,7 @@ def run_assets(args: argparse.Namespace, settings: Config) -> None:
     check_release_dependencies(args.checkout, packages=settings.release.published_dependencies)
     policy = load_asset_policy(_path(settings.root, args.configuration))
     checkout = args.checkout.resolve(strict=True)
-    if Path(__file__).resolve().is_relative_to(checkout):
+    if _in_checkout(Path(__file__), checkout):
         raise ValueError("release assets require a trusted installed runtime outside the observed checkout")
     if resolve_revision(checkout, args.tag) != args.commit:
         raise ValueError("local release tag differs from the independent commit assertion")

@@ -6,6 +6,7 @@ import json
 import math
 import os
 import re
+import runpy
 import shutil
 import subprocess
 import sys
@@ -563,6 +564,12 @@ class TestCompleteConsumer(unittest.TestCase):
         self._declarative_workflow(native=False)
 
     def _declarative_workflow(self, *, native):
+        if native:
+            support = Path(__file__).resolve().with_name("fixture_environment.py")
+            if not support.is_file():
+                support = Path(__file__).resolve().parents[1] / "fixture_environment.py"
+            environment = runpy.run_path(str(support))["git_environment"]()
+            self.enterContext(patch.dict(os.environ, environment, clear=True))
         with tempfile.TemporaryDirectory(prefix="consumer café ") as directory:
             root = Path(directory).resolve() / "consumer"
             fixture(root)

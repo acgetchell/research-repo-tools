@@ -382,7 +382,7 @@ def publication_inputs(root: Path, evidence: Evidence):
         if phase == "current":
             selections.extend(
                 [
-                    (suite.measurement.sources, "source-inventory", source.source_sha256),
+                    (suite.measurement.phase_sources("current"), "source-inventory", source.source_sha256),
                     (suite.measurement.measurement.workloads, "workload-inventory", context["workload-sha256"]),
                 ]
             )

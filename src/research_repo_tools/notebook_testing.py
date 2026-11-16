@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 
 from research_repo_tools import config, notebooks
+from research_repo_tools._git_checkout import _in_checkout
 from research_repo_tools.notebooks import NotebookExecution as NotebookExecution
 
 __all__ = ["NotebookExecution", "NotebookProject", "isolated_project"]
@@ -110,7 +111,7 @@ def isolated_project(
     source_root, parent, environment = source_root.resolve(), parent.resolve(), environment.resolve()
     if not source_root.is_dir() or not parent.is_dir():
         raise ValueError("source_root and parent must be existing directories")
-    if parent.is_relative_to(source_root) or parent.is_relative_to(environment):
+    if _in_checkout(parent, source_root) or _in_checkout(parent, environment):
         raise ValueError("fixture parent must be outside the source project and borrowed environment")
     if environment != Path(sys.prefix).resolve():
         raise ValueError("run notebook tests with the explicitly selected locked environment's interpreter")
@@ -120,7 +121,9 @@ def isolated_project(
     for path in (*_PROJECT_FILES, *paths):
         source = _inside(source_root, path)
         relative = source.relative_to(source_root)
-        if relative == Path("rust-toolchain.toml") or any(part.casefold() in {".git", ".venv"} for part in relative.parts):
+        if (len(relative.parts) == 1 and relative.name.casefold() == "rust-toolchain.toml") or any(
+            part.casefold() in {".git", ".venv"} for part in relative.parts
+        ):
             raise ValueError(f"notebook fixtures exclude toolchain/environment state: {path}")
         if not source.is_file():
             raise ValueError(f"fixture input must be a regular file: {path}")

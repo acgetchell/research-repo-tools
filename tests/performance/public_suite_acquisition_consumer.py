@@ -813,6 +813,82 @@ sys.exit(status)
         with self.assertRaisesRegex(ValueError, "same-release"):
             validate_run_policy(changed, selected, release=True)
 
+    def test_document_publication_uses_current_phase_source_inventory(self) -> None:
+        self.revisions["v1.0.0"]["baseline-only.json"] = b"historical compiler input\r\n"
+        self.revisions["v1.1.0"]["current-input.json"] = b"current compiler input\r\n"
+        self.stack.enter_context(patch("research_repo_tools.source_exports._git", side_effect=git_model(self.revisions)))
+        selected = plan(self.log, ("shared",))
+        suite = selected.suites[0]
+        selected = replace(
+            selected,
+            suites=(
+                replace(
+                    suite,
+                    measurement=replace(
+                        suite.measurement,
+                        measurement=replace(suite.measurement.measurement, sources=("unused-default-*.json",)),
+                        baseline=replace(suite.measurement.baseline, sources=(*suite.measurement.sources, "baseline-only.json")),
+                        current=replace(suite.measurement.current, sources=(*suite.measurement.sources, "current-*.json")),
+                    ),
+                ),
+            ),
+        )
+        evidence = measure_pair(self.root, selected, PAIR, progress=self.quiet)
+        measured = self.log.read_bytes()
+        for name, data in self.revisions["v1.1.0"].items():
+            (self.root / name).write_bytes(data)
+        payload, manifest = serialize_evidence(evidence)
+        (self.root / "run.json").write_bytes(payload)
+        (self.root / "evidence.json").write_bytes(manifest)
+        document = self.root / "README.md"
+        document.write_bytes(b"head\r\n<!-- BEGIN -->\r\nold\r\n<!-- END -->\r\ntail\r\n")
+        (self.root / "releases.txt").write_bytes(b"current=v1.1.0\nprevious=v1.0.0\n")
+        (self.root / "publication.toml").write_text(
+            'schema=2\ndocument="README.md"\nbegin="<!-- BEGIN -->"\nend="<!-- END -->"\n'
+            'payload="run.json"\nmanifest="evidence.json"\nunit="ns"\nstatistic="median"\n'
+            'rows=[{key="case",label="Case"}]\n'
+            'series=[{name="shared/current",label="Current",rows={case="shared/case"}}]\n'
+            "references=["
+            '{path="Cargo.toml",pattern=\'^version="(?P<value>[^"]+)"$\',source="version"},'
+            '{path="releases.txt",pattern=\'^current=(?P<value>.*)$\',source="tag"},'
+            '{path="releases.txt",pattern=\'^previous=(?P<value>.*)$\',source="previous-tag"}]\n'
+            '[provenance.baseline]\nrelease="v1.0.0"\nrevision="' + "a" * 40 + '"\n'
+            '[provenance.current]\nrelease="v1.1.0"\nrevision="' + "b" * 40 + '"\n',
+            encoding="utf-8",
+            newline="\n",
+        )
+        with patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("publication must not reacquire")):
+            prepared = load_publication(self.root, "publication.toml")
+            current = self.root / "current-input.json"
+            original = current.read_bytes()
+            self.assertEqual(dict(prepared.originals)[current.name], original)
+            self.assertNotIn("baseline-only.json", dict(prepared.originals))
+            publish_publication(prepared)
+            published = document.read_bytes()
+            self.assertTrue(published.startswith(b"head\r\n"))
+            self.assertTrue(published.endswith(b"tail\r\n"))
+            self.assertIn(b"Current", published)
+            self.assertEqual(publish_publication(load_publication(self.root, "publication.toml")), ())
+            added = self.root / "current-added.json"
+            for damage in ("changed", "deleted", "added"):
+                current.write_bytes(original)
+                added.unlink(missing_ok=True)
+                prepared = load_publication(self.root, "publication.toml")
+                if damage == "changed":
+                    current.write_bytes(b"changed compiler input\r\n")
+                elif damage == "deleted":
+                    current.unlink()
+                else:
+                    added.write_bytes(b"new matching compiler input\r\n")
+                with self.subTest(damage=damage):
+                    with self.assertRaisesRegex(ValueError, "publication (input or output|source inventory) changed"):
+                        publish_publication(prepared)
+                    with self.assertRaisesRegex(ValueError, "source-inventory differs from measured inputs|source pattern has no matches"):
+                        load_publication(self.root, "publication.toml")
+                    self.assertEqual(document.read_bytes(), published)
+        self.assertEqual(self.log.read_bytes(), measured)
+        self.assertEqual(((self.root / "run.json").read_bytes(), (self.root / "evidence.json").read_bytes()), (payload, manifest))
+
     def test_prepare_artifacts_derive_suite_inventories(self) -> None:
         original = self.revisions["v1.1.0"]
         for name, data in original.items():

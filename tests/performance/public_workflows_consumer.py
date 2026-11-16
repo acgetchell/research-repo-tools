@@ -4,6 +4,7 @@ import csv
 import io
 import json
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -29,6 +30,11 @@ from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.selection import argument_batches
 from research_repo_tools.validation import run_checks
 from research_repo_tools.worktrees import apply_snapshot, capture_snapshot, temporary_worktree
+
+_SUPPORT = Path(__file__).resolve().with_name("fixture_environment.py")
+if not _SUPPORT.is_file():
+    _SUPPORT = Path(__file__).resolve().parents[1] / "fixture_environment.py"
+git_environment = runpy.run_path(str(_SUPPORT))["git_environment"]
 
 LEGACY_CONFIG = b"""schema = 1
 schema-field = "schema"
@@ -489,6 +495,7 @@ record="$"
 
     @unittest.skipIf(os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1", "Git mutations disabled by local policy")
     def test_native_binary_snapshot_and_worktree_cleanup(self) -> None:
+        self.enterContext(patch.dict(os.environ, git_environment(), clear=True))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory).resolve() / "source"
             root.mkdir()

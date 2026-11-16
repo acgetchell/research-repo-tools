@@ -10,7 +10,7 @@ import tarfile
 import tempfile
 import unittest
 import zipfile
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from dataclasses import FrozenInstanceError
 from pathlib import Path
 from typing import override
@@ -133,6 +133,30 @@ class TestSourceBuilds(unittest.TestCase):
 
         with patch.object(dependency_builds, "_build_environment", side_effect=isolated):
             return prepare_dependency_builds(self.root, provider=self.provider)
+
+    def test_signing_store_rejects_checkout_aliases_in_both_directions(self) -> None:
+        root = self.root.resolve()
+        alias = root.with_name(root.name.upper())
+        native = alias.exists()
+        if native:
+            self.assertTrue(alias.samefile(root))
+        else:
+            alias.mkdir()
+        samefile = Path.samefile
+
+        def identity(path, other):
+            return (path == alias and Path(other) == root) or (path == root and Path(other) == alias) or samefile(path, other)
+
+        before = {path.name: path.read_bytes() for path in root.iterdir()}
+        with (
+            nullcontext() if native else patch.object(Path, "samefile", identity),
+            patch.object(dependency_build_receipts, "_key", side_effect=AssertionError("signing store must not be opened")),
+        ):
+            for checkout, store in ((root, alias / "private store"), (root / "nested checkout", alias)):
+                with self.subTest(checkout=checkout, store=store), self.assertRaisesRegex(ValueError, "separate from the checkout"):
+                    verify_build_receipt(checkout, "sample-pkg", "1.2.3", self.source, directory=store)
+        self.assertFalse((alias / "private store").exists())
+        self.assertEqual({path.name: path.read_bytes() for path in root.iterdir()}, before)
 
     def test_real_sdist_build_install_and_tampering_fail_closed(self) -> None:
         wheels = self.build()

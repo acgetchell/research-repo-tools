@@ -302,6 +302,7 @@ def check(dist: Path) -> None:
     generator_version = run(
         [str(just_program), "--justfile", str(ROOT / "justfile"), "--evaluate", "git_cliff_version"], cwd=ROOT, env=release_credentials.environment()
     ).strip()
+    rust_channel = tomllib.loads((ROOT / "rust-toolchain.toml").read_text(encoding="utf-8"))["toolchain"]["channel"]
     # Windows' user TEMP plus the managed Rust hierarchy can exceed link.exe's
     # path limit. RUNNER_TEMP provides a short, runner-owned workspace on all hosts.
     with native_workspace() as directory:
@@ -321,7 +322,9 @@ def check(dist: Path) -> None:
         )
         (consumer / ".python-version").write_text("3.15\n", encoding="utf-8", newline="\n")
         (consumer / "rust-toolchain.toml").write_text(
-            '[toolchain]\nchannel="1.98.0"\nprofile="minimal"\ncomponents=["rustfmt"]\ntargets=["wasm32-unknown-unknown"]\n', encoding="utf-8", newline="\n"
+            f'[toolchain]\nchannel="{rust_channel}"\nprofile="minimal"\ncomponents=["rustfmt"]\ntargets=["wasm32-unknown-unknown"]\n',
+            encoding="utf-8",
+            newline="\n",
         )
         run([uv, "lock", "--managed-python"], cwd=consumer, env=env)
         declarations = {name: (consumer / name).read_bytes() for name in (".python-version", "pyproject.toml", "rust-toolchain.toml", "uv.lock")}

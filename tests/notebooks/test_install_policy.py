@@ -163,6 +163,65 @@ def test_magic_cell_preserves_multiline_python_call_line(tmp_path):
     assert item.path.read_bytes() == item.original
 
 
+@pytest.mark.parametrize(
+    "magic,newline",
+    [("bash", "\n"), ("sh", "\r\n"), ("script bash", "\r"), ("script sh", "\n")],
+    ids=["bash-lf", "sh-crlf", "script-bash-cr", "script-sh-lf"],
+)
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        ("printf '%s\\n' '\npip install numpy\n'", []),
+        ('printf "%s\\n" "\npip install numpy\n"', []),
+        ("pip \\\n  install numpy", [2]),
+        ("pi\\\np install numpy", [2]),
+        ("printf '%s\\n' '\npip install ignored\n'\n\npip \\\n install numpy", [6]),
+        ("echo before # 'comment\n\n  pip \\\n install numpy", [4]),
+        ('echo \\"\npip install numpy', [3]),
+        ("echo \\'\nuv sync", [3]),
+        ('echo "escaped \\" quote"\npip install numpy', [3]),
+        (r"pi\p in\stall numpy", [2]),
+        ("pip install numpy\\", [2]),
+        ("pip install\\", [2]),
+        ("echo \\\\\npip install numpy", [3]),
+    ],
+)
+def test_shell_cells_preserve_multiline_quotes_continuations_and_source_lines(tmp_path, magic, newline, body, expected):
+    item = notebook(tmp_path, (f"%%{magic}\n" + body).replace("\n", newline))
+    assert [diagnostic.line for diagnostic in install_diagnostics(item)] == expected
+    assert item.path.read_bytes() == item.original
+
+
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        ("cat <<'EOF'\n'unclosed literal\nEOF\npip install numpy", [5]),
+        ("cat <<EOF\npip install documentation-only\nEOF\necho safe", []),
+        ('cat <<"END"\npip install ignored; "\nEND\nuv sync', [5]),
+        ("cat <<\\EOF\n'unclosed literal\nEOF\npip install numpy", [5]),
+        ("cat <<-'EOF'\n\tpip install ignored\n\tEOF\npip install numpy", [5]),
+        ("cat <<'EOF' # an unmatched quote: '\n'unclosed literal\nEOF\npip install numpy", [5]),
+        ("cat <<ONE <<'TWO'\n'first\nONE\n\"second\nTWO\npip install numpy", [7]),
+        ("cat <<EOF; pip install numpy\n'unclosed literal\nEOF\nuv sync", [2, 5]),
+        ("cat <<EOF\npip install still-data\n EOF\npip install still-data", []),
+        ("cat <<''\n'unclosed literal\n\npip install numpy", [5]),
+        ("cat <<'EOF'\r\n'unclosed literal\r\nEOF\r\npip install numpy", [5]),
+        ("printf '%s' '<<EOF'\npip install numpy", [3]),
+        ("cat <<< 'pip install documentation-only'\npip install numpy", [3]),
+        ("echo $((1 << 2))\npip install numpy", [3]),
+        ("echo $((1 << 2)); cat <<EOF\n'unclosed literal\nEOF\npip install numpy", [5]),
+        ("(cat <<'EOF'\n'unclosed literal\nEOF\n)\npip install numpy", [6]),
+        ("cat <<EOF\nEO\\\nF\npip install numpy", [5]),
+        ("cat <<'EOF'\nEO\\\nF\npip install documentation-only\nEOF\nuv sync", [7]),
+        ("cat <<EOF\nliteral\\\\\nEOF\npip install numpy", [5]),
+    ],
+)
+def test_shell_heredocs_preserve_literal_bodies_and_later_command_lines(tmp_path, body, expected):
+    item = notebook(tmp_path, "%%bash\n" + body)
+    assert [diagnostic.line for diagnostic in install_diagnostics(item)] == expected
+    assert item.path.read_bytes() == item.original
+
+
 @pytest.mark.parametrize("separator", ["\v", "\f", "\x1c", "\x1d", "\x1e", "\x85", "\u2028", "\u2029"])
 @pytest.mark.parametrize("newline", ["\n", "\r\n", "\r"])
 def test_string_separators_preserve_physical_lines_and_token_offsets(tmp_path, separator, newline):

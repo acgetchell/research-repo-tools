@@ -338,12 +338,23 @@ def test_explicit_selection_required():
     assert error.value.code == 2
 
 
-@pytest.mark.skipif(os.name == "nt", reason="symlink creation needs elevated Windows privileges")
 def test_artifacts_cannot_follow_symlink_parent_into_sources(consumer, monkeypatch):
     path = write(consumer.root / "notebooks/input.ipynb")
     output = consumer.root / "target/notebooks"
     output.mkdir(parents=True)
-    (output / "notebooks").symlink_to(path.parent, target_is_directory=True)
+    alias = output / "notebooks"
+    try:
+        alias.symlink_to(path.parent, target_is_directory=True)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip(f"native symlink privilege unavailable: {error}")
+        raise
+    original_link = alias.readlink()
+    original = path.read_bytes()
+    assert alias.samefile(path.parent)
     monkeypatch.setattr(notebooks, "_execute", lambda *args, **kwargs: pytest.fail("unsafe output started kernel"))
     with pytest.raises(ValueError, match="unsafe notebook artifact"):
         notebooks.execute(consumer, [path])
+    assert alias.readlink() == original_link
+    assert alias.samefile(path.parent)
+    assert path.read_bytes() == original

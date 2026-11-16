@@ -289,16 +289,30 @@ notes-only PR. A PR containing corrections keeps its corrective title.
 #### Push the branch and merge the PR
 
 Require all intended changes to be committed. Batch the reviewed commits into
-one push, then open the PR; `gh pr create` prompts for its description. If this
+one push. If this
 branch already has a PR, push to it and update its description. For a PR containing
 corrections, retain a specific corrective title that still describes the changes;
 replace an outdated notes-only preparation title with the chosen `RECOVERY_TITLE`.
-For a notes-only PR, use the preparation title. Do not run `gh pr create` again:
+For a notes-only PR, use the preparation title.
 
 ```bash
 git push -u origin "$RECOVERY_BRANCH"
+```
+
+If the branch has no PR, create it; this command prompts for its description:
+
+```bash
 gh pr create --repo "$REPO" --base main --head "$RECOVERY_BRANCH" \
   --title "$RECOVERY_TITLE"
+```
+
+If the branch already has a PR, update it instead. The first command sets its
+title; run the second interactively and select **Body** to edit its description.
+Do not run `gh pr create` again:
+
+```bash
+gh pr edit "$RECOVERY_BRANCH" --repo "$REPO" --title "$RECOVERY_TITLE"
+gh pr edit "$RECOVERY_BRANCH" --repo "$REPO"
 ```
 
 Describe the corrections and generated notes, record actual validation results
@@ -352,7 +366,31 @@ again or change the selected acquisition's provenance.
 
 ### 4. Replace the superseded draft and tag
 
-First create and inspect the replacement **local** tag while the remote tag and
+Before changing the local tag, check dependency provenance in the local
+environment that will run `just tag`:
+
+```bash
+just release-dependencies
+```
+
+`just tag` also requires valid source-build receipts. Successful hosted CI does not
+refresh machine-local receipts. Changes to RRT's Python code, dependency inputs, checkout
+location, or interpreter/platform can invalidate those receipts even when the
+dependency versions have not changed.
+
+If the check reports missing or stale source-build receipts, rebuild the
+configured dependencies and verify again:
+
+```bash
+just release-dependency-builds
+just release-dependencies
+```
+
+Require success before continuing; investigate other failures instead of treating
+them as stale receipts. Rebuilding local evidence alone does not require another
+PR or main CI run. If tracked inputs need corrections, return to steps 2 and 3.
+
+Then create and inspect the replacement **local** tag while the remote tag and
 draft remain intact. Require a clean checkout at the validated final commit.
 The exit trap restores the old local tag if creation fails before a new ref
 exists; it never overwrites another object:

@@ -317,7 +317,13 @@ def test_main_rejects_symlinked_lock_without_mutating_link_or_target(
     original_lock = lock_text(ruff="0.16.2").encode()
     lock_target.write_bytes(original_lock)
     uv_lock = tmp_path / "uv.lock"
-    uv_lock.symlink_to(lock_target.name)
+    try:
+        uv_lock.symlink_to(lock_target.name)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip("symlink creation is unavailable on this runner")
+        raise
+    original_link = uv_lock.readlink()
 
     def unexpected_uv(*_args: object, **_kwargs: object) -> None:
         msg = "uv must not run with a symlinked lockfile"
@@ -329,7 +335,8 @@ def test_main_rejects_symlinked_lock_without_mutating_link_or_target(
     assert captured.out == ""
     assert "uv.lock must not be a symbolic link" in captured.err
     assert uv_lock.is_symlink()
-    assert uv_lock.readlink().as_posix() == lock_target.name
+    assert uv_lock.readlink() == original_link
+    assert uv_lock.samefile(lock_target)
     assert lock_target.read_bytes() == original_lock
     assert pyproject.read_text(encoding="utf-8") == original_manifest
 

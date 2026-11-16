@@ -371,6 +371,45 @@ class TestDraftReceipts(unittest.TestCase):
             self.retrieve()
         self.assertEqual(self.provider.downloads, [])
 
+    def test_cli_rejects_checkout_alias_before_receipt_retrieval(self):
+        with tempfile.TemporaryDirectory(prefix="receipt alias café ") as temporary:
+            directory = Path(temporary).resolve()
+            root = directory / "consumer"
+            root.mkdir()
+            policy = root / "receipt.toml"
+            policy.write_bytes(
+                f'schema=1\nrepository="{POLICY.repository}"\nworkflow="{POLICY.workflow}"\nworkflow-name="{POLICY.workflow_name}"\n'
+                '[[jobs]]\nname="verify"\nsteps=["Verify source"]\n[[jobs]]\nname="prepare"\nsteps=["Prepare", "Retain"]\n'.encode()
+            )
+            original = policy.read_bytes()
+            alias = directory / "CONSUMER"
+            native = alias.exists()
+            if native:
+                self.assertTrue(alias.samefile(root))
+            else:
+                alias.mkdir()
+            samefile = Path.samefile
+
+            def identity(path, other):
+                return (path == alias and Path(other) == root) or samefile(path, other)
+
+            output = alias / "saved receipt"
+            errors = io.StringIO()
+            with (
+                contextlib.nullcontext() if native else patch.object(Path, "samefile", identity),
+                patch("research_repo_tools.release_interfaces.api", side_effect=AssertionError("unexpected provider request")),
+                contextlib.redirect_stderr(errors),
+            ):
+                self.assertEqual(
+                    cli.main(
+                        ["--root", str(root), "release", "assets", "retrieve", "receipt.toml", "--tag", SOURCE.tag, "--commit", COMMIT, "--output", str(output)]
+                    ),
+                    1,
+                )
+            self.assertIn("outside the consumer checkout", errors.getvalue())
+            self.assertFalse(output.exists())
+            self.assertEqual(policy.read_bytes(), original)
+
     def test_cli_automatically_freezes_and_restores_original_receipt(self):
         with tempfile.TemporaryDirectory(prefix="receipt café ") as temporary:
             directory = Path(temporary).resolve()

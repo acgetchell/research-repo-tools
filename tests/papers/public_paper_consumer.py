@@ -181,6 +181,18 @@ class TestPdf(unittest.TestCase):
         normalize_pdf(self.pdf, tex=self.tex, identity="stable", output=self.root / "new.pdf")
         self.assertEqual(check_pdf(self.root / "new.pdf").page_count, 1)
 
+    def test_output_aliases_preserve_tex_source_and_input_pdf(self) -> None:
+        unicode_tex = self.root / "caf\u00e9.tex"
+        unicode_tex.write_bytes(self.tex.read_bytes())
+        for source, destination in ((self.tex, self.root / "SOURCE.TEX"), (unicode_tex, self.root / "cafe\u0301.tex")):
+            with self.subTest(destination=destination):
+                if destination.exists():
+                    self.assertTrue(destination.samefile(source))
+                before = {path.name: path.read_bytes() for path in self.root.iterdir()}
+                with self.assertRaisesRegex(ValueError, "TeX source"):
+                    normalize_pdf(self.pdf, tex=source, identity="stable", output=destination)
+                self.assertEqual({path.name: path.read_bytes() for path in self.root.iterdir()}, before)
+
     def test_atomic_failure_and_invalid_source_preserve_input(self) -> None:
         with patch.object(files, "_replace_path", side_effect=OSError("publication failed")):
             with self.assertRaisesRegex(OSError, "publication failed"):

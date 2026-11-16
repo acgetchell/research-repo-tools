@@ -18,6 +18,7 @@ from pathlib import Path
 
 from packaging.utils import parse_wheel_filename
 
+from research_repo_tools._git_checkout import _in_checkout
 from research_repo_tools.dependency_build_policy import member_name, native_platform
 from research_repo_tools.dependency_sources import table
 from research_repo_tools.evidence import _load_json
@@ -63,7 +64,7 @@ def build_store(root: Path, directory: Path | None = None) -> Path:
     if not selected.is_absolute() or selected.is_symlink() or selected.is_junction():
         raise ValueError("source-build store must be an absolute directory without links")
     resolved = selected.resolve()
-    if resolved.is_relative_to(root.resolve()) or root.resolve().is_relative_to(resolved):
+    if _in_checkout(resolved, root.resolve()) or _in_checkout(root, resolved):
         raise ValueError("source-build signing store must be separate from the checkout")
     return resolved
 

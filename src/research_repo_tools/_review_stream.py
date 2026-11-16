@@ -6,6 +6,7 @@ import time
 from collections.abc import Callable, Mapping, Sequence
 from pathlib import Path
 
+from research_repo_tools._stdout_forwarder import open_spool
 from research_repo_tools.review_protocol import AgentEvents, CompletedReview, ConsentRequired, FailedReview
 
 
@@ -31,9 +32,10 @@ def stream_review(
     events = AgentEvents()
     # Separate file offsets avoid pipe deadlocks and preserve Windows bytes.
     # A descendant retaining stdout cannot prevent the direct child timeout.
-    with tempfile.TemporaryDirectory(prefix="rrt-review-") as directory:
-        path = Path(directory) / "stdout"
-        with path.open("wb") as writer, path.open("rb") as reader:
+    # Windows deletes this spool after the final inherited delete-sharing handle
+    # closes. No temporary-directory cleanup must wait for an unmanaged child.
+    with tempfile.NamedTemporaryFile(prefix="rrt-review-", buffering=0) as writer:
+        with open_spool(Path(writer.name)) as reader:
             process = subprocess.Popen([str(command), *args], cwd=cwd, env=env, stdin=subprocess.DEVNULL, stdout=writer)
             started = time.monotonic()
             total = 0

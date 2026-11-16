@@ -4,6 +4,7 @@ from collections.abc import Callable, Sequence
 from pathlib import Path
 
 from research_repo_tools._dependency_observation import DependencyOperation
+from research_repo_tools._git_checkout import _in_checkout
 from research_repo_tools.archives import ArchiveLimits
 from research_repo_tools.dependency_progress import DependencyProgress, report, reporting
 from research_repo_tools.evidence import _digest, _load_json, _object, deterministic_json, sha256
@@ -93,7 +94,7 @@ def _stage(
     if not 1 <= len(assets) <= 64:
         raise ValueError("asset batch requires 1..64 independently selected files")
     _validate_distinct_paths((*assets, journal, destination))
-    if checkout is not None and any(p.resolve().is_relative_to(checkout.resolve()) for p in (journal, destination)):
+    if checkout is not None and any(_in_checkout(p, checkout.resolve()) for p in (journal, destination)):
         raise ValueError("retain the staging journal and transfer outside the observed source checkout")
     names = tuple(_asset_name(p.name) for p in assets)
     if len({name.casefold() for name in names}) != len(names):

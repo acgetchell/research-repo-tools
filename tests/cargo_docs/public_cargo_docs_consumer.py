@@ -4,6 +4,8 @@ import contextlib
 import hashlib
 import io
 import json
+import os
+import runpy
 import subprocess
 import tempfile
 import unittest
@@ -15,7 +17,13 @@ from research_repo_tools import cli
 from research_repo_tools.cargo_docs import check_documentation
 from research_repo_tools.process import run_command
 
-STABLE_RUST = "1.99.1"
+_SUPPORT = Path(__file__).resolve().with_name("fixture_environment.py")
+if not _SUPPORT.is_file():
+    _SUPPORT = Path(__file__).resolve().parents[1] / "fixture_environment.py"
+_environment = runpy.run_path(str(_SUPPORT))
+cargo_environment = _environment["cargo_environment"]
+
+STABLE_RUST = _environment["rust_channel"]()
 MANIFEST = b"""[package]
 name = "docs-fixture"
 version = "0.1.0"
@@ -43,7 +51,10 @@ class TestCargoDocumentation(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix="stable cargo docs café ")
         self.addCleanup(directory.cleanup)
-        self.root = Path(directory.name).resolve()
+        area = Path(directory.name).resolve()
+        self.root = area / "consumer"
+        self.root.mkdir()
+        self.enterContext(patch.dict(os.environ, cargo_environment(area / "cargo-home"), clear=True))
         self.manifest = self.root / "Cargo.toml"
         self.manifest.write_bytes(MANIFEST)
         self.guide = self.root / "guide.md"

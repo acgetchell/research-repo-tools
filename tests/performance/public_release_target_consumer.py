@@ -172,6 +172,31 @@ class TestReleaseStaging(unittest.TestCase):
             self.root, self.target, self.assets if assets is None else assets, journal=self.journal, destination=self.destination, approve=True
         )
 
+    def test_batch_rejects_aliased_checkout_outputs_before_effects(self):
+        checkout = self.root / "checkout"
+        checkout.mkdir()
+        sentinel = checkout / "retained.bin"
+        sentinel.write_bytes(PAYLOAD)
+        alias = self.root / "CHECKOUT"
+        native = alias.exists()
+        if native:
+            self.assertTrue(alias.samefile(checkout))
+        else:
+            alias.mkdir()
+        samefile = Path.samefile
+
+        def identity(path, other):
+            return (path == alias and Path(other) == checkout) or samefile(path, other)
+
+        with contextlib.nullcontext() if native else patch.object(Path, "samefile", identity):
+            for journal, destination in ((alias / "journal.json", self.destination), (self.journal, alias / "transfer.json")):
+                with self.subTest(journal=journal, destination=destination), self.assertRaisesRegex(ValueError, "outside the observed source checkout"):
+                    stage_release_assets(self.root, self.target, self.assets, journal=journal, destination=destination, approve=True, checkout=checkout)
+                self.assertFalse(journal.exists() or destination.exists())
+        self.assertEqual(sentinel.read_bytes(), PAYLOAD)
+        self.assertEqual([asset.read_bytes() for asset in self.assets], [PAYLOAD + bytes([index]) for index in range(3)])
+        self.assertEqual(self.server.calls, [])
+
     def test_batch_checks_dependencies_twice_for_one_or_several_assets_and_retries_exact_bytes(self):
         from research_repo_tools.dependency_provenance import check_release_dependencies
 
@@ -495,6 +520,47 @@ class TestReleaseStaging(unittest.TestCase):
 
 
 class TestReleaseTargetConsumer(unittest.TestCase):
+    def test_cli_rejects_a_checker_inside_a_checkout_alias(self):
+        root = self.root.resolve()
+        checkout = root / "observed"
+        checkout.mkdir()
+        checker = checkout / "checker.py"
+        checker.write_bytes(b"# inert checker identity\n")
+        alias = root / "OBSERVED"
+        native = alias.exists()
+        if native:
+            self.assertTrue(alias.samefile(checkout))
+        else:
+            alias.mkdir()
+        samefile = Path.samefile
+
+        def identity(path, other):
+            return (path == alias and Path(other) == checkout) or samefile(path, other)
+
+        (root / "assets.toml").write_bytes(b'schema=1\nrepository="example/project"\nexpected-title="tag"\n')
+        target = root / "captured.json"
+        target.write_bytes(serialize_release_target(ReleaseTarget(REPOSITORY, TAG, 9, SHA, TAG)))
+        output, journal = root / "output.json", root / "journal.json"
+        assertions = ["assets.toml", "--checkout", str(checkout), "--commit", SHA, "--tag", TAG, "--output", str(output)]
+        with (
+            contextlib.nullcontext() if native else patch.object(Path, "samefile", identity),
+            patch("research_repo_tools.release_interfaces.__file__", str(alias / checker.name)),
+            patch("research_repo_tools.dependency_provenance.check_release_dependencies"),
+            patch("research_repo_tools.release_interfaces.resolve_revision", side_effect=AssertionError("checkout must not be inspected")),
+        ):
+            for operation, extra in (
+                ("preflight", []),
+                ("stage", ["--target", str(target), "--asset", str(self.asset), "--journal", str(journal), "--approve"]),
+            ):
+                errors = io.StringIO()
+                with self.subTest(operation=operation), contextlib.redirect_stderr(errors):
+                    self.assertEqual(cli.main(["--root", str(root), "release", "assets", operation, *assertions, *extra]), 1)
+                self.assertIn("trusted installed runtime outside", errors.getvalue())
+                self.assertFalse(output.exists() or journal.exists())
+        self.assertEqual(checker.read_bytes(), b"# inert checker identity\n")
+        self.assertEqual(self.asset.read_bytes(), PAYLOAD)
+        self.assertEqual(self.server.calls, [])
+
     def test_configured_asset_cli_observes_checkout_and_requires_captured_target(self):
         root = self.root.resolve()
         configuration = root / "assets.toml"

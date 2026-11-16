@@ -145,7 +145,8 @@ Semgrep consumers request the `semgrep` extra on their shared package pin,
 retain the shared Python 3.15 selector, and adopt the package's
 [shared dependency overrides][rust-scans]
 before locking. The consumer lock selects the exact compatible scanner used for
-fixture and production scans. A package
+fixture and production scans. On macOS, the Semgrep extra requires Apple silicon;
+Intel Macs are not supported. A package
 upgrade does not rewrite copied Just recipes; merge the relevant exported
 recipes as part of each consumer adoption and verify its integration before
 removing temporary adapters.

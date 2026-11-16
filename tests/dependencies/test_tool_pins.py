@@ -1,6 +1,5 @@
 """Canonical Cargo SemVer and stable uv pins, independent of consumer identity."""
 
-import os
 import subprocess
 from pathlib import Path
 
@@ -151,20 +150,25 @@ def test_selected_uv_does_not_get_overwritten_by_cargo_package(tmp_path, monkeyp
     assert path.read_bytes() == original
 
 
-def test_symlink_target_and_permissions_preserved(tmp_path):
+@pytest.mark.parametrize("absolute", [False, True])
+def test_symlink_target_and_permissions_preserved(tmp_path, absolute):
     target = tmp_path / "pins.just"
     target.write_bytes(b'uv_version := "1.2.3"\r\n')
     target.chmod(416)
     link = tmp_path / "justfile"
     try:
-        link.symlink_to(target.name)
-    except OSError:
-        if os.name != "nt":
-            raise
-        pytest.skip("symlink creation unavailable on this native Windows runner")
+        link.symlink_to(target if absolute else target.name)
+    except OSError as error:
+        if getattr(error, "winerror", None) == 1314:
+            pytest.skip(f"native symlink privilege unavailable: {error}")
+        raise
+    original_link = link.readlink()
+    assert link.samefile(target)
     mode = target.stat().st_mode
     tool_pins.reconcile(link, {"uv": "3.0.0"}, {"uv_version": "uv"})
     assert link.is_symlink()
+    assert link.readlink() == original_link
+    assert link.samefile(target)
     assert target.read_bytes() == b'uv_version := "3.0.0"\r\n'
     assert target.stat().st_mode == mode
     assert sorted((p.name for p in tmp_path.iterdir())) == ["justfile", "pins.just"]

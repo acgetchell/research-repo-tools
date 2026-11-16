@@ -42,7 +42,17 @@ FIELDS = {
     },
     "release": {"date-policy", "final-changelog", "required-files", "exclude", "rules", "tag-policy", "published-dependencies"},
     "changelog": {"formatter", "cliff-config", "owner", "repository", "dependency-bodies", "date-source", "citation"},
-    "publishing": {"registry", "package", "repository", "required-checks", "required-assets", "reuse"},
+    "publishing": {
+        "expected-title",
+        "generated-notes",
+        "package",
+        "registry",
+        "repository",
+        "require-immutable",
+        "required-assets",
+        "required-checks",
+        "reuse",
+    },
     "zizmor": {"persona", "timeout"},
 }
 

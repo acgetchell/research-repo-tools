@@ -3,6 +3,7 @@
 import hashlib
 import json
 import os
+import runpy
 import subprocess
 import sys
 import tarfile
@@ -19,6 +20,11 @@ from packaging.specifiers import SpecifierSet
 from research_repo_tools import cli, python_adoption
 from research_repo_tools.changelog import template
 from research_repo_tools.python_baseline import baseline
+
+_SUPPORT = Path(__file__).resolve().with_name("fixture_environment.py")
+if not _SUPPORT.is_file():
+    _SUPPORT = Path(__file__).resolve().parents[1] / "fixture_environment.py"
+git_environment = runpy.run_path(str(_SUPPORT))["git_environment"]
 
 
 class TestPythonMinimumConsumer(unittest.TestCase):
@@ -151,7 +157,7 @@ class TestPythonMinimumConsumer(unittest.TestCase):
             root = Path(directory).resolve()
             consumer = root / "application"
             consumer.mkdir()
-            env = {key: value for key, value in os.environ.items() if key not in {"UV_PROJECT_ENVIRONMENT", "UV_PROJECT", "UV_PYTHON", "VIRTUAL_ENV"}}
+            env = {key: value for key, value in git_environment().items() if key not in {"UV_PROJECT_ENVIRONMENT", "UV_PROJECT", "UV_PYTHON", "VIRTUAL_ENV"}}
             env["RESEARCH_REPO_TOOLS_HOME"] = str(root / "managed tools")
             env["UV_PYTHON_INSTALL_DIR"] = str(root / "managed Python")
 

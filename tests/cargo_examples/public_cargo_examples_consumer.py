@@ -1,6 +1,7 @@
 """Public Cargo/process contracts, also executed from wheel and sdist installs."""
 
 import os
+import runpy
 import subprocess
 import sys
 import tempfile
@@ -12,6 +13,11 @@ from unittest.mock import patch
 
 from research_repo_tools.cargo_examples import discover_examples, run_examples
 from research_repo_tools.process import run_command
+
+_SUPPORT = Path(__file__).resolve().with_name("fixture_environment.py")
+if not _SUPPORT.is_file():
+    _SUPPORT = Path(__file__).resolve().parents[1] / "fixture_environment.py"
+cargo_environment = runpy.run_path(str(_SUPPORT))["cargo_environment"]
 
 
 class TestLiveProcess(unittest.TestCase):
@@ -375,7 +381,7 @@ class TestLiveProcess(unittest.TestCase):
                 )
                 self.assertEqual(result.returncode == 0, success, result.stderr[-2000:])
                 self.assertEqual(result.stdout, b"out\xff\r\n")
-                matches = result.stderr.startswith(payload)
+                matches = result.stderr == payload if success else result.stderr.startswith(payload)
                 detail = ""
                 if not matches:
                     offset = next(
@@ -383,7 +389,7 @@ class TestLiveProcess(unittest.TestCase):
                         min(len(payload), len(result.stderr)),
                     )
                     detail = (
-                        f"stderr differs at byte {offset}; returncode={result.returncode}; expected prefix bytes={len(payload)}; actual bytes={len(result.stderr)}; "
+                        f"stderr differs at byte {offset}; returncode={result.returncode}; expected payload bytes={len(payload)}; actual bytes={len(result.stderr)}; "
                         f"prefix={result.stderr[:128]!r}; near mismatch={result.stderr[max(0, offset - 16) : offset + 32]!r}; suffix={result.stderr[-1024:]!r}"
                     )
                 self.assertTrue(matches, detail)
@@ -498,10 +504,8 @@ class TestNativeCargo(unittest.TestCase):
             "examples/gated.rs",
             'fn main() { assert!(!cfg!(feature="ordinary")); assert!(cfg!(feature="gated")); std::fs::write("gated-ran","yes").unwrap(); println!("gated"); }',
         )
-        # Ignore ambient target selection/output paths; the fixture itself owns
-        # the path test and has no registry dependencies or network requirement.
-        environment = {key: value for key, value in os.environ.items() if key not in {"CARGO_TARGET_DIR", "CARGO_BUILD_TARGET"}}
-        self.enterContext(patch.dict(os.environ, environment, clear=True))
+        # The fixture owns its Cargo configuration and has no registry dependencies.
+        self.enterContext(patch.dict(os.environ, cargo_environment(self.root.parent / "cargo-home"), clear=True))
         run_command("cargo", ["generate-lockfile", "--offline"], cwd=self.root)
 
     def write(self, name: str, text: str) -> None:

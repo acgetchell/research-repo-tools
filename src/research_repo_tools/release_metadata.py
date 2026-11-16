@@ -390,7 +390,7 @@ def _single_reference(references: list[MetadataReference], path: Path, descripti
     return references[0]
 
 
-def _citation_scalars(path: Path, names: Sequence[str]) -> dict[str, tuple[str, int, str]]:
+def _citation_scalars(path: Path, names: Sequence[str], *, optional: Sequence[str] = ()) -> dict[str, tuple[str, int, str]]:
     """Parse unambiguous top-level citation scalars with their source locations."""
     import yaml
     from yaml.nodes import MappingNode, Node, ScalarNode
@@ -415,7 +415,7 @@ def _citation_scalars(path: Path, names: Sequence[str]) -> dict[str, tuple[str, 
             raise ReleaseCheckError(f"{path}{location} must contain exactly one top-level {name}; found {len(entries)}{lines}")
     result = {}
     source_lines = text.splitlines()
-    for name in names:
+    for name in dict.fromkeys((*names, *(name for name in optional if name in fields))):
         value, line = fields[name][0]
         tags = {"tag:yaml.org,2002:str"} | ({"tag:yaml.org,2002:timestamp"} if name == "date-released" else set())
         if not isinstance(value, ScalarNode) or value.tag not in tags or not isinstance(value.value, str) or not value.value or value.style in ("|", ">"):
@@ -424,22 +424,24 @@ def _citation_scalars(path: Path, names: Sequence[str]) -> dict[str, tuple[str, 
     return result
 
 
-def _citation_metadata_reference(path: Path, field: str, value_pattern: str, kind: MetadataKind) -> MetadataReference:
+def _citation_metadata_reference(
+    path: Path, field: str, value_pattern: str, kind: MetadataKind, *, values: dict[str, tuple[str, int, str]] | None = None
+) -> MetadataReference:
     """Return one non-empty top-level scalar from CITATION.cff."""
-    value, line, text = _citation_scalars(path, (field,))[field]
+    value, line, text = (_citation_scalars(path, (field,)) if values is None else values)[field]
     if re.fullmatch(value_pattern, value) is None:
         raise ReleaseCheckError(f"{path}:{line}: top-level {field} must be a valid non-empty scalar")
     return _metadata_reference(path, line, value, kind, text)
 
 
-def _citation_doi_reference(path: Path) -> MetadataReference:
+def _citation_doi_reference(path: Path, *, values: dict[str, tuple[str, int, str]] | None = None) -> MetadataReference:
     """Return the stable concept DOI from CITATION.cff."""
-    return _citation_metadata_reference(path, "doi", r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+", MetadataKind.CITATION_DOI)
+    return _citation_metadata_reference(path, "doi", r"10\.\d{4,9}/[-._;()/:A-Za-z0-9]+", MetadataKind.CITATION_DOI, values=values)
 
 
-def _citation_date_reference(path: Path) -> MetadataReference:
+def _citation_date_reference(path: Path, *, values: dict[str, tuple[str, int, str]] | None = None) -> MetadataReference:
     """Return and validate the release date from CITATION.cff."""
-    reference = _citation_metadata_reference(path, "date-released", r"\d{4}-\d{2}-\d{2}", MetadataKind.CITATION_DATE)
+    reference = _citation_metadata_reference(path, "date-released", r"\d{4}-\d{2}-\d{2}", MetadataKind.CITATION_DATE, values=values)
     try:
         date.fromisoformat(reference.value)
     except ValueError as error:
@@ -612,12 +614,12 @@ def find_release_metadata_mismatches(root: Path, *, policy: ReleasePolicy | None
     package = read_package_info(root)
     policy = load(root=root).release if policy is None else policy
     citation = root / "CITATION.cff"
-    citation_text = citation.read_text(encoding="utf-8") if citation.is_file() else ""
-    citation_date = _citation_date_reference(citation) if citation.is_file() else None
+    citation_values = _citation_scalars(citation, ("date-released",), optional=("doi",)) if citation.is_file() else None
+    citation_date = _citation_date_reference(citation, values=citation_values) if citation_values is not None else None
     changelog_date = _changelog_date_reference(root / "CHANGELOG.md", package.version)
     expected: list[tuple[MetadataReference, str]] = []
-    if re.search(r"^doi:", citation_text, re.MULTILINE):
-        citation_doi = _citation_doi_reference(citation)
+    if citation_values is not None and "doi" in citation_values:
+        citation_doi = _citation_doi_reference(citation, values=citation_values)
         doi = citation_doi.value
         for path, reader in (
             (root / "README.md", _readme_doi_reference),

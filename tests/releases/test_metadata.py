@@ -36,6 +36,40 @@ def test_find_release_metadata_mismatches_reports_stale_date_and_dois(tmp_path: 
     ]
 
 
+@pytest.mark.parametrize("key", ['"doi"', "'doi'", '"d\\u006fi"'])
+def test_quoted_doi_keys_still_check_both_markdown_references(tmp_path: Path, key: str) -> None:
+    write_project(tmp_path, citation_doi="10.5281/zenodo.87654321")
+    citation = tmp_path / "CITATION.cff"
+    citation.write_bytes(citation.read_bytes().replace(b"doi:", key.encode() + b":"))
+    original = citation.read_bytes()
+    mismatches = release_check.find_release_metadata_mismatches(tmp_path)
+    assert [(item.reference.kind, item.expected) for item in mismatches] == [
+        (release_check.MetadataKind.README_DOI, "10.5281/zenodo.87654321"),
+        (release_check.MetadataKind.REFERENCES_DOI, "10.5281/zenodo.87654321"),
+    ]
+    assert citation.read_bytes() == original
+
+
+@pytest.mark.parametrize("value", ["null", "42", "[]", "{}", "''", "not-a-doi", "|\n  10.5281/zenodo.87654321"])
+def test_present_invalid_quoted_doi_is_not_treated_as_absent(tmp_path: Path, value: str) -> None:
+    write_project(tmp_path)
+    citation = tmp_path / "CITATION.cff"
+    citation.write_bytes(citation.read_bytes().replace(f"doi: {_DOI}".encode(), f'"d\\u006fi": {value}'.encode()))
+    with pytest.raises(release_check.ReleaseCheckError, match="top-level doi must be a valid non-empty scalar"):
+        release_check.find_release_metadata_mismatches(tmp_path)
+
+
+def test_optional_doi_may_be_absent_but_cannot_have_aliased_duplicate_keys(tmp_path: Path) -> None:
+    write_project(tmp_path)
+    citation = tmp_path / "CITATION.cff"
+    original = citation.read_bytes()
+    citation.write_bytes(original.replace(f"doi: {_DOI}\n".encode(), b""))
+    assert release_check.find_release_metadata_mismatches(tmp_path) == []
+    citation.write_bytes(original + f'"d\\u006fi": {_DOI}\n'.encode())
+    with pytest.raises(release_check.ReleaseCheckError, match="exactly one top-level doi; found 2"):
+        release_check.find_release_metadata_mismatches(tmp_path)
+
+
 def test_release_date_uses_the_current_package_heading_not_the_first_release(tmp_path: Path) -> None:
     """Date synchronization targets Cargo's version even if another release is listed first."""
     write_project(tmp_path)

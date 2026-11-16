@@ -564,15 +564,55 @@ class TestDependencyProvenance(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "project.name"):
             check_release_dependencies(self.root)
 
+    def test_lock_fixture_ignores_inherited_project_selectors_before_mutation(self):
+        external = self.root / "external"
+        external.mkdir()
+        sentinel = external / "uv.lock"
+        sentinel.write_bytes(b"unrelated lock\n")
+        inherited = dict.fromkeys(("UV_PROJECT", "UV_WORKING_DIR", "UV_PROJECT_ENVIRONMENT", "UV_CONFIG_FILE", "UV_FROZEN"), str(external))
+
+        class Intercepted(Exception):
+            pass
+
+        def intercept(command, **kwargs):
+            self.assertEqual(command[:7], ["uv", "--no-config", "--directory", str(self.root), "--project", str(self.root), "lock"])
+            self.assertEqual(kwargs["cwd"], self.root)
+            self.assertFalse(any(name.upper().startswith("UV_") for name in kwargs["env"]))
+            self.assertEqual(command[-2:], ["--python", sys.executable])
+            raise Intercepted
+
+        with (
+            patch.dict(os.environ, inherited),
+            patch.object(self, "normal_environment", return_value=self.root / "site"),
+            patch.object(subprocess, "run", side_effect=intercept),
+            self.assertRaises(Intercepted),
+        ):
+            self.test_lock_check_uses_the_observed_root_and_trusted_interpreter()
+        self.assertEqual(sentinel.read_bytes(), b"unrelated lock\n")
+
     def test_lock_check_uses_the_observed_root_and_trusted_interpreter(self):
         # A real uv check must neither follow inherited project selectors nor
         # execute the consumer environment's startup hooks during discovery.
         site = self.normal_environment(self.root / ".venv")
         (self.root / "pyproject.toml").write_bytes(b'[project]\nname="consumer"\nversion="1.0.0"\nrequires-python=">=3.15"\n')
         (self.root / "uv.lock").unlink()
+        environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("UV_") and key not in {"VIRTUAL_ENV", "CONDA_PREFIX"}}
         subprocess.run(
-            ["uv", "lock", "--offline", "--no-python-downloads", "--python", sys.executable],
+            [
+                "uv",
+                "--no-config",
+                "--directory",
+                str(self.root),
+                "--project",
+                str(self.root),
+                "lock",
+                "--offline",
+                "--no-python-downloads",
+                "--python",
+                sys.executable,
+            ],
             cwd=self.root,
+            env=environment,
             check=True,
             capture_output=True,
             timeout=30,

@@ -4,6 +4,7 @@ import contextlib
 import io
 import json
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -14,6 +15,11 @@ from typing import Any, cast, override
 from unittest.mock import patch
 
 from research_repo_tools.cli import main
+
+_SUPPORT = Path(__file__).resolve().with_name("fixture_environment.py")
+if not _SUPPORT.is_file():
+    _SUPPORT = Path(__file__).resolve().parents[1] / "fixture_environment.py"
+git_environment = runpy.run_path(str(_SUPPORT))["git_environment"]
 
 
 def template(name: str) -> str:
@@ -244,6 +250,7 @@ class TestPythonPolicy(unittest.TestCase):
 @unittest.skipIf(os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1", "Git mutations disabled by agent policy")
 class TestGitDiscovery(unittest.TestCase):
     def test_tracked_and_new_nonignored_python_files_are_selected(self) -> None:
+        self.enterContext(patch.dict(os.environ, git_environment(), clear=True))
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
             subprocess.run(["git", "init", "--quiet"], cwd=root, check=True)

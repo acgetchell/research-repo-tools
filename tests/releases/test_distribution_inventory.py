@@ -327,7 +327,17 @@ def test_install_check_does_not_forward_external_project_locations(distribution_
     external.mkdir()
     sentinel = external / "uv.lock"
     sentinel.write_bytes(b"do not modify\n")
-    selectors = ("UV_PROJECT", "UV_PROJECT_ENVIRONMENT", "UV_WORKING_DIR", "UV_WORKING_DIRECTORY", "UV_ENV_FILE")
+    selectors = (
+        "UV_PROJECT",
+        "UV_PROJECT_ENVIRONMENT",
+        "UV_WORKING_DIR",
+        "UV_WORKING_DIRECTORY",
+        "UV_ENV_FILE",
+        "GIT_DIR",
+        "GIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_COMMON_DIR",
+    )
     for name in selectors:
         monkeypatch.setenv(name, str(external))
     monkeypatch.setenv("UV_HTTP_TIMEOUT", "123")
@@ -341,6 +351,11 @@ def test_install_check_does_not_forward_external_project_locations(distribution_
         assert command[:2] == ["uv", "venv"]
         assert not cwd.is_relative_to(external)
         assert not set(selectors).intersection(env)
+        assert env["GIT_CONFIG_GLOBAL"] == os.devnull
+        assert env["GIT_CONFIG_NOSYSTEM"] == "1"
+        assert env["GIT_TEMPLATE_DIR"] == ""
+        assert env["GIT_CONFIG_KEY_0"] == "core.hooksPath"
+        assert env["GIT_CONFIG_VALUE_0"] == os.devnull
         assert env["UV_HTTP_TIMEOUT"] == "123"
         assert env["RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS"] == "1"
         raise CheckedEnvironment

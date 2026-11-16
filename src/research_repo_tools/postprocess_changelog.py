@@ -800,11 +800,6 @@ def _code_span_wildcard_identifiers(line: str) -> str:
     return "".join(result)
 
 
-def _normalize_entry_heading_text(line: str) -> str:
-    """Apply final cleanup for generated changelog prose and headings."""
-    return _code_span_wildcard_identifiers(line)
-
-
 def normalize_entry_headings_text(text: str) -> str:
     """Demote entry-local headings without applying broader changelog cleanup."""
     result: list[str] = []
@@ -823,7 +818,7 @@ def normalize_entry_headings_text(text: str) -> str:
             continue
         current_entry_summary = _update_entry_summary(line, current_entry_summary)
         line = _normalize_entry_heading(line, current_entry_summary)
-        line = _normalize_entry_heading_text(line)
+        line = _code_span_wildcard_identifiers(line)
         result.append(line)
 
     return "\n".join(result)
@@ -921,13 +916,12 @@ def _normalize_body_line(
     line = _normalize_indented_heading(line)
     line = _normalize_indented_bold_heading(line, current_entry_summary, is_isolated_body_heading)
     line = _normalize_entry_heading(line, current_entry_summary)
-    horizontal_rule = _normalize_horizontal_rule(line, result)
-    line = horizontal_rule
+    line = _normalize_horizontal_rule(line, result)
 
     if is_isolated_body_heading:
         line = _normalize_squash_heading(line, nested=current_entry_summary is not None)
 
-    line = _normalize_entry_heading_text(line)
+    line = _code_span_wildcard_identifiers(line)
 
     if _needs_blank_before(line, result):
         result.append("")

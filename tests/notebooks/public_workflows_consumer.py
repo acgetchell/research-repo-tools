@@ -87,6 +87,8 @@ class TestLaunch(Consumer):
     def test_launch_rejects_symlink_environment_overrides_before_sync(self):
         target = self.root / "environment"
         target.mkdir()
+        sentinel = target / "retained"
+        sentinel.write_bytes(b"environment bytes\r\n\xff")
         alias = self.root / "alias"
         try:
             alias.symlink_to(target, target_is_directory=True)
@@ -94,11 +96,16 @@ class TestLaunch(Consumer):
             if getattr(error, "winerror", None) == 1314:
                 self.skipTest(f"native symlink privilege unavailable: {error}")
             raise
+        original_link = alias.readlink()
+        self.assertTrue(alias.samefile(target))
         with patch.dict(os.environ, {"UV_PROJECT_ENVIRONMENT": "alias"}):
             with self.assertRaisesRegex(ValueError, "symlink or junction"):
                 launch(parse({}, root=self.root))
         self.assertTrue(alias.is_symlink())
-        self.assertEqual(list(target.iterdir()), [])
+        self.assertEqual(alias.readlink(), original_link)
+        self.assertTrue(alias.samefile(target))
+        self.assertEqual(list(target.iterdir()), [sentinel])
+        self.assertEqual(sentinel.read_bytes(), b"environment bytes\r\n\xff")
         self.assertFalse((self.root / "target").exists())
 
     def test_launch_rejects_external_project_environments_before_sync(self):

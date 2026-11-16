@@ -12,6 +12,7 @@ from packaging.tags import parse_tag, sys_tags
 from packaging.utils import parse_wheel_filename
 
 from research_repo_tools import release_credentials
+from research_repo_tools._git_checkout import _in_checkout
 from research_repo_tools.dependency_build_receipts import _entry, build_store, read_regular, verify_build_receipt
 from research_repo_tools.dependency_builds import locked_sdist
 from research_repo_tools.dependency_graphs import inspect_project, verify_graph
@@ -145,7 +146,7 @@ def record_runtime_policy(root: Path, destination: Path, *, provider: SourceProv
     root = root.resolve(strict=True)
     destination = destination.absolute()
     environment = root / ".venv"
-    if destination.exists() or destination.is_symlink() or destination.resolve().is_relative_to(root):
+    if destination.exists() or destination.is_symlink() or _in_checkout(destination, root):
         raise ValueError("runtime recording requires a new bundle directory outside the runtime project")
     entry = InputSnapshot.capture(tuple(root / name for name in ("pyproject.toml", "uv.lock", "dependency-sources.toml")))
     policy = load_policy(root)

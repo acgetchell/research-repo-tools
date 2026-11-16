@@ -6,6 +6,7 @@ standard-library boundaries. No pytest dependency is needed in installations.
 
 import hashlib
 import os
+import runpy
 import shlex
 import stat
 import subprocess
@@ -29,6 +30,11 @@ from research_repo_tools.process import (
     run_git_bytes,
 )
 from research_repo_tools.selection import run_selected
+
+_SUPPORT = Path(__file__).resolve().with_name("fixture_environment.py")
+if not _SUPPORT.is_file():
+    _SUPPORT = Path(__file__).resolve().parents[1] / "fixture_environment.py"
+git_environment = runpy.run_path(str(_SUPPORT))["git_environment"]
 
 
 class ConsumerCase(unittest.TestCase):
@@ -341,6 +347,7 @@ print(count)
     def test_git_bytes_and_clean_filters(self) -> None:
         # hash-object without -w can apply configured filters outside a Git
         # repository: no index, ref, config, or object-store mutations are needed.
+        self.enterContext(patch.dict(os.environ, git_environment(), clear=True))
         source = self.root / "données.txt"
         filter_script = self.root / "filter.py"
         filter_script.write_text(
