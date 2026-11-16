@@ -11,6 +11,7 @@ import shlex
 import subprocess
 import sys
 import tokenize
+from dataclasses import dataclass
 from pathlib import PureWindowsPath
 from warnings import catch_warnings
 
@@ -187,38 +188,135 @@ def _heredoc_word(command: str, index: int) -> tuple[str, int, bool]:
     return "".join(word), index, quoted
 
 
-def _command_substitution(command: str, index: int) -> tuple[str, int] | None:
-    """Locate a literal substitution without evaluating its output."""
-    backtick = command[index] == "`"
-    start = index + (1 if backtick else 2)
-    index = start
-    contexts = [("`" if backtick else ")", "")]
+@dataclass(frozen=True)
+class _ShellSource:
+    text: str
+    lines: tuple[int, ...]
+
+    @classmethod
+    def original(cls, text: str) -> _ShellSource:
+        lines = []
+        line = 1
+        for character in text:
+            lines.append(line)
+            if character == "\n":
+                line += 1
+        return cls(text, (*lines, line))
+
+    def slice(self, start: int, end: int) -> _ShellSource:
+        return _ShellSource(self.text[start:end], self.lines[start : end + 1])
+
+    def unquote(self, escapes: str, *, strip_tabs: bool = False) -> _ShellSource:
+        # Preserve each retained character's physical line, including when an
+        # outer heredoc removes a newline before the child shell parses it.
+        characters = []
+        lines = []
+        escaped_characters = set(escapes)
+        index = 0
+        leading = True
+        while index < len(self.text):
+            character = self.text[index]
+            if strip_tabs and leading and character == "\t":
+                index += 1
+                continue
+            if character == "\\" and self.text[index + 1 : index + 2] in escaped_characters:
+                index += 1
+                character = self.text[index]
+                if character == "\n":
+                    index += 1
+                    continue
+            leading = character == "\n"
+            characters.append(character)
+            lines.append(self.lines[index])
+            index += 1
+        return _ShellSource("".join(characters), (*lines, self.lines[-1]))
+
+
+def _heredoc_end(command: str, index: int, delimiter: str, strip_tabs: bool, quoted: bool) -> tuple[int, int]:
+    """Return the literal body's end and the position after its delimiter."""
+    logical_start = index
+    fragments: list[str] = []
     while index < len(command):
-        closing, quote = contexts[-1]
+        if not fragments:
+            logical_start = index
+        end = command.find("\n", index)
+        end = len(command) if end < 0 else end
+        body_line = command[index:end]
+        index = end + (end < len(command))
+        if not quoted and end < len(command) and (len(body_line) - len(body_line.rstrip("\\"))) % 2:
+            fragments.append(body_line[:-1])
+            continue
+        body_line = "".join([*fragments, body_line])
+        if (body_line.lstrip("\t") if strip_tabs else body_line) == delimiter:
+            return logical_start, index
+        fragments.clear()
+    return len(command), index
+
+
+def _backquote_end(command: str, index: int) -> int | None:
+    # Unlike $(...), backquotes close before the extracted shell code is parsed.
+    while index < len(command):
+        if command[index] == "`":
+            return index
+        index += 2 if command[index] == "\\" else 1
+    return None
+
+
+def _command_substitution(source: _ShellSource, index: int) -> tuple[_ShellSource, int] | None:
+    """Locate a literal substitution without evaluating its output."""
+    command = source.text
+    if command[index] == "`":
+        end = _backquote_end(command, index + 1)
+        return None if end is None else (source.slice(index + 1, end).unquote("\\$`"), end + 1)
+    start = index + 2
+    index = start
+    contexts: list[tuple[str, list[tuple[str, bool, bool]], bool]] = [("", [], False)]
+    while index < len(command):
+        quote, heredocs, arithmetic = contexts[-1]
         character = command[index]
+        if character == "\n" and not quote and heredocs:
+            index += 1
+            for delimiter, strip_tabs, quoted in heredocs:
+                _body_end, index = _heredoc_end(command, index, delimiter, strip_tabs, quoted)
+            heredocs.clear()
+            continue
         if character == "\\" and quote != "'":
             index += 2
             continue
-        if character == closing and (closing == "`" or not quote):
+        if character == ")" and not quote:
             contexts.pop()
             if not contexts:
-                body = command[start:index]
-                return (re.sub(r"\\([\\$`])", r"\1", body) if backtick else body), index + 1
+                return source.slice(start, index), index + 1
         elif quote == "'":
             if character == quote:
-                contexts[-1] = (closing, "")
+                contexts[-1] = ("", heredocs, arithmetic)
         elif command.startswith("$(", index):
-            contexts.append((")", ""))
+            contexts.append(("", [], command.startswith("$((", index)))
             index += 1
         elif character == "`":
-            contexts.append(("`", ""))
+            end = _backquote_end(command, index + 1)
+            if end is None:
+                return None
+            index = end + 1
+            continue
         elif quote:
             if character == quote:
-                contexts[-1] = (closing, "")
+                contexts[-1] = ("", heredocs, arithmetic)
         elif character in "\"'":
-            contexts[-1] = (closing, character)
+            contexts[-1] = (character, heredocs, arithmetic)
+        elif not arithmetic and command.startswith("<<<", index):
+            index += 3
+            continue
+        elif not arithmetic and command.startswith("<<", index):
+            strip_tabs = command.startswith("<<-", index)
+            try:
+                delimiter, index, quoted = _heredoc_word(command, index + 2 + strip_tabs)
+            except ValueError:
+                return None
+            heredocs.append((delimiter, strip_tabs, quoted))
+            continue
         elif character == "(":
-            contexts.append((")", ""))
+            contexts.append(("", [], arithmetic or command.startswith("((", index)))
         elif character == "#" and (index == start or command[index - 1].isspace()):
             newline = command.find("\n", index)
             index = len(command) if newline < 0 else newline
@@ -227,23 +325,22 @@ def _command_substitution(command: str, index: int) -> tuple[str, int] | None:
     return None
 
 
-def _heredoc_substitutions(body: str) -> list[tuple[int, str]]:
+def _heredoc_substitutions(source: _ShellSource) -> list[_ShellSource]:
     """Ordinary heredoc quotes are data; only escaped expansion markers are inert."""
+    body = source.text
     result = []
     index = 0
-    line = 1
     while index < len(body):
         if body[index] == "\\" and body[index + 1 : index + 2] in {"\\", "$", "`", "\n"}:
-            line += body[index + 1] == "\n"
             index += 2
             continue
-        if (body.startswith("$(", index) and not body.startswith("$((", index) or body[index] == "`") and (substitution := _command_substitution(body, index)):
+        if (body.startswith("$(", index) and not body.startswith("$((", index) or body[index] == "`") and (
+            substitution := _command_substitution(source, index)
+        ):
             content, end = substitution
-            result.append((line, content))
-            line += body[index:end].count("\n")
+            result.append(content)
             index = end
             continue
-        line += body[index] == "\n"
         index += 1
     return result
 
@@ -272,13 +369,14 @@ def _shell_reads_stdin(command: str) -> bool:
     return True
 
 
-def _shell_parts(command: str, *, windows: bool, posix_escapes: bool) -> tuple[list[tuple[int, str]], list[tuple[int, str]]]:
+def _shell_parts(source: _ShellSource, *, windows: bool, posix_escapes: bool) -> tuple[list[tuple[int, str]], list[_ShellSource]]:
     """Retain physical command lines while parsing quotes and continuations."""
+    command = source.text
     parts = []
     nested = []
     part: list[str] = []
     index = 0
-    line = start_line = 1
+    start_line = source.lines[0]
     quote = ""
     ansi_quote = False
     arithmetic_depth = 0
@@ -287,6 +385,7 @@ def _shell_parts(command: str, *, windows: bool, posix_escapes: bool) -> tuple[l
     heredocs: list[tuple[str, bool, bool, list[str], bool]] = []
     while index < len(command):
         character = command[index]
+        line = source.lines[index]
         if not quote and redirection_start is not None and character in " \t\r\n;&|<>":
             del part[redirection_start:]
             redirection_start = None
@@ -297,41 +396,19 @@ def _shell_parts(command: str, *, windows: bool, posix_escapes: bool) -> tuple[l
             parts.append((start_line, "".join(part)))
             part = []
             index += 1
-            line += 1
             for number, (delimiter, strip_tabs, quoted, receiver, stdin) in enumerate(heredocs):
-                body_start, body_line_number = index, line
-                body_end = len(command)
-                logical_start = index
-                body_parts: list[str] = []
-                while index < len(command):
-                    if not body_parts:
-                        logical_start = index
-                    end = command.find("\n", index)
-                    end = len(command) if end < 0 else end
-                    body_line = command[index:end]
-                    index = end + (end < len(command))
-                    line += end < len(command)
-                    if not quoted and end < len(command) and (len(body_line) - len(body_line.rstrip("\\"))) % 2:
-                        body_parts.append(body_line[:-1])
-                        continue
-                    body_line = "".join([*body_parts, body_line])
-                    if (body_line.lstrip("\t") if strip_tabs else body_line) == delimiter:
-                        body_end = logical_start
-                        break
-                    body_parts.clear()
-                body = command[body_start:body_end]
+                body_start = index
+                body_end, index = _heredoc_end(command, index, delimiter, strip_tabs, quoted)
+                body = source.slice(body_start, body_end)
                 if not quoted:
-                    nested.extend((body_line_number + offset - 1, content) for offset, content in _heredoc_substitutions(body))
+                    nested.extend(_heredoc_substitutions(body))
                 if stdin and not any(later[3] is receiver and later[4] for later in heredocs[number + 1 :]) and _shell_reads_stdin("".join(receiver)):
-                    if strip_tabs:
-                        body = re.sub(r"(?m)^\t+", "", body)
-                    nested.append((body_line_number, body))
+                    nested.append(body.unquote("" if quoted else "\\$`\n", strip_tabs=strip_tabs))
             heredocs.clear()
             continue
         if character == ("^" if windows else "\\") and (not quote if windows else quote != "'" or ansi_quote):
             escaped = command[index : index + 2]
             if not windows and escaped == "\\\n":
-                line += 1
                 index += 2
                 continue
             if not part:
@@ -339,21 +416,18 @@ def _shell_parts(command: str, *, windows: bool, posix_escapes: bool) -> tuple[l
             if posix_escapes and escaped == "\\" and not quote:
                 escaped = ""  # Bash/sh discard an unpaired escape at EOF.
             part.append(escaped)
-            line += escaped.count("\n")
             index += 2
             continue
         if not part and character.isspace():
-            line += character == "\n"
             index += 1
             continue
         if not part:
             start_line = line
         if not windows and quote != "'" and (command.startswith("$(", index) and not command.startswith("$((", index) or character == "`"):
-            if substitution := _command_substitution(command, index):
+            if substitution := _command_substitution(source, index):
                 content, end = substitution
-                nested.append((line, content))
+                nested.append(content)
                 part.append("__dynamic_substitution__")
-                line += command[index:end].count("\n")
                 index = end
                 continue
         if quote:
@@ -380,7 +454,6 @@ def _shell_parts(command: str, *, windows: bool, posix_escapes: bool) -> tuple[l
             # Redirection syntax is not an argument, and its quoting must not
             # reach the host-oriented argument parser or affect body parsing.
             part.append(" ")
-            line += command[index:end].count("\n")
             index = end
             continue
         elif not windows and not arithmetic_depth and (redirect := SHELL_REDIRECTION.match(command, index)):
@@ -404,11 +477,9 @@ def _shell_parts(command: str, *, windows: bool, posix_escapes: bool) -> tuple[l
         elif character in ("&|\r\n" if windows else ";&|\r\n"):
             parts.append((start_line, "".join(part)))
             part = []
-            line += character == "\n"
             index += 1
             continue
         part.append(character)
-        line += character == "\n"
         index += 1
     if redirection_start is not None:
         del part[redirection_start:]
@@ -418,17 +489,17 @@ def _shell_parts(command: str, *, windows: bool, posix_escapes: bool) -> tuple[l
 
 def _shell_segments(command: str, *, windows: bool, posix_escapes: bool = False) -> list[tuple[int, list[str]]]:
     result = []
-    pending = [(0, command, windows, posix_escapes)]
+    pending = [(_ShellSource.original(command), windows, posix_escapes)]
     while pending:
-        offset, command, windows, posix_escapes = pending.pop()
-        parts, nested = _shell_parts(command, windows=windows, posix_escapes=posix_escapes)
+        source, windows, posix_escapes = pending.pop()
+        parts, nested = _shell_parts(source, windows=windows, posix_escapes=posix_escapes)
         for line, part in parts:
             try:
                 arguments = _arguments(part, windows=windows, posix_escapes=posix_escapes)
             except ValueError:
                 continue  # One unsupported segment must not erase other installs.
-            result.append((offset + line, arguments))
-        pending.extend((offset + line - 1, body, False, True) for line, body in nested)
+            result.append((line, arguments))
+        pending.extend((body, False, True) for body in nested)
     return result
 
 
