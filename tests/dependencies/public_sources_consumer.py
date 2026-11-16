@@ -6,6 +6,7 @@ import hashlib
 import io
 import json
 import os
+import runpy
 import shutil
 import socket
 import subprocess
@@ -545,6 +546,55 @@ class TestSourceWorkflows(unittest.TestCase):
                 )
                 self.assertEqual(self.snapshot(), before)
                 self.native.assert_called()
+
+    def test_source_plan_rejects_junction_before_snapshot_or_resolution(self) -> None:
+        self.python()
+        self.policy("python", git=True)
+        linked = self.root / "linked source"
+        linked.mkdir()
+        (linked / "module.py").write_bytes(b"external source\r\n")
+        before = self.snapshot()
+        original = Path.is_junction
+
+        def junction(path: Path) -> bool:
+            return path == linked or original(path)
+
+        with (
+            patch.object(Path, "is_junction", junction),
+            patch.object(dependency_workflows.InputSnapshot, "capture") as capture,
+            patch.object(dependency_workflows, "_resolve_candidate") as resolve,
+            self.assertRaisesRegex(ValueError, "unlinked candidate checkout"),
+        ):
+            plan_source(self.root, "upstream", provider=self.provider)
+        capture.assert_not_called()
+        resolve.assert_not_called()
+        self.assertEqual(self.snapshot(), before)
+
+    @unittest.skipUnless(os.name == "nt", "native Windows junction contract")
+    def test_source_plan_rejects_native_junction_into_external_directory(self) -> None:
+        self.python()
+        self.policy("python", git=True)
+        before = self.snapshot()
+        with tempfile.TemporaryDirectory(prefix="external source ") as temporary:
+            target = Path(temporary)
+            source = target / "module.py"
+            source.write_bytes(b"external source\r\n")
+            link = self.root / "linked source"
+            subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True, timeout=30)
+            try:
+                self.assertTrue(link.is_junction())
+                with (
+                    patch.object(dependency_workflows.InputSnapshot, "capture") as capture,
+                    patch.object(dependency_workflows, "_resolve_candidate") as resolve,
+                    self.assertRaisesRegex(ValueError, "unlinked candidate checkout"),
+                ):
+                    plan_source(self.root, "upstream", provider=self.provider)
+                capture.assert_not_called()
+                resolve.assert_not_called()
+                self.assertEqual(source.read_bytes(), b"external source\r\n")
+            finally:
+                link.rmdir()
+        self.assertEqual(self.snapshot(), before)
 
     def test_two_graphs_share_one_observation_per_pass_but_check_each_lock(self) -> None:
         self.cargo()
@@ -1125,6 +1175,51 @@ class TestSourceWorkflows(unittest.TestCase):
         self.assertFalse(set(settings) - {"CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN", "PATH"} & environment.keys())
         self.assertNotIn(str(self.root), environment["PATH"].split(os.pathsep))
 
+    def test_python_resolver_excludes_checkout_aliases_from_path_and_selection(self) -> None:
+        proof = verify_source(RegistryRelease("python", "sample-pkg", "1.2.3"), provider=self.provider)
+        checkout, candidate = self.root / "observed", self.root / "candidate"
+        modeled = []
+        excluded = []
+        for root in (checkout, candidate):
+            (root / "bin").mkdir(parents=True)
+            alias = root.with_name(root.name.upper())
+            if alias.exists():
+                self.assertTrue(alias.samefile(root))
+            else:
+                (alias / "bin").mkdir(parents=True)
+                modeled.append((alias, root))
+            excluded.append(alias / "bin")
+        trusted = self.root / "trusted tools"
+        trusted.mkdir()
+        project = candidate / "project"
+        project.mkdir()
+        manifest = project / "pyproject.toml"
+        manifest.write_bytes(b'[project]\nname="candidate"\nversion="1.0"\n')
+        original = manifest.read_bytes()
+        samefile = Path.samefile
+
+        def identity(path, other):
+            return any(path == alias and Path(other) == root for alias, root in modeled) or samefile(path, other)
+
+        with (
+            patch.object(Path, "samefile", identity),
+            patch.dict(os.environ, {"PATH": os.pathsep.join(map(str, (*excluded, trusted)))}),
+            patch.object(process, "resolve_executable", return_value=Path(sys.executable)) as resolve,
+            patch.object(process, "run_command", return_value=subprocess.CompletedProcess([], 0, "", "")) as run,
+        ):
+            dependency_workflows._resolve_candidate(project, proof, checkout=checkout, candidate_checkout=candidate)
+            self.assertEqual(resolve.call_args.kwargs["env"]["PATH"], str(trusted))
+            self.assertEqual(run.call_args.kwargs["env"]["PATH"], str(trusted))
+            self.assertEqual(run.call_args.args[0], Path(sys.executable))
+            self.assertEqual(run.call_count, 1)
+            run.reset_mock()
+            for directory in excluded:
+                resolve.return_value = directory / "uv"
+                with self.subTest(directory=directory), self.assertRaisesRegex(ValueError, "outside the candidate checkout"):
+                    dependency_workflows._resolve_candidate(project, proof, checkout=checkout, candidate_checkout=candidate)
+                run.assert_not_called()
+        self.assertEqual(manifest.read_bytes(), original)
+
     def test_native_rustup_cargo_selection_rejects_both_checkouts_and_accepts_external_toolchains(self) -> None:
         self.cargo()
         proof = verify_source(GitCommit("cargo", "sample-crate", "example/upstream", COMMIT), provider=self.provider)
@@ -1521,6 +1616,10 @@ class TestSourceWorkflows(unittest.TestCase):
 
     @unittest.skipIf(os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1", "disposable Git mutations disabled")
     def test_native_cargo_resolves_registry_to_git_and_git_to_registry(self) -> None:
+        support = Path(__file__).resolve().with_name("fixture_environment.py")
+        if not support.is_file():
+            support = Path(__file__).resolve().parents[1] / "fixture_environment.py"
+        self.enterContext(patch.dict(os.environ, runpy.run_path(str(support))["git_environment"](), clear=True))
         upstream = self.root / "upstream"
         vendor = self.root / "vendor/sample-crate"
         consumer = self.root / "consumer"

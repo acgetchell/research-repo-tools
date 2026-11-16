@@ -259,11 +259,14 @@ class TestReviewConsumer(unittest.TestCase):
                 self.assertTrue(self.pending.with_name(self.pending.name + ".used").is_file())
 
     def test_environment_changes_and_missing_acknowledgment_cannot_spend(self) -> None:
-        result = self.start()
-        with patch.dict(os.environ, {"GIT_CONFIG_COUNT": "1"}), self.assertRaisesRegex(ValueError, "inputs changed"):
-            review.resume(self.pending, self.approval(result), output=self.output.append)
-        with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
-            cli.main(["--root", str(self.root), "review", "resume", str(self.pending), "--approve", result.pending_identity or ""])
+        # Installed fixtures already set a config entry for hook isolation.
+        # Capture a distinct starting value before testing the original edit.
+        with patch.dict(os.environ, {"GIT_CONFIG_COUNT": "0"}):
+            result = self.start()
+            with patch.dict(os.environ, {"GIT_CONFIG_COUNT": "1"}), self.assertRaisesRegex(ValueError, "inputs changed"):
+                review.resume(self.pending, self.approval(result), output=self.output.append)
+            with contextlib.redirect_stderr(io.StringIO()), self.assertRaises(SystemExit):
+                cli.main(["--root", str(self.root), "review", "resume", str(self.pending), "--approve", result.pending_identity or ""])
         self.assertEqual(len(self.calls), 1)
 
     def test_large_included_scope_has_no_consumer_file_limit(self) -> None:
@@ -383,6 +386,44 @@ class TestReviewConsumer(unittest.TestCase):
         self.assertEqual(status, 0)
         self.assertEqual(json.loads(body.splitlines()[-1])["status"], "completed")
         self.assertEqual(self.calls[-1], [*self.calls[0], "--use-credits"])
+
+    def test_cli_relative_pending_paths_use_root_for_start_deny_and_resume(self) -> None:
+        caller = self.area / "caller" / "nested"
+        caller.mkdir(parents=True)
+        unexpected = caller.parent / self.pending.name
+        with contextlib.chdir(caller), io.TextIOWrapper(io.BytesIO(), encoding="utf-8", newline="\n") as output, contextlib.redirect_stdout(output):
+            arguments = ["--root", str(self.root), "review"]
+            pending = "../pending.json"
+            self.assertEqual(cli.main([*arguments, "uncommitted", "--pending", pending]), 3)
+            self.assertTrue(self.pending.is_file())
+            self.assertFalse(unexpected.exists())
+            self.assertEqual(cli.main([*arguments, "deny", pending]), 4)
+            self.assertEqual(json.loads(self.pending.with_name("pending.json.used").read_bytes())["action"], "denied")
+            self.pending = self.area / "resume.json"
+            self.results = [QUOTE]
+            self.assertEqual(cli.main([*arguments, "uncommitted", "--pending", "../resume.json"]), 3)
+            selected = _review_pending.load(self.pending)
+            self.results = [QUOTE, COMPLETE]
+            self.assertEqual(
+                cli.main(
+                    [
+                        *arguments,
+                        "resume",
+                        "../resume.json",
+                        "--approve",
+                        selected.identity,
+                        "--currency",
+                        "USD",
+                        "--review-kind",
+                        "incremental",
+                        "--terms-source",
+                        "synthetic confirmed terms",
+                        "--accept-unenforced-quote",
+                    ]
+                ),
+                0,
+            )
+            self.assertFalse((caller.parent / "resume.json").exists())
 
     def test_unterminated_provider_records_remain_separate_during_resume(self) -> None:
         selected = self.start()
@@ -640,6 +681,64 @@ class TestAgentEvents(unittest.TestCase):
         for key, value in (("billableFilesCount", True), ("maximumCostCents", -1), ("confirmationHeadCommitId", "unknown"), ("action", "execute_shell")):
             with self.subTest(key=key), self.assertRaises(ValueError):
                 ReviewQuote(deterministic_json({**QUOTE, key: value})).terms()
+
+    def test_descendant_stdout_handle_preserves_review_result_and_eventual_cleanup(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            spools = root / "spools"
+            spools.mkdir()
+            ready, release, closed = (root / name for name in ("ready", "release", "closed"))
+            heartbeat = event({"type": "heartbeat"})
+            descendant = (
+                "import os,pathlib,time\n"
+                f"pathlib.Path({str(ready)!r}).touch()\n"
+                "deadline=time.monotonic()+20\n"
+                f"while not pathlib.Path({str(release)!r}).exists() and time.monotonic()<deadline: time.sleep(0.01)\n"
+                "os.close(1)\n"
+                f"pathlib.Path({str(closed)!r}).touch()\n"
+            )
+            for mode in ("completed", "timeout", "interrupted"):
+                with self.subTest(mode=mode):
+                    for signal in (ready, release, closed):
+                        signal.unlink(missing_ok=True)
+                    expected_output = heartbeat + (event(COMPLETE) if mode == "completed" else b"")
+                    child = (
+                        "import pathlib,subprocess,sys,tempfile,time\n"
+                        f"subprocess.Popen([sys.executable,'-I','-c',{descendant!r}],cwd=tempfile.gettempdir(),stdin=subprocess.DEVNULL,stderr=subprocess.DEVNULL)\n"
+                        f"while not pathlib.Path({str(ready)!r}).exists(): time.sleep(0.01)\n"
+                        f"sys.stdout.buffer.write({expected_output!r}); sys.stdout.buffer.flush()\n" + ("" if mode == "completed" else "time.sleep(30)\n")
+                    )
+                    body = (
+                        "import os,pathlib,sys,tempfile,time\n"
+                        "from research_repo_tools._review_stream import stream_review\n"
+                        "from research_repo_tools.review_protocol import CompletedReview,FailedReview\n"
+                        f"tempfile.tempdir={str(spools)!r}\n"
+                        "chunks=[]\n"
+                        "def output(chunk):\n"
+                        " chunks.append(chunk)\n"
+                        f" if {mode == 'interrupted'!r}: raise KeyboardInterrupt\n"
+                        "try:\n"
+                        " python=pathlib.Path(getattr(sys,'_base_executable',sys.executable))\n"
+                        f" result=stream_review(python,['-I','-c',{child!r}],cwd=pathlib.Path({str(root)!r}),env=dict(os.environ),output=output,timeout=2)\n"
+                        + (
+                            " assert isinstance(result,CompletedReview), result\n"
+                            if mode == "completed"
+                            else f" assert isinstance(result,FailedReview) and result.exit_code=={124 if mode == 'timeout' else 130}, result\n"
+                        )
+                        + f" assert pathlib.Path({str(ready)!r}).exists()\n"
+                        f" assert not pathlib.Path({str(closed)!r}).exists()\n"
+                        " sys.stdout.buffer.write(b''.join(chunks))\n"
+                        "finally:\n"
+                        f" pathlib.Path({str(release)!r}).touch()\n"
+                        " deadline=time.monotonic()+8\n"
+                        f" while not pathlib.Path({str(closed)!r}).exists() and time.monotonic()<deadline: time.sleep(0.01)\n"
+                        f" assert pathlib.Path({str(closed)!r}).exists(), 'descendant did not close stdout'\n"
+                        f" while any(pathlib.Path({str(spools)!r}).iterdir()) and time.monotonic()<deadline: time.sleep(0.01)\n"
+                    )
+                    result = subprocess.run([sys.executable, "-I", "-c", body], capture_output=True, timeout=15)
+                    self.assertEqual(result.returncode, 0, result.stderr)
+                    self.assertEqual(result.stdout, expected_output)
+                    self.assertEqual(list(spools.iterdir()), [])
 
     def test_timeout_and_interrupt_cleanup_real_child(self) -> None:
         children: list[subprocess.Popen[bytes] | subprocess.Popen[str]] = []

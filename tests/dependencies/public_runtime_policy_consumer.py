@@ -100,6 +100,31 @@ class TestRuntimePolicy(unittest.TestCase):
         self.assertIn(RuntimePolicy, get_args(get_type_hints(isolated_release_runtime)["policy"]))
         self.assertIs(get_type_hints(runtime_policy_cli.run)["settings"], Config)
 
+    def test_recording_rejects_project_alias_before_acquisition_or_writes(self) -> None:
+        root = self.project.resolve()
+        alias = root.with_name(root.name.upper())
+        native = alias.exists()
+        if native:
+            self.assertTrue(alias.samefile(root))
+        else:
+            alias.mkdir()
+        samefile = Path.samefile
+
+        def identity(path, other):
+            return (path == alias and Path(other) == root) or samefile(path, other)
+
+        before = {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+        # Model only the filesystem identity when the host has no native alias.
+        with (
+            contextlib.nullcontext() if native else patch.object(Path, "samefile", identity),
+            patch.object(self.provider, "read", side_effect=AssertionError("unexpected acquisition")),
+            self.assertRaisesRegex(ValueError, "outside the runtime project"),
+        ):
+            record_runtime_policy(root, alias / "bundle", provider=self.provider)
+        self.lock_check.assert_not_called()
+        self.assertFalse((alias / "bundle").exists())
+        self.assertEqual({path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}, before)
+
     def test_record_and_checkout_free_verification_preserve_exact_bytes(self) -> None:
         policy = self.record()
         self.lock_check.assert_called_once_with(self.project.resolve())
@@ -313,6 +338,56 @@ class TestRuntimePolicy(unittest.TestCase):
                 self.record()
         self.lock_check.assert_not_called()
         self.assertFalse(self.bundle.exists())
+
+    def test_cli_isolation_and_handler_observe_the_same_rooted_checkout(self) -> None:
+        from research_repo_tools import release_interfaces, release_runtime
+
+        policy = self.record()
+        self.executing_context()
+        checkout = self.base / "observed checkout"
+        checkout.mkdir()
+        checkout = checkout.resolve()
+        for pinned in (False, True):
+            for selection in (None, ".", str(checkout)):
+                with self.subTest(pinned=pinned, selection=selection):
+                    arguments = ["--root", str(checkout), "release", "--isolated-runtime"]
+                    if pinned:
+                        arguments += ["--runtime-policy", str(self.bundle / "runtime.json"), "--runtime-policy-sha256", policy.digest]
+                    arguments += [
+                        "assets",
+                        "stage",
+                        "policy.toml",
+                        "--approve",
+                        "--asset",
+                        "asset.zip",
+                        "--commit",
+                        "a" * 40,
+                        "--journal",
+                        "journal.json",
+                        "--output",
+                        "output.json",
+                        "--tag",
+                        "v1.2.3",
+                        "--target",
+                        "target.json",
+                    ]
+                    if selection is not None:
+                        arguments += ["--checkout", selection]
+                    with (
+                        contextlib.chdir(self.project),
+                        patch.object(release_runtime, "_prepare", return_value=(dict(os.environ), self.base / "gh")) as prepare,
+                        patch.object(release_interfaces, "run_assets") as handler,
+                        contextlib.redirect_stderr(io.StringIO()) as error,
+                    ):
+                        self.assertEqual(cli.main(arguments), 0, error.getvalue())
+                    self.assertEqual(prepare.call_count, 1)
+                    self.assertEqual(handler.call_count, 1)
+                    settings, isolated_checkout = prepare.call_args.args
+                    args, handler_settings = handler.call_args.args
+                    self.assertEqual(settings.root, checkout)
+                    self.assertIs(settings, handler_settings)
+                    self.assertEqual(isolated_checkout, checkout)
+                    self.assertEqual(args.checkout, None if selection is None else checkout)
 
     def test_malformed_runtime_project_has_an_actionable_cli_error(self) -> None:
         path = self.project / "pyproject.toml"

@@ -9,7 +9,7 @@ from io import BytesIO
 from pathlib import Path
 from xml.etree import ElementTree
 
-from research_repo_tools.files import replace_many
+from research_repo_tools.files import _paths_alias, replace_many
 from research_repo_tools.paper_dates import PaperDate, parse_source_date
 
 __all__ = ["PdfInspection", "PdfPage", "PdfPolicy", "check_pdf", "compare_structure", "inspect_pdf", "normalize_pdf", "normalize_pdf_bytes"]
@@ -232,7 +232,7 @@ def normalize_pdf(
     writers must still be excluded by the consumer.
     """
     destination = path if output is None else output
-    if destination.resolve() == tex.resolve():
+    if _paths_alias(destination, tex):
         raise ValueError("PDF output must not replace its TeX source")
     originals = {path: path.read_bytes(), tex: tex.read_bytes()}
     try:

@@ -618,6 +618,41 @@ class TestInstallPolicy(Consumer):
                 self.assertEqual(status, 0, err)
                 self.assertEqual(self.path.read_bytes(), original)
 
+    def test_shell_cell_multiline_literals_and_continuations_keep_original_lines(self):
+        (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.15"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
+        cases = (
+            ("%%bash\nprintf '%s\\n' '\npip install never-executed\n'", None),
+            ("%%sh\n\n  pip \\\n install never-executed", 3),
+            ("%%script bash\nprintf '%s\\n' '\npip install ignored\n'\n\nuv \\\n sync", 6),
+            ("%%bash\ncat <<'EOF'\n'unclosed literal\nEOF\npip install never-executed", 5),
+            ("%%sh\ncat <<EOF\npip install documentation-only\nEOF\necho safe", None),
+            ("%%script bash\ncat <<-'END'\n\t'unclosed literal\n\tEND\nuv sync", 5),
+            ('%%bash\necho \\"\npip install never-executed', 3),
+            ("%%sh\npip install never-executed\\", 2),
+            ("%%bash\nbash <<'EOF'\npip install never-executed\nEOF", 3),
+            ("%%bash\nbash <<EOF\necho \\$(pip install never-executed)\nEOF", 3),
+            ("%%bash\nbash <<EOF\necho \\$(\\\npip install never-executed)\nEOF", 4),
+            ("%%bash\nbash <<-EOF\npip\\\n\tinstall never-executed\nEOF", 3),
+            ("%%bash\ntext=`cat <<'EOF'\nliteral\nEOF`\npip install never-executed", 5),
+            ("%%bash\necho \"$(cat <<'EOF'\n)\nEOF\npip install never-executed\n)\"", 5),
+            ("%%bash\nbash <<-'OUTER'\n\tcat <<'INNER'\n\tpip install documentation-only\n\tINNER\n\tuv sync\nOUTER", 6),
+            ("%%bash\nbash >install.log <<'EOF'\npip install never-executed\nEOF", 3),
+            ("%%sh\ncat <<EOF\n$(\npip install never-executed\n)\nEOF", 4),
+            ("%%bash\ncat <<'EOF'\n$(pip install documentation-only)\nEOF", None),
+            ("%%bash\npip install never-executed\nprintf '%s\\n' $'it\\'s'", 2),
+        )
+        for source, line in cases:
+            with self.subTest(source=source):
+                original = self.write([code(source, "multiline-shell")])
+                status, _out, err = self.run_cli("lint")
+                self.assertEqual(status, int(line is not None), err)
+                if line is None:
+                    self.assertNotIn("dependency-install", err)
+                else:
+                    self.assertIn(f"cell 1 (multiline-shell):{line}:1: dependency-install", err)
+                    self.assertEqual(err.count("dependency-install"), 1, err)
+                self.assertEqual(self.path.read_bytes(), original)
+
     def test_installed_lint_models_shell_vectors_without_executing_them(self):
         (self.root / "pyproject.toml").write_bytes(b'[project]\nrequires-python=">=3.15"\n[tool.research-repo-tools.notebooks]\nprohibit-installs=true\n')
         source = 'import subprocess\n\nsubprocess.run(["echo", "&&", "pip", "install", "never-executed"], shell=True, check=True, timeout=10)'

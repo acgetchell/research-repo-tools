@@ -18,11 +18,11 @@ on PATH. On macOS, the system Bash is sufficient and Homebrew provides jq
 On Windows, use Git for Windows' Bash and install jq with `winget install jqlang.jq`,
 then open a new terminal. The Python setup command below does not install these
 system executables; missing prerequisites fail the tests with setup guidance.
-Cargo and a native Rust toolchain must also be on PATH for the small dependency-free
-example-runner fixtures in source and installed-distribution suites. Hosted package
-jobs use their native Rust toolchains for these fixtures on all three platforms.
-Packaged documentation regressions also require Rust 1.99.1 installed through
-rustup, matching the fixture's declared stable release compiler.
+Rustup must also be on PATH. The root `rust-toolchain.toml` pins the compiler for
+the dependency-free Rust fixtures, packaged documentation regressions, and native
+setup checks. Install it from this checkout with
+`rustup toolchain install --no-self-update` before running `just ci`. Local and
+hosted package checks use this same pin on Linux, macOS, and Windows.
 
 ```sh
 uv run --locked --managed-python research-repo-tools setup

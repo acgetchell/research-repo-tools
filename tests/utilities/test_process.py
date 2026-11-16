@@ -2,11 +2,12 @@
 
 import io
 import math
+import os
 import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import Any
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -30,12 +31,19 @@ from research_repo_tools.process import (
     run_git_command_with_input,
     run_safe_command,
 )
+from tests.fixture_environment import git_environment
 
 
 @pytest.fixture(autouse=True)
 def invocation_directory(tmp_path, monkeypatch):
     """Keep generic subprocess tests independent of Git and the checkout."""
     monkeypatch.chdir(tmp_path)
+    for name in tuple(os.environ):
+        if name.upper().startswith("GIT_"):
+            monkeypatch.delenv(name)
+    for name, value in git_environment().items():
+        if name.startswith("GIT_"):
+            monkeypatch.setenv(name, value)
 
 
 @pytest.fixture
@@ -75,10 +83,6 @@ def test_repository_identity_and_history_are_read_from_the_consumer(invocation_r
 
 if __name__ == "__main__":
     pytest.main([__file__, "-v"])
-if TYPE_CHECKING:
-    pass
-if TYPE_CHECKING:
-    from pathlib import Path
 
 
 class TestGetSafeExecutable:
@@ -99,14 +103,6 @@ class TestGetSafeExecutable:
         with pytest.raises(ExecutableNotFoundError, match="not found in PATH") as exc_info:
             get_safe_executable(fake_command)
         assert fake_command in str(exc_info.value)
-
-    def test_finds_git(self) -> None:
-        path = get_safe_executable("git")
-        assert "git" in path
-
-    def test_raises_for_nonexistent_command(self) -> None:
-        with pytest.raises(ExecutableNotFoundError, match="not found in PATH"):
-            get_safe_executable("definitely_not_a_real_command_12345")
 
     def test_returns_full_executable_path(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         selected = str(tmp_path / "bin" / "git")
@@ -205,16 +201,11 @@ class TestRunGitCommand:
         assert "git version" in result.stdout.lower()
         assert isinstance(result.stdout, str)
 
-    def test_git_command_with_custom_params(self) -> None:
-        """Test git command with custom parameters."""
-        result = run_git_command(["status", "--porcelain"], check=False)
-        assert isinstance(result.returncode, int)
-        assert isinstance(result.stdout, str)
-
-    def test_git_command_failure_handling(self) -> None:
-        """Test that failed git commands raise CalledProcessError when check=True."""
+    @pytest.mark.parametrize("options", [{}, {"check": True}], ids=["default-check", "explicit-check"])
+    def test_git_command_failure_handling(self, options) -> None:
+        """Failed native Git commands raise under both default and explicit checking."""
         with pytest.raises(subprocess.CalledProcessError):
-            run_git_command(["invalid-git-subcommand-xyz"], check=True)
+            run_git_command(["invalid-git-subcommand-xyz"], **options)
 
     def test_git_command_no_failure_with_check_false(self) -> None:
         """Test that failed git commands don't raise when check=False."""
@@ -226,10 +217,6 @@ class TestRunGitCommand:
         result = run_git_command(["rev-parse", "--git-dir"])
         assert result.returncode == 0
         assert result.stdout.strip()
-
-    def test_raises_on_bad_command(self) -> None:
-        with pytest.raises(subprocess_utils.subprocess.CalledProcessError):
-            run_git_command(["not-a-real-git-subcommand"])
 
     def test_runs_git_with_full_path_and_defaults(self, monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
         calls: dict[str, Any] = {}
@@ -305,12 +292,6 @@ class TestRunSafeCommand:
         assert result.returncode == 0
         assert result.stdout.strip() == "hello world"
         assert isinstance(result.stdout, str)
-
-    def test_secure_defaults_are_applied(self) -> None:
-        """Test that secure defaults are applied."""
-        result = run_safe_command(sys.executable, ["-c", "import sys; print(sys.argv[1])", "test"])
-        assert isinstance(result.stdout, str)
-        assert result.stdout.strip() == "test"
 
     def test_text_parameter_enforced(self) -> None:
         """Test that text parameter is enforced for security/stability."""
@@ -399,13 +380,6 @@ class TestErrorHandling:
 
 
 class TestSecurityFeatures:
-    @pytest.mark.skipif(shutil.which("git") is None, reason="git not installed in PATH")
-    def test_uses_full_executable_paths(self) -> None:
-        """Test that commands use full executable paths."""
-        git_path = get_safe_executable("git")
-        assert Path(git_path).is_absolute()
-        assert "git" in git_path
-
     def test_no_shell_execution(self) -> None:
         """Test that commands don't use shell=True."""
         result = run_safe_command(sys.executable, ["-c", "import sys; print(sys.argv[1])", "$HOME"])

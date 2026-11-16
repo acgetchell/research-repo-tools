@@ -415,11 +415,6 @@ def _existing_archive_updates(archive_dir: Path, excluded: set[Path] | None = No
     return updates
 
 
-def _postprocess_existing_archives(archive_dir: Path) -> None:
-    """Apply changelog postprocessing to existing archives transactionally."""
-    _write_texts_transactionally(_existing_archive_updates(archive_dir))
-
-
 def _merge_archive(
     path: Path,
     minor: str,

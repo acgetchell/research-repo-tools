@@ -88,6 +88,21 @@ class TestReleaseConsumer(unittest.TestCase):
     def snapshot(self) -> dict[str, bytes]:
         return {path.relative_to(self.root).as_posix(): path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
 
+    def test_quoted_citation_doi_keys_cannot_bypass_metadata_consistency(self) -> None:
+        citation = self.root / "CITATION.cff"
+        original = citation.read_bytes()
+        for key in (b'"doi"', b"'doi'", b'"d\\u006fi"'):
+            with self.subTest(key=key):
+                citation.write_bytes(original.replace(b"doi: " + DOI.encode(), key + b": 10.5281/zenodo.99999999"))
+                before = self.snapshot()
+                result = check_release(self.root, policy=replace(self.policy, rules=()), previous_tag="v1.2.2")
+                self.assertFalse(result.ok)
+                self.assertEqual(len(result.problems), 2)
+                self.assertTrue(any("README.md" in problem for problem in result.problems))
+                self.assertTrue(any("REFERENCES.md" in problem for problem in result.problems))
+                self.assertTrue(all("10.5281/zenodo.99999999" in problem for problem in result.problems))
+                self.assertEqual(self.snapshot(), before)
+
     def test_rule_replacement_retains_one_valid_alternative_through_copy(self) -> None:
         rule = ReleaseRule("README.md", r"(?P<value>.+)", FixedValue("retained"))
         self.assertEqual(rule.matches("retained")[0].group("value"), "retained")

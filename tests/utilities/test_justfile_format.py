@@ -5,6 +5,8 @@ from pathlib import Path
 
 import pytest
 
+from tests.fixture_environment import git_environment
+
 
 @pytest.mark.parametrize("name", ["justfile", "src/research_repo_tools/templates/justfile"])
 def test_justfile_policy_keeps_crlf_out_of_formatter_input(name: str) -> None:
@@ -21,6 +23,7 @@ def test_justfile_policy_keeps_crlf_out_of_formatter_input(name: str) -> None:
         return subprocess.run(
             ["git", "--no-pager", "-c", "core.autocrlf=false", *arguments],
             cwd=root,
+            env=git_environment(),
             input=payload,
             capture_output=True,
             check=True,

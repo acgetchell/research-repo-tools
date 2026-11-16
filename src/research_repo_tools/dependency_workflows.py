@@ -15,6 +15,7 @@ from packaging.utils import canonicalize_name
 
 from research_repo_tools import toml_source
 from research_repo_tools._dependency_observation import retain_guard
+from research_repo_tools._git_checkout import _in_checkout
 from research_repo_tools.dependency_graphs import CRATES_IO, DependencyGraph, _resolve_cargo, _verify_graph, check_native_graph, inspect_project
 from research_repo_tools.dependency_policy import (
     MAX_SNAPSHOT_FILES,
@@ -210,7 +211,7 @@ def _source_files(root: Path, manifests: tuple[Path, ...]) -> tuple[Path, ...]:
                 entries += 1
                 if entries > MAX_SNAPSHOT_FILES:
                     raise ValueError("dependency source inventory exceeds the entry-count limit")
-                if entry.is_symlink():
+                if entry.is_symlink() or path.is_junction():
                     raise ValueError("source transitions require an unlinked candidate checkout")
                 if entry.is_dir(follow_symlinks=False):
                     pending.append(path)
@@ -240,14 +241,14 @@ def _resolve_candidate(root: Path, verified: VerifiedSource, *, checkout: Path, 
     environment["PATH"] = os.pathsep.join(
         entry
         for entry in os.get_exec_path()
-        if Path(entry).is_absolute() and not Path(entry).resolve().is_relative_to(checkout) and not Path(entry).resolve().is_relative_to(candidate_checkout)
+        if Path(entry).is_absolute() and not _in_checkout(Path(entry), checkout.resolve()) and not _in_checkout(Path(entry), candidate_checkout.resolve())
     )
     executable = (
         resolve_executable("uv", cwd=cwd, env=environment)
         if source.ecosystem == "python"
         else _resolve_cargo(cwd=cwd, environment=environment, checkouts=(checkout, candidate_checkout))
     )
-    if executable.resolve().is_relative_to(candidate_checkout) or executable.resolve().is_relative_to(checkout):
+    if _in_checkout(executable, candidate_checkout.resolve()) or _in_checkout(executable, checkout.resolve()):
         raise ValueError("dependency resolver must be outside the candidate checkout")
     if source.ecosystem == "python":
         environment["UV_PROJECT_ENVIRONMENT"] = str(root.parent / "uncreated-environment")

@@ -13,6 +13,7 @@ from packaging.specifiers import SpecifierSet
 from packaging.version import Version
 
 from research_repo_tools import config, toolchain, toolchain_config
+from research_repo_tools._git_checkout import _in_checkout
 from research_repo_tools._venv_config import configuration_fields
 from research_repo_tools.process import ExecutableNotFoundError, run_safe_command
 from research_repo_tools.tool_pins import SEMVER, STABLE
@@ -155,7 +156,7 @@ def _python_removals(runtime: toolchain.Runtime, plans: list[toolchain_config.To
         if not Path(path).is_absolute():
             raise ValueError("uv Python inventory paths must be absolute")
         resolved = Path(path).resolve()
-        if not candidate.is_dir() or not resolved.is_relative_to(candidate.resolve()):
+        if not candidate.is_dir() or not _in_checkout(resolved, candidate.resolve()):
             continue
         host_os = {"apple-darwin": "macos", "unknown-linux-gnu": "linux", "pc-windows-msvc": "windows"}
         system = next(value for suffix, value in host_os.items() if runtime.host.endswith(suffix))
@@ -169,10 +170,10 @@ def _python_removals(runtime: toolchain.Runtime, plans: list[toolchain_config.To
     )
     removals = []
     for key, (candidate, version) in sorted(candidates.items()):
-        if version >= floor or any(value.is_relative_to(candidate.resolve()) for value in protected):
+        if version >= floor or any(_in_checkout(value, candidate.resolve()) for value in protected):
             continue
         minor = directory / key.replace(f"cpython-{version}-", f"cpython-{version.major}.{version.minor}-", 1)
-        aliases = [path for path, target in links.items() if target.is_relative_to(candidate.resolve())]
+        aliases = [path for path, target in links.items() if _in_checkout(target, candidate.resolve())]
         if any(path != minor for path in aliases):
             continue  # Preserve targets of unrecognized user-created aliases.
         removals.extend(_removal("python-alias", path) for path in aliases)

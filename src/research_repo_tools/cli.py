@@ -804,13 +804,14 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         from research_repo_tools import review
 
         if args.action == "deny":
-            return review.report(review.deny(args.pending))
+            return review.report(review.deny(settings.path(str(args.pending))))
         if args.action == "resume":
             from research_repo_tools.review_protocol import ReviewApproval
 
             approval = ReviewApproval(args.approve, args.currency, args.review_kind, args.terms_source, args.accept_unenforced_quote)
-            return review.report(review.resume(args.pending, approval, timeout=args.timeout))
-        return review.run(settings.root, base=args.base if args.action == "branch" else None, pending_path=args.pending, timeout=args.timeout)
+            return review.report(review.resume(settings.path(str(args.pending)), approval, timeout=args.timeout))
+        pending = settings.path(str(args.pending)) if args.pending is not None else None
+        return review.run(settings.root, base=args.base if args.action == "branch" else None, pending_path=pending, timeout=args.timeout)
     if args.group == "release":
         if args.action == "runtime":
             from research_repo_tools.runtime_policy_cli import run as run_runtime
@@ -989,12 +990,13 @@ def main(argv: list[str] | None = None) -> int:
             if args.group == "release" and args.isolated_runtime:
                 from research_repo_tools.release_runtime import isolated_release_runtime
 
+                checkout = getattr(args, "checkout", None)
+                if checkout is not None:
+                    checkout = settings.path(str(checkout))
                 if runtime_policy is None:
-                    streams.enter_context(isolated_release_runtime(settings, checkout=getattr(args, "checkout", None)))
+                    streams.enter_context(isolated_release_runtime(settings, checkout=checkout))
                 else:
-                    streams.enter_context(
-                        isolated_release_runtime(settings, checkout=getattr(args, "checkout", None), policy=runtime_policy, artifacts=runtime_artifacts)
-                    )
+                    streams.enter_context(isolated_release_runtime(settings, checkout=checkout, policy=runtime_policy, artifacts=runtime_artifacts))
             return run(args, settings)
         except ExceptionGroup as error:
             expected, unexpected = error.split(expected_errors)

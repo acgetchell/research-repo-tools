@@ -11,6 +11,7 @@ import threading
 import unittest
 import warnings
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import nullcontext
 from pathlib import Path
 from typing import override
 from unittest.mock import AsyncMock, patch
@@ -356,6 +357,45 @@ class TestNotebookProject(unittest.TestCase):
         ):
             self.fail("source project used for scratch")
         self.assertEqual(set(self.parent.iterdir()), before)
+
+    def test_root_toolchain_case_aliases_are_excluded_without_copying(self):
+        original = (self.source / "rust-toolchain.toml").read_bytes()
+        for name in ("RUST-TOOLCHAIN.TOML", "Rust-Toolchain.toml"):
+            with self.subTest(name=name):
+                path = self.source / name
+                if not path.exists():
+                    path.write_bytes(original)
+                before = set(self.parent.iterdir())
+                with self.assertRaisesRegex(ValueError, "exclude toolchain/environment state"), self.project([Path(name)]):
+                    self.fail("case alias of native toolchain was copied")
+                self.assertEqual(path.read_bytes(), original)
+                self.assertEqual((self.source / "rust-toolchain.toml").read_bytes(), original)
+                self.assertEqual(set(self.parent.iterdir()), before)
+
+    def test_parent_aliases_cannot_enter_source_or_borrowed_environment(self):
+        original = self.write_notebook("pass\n")
+        environment = Path(sys.prefix).resolve()
+        for root, alias in ((self.source, self.parent / "SOURCE"), (environment, self.parent / "borrowed environment alias")):
+            with self.subTest(root=root):
+                native = alias.exists()
+                if native:
+                    self.assertTrue(alias.samefile(root))
+                else:
+                    alias.mkdir()
+                samefile = Path.samefile
+
+                def identity(path, other):
+                    return (path == alias and Path(other) == root) or samefile(path, other)
+
+                before = set(alias.iterdir())
+                with (
+                    nullcontext() if native else patch.object(Path, "samefile", identity),
+                    self.assertRaisesRegex(ValueError, "outside the source project and borrowed environment"),
+                    isolated_project(self.source, [self.relative], parent=alias, environment=environment),
+                ):
+                    self.fail("an aliased source or environment parent was accepted")
+                self.assertEqual(set(alias.iterdir()), before)
+                self.assertEqual((self.source / self.relative).read_bytes(), original)
 
     def test_execution_rejects_escaping_paths_bad_env_and_wrong_python(self):
         self.write_notebook("pass\n")

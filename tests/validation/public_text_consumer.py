@@ -3,6 +3,7 @@
 import contextlib
 import io
 import os
+import runpy
 import subprocess
 import tempfile
 import unittest
@@ -13,6 +14,11 @@ from unittest.mock import patch
 from research_repo_tools import config, selection
 from research_repo_tools.cli import main
 from research_repo_tools.text_lines import check_lines, inspect_lines
+
+_SUPPORT = Path(__file__).resolve().with_name("fixture_environment.py")
+if not _SUPPORT.is_file():
+    _SUPPORT = Path(__file__).resolve().parents[1] / "fixture_environment.py"
+git_environment = runpy.run_path(str(_SUPPORT))["git_environment"]
 
 
 class TestRawLines(unittest.TestCase):
@@ -79,6 +85,8 @@ class TestRawLines(unittest.TestCase):
 
     @unittest.skipIf(os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1", "Git mutations disabled")
     def test_native_git_selection_tracked_new_ignored_and_excluded(self) -> None:
+        self.enterContext(patch.dict(os.environ, git_environment(), clear=True))
+
         def git(*args: str) -> None:
             subprocess.run(["git", *args], cwd=self.root, check=True, capture_output=True, timeout=30)
 

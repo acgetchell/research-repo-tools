@@ -2,6 +2,7 @@
 
 import io
 import os
+import runpy
 import shutil
 import subprocess
 import sys
@@ -33,6 +34,11 @@ from research_repo_tools.publication import (
 from research_repo_tools.publication_config import load_publication
 from research_repo_tools.release_policy import FixedValue
 from research_repo_tools.releases import ReleaseRule
+
+_SUPPORT = Path(__file__).resolve().with_name("fixture_environment.py")
+if not _SUPPORT.is_file():
+    _SUPPORT = Path(__file__).resolve().parents[1] / "fixture_environment.py"
+git_environment = runpy.run_path(str(_SUPPORT))["git_environment"]
 
 MARKERS = MarkerPair("<!-- PERFORMANCE:BEGIN -->", "<!-- PERFORMANCE:END -->")
 DOCUMENT = b"\xef\xbb\xbf# Results\r\n[Historical](old/v0.9/report.md)\r\n" + MARKERS.begin.encode() + b"\r\nstale\r\n" + MARKERS.end.encode() + b"\r\nTail\r\n"
@@ -102,11 +108,12 @@ source = "tag"
 
 
 def fixture_git(root: Path, *args: str, input: bytes | None = None) -> bytes:
-    """Run fixture Git without inheriting commit or tag signing preferences."""
+    """Run isolated fixture Git without commit or tag signing preferences."""
     return subprocess.run(
         ["git", "--no-pager", "-c", "commit.gpgsign=false", "-c", "tag.gpgsign=false", *args],
         input=input,
         cwd=root,
+        env=git_environment(),
         check=True,
         capture_output=True,
         timeout=30,
@@ -313,7 +320,7 @@ class TestPublicationConsumer(unittest.TestCase):
             "GIT_CONFIG_KEY_1": "tag.gpgsign",
             "GIT_CONFIG_VALUE_1": "true",
         }
-        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, inherited):
+        with tempfile.TemporaryDirectory() as temporary, patch.dict(os.environ, {**git_environment(), **inherited}, clear=True):
             root = Path(temporary)
             for key in ("commit.gpgsign", "tag.gpgsign"):
                 original = subprocess.run(["git", "--no-pager", "config", "--get", key], cwd=root, check=True, capture_output=True, timeout=30)
@@ -441,6 +448,7 @@ class TestPublicationConsumer(unittest.TestCase):
 )
 class TestGitPublicationConsumer(unittest.TestCase):
     def test_git_verifies_stored_bytes_without_filters_or_text_conversion(self) -> None:
+        self.enterContext(patch.dict(os.environ, git_environment(), clear=True))
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
 
@@ -495,6 +503,7 @@ class TestGitPublicationConsumer(unittest.TestCase):
             self.assertEqual((root / "README.md").read_bytes(), DOCUMENT)
 
     def test_tagged_links_require_the_generated_artifacts_at_the_tag(self) -> None:
+        self.enterContext(patch.dict(os.environ, git_environment(), clear=True))
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             configuration = make_fixture(root)

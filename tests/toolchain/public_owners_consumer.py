@@ -66,6 +66,75 @@ class TestOwnersConsumer(unittest.TestCase):
                             toolchain_clean.plan_clean(settings)
                     self.assertTrue(all(Path(entry["path"]).is_file() for entry in entries))
 
+    def test_cleanup_preserves_interpreter_and_unknown_alias_identities(self):
+        from research_repo_tools import config, toolchain, toolchain_clean, toolchain_config
+
+        with tempfile.TemporaryDirectory(prefix="cleanup aliases café ") as directory:
+            root = Path(directory).resolve()
+            (root / "pyproject.toml").write_bytes(b'[tool.uv]\nrequired-version="==0.13.7"\n')
+            (root / ".python-version").write_bytes(b"3.15\n")
+            tools = root / "uv tools"
+            tools.mkdir()
+            with patch.dict(os.environ, {"RESEARCH_REPO_TOOLS_HOME": str(root / "managed"), "VIRTUAL_ENV": "", "UV_PROJECT_ENVIRONMENT": ""}):
+                settings = config.load(root=root)
+                runtime = toolchain.Runtime(toolchain_config.load(settings))
+                systems = {"apple-darwin": "macos", "unknown-linux-gnu": "linux", "pc-windows-msvc": "windows"}
+                system = next(value for suffix, value in systems.items() if runtime.host.endswith(suffix))
+                arch = runtime.host.split("-", 1)[0]
+                entries = []
+                for version in ("3.13.7", "3.13.8", "3.14.7", "3.15.1"):
+                    key = f"cpython-{version}-{system}-{arch}-none"
+                    interpreter = runtime.base / "python" / key / "interpreter"
+                    interpreter.parent.mkdir(parents=True)
+                    interpreter.write_bytes(b"retained interpreter\r\n")
+                    entries.append(dict(key=key, version=version, path=str(interpreter), os=system, arch=arch, implementation="cpython", variant="default"))
+                protected, linked, obsolete, current = (Path(entry["path"]).parent for entry in entries)
+                aliases = []
+                modeled = []
+                for target in (protected, linked):
+                    alias = target.with_name(target.name.upper())
+                    if alias.exists():
+                        self.assertTrue(alias.samefile(target))
+                    else:
+                        alias.mkdir()
+                        modeled.append((alias, target))
+                    aliases.append(alias)
+                environment = root / ".venv"
+                environment.mkdir()
+                configuration = environment / "pyvenv.cfg"
+                configuration.write_bytes(f"home = {aliases[0]}\r\nexecutable = {aliases[0] / 'interpreter'}\r\n".encode())
+                before = configuration.read_bytes()
+                link = runtime.base / "python" / "unrecognized-user-alias"
+                if os.name == "nt":
+                    subprocess.run(["cmd.exe", "/d", "/c", "mklink", "/J", str(link), str(aliases[1])], check=True, capture_output=True, timeout=30)
+                    self.assertTrue(link.is_junction())
+                else:
+                    link.symlink_to(aliases[1], target_is_directory=True)
+                    self.assertTrue(link.is_symlink())
+                samefile = Path.samefile
+
+                def identity(path, other):
+                    return any(path == alias and Path(other) == target for alias, target in modeled) or samefile(path, other)
+
+                def inventory(command, args, **kwargs):
+                    self.assertIn(args[:2], (["python", "list"], ["tool", "dir"]))
+                    return subprocess.CompletedProcess([], 0, json.dumps(entries) if args[:2] == ["python", "list"] else str(tools), "")
+
+                with (
+                    patch.object(Path, "samefile", identity),
+                    patch.object(toolchain.Runtime, "uv_status", return_value=toolchain.Status("uv", "0.13.7", "0.13.7", "mock-uv", True)),
+                    patch.object(toolchain_clean, "run_safe_command", side_effect=inventory),
+                ):
+                    self.assertTrue(link.resolve().samefile(linked))
+                    plan = toolchain_clean.plan_clean(settings)
+                    self.assertEqual([removal.path for removal in plan.removals], [obsolete])
+                    toolchain_clean.apply_clean(plan, settings)
+                self.assertFalse(obsolete.exists())
+                self.assertTrue(link.is_symlink() or link.is_junction())
+                self.assertEqual(configuration.read_bytes(), before)
+                for retained in (protected, linked, current):
+                    self.assertEqual((retained / "interpreter").read_bytes(), b"retained interpreter\r\n")
+
     def test_uv_tool_receipt_preview_stale_pin_apply_and_noop(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)

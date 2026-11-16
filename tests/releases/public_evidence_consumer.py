@@ -2505,6 +2505,58 @@ class TestAuthenticatedDraftWorkflow(unittest.TestCase):
             plan_release_draft(self.settings, self.configuration, self.source, event="push", expected=self.payload)
         self.assertEqual(self.provider.posts, [])
 
+    def test_cli_plan_rejects_checkout_alias_before_preparing_a_handoff(self):
+        project = self.checkout / "pyproject.toml"
+        project.write_bytes(
+            project.read_bytes() + b'\n[tool.research-repo-tools.publishing]\nregistry="pypi"\npackage="sample"\nrepository="example/package"\n'
+            b'required-checks=[{name="native", app-id=15368}]\n'
+        )
+        alias = self.root / "OBSERVED"
+        native = alias.exists()
+        if native:
+            self.assertTrue(alias.samefile(self.checkout))
+        else:
+            alias.mkdir()
+        samefile = Path.samefile
+
+        def identity(path, other):
+            return (path == alias and Path(other) == self.checkout) or samefile(path, other)
+
+        before = {path.name: path.read_bytes() for path in self.checkout.iterdir()}
+        output = alias / "handoff.json"
+        errors = io.StringIO()
+        with (
+            contextlib.nullcontext() if native else patch.object(Path, "samefile", identity),
+            patch("research_repo_tools.draft_workflow.plan_release_draft", side_effect=AssertionError("planning must not begin")),
+            contextlib.redirect_stderr(errors),
+        ):
+            self.assertEqual(
+                cli.main(
+                    [
+                        "--root",
+                        str(self.checkout),
+                        "release",
+                        "assets",
+                        "plan",
+                        str(self.configuration.relative_to(self.checkout)),
+                        "--repository",
+                        "example/package",
+                        "--tag",
+                        "v1.2.3",
+                        "--commit",
+                        COMMIT,
+                        "--event",
+                        "push",
+                        "--output",
+                        str(output),
+                    ]
+                ),
+                1,
+            )
+        self.assertIn("outside the observed checkout", errors.getvalue())
+        self.assertFalse(output.exists())
+        self.assertEqual({path.name: path.read_bytes() for path in self.checkout.iterdir()}, before)
+
     def test_installed_cli_plans_and_authenticates_original_handoff(self):
         from research_repo_tools.release_assets import parse_release_target
 
