@@ -54,6 +54,12 @@ draft deletion, and remote tag replacement. Run from the repository root in Bash
 or Zsh (Git Bash on Windows). Stop after any failed command and inspect the
 resulting state before continuing.
 
+Use the same shell throughout. The assignments below retain the candidate's
+identity; they do not create tags or drafts. Copy the printed assignments into
+the release tracker as you complete each step. After a shell restart, restore
+those recorded values before resuming. Do not recompute `OLD_*` from a candidate
+that you have already replaced.
+
 ### Freeze publication before step 1
 
 Set the intended tag and derive the repository from this checkout:
@@ -100,26 +106,49 @@ enabled for step 5. See [GitHub CLI workflow disable](https://cli.github.com/man
 
 ### 1. Record the existing candidate
 
-Record the annotated tag object and the commit it names, then compare the remote
-ref with that exact object:
+First define this read-only helper. It returns one unpublished draft ID, or
+`none` after a successful listing with no matching release. A failed lookup,
+published/immutable release, or multiple matching drafts stops it. Keep the
+function available for step 4; after a shell restart, define it again without
+rerunning the old-candidate assignments.
 
 ```bash
-OLD_TAG_OBJECT=$(git --no-pager rev-parse --verify "refs/tags/$TAG")
-OLD_COMMIT=$(git --no-pager rev-parse --verify "refs/tags/$TAG^{commit}")
-git --no-pager cat-file -t "$OLD_TAG_OBJECT"
-git --no-pager ls-remote --exit-code origin "refs/tags/$TAG"
-gh api --paginate "repos/$REPO/releases?per_page=100" \
-  --jq ".[] | select(.tag_name == \"$TAG\") | {id, tag_name, draft, published_at, immutable}"
+candidate_draft_id() (
+  set -eu
+  : "${REPO:?Set REPO first}" "${TAG:?Set TAG first}"
+  ids=$(gh api --paginate "repos/$REPO/releases?per_page=100" \
+    --jq ".[] | select(.tag_name == \"$TAG\") |
+      if .draft == true and .published_at == null and .immutable == false
+      then .id else error(\"Stop: candidate is published or immutable\") end") || exit "$?"
+  case "$ids" in
+    '') printf 'none\n' ;;
+    *[!0-9]*) printf 'Stop: expected exactly one candidate draft\n' >&2; exit 1 ;;
+    *) printf '%s\n' "$ids" ;;
+  esac
+)
 ```
 
-Require an annotated `tag`, matching local/remote object IDs, and either no
-matching release or exactly the expected unpublished draft. Record its numeric
-ID as `OLD_RELEASE_ID` when present. If a local tag is missing or differs,
-reconcile it with the recorded remote candidate
-before using this procedure. A draft without its expected remote tag needs the
-owning writer's recovery first. Stop if any matching release is published or
-immutable. Authenticated release listings include drafts only for users with
-the necessary access; see the [GitHub releases API](https://docs.github.com/en/rest/releases/releases#list-releases).
+Now record the annotated local tag, its commit, and the draft ID in this shell.
+The chained checks require the same tag object on the remote before printing
+the recovery values:
+
+```bash
+OLD_TAG_OBJECT=$(git --no-pager rev-parse --verify "refs/tags/$TAG") &&
+  OLD_COMMIT=$(git --no-pager rev-parse --verify "refs/tags/$TAG^{commit}") &&
+  test "$(git --no-pager cat-file -t "$OLD_TAG_OBJECT")" = tag &&
+  REMOTE_TAG=$(git --no-pager ls-remote --exit-code origin "refs/tags/$TAG") &&
+  test "${REMOTE_TAG%%[[:space:]]*}" = "$OLD_TAG_OBJECT" &&
+  OLD_RELEASE_ID=$(candidate_draft_id) &&
+  printf 'TAG=%s\nREPO=%s\nOLD_TAG_OBJECT=%s\nOLD_COMMIT=%s\nOLD_RELEASE_ID=%s\n' \
+    "$TAG" "$REPO" "$OLD_TAG_OBJECT" "$OLD_COMMIT" "$OLD_RELEASE_ID"
+```
+
+Require success before proceeding. `OLD_RELEASE_ID` is now the numeric draft ID
+or the literal `none`; no later placeholder assignment is needed. If the local
+tag is missing or differs, reconcile it with the recorded remote candidate
+first. A draft without its expected remote tag needs the owning writer's
+recovery. Authenticated listings include drafts only for users with the
+necessary access; see the [GitHub releases API](https://docs.github.com/en/rest/releases/releases#list-releases).
 
 Check the **exact version** using the existing publication configuration:
 
@@ -388,6 +417,7 @@ step 2.5 confirms no commits remain or this branch head was already merged:
 git switch main
 git pull --ff-only
 RELEASE_COMMIT=$(git --no-pager rev-parse HEAD)
+printf 'RELEASE_COMMIT=%s\n' "$RELEASE_COMMIT"
 ```
 
 Before accepting `RELEASE_COMMIT`, confirm the generated release notes cover the
@@ -414,6 +444,12 @@ again or change the selected acquisition's provenance.
 
 ### 4. Replace the superseded draft and tag
 
+**Follow 4.1–4.4 in order.** Creating the local tag, deleting the old draft,
+and pushing the tag are separate operations. Only the push starts RRT's
+preparation run that creates the new draft.
+
+#### 4.1. Refresh machine-local dependency evidence
+
 Before changing the local tag, check dependency provenance in the local
 environment that will run `just tag`:
 
@@ -438,27 +474,36 @@ Require success before continuing; investigate other failures instead of treatin
 them as stale receipts. Rebuilding local evidence alone does not require another
 PR or main CI run. If tracked inputs need corrections, return to steps 2 and 3.
 
-Then create and inspect the replacement **local** tag while the remote tag and
-draft remain intact. Require a clean checkout at the validated final commit.
-The exit trap restores the old local tag if creation fails before a new ref
-exists; it never overwrites another object:
+#### 4.2. Create or inspect the replacement local tag
+
+Require the values recorded in steps 1 and 3 and a clean checkout at that exact
+validated commit. `just tag "$TAG" --force` runs the existing metadata,
+dependency and release-note checks before replacing the **local** annotated tag.
+It does not push or publish. The old local ref remains in place if those checks
+fail; there is no delete-and-restore interval.
+
+If you already created the replacement local tag, the block inspects it instead
+of trying to create it again. Its commit must equal `RELEASE_COMMIT`; review its
+annotation against `just release-notes "$TAG"` before accepting it. Stop on any
+unexpected object or annotation. Consumers need a `tag` recipe that forwards
+arguments to the shared `changelog tag` command, as the current template does.
 
 ```bash
 (
   set -eu
+  : "${TAG:?Restore TAG from step 1}" "${REPO:?Restore REPO from step 1}"
+  : "${OLD_TAG_OBJECT:?Restore OLD_TAG_OBJECT from step 1}"
+  : "${OLD_RELEASE_ID:?Restore OLD_RELEASE_ID from step 1}"
+  : "${RELEASE_COMMIT:?Restore RELEASE_COMMIT from step 3}"
   test -z "$(git --no-pager status --porcelain)"
   test "$(git --no-pager rev-parse HEAD)" = "$RELEASE_COMMIT"
-  test "$(git --no-pager rev-parse "refs/tags/$TAG")" = "$OLD_TAG_OBJECT"
-  restore_missing_tag() {
-    if ! git --no-pager rev-parse --verify "refs/tags/$TAG" >/dev/null 2>&1; then
-      git update-ref "refs/tags/$TAG" "$OLD_TAG_OBJECT" ""
-    fi
-  }
-  trap restore_missing_tag EXIT
-  trap 'exit 130' INT
-  trap 'exit 143' TERM
-  git update-ref -d "refs/tags/$TAG" "$OLD_TAG_OBJECT" || exit "$?"
-  just tag "$TAG" || exit "$?"
+  CURRENT_TAG_OBJECT=$(git --no-pager rev-parse --verify "refs/tags/$TAG")
+  if [ "$CURRENT_TAG_OBJECT" = "$OLD_TAG_OBJECT" ]; then
+    just tag "$TAG" --force
+  else
+    printf 'Inspecting the existing replacement local tag: %s\n' "$CURRENT_TAG_OBJECT"
+  fi
+  test "$(git --no-pager cat-file -t "refs/tags/$TAG")" = tag
   test "$(git --no-pager rev-parse "refs/tags/$TAG^{commit}")" = "$RELEASE_COMMIT"
   git --no-pager tag -l --format='%(contents)' "$TAG"
 )
@@ -468,24 +513,36 @@ After that block succeeds and the annotation is reviewed, record the new object:
 
 ```bash
 NEW_TAG_OBJECT=$(git --no-pager rev-parse --verify "refs/tags/$TAG")
+printf 'NEW_TAG_OBJECT=%s\n' "$NEW_TAG_OBJECT"
 ```
 
-Immediately before changing the remote candidate, repeat step 1's remote ref,
-all-release, and exact-registry checks. Keep the recorded `OLD_*` values; compare
-fresh remote observations against them. The local tag now intentionally differs.
-Require the same old remote object and the same unpublished draft (or continued
-absence if no draft existed). Confirm no preparation/publication writer is still
-running. Stop if another operator changed the candidate or published it. The Git
-lease below protects the tag ref; it cannot prevent concurrent GitHub publication.
+This assignment only records the reviewed object's ID for the push. It does not
+create another tag. Keep it with the earlier recovery values.
 
-If there is no draft, skip its deletion and continue to tag replacement below.
-Otherwise set the recorded draft ID, inspect its assets, and delete that exact
-draft only after confirming it remains the superseded unpublished candidate:
+#### 4.3. Inspect and delete the superseded draft
+
+Keep the publication freeze and confirm no preparation/publication writer is
+running for this candidate. Recheck the remote ref, release listing and registry
+without overwriting `OLD_*`. Require the same old remote object and either the
+recorded draft or no draft. If you already deleted that draft, a successful empty
+listing lets you continue; a failed lookup does not. A different draft stops
+recovery. Review the displayed assets before running the deletion block.
 
 ```bash
-OLD_RELEASE_ID=REPLACE_WITH_THE_RECORDED_DRAFT_ID
-gh api "repos/$REPO/releases/$OLD_RELEASE_ID" \
-  --jq '{id, tag_name, draft, published_at, immutable, assets: [.assets[] | {id, name, digest}]}'
+(
+  set -eu
+  : "${OLD_TAG_OBJECT:?Restore OLD_TAG_OBJECT from step 1}"
+  : "${OLD_RELEASE_ID:?Restore OLD_RELEASE_ID from step 1}"
+  REMOTE_TAG=$(git --no-pager ls-remote --exit-code origin "refs/tags/$TAG")
+  test "${REMOTE_TAG%%[[:space:]]*}" = "$OLD_TAG_OBJECT"
+  CURRENT_RELEASE_ID=$(candidate_draft_id)
+  test "$CURRENT_RELEASE_ID" = "$OLD_RELEASE_ID" || test "$CURRENT_RELEASE_ID" = none
+  just release-registry "$TAG" --expect absent
+  if [ "$CURRENT_RELEASE_ID" != none ]; then
+    gh api "repos/$REPO/releases/$OLD_RELEASE_ID" \
+      --jq '{id, tag_name, draft, published_at, immutable, assets: [.assets[] | {id, name, digest}]}'
+  fi
+)
 ```
 
 After reviewing that output, recheck its unpublished draft state immediately
@@ -494,10 +551,17 @@ before deleting it. A failed lookup or a changed state stops this block:
 ```bash
 (
   set -eu
-  RELEASE_IS_DRAFT=$(gh api "repos/$REPO/releases/$OLD_RELEASE_ID" \
-    --jq '.draft == true and .published_at == null and .immutable == false')
-  test "$RELEASE_IS_DRAFT" = true
-  gh api --method DELETE "repos/$REPO/releases/$OLD_RELEASE_ID"
+  : "${OLD_RELEASE_ID:?Restore OLD_RELEASE_ID from step 1}"
+  CURRENT_RELEASE_ID=$(candidate_draft_id)
+  if [ "$CURRENT_RELEASE_ID" = none ]; then
+    printf 'No old draft remains; continue to 4.4.\n'
+  else
+    test "$CURRENT_RELEASE_ID" = "$OLD_RELEASE_ID"
+    RELEASE_IS_DRAFT=$(gh api "repos/$REPO/releases/$OLD_RELEASE_ID" \
+      --jq ".tag_name == \"$TAG\" and .draft == true and .published_at == null and .immutable == false")
+    test "$RELEASE_IS_DRAFT" = true
+    gh api --method DELETE "repos/$REPO/releases/$OLD_RELEASE_ID"
+  fi
 )
 ```
 
@@ -507,11 +571,17 @@ Use the [release-ID deletion endpoint](https://docs.github.com/en/rest/releases/
 Leave the remote tag in place until the guarded replacement push. In particular,
 do not combine draft removal with an unconditional remote tag deletion.
 
-Push the reviewed new object only if the remote tag still equals the old object:
+#### 4.4. Push the replacement tag to start preparation
+
+Use the existing replacement tag; do not run `just tag` again. Push the reviewed
+new object only if the remote tag still equals the recorded old object:
 
 ```bash
 (
   set -eu
+  : "${OLD_TAG_OBJECT:?Restore OLD_TAG_OBJECT from step 1}"
+  : "${NEW_TAG_OBJECT:?Restore NEW_TAG_OBJECT from step 4.2}"
+  : "${RELEASE_COMMIT:?Restore RELEASE_COMMIT from step 3}"
   test -z "$(git --no-pager status --porcelain)"
   test "$(git --no-pager rev-parse HEAD)" = "$RELEASE_COMMIT"
   test "$(git --no-pager rev-parse "refs/tags/$TAG")" = "$NEW_TAG_OBJECT"
@@ -525,7 +595,9 @@ The explicit expected-object form of
 [`--force-with-lease`](https://git-scm.com/docs/git-push#Documentation/git-push.txt---force-with-leaseltrefnamegtltexpectgt)
 rejects a changed remote ref. If a command fails or its result is uncertain,
 inspect both refs before retrying; do not rerun this block blindly or replace
-the lease with `--force`. A rejected push does not replace the remote ref.
+the lease with `--force`. If the remote already equals `NEW_TAG_OBJECT`, the
+push succeeded: continue to step 5. Pushing that unchanged tag again does not
+start another preparation run. A rejected push does not replace the remote ref.
 
 ### 5. Verify the new candidate, then resume publication
 
@@ -536,8 +608,10 @@ git --no-pager rev-parse "refs/tags/$TAG" "refs/tags/$TAG^{commit}"
 git --no-pager ls-remote --exit-code origin "refs/tags/$TAG" "refs/tags/$TAG^{}"
 ```
 
-For RRT, the tag push starts a new preparation run to create the draft and stage
-assets for the corrected commit. Consumers use the replacement procedure agreed
+For RRT, the tag push starts a **new run of the existing `prepare-release.yml`
+workflow**, which creates the draft and stages assets for the corrected commit.
+The push itself does not synchronously create a draft; wait for that run to
+finish. Consumers use the replacement procedure agreed
 under [their writer's contract](#check-the-consumers-draft-writer). Watch the new
 run for that tag and full commit; do not rerun the old preparation run, which
 still names the old commit. If the expected trigger does not start, inspect
@@ -561,4 +635,6 @@ gh api "repos/$REPO/actions/workflows/publish.yml" --jq .state
 ```
 
 Require `active` before publication. Keep the release tracker open until registry
-publication and required post-publication verification succeed.
+publication and required post-publication verification succeed. Continue with
+[Publish the reviewed draft and approve PyPI publication](RELEASING.md#7-publish-the-reviewed-draft-and-approve-pypi-publication),
+then the registry/consumer and applicable Zenodo verification in that guide.

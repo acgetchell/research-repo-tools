@@ -241,8 +241,8 @@ shared-python-update version:
     uv run --no-config --no-project --isolated --managed-python --script python-bootstrap.py "$1" --apply
 
 # Create a local annotated release tag after checking final metadata.
-tag tag: release-version-check
-    uv run --locked --group dev research-repo-tools changelog tag "$1"
+tag tag *args: release-version-check
+    uv run --locked --group dev research-repo-tools changelog tag "$@"
 
 # Preview the release annotation without changing Git state.
 tag-preview tag: release-version-check

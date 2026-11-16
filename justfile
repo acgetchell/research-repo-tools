@@ -220,8 +220,8 @@ sync:
     uv sync --locked
 
 # Create a local annotated release tag after checking final metadata.
-tag tag: release-version-check
-    uv run --locked research-repo-tools changelog tag "$1"
+tag tag *args: release-version-check
+    uv run --locked research-repo-tools changelog tag "$@"
 
 # Preview the release annotation without changing Git state.
 tag-preview tag: release-version-check
