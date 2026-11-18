@@ -33,6 +33,92 @@ from research_repo_tools.release_publishing import (
 
 
 class TestPublishingConsumer(unittest.TestCase):
+    def test_visibility_cli_checks_completed_assets_and_checksum_without_a_checkout(self):
+        repository, tag, name = "example/project", "v1.2.3", "benchmark-1.2.3.tar.gz"
+        version_url = "https://crates.io/api/v1/crates/sample/1.2.3"
+        target = ReleaseTarget(repository, tag, 9, "a" * 40, tag)
+        (self.root / "target.json").write_bytes(serialize_release_target(target))
+        release = {
+            "id": 9,
+            "url": f"https://api.github.com/repos/{repository}/releases/9",
+            "tag_name": tag,
+            "name": tag,
+            "draft": False,
+            "immutable": True,
+            "prerelease": False,
+            "assets": [],
+        }
+        asset = {"id": 14, "name": name, "size": 24, "state": "uploaded"}
+        checksum = "b" * 64
+        version = json.dumps({"version": {"crate": "sample", "num": "1.2.3", "yanked": False, "checksum": checksum}}).encode()
+
+        def github(program, arguments, *, cwd, **kwargs):
+            self.assertEqual(program, "gh")
+            self.assertTrue(cwd.samefile(self.root))
+            match arguments:
+                case ["release", "view", "v1.2.3", "--repo", "example/project", "--json", "databaseId,tagName"]:
+                    body = {"databaseId": 9, "tagName": tag}
+                case ["api", "repos/example/project/releases/9"]:
+                    body = release
+                case ["api", "--paginate", "--slurp", "repos/example/project/releases/9/assets?per_page=100"]:
+                    body = [[asset]]
+                case ["api", "repos/example/project/git/ref/tags/v1.2.3"]:
+                    body = {"ref": f"refs/tags/{tag}", "object": {"type": "commit", "sha": target.commit}}
+                case _:
+                    raise AssertionError(arguments)
+            return subprocess.CompletedProcess(arguments, 0, json.dumps(body).encode(), b"")
+
+        args = [
+            "--root",
+            str(self.root),
+            "release",
+            "visibility",
+            tag,
+            "--repository",
+            repository,
+            "--registry",
+            "crates-io",
+            "--package",
+            "sample",
+            "--required-asset",
+            name,
+            "--target",
+            "target.json",
+            "--attempts",
+            "2",
+            "--interval",
+            "0",
+        ]
+        with (
+            patch("research_repo_tools.release_assets.run_command_bytes", side_effect=github) as provider,
+            patch(
+                "research_repo_tools._registry_requests._request", side_effect=[urllib.error.HTTPError(version_url, 404, "missing", Message(), None), version]
+            ) as registry_get,
+            patch("research_repo_tools._registry_requests._requested_at", None),
+            patch("research_repo_tools._registry_requests.time.sleep"),
+            patch("research_repo_tools.dependency_provenance.check_release_dependencies", side_effect=AssertionError("unexpected dependency check")),
+            patch("research_repo_tools.changelog.notes", side_effect=AssertionError("unexpected notes generation")),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+        ):
+            self.assertEqual(cli.main(args), 0)
+            self.assertIn(checksum, output.getvalue())
+            self.assertEqual([call.args[0] for call in registry_get.call_args_list], [version_url, version_url])
+            self.assertEqual(provider.call_count, 8)
+
+            asset["state"] = "starter"
+            registry_get.reset_mock()
+            with contextlib.redirect_stderr(io.StringIO()) as errors:
+                self.assertEqual(cli.main(args), 1)
+            registry_get.assert_not_called()
+            self.assertIn("empty or incomplete", errors.getvalue())
+
+            asset["state"] = "uploaded"
+            registry_get.side_effect = [b"{"]
+            with contextlib.redirect_stderr(io.StringIO()) as errors:
+                self.assertEqual(cli.main(args), 1)
+            registry_get.assert_called_once()
+            self.assertIn("malformed JSON", errors.getvalue())
+
     def test_captured_draft_id_is_preserved_through_publication_and_event_gate(self):
         settings = self.settings("pypi", **{"expected-title": "tag", "generated-notes": True, "require-immutable": True})
         sha = "a" * 40

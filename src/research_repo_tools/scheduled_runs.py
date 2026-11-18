@@ -10,7 +10,7 @@ import time
 import uuid
 from collections.abc import Callable
 from contextlib import nullcontext
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
@@ -72,7 +72,7 @@ def _parse_scheduled_run(evidence: Evidence, *, partial: bool = False) -> Schedu
     records = _array(raw["trials"], "trials")
     if not records or len(records) > plan.schedule.trials or (not partial and len(records) != plan.schedule.trials):
         raise ValueError("trial inventory differs from schedule")
-    base = SuiteMeasurementPlan(plan.suites)
+    base = replace(plan, schedule=None, outputs=())
     trials = []
     sessions = set()
     identities = set()
@@ -164,8 +164,9 @@ def validate_scheduled_policy(evidence: Evidence, plan: SuiteMeasurementPlan, *,
     run = parse_scheduled_run(evidence)
     if deterministic_json(run.plan.document()) != deterministic_json(plan.document()):
         raise ValueError("scheduled acquisition declaration changed")
+    base = replace(plan, schedule=None, outputs=())
     for trial in run.trials:
-        validate_suite_policy(trial, SuiteMeasurementPlan(plan.suites), release=release)
+        validate_suite_policy(trial, base, release=release)
     return run
 
 
@@ -181,6 +182,7 @@ def measure_schedule(
     verify: Callable[[], None] | None,
 ) -> Evidence:
     assert plan.schedule is not None
+    base = replace(plan, schedule=None, outputs=())
     if resume and checkpoint is None:
         raise ValueError("resume requires an explicit checkpoint")
     captures = {
@@ -250,7 +252,7 @@ def measure_schedule(
             asserted_units = parse_suite_run(first).units
             _measure_suites(
                 root,
-                SuiteMeasurementPlan(plan.suites),
+                base,
                 pair,
                 working_tree=working_tree,
                 progress=progress,
@@ -309,7 +311,7 @@ def measure_schedule(
                 try:
                     original = _measure_suites(
                         root,
-                        SuiteMeasurementPlan(plan.suites),
+                        base,
                         pair,
                         working_tree=working_tree,
                         progress=progress,
@@ -347,7 +349,7 @@ def measure_schedule(
                         deterministic_json(
                             {
                                 "schema": SUITE_RUN_SCHEMA,
-                                "declaration": SuiteMeasurementPlan(plan.suites).document(),
+                                "declaration": base.document(),
                                 "units": recovery.units,
                                 "reused": sorted(recovery.reused),
                             }

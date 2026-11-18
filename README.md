@@ -780,6 +780,21 @@ Use `--expect present` to require an existing version. Lookup failures stop the
 check; they never count as absence. Full publication verification still requires
 `just release-verify "$TAG"` and the repository's post-publication checks.
 
+For an immutable release, run the installed CLI from any directory to check
+GitHub and the registry without a project checkout or synchronized environment.
+Pass each required asset by its exact filename. For example, a crate release
+with a required benchmark archive can be checked with:
+
+```sh
+research-repo-tools release visibility v1.2.3 \
+  --repository example/library --registry crates-io --package example-library \
+  --required-asset benchmark-1.2.3.tar.gz --attempts 7 --interval 10
+```
+
+The command requires completed, nonempty assets and prints the crates.io
+archive checksum. Use `--target PATH` to also require the captured release ID
+and tag commit. Only an exact registry 404 permits another poll.
+
 The v0.2.9 `release assets plan` command verifies independent repository/tag/commit
 and push-event assertions, protected-default-branch ancestry, required checks,
 metadata, generated notes and original signed evidence.

@@ -13,12 +13,13 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
-from research_repo_tools.common_measurement import CompleteMeasurementPlan, _plan_document, _prepare_phases, parse_plan
-from research_repo_tools.complete_runs import CompletePolicy, CompleteSample, serialize_policy
+from research_repo_tools.common_measurement import CompleteMeasurementPlan, DiscoveryPolicy, _plan_document, _prepare_phases, parse_plan
+from research_repo_tools.complete_runs import CompletePolicy, CompleteSample, _integer, serialize_policy
 from research_repo_tools.evidence import Evidence, Provenance, _object, _string, deterministic_json, sha256
 from research_repo_tools.measurement import MeasurementConfig, _strings
 from research_repo_tools.measurement_checkpoints import open_checkpoint
 from research_repo_tools.performance_progress import ProgressReporter
+from research_repo_tools.prepared_measurement import is_export_executable, retained_size
 from research_repo_tools.publication_config import _table
 from research_repo_tools.release_discovery import _tag_version, normalize_tag
 from research_repo_tools.release_pairs import FirstRelease, ReleasePair
@@ -26,6 +27,8 @@ from research_repo_tools.source_exports import capture_source, export_source
 from research_repo_tools.trial_schedule import TrialSchedule, parse_schedule
 
 __all__ = ["AcquisitionSuite", "SuiteMeasurementPlan", "parse_suite_plan", "measure_suites"]
+
+type _Sampler = Callable[[], tuple[tuple[tuple[str, CompleteSample], ...], tuple[tuple[str, Provenance], ...]]]
 
 
 @dataclass(frozen=True, slots=True)
@@ -83,8 +86,11 @@ class SuiteMeasurementPlan:
     suites: tuple[AcquisitionSuite, ...]
     schedule: TrialSchedule | None = None
     outputs: tuple[str, ...] = ()
+    preparation_storage_bytes: int = 0
 
     def __post_init__(self) -> None:
+        if type(self.preparation_storage_bytes) is not int or self.preparation_storage_bytes < 0:
+            raise ValueError("preparation-storage-bytes must be a nonnegative integer")
         suites = tuple(self.suites)
         if not suites or any(not isinstance(item, AcquisitionSuite) for item in suites):  # ty: ignore[redundant-condition-strict]  Validate untyped callers.
             raise ValueError("suite plan requires acquisition suites")
@@ -159,6 +165,7 @@ class SuiteMeasurementPlan:
         return {
             "schema": self.schema,
             **({"schedule": self.schedule.document(), "outputs": list(self.outputs)} if self.schedule else {}),
+            **({"preparation-storage-bytes": self.preparation_storage_bytes} if self.preparation_storage_bytes else {}),
             "suites": [
                 {
                     "name": item.name,
@@ -175,7 +182,7 @@ class SuiteMeasurementPlan:
 
 
 def parse_suite_plan(document: dict[str, Any]) -> SuiteMeasurementPlan:
-    raw = _table(document, "suite measurement", {"schema", "suites"}, {"schedule", "outputs"})
+    raw = _table(document, "suite measurement", {"schema", "suites"}, {"schedule", "outputs", "preparation-storage-bytes"})
     if type(raw["schema"]) is not int or raw["schema"] not in {5, 6} or not isinstance(raw["suites"], list):
         raise ValueError("suite measurement requires schema 5 or 6 and a suite array")
     if (raw["schema"] == 6) != ("schedule" in raw) or (raw["schema"] == 5 and "outputs" in raw):
@@ -197,8 +204,27 @@ def parse_suite_plan(document: dict[str, Any]) -> SuiteMeasurementPlan:
             )
         )
     return SuiteMeasurementPlan(
-        tuple(suites), parse_schedule(raw["schedule"]) if "schedule" in raw else None, _strings(raw.get("outputs", []), "outputs", nonempty=False)
+        tuple(suites),
+        parse_schedule(raw["schedule"]) if "schedule" in raw else None,
+        _strings(raw.get("outputs", []), "outputs", nonempty=False),
+        _integer(raw.get("preparation-storage-bytes", 0), "preparation-storage-bytes"),
     )
+
+
+def _checked_executables(suite: AcquisitionSuite, active: tuple[str, ...]) -> dict[str, str]:
+    """Only reuse when discovery and sampling name the same in-export program."""
+    if not suite.compilation:
+        return {}
+    programs = {}
+    for phase in active:
+        selected = suite.measurement.baseline if phase == "baseline" else suite.measurement.current
+        program = selected.command[0]
+        if not is_export_executable(program) or not isinstance(selected.policy, DiscoveryPolicy):
+            return {}
+        if any(command.cwd != "." or command.command[0] != program for command in selected.policy.discovery.suites):
+            return {}
+        programs[phase] = program
+    return programs
 
 
 def _source_record(source: Provenance) -> dict[str, object]:
@@ -345,25 +371,36 @@ def _measure_suites(
             "environment-sha256": ambient,
         }
         journal = None
+        retained: dict[str, dict[str, object]] = {}
         if checkpoint is not None:
             with reporter.stage("checkpoint"):
                 journal = stack.enter_context(open_checkpoint(checkpoint, identity, tuple(s.name for s in plan.suites), resume=resume))
+                retained = journal.read()
+        if retained_units:
+            if journal is not None or reuse_assertions:
+                raise ValueError("retained suite units require a single external checkpoint owner")
+            retained = {unit["name"]: unit for unit in retained_units}
+        if reuse_assertions:
+            if journal is not None or not asserted_units:
+                raise ValueError("retained assertions require a complete independent unit set without a checkpoint")
+            retained = {unit["name"]: unit for unit in asserted_units}
         exports_root = Path(stack.enter_context(tempfile.TemporaryDirectory(prefix="research-suites-"))).resolve()
         prepared: dict[str, tuple[dict[str, CompletePolicy], dict[str, Provenance]]] = {}
+        samplers: dict[str, tuple[ExitStack, _Sampler]] = {}
+        remaining_storage = plan.preparation_storage_bytes
         counts: dict[str, int] = {}
         inventory = {(suite.name, phase): 0 for suite in plan.suites for phase in captures}
         nominal: float | None = 0.0
         ownership: dict[str, set[str]] = {"baseline": set(), "current": set()}
 
+        active_phases = {suite.name: tuple(phase for phase in captures if decisions[suite.name][phase]["state"] == "available") for suite in plan.suites}
+        checked = {suite.name: _checked_executables(suite, active_phases[suite.name]) for suite in plan.suites} if plan.preparation_storage_bytes else {}
+
         def prepare(
             suite: AcquisitionSuite,
             resources: ExitStack,
-        ) -> tuple[
-            dict[str, CompletePolicy],
-            dict[str, Provenance],
-            Callable[[], tuple[tuple[tuple[str, CompleteSample], ...], tuple[tuple[str, Provenance], ...]]],
-        ]:
-            active = tuple(phase for phase in captures if decisions[suite.name][phase]["state"] == "available")
+        ) -> tuple[dict[str, CompletePolicy], dict[str, Provenance], _Sampler]:
+            active = active_phases[suite.name]
             directories = {phase: exports_root / f"{suite.name}-{phase}" for phase in captures}
             for phase, capture in captures.items():
                 if phase in active or (phase == "current" and suite.measurement.harness_mode == "common"):
@@ -384,6 +421,7 @@ def _measure_suites(
                 active=active,
                 progress=reporter,
                 compilation=dict(suite.compilation),
+                checked_executables=checked.get(suite.name),
                 on_sample=accepted_sample,
                 phase_order=phase_order,
                 on_phase=(lambda phase, start, end: on_phase(suite.name, phase, start, end)) if on_phase is not None else None,
@@ -405,14 +443,29 @@ def _measure_suites(
                 on_phase_failure=(lambda phase, start, directory, error: _retain_failed_phase(phase, start, directory, error, on_event)) if on_event else None,
             )
 
-        # Discover and gate every suite before timing, retaining only metadata.
-        # Each export (including its build outputs) is removed before the next suite.
+        # Discover and gate every suite before timing. Surplus exports are
+        # released immediately and can be prepared again one suite at a time.
         for suite in plan.suites:
             reporter.suite = suite.name
-            if not any(decision["state"] == "available" for decision in decisions[suite.name].values()):
+            if not active_phases[suite.name]:
                 continue
             with ExitStack() as resources:
-                policies, declared, _acquire = prepare(suite, resources)
+                policies, declared, acquire = prepare(suite, resources)
+                if suite.name not in retained and checked.get(suite.name) and remaining_storage:
+                    used = 0
+                    for phase in captures:
+                        directory = exports_root / f"{suite.name}-{phase}"
+                        if not directory.exists():
+                            continue
+                        size = retained_size(directory, remaining_storage - used)
+                        if size is None:
+                            break
+                        used += size
+                    else:
+                        remaining_storage -= used
+                        owned = resources.pop_all()
+                        stack.callback(owned.close)
+                        samplers[suite.name] = owned, acquire
             prepared[suite.name] = policies, declared
             for phase, policy in policies.items():
                 if ownership[phase] & set(policy.expected):
@@ -431,18 +484,6 @@ def _measure_suites(
                 raise ValueError("asserted unit inventory differs")
             for suite, unit in zip(plan.suites, asserted_units, strict=True):
                 validate_unit(unit, suite, decisions[suite.name], prepared.get(suite.name, ({}, {}))[1])
-        retained: dict[str, dict[str, object]] = {}
-        if journal is not None:
-            with reporter.stage("checkpoint"):
-                retained = journal.read()
-        if retained_units:
-            if journal is not None or reuse_assertions:
-                raise ValueError("retained suite units require a single external checkpoint owner")
-            retained = {unit["name"]: unit for unit in retained_units}
-        if reuse_assertions:
-            if journal is not None or not asserted_units:
-                raise ValueError("retained assertions require a complete independent unit set without a checkpoint")
-            retained = {unit["name"]: unit for unit in asserted_units}
         # Validate every retained unit before accepting or measuring any work.
         for suite in plan.suites:
             if suite.name in retained:
@@ -463,7 +504,11 @@ def _measure_suites(
                     on_event({"kind": "suite-start", "suite": suite.name, "session": session, "at_ns": started})
                 measurements: tuple[tuple[str, CompleteSample], ...] = ()
                 sources: tuple[tuple[str, Provenance], ...] = ()
-                if suite.name in prepared:
+                if suite.name in samplers:
+                    resources, acquire = samplers.pop(suite.name)
+                    with resources:
+                        measurements, sources = acquire()
+                elif suite.name in prepared:
                     # Rebuild only missing units, one suite at a time. Bind the
                     # new sampler to the inventory/provenance checked above.
                     with ExitStack() as resources:

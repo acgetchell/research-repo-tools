@@ -6,11 +6,13 @@ import http.client
 import io
 import json
 import os
+import socket
 import subprocess
 import sys
 import tempfile
 import tomllib
 import unittest
+import urllib.error
 import venv
 import zipfile
 from importlib.metadata import distributions
@@ -277,6 +279,62 @@ class TestDependencyProvenance(unittest.TestCase):
                     self.assertEqual(cli.main(["--root", str(self.root), "release", "dependencies"]), 1)
                 self.assertIn("resolve and sync uv.lock", errors.getvalue())
                 self.assertNotIn("Traceback", errors.getvalue())
+        self.assertEqual(self.snapshot(), before)
+
+    def test_transient_dns_retries_read_only_and_exhaustion_blocks_evidence_creation(self):
+        failure = urllib.error.URLError(socket.gaierror(socket.EAI_AGAIN, "private resolver detail"))
+        before = self.snapshot()
+        with patch("research_repo_tools._registry_requests.time.sleep") as wait:
+            with patch.object(registry._OPENER, "open", side_effect=[failure, Response(self.wheel)]) as download:
+                self.assertEqual(check_release_dependencies(self.root)[0].version, VERSION)
+            self.assertEqual(download.call_count, 2)
+            wait.assert_called_once_with(1)
+
+            with patch.object(registry._OPENER, "open", side_effect=failure) as download:
+                with self.assertRaisesRegex(registry.TransientRegistryError, "temporary DNS lookup failure") as rejected:
+                    check_release_dependencies(self.root)
+                self.assertIn("same checkout and pins", str(rejected.exception))
+                self.assertNotIn("replace development", str(rejected.exception))
+                self.assertNotIn("private resolver detail", str(rejected.exception))
+                self.assertEqual(download.call_count, 3)
+
+            stdout, stderr = io.StringIO(), io.StringIO()
+            output, github_output = self.root / "evidence.json", self.root / "github-output.txt"
+            with (
+                patch.object(registry._OPENER, "open", side_effect=failure) as download,
+                patch("research_repo_tools.release_interfaces.create_evidence_manifest") as manifest,
+                contextlib.redirect_stdout(stdout),
+                contextlib.redirect_stderr(stderr),
+            ):
+                arguments = [
+                    "--root",
+                    str(self.root),
+                    "release",
+                    "evidence",
+                    "create",
+                    "evidence.toml",
+                    "--checkout",
+                    str(self.root),
+                    "--commit",
+                    COMMIT,
+                    "--version",
+                    "1.0.0",
+                    "--output",
+                    str(output),
+                    "--github-output",
+                    str(github_output),
+                    "--run-id",
+                    "123",
+                    "--attempt",
+                    "2",
+                ]
+                self.assertEqual(cli.main(arguments), 1)
+                manifest.assert_not_called()
+            self.assertEqual(download.call_count, 3)
+            self.assertEqual(stdout.getvalue(), "")
+            self.assertIn("commit, run and attempt", stderr.getvalue())
+        self.assertFalse(output.exists())
+        self.assertFalse(github_output.exists())
         self.assertEqual(self.snapshot(), before)
 
     def test_changed_manifest_during_proof_is_rejected(self):

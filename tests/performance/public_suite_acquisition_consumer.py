@@ -84,6 +84,33 @@ elif action == 'measure':
         (target / name).write_bytes((json.dumps(value) + '\\r\\n').encode())
 """
 
+NATIVE_PROGRAM = r"""
+use std::{env, fs, io::Write, path::PathBuf};
+
+fn main() {
+    let arguments = env::args().skip(1).collect::<Vec<_>>();
+    let (suite, action, log) = (&arguments[0], &arguments[1], &arguments[2]);
+    let revision = include_str!("revision");
+    let case = format!("{suite}/case");
+    writeln!(fs::OpenOptions::new().create(true).append(true).open(log).unwrap(), "{suite} {action} {revision}").unwrap();
+    match action.as_str() {
+        "list" => println!("{case}: benchmark"),
+        "gate" => assert_eq!(fs::read(format!("input-{suite}.json")).unwrap(), b"[1, 2]\r\n"),
+        "measure" => {
+            let target = PathBuf::from(env::var_os("CRITERION_HOME").unwrap()).join(suite).join("new");
+            let value = if revision == "old" { "5" } else { "10" };
+            fs::create_dir_all(&target).unwrap();
+            fs::write(target.join("benchmark.json"), format!(r#"{{"full_id":"{case}"}}"#)).unwrap();
+            fs::write(target.join("sample.json"), r#"{"iters":[1,1],"times":[VALUE,VALUE]}"#.replace("VALUE", value)).unwrap();
+            let estimate = r#"{"point_estimate":VALUE,"confidence_interval":{"confidence_level":0.95,"lower_bound":VALUE,"upper_bound":VALUE}}"#;
+            fs::write(target.join("estimates.json"), format!(r#"{{"mean":{estimate},"median":{estimate}}}"#).replace("VALUE", value)).unwrap();
+            fs::write(target.join("tukey.json"), b"[1, 2, 3, 4]\r\n").unwrap();
+        },
+        _ => panic!("unexpected mode"),
+    }
+}
+"""
+
 HOST = HostMetadata("fixture-os", "fixture-arch", "fixture-cpu", 4, 8, 1024, (("python", "fixture-python"),))
 PAIR = ReleasePair("v1.1.0", "v1.0.0")
 
@@ -181,6 +208,223 @@ class TestSuiteAcquisition(unittest.TestCase):
         self.stack.enter_context(patch("research_repo_tools.source_exports._git", side_effect=git_model(self.revisions)))
         self.stack.enter_context(patch("research_repo_tools.measurement.capture_host", return_value=HOST))
         self.quiet = ProgressReporter(mode="none")
+
+    def native_plan(self):
+        revisions = {tag: {**files, "bench.rs": NATIVE_PROGRAM.encode()} for tag, files in self.revisions.items()}
+        self.enterContext(patch("research_repo_tools.source_exports._git", side_effect=git_model(revisions)))
+        suites = []
+        program = "bin/fixture.exe" if os.name == "nt" else "bin/fixture"
+        for suite in plan(self.log, ("shared", "later")).suites:
+            phases = {}
+            for phase in ("baseline", "current"):
+                declaration = getattr(suite.measurement, phase)
+                policy = declaration.policy
+                assert isinstance(policy, DiscoveryPolicy)
+                command = policy.discovery.suites[0]
+                prefix = (program, suite.name)
+                phases[phase] = replace(
+                    declaration,
+                    command=(*prefix, "measure", str(self.log)),
+                    gate=(*prefix, "gate", str(self.log)),
+                    policy=replace(policy, discovery=replace(policy.discovery, suites=(replace(command, command=(*prefix, "list", str(self.log))),))),
+                    environment=(("CRITERION_HOME", "target/criterion"),),
+                )
+            suites.append(
+                replace(
+                    suite,
+                    measurement=replace(
+                        suite.measurement,
+                        measurement=replace(
+                            suite.measurement.measurement, command=phases["baseline"].command, harness=("bench.rs", f"input-{suite.name}.json")
+                        ),
+                        **phases,
+                    ),
+                    compilation=tuple((phase, ("rustc", "bench.rs", "--crate-name", "fixture", "--out-dir", "bin")) for phase in phases),
+                )
+            )
+        return SuiteMeasurementPlan(tuple(suites), schedule=TrialSchedule(1, SequentialOrder()), preparation_storage_bytes=128 * 1024**2)
+
+    def test_separately_compiled_gate_runs_before_sampling_and_remains_bound(self):
+        selected = self.native_plan()
+        suite = selected.suites[0]
+        baseline, current = suite.measurement.baseline, suite.measurement.current
+        gate = Path(baseline.command[0]).with_stem("check").as_posix()
+        compile_script = self.root / "compile.py"
+        compile_script.write_bytes(
+            b"import subprocess\nfor name in ('fixture', 'check'):\n"
+            b"    subprocess.run(['rustc', 'bench.rs', '--crate-name', name, '--out-dir', 'bin'], check=True)\n"
+        )
+        compile_both = (sys.executable, str(compile_script))
+        suite = replace(
+            suite,
+            measurement=replace(
+                suite.measurement,
+                baseline=replace(baseline, gate=(gate, *baseline.gate[1:])),
+                current=replace(current, gate=(gate, *current.gate[1:])),
+            ),
+            compilation=(("baseline", compile_both), ("current", compile_both)),
+        )
+        selected = replace(selected, suites=(suite,))
+        preflight = ["shared list old", "shared list new", "shared gate old", "shared gate new"]
+        for budget, passes in ((selected.preparation_storage_bytes, 1), (1, 2)):
+            with self.subTest(budget=budget):
+                self.log.unlink(missing_ok=True)
+                declaration = replace(selected, preparation_storage_bytes=budget)
+                evidence = measure_pair(self.root, declaration, PAIR, progress=self.quiet)
+                validate_run_policy(evidence, declaration, release=True)
+                self.assertEqual(self.log.read_text().splitlines(), preflight * passes + ["shared measure old", "shared measure new"])
+
+        self.log.unlink(missing_ok=True)
+
+        def replace_gate_after_execution(command, args=(), **kwargs):
+            result = run_command_live(command, args, **kwargs)
+            if command == gate and kwargs["cwd"].name == "shared-baseline":
+                (kwargs["cwd"] / gate).write_bytes(b"replacement gate bytes")
+            return result
+
+        with (
+            patch("research_repo_tools.common_measurement.run_command_live", side_effect=replace_gate_after_execution),
+            self.assertRaisesRegex(ValueError, "baseline prepared tool executable changed before measurement"),
+        ):
+            measure_pair(self.root, selected, PAIR, progress=self.quiet)
+        self.assertNotIn(b" measure ", self.log.read_bytes())
+
+    def test_retained_native_preparation_uses_each_compiled_phase_once_within_budget(self):
+        selected = self.native_plan()
+        self.assertEqual(parse_suite_plan(json.loads(deterministic_json(selected.document()))), selected)
+        measured = []
+        for budget, passes in ((1, 2), (selected.preparation_storage_bytes, 1)):
+            with self.subTest(budget=budget):
+                self.log.unlink(missing_ok=True)
+                events, exports, sizes = [], set(), []
+
+                @contextmanager
+                def track_export(capture, destination):
+                    exports.add(destination)
+                    with export_source(capture, destination) as directory:
+                        yield directory
+
+                def observe(event):
+                    events.append(event)
+                    if event["state"] == "gate" and event["event"] == "finished":
+                        sizes.append(sum(path.stat().st_size for root in exports for path in root.rglob("*") if path.is_file()))
+
+                plan_with_budget = replace(selected, preparation_storage_bytes=budget)
+                with patch("research_repo_tools.suite_measurement.export_source", side_effect=track_export):
+                    evidence = measure_pair(self.root, plan_with_budget, PAIR, progress=ProgressReporter(mode="none", observer=observe))
+                first_sample = next(i for i, event in enumerate(events) if event["state"] == "acquisition" and event["event"] == "started")
+                for suite in ("shared", "later"):
+                    for phase, revision in (("baseline", "old"), ("current", "new")):
+                        for state in ("compilation", "discovery", "gate"):
+                            statuses = [
+                                event
+                                for event in events
+                                if (event["state"], event["suite"], event["phase"]) == (state, suite, phase) and event["event"] in {"started", "finished"}
+                            ]
+                            self.assertEqual([event["event"] for event in statuses], ["started", "finished"] * passes)
+                            self.assertIn(statuses[1], events[:first_sample])
+                        self.assertEqual(self.log.read_bytes().splitlines().count(f"{suite} measure {revision}".encode()), 1)
+                run = parse_suite_run(select_trial(evidence, 1))
+                raw = {(suite, phase): sample.cases[0] for suite, phase, sample, _ in run.observations}
+                self.assertEqual(len(raw), 4)
+                for (suite, phase), case in raw.items():
+                    time_value = 5 if phase == "baseline" else 10
+                    self.assertEqual(case.full_id, f"{suite}/case")
+                    self.assertEqual(json.loads(case.sample)["times"], [time_value] * 2)
+                    self.assertEqual(dict(case.raw_files)["tukey.json"], b"[1, 2, 3, 4]\r\n")
+                measured.append((raw, max(sizes)))
+                self.assertTrue(all(not export.exists() for export in exports))
+                setup = 0.0
+                started = {}
+                for event in events:
+                    if event["state"] in {"compilation", "discovery", "gate"}:
+                        stage = (event["suite"], event["phase"], event["state"])
+                        if event["event"] == "started":
+                            started[stage] = event["elapsed_seconds"]
+                        elif event["event"] == "finished":
+                            setup += event["elapsed_seconds"] - started.pop(stage)
+                print(
+                    f"Prepared fixture: {4 * passes} compilations, {4 * passes} discoveries, {4 * passes} gates, 4 samples, "
+                    f"{setup:.3f}s setup, {max(sizes)} peak logical bytes at gate completion",
+                    flush=True,
+                )
+        self.assertEqual(measured[0][0], measured[1][0])
+        self.assertLess(measured[0][1], measured[1][1])
+        self.assertLessEqual(measured[1][1], selected.preparation_storage_bytes)
+
+    def test_retained_preparation_rejects_failed_gates_and_duplicate_ownership_before_sampling(self):
+        selected = self.native_plan()
+        first, later = selected.suites
+        phase = later.measurement.current
+        policy = phase.policy
+        assert isinstance(policy, DiscoveryPolicy)
+        discovery = policy.discovery.suites[0]
+        duplicate = replace(
+            phase,
+            policy=replace(
+                policy,
+                discovery=replace(
+                    policy.discovery, required=("shared/case",), suites=(replace(discovery, command=(discovery.command[0], "shared", *discovery.command[2:])),)
+                ),
+            ),
+            command=(phase.command[0], "shared", *phase.command[2:]),
+        )
+        bad_gate = replace(phase, gate=(phase.gate[0], "later", "invalid", str(self.log)))
+        for rejected, diagnostic in ((bad_gate, "current preflight gate failed"), (duplicate, "duplicate benchmark ownership in current")):
+            with self.subTest(diagnostic=diagnostic):
+                self.log.unlink(missing_ok=True)
+                plan_with_rejection = replace(selected, suites=(first, replace(later, measurement=replace(later.measurement, current=rejected))))
+                with self.assertRaisesRegex(ValueError, diagnostic):
+                    measure_pair(self.root, plan_with_rejection, PAIR, progress=ProgressReporter(mode="none"))
+                self.assertIn(b"shared gate new", self.log.read_bytes())
+                self.assertNotIn(b" measure ", self.log.read_bytes())
+
+    def test_retained_preparation_rechecks_scope_and_preserves_pair_resume(self):
+        selected = self.native_plan()
+        for change, diagnostic in (("artifact", "prepared executable changed"), ("input", "captured inputs changed"), ("flags", "environment changed")):
+            with self.subTest(change=change), patch.dict(os.environ):
+                self.log.unlink(missing_ok=True)
+                exports = []
+
+                @contextmanager
+                def track_export(capture, destination):
+                    exports.append(destination)
+                    with export_source(capture, destination) as directory:
+                        yield directory
+
+                def tamper(event):
+                    if event["event"] != "budget":
+                        return
+                    baseline = next(path for path in exports if path.name == "shared-baseline")
+                    match change:
+                        case "artifact":
+                            (baseline / selected.suites[0].measurement.baseline.command[0]).write_bytes(b"replacement")
+                        case "input":
+                            (baseline / "input-shared.json").write_bytes(b"[0, 1]\r\n")
+                        case "flags":
+                            os.environ["CARGO_ENCODED_RUSTFLAGS"] = "-Copt-level=3"
+
+                with patch("research_repo_tools.suite_measurement.export_source", side_effect=track_export), self.assertRaisesRegex(ValueError, diagnostic):
+                    measure_pair(self.root, selected, PAIR, progress=ProgressReporter(mode="none", observer=tamper))
+                self.assertNotIn(b" measure ", self.log.read_bytes())
+
+        self.log.unlink()
+        checkpoint = self.root / "prepared-resume"
+
+        def interrupt(command, args=(), **kwargs):
+            if args[:2] == ("later", "measure") and kwargs["cwd"].name == "later-current":
+                raise KeyboardInterrupt()
+            return run_command_live(command, args, **kwargs)
+
+        with patch("research_repo_tools.common_measurement.run_command_live", side_effect=interrupt), self.assertRaises(KeyboardInterrupt):
+            measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, progress=self.quiet)
+        recorded = (checkpoint / "events.jsonl").read_bytes()
+        completed = next(event["unit"] for line in recorded.splitlines() if (event := json.loads(line)["event"])["kind"] == "suite-complete")
+        evidence = measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=ProgressReporter(mode="none"))
+        self.assertTrue((checkpoint / "events.jsonl").read_bytes().startswith(recorded))
+        self.assertEqual(parse_suite_run(select_trial(evidence, 1)).units[0], completed)
+        samples = [line for line in self.log.read_text().splitlines() if " measure " in line]
+        self.assertEqual(samples, ["shared measure old", "shared measure new", "later measure old", "later measure old", "later measure new"])
 
     def reuse_fixture(self, *, mode="common", working_tree=False):
         selected = plan(self.log, mode=mode)

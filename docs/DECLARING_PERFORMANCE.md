@@ -80,13 +80,30 @@ gates, validates every retained unit before missing work, and preserves original
 raw bytes, host, session and collection times. Final evidence attributes retained
 and new units. Validated phase progress never makes a half-pair resumable.
 
-Preparation keeps exports and build outputs for only one suite at a time. A
-first pass compiles, discovers and gates every available suite, then releases
-its trees. After all retained units are validated, missing suites are exported
-and prepared again immediately before measurement. Their resolved policies and
-provenance must match the first pass. This repeats preparation for missing
-suites to bound temporary disk usage while preserving fail-fast validation
-before any timing; retained suites are never measured again.
+Preparation compiles, discovers and gates every available suite before the first
+sample. By default it releases each suite's trees after preflight and prepares
+missing suites again immediately before measurement. Their resolved policies
+and provenance must match the first pass. Completed checkpoint units keep their
+original measurements.
+
+Set top-level `preparation-storage-bytes` in a schema-5 or schema-6 declaration
+to retain eligible exports and compiled executables for the current acquisition
+or trial. Each available phase of an eligible suite supplies a `compilation`
+command that creates a fresh executable. Discovery and sampling name that same
+executable directly by its export-relative path, with discovery running from the
+export root. Each phase runs its declared gate even when another suite has the
+same gate command. Declare all measurement inputs and tool probes as usual.
+The sampler rechecks those identities and the executable path and SHA-256 before
+execution. The per-phase Cargo target and intermediate directories must be
+export-relative. Criterion output must match `criterion-dir` and stay separate
+from compiler output. Each suite and phase gets its own export.
+
+The budget counts logical file bytes kept after preflight, including source
+exports and compiler output. Allow additional scratch space for one suite's
+active preparation and its timing output. A suite that cannot fit or whose
+commands do not identify the same executable follows the two-pass path. Retained
+exports are removed after use or failure. Resume verifies a fresh preparation
+and uses the checkpoint's original complete pairs.
 
 The header binds the declaration, release/source receipts, availability and a
 digest of the inherited environment. Each accepted unit binds effective source,

@@ -1,13 +1,15 @@
 """Shared release gates and human-reviewed GitHub publication, without Cargo policy."""
 
+from collections.abc import Callable
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import TYPE_CHECKING, Literal, cast
 from urllib.parse import quote, urlsplit
 
 from research_repo_tools.evidence import _load_json
 from research_repo_tools.process import run_git_command, run_safe_command
-from research_repo_tools.registry import identity, wait_for_version
+from research_repo_tools.registry import RegistryVersion, identity, wait_for_version
 from research_repo_tools.release_assets import (
     GitHubRelease,
     ReleasePublicationUnknownError,
@@ -41,6 +43,7 @@ __all__ = [
     "require_checks",
     "validate_event",
     "verify_publication",
+    "verify_publication_visibility",
 ]
 
 
@@ -397,22 +400,80 @@ def verify_publication(config: "Config", tag: str, *, attempts: int = 1, interva
 
     check_release_dependencies(config.root, packages=config.release.published_dependencies)
     settings = _settings(config)
+    _verify_publication(
+        config.root,
+        settings.repository,
+        tag,
+        partial(_release_assertions, config, tag=tag, draft=False),
+        registry=settings.registry,
+        package=settings.package,
+        attempts=attempts,
+        interval=interval,
+        target=target,
+    )
+
+
+def verify_publication_visibility(
+    root: Path,
+    repository: str,
+    tag: str,
+    *,
+    registry: Literal["pypi", "crates-io"],
+    package: str,
+    required_assets: tuple[str, ...] = (),
+    attempts: int = 1,
+    interval: int = 10,
+    target: ReleaseTarget | None = None,
+) -> RegistryVersion:
+    """Read remote publication state using explicit identities and no checkout."""
+    required_assets = tuple(_asset_name(name) for name in required_assets)
+    if len(set(required_assets)) != len(required_assets):
+        raise ValueError("duplicate required release asset names")
+
+    def check(release: GitHubRelease) -> None:
+        if release.draft is not False or release.prerelease is not False or release.immutable is not True:
+            raise ValueError("visibility requires a published, stable, immutable GitHub release")
+        states = dict(release.asset_states)
+        completed = {name for name, identifier, size, _ in release.assets if size > 0 and states.get(identifier) == "uploaded"}
+        for name in required_assets:
+            if name not in completed:
+                raise ValueError(f"required release asset {name!r} is missing, empty or incomplete")
+
+    return _verify_publication(root, repository, tag, check, registry=registry, package=package, attempts=attempts, interval=interval, target=target)
+
+
+def _verify_publication(
+    root: Path,
+    repository: str,
+    tag: str,
+    check: Callable[[GitHubRelease], None],
+    *,
+    registry: Literal["pypi", "crates-io"],
+    package: str,
+    attempts: int,
+    interval: int,
+    target: ReleaseTarget | None,
+) -> RegistryVersion:
+    _repository(repository)
     version = _tag(tag)
-    release = lookup_release(config.root, settings.repository, tag)
-    if target is not None:
-        if target.repository != settings.repository or target.tag != tag:
-            raise ValueError("publication target differs from configured repository/tag")
-        _require_identity(release, target)
-        if _remote_commit(config.root, target.repository, tag) != target.commit:
-            raise ValueError("published tag differs from captured source")
-    _release_assertions(config, release, tag, draft=False)
-    if not wait_for_version(settings.registry, settings.package, version, attempts=attempts, interval=interval).present:
+    identity(registry, package, version)
+    if target is not None and (target.repository != repository or target.tag != tag):
+        raise ValueError("publication target differs from configured repository/tag")
+
+    def observe() -> GitHubRelease:
+        release = lookup_release(root, repository, tag)
+        if target is not None:
+            _require_identity(release, target)
+            if _remote_commit(root, target.repository, tag) != target.commit:
+                raise ValueError("published tag differs from captured source")
+        check(release)
+        return release
+
+    release = observe()
+    result = wait_for_version(registry, package, version, attempts=attempts, interval=interval)
+    if not result.present:
         raise ValueError("exact registry version is not yet visible; inspect the upload before retrying")
-    current = lookup_release(config.root, settings.repository, tag)
+    current = observe()
     if current.identifier != release.identifier:
         raise ValueError("published release identity changed during registry verification")
-    if target is not None:
-        _require_identity(current, target)
-        if _remote_commit(config.root, target.repository, tag) != target.commit:
-            raise ValueError("published tag changed during registry verification")
-    _release_assertions(config, current, tag, draft=False)
+    return result
