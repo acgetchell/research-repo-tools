@@ -10,7 +10,7 @@ the documented interfaces. Exact-release-commit evidence is the default;
 
 ## Release evidence and attachment handoffs
 
-For v0.2.7 consumers, declare selected tooling under
+Declare selected tooling under
 `release.published-dependencies`. Pre-tag evidence and later approval/asset gates
 check the observed checkout's dependency declarations and lock against the
 executing runtime and published artifact bytes before provider operations or
@@ -45,7 +45,7 @@ just release-assets upload tooling/release-assets.toml \
   --target /trusted/target.json --asset /path/to/baseline.tar.gz --approve
 ```
 
-With v0.2.7, add `--format summary` for a concise human-readable result after verification.
+Add `--format summary` for a concise human-readable result after verification.
 The summary states the actual package guarantee and labels absent benchmark or
 signature checks explicitly. JSON handoff bytes and approval selections remain
 unchanged; `--format json` also emits those bytes on stdout. For committed benchmark

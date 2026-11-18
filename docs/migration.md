@@ -77,7 +77,7 @@ releases; do not depend on the old combinations of optional fields.
 | Previous Python call | v0.2.7 replacement | Contract |
 | --- | --- | --- |
 | `Estimate(point, lower, upper, confidence_level)` | `Estimate(point, ConfidenceInterval(lower, upper, confidence_level))`, or `Estimate(point)` without an interval | [Timing estimates](performance-api.md) |
-| `TrialSchedule(6, order="randomized", seed=42)` | `TrialSchedule(6, RandomizedOrder(42))`; use `AlternatingOrder()` or `SequentialOrder()` for the other orders | [Trial schedules](complete-run-api.md#scheduled-trials-v026) |
+| `TrialSchedule(6, order="randomized", seed=42)` | `TrialSchedule(6, RandomizedOrder(42))`; use `AlternatingOrder()` or `SequentialOrder()` for the other orders | [Trial schedules](complete-run-api.md#scheduled-trials) |
 | `ReleaseRule(..., value=text)` or `ReleaseRule(..., source="tag")` | `ReleaseRule(..., replacement=FixedValue(text))` or `replacement=ReleaseSource.TAG` | [Release rules](publishing-api.md) |
 
 The corresponding TOML/JSON transports retain their documented field names;

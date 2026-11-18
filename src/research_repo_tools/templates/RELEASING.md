@@ -32,7 +32,7 @@ commit and current native evidence.
 
 ## Prepare the environment
 
-With v0.2.7 tooling, declare `published-dependencies = ["research-repo-tools"]`
+Declare `published-dependencies = ["research-repo-tools"]`
 under `[tool.research-repo-tools.release]` in the consumer's `pyproject.toml`.
 Development and CI may use a reviewed full Git commit. Before release work,
 publish the supplying version, remove its development override, reconcile normal
@@ -126,9 +126,8 @@ policies. For a release with a published predecessor, run
 `just performance-readme tooling/performance-release.toml`, in that order.
 README retries consume retained results without repeating measurements.
 The acquisition-owner, `performance capture`, and `performance first-release`
-interfaces below require a supplying release after v0.2.8; check
-[release availability](https://github.com/acgetchell/research-repo-tools/blob/main/README.md#release-availability)
-before adopting them.
+interfaces below are available in v0.2.9. Use the recipes from the installed
+tooling version.
 For a scheduled candidate acquisition with a schema-2 report, add
 `--owner "$OWNER_RECORD"` to `just performance-release`. Choose a new trusted
 directory outside the checkout. Recover a completed acquisition with
@@ -281,8 +280,8 @@ PR, manual-dispatch and partial-rerun evidence cannot substitute for it.
 ### 5. Create the draft GitHub release
 
 Let the repository's preparation workflow create the draft and required assets.
-With published v0.2.7 tooling, a consumer can compose signed retained evidence
-with `release assets prepare`; use the
+With v0.2.9, use `release assets plan` and `release assets prepare-authenticated`
+to compose signed retained evidence with the
 [isolated writer and receipt-recovery procedure](https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md).
 Preserve its captured release ID and original receipt for every retry.
 If no workflow creates a draft and the consumer's provenance policy permits

@@ -2,5 +2,6 @@
 
 from tests.utilities.public_api_consumer import TestCoverageCleanup as TestCoverageCleanup
 from tests.utilities.public_api_consumer import TestDirectoryPublication as TestDirectoryPublication
+from tests.utilities.public_api_consumer import TestEnvironmentExport as TestEnvironmentExport
 from tests.utilities.public_api_consumer import TestProcess as TestProcess
 from tests.utilities.public_api_consumer import TestPublication as TestPublication

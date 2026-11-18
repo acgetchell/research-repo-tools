@@ -161,7 +161,9 @@ requires identical original archive SHA-256 and exact tool identity strings.
 available as a separate integrity check; it makes no CI or signature claim.
 It reads bounded bytes without extracting or executing files: at most 64 MiB
 compressed/expanded, 4,096 members and 1 MiB per metadata member. It rejects
-links, sparse files, duplicate/unsafe member paths and mismatched Cargo metadata.
+links, sparse files, duplicate or unsafe member paths, and mismatched Cargo
+metadata. In v0.3.0, the shared portable path check also rejects file/directory
+overlaps and case or Unicode aliases.
 The outer artifact download additionally enforces its 32 MiB ZIP/expanded bound,
 exact portable flat-file inventory and provider ZIP digest.
 

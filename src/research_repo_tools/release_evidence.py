@@ -20,11 +20,13 @@ from datetime import UTC, datetime
 from pathlib import Path, PurePosixPath
 from typing import Any, Literal
 
+from research_repo_tools._archive_paths import ArchivePaths
 from research_repo_tools.evidence import deterministic_json
 from research_repo_tools.registry import pypi_destination
 from research_repo_tools.release_validation import (
     MAX_BYTES,
     ValidationPolicy,
+    _commit,
     artifact_identity,
     distribution_names,
     download_artifact,
@@ -57,12 +59,6 @@ def _object(value: Any) -> dict[str, Any]:
 def _positive(value: Any) -> int:
     if type(value) is not int or value <= 0:
         raise ValueError("expected a positive evidence identity")
-    return value
-
-
-def _commit(value: str) -> str:
-    if not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{40}", value) is None:
-        raise ValueError("expected a full lowercase commit SHA")
     return value
 
 
@@ -252,30 +248,28 @@ def _crate(payload: bytes, package: str, version: str, commit: str, path_in_vcs:
     if len(expanded) > MAX_CRATE_BYTES:
         raise ValueError("Cargo archive expanded size exceeds the release bound")
     with tarfile.open(fileobj=io.BytesIO(expanded), mode="r:") as archive:
-        names: set[str] = set()
+        paths = ArchivePaths()
         metadata: dict[str, bytes] = {}
-        for member in archive:
+        for count, member in enumerate(archive, 1):
             name = PurePosixPath(member.name)
-            if len(names) >= MAX_CRATE_MEMBERS:
+            if count > MAX_CRATE_MEMBERS:
                 raise ValueError("Cargo archive inventory exceeds the release bound")
             if (
-                member.name in names
-                or not member.isfile()
+                not member.isfile()
                 or member.sparse is not None
                 or not member.name.startswith(f"{prefix}/")
-                or ".." in name.parts
                 or str(name) != member.name
-                or "\\" in member.name
                 or not 0 <= member.size <= len(expanded) - member.offset_data
             ):
                 raise ValueError("Cargo archive must contain unique regular package files with safe paths")
-            names.add(member.name)
+            paths.add(member.name, directory=False)
             if member.name in (f"{prefix}/.cargo_vcs_info.json", f"{prefix}/Cargo.toml"):
                 if member.size > MAX_METADATA_BYTES:
                     raise ValueError("Cargo archive metadata exceeds the release bound")
                 content = archive.extractfile(member)
                 if content is not None:
-                    metadata[name.name] = content.read()
+                    with content:
+                        metadata[name.name] = content.read()
         if set(metadata) != {".cargo_vcs_info.json", "Cargo.toml"}:
             raise ValueError("Cargo archive lacks source or package metadata")
     identity = _object(parse_release_json(metadata[".cargo_vcs_info.json"]))

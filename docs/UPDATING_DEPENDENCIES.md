@@ -172,7 +172,7 @@ URLs and `find-links` remain relative to the consumer project.
 Pin discovery supports registry requirements and named-index sources with
 optional platform markers. Absolute local wheel/sdist source files are also
 retained for isolated artifact evaluation; their fixed pins are not upgrade
-targets. With v0.2.7, exact development Git sources use the same declaration accepted during
+targets. Exact development Git sources use the same declaration accepted during
 adoption: one uncredentialed HTTPS repository URL and a full lowercase
 40-character `rev`, with no branch, tag, marker, group or extra scope. These
 packages retain their version requirements, extras and exact repository/commit
@@ -560,7 +560,7 @@ support, not every possible runtime incompatibility; retain focused consumer CI.
 
 ## Verified dependency sources
 
-The v0.2.7 [dependency source workflow](../README.md#verified-python-and-cargo-dependency-sources)
+The [dependency source workflow](../README.md#verified-python-and-cargo-dependency-sources)
 supports exact development commits and explicit commit-to-release transitions. The
 canonical `dependency-sources.toml` belongs at the checkout root. It declares
 Python/uv and Cargo projects, the package directories owned by each release,

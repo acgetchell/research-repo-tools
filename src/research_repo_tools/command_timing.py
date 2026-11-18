@@ -6,7 +6,6 @@ import math
 import os
 import platform
 import re
-import statistics
 import sys
 import time
 import tomllib
@@ -14,6 +13,7 @@ import uuid
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass
 from datetime import UTC, datetime
+from fractions import Fraction
 from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from research_repo_tools import __version__
@@ -282,7 +282,7 @@ def publish_command_timing(root: Path, configuration: str, output: str) -> bytes
     return payload
 
 
-def _report(payload: bytes) -> tuple[_Plan, list[dict[str, object]]]:
+def _report(payload: bytes) -> dict[str, list[int]]:
     raw = _table(
         _load_json(payload, "command timing report"),
         "command timing report",
@@ -379,15 +379,17 @@ def _report(payload: bytes) -> tuple[_Plan, list[dict[str, object]]]:
     values = raw["observations"]
     if not isinstance(values, list) or len(values) != len(sequence):
         raise ValueError("timing observations are incomplete")
-    observations = []
+    samples: dict[str, list[int]] = {name: [] for name, _ in plan.cases}
     for value, identity in zip(values, sequence, strict=True):
         item = _table(value, "observation", {"command", "stage", "index", "elapsed_ns", "returncode", "status"})
         if (item["command"], item["stage"], item["index"]) != identity or type(item["index"]) is not int:
             raise ValueError("timing observations have wrong order, case, stage or index")
-        _integer(item["elapsed_ns"], "elapsed_ns", 1, 10**30)
+        elapsed = _integer(item["elapsed_ns"], "elapsed_ns", 1, 10**30)
         _success(item)
-        observations.append(item)
-    return plan, observations
+        command, stage, _ = identity
+        if stage == "sample":
+            samples[command.removeprefix("case/")].append(elapsed)
+    return samples
 
 
 def _success(item: dict[str, object]) -> None:
@@ -410,13 +412,18 @@ def validate_command_timing(payload: bytes) -> None:
     _report(payload)
 
 
+def _seconds(nanoseconds: int) -> str:
+    seconds, remainder = divmod(nanoseconds, 10**9)
+    return f"{seconds}.{remainder:09d}"
+
+
 def summarize_commands(payload: bytes) -> str:
-    """Render sorted case counts and elapsed seconds from every retained sample."""
-    plan, observations = _report(payload)
+    """Render sorted case counts and elapsed seconds to the nearest nanosecond."""
+    samples = _report(payload)
     lines = ["Exploratory command timing (wall seconds; no comparability claim)", "case\tsamples\tmin_s\tmedian_s\tmax_s"]
-    for name, _ in plan.cases:
-        values = [
-            _integer(item["elapsed_ns"], "elapsed_ns", 1, 10**30) for item in observations if item["command"] == f"case/{name}" and item["stage"] == "sample"
-        ]
-        lines.append(f"{name}\t{len(values)}\t{min(values) / 1e9:.9f}\t{statistics.median(values) / 1e9:.9f}\t{max(values) / 1e9:.9f}")
+    for name, values in samples.items():
+        values.sort()
+        count = len(values)
+        median = round(Fraction(values[(count - 1) // 2] + values[count // 2], 2))
+        lines.append(f"{name}\t{count}\t{_seconds(values[0])}\t{_seconds(median)}\t{_seconds(values[-1])}")
     return "\n".join(lines) + "\n"

@@ -158,7 +158,7 @@ publication follow package adoption.
 | Untagged `release-check` recipe | `release-version-check` for prepared metadata; `release-check TAG` for explicit publication preflight |
 | `release-tag`, `tag-release` | `tag TAG` |
 | `release-tag-preview` | `tag-preview TAG` |
-| `tag-force` recipe | Removed; never move a published release tag |
+| `tag-force` recipe | Use `tag TAG --force` with the v0.3.0 recipe only for [guarded unpublished-candidate recovery](RECOVERING_RELEASES.md#4-replace-the-superseded-draft-and-tag) |
 | `release-update TAG PREVIOUS DATE` | `update-version TAG`; add `--previous-release PREVIOUS --date DATE` for explicit inputs |
 | Transitional manual `publish` / Cargo upload | `release-publish TAG`, then approve the OIDC workflow |
 | Local Cargo info / registry-only checks | `release-verify TAG` for exact registry and GitHub state |

@@ -200,6 +200,23 @@ class TestCommandTiming(unittest.TestCase):
         with self.assertRaises(ValueError):
             validate_command_timing(b'{"schema":1,"schema":1}')
 
+    def test_summary_keeps_nanoseconds_and_rounds_half_nanoseconds_to_even(self) -> None:
+        self.declare(warmups=1, repeats=2)
+        report = json.loads(measure_commands(self.root, "timing.toml"))
+        values = {
+            "case/a-first": (10**20 + 1, 10**20 + 2),
+            "case/z-last": (101, 100),
+        }
+        for row in report["observations"]:
+            row["elapsed_ns"] = values[row["command"]][row["index"]] if row["stage"] == "sample" else 10**25
+        self.assertEqual(
+            summarize_commands(json.dumps(report).encode()).splitlines()[2:],
+            [
+                "a-first\t2\t100000000000.000000001\t100000000000.000000002\t100000000000.000000002",
+                "z-last\t2\t0.000000100\t0.000000100\t0.000000101",
+            ],
+        )
+
     def test_native_globs_and_offline_windows_case_matching(self) -> None:
         self.declare(warmups=0, repeats=1)
         declaration = self.root / "timing.toml"

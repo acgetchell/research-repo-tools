@@ -22,8 +22,8 @@ The checked-in settings define this repository's desired baseline:
   limited to Codecov, validated-release signing, and PyPI upload jobs. Actions
   approvals are enabled for the Dependabot approval policy described below.
 - Selected Actions only, with full commit SHA pinning required. Dependabot updates
-  GitHub Actions weekly, with separate security-update groups. The uv updater is
-  paused pending Python 3.15 support; maintain Python dependencies with
+  GitHub Actions weekly, with separate security-update groups. The checked-in
+  schedule disables uv updates. Maintain Python dependencies with
   `just update-python-dependencies` as described in the
   [rollout guidance](AUTOMATING_DEPENDABOT.md#deployment-and-rollout).
 - Dependabot alerts/security updates, secret scanning, push protection, and private

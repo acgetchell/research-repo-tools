@@ -64,6 +64,16 @@ def test_invalid_source_and_missing_paths_fail_closed(checker, tmp_path, monkeyp
     assert f"{missing}: input does not exist" in errors
 
 
+@pytest.mark.parametrize("source", [b"\xef\xbb\xbfpath.write_text('text')\n", b"# coding: latin-1\npath.write_text('caf\xe9')\n"])
+def test_scans_source_with_a_python_encoding_declaration(checker, tmp_path, monkeypatch, capsys, source):
+    path = tmp_path / "encoded.py"
+    path.write_bytes(source)
+    compile(path.read_bytes(), str(path), "exec")
+    monkeypatch.setattr(sys, "argv", [str(CHECKER), str(path)])
+    assert checker.main() == 1
+    assert f"{path}:{source.count(b'\n')}:1: implicit-newline:" in capsys.readouterr().err
+
+
 @pytest.mark.parametrize("newline", ["\n", ""])
 def test_explicit_policy_preserves_mixed_bytes_on_native_path_and_windows_model(tmp_path, newline):
     text = "first\nsecond\r\n分析\n"

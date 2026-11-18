@@ -564,6 +564,21 @@ class TestEvidenceConsumer(unittest.TestCase):
                 verify_cargo_archive(path, "sample", "1.2.3", COMMIT)
             self.assertIsNone(caught.exception.__cause__)
 
+    def test_cargo_archive_rejects_overlapping_and_aliased_member_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "sample.crate"
+            for name, diagnostic in (
+                ("sample-1.2.3/src", "file overlaps a directory"),
+                ("sample-1.2.3/src/lib.rs/child", "file overlaps a directory"),
+                ("sample-1.2.3/SRC/other.rs", "paths alias"),
+            ):
+                with self.subTest(name=name):
+                    payload = crate(extra=name)
+                    path.write_bytes(payload)
+                    with self.assertRaisesRegex(ValueError, diagnostic):
+                        verify_cargo_archive(path, "sample", "1.2.3", COMMIT)
+                    self.assertEqual(path.read_bytes(), payload)
+
     def test_json_and_pagination_fail_closed(self):
         for payload in (b'{"id":1,"id":2}', b'{"id":NaN}', b'{"id":1e999}', b"\xff", b"[" * 2000 + b"]" * 2000):
             with self.subTest(payload=payload[:30]), self.assertRaises(ValueError):

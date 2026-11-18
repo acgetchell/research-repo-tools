@@ -7,13 +7,9 @@ evidence. A first release requires unscheduled schema-5 measurement and
 complete-run v6 evidence; see the [first-release procedure under committed publisher
 evidence](#committed-publisher-evidence). Historical v1–v4 evidence is not upgraded,
 assigned missing receipts, or silently measured again.
-This reference includes v0.2.7 extensions to the published v0.2.6 contract:
-committed publisher receipts, phase-specific source inputs, and typed trial
-orders. Check [release availability](../README.md#release-availability) before adoption.
-The owner-capture, hosted-retrieval, archive-attachment and first-release commands
-described below are pending a supplying release; published v0.2.8 does not include
-them. [Release tracker #236](https://github.com/acgetchell/research-repo-tools/issues/236)
-owns their release validation and publication.
+Use v0.2.9 for the owner-capture, hosted-retrieval, archive-attachment and
+first-release commands below. See [release availability](../README.md#release-availability)
+for the published package and matching templates.
 
 ## Source and trust contract
 
