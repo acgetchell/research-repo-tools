@@ -38,7 +38,7 @@ from research_repo_tools.evidence import deterministic_json
 from research_repo_tools.files import RecoveryError
 from research_repo_tools.process import run_git_bytes
 from research_repo_tools.registry import lookup_version, verify_published_distributions
-from research_repo_tools.release_assets import require_release_checkout
+from research_repo_tools.release_assets import parse_release_target, require_release_checkout
 from research_repo_tools.release_drafts import DraftPreparationUnknownError, prepare_release_draft
 from research_repo_tools.release_evidence import (
     EvidencePolicy,
@@ -2393,6 +2393,43 @@ class TestAuthenticatedDraftWorkflow(unittest.TestCase):
             self.assertEqual(self.prepare(executing_run_id=999), target)
         self.assertEqual(self.provider.posts, [])
 
+    def test_tag_writer_waits_for_captured_id_in_the_listing_with_one_post(self):
+        def temporarily_hidden():
+            self.provider.listing = [[]]
+
+        def visible(_seconds):
+            receipt = json.loads((self.state / "draft-receipt.json").read_bytes())
+            self.assertEqual((receipt["state"], receipt["release_id"]), ("captured", 91))
+            self.provider.listing = None
+
+        self.provider.on_create = temporarily_hidden
+        with patch("research_repo_tools.release_drafts.time.sleep", side_effect=visible) as wait:
+            self.assertEqual(self.prepare().release_id, 91)
+        wait.assert_called_once_with(1)
+        self.assertEqual(len(self.provider.posts), 1)
+        self.assertIn(["api", "repos/example/package/releases/91"], self.provider.calls)
+        self.assertEqual((self.state / "handoff.json").read_bytes(), self.payload)
+        self.assertEqual(parse_release_target((self.state / "target.json").read_bytes()).release_id, 91)
+
+    def test_tag_writer_fails_closed_when_captured_draft_cannot_be_confirmed(self):
+        self.provider.on_create = lambda: setattr(self.provider, "listing", [[]])
+        with patch("research_repo_tools.release_drafts.time.sleep") as wait:
+            with self.assertRaises(DraftPreparationUnknownError) as failed:
+                self.prepare()
+            self.assertIn("draft disappeared", str(failed.exception.__cause__))
+            self.assertEqual([call.args for call in wait.call_args_list], [(1,), (2,)])
+            receipt_path = self.state / "draft-receipt.json"
+            before = receipt_path.read_bytes()
+            self.assertEqual(json.loads(before)["release_id"], 91)
+            for listing in ([[]], [[self.provider.draft(id=92)]], [[self.provider.draft(), self.provider.draft(id=92)]], b"{"):
+                with self.subTest(listing=listing):
+                    self.provider.listing = listing
+                    with self.assertRaises(ValueError):
+                        self.prepare()
+                    self.assertEqual(receipt_path.read_bytes(), before)
+                    self.assertFalse((self.state / "target.json").exists())
+                    self.assertEqual(len(self.provider.posts), 1)
+
     def test_missing_journal_new_run_and_ambiguous_creation_never_create_replacement(self):
         with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}), self.assertRaisesRegex(ValueError, "original handoff and journal"):
             self.prepare(executing_run_id=999)
@@ -2558,7 +2595,6 @@ class TestAuthenticatedDraftWorkflow(unittest.TestCase):
         self.assertEqual({path.name: path.read_bytes() for path in self.checkout.iterdir()}, before)
 
     def test_installed_cli_plans_and_authenticates_original_handoff(self):
-        from research_repo_tools.release_assets import parse_release_target
 
         project = self.checkout / "pyproject.toml"
         project.write_bytes(

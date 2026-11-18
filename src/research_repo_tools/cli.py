@@ -215,6 +215,15 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("--attempts", type=int, default=1)
     command.add_argument("--interval", type=int, default=10)
     command.add_argument("--target", type=Path, help="independently captured release target to preserve through final verification")
+    command = release.add_parser("visibility", help="check immutable GitHub publication and the exact registry version without a checkout")
+    command.add_argument("tag")
+    command.add_argument("--attempts", type=int, default=1)
+    command.add_argument("--interval", type=int, default=10)
+    command.add_argument("--package", required=True)
+    command.add_argument("--registry", choices=("crates-io", "pypi"), required=True)
+    command.add_argument("--repository", required=True, help="GitHub owner/name")
+    command.add_argument("--required-asset", action="append", default=[], help="exact uploaded asset filename (repeatable)")
+    command.add_argument("--target", type=Path, help="independently captured release target to preserve through final verification")
     review = groups.add_parser("review", help="run an opt-in CodeRabbit review").add_subparsers(dest="action", required=True)
     command = review.add_parser("branch", help="review branch and local changes against a verified base", allow_abbrev=False)
     command.add_argument("--base", default="origin/main")
@@ -867,7 +876,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             print("Saved verified CI reuse selection; revalidate it with --reuse-evidence at the release gate.")
             return 0
         target = None
-        if args.action in {"gate", "publish", "verify"} and args.target is not None:
+        if args.action in {"gate", "publish", "verify", "visibility"} and args.target is not None:
             from research_repo_tools.release_assets import _read_target
 
             target = _read_target(settings.path(str(args.target)))
@@ -903,6 +912,22 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         if args.action == "verify":
             release_publishing.verify_publication(settings, args.tag, attempts=args.attempts, interval=args.interval, target=target)
             print(f"Verified published GitHub Release and registry version {args.tag}.")
+            return 0
+        if args.action == "visibility":
+            result = release_publishing.verify_publication_visibility(
+                settings.root,
+                args.repository,
+                args.tag,
+                registry=args.registry,
+                package=args.package,
+                required_assets=tuple(args.required_asset),
+                attempts=args.attempts,
+                interval=args.interval,
+                target=target,
+            )
+            print(f"Verified immutable GitHub release and {result.registry} package {result.package} {result.version}.")
+            if result.checksum is not None:
+                print(f"Registry archive SHA-256 {result.checksum}")
             return 0
         if args.action == "check" and args.tag:
             release_publishing.check_metadata(settings, args.tag, previous_tag=args.previous_release)

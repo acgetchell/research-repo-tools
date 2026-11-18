@@ -109,12 +109,17 @@ class RegistryLookupError(ValueError):
     """Registry evidence is unavailable or malformed, rather than absent."""
 
 
+class TransientRegistryError(RegistryLookupError):
+    """A transient registry GET failure exhausted the bounded retry policy."""
+
+
 @dataclass(frozen=True, slots=True)
 class RegistryVersion:
     registry: Literal["pypi", "crates-io"]
     package: str
     version: str
     present: bool
+    checksum: str | None = None
 
 
 def identity(registry: str, package: str, version: str) -> None:
@@ -149,6 +154,8 @@ def _json(url: str) -> object:
         raise RegistryLookupError(f"registry lookup failed with HTTP {error.code}; absence is unproven") from error
     except (OSError, urllib.error.URLError) as error:
         raise RegistryLookupError("registry lookup failed; absence is unproven") from error
+    except TransientRegistryError:
+        raise
     except ValueError as error:
         raise RegistryLookupError(str(error)) from error
     if len(payload) > LIMIT:
@@ -178,6 +185,7 @@ def lookup_version(registry: Literal["pypi", "crates-io"], package: str, version
         return RegistryVersion(registry, package, version, False)
     if not isinstance(data, dict):
         raise RegistryLookupError("registry response must be an object")
+    checksum = None
     if registry == "pypi":
         info, uploads = data.get("info"), data.get("urls")
         if not isinstance(info, dict) or not isinstance(info.get("name"), str) or not isinstance(uploads, list) or not uploads:
@@ -201,7 +209,7 @@ def lookup_version(registry: Literal["pypi", "crates-io"], package: str, version
         checksum = info.get("checksum")
         if not isinstance(checksum, str) or re.fullmatch(r"[0-9a-f]{64}", checksum) is None:
             raise RegistryLookupError("crates.io version lacks a valid archive checksum")
-    return RegistryVersion(registry, package, version, True)
+    return RegistryVersion(registry, package, version, True, checksum)
 
 
 def wait_for_version(registry: Literal["pypi", "crates-io"], package: str, version: str, *, attempts: int = 1, interval: int = 10) -> RegistryVersion:

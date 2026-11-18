@@ -85,14 +85,26 @@ inspect the captured ID before retrying because publication may have succeeded.
 `verify_publication(config, tag, *, attempts=1, interval=10)` requires a published
 stable GitHub Release, configured assets and the exact registry version.
 
-`research_repo_tools.registry` exposes `RegistryVersion`, `RegistryLookupError`,
+`verify_publication_visibility(root, repository, tag, *, registry, package,
+required_assets=(), attempts=1, interval=10, target=None)` checks an immutable
+stable release, nonempty uploaded assets, and the exact registry version with
+its checksum for crates.io. It returns `RegistryVersion` and uses the same
+explicit inputs as `release visibility`. `root` supplies a working directory
+for authenticated `gh` requests and resolves CLI `--target` paths. Visibility
+checks run without checkout, generated notes, or dependency provenance.
+
+`research_repo_tools.registry` exposes `RegistryVersion`, `RegistryLookupError`, `TransientRegistryError`,
 `lookup_version(registry, package, version)` and `wait_for_version(...)`.
 `present=False` means only a proven exact-endpoint 404. Every unavailable,
 malformed, yanked, mismatched or partial-upload response raises an error.
 Verification asserts metadata visibility, not archive-byte provenance. Waits
-retry only absence, with 1..31 requests, a 0..10 second interval and a
-15-second timeout per request. PyPI requires both wheel and sdist upload evidence;
-crates.io requires an archive checksum. Neither lookup retries uploads.
+poll only absence, with 1..31 observations and a 0..10 second interval.
+Public registry GETs retry transient transport failures at most three times
+within a 60-second retry budget per observation. `TransientRegistryError`
+means that budget was exhausted. Release dependency verification recommends
+retrying the read-only check with the same pins and retaining the original CI
+source and attempt assertions. PyPI requires both wheel and sdist upload evidence.
+Crates.io requires a valid archive checksum.
 
 The canonical release recipe surface is identical in root and consumer templates:
 `release-check TAG`, `release-first TAG DATE`, `release-notes TAG`,

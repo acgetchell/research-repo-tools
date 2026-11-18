@@ -8,6 +8,7 @@ storage and serialize every writer for a repository/tag across invocations.
 import hashlib
 import os
 import tempfile
+import time
 from collections.abc import Callable
 from dataclasses import dataclass
 from functools import partial
@@ -161,7 +162,15 @@ def _reserve(path: Path, payload: bytes) -> None:
 
 
 def _require_draft(root: Path, assertions: _Assertions, target: ReleaseTarget) -> None:
-    matches = _release_matches(root, assertions.repository, assertions.tag)
+    # A captured ID can take a moment to appear in the complete release listing.
+    # Only a successful empty listing permits another read. Conflicting or
+    # malformed observations never authorize continuing or creating again.
+    for delay in (0, 1, 2):
+        if delay:
+            time.sleep(delay)
+        matches = _release_matches(root, assertions.repository, assertions.tag)
+        if matches:
+            break
     if len(matches) != 1 or matches[0].get("id") != target.release_id:
         raise ValueError("draft disappeared, was replaced or has duplicate matches; retain the original receipt")
     release = _release_by_id(root, target.repository, target.tag, target.release_id)
@@ -278,7 +287,7 @@ def _prepare_release_draft(
 
     evidence()
     _require_tag(root, assertions)
-    matches = _release_matches(root, repository, tag)
+    matches = _release_matches(root, repository, tag) if target is None else []
     if len(matches) > 1:
         raise ValueError("duplicate releases for the stable tag")
     if target is not None:

@@ -13,6 +13,7 @@ from urllib.parse import urlsplit
 
 from research_repo_tools._http import closing_http_errors
 from research_repo_tools.dependency_progress import report
+from research_repo_tools.registry import TransientRegistryError
 
 _LOCK = threading.Lock()
 _requested_at: float | None = None
@@ -124,7 +125,7 @@ def read_registry(
             break
         report("retry", "registry", detail=f"{parsed.netloc}; attempt {attempt + 2}/3 after {delay:g}s")
         sleep(delay)
-    raise ValueError(
+    raise TransientRegistryError(
         f"registry GET exhausted three attempts or its 60-second retry budget; last failure: {last_failure}; "
         "availability is unproven; retry verification with retained evidence"
     )

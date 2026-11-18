@@ -437,6 +437,8 @@ def check_release_dependencies(
 
 
 def _check_release_dependencies(root: Path, *, packages: tuple[str, ...] | None) -> tuple[DependencyIdentity, ...]:
+    from research_repo_tools.registry import TransientRegistryError
+
     try:
         report("started", "local prerequisites")
         manifest = root / "pyproject.toml"
@@ -494,5 +496,10 @@ def _check_release_dependencies(root: Path, *, packages: tuple[str, ...] | None)
         retain_guard(unchanged, sha256(deterministic_json({"manifest": sha256(original), "lock": sha256(original_lock), "runtime": pending})))
         generic = _policy_identities(root)
         return tuple(dict.fromkeys((*[DependencyIdentity(name, version, INDEX) for name, version, _, _ in pending], *generic)))
+    except TransientRegistryError as error:
+        raise TransientRegistryError(
+            f"release dependency provenance: {error}. Retry the read-only dependency check with the same checkout and pins. "
+            "For CI evidence, retain the independently selected commit, run and attempt."
+        ) from error
     except (ValueError, OSError, TypeError, subprocess.SubprocessError, zipfile.BadZipFile, http.client.HTTPException) as error:
         raise ValueError(f"release dependency provenance: {error}. {RECOVERY}") from error

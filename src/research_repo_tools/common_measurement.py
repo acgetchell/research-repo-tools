@@ -45,7 +45,8 @@ from research_repo_tools.criterion_inventory import (
 from research_repo_tools.evidence import Evidence, Provenance, _digest, _load_json, _object, _string, compare_provenance, fingerprint_files
 from research_repo_tools.measurement import MeasurementConfig, _strings, capture_provenance
 from research_repo_tools.performance_progress import ProgressReporter
-from research_repo_tools.process import run_command_live
+from research_repo_tools.prepared_measurement import executable_digest, executable_identity, private_environment
+from research_repo_tools.process import resolve_executable, run_command_live
 from research_repo_tools.publication import _inventory, _path
 from research_repo_tools.publication_config import _table
 from research_repo_tools.release_pairs import FirstRelease, ReleasePair
@@ -479,6 +480,7 @@ def _prepare_phases(
     active: tuple[str, ...] = ("baseline", "current"),
     progress: ProgressReporter | None = None,
     compilation: dict[str, tuple[str, ...]] | None = None,
+    checked_executables: dict[str, str] | None = None,
     on_sample: Callable[[str, CompleteSample, float], None] | None = None,
     phase_order: tuple[str, ...] = ("baseline", "current"),
     on_phase: Callable[[str, int, int], None] | None = None,
@@ -552,18 +554,22 @@ def _prepare_phases(
     declared: dict[str, Provenance] = {}
     configurations = {}
     environments = {}
+    inherited = {}
+    executables: dict[str, tuple[Path, str]] = {}
+    tools: dict[str, dict[str, tuple[Path, str]]] = {}
     for phase, root in roots.items():
         selected = plan.baseline if phase == "baseline" else plan.current
         config = replace(plan.measurement, command=selected.command, sources=plan.phase_sources(phase))
         configurations[phase] = config
         env = _overlay_environment(os.environ, selected.environment)
-        environments[phase] = env
+        inherited[phase] = env
+        environments[phase] = private_environment(root, env, plan.measurement.criterion_dir) if checked_executables else env
         before[phase] = capture_provenance(
             root,
             config,
             getattr(pair, phase),
             mode="working-tree" if phase == "current" and working_tree else "tag",
-            env=env,
+            env=environments[phase],
             source=captured_sources[phase] if captured_sources else None,
         )
         declared[phase] = replace(
@@ -606,13 +612,28 @@ def _prepare_phases(
             != source
         ):
             raise ValueError(f"{phase} measurement inputs or host/tool identity changed")
+        if checked_executables and phase in executables:
+            if executable_identity(roots[phase], checked_executables[phase], environments[phase]) != executables[phase]:
+                raise ValueError(f"{phase} prepared executable changed before retention")
+
+    def tool_identity(phase: str, program: str) -> tuple[Path, str]:
+        path = resolve_executable(program, cwd=roots[phase], env=environments[phase])
+        return path.resolve(strict=True), executable_digest(path)
 
     policies: dict[str, CompletePolicy] = {}
     for phase, root in roots.items():
         if compilation and phase in compilation:
             command = compilation[phase]
+            if checked_executables:
+                artifact = checked_executables[phase]
+                if _path(root, artifact).exists():
+                    raise ValueError(f"{phase} compiled executable must be absent before compilation: {artifact}")
+                programs = {command[0], *(probe[0] for _, probe in plan.measurement.probes), getattr(plan, phase).gate[0]} - {artifact}
+                tools[phase] = {program: tool_identity(phase, program) for program in sorted(programs)}
             with reporter.stage("compilation", suite=reporter.suite, phase=phase):
                 run_command_live(command[0], command[1:], cwd=root, env=environments[phase], timeout=plan.measurement.timeout)
+            if checked_executables:
+                executables[phase] = executable_identity(root, checked_executables[phase], environments[phase])
             unchanged(phase)
             if (root / plan.measurement.criterion_dir).exists():
                 raise ValueError("compilation produced timing output before measurement")
@@ -674,7 +695,7 @@ def _prepare_phases(
             if phase not in roots:
                 continue
             root = roots[phase]
-            selected = getattr(plan, phase)
+            selected = plan.baseline if phase == "baseline" else plan.current
             unchanged(phase)
             if (root / plan.measurement.criterion_dir).exists():
                 raise ValueError(f"{phase} timing output appeared before its measurement")
@@ -684,7 +705,15 @@ def _prepare_phases(
                 on_phase_start(phase, started_ns)
             in_progress = phase, started_ns
             with reporter.stage("acquisition", suite=reporter.suite, phase=phase):
-                result = run_command_live(selected.command[0], selected.command[1:], cwd=root, env=environments[phase], timeout=plan.measurement.timeout)
+                program: str | Path = selected.command[0]
+                if checked_executables:
+                    private_environment(root, inherited[phase], plan.measurement.criterion_dir)
+                    if any(tool_identity(phase, name) != previous for name, previous in tools[phase].items()):
+                        raise ValueError(f"{phase} prepared tool executable changed before measurement")
+                    program, digest = executable_identity(root, checked_executables[phase], environments[phase])
+                    if (program, digest) != executables[phase]:
+                        raise ValueError(f"{phase} prepared executable changed before measurement")
+                result = run_command_live(program, selected.command[1:], cwd=root, env=environments[phase], timeout=plan.measurement.timeout)
             finished_ns = time.time_ns()
             if result.returncode:
                 raise ValueError(f"{phase} measurement failed")
