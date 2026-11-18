@@ -46,7 +46,7 @@ from research_repo_tools.evidence import Evidence, Provenance, _digest, _load_js
 from research_repo_tools.measurement import MeasurementConfig, _strings, capture_provenance
 from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.prepared_measurement import executable_digest, executable_identity, private_environment
-from research_repo_tools.process import resolve_executable, run_command_live
+from research_repo_tools.process import ExecutableNotFoundError, resolve_executable, run_command_live
 from research_repo_tools.publication import _inventory, _path
 from research_repo_tools.publication_config import _table
 from research_repo_tools.release_pairs import FirstRelease, ReleasePair
@@ -622,22 +622,37 @@ def _prepare_phases(
 
     policies: dict[str, CompletePolicy] = {}
     for phase, root in roots.items():
+        phase_plan = plan.baseline if phase == "baseline" else plan.current
+        gate_program = phase_plan.gate[0]
         if compilation and phase in compilation:
             command = compilation[phase]
             if checked_executables:
                 artifact = checked_executables[phase]
                 if _path(root, artifact).exists():
                     raise ValueError(f"{phase} compiled executable must be absent before compilation: {artifact}")
-                programs = {command[0], *(probe[0] for _, probe in plan.measurement.probes), getattr(plan, phase).gate[0]} - {artifact}
+                programs = {command[0], *(probe[0] for _, probe in plan.measurement.probes)} - {artifact}
                 tools[phase] = {program: tool_identity(phase, program) for program in sorted(programs)}
+                if gate_program != artifact and gate_program not in tools[phase]:
+                    try:
+                        tools[phase][gate_program] = tool_identity(phase, gate_program)
+                    except ExecutableNotFoundError:
+                        # Compilation may supply a gate at an explicit path in this export.
+                        if not os.path.dirname(gate_program) or not (root / gate_program).resolve().is_relative_to(root):
+                            raise
             with reporter.stage("compilation", suite=reporter.suite, phase=phase):
                 run_command_live(command[0], command[1:], cwd=root, env=environments[phase], timeout=plan.measurement.timeout)
             if checked_executables:
-                executables[phase] = executable_identity(root, checked_executables[phase], environments[phase])
+                artifact = checked_executables[phase]
+                executables[phase] = executable_identity(root, artifact, environments[phase])
+                if gate_program != artifact and gate_program not in tools[phase]:
+                    gate_tool = tool_identity(phase, gate_program)
+                    if not gate_tool[0].is_relative_to(root):
+                        raise ValueError(f"{phase} generated gate executable is outside the phase export")
+                    tools[phase][gate_program] = gate_tool
             unchanged(phase)
             if (root / plan.measurement.criterion_dir).exists():
                 raise ValueError("compilation produced timing output before measurement")
-        policy = (plan.baseline if phase == "baseline" else plan.current).policy
+        policy = phase_plan.policy
         if isinstance(policy, DiscoveryPolicy):
             with reporter.stage("discovery", suite=reporter.suite, phase=phase):
                 inventory = discover_inventory(root, policy.discovery, env=environments[phase])
@@ -676,6 +691,8 @@ def _prepare_phases(
     for phase, root in roots.items():
         gate = getattr(plan, phase).gate
         with reporter.stage("gate", suite=reporter.suite, phase=phase):
+            if checked_executables and (gate_tool := tools[phase].get(gate[0])) is not None and tool_identity(phase, gate[0]) != gate_tool:
+                raise ValueError(f"{phase} gate executable changed before preflight")
             result = run_command_live(gate[0], gate[1:], cwd=root, env=environments[phase], timeout=plan.measurement.timeout, check=False)
             # A gate finishes only after its command and evidence checks pass.
             if result.returncode:

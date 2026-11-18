@@ -244,6 +244,51 @@ class TestSuiteAcquisition(unittest.TestCase):
             )
         return SuiteMeasurementPlan(tuple(suites), schedule=TrialSchedule(1, SequentialOrder()), preparation_storage_bytes=128 * 1024**2)
 
+    def test_separately_compiled_gate_runs_before_sampling_and_remains_bound(self):
+        selected = self.native_plan()
+        suite = selected.suites[0]
+        baseline, current = suite.measurement.baseline, suite.measurement.current
+        gate = Path(baseline.command[0]).with_stem("check").as_posix()
+        compile_script = self.root / "compile.py"
+        compile_script.write_bytes(
+            b"import subprocess\nfor name in ('fixture', 'check'):\n"
+            b"    subprocess.run(['rustc', 'bench.rs', '--crate-name', name, '--out-dir', 'bin'], check=True)\n"
+        )
+        compile_both = (sys.executable, str(compile_script))
+        suite = replace(
+            suite,
+            measurement=replace(
+                suite.measurement,
+                baseline=replace(baseline, gate=(gate, *baseline.gate[1:])),
+                current=replace(current, gate=(gate, *current.gate[1:])),
+            ),
+            compilation=(("baseline", compile_both), ("current", compile_both)),
+        )
+        selected = replace(selected, suites=(suite,))
+        preflight = ["shared list old", "shared list new", "shared gate old", "shared gate new"]
+        for budget, passes in ((selected.preparation_storage_bytes, 1), (1, 2)):
+            with self.subTest(budget=budget):
+                self.log.unlink(missing_ok=True)
+                declaration = replace(selected, preparation_storage_bytes=budget)
+                evidence = measure_pair(self.root, declaration, PAIR, progress=self.quiet)
+                validate_run_policy(evidence, declaration, release=True)
+                self.assertEqual(self.log.read_text().splitlines(), preflight * passes + ["shared measure old", "shared measure new"])
+
+        self.log.unlink(missing_ok=True)
+
+        def replace_gate_after_execution(command, args=(), **kwargs):
+            result = run_command_live(command, args, **kwargs)
+            if command == gate and kwargs["cwd"].name == "shared-baseline":
+                (kwargs["cwd"] / gate).write_bytes(b"replacement gate bytes")
+            return result
+
+        with (
+            patch("research_repo_tools.common_measurement.run_command_live", side_effect=replace_gate_after_execution),
+            self.assertRaisesRegex(ValueError, "baseline prepared tool executable changed before measurement"),
+        ):
+            measure_pair(self.root, selected, PAIR, progress=self.quiet)
+        self.assertNotIn(b" measure ", self.log.read_bytes())
+
     def test_retained_native_preparation_uses_each_compiled_phase_once_within_budget(self):
         selected = self.native_plan()
         self.assertEqual(parse_suite_plan(json.loads(deterministic_json(selected.document()))), selected)
