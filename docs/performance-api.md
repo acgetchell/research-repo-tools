@@ -166,11 +166,13 @@ members, encrypted ZIP files, duplicate members, file/directory overlaps, and
 names that collide or are unsafe on supported platforms. This includes Windows
 drive/UNC/alternate-stream paths, reserved device names, case aliases, and Unicode
 normalization aliases. Common leading `./` components and root directory entries
-are accepted. Only ordinary files/directories are written; no archive ownership,
-permissions, or timestamps are restored. The parent directory must exist and the
-destination must be absent. Failures leave the destination absent and attempt to
-remove staging files; cleanup failures log the retained staging path without
-masking the original error. Callers must exclude concurrent destination/parent writers.
+are accepted. In v0.3.0, member paths have at most 128 components after removing
+leading `./` prefixes. Extraction writes ordinary files and directories and
+omits archive ownership, permissions, and timestamps. The parent directory must
+exist and the destination must be absent. Failures leave the destination absent
+and attempt to remove staging files. Cleanup failures log the retained staging
+path without masking the original error. Callers must exclude concurrent
+destination and parent directory writers.
 
 Extraction uses a private sibling directory rather than merging into an existing
 tree. Python's extraction filters alone do not address every resource or overwrite

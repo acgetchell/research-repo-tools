@@ -4,6 +4,9 @@ import ntpath
 import unicodedata
 from pathlib import PurePosixPath
 
+# Ancestor tracking keeps the full spelling of each directory prefix.
+_MAX_MEMBER_COMPONENTS = 128
+
 
 def _member_path(name: str, *, directory: bool) -> PurePosixPath:
     # Common tar producers prefix relative entries with './'. It is harmless,
@@ -14,7 +17,9 @@ def _member_path(name: str, *, directory: bool) -> PurePosixPath:
         name = name.removesuffix("/")
     if not name or name.startswith("/") or "\\" in name or ":" in name:
         raise ValueError(f"unsafe archive path: {name!r}")
-    parts = name.split("/")
+    parts = name.split("/", _MAX_MEMBER_COMPONENTS)
+    if len(parts) > _MAX_MEMBER_COMPONENTS:
+        raise ValueError(f"archive member path exceeds the {_MAX_MEMBER_COMPONENTS}-component limit")
     for part in parts:
         if (
             part in {"", ".", ".."}
