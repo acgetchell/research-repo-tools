@@ -271,7 +271,7 @@ installation verified; source-only availability does not satisfy that gate.
 
 ### Python registry approval
 
-In v0.2.9, `PythonDistributionPolicy(..., index_url=None)` explicitly freezes an
+`PythonDistributionPolicy(..., index_url=None)` explicitly freezes an
 undecided destination (`destination="undecided"` in TOML, mutually exclusive with
 `index-url`). Evidence remains verifiable, with status and summaries identifying
 it as not publishable. The original `published` command rejects this state.
@@ -306,7 +306,7 @@ consumer-owned retry. CLI equivalents are `approve-python`,
 
 ### Authenticated tag-to-draft workflow
 
-In v0.2.9, `draft_workflow.plan_release_draft(config, evidence_policy, source, *,
+`draft_workflow.plan_release_draft(config, evidence_policy, source, *,
 event, expected=None)` returns a deterministic inert handoff. `source` is an
 independently observed `TagSource`; `event` must be `push`. Planning checks clean
 source/package metadata, protected-default-branch ancestry, required checks and

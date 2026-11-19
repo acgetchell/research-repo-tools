@@ -20,18 +20,14 @@ then choose a [capability](#capability-index). Package development belongs in
 
 ## Release availability
 
-**v0.2.9** is published on [PyPI][pypi] and [GitHub][published-release]. Start with
-that exact pin and use templates from the same installed release. See the
-[release tracker][release-tracker] for its validation and publication record.
-Changes intended for **v0.3.0** are marked where they affect a command or
-contract. Use a reviewed full commit for rehearsal before publication and a
-verified published pin for release-intent workflows.
+Install **v0.3.0** from [PyPI][pypi-v030]. See [CHANGELOG.md][changelog-history]
+for release notes. Use templates from the same installed release, a reviewed
+full commit for rehearsal, and a verified published pin for release-intent workflows.
 
-v0.2.9 includes the acquisition-owner workflow
-(`performance-release --owner`, `performance capture`, and `performance first-release`),
-candidate archive attachment, authenticated draft planning, selected managed tools,
-dedicated runtime policies, native path identity, and CodeRabbit quote/resume/deny
-contracts.
+v0.3.0 adds checkout-independent release visibility checks and opt-in reuse of
+verified benchmark preparation inputs. It also makes unpublished-candidate
+recovery resumable, tightens archive path validation, and retains nanosecond
+precision in command-timing summaries.
 
 **v0.2.7 includes breaking Python API changes.** Update callers to the documented
 typed variants, including [trial orders][complete-api] and
@@ -41,9 +37,8 @@ typed variants, including [trial orders][complete-api] and
 An upstream merge, local wheel or passing source test does not publish a package.
 Before adopting a new capability, verify its exact PyPI release, update your
 consumer's pin and lockfile, and run its integration checks. Keep working adapters
-until that adoption succeeds. Package publication and consumer adoption are
-separate steps. [Migration guidance][migration] covers compatibility changes;
-the generated [CHANGELOG.md][changelog-history] records release history.
+until that adoption succeeds. [Migration guidance][migration] covers
+compatibility changes.
 
 ## Install with uv
 
@@ -56,7 +51,7 @@ the published package requires Python 3.15 or newer.
 From the consumer root, add the exact published package:
 
 ```sh
-uv add --group tooling --no-sync "research-repo-tools==0.2.9"
+uv add --group tooling --no-sync "research-repo-tools==0.3.0"
 ```
 
 Include `tooling` from `dev`, retaining your other dependencies. Set
@@ -66,7 +61,7 @@ if the project currently requires an older interpreter.
 
 ```toml
 [dependency-groups]
-tooling = ["research-repo-tools==0.2.9"]
+tooling = ["research-repo-tools==0.3.0"]
 dev = [{include-group = "tooling"}]
 ```
 
@@ -102,10 +97,10 @@ See [local and CI cache configuration][cargo-cache] before adopting it downstrea
 
 ### Selecting tools for a job
 
-With v0.2.9 installed, a narrow CI job can select exact keys from its
-existing tool catalog. After the one-time setup and adopting the matching Just
-template, use the same repeatable `--tool` selection for setup, verification,
-export and execution. For example, with a declared `zizmor` pin:
+A narrow CI job can select exact keys from its existing tool catalog. After
+one-time setup and adopting the matching Just template, use the same repeatable
+`--tool` selection for setup, verification, export and execution. For example,
+with a declared `zizmor` pin:
 
 ```sh
 just tools-sync --tool zizmor
@@ -157,27 +152,25 @@ the selected paths and adoption instructions.
 
 ## Development pins and release dependencies
 
-Downstream development and CI may use a reviewed
-full commit from the tooling repository's main branch. Keep the requirement's
-exact version and extras, and add an exact Git source in the consumer manifest:
+Downstream development and CI may use a reviewed full commit from the tooling
+repository's `main` branch. Replace `FULL_40_CHARACTER_SHA` with that commit and
+`X.Y.Z` with the version declared in its `pyproject.toml`. Retain the extras your
+consumer needs.
 
 ```toml
 [dependency-groups]
-tooling = ["research-repo-tools[python-tools]==0.2.9"]
+tooling = ["research-repo-tools[python-tools]==X.Y.Z"]
 dev = [{include-group = "tooling"}]
 
 [tool.uv.sources]
-# Reviewed source commit for v0.2.9.
-research-repo-tools = {git = "https://github.com/acgetchell/research-repo-tools.git", rev = "aa9e59fac03b11516be45cf32fcb22912061bead"}
+research-repo-tools = {git = "https://github.com/acgetchell/research-repo-tools.git", rev = "FULL_40_CHARACTER_SHA"}
 
 [tool.research-repo-tools.release]
 published-dependencies = ["research-repo-tools"]
 ```
 
-For changes after that release, choose a reviewed commit that supplies every
-interface your consumer uses.
-Use the version declared by that commit, resolve
-and sync it deliberately, and retain the manifest and lock together. Match any
+Choose a commit that supplies every interface your consumer uses. Resolve and
+sync it deliberately, and retain the manifest and lock together. Match any
 isolated runtime selection to the same repository and full commit.
 Normal setup, checks and development evidence remain usable. Git provenance
 must agree with the declaration and lock; a matching version label alone fails.
@@ -202,12 +195,12 @@ automatic pin/lock rewrite is needed.
 
 Use the shared wrapper for isolated commands. Export the matching
 `python-bootstrap.py` template beside the consumer Justfile; it contains the
-same implementation as `research_repo_tools.tooling_runtime`. For example,
-with v0.2.9:
+same implementation as `research_repo_tools.tooling_runtime`. Use the exact
+published version for isolated release-intent commands:
 
 ```sh
 just templates python-bootstrap.py --output python-bootstrap.py
-just tooling-run --version 0.2.9 --release-intent --arguments-json '["release","dependencies"]'
+just tooling-run --version 0.3.0 --release-intent --arguments-json '["release","dependencies"]'
 ```
 
 For development, replace `--version` with `--github acgetchell/research-repo-tools
@@ -216,17 +209,18 @@ For development, replace `--version` with `--github acgetchell/research-repo-too
 profile. Selectors are mutually exclusive. Missing releases, yanked-only releases,
 missing commits and failed lookups stop before tooling starts; there is no fallback.
 
-GitHub Actions can use the same implementation, with uv already installed:
+GitHub Actions can use the same implementation, with uv already installed.
+Replace `FULL_40_CHARACTER_SHA` with the reviewed commit targeted by the
+v0.3.0 release tag before adding this step.
 
 ```yaml
-- uses: acgetchell/research-repo-tools/.github/actions/run-tooling@aa9e59fac03b11516be45cf32fcb22912061bead # v0.2.9
+- uses: acgetchell/research-repo-tools/.github/actions/run-tooling@FULL_40_CHARACTER_SHA # v0.3.0
   with:
-    version: '0.2.9'
+    version: '0.3.0'
     release-intent: 'true'
     arguments: '["release", "dependencies"]'
 ```
 
-Keep the action pinned to a reviewed supplying commit under your Actions policy.
 For development, substitute
 the `github` and `commit` inputs for `version`. `root` selects the observed
 consumer/configuration root and `extras` selects optional package extras.
@@ -249,11 +243,11 @@ continues to resolve its transitive dependencies independently; `--locked` with
 `--no-project` does not turn that environment into a locked runtime.
 
 Use a trusted bootstrap installation outside the consumer checkout, with the
-matching `release-runtime` recipe from the shipped Justfile. With v0.2.9 installed,
+matching `release-runtime` recipe from the shipped Justfile. With v0.3.0 installed,
 resolve the dedicated project there:
 
 ```sh
-just release-runtime resolve --directory /trusted/runtime-project --require 'research-repo-tools==0.2.9'
+just release-runtime resolve --directory /trusted/runtime-project --require 'research-repo-tools==0.3.0'
 ```
 
 Keep uv as a prerequisite. Add these bootstrap recipes alongside the trusted
@@ -626,8 +620,8 @@ just performance-readme tooling/performance-release.toml
 Owner capture runs the release dependency gate before acquisition, even without
 `--release-intent`. Packages selected in `published-dependencies` must use a
 published registry release; development source overrides are rejected. Rehearse
-an unreleased pin without `--owner` or `--release-intent`. With the published
-v0.2.9 tooling, pass `--owner "$owner"` to `just performance-release`
+an unreleased pin without `--owner` or `--release-intent`. With published
+tooling, pass `--owner "$owner"` to `just performance-release`
 to retain the original assertions outside the checkout before report promotion.
 
 For a repository's first stable release, `just performance first-release` acquires
@@ -658,6 +652,8 @@ continue to use retained evidence without measuring again.
 
 Preparation saves independently selected release tags and full commits. Measurement
 runs the gates and benchmarks, then retains/promotes the complete evidence.
+To retain eligible exports and executables between preflight and sampling, set
+`preparation-storage-bytes` in the schema-5 or schema-6 [measurement policy][performance-policy].
 README publication only consumes retained evidence: repair a presentation failure
 and retry that last stage without measuring again. The [performance guide][performance-guide]
 explains source exports versus worktrees, common versus independent harnesses,
@@ -680,7 +676,7 @@ candidate = plan_reuse_archive(
 publish_publication(candidate)
 ```
 
-This v1 API requires exact tagged source measurements. The v0.2.6
+This v1 API requires exact tagged source measurements. The
 [candidate contract][candidate-api] supports a single pre-tag
 acquisition, report/README edits, final-main evidence acceptance, and archive
 reuse. Its schema-6 measurement declaration includes repeated alternating or
@@ -719,8 +715,8 @@ retention. Keep output paths outside the observed checkout. Use `--progress
 human` or `--progress json` for dependency phases and request/retry counts;
 `release dependencies` supports the same modes and defaults to human progress.
 
-For committed schema-2 publisher histories, v0.2.7 adds a publication receipt.
-Declare the original report configuration in
+For committed schema-2 publisher histories, retain a publication receipt and
+declare the original report configuration in
 `CandidatePolicy(report="tooling/performance-report.toml", ...)`.
 Before promotion, freeze the shared publisher's exact outputs under acquisition-owner
 control:
@@ -777,11 +773,9 @@ Use `--expect present` to require an existing version. Lookup failures stop the
 check; they never count as absence. Full publication verification still requires
 `just release-verify "$TAG"` and the repository's post-publication checks.
 
-The v0.3.0 `release visibility` command checks an immutable release on GitHub
-and the registry from any directory. The v0.2.9 package supports the configured
-`release verify` workflow above.
-Pass each required asset by its exact filename. For example, a crate release
-with a required benchmark archive can be checked with:
+With the installed CLI on PATH, `release visibility` checks an immutable release
+on GitHub and the registry from any directory. Pass each required asset by its
+exact filename. This example checks a crate release and its benchmark archive.
 
 ```sh
 research-repo-tools release visibility v1.2.3 \
@@ -793,7 +787,7 @@ The command requires completed, nonempty assets and prints the crates.io
 archive checksum. Use `--target PATH` to also require the captured release ID
 and tag commit. Only an exact registry 404 permits another poll.
 
-The v0.2.9 `release assets plan` command verifies independent repository/tag/commit
+The `release assets plan` command verifies independent repository/tag/commit
 and push-event assertions, protected-default-branch ancestry, required checks,
 metadata, generated notes and original signed evidence.
 `release assets prepare-authenticated` authenticates the retained handoff's
@@ -1042,16 +1036,15 @@ BSD-3-Clause. See [LICENSE][license].
 [performance-policy]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/DECLARING_PERFORMANCE.md
 [process-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/process-api.md
 [publication-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/publication-api.md
-[published-release]: https://github.com/acgetchell/research-repo-tools/releases/tag/v0.2.9
 [publishing]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RELEASING.md
 [publishing-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/publishing-api.md
 [pypi]: https://pypi.org/project/research-repo-tools/
 [pypi-badge]: https://badgen.net/pypi/v/research-repo-tools
+[pypi-v030]: https://pypi.org/project/research-repo-tools/0.3.0/
 [python-adoption]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_DEPENDENCIES.md#shared-python-adoption
 [python-evidence]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/release-evidence-api.md#python-distribution-evidence
 [recovery-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RECOVERING_RELEASES.md
 [release]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_RELEASE_METADATA.md
-[release-tracker]: https://github.com/acgetchell/research-repo-tools/issues/236
 [reports-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/PUBLISHING_REPORTS.md
 [reuse-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_CI.md
 [review-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/review-api.md

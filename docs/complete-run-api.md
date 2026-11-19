@@ -73,7 +73,6 @@ An unscheduled schema-5 plan can acquire a first release without inventing a
 predecessor. The [first-release procedure](candidate-reuse-api.md#committed-publisher-evidence)
 uses `performance first-release`, requires at least one declared current-phase
 series, and emits `RUN_SCHEMA_V6` (`research-repo-tools/complete-run/v6`).
-This command and schema are available in v0.2.9.
 `parse_suite_run` and `validate_run_evidence` return `SuiteRun` with
 `first_release=True`; its observations, phase views and series contain only
 current measurements. The measured source is a working-tree snapshot: its
@@ -250,7 +249,7 @@ The supported names in `complete_runs` are:
 | `RUN_SCHEMA_V3` | `research-repo-tools/complete-run/v3`; common or independent acquisition and supplemental raw JSON files |
 | `RUN_SCHEMA_V4` | `research-repo-tools/complete-run/v4`; suite availability, complete acquisition units and observation-level comparisons |
 | `RUN_SCHEMA_V5` | `research-repo-tools/complete-run/v5`; separately retained trials, declared schedule and observed execution receipts |
-| `RUN_SCHEMA_V6` | `research-repo-tools/complete-run/v6`; one first-release acquisition with current-only suite observations; available in v0.2.9 |
+| `RUN_SCHEMA_V6` | `research-repo-tools/complete-run/v6` for a first-release acquisition with current-only suite observations |
 | `CompleteCase(storage_path, benchmark, estimates, sample, *, raw_files=())` | Portable relative path plus original immutable bytes for Criterion's three core JSON files and optional `(filename, bytes)` pairs |
 | `CompletePolicy(expected, sample_count=100, statistics=("mean", "median"), confidence_level=0.95, unit="ns", *, sample_counts=())` | Exact unique semantic IDs; select uniform counts or exhaustive immutable ID/count pairs with `sample_count=None` |
 | `CompleteRun(phases, series, compatible=("harness_sha256",), *, schema=RUN_SCHEMA, harness_mode="common")` | Exactly baseline/current complete samples, named views and required provenance selection; defaults to v1, with v2 for independent phase counts and v3 for independent acquisition |

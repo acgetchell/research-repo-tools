@@ -99,7 +99,7 @@ class SelectedTools:
 def catalog(root):
     (root / "pyproject.toml").write_bytes(
         b'[project]\nname="sample"\nversion="1.2.3"\nrequires-python=">=3.15"\n[tool.uv]\nrequired-version="==0.12.19"\n'
-        b'[dependency-groups]\ntooling=["research-repo-tools==0.2.9"]\ndev=["pytest==9.0.2"]\n'
+        b'[dependency-groups]\ntooling=["research-repo-tools==0.3.0"]\ndev=["pytest==9.0.2"]\n'
         b'[tool.research-repo-tools.toolchain.cargo]\nzizmor="1.23.1"\ntectonic="0.15.0"\ncargo-llvm-cov="0.6.21"\n'
         b'[tool.research-repo-tools.toolchain.binaries]\ngitleaks="8.30.1"\nosv-scanner="2.6.0"\n'
     )

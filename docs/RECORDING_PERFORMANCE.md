@@ -31,7 +31,7 @@ supplying release before replacing a working consumer adapter.
 
 These prepared stages select a current/baseline pair. For a repository's first
 stable release, use the separate [first-release procedure](candidate-reuse-api.md#committed-publisher-evidence).
-The published v0.2.9 command retains a current-only snapshot and report.
+The first-release command retains a current-only snapshot and report.
 
 ```sh
 just performance-prepare tooling/performance-release.toml

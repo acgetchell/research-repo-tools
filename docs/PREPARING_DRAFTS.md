@@ -1,11 +1,8 @@
 # Preparing an unpublished release draft
 
-The shared planning and authenticated-writer commands below target v0.2.9.
-The underlying draft and receipt primitives are available from v0.2.7.
-Enable them only after verifying the published supplying version and its installed
-consumer integration. See
-[release availability](../README.md#release-availability); source availability
-does not establish that the example pin is published.
+The shared planning and authenticated-writer examples pin v0.3.0. Verify the
+[published version](../README.md#release-availability) and test it in the
+installed consumer before adopting the workflow.
 
 The [public contract](release-evidence-api.md#draft-preparation) composes retained
 signed evidence with existing captured release targets. Consumer policy owns
@@ -103,11 +100,11 @@ jobs:
           commit=$(git --no-pager rev-parse "$GITHUB_REF^{commit}")
           mkdir "$RUNNER_TEMP/handoff"
           uv run --no-config --no-project --isolated --no-cache --python 3.15 \
-            --with research-repo-tools==0.2.9 python -I -m research_repo_tools \
+            --with research-repo-tools==0.3.0 python -I -m research_repo_tools \
             --root "$GITHUB_WORKSPACE" release evidence wait tooling/release-evidence.toml \
             --commit "$commit" --attempts 241 --interval 30
           uv run --no-config --no-project --isolated --no-cache --python 3.15 \
-            --with research-repo-tools==0.2.9 python -I -m research_repo_tools \
+            --with research-repo-tools==0.3.0 python -I -m research_repo_tools \
             --root "$GITHUB_WORKSPACE" release assets plan tooling/release-evidence.toml \
             --repository "$GITHUB_REPOSITORY" --event "$GITHUB_EVENT_NAME" \
             --tag "$RELEASE_TAG" --commit "$commit" \
@@ -154,7 +151,7 @@ jobs:
           runner-labels = ["ubuntu-24.04"]
           TOML
           uv run --no-config --no-project --isolated --no-cache --python 3.15 \
-            --with research-repo-tools==0.2.9 python -I -m research_repo_tools \
+            --with research-repo-tools==0.3.0 python -I -m research_repo_tools \
             release assets prepare-authenticated handoff-policy.toml \
             --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" \
             --run-id "$GITHUB_RUN_ID" --attempt 1 \
@@ -182,9 +179,7 @@ jobs:
 ```
 
 The writer invokes shared installed commands and never imports or executes the
-observed checkout. The example uses the published v0.2.9 package. When upgrading,
-update every planner and writer pin together. The listing rechecks described
-below require v0.3.0.
+observed checkout. When upgrading, update every planner and writer pin together.
 
 Neither job installs the contributor tool catalog. Verification and extraction of
 existing changelog notes need the exact shared Python package and runner Git/gh;
@@ -251,7 +246,7 @@ treat a new workflow run or a missing receipt as permission to replace a draft.
 
 ## Retrieve original preparation output
 
-The v0.2.7 `release assets retrieve` command supplies the authenticated captured
+The `release assets retrieve` command supplies the authenticated captured
 target needed by consumer Step 2. It does not run preparation, look up another
 draft by tag, build packages, acquire measurements or authorize publication.
 Keep this separate policy in `tooling/draft-receipt.toml`, with the actual
@@ -373,7 +368,7 @@ validation alone does not establish downstream release readiness.
 
 ## MCMC controller migration
 
-After validating the published v0.2.9 package in the consumer, replace the
+After validating the published package in the consumer, replace the
 generic source-event/protected-main/check/evidence/notes controller in
 `tooling/prepare_release.py` with `release assets plan` and
 `release assets prepare-authenticated`.

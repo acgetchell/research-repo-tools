@@ -1,7 +1,7 @@
 # Isolated runtime policy API
 
-The v0.2.9 runtime-policy capability strengthens isolated Python execution by
-selecting a complete, platform-specific graph from a dedicated virtual project.
+The runtime policy selects a complete, platform-specific dependency graph from a
+dedicated virtual project for isolated Python execution.
 It does not require equality with the consumer's development lock. Consumer
 commands and migration examples belong in the
 [README](../README.md#reproducible-isolated-release-runtimes).

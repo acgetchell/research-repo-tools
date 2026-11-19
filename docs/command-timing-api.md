@@ -139,5 +139,4 @@ Malformed declarations/reports, changed inputs and invalid observations raise
 failures/timeouts and OS errors retain the shared process exceptions. No package
 or consumer repository is built implicitly outside declared preflights.
 
-The command-timing API and recipe are available in v0.2.9. Validate the
-consumer's integration before replacing an existing timing script.
+Validate the consumer's integration before replacing an existing timing script.
