@@ -38,16 +38,13 @@ for offline/local-artifact metadata and dry-run/apply behavior.
 uv must be at least 0.12.10 so the shared installer can enforce its Python
 installation ownership policy with `--no-bin` and `--no-registry`.
 
-For a Rust consumer, merge this structure into its existing manifest. Versions
-below are examples, not automatic upgrades:
+For a Rust consumer, start with the published package pin and dependency groups
+in the [consumer quickstart](../README.md#install-with-uv), then merge the tool
+declarations below into the existing manifest. The versions are examples.
 
 ```toml
-[dependency-groups]
-tooling = ["research-repo-tools==0.2.8"]
-dev = [{include-group = "tooling"}]
-
 [tool.uv]
-required-version = "==0.13.7"
+required-version = "==0.13.9"
 
 [tool.research-repo-tools.toolchain.cargo]
 git-cliff = "2.14.2"
@@ -98,7 +95,7 @@ redaction, reports and consumer-owned exceptions.
 
 ## First adoption and setup
 
-With the v0.2.7 capability, managed Cargo installs reuse compilation output under
+Managed Cargo installs reuse compilation output under
 `RESEARCH_REPO_TOOLS_HOME/cargo-build/<host>/<Rust version>` (the default home is
 `~/.cache/research-repo-tools`). Package versions retain separate installation
 directories and are still installed with exact pins, `--locked`, and executable
@@ -281,7 +278,7 @@ earlier removals remain applied. Correct the cause and preview again.
 
 ## Cleaning retained coverage
 
-The v0.2.7 consumer template exports `clean-coverage` and includes the same shared
+The consumer template exports `clean-coverage` and includes the same shared
 cleanup in `clean`. Upgrade the package pin and lock, then merge these two recipes
 from its exported Justfile; upgrading the package alone does not replace existing
 recipes. The CLI entry points are `coverage clean [--dry-run | --apply]` and

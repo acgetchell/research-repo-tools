@@ -90,7 +90,7 @@ jobs:
           persist-credentials: false
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.7"
+          version: "0.13.9"
           enable-cache: false
       - name: Assert source and verify original signed evidence
         id: source
@@ -129,7 +129,7 @@ jobs:
     steps:
       - uses: astral-sh/setup-uv@68559e99cc807c1eb7e9238fd43a15bba460eec2 # v10.3.3
         with:
-          version: "0.13.7"
+          version: "0.13.9"
           enable-cache: false
       - name: Authenticate inert handoff and prepare unpublished draft
         env:
@@ -182,8 +182,9 @@ jobs:
 ```
 
 The writer invokes shared installed commands and never imports or executes the
-observed checkout. The example pin is a target supplying version, not a claim
-that v0.2.9 is already published; adopt it only after verified publication.
+observed checkout. The example uses the published v0.2.9 package. When upgrading,
+update every planner and writer pin together. The listing rechecks described
+below require v0.3.0.
 
 Neither job installs the contributor tool catalog. Verification and extraction of
 existing changelog notes need the exact shared Python package and runner Git/gh;
@@ -324,6 +325,11 @@ creation, retry against its captured release ID. Missing, replaced, published,
 prerelease, immutable, renamed or edited drafts reject. Existing assets are
 never changed. Preparation cannot repair drift by editing or deleting a release.
 
+In v0.3.0, when GitHub's complete release listing succeeds but omits the captured
+draft, the writer rechecks the listing up to twice, with waits of one and two
+seconds. Conflicting IDs and malformed responses still stop validation. The
+rechecks use the captured release ID and issue no creation request.
+
 An ambiguous POST outcome retains a pending journal. Inspect the actual release
 and provider/audit history independently. If the reviewed release ID matches the
 original assertions, rerun the same CLI command with
@@ -367,7 +373,7 @@ validation alone does not establish downstream release readiness.
 
 ## MCMC controller migration
 
-After verified v0.2.9 publication and consumer integration checks, replace the
+After validating the published v0.2.9 package in the consumer, replace the
 generic source-event/protected-main/check/evidence/notes controller in
 `tooling/prepare_release.py` with `release assets plan` and
 `release assets prepare-authenticated`.

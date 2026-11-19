@@ -564,6 +564,35 @@ class TestEvidenceConsumer(unittest.TestCase):
                 verify_cargo_archive(path, "sample", "1.2.3", COMMIT)
             self.assertIsNone(caught.exception.__cause__)
 
+    def test_cargo_archive_rejects_overlapping_and_aliased_member_paths(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "sample.crate"
+            for name, diagnostic in (
+                ("sample-1.2.3/src", "file overlaps a directory"),
+                ("sample-1.2.3/src/lib.rs/child", "file overlaps a directory"),
+                ("sample-1.2.3/SRC/other.rs", "paths alias"),
+            ):
+                with self.subTest(name=name):
+                    payload = crate(extra=name)
+                    path.write_bytes(payload)
+                    with self.assertRaisesRegex(ValueError, diagnostic):
+                        verify_cargo_archive(path, "sample", "1.2.3", COMMIT)
+                    self.assertEqual(path.read_bytes(), payload)
+
+    def test_cargo_archive_limits_member_path_components(self):
+        max_components = 128
+        with tempfile.TemporaryDirectory() as temporary:
+            path = Path(temporary) / "sample.crate"
+            for directory_count in (2, max_components - 2):
+                with self.subTest(directory_count=directory_count):
+                    payload = crate(extra="sample-1.2.3/" + "nested/" * directory_count + "data.rs")
+                    path.write_bytes(payload)
+                    self.assertEqual(verify_cargo_archive(path, "sample", "1.2.3", COMMIT), hashlib.sha256(payload).hexdigest())
+
+            path.write_bytes(crate(extra="sample-1.2.3/" + "nested/" * (max_components - 1) + "data.rs"))
+            with self.assertRaisesRegex(ValueError, rf"path exceeds the {max_components}-component limit"):
+                verify_cargo_archive(path, "sample", "1.2.3", COMMIT)
+
     def test_json_and_pagination_fail_closed(self):
         for payload in (b'{"id":1,"id":2}', b'{"id":NaN}', b'{"id":1e999}', b"\xff", b"[" * 2000 + b"]" * 2000):
             with self.subTest(payload=payload[:30]), self.assertRaises(ValueError):

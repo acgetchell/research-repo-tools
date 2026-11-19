@@ -13,7 +13,8 @@ def export_environment(destination: Path, names: Sequence[str], *, environment: 
 
     Names are explicit, unique ASCII environment identifiers. Values must be
     present, nonempty, and free of NUL/CR/LF. Spaces and Windows paths survive
-    unchanged. Reject GitHub-reserved names and NODE_OPTIONS. No shell or
+    unchanged. Add a separator if the existing file has an unterminated line.
+    Reject GitHub-reserved names and NODE_OPTIONS. No shell or
     multiline command-file syntax is used. The caller owns the command file
     and must exclude concurrent writers. I/O errors may leave a partial append.
     """
@@ -37,5 +38,9 @@ def export_environment(destination: Path, names: Sequence[str], *, environment: 
     payload = "".join(lines).encode("utf-8")
     if destination.is_symlink():
         raise ValueError(f"environment command file must not be a symlink: {destination}")
-    with destination.open("ab") as stream:
+    with destination.open("a+b") as stream:
+        if stream.seek(0, os.SEEK_END):
+            stream.seek(-1, os.SEEK_END)
+            if stream.read(1) != b"\n":
+                payload = b"\n" + payload
         stream.write(payload)

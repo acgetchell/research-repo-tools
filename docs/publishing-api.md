@@ -86,8 +86,8 @@ inspect the captured ID before retrying because publication may have succeeded.
 stable GitHub Release, configured assets and the exact registry version.
 
 `verify_publication_visibility(root, repository, tag, *, registry, package,
-required_assets=(), attempts=1, interval=10, target=None)` checks an immutable
-stable release, nonempty uploaded assets, and the exact registry version with
+required_assets=(), attempts=1, interval=10, target=None)` is a v0.3.0 API.
+It checks an immutable stable release, nonempty uploaded assets, and the exact registry version with
 its checksum for crates.io. It returns `RegistryVersion` and uses the same
 explicit inputs as `release visibility`. `root` supplies a working directory
 for authenticated `gh` requests and resolves CLI `--target` paths. Visibility
@@ -99,9 +99,10 @@ checks run without checkout, generated notes, or dependency provenance.
 malformed, yanked, mismatched or partial-upload response raises an error.
 Verification asserts metadata visibility, not archive-byte provenance. Waits
 poll only absence, with 1..31 observations and a 0..10 second interval.
-Public registry GETs retry transient transport failures at most three times
-within a 60-second retry budget per observation. `TransientRegistryError`
-means that budget was exhausted. Release dependency verification recommends
+Public registry GETs make up to three attempts within a 60-second retry budget
+per observation. In v0.3.0, `TransientRegistryError` identifies exhausted
+transient retries, and `RegistryVersion.checksum` exposes the crates.io archive
+checksum for a present version. Release dependency verification recommends
 retrying the read-only check with the same pins and retaining the original CI
 source and attempt assertions. PyPI requires both wheel and sdist upload evidence.
 Crates.io requires a valid archive checksum.

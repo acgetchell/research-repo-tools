@@ -46,6 +46,16 @@ class ConsumerCase(unittest.TestCase):
         self.root.mkdir()
 
 
+class TestEnvironmentExport(ConsumerCase):
+    def test_export_separates_an_unterminated_existing_assignment(self) -> None:
+        target = self.root / "environment"
+        target.write_bytes(b"EXISTING=yes")
+        with patch.dict(os.environ, {"REVIEW_RESULT": "caf\u00e9"}):
+            status = cli.main(["--root", str(self.root), "ci", "export", "--file", str(target), "REVIEW_RESULT"])
+        self.assertEqual(status, 0)
+        self.assertEqual(target.read_bytes(), b"EXISTING=yes\nREVIEW_RESULT=caf\xc3\xa9\n")
+
+
 class TestCoverageCleanup(ConsumerCase):
     def test_preview_apply_and_idempotence_preserve_latest_reports_and_unknown_files(self) -> None:
         retained = {

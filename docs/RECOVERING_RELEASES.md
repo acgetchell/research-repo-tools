@@ -180,9 +180,9 @@ step. Retain the prepared version and declared release date; do not rerun
 
 The result is **one PR containing all remaining corrections and the regenerated
 changelog**. Corrections must be committed before generation so git-cliff can
-include their history. If the corrections already merged, this PR contains only
-the missing notes. A merged PR cannot receive another commit; use the branch
-selected in 2.1 for the remaining work.
+include their history. If the corrections and the required tag recipe are already
+on `main`, this PR contains only the missing notes. A merged PR cannot receive
+another commit; use the branch selected in 2.1 for the remaining work.
 
 #### 2.1. Select the corrective branch
 
@@ -205,6 +205,13 @@ carries any notes already generated on `main` with it. Preserve local changes.
 #### 2.2. Finish corrections and establish validation once
 
 Finish any remaining source, recipe, or documentation edits on this branch.
+For step 4, the final checkout needs a `tag` recipe that forwards `--force`
+to `changelog tag`. The v0.3.0 template forwards it, and the v0.2.9 CLI already
+accepts it. If your Justfile uses the older recipe, copy the argument-forwarding
+recipe from the [current consumer template](../src/research_repo_tools/templates/justfile).
+Include that edit in the corrective commit before generating notes. Step 3
+validates the merged commit with the corrected recipe.
+
 Use `just check` while editing. Benchmark consumers also decide whether fresh
 acquisition is required using the
 [benchmark recovery decision table](REUSING_BENCHMARKS.md#release-recovery-decisions).
@@ -485,8 +492,9 @@ fail; there is no delete-and-restore interval.
 If you already created the replacement local tag, the block inspects it instead
 of trying to create it again. Its commit must equal `RELEASE_COMMIT`; review its
 annotation against `just release-notes "$TAG"` before accepting it. Stop on any
-unexpected object or annotation. Consumers need a `tag` recipe that forwards
-arguments to the shared `changelog tag` command, as the current template does.
+unexpected object or annotation. Use the argument-forwarding recipe from
+[step 2.2](#22-finish-corrections-and-establish-validation-once). If the validated
+checkout still has the older recipe, return to steps 2 and 3 before continuing.
 
 ```bash
 (

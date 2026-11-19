@@ -86,7 +86,7 @@ missing suites again immediately before measurement. Their resolved policies
 and provenance must match the first pass. Completed checkpoint units keep their
 original measurements.
 
-Set top-level `preparation-storage-bytes` in a schema-5 or schema-6 declaration
+In v0.3.0, set top-level `preparation-storage-bytes` in a schema-5 or schema-6 declaration
 to retain eligible exports and compiled executables for the current acquisition
 or trial. Each available phase of an eligible suite supplies a `compilation`
 command that creates a fresh executable. Discovery and sampling name that same

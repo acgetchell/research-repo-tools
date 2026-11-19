@@ -51,7 +51,8 @@ the unaffected source and installation suites.
 `just check` includes `just newline-check`, so both local `just ci` and every
 native `source` job enforce explicit newline policies. The guard's positive and
 negative fixtures verify detection; byte assertions exercise mixed LF/CRLF data
-on the native host and a focused Windows translation model. See the
+on the native host and a focused Windows translation model. The v0.3.0 guard
+also recognizes Python source encoding declarations and UTF-8 BOMs. See the
 [contributor guidance](../CONTRIBUTING.md#shared-implementation) for the syntax
 check's scope and limits. Native Windows validation remains required.
 

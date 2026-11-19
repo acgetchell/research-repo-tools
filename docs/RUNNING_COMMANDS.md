@@ -75,7 +75,7 @@ arguments in lexicographic order.
 | `just setup` | Install and verify declared tools, then synchronize the Python environment |
 | `just shared-python-plan VERSION` | Preview mandatory Python-minimum and optional tool-profile adoption outside the old environment |
 | `just shared-python-update VERSION` | Apply the migration and recreate the locked environment and notebook kernel |
-| `just tag TAG` | Create a local annotated tag from validated release notes |
+| `just tag TAG [--force]` | Create a local annotated tag from validated release notes. The v0.3.0 recipe forwards `--force` for guarded recovery. |
 | `just tag-preview TAG` | Inspect the release annotation without changing Git state |
 | `just tectonic COMMAND...` | Discover or export existing native dependency environments |
 | `just templates ARGS...` | Export a packaged configuration or workflow template |
@@ -122,7 +122,7 @@ global root/configuration options before the group; consult
 | Papers | `papers check`, `normalize`, `source-date` | Explicit UTC dates, optional PDF text/geometry checks and validated metadata normalization |
 | Performance | `performance assemble-suites`, `assets`, `baseline`, `capture`, `command-time`, `compare`, `convert`, `discover`, `export`, `extract`, `fetch`, `first-release`, `host`, `measure`, `pack-suite`, `prepare`, `profile`, `promote`, `publish`, `readme`, `release`, `release-draft`, `release-upload`, `render`, `verify`, `verify-saved` | Complete configured measurement, retained evidence, release assets and publication |
 | Python | `python check`, `fix`, `typecheck` | Complete tracked/nonignored inventory; native Ruff/ty policy; explicit fixes only |
-| Releases | `release assets`, `check`, `dependencies`, `dependency-builds`, `evidence`, `gate`, `publish`, `registry`, `reuse`, `runtime`, `update`, `verify` | Metadata preparation, published-only dependency gates, isolated runtime policies and exact registry/GitHub verification |
+| Releases | `release assets`, `check`, `dependencies`, `dependency-builds`, `evidence`, `gate`, `publish`, `registry`, `reuse`, `runtime`, `update`, `verify`, `visibility` | Metadata preparation, published-only dependency gates, isolated runtime policies and exact registry/GitHub verification. `visibility` requires v0.3.0 or a supplying commit. |
 | Review | `review branch`, `review deny`, `review resume`, `review uncommitted` | Opt-in review, typed quote-and-stop and one-use explicit paid resume |
 | SARIF | `sarif split` | Consumer-selected drivers/namespaces, corrected rule indices and complete output generations |
 | Security | `security osv`, `secrets` | Managed OSV/Gitleaks, explicit inputs, full history, redacted native reports |

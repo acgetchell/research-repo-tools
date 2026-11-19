@@ -9,8 +9,7 @@ retain their own sampling and release-eligibility requirements.
 
 ## Exploratory command timing
 
-Pin a verified published version with command-timing support before replacing
-generic timing loops with a declaration. Keep workload arguments,
+Use the published v0.2.9 tooling and its `command-time` recipe. Keep workload arguments,
 source selection and interpretation in the consumer. This harmless example
 measures a native tool's version command, including process startup:
 
@@ -50,6 +49,5 @@ identity and execution policy; the summary shows sample counts and minimum,
 median and maximum wall seconds. Existing outputs are rejected before execution.
 See the [timing contract](command-timing-api.md) for failure, freshness,
 source-selection and measurement limits. These exploratory timings stay separate
-from Criterion and scientific release/comparability evidence. Preserve the
-current consumer workflow, workload arguments and interpretation until its
-published replacement is pinned and integration-verified.
+from Criterion and scientific release/comparability evidence. Validate the
+consumer's commands, inputs, and expected report before replacing an existing timing loop.

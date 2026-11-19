@@ -59,7 +59,7 @@ def newline_position(call: ast.Call, imports: dict[str, str]) -> int | None:
     return newline
 
 
-def violations(source: str, filename: str, *, embedded: bool = False) -> list[str]:
+def violations(source: str | bytes, filename: str, *, embedded: bool = False) -> list[str]:
     try:
         with warnings.catch_warnings():
             # Regexes and other data strings can look like Python expressions.
@@ -110,8 +110,8 @@ def main() -> int:
             paths.add(path)
     for path in sorted(paths):
         try:
-            errors.extend(violations(path.read_text(encoding="utf-8"), str(path)))
-        except (OSError, UnicodeError) as error:
+            errors.extend(violations(path.read_bytes(), str(path)))
+        except OSError as error:
             errors.append(f"{path}: cannot read Python source: {error}")
     for error in errors:
         print(error, file=sys.stderr)

@@ -4,7 +4,7 @@ For exact-tagged v4 evidence, the [reuse API](benchmark-reuse-api.md) derives a
 release archive without acquisition, preserving the original run and separately
 asserted release target. It does not manufacture native saved samples or CI trust.
 
-## Scheduled trials (v0.2.6)
+## Scheduled trials
 
 `SuiteMeasurementPlan(suites, schedule=TrialSchedule(...), outputs=())` is schema 6.
 `trial_schedule.TrialSchedule(trials=2, order=AlternatingOrder())` declares
@@ -73,7 +73,7 @@ An unscheduled schema-5 plan can acquire a first release without inventing a
 predecessor. The [first-release procedure](candidate-reuse-api.md#committed-publisher-evidence)
 uses `performance first-release`, requires at least one declared current-phase
 series, and emits `RUN_SCHEMA_V6` (`research-repo-tools/complete-run/v6`).
-This capability is pending a supplying release; it is not in published v0.2.8.
+This command and schema are available in v0.2.9.
 `parse_suite_run` and `validate_run_evidence` return `SuiteRun` with
 `first_release=True`; its observations, phase views and series contain only
 current measurements. The measured source is a working-tree snapshot: its
@@ -91,7 +91,10 @@ receipt to final native evidence. Existing v1–v5 evidence is not relabeled v6.
 before=None, nominal_seconds_per_case=None, compilation=())` wraps a schema-4
 export plan. `SuiteMeasurementPlan(suites)` is loaded by
 `measurement.load_measurement` from schema 5. Its `document()` returns the
-canonical declaration. `measurement.measure_pair` adds keyword arguments
+canonical declaration. In v0.3.0, `SuiteMeasurementPlan` accepts
+`preparation_storage_bytes=0`. A positive byte budget enables eligible
+[preparation storage reuse](DECLARING_PERFORMANCE.md#checkpoint-and-recovery).
+`measurement.measure_pair` accepts keyword arguments
 `checkpoint: Path | None`, `resume=False` and `progress: ProgressReporter | None`.
 The direct/prepared CLI and `performance_release.measure_release` expose the same
 checkpoint/resume options; retention accepts a root-relative checkpoint string.
@@ -247,7 +250,7 @@ The supported names in `complete_runs` are:
 | `RUN_SCHEMA_V3` | `research-repo-tools/complete-run/v3`; common or independent acquisition and supplemental raw JSON files |
 | `RUN_SCHEMA_V4` | `research-repo-tools/complete-run/v4`; suite availability, complete acquisition units and observation-level comparisons |
 | `RUN_SCHEMA_V5` | `research-repo-tools/complete-run/v5`; separately retained trials, declared schedule and observed execution receipts |
-| `RUN_SCHEMA_V6` | `research-repo-tools/complete-run/v6`; one first-release acquisition with current-only suite observations; pending a supplying release |
+| `RUN_SCHEMA_V6` | `research-repo-tools/complete-run/v6`; one first-release acquisition with current-only suite observations; available in v0.2.9 |
 | `CompleteCase(storage_path, benchmark, estimates, sample, *, raw_files=())` | Portable relative path plus original immutable bytes for Criterion's three core JSON files and optional `(filename, bytes)` pairs |
 | `CompletePolicy(expected, sample_count=100, statistics=("mean", "median"), confidence_level=0.95, unit="ns", *, sample_counts=())` | Exact unique semantic IDs; select uniform counts or exhaustive immutable ID/count pairs with `sample_count=None` |
 | `CompleteRun(phases, series, compatible=("harness_sha256",), *, schema=RUN_SCHEMA, harness_mode="common")` | Exactly baseline/current complete samples, named views and required provenance selection; defaults to v1, with v2 for independent phase counts and v3 for independent acquisition |

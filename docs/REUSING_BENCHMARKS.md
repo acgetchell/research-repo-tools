@@ -1,20 +1,16 @@
 # Reusing benchmark acquisitions
 
-This procedure describes the current candidate contract for consumer release
-preparation, including the v0.2.7 publication-receipt and interruption-recovery
-extensions. Check [release availability](../README.md#release-availability) before
-adoption. Consumers own workloads, scientific acceptance, output declarations, and thin recipe/workflow
+This procedure uses the candidate contract available in v0.2.9. Consumers own
+workloads, scientific acceptance, output declarations, and thin recipe/workflow
 wiring. The shared package owns acquisition, trial receipts, validation, archive
 conversion, and evidence mechanics. See the [API and trust contract](candidate-reuse-api.md).
 The procedure below acquires scheduled pairs. For a first release without a
 predecessor, follow the [current-only procedure](candidate-reuse-api.md#committed-publisher-evidence)
-with unscheduled schema-5 measurement and complete-run v6 evidence. That procedure
-and the shared owner-capture commands below are pending a supplying release;
-published v0.2.8 does not include them.
+with unscheduled schema-5 measurement and complete-run v6 evidence.
 
 ## Step 1: prepare and acquire
 
-When using the v0.2.7 published-dependency policy, run `just release-dependencies`
+When using the published-dependency policy, run `just release-dependencies`
 and pass `--release-intent` to preparation and acquisition before final release
 measurements. Exact Git pins remain supported for development rehearsals.
 Replacing them with a published pin changes dependency/harness inputs and can

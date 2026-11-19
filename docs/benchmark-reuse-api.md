@@ -1,7 +1,7 @@
 # Verified benchmark acquisition reuse
 
-This page describes the unchanged exact-tag v1 transport. For pre-tag acquisition,
-declared repeated trials, and final-main acceptance, use the v0.2.6
+This page describes the exact-tag v1 transport. For pre-tag acquisition,
+declared repeated trials, and final-main acceptance, use the
 [candidate contract](candidate-reuse-api.md) and
 [two-step procedure](REUSING_BENCHMARKS.md).
 

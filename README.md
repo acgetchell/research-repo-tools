@@ -20,22 +20,18 @@ then choose a [capability](#capability-index). Package development belongs in
 
 ## Release availability
 
-This README documents **v0.2.9**. Installation examples use that exact version
-and require it to be available on [PyPI][pypi].
+**v0.2.9** is published on [PyPI][pypi] and [GitHub][published-release]. Start with
+that exact pin and use templates from the same installed release. See the
+[release tracker][release-tracker] for its validation and publication record.
+Changes intended for **v0.3.0** are marked where they affect a command or
+contract. Use a reviewed full commit for rehearsal before publication and a
+verified published pin for release-intent workflows.
 
-The v0.2.7 additions include verified Python/Cargo dependency sources,
-published-dependency release gates, retained-evidence draft preparation and
-authenticated retrieval of original tag-push receipts,
-committed benchmark publication receipts, resumable scheduled suites,
-reusable compilation for managed Cargo tool installs, and shared coverage cleanup.
-
-The v0.2.9 additions include the acquisition-owner workflow
+v0.2.9 includes the acquisition-owner workflow
 (`performance-release --owner`, `performance capture`, and `performance first-release`),
 candidate archive attachment, authenticated draft planning, selected managed tools,
 dedicated runtime policies, native path identity, and CodeRabbit quote/resume/deny
-contracts. Release validation and publication are tracked in [#236][release-tracker].
-Use an exact supplying [development pin](#development-pins-and-release-dependencies) for rehearsal,
-then adopt the published supplying release before release-intent use.
+contracts.
 
 **v0.2.7 includes breaking Python API changes.** Update callers to the documented
 typed variants, including [trial orders][complete-api] and
@@ -100,7 +96,7 @@ Open a new terminal if PATH changed. A failed step stops setup with a diagnostic
 fix that prerequisite and rerun. [Installation and recovery][toolchain] explains
 ownership, native build prerequisites and platform behavior.
 
-With v0.2.7, managed Cargo tool installs reuse compilation output across setup
+Managed Cargo tool installs reuse compilation output across setup
 and update runs while retaining exact-version installation and executable checks.
 See [local and CI cache configuration][cargo-cache] before adopting it downstream.
 
@@ -151,7 +147,7 @@ upgrade does not rewrite copied Just recipes; merge the relevant exported
 recipes as part of each consumer adoption and verify its integration before
 removing temporary adapters.
 
-With the v0.2.7 cleanup recipes, preview obsolete tool installations and retained
+Preview obsolete tool installations and retained
 coverage artifacts with `just clean`, then use `just clean --apply` to remove
 the listed entries. `just clean-coverage` previews only coverage cleanup;
 `just clean-coverage --apply` performs it. Stop coverage runs first. Both preserve
@@ -161,34 +157,35 @@ the selected paths and adoption instructions.
 
 ## Development pins and release dependencies
 
-With the v0.2.7 capability, downstream development and CI may use a reviewed
+Downstream development and CI may use a reviewed
 full commit from the tooling repository's main branch. Keep the requirement's
 exact version and extras, and add an exact Git source in the consumer manifest:
 
 ```toml
 [dependency-groups]
-tooling = ["research-repo-tools[python-tools]==0.2.6"]
+tooling = ["research-repo-tools[python-tools]==0.2.9"]
 dev = [{include-group = "tooling"}]
 
 [tool.uv.sources]
-# Supplying main commit; its package metadata still declares 0.2.6.
-research-repo-tools = {git = "https://github.com/acgetchell/research-repo-tools.git", rev = "5ad89e0f8ea861deb140109c25a30a254b27189d"}
+# Reviewed source commit for v0.2.9.
+research-repo-tools = {git = "https://github.com/acgetchell/research-repo-tools.git", rev = "aa9e59fac03b11516be45cf32fcb22912061bead"}
 
 [tool.research-repo-tools.release]
 published-dependencies = ["research-repo-tools"]
 ```
 
-The commit above supplies the dependency-source and release-dependency capabilities.
-Choose a reviewed commit that supplies every interface your consumer uses.
+For changes after that release, choose a reviewed commit that supplies every
+interface your consumer uses.
 Use the version declared by that commit, resolve
 and sync it deliberately, and retain the manifest and lock together. Match any
 isolated runtime selection to the same repository and full commit.
 Normal setup, checks and development evidence remain usable. Git provenance
 must agree with the declaration and lock; a matching version label alone fails.
 
-Before a release campaign, publish the supplying upstream version, remove its
-development source override, update both normal and isolated requirements to
-that exact PyPI release, then resolve and sync the lock. Run:
+Before a release campaign, select the published upstream version that supplies
+the required interfaces. Remove the development source override, set both normal
+and isolated requirements to that exact PyPI release, then resolve and sync the
+lock. Run:
 
 ```sh
 just release-dependencies
@@ -222,15 +219,15 @@ missing commits and failed lookups stop before tooling starts; there is no fallb
 GitHub Actions can use the same implementation, with uv already installed:
 
 ```yaml
-- uses: acgetchell/research-repo-tools/.github/actions/run-tooling@v0.2.9
+- uses: acgetchell/research-repo-tools/.github/actions/run-tooling@aa9e59fac03b11516be45cf32fcb22912061bead # v0.2.9
   with:
     version: '0.2.9'
     release-intent: 'true'
     arguments: '["release", "dependencies"]'
 ```
 
-This example requires the supplying release; pin the action itself to its
-reviewed supplying commit under your Actions policy. For development, substitute
+Keep the action pinned to a reviewed supplying commit under your Actions policy.
+For development, substitute
 the `github` and `commit` inputs for `version`. `root` selects the observed
 consumer/configuration root and `extras` selects optional package extras.
 The Action supplies `RRT_GITHUB_LOOKUP_TOKEN` for commit lookups; the wrapper
@@ -352,7 +349,7 @@ remain available for integrations.
 
 ## Verified Python and Cargo dependency sources
 
-With v0.2.7, use `dependency-sources.toml` at the checkout root to select upstream
+Use `dependency-sources.toml` at the checkout root to select upstream
 Python packages or Cargo crates. Releases accept **PyPI and crates.io only**;
 exact GitHub commits are available for development checks and rehearsal.
 
@@ -629,8 +626,8 @@ just performance-readme tooling/performance-release.toml
 Owner capture runs the release dependency gate before acquisition, even without
 `--release-intent`. Packages selected in `published-dependencies` must use a
 published registry release; development source overrides are rejected. Rehearse
-an unreleased pin without `--owner` or `--release-intent`. After adopting the
-published supplying release, pass `--owner "$owner"` to `just performance-release`
+an unreleased pin without `--owner` or `--release-intent`. With the published
+v0.2.9 tooling, pass `--owner "$owner"` to `just performance-release`
 to retain the original assertions outside the checkout before report promotion.
 
 For a repository's first stable release, `just performance first-release` acquires
@@ -641,7 +638,7 @@ paired schema-2 README publication rejects first-release v6 evidence. See the
 for capture, recovery and draft attachment.
 
 For schema-5 measurement declarations, use a new ignored checkpoint directory
-whose parent already exists. v0.2.7 also supports interruption recovery within
+whose parent already exists. Interruption recovery also works within
 schema-6 scheduled trials. Resume explicitly after an interruption:
 
 ```sh
@@ -751,7 +748,7 @@ rejects arbitrary JSON/output paths.
 
 ### Releases
 
-With v0.2.7, add `--format summary` to shared evidence verification commands for
+Add `--format summary` to shared evidence verification commands for
 release/commit, native run/attempt, actual package guarantee, optional benchmark acquisition,
 signature and artifact-integrity results. `--format json` prints the same verified
 record saved by `--output`; default shared CLI status messages remain compatible.
@@ -780,8 +777,9 @@ Use `--expect present` to require an existing version. Lookup failures stop the
 check; they never count as absence. Full publication verification still requires
 `just release-verify "$TAG"` and the repository's post-publication checks.
 
-For an immutable release, run the installed CLI from any directory to check
-GitHub and the registry without a project checkout or synchronized environment.
+The v0.3.0 `release visibility` command checks an immutable release on GitHub
+and the registry from any directory. The v0.2.9 package supports the configured
+`release verify` workflow above.
 Pass each required asset by its exact filename. For example, a crate release
 with a required benchmark archive can be checked with:
 
@@ -1044,6 +1042,7 @@ BSD-3-Clause. See [LICENSE][license].
 [performance-policy]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/DECLARING_PERFORMANCE.md
 [process-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/process-api.md
 [publication-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/publication-api.md
+[published-release]: https://github.com/acgetchell/research-repo-tools/releases/tag/v0.2.9
 [publishing]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RELEASING.md
 [publishing-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/publishing-api.md
 [pypi]: https://pypi.org/project/research-repo-tools/

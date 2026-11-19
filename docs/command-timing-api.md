@@ -98,6 +98,8 @@ The report retains:
   secrets out of declarations and command arguments.
 
 The summary lists case ID, sample count, minimum, median and maximum seconds.
+It displays nine decimal places. In v0.3.0, it computes these values directly
+from integer nanoseconds and rounds half-nanosecond medians to even.
 Only samples contribute; every warmup and preflight remains in JSON. It makes
 no throughput or cross-run comparison claim and can be regenerated offline.
 
@@ -137,5 +139,5 @@ Malformed declarations/reports, changed inputs and invalid observations raise
 failures/timeouts and OS errors retain the shared process exceptions. No package
 or consumer repository is built implicitly outside declared preflights.
 
-Preserve the current consumer script, workload arguments and interpretation
-until its published replacement is pinned and integration-verified.
+The command-timing API and recipe are available in v0.2.9. Validate the
+consumer's integration before replacing an existing timing script.

@@ -104,8 +104,8 @@ extraction and verifies the shared schema and envelope. Explicit legacy layout
 configuration is used only when neither shared entry exists. Broken shared
 archives cannot fall back to a more permissive legacy reader.
 
-The captured release-target APIs require v0.1.9 or newer; they are not available
-in v0.1.8. Pin an exact verified published package before adopting the
+The captured release-target APIs were introduced in v0.1.9. Pin an exact
+verified published package before adopting the
 [trusted handoff](VERIFYING_RELEASE_EVIDENCE.md#trusted-release-target-handoff).
 
 `ReleaseTarget(repository, tag, release_id, commit, expected_title=None)` is a
@@ -321,6 +321,8 @@ and [static-plan migration](cargo-examples-migration.md).
 
 `ci.export_environment(destination, names, *, environment=None)` validates every
 requested name and nonempty value before appending UTF-8/LF `NAME=value` lines.
+In v0.3.0, it inspects the last byte of an existing command file and adds an LF
+separator after any unterminated line. The existing file must be readable and writable.
 NUL/CR/LF, duplicate or invalid names, reserved GitHub/runner variables and
 `NODE_OPTIONS` are rejected. Spaces and Windows paths are preserved. The leaf
 must not be a symlink. An OS write failure can partially append; validation

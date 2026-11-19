@@ -79,7 +79,7 @@ The release commands share Delaunay's operator-facing roles:
 | `release-registry TAG --expect absent\|present` | Check exact version visibility using the configured package and registry |
 | `release-verify TAG` | Verify GitHub assets and the exact PyPI version |
 | `release-version-check` | Require synchronized metadata and matching final changelog and citation dates |
-| `tag TAG` | Create the annotated tag after the final version check |
+| `tag TAG [--force]` | Create the annotated tag after the final version check. The v0.3.0 recipe forwards `--force` for [guarded unpublished-candidate recovery](RECOVERING_RELEASES.md#4-replace-the-superseded-draft-and-tag). |
 | `update-version TAG [ARGS...]` | Prepare synchronized release metadata |
 
 This package has no release benchmark or README performance snapshot to generate.

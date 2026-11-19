@@ -166,11 +166,13 @@ members, encrypted ZIP files, duplicate members, file/directory overlaps, and
 names that collide or are unsafe on supported platforms. This includes Windows
 drive/UNC/alternate-stream paths, reserved device names, case aliases, and Unicode
 normalization aliases. Common leading `./` components and root directory entries
-are accepted. Only ordinary files/directories are written; no archive ownership,
-permissions, or timestamps are restored. The parent directory must exist and the
-destination must be absent. Failures leave the destination absent and attempt to
-remove staging files; cleanup failures log the retained staging path without
-masking the original error. Callers must exclude concurrent destination/parent writers.
+are accepted. In v0.3.0, member paths have at most 128 components after removing
+leading `./` prefixes. Extraction writes ordinary files and directories and
+omits archive ownership, permissions, and timestamps. The parent directory must
+exist and the destination must be absent. Failures leave the destination absent
+and attempt to remove staging files. Cleanup failures log the retained staging
+path without masking the original error. Callers must exclude concurrent
+destination and parent directory writers.
 
 Extraction uses a private sibling directory rather than merging into an existing
 tree. Python's extraction filters alone do not address every resource or overwrite
@@ -203,9 +205,8 @@ contain no Git metadata and never fall back to worktrees.
 Schema-5 suites and schema-6 scheduled trials compose that acquisition boundary
 and produce complete-run v4 and v5 respectively; see the
 [complete-run APIs](complete-run-api.md).
-The separate first-release path uses an unscheduled schema-5 plan and emits
-current-only complete-run v6 evidence; it is pending a supplying release after
-v0.2.8. It does not fabricate a baseline or an acquisition-order receipt.
+The v0.2.9 first-release path uses an unscheduled schema-5 plan and emits
+complete-run v6 evidence for the current phase only.
 
 `complete_runs.ratio_incompatibilities` returns retained diagnostic reasons
 without probing today's host. `validate_run_evidence` establishes acquisition
