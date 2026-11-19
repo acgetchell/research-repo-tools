@@ -9,9 +9,9 @@ retain their own sampling and release-eligibility requirements.
 
 ## Exploratory command timing
 
-Use the published v0.2.9 tooling and its `command-time` recipe. Keep workload arguments,
-source selection and interpretation in the consumer. This harmless example
-measures a native tool's version command, including process startup:
+Use the `command-time` recipe from the matching installed Just template. Keep
+workload arguments, source selection and interpretation in the consumer. This
+example measures a native tool's version command, including process startup:
 
 ```toml
 schema = 1

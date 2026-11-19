@@ -1,9 +1,9 @@
 # Reusing benchmark acquisitions
 
-This procedure uses the candidate contract available in v0.2.9. Consumers own
-workloads, scientific acceptance, output declarations, and thin recipe/workflow
-wiring. The shared package owns acquisition, trial receipts, validation, archive
-conversion, and evidence mechanics. See the [API and trust contract](candidate-reuse-api.md).
+Consumers own workloads, scientific acceptance, output declarations, and thin
+recipe/workflow wiring. The shared package owns acquisition, trial receipts,
+validation, archive conversion, and evidence mechanics. See the
+[API and trust contract](candidate-reuse-api.md).
 The procedure below acquires scheduled pairs. For a first release without a
 predecessor, follow the [current-only procedure](candidate-reuse-api.md#committed-publisher-evidence)
 with unscheduled schema-5 measurement and complete-run v6 evidence.

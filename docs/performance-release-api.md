@@ -23,8 +23,8 @@ acquisition effects. Pass `dependencies=settings.release.published_dependencies`
 to carry selections from standalone controller configuration; these are combined
 with the checkout's manifest policy. The default permits development rehearsals.
 
-The `owner` option is available in v0.2.9. It requires a new
-directory outside the checkout, a scheduled suite plan, a schema-2 report, and
+The `owner` option requires a new directory outside the checkout, a scheduled
+suite plan, a schema-2 report, and
 local acquisition-owner context in every suite. It also checks published upstream
 dependencies before acquisition. It cannot be combined with `before_promotion`.
 The handoff freezes the original evidence, policy and publisher receipt before

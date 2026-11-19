@@ -205,12 +205,11 @@ carries any notes already generated on `main` with it. Preserve local changes.
 #### 2.2. Finish corrections and establish validation once
 
 Finish any remaining source, recipe, or documentation edits on this branch.
-For step 4, the final checkout needs a `tag` recipe that forwards `--force`
-to `changelog tag`. The v0.3.0 template forwards it, and the v0.2.9 CLI already
-accepts it. If your Justfile uses the older recipe, copy the argument-forwarding
-recipe from the [current consumer template](../src/research_repo_tools/templates/justfile).
-Include that edit in the corrective commit before generating notes. Step 3
-validates the merged commit with the corrected recipe.
+For step 4, use the `tag` recipe from the
+[current consumer template](../src/research_repo_tools/templates/justfile). It
+forwards `--force` to `changelog tag`. If your copied Justfile needs that update,
+include it in the corrective commit before generating notes. Step 3 validates the
+merged commit with the updated recipe.
 
 Use `just check` while editing. Benchmark consumers also decide whether fresh
 acquisition is required using the
