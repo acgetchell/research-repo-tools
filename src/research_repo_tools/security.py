@@ -6,18 +6,22 @@ import shutil
 import subprocess
 import sys
 import tempfile
-from pathlib import Path
-from typing import Any
+from collections import Counter
+from dataclasses import dataclass
+from pathlib import Path, PurePosixPath, PureWindowsPath
+from typing import Any, cast
 
 from research_repo_tools import config, files, toolchain, toolchain_config
 from research_repo_tools.evidence import _load_json
 from research_repo_tools.process import run_command_bytes, run_git_bytes
-from research_repo_tools.scanner_output import FindingOutput
+from research_repo_tools.scanner_output import FindingOutput, _print, _text
 from research_repo_tools.selection import select_files
 
-__all__ = ["scan_osv", "scan_secrets", "security_inventory"]
+__all__ = ["check_secret_exceptions", "scan_osv", "scan_secrets", "security_inventory", "show_secret_findings"]
 
 GENERATED = tuple(f"**/{name}/**" for name in (".venv", "venv", ".tox", ".nox", "__pycache__", "target", "dist", "build", "node_modules"))
+REPORT_LIMIT = 128 * 1024 * 1024
+GITLEAKS_FINDINGS_EXIT = 3
 
 
 def security_inventory(root: Path, *, include: tuple[str, ...] = (), exclude: tuple[str, ...] = ()) -> tuple[str, ...]:
@@ -122,6 +126,16 @@ def _gitleaks_report(value: object, format_name: str) -> bool:
     return bool(value)
 
 
+def _load_report(path: Path) -> object:
+    if not path.is_file() or path.is_symlink() or path.is_junction():
+        raise ValueError("scanner report is missing or is not a regular file")
+    with path.open("rb") as stream:
+        payload = stream.read(REPORT_LIMIT + 1)
+    if len(payload) > REPORT_LIMIT:
+        raise ValueError("scanner report exceeds size limit")
+    return _load_json(payload, "scanner report")
+
+
 def _report_run(binary: Path, args: list[str], destination: Path, format_name: str, *, root: Path, env: dict[str, str], validate, present=None) -> int:
     if destination.is_symlink():
         raise ValueError("report destination must not be a symlink")
@@ -139,13 +153,7 @@ def _report_run(binary: Path, args: list[str], destination: Path, format_name: s
             return 124
         code = result.returncode if result.returncode >= 0 else 128 - result.returncode
         try:
-            if not report.is_file() or report.is_symlink():
-                raise ValueError("scanner did not produce a fresh report")
-            with report.open("rb") as stream:
-                payload = stream.read(128 * 1024 * 1024 + 1)
-            if len(payload) > 128 * 1024 * 1024:
-                raise ValueError("scanner report exceeds size limit")
-            value = _load_json(payload, "scanner report")
+            value = _load_report(report)
             findings = validate(value, format_name)
         except OSError, ValueError, TypeError, KeyError:
             print(f"{binary.name}: missing, malformed, incomplete, or unredacted {format_name} report (exit {code}); no report published", file=sys.stderr)
@@ -218,13 +226,7 @@ def scan_osv(settings: config.Config, lockfiles: tuple[str, ...], *, output: str
     return code
 
 
-def scan_secrets(settings: config.Config, *, output: str = "target/security", configuration: str | None = None, exclude: tuple[str, ...] = ()) -> int:
-    """Scan full reachable history and a private snapshot of the working inventory.
-
-    Links/submodules in selected working paths fail rather than silently lose
-    coverage. History follows native Gitleaks patch semantics, not submodule
-    contents, ignored files, binary blobs, archives or unreachable Git objects.
-    """
+def _prepare_secret_scan(settings: config.Config, stage: Path, exclude: tuple[str, ...]) -> tuple[Path, dict[str, str]]:
     shallow = run_git_bytes(["--no-pager", "rev-parse", "--is-shallow-repository"], cwd=settings.root).stdout.strip()
     if shallow != b"false":
         raise ValueError("full-history secret scanning requires a non-shallow checkout (fetch-depth: 0)")
@@ -234,50 +236,72 @@ def scan_secrets(settings: config.Config, *, output: str = "target/security", co
     if not names:
         raise ValueError("no working files selected for secret scanning")
     binary, env = _binary(settings, "gitleaks")
-    env = {key: value for key, value in env.items() if not key.startswith("GITLEAKS_")}
+    snapshot = stage / "working"
+    snapshot.mkdir()
+    for name in names:
+        destination = snapshot / name
+        destination.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(settings.root / name, destination)
+    # Explicit defaults avoid ambient config and .gitleaksignore bypasses.
+    (stage / "default.toml").write_bytes(b"[extend]\nuseDefault = true\n")
+    (stage / "empty-ignore").write_bytes(b"")
+    return binary, {key: value for key, value in env.items() if not key.startswith("GITLEAKS_")}
+
+
+def _secret_config(settings: config.Config, stage: Path, configuration: str | None) -> Path:
+    selected = settings.path(configuration) if configuration is not None else settings.root / ".gitleaks.toml"
+    if selected.is_file():
+        return selected
+    if configuration is not None:
+        raise ValueError("requested Gitleaks configuration is missing")
+    return stage / "default.toml"
+
+
+def _secret_sources(root: Path, stage: Path) -> tuple[tuple[str, str, Path], ...]:
+    return (("history", "git", root), ("working", "dir", stage / "working"))
+
+
+def _gitleaks_args(mode: str, source: Path, stage: Path, selected: Path, format_name: str) -> list[str]:
+    args = [
+        mode,
+        str(source),
+        "--config",
+        str(selected),
+        "--redact=100",
+        "--no-banner",
+        "--no-color",
+        "--ignore-gitleaks-allow",
+        "--gitleaks-ignore-path",
+        str(stage / "empty-ignore"),
+        "--timeout=300",
+        "--report-format",
+        format_name,
+        "--report-path",
+        "{report}",
+    ]
+    if mode == "git":
+        args.append("--log-opts=--all --full-history")
+    return args
+
+
+def scan_secrets(settings: config.Config, *, output: str = "target/security", configuration: str | None = None, exclude: tuple[str, ...] = ()) -> int:
+    """Scan full reachable history and a private snapshot of the working inventory.
+
+    Links/submodules in selected working paths fail rather than silently lose
+    coverage. History follows native Gitleaks patch semantics, not submodule
+    contents, ignored files, binary blobs, archives or unreachable Git objects.
+    """
     code = 0
     with tempfile.TemporaryDirectory(prefix="research-secret-scan-") as directory:
         stage = Path(directory)
-        snapshot = stage / "working"
-        snapshot.mkdir()
-        for name in names:
-            destination = snapshot / name
-            destination.parent.mkdir(parents=True, exist_ok=True)
-            shutil.copyfile(settings.root / name, destination)
-        # Explicit defaults avoid ambient config and .gitleaksignore bypasses.
-        default = stage / "gitleaks.toml"
-        default.write_bytes(b"[extend]\nuseDefault = true\n")
-        selected = settings.path(configuration) if configuration else settings.root / ".gitleaks.toml"
-        selected = selected if selected.is_file() else default
-        if configuration and selected == default:
-            raise ValueError("requested Gitleaks configuration is missing")
-        ignore = stage / "empty-ignore"
-        ignore.write_bytes(b"")
-        for label, mode, source in (("history", "git", settings.root), ("working", "dir", snapshot)):
-            present = FindingOutput("Gitleaks", "history" if label == "history" else "working tree", settings.root, snapshot=snapshot)
+        binary, env = _prepare_secret_scan(settings, stage, exclude)
+        selected = _secret_config(settings, stage, configuration)
+        for label, mode, source in _secret_sources(settings.root, stage):
+            present = FindingOutput("Gitleaks", "history" if label == "history" else "working tree", settings.root, snapshot=stage / "working")
             for format_name in ("json", "sarif"):
-                args = [
-                    mode,
-                    str(source),
-                    "--config",
-                    str(selected),
-                    "--redact=100",
-                    "--no-banner",
-                    "--no-color",
-                    "--ignore-gitleaks-allow",
-                    "--gitleaks-ignore-path",
-                    str(ignore),
-                    "--timeout=300",
-                    "--report-format",
-                    format_name,
-                    "--report-path",
-                    "{report}",
-                ]
-                if mode == "git":
-                    args.append("--log-opts=--all --full-history")
                 status = _report_run(
                     binary,
-                    args,
+                    _gitleaks_args(mode, source, stage, selected, format_name),
                     settings.path(output) / f"gitleaks-{label}.{format_name}",
                     format_name,
                     root=settings.root,
@@ -287,3 +311,104 @@ def scan_secrets(settings: config.Config, *, output: str = "target/security", co
                 )
                 code = code or status
     return code
+
+
+@dataclass(frozen=True, order=True, slots=True)
+class _SecretFinding:
+    scope: str
+    path: str
+    position: tuple[int, int, int, int]
+    rule: str
+    commit: str
+
+
+def _secret_path(path: str, scope: str, source: Path) -> str:
+    native = Path(path)
+    if native.is_relative_to(source):
+        return native.relative_to(source).as_posix()
+    if scope == "working":
+        # Saved reports can originate from a deleted snapshot on another host.
+        portable = PurePosixPath(path) if path.startswith("/") else PureWindowsPath(path)
+        if portable.is_absolute():
+            parts = portable.parts
+            for index, part in enumerate(parts[:-2]):
+                if part.startswith("research-secret-scan-") and parts[index + 1] == "working":
+                    return PurePosixPath(*parts[index + 2 :]).as_posix()
+    return native.as_posix()
+
+
+def _secret_findings(report: Path, scope: str, source: Path) -> Counter[_SecretFinding]:
+    value = _load_report(report)
+    _gitleaks_report(value, "json")
+    findings: Counter[_SecretFinding] = Counter()
+    for item in cast(list[dict[str, Any]], value):
+        path, rule, commit = item["File"], item["RuleID"], item.get("Commit", "")
+        position = tuple(item.get(field) for field in ("StartLine", "StartColumn", "EndLine", "EndColumn"))
+        if (
+            not path
+            or not rule
+            or not isinstance(commit, str)
+            or (scope == "history" and not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", commit))
+            or (scope == "working" and commit != "")
+            or any(type(part) is not int or part < 0 for part in position)
+        ):
+            raise ValueError(f"invalid Gitleaks {scope} finding identity")
+        findings[_SecretFinding(scope, _secret_path(path, scope, source), cast(tuple[int, int, int, int], position), rule, commit)] += 1
+    return findings
+
+
+def _print_secret_findings(label: str, findings: Counter[_SecretFinding]) -> None:
+    _print(f"{label}: {findings.total()} finding(s)")
+    for finding, count in sorted(findings.items()):
+        line, column, end_line, end_column = finding.position
+        commit = f" at commit {finding.commit}" if finding.commit else ""
+        instances = f" ({count} matches)" if count > 1 else ""
+        _print(f"  {finding.scope} {_text(finding.path)}:{line}:{column}-{end_line}:{end_column} {_text(finding.rule)}{commit}{instances}")
+
+
+def show_secret_findings(settings: config.Config, *, reports: str = "target/security") -> None:
+    """Summarize existing redacted Gitleaks history and working JSON reports."""
+    directory = settings.path(reports)
+    findings = {scope: _secret_findings(directory / f"gitleaks-{scope}.json", scope, settings.root) for scope in ("history", "working")}
+    for scope, records in findings.items():
+        _print_secret_findings(scope.capitalize(), records)
+
+
+def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline: str | None = None, exclude: tuple[str, ...] = ()) -> None:
+    """Compare two Gitleaks policies using one working snapshot and unchanged Git refs."""
+    with tempfile.TemporaryDirectory(prefix="research-secret-compare-") as directory:
+        stage = Path(directory)
+        binary, env = _prepare_secret_scan(settings, stage, exclude)
+        original = _secret_config(settings, stage, baseline)
+        proposed = _secret_config(settings, stage, candidate)
+        if original.samefile(proposed):
+            raise ValueError("baseline and candidate must be separate Gitleaks configuration files")
+        policy_snapshots = {path: path.read_bytes() for path in (original, proposed)}
+
+        def history_refs() -> bytes:
+            return run_git_bytes(["--no-pager", "show-ref", "--head"], cwd=settings.root).stdout
+
+        refs = history_refs()
+        results: list[Counter[_SecretFinding]] = []
+        for policy in (original, proposed):
+            findings: Counter[_SecretFinding] = Counter()
+            for scope, mode, source in _secret_sources(settings.root, stage):
+                report = stage / f"gitleaks-{scope}.json"
+                args = _gitleaks_args(mode, source, stage, policy, "json")
+                args.append(f"--exit-code={GITLEAKS_FINDINGS_EXIT}")
+                status = _report_run(binary, args, report, "json", root=settings.root, env=env, validate=_gitleaks_report)
+                if status not in (0, GITLEAKS_FINDINGS_EXIT) or not report.is_file():
+                    raise ValueError(f"Gitleaks {scope} scan failed during policy comparison (exit {status})")
+                observed = _secret_findings(report, scope, source)
+                if status != (GITLEAKS_FINDINGS_EXIT if observed else 0):
+                    raise ValueError(f"Gitleaks {scope} scan returned an inconsistent findings status")
+                findings.update(observed)
+            if history_refs() != refs:
+                raise ValueError("Git refs changed during Gitleaks policy comparison")
+            if any(path.read_bytes() != payload for path, payload in policy_snapshots.items()):
+                raise ValueError("Gitleaks configuration changed during policy comparison")
+            results.append(findings)
+    before, after = results
+    _print_secret_findings("Suppressed", before - after)
+    _print_secret_findings("Introduced", after - before)
+    _print_secret_findings("Remaining", before & after)

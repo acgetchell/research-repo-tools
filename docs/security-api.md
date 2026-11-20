@@ -10,6 +10,12 @@ for setup and ordinary workflows.
 
 `research_repo_tools.security` exports:
 
+- `check_secret_exceptions(settings, candidate, *, baseline=None, exclude=())`
+  compares two native Gitleaks configurations against the same working-tree
+  snapshot and checks for changes to Git refs and primary policy files between
+  scans. It prints suppressed, introduced, and remaining findings and returns
+  `None` when the comparison completes. The default baseline is the repository's
+  `.gitleaks.toml` or the native default rules.
 - `scan_osv(settings, lockfiles, *, output="target/security", configuration=None)`:
   explicit relative `uv.lock`/`Cargo.lock` paths from the shared inventory. Each
   produces a numbered native JSON/SARIF pair with verified source coverage.
@@ -19,6 +25,9 @@ for setup and ordinary workflows.
 - `security_inventory(root, *, include=(), exclude=())`: sorted tracked/nonignored
   regular files, excluding standard generated/environment directories. Inclusion
   patterns are Git pathspecs and exclusions are case-sensitive POSIX globs.
+- `show_secret_findings(settings, *, reports="target/security")` validates and
+  summarizes both redacted native JSON reports without invoking the scanner.
+  A completed summary returns `None` even when the reports contain findings.
 
 Scans require declared, already installed exact managed binaries. They return
 zero only for complete scans without findings, otherwise the first native

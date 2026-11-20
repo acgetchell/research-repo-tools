@@ -18,6 +18,147 @@ from research_repo_tools.toolchain_config import load
 
 
 class TestSharedCapabilities(unittest.TestCase):
+    def test_gitleaks_findings_requires_both_redacted_reports_and_shows_only_identity(self):
+        with tempfile.TemporaryDirectory(prefix="gitleaks findings café ") as directory:
+            root = Path(directory).resolve()
+            reports = root / "downloaded reports"
+            reports.mkdir()
+            history = reports / "gitleaks-history.json"
+            working = reports / "gitleaks-working.json"
+            finding = self.secret_finding("a" * 40, "logs/run café.json", 5)
+            history.write_bytes(json.dumps([finding]).encode())
+            working.write_bytes(
+                json.dumps(
+                    [
+                        self.secret_finding("", "/tmp/research-secret-scan-fixture/working/logs/current.json", 3),
+                        self.secret_finding("", r"C:\Temp\research-secret-scan-fixture\working\logs\windows.json", 4),
+                    ]
+                ).encode()
+            )
+            arguments = ["--root", str(root), "security", "findings", "--reports", reports.name]
+            settings = config.parse({}, root=root)
+            with (
+                patch("research_repo_tools.cli.config.load", return_value=settings),
+                patch.object(security, "_binary", side_effect=AssertionError("report summary invoked a scanner")),
+                redirect_stdout(io.StringIO()) as stdout,
+            ):
+                self.assertEqual(main(arguments), 0)
+                self.assertIn('history "logs/run café.json":9:5-9:8 "fixture-rule" at commit ' + "a" * 40, stdout.getvalue())
+                self.assertIn('working "logs/current.json":9:3-9:6 "fixture-rule"', stdout.getvalue())
+                self.assertIn('working "logs/windows.json":9:4-9:7 "fixture-rule"', stdout.getvalue())
+                self.assertNotIn("research-secret-scan-", stdout.getvalue())
+                self.assertNotIn("_SECRET", stdout.getvalue())
+                working.write_bytes(json.dumps([{**finding, "Secret": "UNREDACTED_SECRET"}]).encode())
+                with redirect_stdout(io.StringIO()) as failed, redirect_stderr(io.StringIO()) as errors:
+                    self.assertEqual(main(arguments), 1)
+                self.assertEqual(failed.getvalue(), "")
+                self.assertIn("unredacted secret", errors.getvalue())
+                self.assertNotIn("_SECRET", errors.getvalue())
+
+    @staticmethod
+    def secret_finding(commit, path, column, rule="fixture-rule"):
+        return {
+            "Commit": commit,
+            "File": path,
+            "StartLine": 9,
+            "StartColumn": column,
+            "EndLine": 9,
+            "EndColumn": column + 3,
+            "RuleID": rule,
+            "Secret": "REDACTED",
+            "Match": "MATCH_SECRET",
+            "Description": "DESCRIPTION_SECRET",
+            "Message": "COMMIT_SECRET",
+        }
+
+    def test_gitleaks_exception_review_compares_one_snapshot_and_requires_complete_scans(self):
+        with tempfile.TemporaryDirectory(prefix="exception review café ") as directory:
+            root = Path(directory).resolve()
+            source = root / "run café.json"
+            source.write_bytes(b"retained fixture\r\n")
+            baseline, candidate = root / ".gitleaks.toml", root / "candidate policy.toml"
+            baseline.write_bytes(b"[extend]\nuseDefault = true\n")
+            candidate.write_bytes(b"# Proposed exception\n[extend]\nuseDefault = true\n")
+            calls = []
+
+            def git(args, *, cwd):
+                self.assertEqual(cwd, root)
+                if "--is-shallow-repository" in args:
+                    output = b"false\n"
+                elif "show-ref" in args:
+                    output = refs
+                else:
+                    self.assertEqual(args, ["--no-pager", "rev-parse", "--verify", "HEAD"])
+                    output = b"a" * 40 + b"\n"
+                return subprocess.CompletedProcess(args, 0, output, b"")
+
+            def native(binary, args, **kwargs):
+                nonlocal refs
+                mode, target = args[0], Path(args[1])
+                policy = Path(args[args.index("--config") + 1])
+                calls.append((mode, target, policy))
+                self.assertIn("--exit-code=3", args)
+                self.assertIn("--redact=100", args)
+                self.assertEqual(kwargs["env"], {"FIXTURE": "1"})
+                if mode == "dir":
+                    self.assertEqual((target / source.name).read_bytes(), b"retained fixture\r\n")
+                    path, commit = str(target / source.name), ""
+                else:
+                    self.assertEqual(target, root)
+                    path, commit = source.name, "a" * 40
+                records = [self.secret_finding(commit, path, 7)]
+                if policy == baseline:
+                    records.append(self.secret_finding(commit, path, 2))
+                    # Files can change after the working snapshot has been captured.
+                    source.write_bytes(b"changed source\n")
+                else:
+                    records.append(self.secret_finding(commit, path, 9, "new-rule"))
+                    if move_ref:
+                        refs = b"changed refs"
+                Path(args[args.index("--report-path") + 1]).write_bytes(json.dumps(records).encode())
+                return subprocess.CompletedProcess(args, exit_code, b"RAW_SECRET", b"RAW_SECRET")
+
+            settings = config.parse({}, root=root)
+            arguments = ["--root", str(root), "security", "check-exceptions", candidate.name, "--exclude", "**/*.bin"]
+            with (
+                patch("research_repo_tools.cli.config.load", return_value=settings),
+                patch.object(security, "security_inventory", return_value=(source.name,)) as inventory,
+                patch.object(security, "_binary", return_value=(root / "gitleaks", {"GITLEAKS_CONFIG": "ambient", "FIXTURE": "1"})),
+                patch.object(security, "run_git_bytes", side_effect=git),
+                patch.object(security, "run_command_bytes", side_effect=native),
+            ):
+                refs = b"initial refs"
+                exit_code = 3
+                move_ref = False
+                with redirect_stdout(io.StringIO()) as stdout:
+                    self.assertEqual(main(arguments), 0)
+                output = stdout.getvalue()
+                inventory.assert_called_once_with(root, exclude=("**/*.bin",))
+                self.assertEqual([(mode, policy) for mode, _, policy in calls], [("git", baseline), ("dir", baseline), ("git", candidate), ("dir", candidate)])
+                self.assertEqual(calls[1][1], calls[3][1])
+                self.assertIn('Suppressed: 2 finding(s)\n  history "run café.json":9:2', output)
+                self.assertIn('Introduced: 2 finding(s)\n  history "run café.json":9:9', output)
+                self.assertIn('Remaining: 2 finding(s)\n  history "run café.json":9:7', output)
+                self.assertNotIn("_SECRET", output)
+                self.assertNotIn(str(calls[1][1]), output)
+                self.assertEqual(candidate.read_bytes(), b"# Proposed exception\n[extend]\nuseDefault = true\n")
+                self.assertFalse((root / "target").exists())
+
+                exit_code = 1
+                with redirect_stdout(io.StringIO()) as failed, redirect_stderr(io.StringIO()) as errors:
+                    self.assertEqual(main(arguments), 1)
+                self.assertEqual(failed.getvalue(), "")
+                self.assertIn("history scan failed during policy comparison", errors.getvalue())
+                self.assertNotIn("_SECRET", errors.getvalue())
+
+                exit_code = 3
+                move_ref = True
+                source.write_bytes(b"retained fixture\r\n")
+                with redirect_stdout(io.StringIO()) as failed, redirect_stderr(io.StringIO()) as errors:
+                    self.assertEqual(main([*arguments, "--baseline", str(baseline)]), 1)
+                self.assertEqual(failed.getvalue(), "")
+                self.assertIn("Git refs changed during Gitleaks policy comparison", errors.getvalue())
+
     def test_cli_findings_are_actionable_once_per_scan_and_never_echo_matches(self):
         for scanner in ("osv", "secrets", "semgrep"):
             for behavior, expected in (

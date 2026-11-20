@@ -567,6 +567,7 @@ for exhaustive arguments, configuration and Python contracts.
 | Publish reports and figures | [Preview and publish retained evidence][reports-guide] | [Publication APIs][publication-api] |
 | Publish to PyPI or crates.io | [Reviewed release procedure][publishing] | [Exact-commit evidence][evidence-guide], [optional reuse][reuse-guide] |
 | Record complete performance results | [Prepare, measure/retain, publish README][performance-guide] | [Measurement policy][performance-policy], [complete-run APIs][complete-api] |
+| Review secret findings and false-positive exceptions | [Gitleaks exception review](docs/RUNNING_CHECKS.md#reviewing-gitleaks-exceptions) | [Security APIs][security-api] |
 | Select files, run commands and export CI values | [Consumer checks and integration][checks-guide] | [File APIs][files-api], [process/Just APIs][process-api], [workflow APIs][workflow-api] |
 | Set up or repair tools | [Installation and ownership][toolchain] | [Toolchain APIs][toolchain-api] |
 | Time external commands | [Exploratory command timing][timing-guide] | [Timing evidence contract][timing-api] |

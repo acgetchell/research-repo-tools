@@ -255,6 +255,12 @@ def parser() -> argparse.ArgumentParser:
     split.add_argument("--github-output", type=Path, help="append SARIF_DIRECTORY, SARIF_HAS_UPLOADABLE_RUNS and SARIF_RUN_COUNT after publication")
     split.add_argument("--output", required=True, help="owned directory replaced as a complete generation")
     security = groups.add_parser("security", help="run managed native dependency and secret scanners").add_subparsers(dest="action", required=True)
+    exceptions = security.add_parser("check-exceptions", help="compare a proposed Gitleaks policy to the current policy")
+    exceptions.add_argument("candidate", help="path to the proposed Gitleaks configuration")
+    exceptions.add_argument("--baseline", help="path to the baseline configuration; defaults to the current repository policy")
+    exceptions.add_argument("--exclude", action="append", default=[], help="exclude this working-tree glob from both scans")
+    findings = security.add_parser("findings", help="summarize existing redacted Gitleaks JSON reports")
+    findings.add_argument("--reports", default="target/security", help="directory containing the Gitleaks report pair")
     osv = security.add_parser("osv", help="scan explicit tracked/nonignored uv.lock and Cargo.lock files")
     osv.add_argument("lockfiles", nargs="+")
     osv.add_argument("--output", default="target/security")
@@ -716,11 +722,17 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         _print(f"Published {len(outputs)} uploadable SARIF run(s)")
         return 0
     if args.group == "security":
-        from research_repo_tools.security import scan_osv, scan_secrets
+        from research_repo_tools import security
 
+        if args.action == "check-exceptions":
+            security.check_secret_exceptions(settings, args.candidate, baseline=args.baseline, exclude=tuple(args.exclude))
+            return 0
+        if args.action == "findings":
+            security.show_secret_findings(settings, reports=args.reports)
+            return 0
         if args.action == "osv":
-            return scan_osv(settings, tuple(args.lockfiles), output=args.output, configuration=args.scanner_config)
-        return scan_secrets(settings, output=args.output, configuration=args.scanner_config, exclude=tuple(args.exclude))
+            return security.scan_osv(settings, tuple(args.lockfiles), output=args.output, configuration=args.scanner_config)
+        return security.scan_secrets(settings, output=args.output, configuration=args.scanner_config, exclude=tuple(args.exclude))
     if args.group == "semgrep":
         if args.action == "check-reports":
             from research_repo_tools.semgrep_scan import require_current_reports

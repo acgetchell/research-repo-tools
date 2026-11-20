@@ -203,6 +203,14 @@ review-uncommitted:
 # Audit locked dependencies and scan full history/current files for secrets.
 security: audit security-secrets
 
+# Compare a proposed Gitleaks configuration with the baseline.
+security-check-exceptions candidate *args:
+    uv run --locked research-repo-tools security check-exceptions "$@"
+
+# Summarize existing redacted Gitleaks reports.
+security-findings *args:
+    uv run --locked research-repo-tools security findings "$@"
+
 # Scan full history and current tracked/nonignored files with managed Gitleaks.
 security-secrets *args:
     uv run --locked research-repo-tools security secrets "$@"

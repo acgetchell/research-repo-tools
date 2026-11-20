@@ -223,6 +223,14 @@ review-uncommitted:
 # Audit selected dependencies and then scan for secrets; add consumer policy here.
 security: audit security-secrets
 
+# Compare a proposed Gitleaks configuration with the baseline.
+security-check-exceptions candidate *args:
+    uv run --locked --group dev research-repo-tools security check-exceptions "$@"
+
+# Summarize existing redacted Gitleaks reports.
+security-findings *args:
+    uv run --locked --group dev research-repo-tools security findings "$@"
+
 # Audit explicitly selected uv.lock/Cargo.lock files with the managed OSV scanner.
 security-osv +lockfiles:
     uv run --locked --group dev research-repo-tools security osv "$@"

@@ -69,6 +69,8 @@ arguments in lexicographic order.
 | `just review-resume PENDING ARGS...` | Attempt one explicitly approved review with an unenforced quote |
 | `just review-uncommitted` | Review staged, unstaged, and non-ignored untracked changes |
 | `just security` | Audit selected lockfiles, then scan for secrets |
+| `just security-check-exceptions CANDIDATE [ARGS...]` | Compare a proposed Gitleaks policy with the current or selected baseline |
+| `just security-findings [ARGS...]` | Read the redacted Gitleaks history and working-tree JSON reports |
 | `just security-osv LOCKFILE...` | Audit explicitly selected uv.lock/Cargo.lock files |
 | `just security-secrets [ARGS...]` | Scan full reachable history and current tracked/nonignored files |
 | `just semgrep-check` | Validate the consumer's Semgrep rules and fixtures |

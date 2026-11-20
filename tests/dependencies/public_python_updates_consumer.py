@@ -104,6 +104,13 @@ class TestPythonUpdates(unittest.TestCase):
         constraints, pins = dependencies.parse_project(self.manifest.read_text(encoding="utf-8"))
         return dependencies.resolve_latest_pins(pins, constraints, self.project, env=self.env)
 
+    def test_preserve_matches_normalized_pin_names(self):
+        original = self.manifest.read_bytes()
+        with patch.object(dependencies, "resolve_latest_pins", side_effect=AssertionError("preserved pin reached the resolver")):
+            self.assertEqual(dependencies.update_dev_pins(self.manifest, preserve=frozenset({"Fixture_Tool"})), {})
+        self.assertEqual(self.manifest.read_bytes(), original)
+        self.assertFalse((self.project / "uv.lock").exists())
+
     def exact_git_source(self):
         if os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1":
             self.skipTest("disposable Git mutations disabled")

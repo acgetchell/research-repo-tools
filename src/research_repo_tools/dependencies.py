@@ -129,7 +129,7 @@ def parse_project(text: str, *, toolchain: config.ToolchainSettings | None = Non
 
     project = _required_table(data, "project")
     pins = _dev_pins(_required_table(data, "dependency-groups"))
-    fixed_sources = python_resolution.fixed_source_names(text) | preserve
+    fixed_sources = python_resolution.fixed_source_names(text) | {canonicalize_name(name) for name in preserve}
     pins = [pin for pin in pins if canonicalize_name(pin.name) not in fixed_sources]
     if toolchain is None:
         tool = config._table(data.get("tool", {}), "tool")
