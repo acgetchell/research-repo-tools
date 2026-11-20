@@ -55,6 +55,17 @@ class TestSharedCapabilities(unittest.TestCase):
                 self.assertEqual(failed.getvalue(), "")
                 self.assertIn("unredacted secret", errors.getvalue())
                 self.assertNotIn("_SECRET", errors.getvalue())
+                working.write_bytes(b'{"MATCH_SECRET": 1, "MATCH_SECRET": 2}')
+                with redirect_stdout(io.StringIO()) as failed, redirect_stderr(io.StringIO()) as errors:
+                    self.assertEqual(main(arguments), 1)
+                self.assertEqual(failed.getvalue(), "")
+                self.assertIn(working.name, errors.getvalue())
+                self.assertNotIn("MATCH_SECRET", errors.getvalue())
+                working.unlink()
+                with redirect_stdout(io.StringIO()) as failed, redirect_stderr(io.StringIO()) as errors:
+                    self.assertEqual(main(arguments), 1)
+                self.assertEqual(failed.getvalue(), "")
+                self.assertIn(working.name, errors.getvalue())
 
     @staticmethod
     def secret_finding(commit, path, column, rule="fixture-rule"):
@@ -159,7 +170,8 @@ class TestSharedCapabilities(unittest.TestCase):
                 self.assertEqual(len({retained for _, _, _, retained in calls}), 1)
                 self.assertIn('Suppressed: 2 finding(s)\n  history "run café.json":9:2', output)
                 self.assertIn('Introduced: 2 finding(s)\n  history "run café.json":9:9', output)
-                self.assertIn('Remaining: 2 finding(s)\n  history "run café.json":9:7', output)
+                self.assertIn('Matching locations: 2 finding(s)\n  history "run café.json":9:7', output)
+                self.assertIn("Review matching rule IDs and locations whenever a detection rule changes.", output)
                 self.assertNotIn("_SECRET", output)
                 self.assertNotIn(str(calls[1][1]), output)
                 self.assertEqual(candidate.read_bytes(), candidate_bytes)

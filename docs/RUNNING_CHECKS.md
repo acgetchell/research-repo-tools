@@ -193,8 +193,9 @@ repository root.
 Reports go to `target/security`: numbered OSV JSON/SARIF pairs and Gitleaks
 history/working pairs. Findings retain native rule IDs and locations. Gitleaks
 uses complete native secret redaction; surrounding match text and commit messages
-are also removed before reports are published. Inline `gitleaks:allow` and
-ambient `.gitleaksignore` bypasses are disabled. Consumer `.gitleaks.toml` policy
+are also removed before reports are published. Inline `gitleaks:allow` comments
+are disabled. Managed scans require any repository-root `.gitleaksignore` file
+to be removed from the checkout. Consumer `.gitleaks.toml` policy
 is honored; use `--scanner-config PATH` for another reviewed configuration.
 Raw scanner logs are not echoed because they can include sensitive metadata.
 Validated findings are printed by default: OSV identifies the lockfile,
@@ -247,7 +248,10 @@ The baseline is the repository's `.gitleaks.toml`, or the built-in default rules
 when the repository has no policy. Use `--baseline PATH` for an explicitly saved
 baseline. Pass the same `--exclude` options used by the regular scan. The command
 scans reachable history and one working-tree snapshot with each policy, then
-shows suppressed, introduced, and remaining findings. It retains both policy
+shows suppressed and introduced findings and matching locations. Findings are
+paired by rule ID, file, line and column range, and commit. Review matching
+locations when a detection rule changes because the rule may select a different
+value at the same location. The command retains both policy
 files and their local extensions and checks them for changes during comparison.
 Keep Git refs stable during the comparison. A zero exit means the comparison
 completed. Review every suppressed location before committing the approved

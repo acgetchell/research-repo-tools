@@ -133,12 +133,15 @@ def _gitleaks_report(value: object, format_name: str) -> bool:
 
 def _load_report(path: Path) -> object:
     if not path.is_file() or path.is_symlink() or path.is_junction():
-        raise ValueError("scanner report is missing or is not a regular file")
+        raise ValueError(f"scanner report is missing or is not a regular file: {path}")
     with path.open("rb") as stream:
         payload = stream.read(REPORT_LIMIT + 1)
     if len(payload) > REPORT_LIMIT:
-        raise ValueError("scanner report exceeds size limit")
-    return _load_json(payload, "scanner report")
+        raise ValueError(f"scanner report exceeds size limit: {path}")
+    try:
+        return _load_json(payload, "scanner report")
+    except ValueError:
+        raise ValueError(f"invalid JSON in scanner report {path}") from None
 
 
 def _report_run(binary: Path, args: list[str], destination: Path, format_name: str, *, root: Path, env: dict[str, str], validate, present=None) -> int:
@@ -231,7 +234,15 @@ def scan_osv(settings: config.Config, lockfiles: tuple[str, ...], *, output: str
     return code
 
 
+def _require_no_gitleaks_ignore(root: Path) -> None:
+    path = root / ".gitleaksignore"
+    # Gitleaks loads this from its target even with an explicit empty ignore file.
+    if path.exists(follow_symlinks=False):
+        raise ValueError(f"managed Gitleaks scans require {path} to be absent; place reviewed exceptions in .gitleaks.toml")
+
+
 def _prepare_gitleaks_scan(settings: config.Config, stage: Path, exclude: tuple[str, ...]) -> tuple[Path, dict[str, str]]:
+    _require_no_gitleaks_ignore(settings.root)
     shallow = run_git_bytes(["--no-pager", "rev-parse", "--is-shallow-repository"], cwd=settings.root).stdout.strip()
     if shallow != b"false":
         raise ValueError("full-history secret scanning requires a non-shallow checkout (fetch-depth: 0)")
@@ -247,6 +258,8 @@ def _prepare_gitleaks_scan(settings: config.Config, stage: Path, exclude: tuple[
         destination = snapshot / name
         destination.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(settings.root / name, destination)
+    _require_no_gitleaks_ignore(snapshot)
+    _require_no_gitleaks_ignore(settings.root)
     # Explicit defaults avoid ambient config and .gitleaksignore bypasses.
     (stage / "default.toml").write_bytes(b"[extend]\nuseDefault = true\n")
     (stage / "empty-ignore").write_bytes(b"")
@@ -357,6 +370,7 @@ def scan_secrets(settings: config.Config, *, output: str = "target/security", co
         for label, mode, source in _gitleaks_scan_targets(settings.root, stage):
             present = FindingOutput("Gitleaks", "history" if label == "history" else "working tree", settings.root, snapshot=stage / "working")
             for format_name in ("json", "sarif"):
+                _require_no_gitleaks_ignore(source)
                 status = _report_run(
                     binary,
                     _gitleaks_args(mode, source, stage, selected, format_name),
@@ -367,6 +381,7 @@ def scan_secrets(settings: config.Config, *, output: str = "target/security", co
                     validate=_gitleaks_report,
                     present=present,
                 )
+                _require_no_gitleaks_ignore(source)
                 code = code or status
     return code
 
@@ -455,7 +470,9 @@ def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline
                 report = stage / f"gitleaks-{scope}.json"
                 args = _gitleaks_args(mode, source, stage, policy, "json")
                 args.append(f"--exit-code={GITLEAKS_FINDINGS_EXIT}")
+                _require_no_gitleaks_ignore(source)
                 status = _report_run(binary, args, report, "json", root=source, env=env, validate=_gitleaks_report)
+                _require_no_gitleaks_ignore(source)
                 if status not in (0, GITLEAKS_FINDINGS_EXIT) or not report.is_file():
                     raise ValueError(f"Gitleaks {scope} scan failed during policy comparison (exit {status})")
                 observed = _secret_findings(report, scope, source)
@@ -469,4 +486,5 @@ def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline
     before, after = results
     _print_secret_findings("Suppressed", before - after)
     _print_secret_findings("Introduced", after - before)
-    _print_secret_findings("Remaining", before & after)
+    _print_secret_findings("Matching locations", before & after)
+    _print("Review matching rule IDs and locations whenever a detection rule changes.")

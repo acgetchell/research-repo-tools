@@ -154,15 +154,20 @@ regex = 'synthetic-scanner-match'
     (root / "src" / "new.txt").write_bytes(b"synthetic-scanner-match\n")
     settings = config.Config(root=root)
 
-    with patch.object(security, "_binary", return_value=(binary, env)):
+    with patch.dict(os.environ, env, clear=True), patch.object(security, "_binary", return_value=(binary, env)):
         security.check_secret_exceptions(settings, "candidate.toml")
         output = capsys.readouterr().out
         assert "Suppressed: 0 finding(s)" in output
-        assert "Remaining: 1 finding(s)" in output
+        assert "Matching locations: 1 finding(s)" in output
         assert 'working "src/new.txt"' in output
         assert "synthetic-scanner-match" not in output
 
         assert security.scan_secrets(settings) == 1
+        (root / ".gitleaksignore").write_bytes(b"src/new.txt:fixture-rule:1\n")
+        with pytest.raises(ValueError, match=r"\.gitleaksignore.*absent"):
+            security.check_secret_exceptions(settings, "candidate.toml")
+        with pytest.raises(ValueError, match=r"\.gitleaksignore.*absent"):
+            security.scan_secrets(settings)
     report = root / "target" / "security" / "gitleaks-working.json"
     assert [finding["RuleID"] for finding in json.loads(report.read_bytes())] == ["fixture-rule"]
 
