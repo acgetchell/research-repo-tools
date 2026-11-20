@@ -272,8 +272,9 @@ def plan_supplier(checkout: Path, name: str, *, project: Path, provider: SourceP
         raise ValueError("automatic supplier adoption must select research-repo-tools in the main Python project")
     manifest = (graph.root / "pyproject.toml").read_text(encoding="utf-8")
     document = tomllib.loads(manifest)
-    declared = str(_requirements(document, PACKAGE)[0].specifier)
-    if [(item.source, f"=={item.version}") for item in graph.dependencies if item.source.package == PACKAGE] != [(pin, declared)]:
+    requirement = _requirements(document, PACKAGE)[0]
+    declared = Version(next(iter(requirement.specifier)).version)
+    if [(item.source, Version(item.version)) for item in graph.dependencies if item.source.package == PACKAGE] != [(pin, declared)]:
         raise ValueError("supplier pin must agree across the manifest, lock and source policy")
     python_support = _supplier_python_support(document, manifest, PACKAGE)
     if isinstance(pin, GitCommit):

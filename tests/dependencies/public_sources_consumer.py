@@ -1010,7 +1010,7 @@ class TestSourceWorkflows(unittest.TestCase):
         manifest, lock, policy = (self.root / filename for filename in ("pyproject.toml", "uv.lock", "dependency-sources.toml"))
         manifest.write_bytes(
             b'[project]\nname="consumer"\nversion="0.1.0"\nrequires-python=">=3.15"\n'
-            b'[dependency-groups]\ntooling=["research-repo-tools[python-tools]==1.2.3"]\ndev=[{include-group="tooling"}]\n'
+            b'[dependency-groups]\ntooling=["research-repo-tools[python-tools]==1.2.3.0"]\ndev=[{include-group="tooling"}]\n'
             b"[tool.uv]\npackage=false\ndefault-groups=[]\n"
             b'[tool.uv.dependency-groups.tooling]\nrequires-python=">=3.15.1"\n'
         )
