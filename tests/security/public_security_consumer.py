@@ -200,6 +200,16 @@ class TestSharedCapabilities(unittest.TestCase):
                 self.assertEqual(failed.getvalue(), "")
                 self.assertIn("Gitleaks configuration changed during policy comparison", errors.getvalue())
 
+                leaf.write_bytes(b"[invalid")
+                with redirect_stderr(io.StringIO()) as errors:
+                    self.assertEqual(main(arguments), 1)
+                self.assertIn(leaf.name, errors.getvalue())
+                self.assertNotIn("[invalid", errors.getvalue())
+                missing = "missing candidate.toml"
+                with redirect_stderr(io.StringIO()) as errors:
+                    self.assertEqual(main(["--root", str(root), "security", "check-exceptions", missing]), 1)
+                self.assertIn(missing, errors.getvalue())
+
     def test_cli_findings_are_actionable_once_per_scan_and_never_echo_matches(self):
         for scanner in ("osv", "secrets", "semgrep"):
             for behavior, expected in (

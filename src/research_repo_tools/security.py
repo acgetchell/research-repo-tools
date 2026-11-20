@@ -271,7 +271,7 @@ def _secret_config(settings: config.Config, stage: Path, configuration: str | No
     if selected.is_file():
         return selected
     if configuration is not None:
-        raise ValueError("requested Gitleaks configuration is missing")
+        raise ValueError(f"requested Gitleaks configuration is missing or is not a file: {selected}")
     return stage / "default.toml"
 
 
@@ -291,22 +291,22 @@ class _GitleaksPolicySnapshot:
                 raise ValueError(f"Gitleaks policy or local extension is missing or is not a file: {path}")
             self.observed[path] = path.read_bytes()
         payload = self.observed[path]
+        try:
+            document = tomllib.loads(payload.decode("utf-8"))
+        except ValueError:
+            raise ValueError(f"Gitleaks policy must be valid UTF-8 TOML: {path}") from None
         if depth < GITLEAKS_EXTEND_DEPTH:
-            try:
-                document = tomllib.loads(payload.decode("utf-8"))
-            except ValueError:
-                raise ValueError("Gitleaks policy must be valid UTF-8 TOML") from None
-            extend_key = _gitleaks_field(document, "extend")
+            extend_key = _gitleaks_field(document, "extend", path)
             extend = document.get(extend_key, {})
             if not isinstance(extend, dict):
-                raise ValueError("Gitleaks extend must be a table")
-            path_key = _gitleaks_field(extend, "path")
+                raise ValueError(f"Gitleaks extend must be a table: {path}")
+            path_key = _gitleaks_field(extend, "path", path)
             extension = extend.get(path_key, "")
             if not isinstance(extension, str):
-                raise ValueError("Gitleaks extend.path must be a string")
+                raise ValueError(f"Gitleaks extend.path must be a string: {path}")
             if extension:
-                if extend.get(_gitleaks_field(extend, "usedefault")) is True:
-                    raise ValueError("Gitleaks extend.path and extend.useDefault cannot both be set")
+                if extend.get(_gitleaks_field(extend, "usedefault", path)) is True:
+                    raise ValueError(f"Gitleaks extend.path and extend.useDefault cannot both be set: {path}")
                 # Native extension paths resolve from the original invocation
                 # directory, even in nested configuration files.
                 extend[path_key] = str(self.retain(self.root / extension, depth + 1))
@@ -321,10 +321,10 @@ class _GitleaksPolicySnapshot:
             raise ValueError("Gitleaks configuration changed during policy comparison")
 
 
-def _gitleaks_field(table: dict[str, object], field_name: str) -> str:
+def _gitleaks_field(table: dict[str, object], field_name: str, path: Path) -> str:
     keys = [key for key in table if key.casefold() == field_name]
     if len(keys) > 1:
-        raise ValueError(f"Gitleaks configuration has ambiguous {field_name} keys")
+        raise ValueError(f"Gitleaks configuration has ambiguous {field_name} keys: {path}")
     return keys[0] if keys else field_name
 
 

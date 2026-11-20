@@ -1219,8 +1219,27 @@ class TestSourceWorkflows(unittest.TestCase):
                 environment.mkdir(exist_ok=True)
                 (environment / "pyvenv.cfg").write_bytes(b"candidate")
 
+        original_manifest = manifest.read_bytes()
+        transient_manifest = original_manifest.replace(b'requires-python=">=3.15.1"', b'requires-python=">=3.15.2"')
+        self.assertNotEqual(transient_manifest, original_manifest)
+        select = python_promotion._selection
+        read = self.provider.read
+
+        def select_before_edit(checkout: Path, source_name: str):
+            selected = select(checkout, source_name)
+            if manifest.read_bytes() == original_manifest:
+                manifest.write_bytes(transient_manifest)
+            return selected
+
+        def read_after_revert(url: str) -> bytes:
+            if url == project_api and manifest.read_bytes() == transient_manifest:
+                manifest.write_bytes(original_manifest)
+            return read(url)
+
         with (
             patch.object(python_promotion, "HttpSourceProvider", return_value=self.provider),
+            patch.object(python_promotion, "_selection", side_effect=select_before_edit),
+            patch.object(self.provider, "read", side_effect=read_after_revert),
             patch.object(python_promotion.platform, "python_version", return_value="3.15.3"),
             patch.object(dependency_workflows, "_resolve_candidate", side_effect=resolve) as resolver,
             patch.object(toolchain.Runtime, "inspect", return_value=[]),

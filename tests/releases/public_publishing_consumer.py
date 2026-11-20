@@ -925,6 +925,7 @@ class TestPublishingConsumer(unittest.TestCase):
                 checkout = self.root / ("cargo" if cargo else "python")
                 checkout.mkdir()
                 environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
+                environment.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
 
                 def git(*args: str) -> str:
                     return run_git_command(list(args), cwd=checkout, env=environment).stdout.strip()

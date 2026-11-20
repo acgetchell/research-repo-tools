@@ -260,6 +260,14 @@ def _declared_python_support(document: dict[str, object], text: str, package: st
     return tuple((base & SpecifierSet(constraints.get(group, ""))).to_range() for group, entries in groups.items() if declares(entries))
 
 
+def _captured_manifest(graph: DependencyGraph) -> str:
+    path = graph.root / "pyproject.toml"
+    payload = dict(graph.snapshot.files).get(path)
+    if payload is None:
+        raise ValueError(f"supplier selection requires a captured Python manifest: {path}")
+    return payload.decode("utf-8")
+
+
 def plan_supplier(checkout: Path, name: str, *, project: Path, provider: SourceProvider | None = None) -> SourcePlan:
     """Resolve the newest compatible RRT release, requiring signed proof for a Git pin."""
     from research_repo_tools.dependency_provenance import _requirements
@@ -270,7 +278,7 @@ def plan_supplier(checkout: Path, name: str, *, project: Path, provider: SourceP
     pin = selection.source
     if pin.package != PACKAGE or graph.root != project:
         raise ValueError("automatic supplier adoption must select research-repo-tools in the main Python project")
-    manifest = (graph.root / "pyproject.toml").read_text(encoding="utf-8")
+    manifest = _captured_manifest(graph)
     document = tomllib.loads(manifest)
     requirement = _requirements(document, PACKAGE)[0]
     declared = Version(next(iter(requirement.specifier)).version)
@@ -317,7 +325,7 @@ def _plan_promotion(
     locked = [dependency for dependency in graph.dependencies if dependency.source.package == pin.package]
     if len(locked) != 1 or locked[0].source != pin:
         raise ValueError("promotion source must match the exact locked development pin")
-    manifest = (graph.root / "pyproject.toml").read_text(encoding="utf-8")
+    manifest = _captured_manifest(graph)
     document = tomllib.loads(manifest)
     override = table(_source(document, pin.package), "development source")
     expected = {"git": pin.url, "rev": pin.commit}
