@@ -186,6 +186,9 @@ from the working snapshot. Selected symlinks and submodules fail explicitly;
 scan submodules as separate repositories. Native history scanning covers patches,
 not unreachable objects, nested repositories, archive contents or binary blobs.
 Extra working-tree exclusions are explicit `--exclude` arguments.
+Working-tree scan paths are relative to the repository, including when policy
+rules use path anchors. Local TOML `[extend].path` values resolve from the
+repository root.
 
 Reports go to `target/security`: numbered OSV JSON/SARIF pairs and Gitleaks
 history/working pairs. Findings retain native rule IDs and locations. Gitleaks
@@ -244,8 +247,9 @@ The baseline is the repository's `.gitleaks.toml`, or the built-in default rules
 when the repository has no policy. Use `--baseline PATH` for an explicitly saved
 baseline. Pass the same `--exclude` options used by the regular scan. The command
 scans reachable history and one working-tree snapshot with each policy, then
-shows suppressed, introduced, and remaining findings. Keep the repository and
-both policy files stable during the comparison. A zero exit means the comparison
+shows suppressed, introduced, and remaining findings. It retains both policy
+files and their local extensions and checks them for changes during comparison.
+Keep Git refs stable during the comparison. A zero exit means the comparison
 completed. Review every suppressed location before committing the approved
 exception to `.gitleaks.toml`, then run the regular scan to verify the resulting
 policy. The regular scan still fails on findings.

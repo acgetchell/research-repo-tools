@@ -6,10 +6,13 @@ import shutil
 import subprocess
 import sys
 import tempfile
+import tomllib
 from collections import Counter
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, cast
+
+import tomli_w
 
 from research_repo_tools import config, files, toolchain, toolchain_config
 from research_repo_tools.evidence import _load_json
@@ -22,6 +25,8 @@ __all__ = ["check_secret_exceptions", "scan_osv", "scan_secrets", "security_inve
 GENERATED = tuple(f"**/{name}/**" for name in (".venv", "venv", ".tox", ".nox", "__pycache__", "target", "dist", "build", "node_modules"))
 REPORT_LIMIT = 128 * 1024 * 1024
 GITLEAKS_FINDINGS_EXIT = 3
+# The pinned Gitleaks follows at most two local extensions.
+GITLEAKS_EXTEND_DEPTH = 2
 
 
 def security_inventory(root: Path, *, include: tuple[str, ...] = (), exclude: tuple[str, ...] = ()) -> tuple[str, ...]:
@@ -257,6 +262,59 @@ def _secret_config(settings: config.Config, stage: Path, configuration: str | No
     return stage / "default.toml"
 
 
+@dataclass
+class _GitleaksPolicySnapshot:
+    root: Path
+    stage: Path
+    observed: dict[Path, bytes] = field(default_factory=dict)
+    retained: dict[tuple[Path, int], Path] = field(default_factory=dict)
+
+    def retain(self, path: Path, depth: int = 0) -> Path:
+        key = (path, depth)
+        if key in self.retained:
+            return self.retained[key]
+        if path not in self.observed:
+            if not path.is_file():
+                raise ValueError(f"Gitleaks policy or local extension is missing or is not a file: {path}")
+            self.observed[path] = path.read_bytes()
+        payload = self.observed[path]
+        if depth < GITLEAKS_EXTEND_DEPTH:
+            try:
+                document = tomllib.loads(payload.decode("utf-8"))
+            except ValueError:
+                raise ValueError("Gitleaks policy must be valid UTF-8 TOML") from None
+            extend_key = _gitleaks_field(document, "extend")
+            extend = document.get(extend_key, {})
+            if not isinstance(extend, dict):
+                raise ValueError("Gitleaks extend must be a table")
+            path_key = _gitleaks_field(extend, "path")
+            extension = extend.get(path_key, "")
+            if not isinstance(extension, str):
+                raise ValueError("Gitleaks extend.path must be a string")
+            if extension:
+                if extend.get(_gitleaks_field(extend, "usedefault")) is True:
+                    raise ValueError("Gitleaks extend.path and extend.useDefault cannot both be set")
+                # Native extension paths resolve from the original invocation
+                # directory, even in nested configuration files.
+                extend[path_key] = str(self.retain(self.root / extension, depth + 1))
+                payload = tomli_w.dumps(document).encode("utf-8")
+        output = self.stage / f"policy-{len(self.retained)}.toml"
+        output.write_bytes(payload)
+        self.retained[key] = output
+        return output
+
+    def verify(self) -> None:
+        if any(not path.is_file() or path.read_bytes() != payload for path, payload in self.observed.items()):
+            raise ValueError("Gitleaks configuration changed during policy comparison")
+
+
+def _gitleaks_field(table: dict[str, object], field_name: str) -> str:
+    keys = [key for key in table if key.casefold() == field_name]
+    if len(keys) > 1:
+        raise ValueError(f"Gitleaks configuration has ambiguous {field_name} keys")
+    return keys[0] if keys else field_name
+
+
 def _gitleaks_scan_targets(root: Path, stage: Path) -> tuple[tuple[str, str, Path], ...]:
     return (("history", "git", root), ("working", "dir", stage / "working"))
 
@@ -264,7 +322,7 @@ def _gitleaks_scan_targets(root: Path, stage: Path) -> tuple[tuple[str, str, Pat
 def _gitleaks_args(mode: str, source: Path, stage: Path, selected: Path, format_name: str) -> list[str]:
     args = [
         mode,
-        str(source),
+        "." if mode == "dir" else str(source),
         "--config",
         str(selected),
         "--redact=100",
@@ -295,7 +353,7 @@ def scan_secrets(settings: config.Config, *, output: str = "target/security", co
     with tempfile.TemporaryDirectory(prefix="research-secret-scan-") as directory:
         stage = Path(directory)
         binary, env = _prepare_gitleaks_scan(settings, stage, exclude)
-        selected = _secret_config(settings, stage, configuration)
+        selected = _GitleaksPolicySnapshot(settings.root, stage).retain(_secret_config(settings, stage, configuration))
         for label, mode, source in _gitleaks_scan_targets(settings.root, stage):
             present = FindingOutput("Gitleaks", "history" if label == "history" else "working tree", settings.root, snapshot=stage / "working")
             for format_name in ("json", "sarif"):
@@ -304,7 +362,7 @@ def scan_secrets(settings: config.Config, *, output: str = "target/security", co
                     _gitleaks_args(mode, source, stage, selected, format_name),
                     settings.path(output) / f"gitleaks-{label}.{format_name}",
                     format_name,
-                    root=settings.root,
+                    root=source,
                     env=env,
                     validate=_gitleaks_report,
                     present=present,
@@ -383,20 +441,21 @@ def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline
         proposed = _secret_config(settings, stage, candidate)
         if original.samefile(proposed):
             raise ValueError("baseline and candidate must be separate Gitleaks configuration files")
-        policy_snapshots = {path: path.read_bytes() for path in (original, proposed)}
+        policy_snapshots = _GitleaksPolicySnapshot(settings.root, stage)
+        retained = (policy_snapshots.retain(original), policy_snapshots.retain(proposed))
 
         def history_refs() -> bytes:
             return run_git_bytes(["--no-pager", "show-ref", "--head"], cwd=settings.root).stdout
 
         refs = history_refs()
         results: list[Counter[_SecretFinding]] = []
-        for policy in (original, proposed):
+        for policy in retained:
             findings: Counter[_SecretFinding] = Counter()
             for scope, mode, source in _gitleaks_scan_targets(settings.root, stage):
                 report = stage / f"gitleaks-{scope}.json"
                 args = _gitleaks_args(mode, source, stage, policy, "json")
                 args.append(f"--exit-code={GITLEAKS_FINDINGS_EXIT}")
-                status = _report_run(binary, args, report, "json", root=settings.root, env=env, validate=_gitleaks_report)
+                status = _report_run(binary, args, report, "json", root=source, env=env, validate=_gitleaks_report)
                 if status not in (0, GITLEAKS_FINDINGS_EXIT) or not report.is_file():
                     raise ValueError(f"Gitleaks {scope} scan failed during policy comparison (exit {status})")
                 observed = _secret_findings(report, scope, source)
@@ -405,8 +464,7 @@ def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline
                 findings.update(observed)
             if history_refs() != refs:
                 raise ValueError("Git refs changed during Gitleaks policy comparison")
-            if any(path.read_bytes() != payload for path, payload in policy_snapshots.items()):
-                raise ValueError("Gitleaks configuration changed during policy comparison")
+            policy_snapshots.verify()
             results.append(findings)
     before, after = results
     _print_secret_findings("Suppressed", before - after)

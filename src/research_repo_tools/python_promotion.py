@@ -246,13 +246,14 @@ def _declared_python_support(document: dict[str, object], text: str, package: st
     from research_repo_tools.dependencies import _python_constraints
 
     project = table(document.get("project", {}), "project")
+    build = table(document.get("build-system", {}), "build-system")
     base = _python_constraints(project)
     optional = table(project.get("optional-dependencies", {}), "project.optional-dependencies")
 
     def declares(entries: object) -> bool:
         return isinstance(entries, list) and any(isinstance(raw, str) and canonicalize_name(Requirement(raw).name) == package for raw in entries)
 
-    if any(declares(entries) for entries in (project.get("dependencies", []), *optional.values())):
+    if any(declares(entries) for entries in (project.get("dependencies", []), *optional.values(), build.get("requires", []))):
         return (base.to_range(),)
     constraints = python_resolution.group_constraints(text)
     groups = table(document.get("dependency-groups", {}), "dependency-groups")

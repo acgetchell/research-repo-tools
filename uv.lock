@@ -1652,6 +1652,7 @@ dependencies = [
     { name = "packaging" },
     { name = "pyyaml" },
     { name = "rust-just" },
+    { name = "tomli-w" },
 ]
 
 [package.optional-dependencies]
@@ -1709,6 +1710,7 @@ requires-dist = [
     { name = "ruff", marker = "extra == 'python-tools'", specifier = "==0.16.9" },
     { name = "rust-just", specifier = "==1.59.0" },
     { name = "semgrep", marker = "extra == 'semgrep'", specifier = ">=1.182.1,<2" },
+    { name = "tomli-w", specifier = ">=1.2.0" },
     { name = "ty", marker = "extra == 'python-tools'", specifier = "==0.0.84" },
 ]
 provides-extras = ["notebooks", "papers", "python-tools", "semgrep"]

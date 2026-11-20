@@ -9,10 +9,11 @@ import threading
 import time
 import urllib.error
 import urllib.request
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
+from queue import Empty, SimpleQueue
 from typing import cast, override
 from urllib.parse import SplitResult, urlsplit
 
@@ -26,6 +27,7 @@ _HOSTS = frozenset({"pypi.org", "files.pythonhosted.org", "crates.io", "static.c
 _TIMEOUT_ENV = "RRT_REGISTRY_TIMEOUT_SECONDS"
 _CONNECT_TIMEOUT = 30.0
 _READ_TIMEOUT = 30.0
+_DNS_SLOTS = threading.BoundedSemaphore(4)
 _CHUNK_SIZE = 64 * 1024
 _remaining: ContextVar[Callable[[], float] | None] = ContextVar("registry_deadline", default=None)
 
@@ -64,9 +66,45 @@ def _io_timeout(remaining: Callable[[], float], cap: float) -> float:
     return min(cap, seconds)
 
 
+type _AddressInfo = tuple[socket.AddressFamily, socket.SocketKind, int, str, tuple[str, int] | tuple[str, int, int, int] | tuple[int, bytes]]
+
+
+def _resolve_addresses(address: tuple[str, int], cap: float, remaining: Callable[[], float]) -> Sequence[_AddressInfo]:
+    # Native DNS is not cancellable. Bound the number of in-flight lookups so
+    # timed-out callers can leave without accumulating resolver threads.
+    if not _DNS_SLOTS.acquire(timeout=_io_timeout(remaining, cap)):
+        _io_timeout(remaining, cap)
+        raise TimeoutError("registry DNS resolver slots are busy")
+    result: SimpleQueue[Sequence[_AddressInfo] | BaseException] = SimpleQueue()
+
+    def resolve() -> None:
+        try:
+            result.put(socket.getaddrinfo(*address, 0, socket.SOCK_STREAM))
+        except BaseException as error:
+            result.put(error)
+        finally:
+            _DNS_SLOTS.release()
+
+    try:
+        _io_timeout(remaining, cap)
+        threading.Thread(target=resolve, daemon=True).start()
+    except BaseException:
+        _DNS_SLOTS.release()
+        raise
+    try:
+        observed = result.get(timeout=_io_timeout(remaining, cap))
+    except Empty:
+        _io_timeout(remaining, cap)
+        raise TimeoutError("registry DNS lookup timed out") from None
+    _io_timeout(remaining, cap)
+    if isinstance(observed, BaseException):
+        raise observed
+    return observed
+
+
 def _connect_tcp(address: tuple[str, int], cap: float, source_address: tuple[str, int] | None, *, remaining: Callable[[], float]) -> socket.socket:
     last_error: OSError = OSError("registry DNS lookup returned no TCP addresses")
-    for family, kind, protocol, _, endpoint in socket.getaddrinfo(*address, 0, socket.SOCK_STREAM):
+    for family, kind, protocol, _, endpoint in _resolve_addresses(address, cap, remaining):
         timeout = _io_timeout(remaining, cap)
         sock = None
         try:

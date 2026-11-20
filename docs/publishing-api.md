@@ -131,7 +131,7 @@ request. `RRT_REGISTRY_TIMEOUT_SECONDS` sets the total per-request budget in
 whole seconds, including pacing and retries. It defaults to `60` and accepts
 `1` through `900`. Connection/response-header and stalled-body waits each keep
 a 30-second limit. The deadline also bounds socket reads within HTTP headers
-and chunk framing. System DNS resolution can return after its budget has expired.
+and chunk framing, as well as time waiting for system DNS.
 The isolated release runtime inherits the setting. For
 example, run `RRT_REGISTRY_TIMEOUT_SECONDS=180 just release-verify "$TAG"` to
 retry a delayed verification of the same candidate.

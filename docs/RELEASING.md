@@ -144,11 +144,13 @@ just release-verify "$TAG"
 ```
 
 Success confirms the stable GitHub Release, its required assets, and the exact
-version on PyPI. Compare the published wheel and sdist with the SHA-256 hashes
-recorded during `just release-evidence`. The [published distribution verifier](publishing-api.md#reviewed-registry-publication-api)
-checks their exact inventory and downloads both files for verification. Install
-that version in a fresh project and run its focused consumer checks. Record the
-results in the release tracker.
+version on PyPI. Separately, download the wheel and sdist from that version's
+PyPI files page. Compute the SHA-256 of each download and compare it with the
+matching filename and hash recorded during `just release-evidence` before marking
+the release verified. Automation can perform this comparison with the
+[published distribution verifier](publishing-api.md#reviewed-registry-publication-api).
+Install the version in a fresh project, run its focused consumer checks, and
+record the results in the release tracker.
 [Consumer installation](../README.md#install-with-uv)
 
 ### 10. Verify the Zenodo release metadata

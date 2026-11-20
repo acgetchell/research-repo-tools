@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import tomllib
 import unittest
 import urllib.error
@@ -430,6 +431,32 @@ class TestSources(unittest.TestCase):
         second.settimeout.assert_called_once_with(2)
         first.close.assert_called_once()
         second.close.assert_called_once()
+
+    def test_registry_deadline_returns_while_native_dns_is_blocked(self) -> None:
+        started, release, finished = threading.Event(), threading.Event(), threading.Event()
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _registry_requests.RegistryHTTPSHandler(), registry._NoRedirectHandler())
+
+        def lookup(*_args):
+            started.set()
+            release.wait(5)
+            finished.set()
+            return [REGISTRY_ADDRESS]
+
+        try:
+            with (
+                patch.object(registry, "_OPENER", opener),
+                patch.object(socket, "getaddrinfo", side_effect=lookup),
+                patch.object(socket, "socket") as connect,
+                patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "1"}),
+                self.assertRaisesRegex(registry.TransientRegistryError, "total download budget exhausted"),
+            ):
+                _registry_requests.read_registry(PYTHON_URL, limit=32)
+            self.assertTrue(started.is_set())
+            self.assertFalse(finished.is_set())
+            connect.assert_not_called()
+        finally:
+            release.set()
+            self.assertTrue(finished.wait(5))
 
     def test_registry_deadline_refreshes_after_proxy_connect_before_tls(self) -> None:
         now = [0.0]
@@ -1216,6 +1243,12 @@ class TestSourceWorkflows(unittest.TestCase):
         self.assertEqual(tooling_runtime._policy_source(policy, "tooling"), tooling_runtime.ReleasePin("1.3.0"))
         with patch("research_repo_tools.dependency_artifacts.python_environment_layout"):
             self.assertEqual(check_dependency_policy(self.root, provider=self.provider)[0].source, RegistryRelease("python", name, "1.3.0"))
+
+    def test_promotion_uses_project_python_range_for_build_only_declaration(self) -> None:
+        text = '[project]\nrequires-python = ">=3.15,<3.16"\n[build-system]\nrequires = ["sample-pkg==1.2.3"]\n'
+        (required,) = python_promotion._declared_python_support(tomllib.loads(text), text, "sample-pkg")
+        self.assertTrue(required.contains("3.15.0"))
+        self.assertFalse(required.contains("3.16.0"))
 
     def test_promotion_binds_artifacts_to_pin_and_rolls_back_failed_sync(self) -> None:
         self.python(git=True)

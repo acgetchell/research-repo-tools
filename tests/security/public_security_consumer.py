@@ -6,6 +6,7 @@ import json
 import os
 import subprocess
 import tempfile
+import tomllib
 import unittest
 from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
@@ -77,8 +78,14 @@ class TestSharedCapabilities(unittest.TestCase):
             source = root / "run café.json"
             source.write_bytes(b"retained fixture\r\n")
             baseline, candidate = root / ".gitleaks.toml", root / "candidate policy.toml"
-            baseline.write_bytes(b"[extend]\nuseDefault = true\n")
-            candidate.write_bytes(b"# Proposed exception\n[extend]\nuseDefault = true\n")
+            (root / "policy inputs").mkdir()
+            leaf = root / "inherited leaf.toml"
+            leaf_bytes = b"# synthetic inherited policy\n"
+            leaf.write_bytes(leaf_bytes)
+            (root / "policy inputs" / "parent.toml").write_bytes(b"extend.path = 'inherited leaf.toml'\n")
+            baseline.write_bytes(b"[extend]\npath = 'policy inputs/parent.toml'\n")
+            candidate_bytes = b"title = 'proposed'\nExtend = { Path = 'policy inputs/parent.toml' }\n"
+            candidate.write_bytes(candidate_bytes)
             calls = []
 
             def git(args, *, cwd):
@@ -94,23 +101,35 @@ class TestSharedCapabilities(unittest.TestCase):
 
             def native(binary, args, **kwargs):
                 nonlocal refs
-                mode, target = args[0], Path(args[1])
+                mode, target = args[0], kwargs["cwd"]
                 policy = Path(args[args.index("--config") + 1])
-                calls.append((mode, target, policy))
+                document = tomllib.loads(policy.read_text(encoding="utf-8"))
+                is_candidate = document.get("title") == "proposed"
+                parent_path = document["Extend"]["Path"] if is_candidate else document["extend"]["path"]
+                parent = Path(parent_path)
+                retained_leaf = Path(tomllib.loads(parent.read_text(encoding="utf-8"))["extend"]["path"])
+                self.assertTrue(parent.is_absolute() and retained_leaf.is_absolute())
+                self.assertNotEqual(retained_leaf, leaf)
+                self.assertEqual(retained_leaf.read_bytes(), leaf_bytes)
+                calls.append((mode, target, is_candidate, retained_leaf))
                 self.assertIn("--exit-code=3", args)
                 self.assertIn("--redact=100", args)
                 self.assertEqual(kwargs["env"], {"FIXTURE": "1"})
                 if mode == "dir":
+                    self.assertEqual(args[1], ".")
                     self.assertEqual((target / source.name).read_bytes(), b"retained fixture\r\n")
-                    path, commit = str(target / source.name), ""
+                    path, commit = source.name, ""
                 else:
                     self.assertEqual(target, root)
+                    self.assertEqual(Path(args[1]), root)
                     path, commit = source.name, "a" * 40
                 records = [self.secret_finding(commit, path, 7)]
-                if policy == baseline:
+                if not is_candidate:
                     records.append(self.secret_finding(commit, path, 2))
                     # Files can change after the working snapshot has been captured.
                     source.write_bytes(b"changed source\n")
+                    if change_extension:
+                        leaf.write_bytes(b"# changed inherited policy\n")
                 else:
                     records.append(self.secret_finding(commit, path, 9, "new-rule"))
                     if move_ref:
@@ -130,18 +149,20 @@ class TestSharedCapabilities(unittest.TestCase):
                 refs = b"initial refs"
                 exit_code = 3
                 move_ref = False
+                change_extension = False
                 with redirect_stdout(io.StringIO()) as stdout:
                     self.assertEqual(main(arguments), 0)
                 output = stdout.getvalue()
                 inventory.assert_called_once_with(root, exclude=("**/*.bin",))
-                self.assertEqual([(mode, policy) for mode, _, policy in calls], [("git", baseline), ("dir", baseline), ("git", candidate), ("dir", candidate)])
+                self.assertEqual([(mode, proposed) for mode, _, proposed, _ in calls], [("git", False), ("dir", False), ("git", True), ("dir", True)])
                 self.assertEqual(calls[1][1], calls[3][1])
+                self.assertEqual(len({retained for _, _, _, retained in calls}), 1)
                 self.assertIn('Suppressed: 2 finding(s)\n  history "run café.json":9:2', output)
                 self.assertIn('Introduced: 2 finding(s)\n  history "run café.json":9:9', output)
                 self.assertIn('Remaining: 2 finding(s)\n  history "run café.json":9:7', output)
                 self.assertNotIn("_SECRET", output)
                 self.assertNotIn(str(calls[1][1]), output)
-                self.assertEqual(candidate.read_bytes(), b"# Proposed exception\n[extend]\nuseDefault = true\n")
+                self.assertEqual(candidate.read_bytes(), candidate_bytes)
                 self.assertFalse((root / "target").exists())
 
                 exit_code = 1
@@ -158,6 +179,14 @@ class TestSharedCapabilities(unittest.TestCase):
                     self.assertEqual(main([*arguments, "--baseline", str(baseline)]), 1)
                 self.assertEqual(failed.getvalue(), "")
                 self.assertIn("Git refs changed during Gitleaks policy comparison", errors.getvalue())
+
+                move_ref = False
+                change_extension = True
+                source.write_bytes(b"retained fixture\r\n")
+                with redirect_stdout(io.StringIO()) as failed, redirect_stderr(io.StringIO()) as errors:
+                    self.assertEqual(main(arguments), 1)
+                self.assertEqual(failed.getvalue(), "")
+                self.assertIn("Gitleaks configuration changed during policy comparison", errors.getvalue())
 
     def test_cli_findings_are_actionable_once_per_scan_and_never_echo_matches(self):
         for scanner in ("osv", "secrets", "semgrep"):

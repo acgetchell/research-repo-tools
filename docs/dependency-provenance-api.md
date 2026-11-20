@@ -184,8 +184,8 @@ attempts for connection/read timeouts, connection failures and HTTP 408, 429,
 500, 502, 503 or 504. Each attempt preserves the original HTTPS URL, redirect
 rejection and byte bounds. `RRT_REGISTRY_TIMEOUT_SECONDS` sets the per-GET
 retry window in whole seconds from 1 to 900 (default 60). Connection and
-stalled-read timeout limits are 30 seconds. System DNS resolution can return
-after the per-GET budget expires.
+stalled-read timeout limits are 30 seconds. The caller stops waiting for DNS
+when the budget expires and discards any result that arrives later.
 Waiting for the shared crates.io pacing lock consumes the same retry budget.
 Backoff is one then two seconds. A valid `Retry-After` can extend a delay to at
 most ten seconds; larger or malformed values stop verification for a later
