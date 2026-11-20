@@ -172,8 +172,10 @@ class Artifact:
 class VerifiedSource:
     """In-process availability evidence, never accepted by deserialization.
 
-    Reverify immediately before a dependent operation. Metadata fingerprints
-    identify observations; they do not turn saved JSON into trusted evidence.
+    Read-only checks in one verification pass share this registry observation.
+    A subsequent pass refreshes availability. Publication callers obtain a
+    fresh observation before mutation. Metadata fingerprints identify the
+    observation and confer no trust on saved JSON.
     """
 
     source: Source

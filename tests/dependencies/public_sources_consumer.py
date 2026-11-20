@@ -27,6 +27,9 @@ from typing import override
 from unittest.mock import MagicMock, patch
 from urllib.parse import urlsplit
 
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
+
 from research_repo_tools import (
     _registry_requests,
     cli,
@@ -1299,6 +1302,33 @@ class TestSourceWorkflows(unittest.TestCase):
         (required,) = python_promotion._declared_python_support(tomllib.loads(text), text, "sample-pkg")
         self.assertTrue(required.contains("3.15.0"))
         self.assertFalse(required.contains("3.16.0"))
+
+    def test_promotion_selects_release_covering_the_marked_python_range(self) -> None:
+        self.provider.put(
+            "https://pypi.org/pypi/sample-pkg/json",
+            {
+                "info": {"name": "sample-pkg"},
+                "releases": {
+                    "1.2.4": [{"yanked": False, "requires_python": ">=3.16"}],
+                    "1.2.5": [{"yanked": False, "requires_python": ">=3.16.1"}],
+                },
+            },
+        )
+        for marker in (
+            'python_version >= "3.16"',
+            'python_version > "3.15"',
+            '"3.15" < python_version',
+            'python_full_version >= "3.16" and (sys_platform == "win32" or python_version != "3.17")',
+            '(python_version == "3.16" and sys_platform == "win32") or python_version >= "3.17"',
+        ):
+            with self.subTest(marker=marker), patch.object(python_promotion.platform, "python_version", return_value="3.16.2"):
+                entry = json.dumps(f"sample-pkg==1.2.3; {marker}")
+                manifest = f'[project]\nrequires-python = ">=3.15"\ndependencies = [{entry}]\n'
+                support = python_promotion._declared_python_support(tomllib.loads(manifest), manifest, "sample-pkg")
+                self.assertEqual(
+                    python_promotion._candidates(self.provider, "sample-pkg", Version("1.2.3"), SpecifierSet(), False, newer=True, python_support=support),
+                    (Version("1.2.4"),),
+                )
 
     def test_promotion_binds_artifacts_to_pin_and_rolls_back_failed_sync(self) -> None:
         self.python(git=True)

@@ -250,14 +250,28 @@ def _declared_python_support(document: dict[str, object], text: str, package: st
     base = _python_constraints(project)
     optional = table(project.get("optional-dependencies", {}), "project.optional-dependencies")
 
-    def declares(entries: object) -> bool:
-        return isinstance(entries, list) and any(isinstance(raw, str) and canonicalize_name(Requirement(raw).name) == package for raw in entries)
+    def declared(entries: object, support: SpecifierSet) -> tuple[VersionRange, ...]:
+        if not isinstance(entries, list):
+            return ()
+        scope = support.to_range()
+        return tuple(
+            scope & python_resolution.marker_python_support(requirement.marker, minor_prereleases=bool(support.prereleases))
+            for raw in entries
+            if isinstance(raw, str) and canonicalize_name((requirement := Requirement(raw)).name) == package
+        )
 
-    if any(declares(entries) for entries in (project.get("dependencies", []), *optional.values(), build.get("requires", []))):
-        return (base.to_range(),)
-    constraints = python_resolution.group_constraints(text)
+    project_ranges = tuple(
+        required for entries in (project.get("dependencies", []), *optional.values(), build.get("requires", [])) for required in declared(entries, base)
+    )
+    project_support = base.to_range()
+    if project_support in project_ranges:
+        return (project_support,)
     groups = table(document.get("dependency-groups", {}), "dependency-groups")
-    return tuple((base & SpecifierSet(constraints.get(group, ""))).to_range() for group, entries in groups.items() if declares(entries))
+    constraints = python_resolution.group_constraints(text)
+    return (
+        *project_ranges,
+        *(required for group, entries in groups.items() for required in declared(entries, base & SpecifierSet(constraints.get(group, "")))),
+    )
 
 
 def _captured_manifest(graph: DependencyGraph) -> str:

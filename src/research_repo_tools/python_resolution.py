@@ -3,11 +3,16 @@
 import json
 import tomllib
 from pathlib import Path
+from typing import cast
 from urllib.parse import urlsplit
 
+from packaging._parser import MarkerItem, MarkerList, Value, Variable
+from packaging.markers import Marker
+from packaging.ranges import VersionRange
 from packaging.requirements import Requirement
-from packaging.specifiers import SpecifierSet
+from packaging.specifiers import InvalidSpecifier, Specifier, SpecifierSet
 from packaging.utils import canonicalize_name
+from packaging.version import Version
 
 from research_repo_tools.config import _table
 
@@ -132,6 +137,93 @@ def group_constraints(text: str) -> dict[str, str]:
             raise ValueError(f"tool.uv.dependency-groups.{name}.requires-python has no matching versions")
         result[name] = str(specifiers)
     return result
+
+
+def _release_series(operator: str, start: str, end: str) -> VersionRange:
+    if operator == "==":
+        return SpecifierSet(f">={start},<{end}").to_range()
+    return SpecifierSet(f"<{start}").to_range() | SpecifierSet(f">={end}").to_range()
+
+
+def _minor_marker_support(specifier: Specifier) -> VersionRange:
+    """Lift a comparison on major.minor into the corresponding release series."""
+    operator = specifier.operator
+    literal = specifier.version
+    if operator == "===":
+        return VersionRange.full()
+    prefix = literal.removesuffix(".*")
+    boundary = Version(prefix)
+    if boundary.epoch:
+        return VersionRange.full()
+    minor = Version(f"{boundary.major}.{boundary.minor}")
+    next_minor = f"{boundary.major}.{boundary.minor + 1}"
+    if prefix != literal and len(boundary.release) == 1:
+        return _release_series(operator, str(boundary.major), str(boundary.major + 1))
+    inclusive = specifier.contains(minor, prereleases=True)
+    match operator:
+        case "==" | "!=":
+            if (operator == "==") == inclusive:
+                return _release_series(operator, str(minor), next_minor)
+            return VersionRange.empty() if operator == "==" else VersionRange.full()
+        case "<" | "<=":
+            return SpecifierSet(f"<{next_minor if inclusive else minor}").to_range()
+        case ">" | ">=":
+            return SpecifierSet(f">={minor if inclusive else next_minor}").to_range()
+        case "~=":
+            prefix = ".".join(map(str, boundary.release[:-1]))
+            return SpecifierSet(f">={minor if inclusive else next_minor},=={prefix}.*").to_range()
+    return VersionRange.full()  # pragma: no cover - Specifier validates operators
+
+
+def _marker_atom_support(atom: MarkerItem, *, minor_prereleases: bool) -> VersionRange:
+    lhs, op, rhs = atom
+    operator = op.value
+    if isinstance(lhs, Variable) and isinstance(rhs, Value):
+        variable, literal = lhs.value, rhs.value
+    elif isinstance(rhs, Variable) and isinstance(lhs, Value) and rhs.value == "python_version":
+        variable, literal = rhs.value, lhs.value
+        parts = literal.split(".")
+        if operator not in {"<", "<=", "==", "!=", ">=", ">"} or len(parts) != 2 or not all(part.isascii() and part.isdecimal() for part in parts):
+            return VersionRange.full()
+        operator = {"<": ">", "<=": ">=", ">=": "<=", ">": "<"}.get(operator, operator)
+    else:
+        return VersionRange.full()
+    if variable not in {"python_full_version", "python_version"}:
+        return VersionRange.full()
+    try:
+        specifier = Specifier(f"{operator}{literal}")
+    except InvalidSpecifier:
+        return VersionRange.full()
+    if variable == "python_full_version":
+        return SpecifierSet(str(specifier)).to_range()
+    if not minor_prereleases:
+        return _minor_marker_support(specifier)
+    return VersionRange.full()
+
+
+def _marker_python_support(markers: MarkerList, *, minor_prereleases: bool) -> VersionRange:
+    # Marker groups join with OR, with AND taking precedence within each group.
+    alternatives, group = VersionRange.empty(), VersionRange.full()
+    for marker in markers:
+        if marker == "or":
+            alternatives |= group
+            group = VersionRange.full()
+        elif isinstance(marker, list):
+            group &= _marker_python_support(marker, minor_prereleases=minor_prereleases)
+        elif isinstance(marker, tuple):
+            group &= _marker_atom_support(cast(MarkerItem, marker), minor_prereleases=minor_prereleases)
+    return alternatives | group
+
+
+def marker_python_support(marker: Marker | None, *, minor_prereleases: bool) -> VersionRange:
+    """Project a dependency marker onto Python versions across environments.
+
+    Unknown conditions retain the full possible range. Native uv resolution
+    still validates the candidate against the actual dependency markers.
+    """
+    # Packaging exposes evaluation for a single environment. Its parsed tree
+    # preserves the Boolean structure needed to reason across environments.
+    return VersionRange.full() if marker is None else _marker_python_support(marker._markers, minor_prereleases=minor_prereleases)
 
 
 def constrain_group(raw: str, python: str) -> str:
