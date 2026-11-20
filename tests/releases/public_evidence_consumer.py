@@ -834,16 +834,20 @@ class TestEvidenceInterfaces(unittest.TestCase):
                 load_evidence_policy(self.policy)
 
     def test_cli_file_handoff_and_post_approval_attempt_revalidation(self):
+        from research_repo_tools.dependency_provenance import check_release_dependencies
+
         provider = Provider(SOURCE)
         provider.retain(create_evidence_manifest(SOURCE, "1.2.3", COMMIT, 123, 2, provider.read))
         with (
             patch("research_repo_tools.release_interfaces.api", side_effect=lambda endpoint, **kwargs: provider.read(endpoint)),
+            patch("research_repo_tools.dependency_provenance.check_release_dependencies", wraps=check_release_dependencies) as dependencies,
             patch("research_repo_tools.release_interfaces.require_release_checkout") as observe,
             patch("research_repo_tools.release_validation.subprocess.run", provider.execute),
             contextlib.redirect_stdout(io.StringIO()),
         ):
             self.assertEqual(cli.main(["--root", str(self.root), *self.args]), 0)
             self.assertGreaterEqual(observe.call_count, 3)
+            dependencies.assert_called_once()
             original = self.output.read_bytes()
             command = self.command_file.read_bytes()
             identity_line = next(line for line in command.splitlines() if line.startswith(b"identity="))
@@ -853,6 +857,7 @@ class TestEvidenceInterfaces(unittest.TestCase):
             args[args.index("--output") + 1] = str(self.root / "revalidated.json")
             with contextlib.redirect_stderr(io.StringIO()):
                 self.assertEqual(cli.main(["--root", str(self.root), *args]), 1)
+            self.assertEqual(dependencies.call_count, 2)
             self.assertFalse((self.root / "revalidated.json").exists())
             self.assertEqual(self.output.read_bytes(), original)
             self.assertEqual(self.command_file.read_bytes(), command)
@@ -1836,7 +1841,7 @@ class TestPythonDistributionEvidence(unittest.TestCase):
         self.assertEqual(document["hashes"], self.hashes)
         self.assertIn("nonportable archive path", document["error"])
 
-    def registry(self):
+    def registry(self, artifact_host="files.example.org"):
         return {
             "info": {"name": "example-app", "version": "1.2.3"},
             "urls": [
@@ -1846,7 +1851,7 @@ class TestPythonDistributionEvidence(unittest.TestCase):
                     "size": len(payload),
                     "yanked": False,
                     "packagetype": "bdist_wheel" if name.endswith(".whl") else "sdist",
-                    "url": f"https://files.example.org/{name}",
+                    "url": f"https://{artifact_host}/{name}",
                 }
                 for name, payload in self.files.items()
             ],
@@ -1934,15 +1939,17 @@ class TestPythonDistributionEvidence(unittest.TestCase):
                             patch.object(urllib.request.HTTPSHandler, "https_open", transport),
                             patch.object(urllib.request.HTTPHandler, "http_open", transport),
                             patch.object(body, "read", wraps=body.read) as read,
+                            patch.object(body, "read1", wraps=body.read1) as read_chunk,
                         ):
                             with self.assertRaisesRegex(ValueError, "download failed|registry lookup failed with HTTP"):
                                 if operation == "download":
-                                    with patch("research_repo_tools.registry._json", return_value=self.registry()):
+                                    with patch("research_repo_tools.registry._json", return_value=self.registry("files.pythonhosted.org")):
                                         verify_published_distributions(PYTHON.package, "1.2.3", self.hashes)
                                 else:
                                     lookup_version(operation, "example-app", "1.2.3")
                             self.assertEqual(len(requests), 1)
                             read.assert_not_called()
+                            read_chunk.assert_not_called()
                             self.assertTrue(body.closed)
 
     def test_installed_cli_create_verify_approval_and_published_in_mixed_workspace(self):

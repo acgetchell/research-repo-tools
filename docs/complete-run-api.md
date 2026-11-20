@@ -482,7 +482,7 @@ controls and their matching schema-2 `table` keys are:
 
 | Style field / TOML key | Contract |
 | --- | --- |
-| `comparison_columns` / `comparison-columns` | Ordered unique selection of `ratio` and/or `reduction`, emitted for each comparison; empty means timing columns only |
+| `comparison_columns` / `comparison-columns` | Ordered unique selection of `ratio` and/or `reduction`, emitted for each comparison. An empty selection renders timing columns and skips comparison calculations and eligibility checks in the Markdown table. |
 | `intervals` / `intervals` | `inline` (default) or `below`, which inserts `<br>` between the point and both recorded bounds |
 | `ratio_headings` / `ratio-headings` | Empty uses numerator/denominator series labels; otherwise one nonempty heading per comparison, in layout order |
 | `ratio_suffix` / `ratio-suffix` | Empty by default; `×` appends the multiplication sign to each available point ratio |

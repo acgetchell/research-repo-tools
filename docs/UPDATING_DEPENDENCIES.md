@@ -181,6 +181,47 @@ when inherited through `tooling`. They are not registry upgrade targets, even
 when the registry has the same version. Development Git pins remain prohibited
 at release acquisition, evidence and publication boundaries.
 
+### Automatically adopting a published supplier
+
+Use an installed version that provides `--adopt-supplier`. Add a named
+`research-repo-tools` selection for the main Python project in
+`dependency-sources.toml`, matching the exact manifest and lock pin. For
+example, if the project is already declared as `[projects.python]` and pins
+version `0.3.0`, add:
+
+```toml
+[sources.tooling]
+project = "python"
+package = "research-repo-tools"
+version = "0.3.0"
+```
+
+Set `supplier_update := "tooling"` in the matching Justfile to opt in, using
+your source selection's name. With this setting, the Python stage of
+`just update` runs in an isolated environment using the locked `tooling`
+group. The equivalent command for an existing wrapper is:
+
+```sh
+uv run --isolated --locked --only-group tooling research-repo-tools \
+  deps update-python --all-projects --adopt-supplier tooling
+```
+
+For a registry pin, the updater checks the newest stable, non-yanked PyPI release
+above that pin that supports the running Python version. uv resolves the resulting
+candidate against the project constraints and stops the update on a resolution
+failure. For an exact Git SHA the updater uses the signed promotion proof
+below, including releases of the same version as the development pin. If there
+is no eligible release, it retains the original source and continues normal
+dependency maintenance. Provider and integrity errors stop the update.
+
+Successful adoption updates the source declaration, exact manifest requirement,
+registry lock, and installed distribution in one recoverable update. Included
+groups and extras stay selected and the resolved release supplies any inherited
+Python-tool pins. Set `--source-policy dependency-sources.toml --selection tooling`
+on isolated recipes and workflows that can trust the same declaration. For
+release controllers using an independently reviewed source, verify their exact
+selector through that controller's approval process.
+
 ### Promoting an exact development pin
 
 From an external installed RRT version that supports promotion, run
@@ -632,7 +673,10 @@ in an isolated build environment.
 
 Availability proof binds exact PyPI upload URLs, sizes and SHA-256 digests, or
 the crates.io archive checksum and size, and rejects yanked uploads. Cargo's
-resolved cached input files are compared with the downloaded published archive.
+resolved input files are compared with an archive authenticated against the
+lock and fresh crates.io metadata. The verifier uses matching compressed bytes
+from the same Cargo cache when available and fetches the published archive on
+a cache miss or mismatch.
 Each Cargo archive is limited to 32 MiB compressed, 32 MiB per member, 64 MiB
 expanded in total, and 10,000 members. Size diagnostics identify the crate and
 the exceeded limit.

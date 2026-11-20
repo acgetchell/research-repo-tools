@@ -157,6 +157,11 @@ def extract_archive(archive_path: Path, destination: Path, *, limits: ArchiveLim
     restore ownership, modes or timestamps. The destination parent must exist.
     Callers must exclude concurrent writers to the destination/parent.
     """
+    _extract_archive(archive_path, destination, limits=limits, expected_sha256=expected_sha256)
+
+
+def _extract_archive(archive_path: Path, destination: Path, *, limits: ArchiveLimits, expected_sha256: str | None = None) -> bytes:
+    """Extract the bounded capture and return the exact bytes used."""
     if destination.exists() or destination.is_symlink():
         raise FileExistsError(f"archive destination must be absent: {destination}")
     destination = destination.absolute()
@@ -190,3 +195,4 @@ def extract_archive(archive_path: Path, destination: Path, *, limits: ArchiveLim
                 shutil.rmtree(stage)
             except OSError as error:
                 LOGGER.warning("Could not remove archive staging directory %s: %s", stage, error)
+    return payload

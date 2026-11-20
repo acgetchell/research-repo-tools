@@ -105,7 +105,7 @@ def read_raw(path: Path) -> tuple[bytes, dict[str, Any]]:
         if not isinstance(raw.get("cells"), list):
             raise ValueError("cells must be an array")
         return original, raw
-    except (ValueError, UnicodeError) as error:
+    except (ValueError, RecursionError) as error:
         raise ValueError(f"{path}: {error}") from error
 
 
@@ -190,7 +190,7 @@ def clear(paths: list[Path]) -> None:
         if generated_state(notebook.node):
             clear_node(notebook.node)
             updates[notebook.path] = serialize(notebook.node)
-    files.replace_many(updates)
+    files.replace_many(updates, expected={notebook.path: notebook.original for notebook in notebooks})
     for notebook in notebooks:
         print(f"OK {'cleared' if notebook.path in updates else 'already clean'} {notebook.path}")
 

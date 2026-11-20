@@ -397,7 +397,7 @@ def add_evidence_commands(release) -> None:
 
 
 def run_evidence(args: argparse.Namespace, settings: Config) -> None:
-    from research_repo_tools.dependency_provenance import check_release_dependencies
+    from research_repo_tools._dependency_observation import DependencyOperation
 
     if args.operation == "wait":
         path = _path(settings.root, args.configuration)
@@ -429,7 +429,8 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
     if args.operation == "candidate":
         _run_candidate(args, settings)
         return
-    check_release_dependencies(args.checkout, packages=settings.release.published_dependencies)
+    checkout = args.checkout.resolve(strict=True)
+    dependencies = DependencyOperation(checkout, settings.release.published_dependencies)
     path = _path(settings.root, args.configuration)
     original = path.read_bytes()
     policy = load_evidence_policy(path)
@@ -437,7 +438,6 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
         raise ValueError("published evidence verification requires Python distribution policy")
     if args.operation == "published" and policy.distributions is not None and policy.distributions.index_url is None:
         raise ValueError("Python evidence destination is undecided; use explicit publication approval and its registry verification command")
-    checkout = args.checkout.resolve(strict=True)
     inputs = [
         path,
         *([args.tools] if args.tools else []),
@@ -454,7 +454,7 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
     read = partial(api, repository=policy.validation.repository)
 
     def observe() -> None:
-        check_release_dependencies(checkout, packages=settings.release.published_dependencies)
+        dependencies.verify()
         if path.read_bytes() != original:
             raise ValueError("release evidence policy changed")
         _checkout(checkout, policy.package, args.version, args.commit, path_in_vcs=policy.path_in_vcs, package_kind=policy.package_kind)

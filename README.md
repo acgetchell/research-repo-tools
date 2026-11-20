@@ -29,6 +29,11 @@ verified benchmark preparation inputs. It also makes unpublished-candidate
 recovery resumable, tightens archive path validation, and retains nanosecond
 precision in command-timing summaries.
 
+Automatic supplier adoption, `just release-cargo-fetch`, `just tag TAG --commit SHA`,
+and `RRT_REGISTRY_TIMEOUT_SECONDS` require a supplying release or a reviewed
+development commit for rehearsal. See the [command reference][commands] for
+current-source examples.
+
 **v0.2.7 includes breaking Python API changes.** Update callers to the documented
 typed variants, including [trial orders][complete-api] and
 [release-rule replacements][publishing-api]. Review the current
@@ -751,8 +756,9 @@ record saved by `--output`; default shared CLI status messages remain compatible
 Checks that are not configured are labeled explicitly. Failures print diagnostics
 and a nonzero status, without a success summary or replacement acceptance.
 
-Follow the [ordered release procedure][publishing] and matching installed
-`RELEASING.md` template. Exact-commit checks are the default. [CI reuse][reuse-guide]
+Follow the ordered release procedure in the matching installed `RELEASING.md`
+template and adapt it to your repository. The [RRT release guide][publishing]
+is a worked Python publication workflow. Exact-commit checks are the default. [CI reuse][reuse-guide]
 is an explicit reviewed option with its own eligibility and revalidation;
 package and artifact checks still apply. Approval, registry publication,
 attachment uploads and downstream adoption remain distinct actions.
@@ -784,8 +790,10 @@ research-repo-tools release visibility v1.2.3 \
 ```
 
 The command requires completed, nonempty assets and prints the crates.io
-archive checksum. Use `--target PATH` to also require the captured release ID
-and tag commit. Only an exact registry 404 permits another poll.
+archive checksum. Compare it with the SHA-256 of the retained `.crate` from
+validation before marking registry publication verified. Use `--target PATH`
+to also require the captured release ID and tag commit. Only an exact registry
+404 permits another poll.
 
 The `release assets plan` command verifies independent repository/tag/commit
 and push-event assertions, protected-default-branch ancestry, required checks,

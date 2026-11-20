@@ -21,8 +21,8 @@ Run `just help` for the complete command list and arguments.
 | `just changelog-preview` | Validate all candidate files and print the resulting root changelog without writing |
 | `just changelog-release TAG [DATE]` | Generate and archive with a citation-owned or explicit ISO date |
 | `just release-notes TAG` | Print notes from the root file or an archive |
-| `just tag TAG` | Create a local annotated tag from validated release notes |
-| `just tag-preview TAG` | Inspect the annotation without changing Git state |
+| `just tag TAG [--commit SHA]` | Create the validated annotated tag and print its target and annotation |
+| `just tag-preview TAG [--commit SHA]` | Inspect the annotation without changing Git state |
 
 For a prospective-release preview, use
 `just changelog-preview --tag v1.2.0`.

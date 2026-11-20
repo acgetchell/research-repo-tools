@@ -122,14 +122,14 @@ def _group_requirements(
     return [python_resolution.constrain_group(raw, constraint) for raw in result]
 
 
-def parse_project(text: str, *, toolchain: config.ToolchainSettings | None = None) -> tuple[SpecifierSet, list[DevPin]]:
+def parse_project(text: str, *, toolchain: config.ToolchainSettings | None = None, preserve: frozenset[str] = frozenset()) -> tuple[SpecifierSet, list[DevPin]]:
     """Parse Python constraints and exact direct development-tool pins."""
     data = tomllib.loads(text)
     from research_repo_tools import python_baseline, python_tools
 
     project = _required_table(data, "project")
     pins = _dev_pins(_required_table(data, "dependency-groups"))
-    fixed_sources = python_resolution.fixed_source_names(text)
+    fixed_sources = python_resolution.fixed_source_names(text) | preserve
     pins = [pin for pin in pins if canonicalize_name(pin.name) not in fixed_sources]
     if toolchain is None:
         tool = config._table(data.get("tool", {}), "tool")
@@ -352,10 +352,12 @@ def _masked_manifest(text: str, managed_names: frozenset[str]) -> dict[str, obje
     return cast("dict[str, object]", data)
 
 
-def _require_applied_pins(pyproject: Path, expected: list[DevPin], original: bytes, *, toolchain: config.ToolchainSettings | None = None) -> None:
+def _require_applied_pins(
+    pyproject: Path, expected: list[DevPin], original: bytes, *, toolchain: config.ToolchainSettings | None = None, preserve: frozenset[str] = frozenset()
+) -> None:
     """Require uv to have changed only the exact requested manifest pins."""
     updated_text = pyproject.read_text(encoding="utf-8")
-    _requires_python, actual = parse_project(updated_text, toolchain=toolchain)
+    _requires_python, actual = parse_project(updated_text, toolchain=toolchain, preserve=preserve)
     expected_versions = {canonicalize_name(pin.name): pin.version for pin in expected}
     actual_versions = {canonicalize_name(pin.name): pin.version for pin in actual}
     if actual_versions != expected_versions:
@@ -369,7 +371,12 @@ def _require_applied_pins(pyproject: Path, expected: list[DevPin], original: byt
 
 
 def update_dev_pins(
-    pyproject: Path, *, uv: str = "uv", toolchain: config.ToolchainSettings | None = None, env: Mapping[str, str] | None = None
+    pyproject: Path,
+    *,
+    uv: str = "uv",
+    toolchain: config.ToolchainSettings | None = None,
+    env: Mapping[str, str] | None = None,
+    preserve: frozenset[str] = frozenset(),
 ) -> dict[str, tuple[str, str]]:
     """Resolve and apply all changed exact direct pins in one uv transaction."""
     manifest = _conventional_manifest(pyproject)
@@ -377,7 +384,7 @@ def update_dev_pins(
     if uv_lock.is_symlink():
         msg = f"uv.lock must not be a symbolic link: {uv_lock}"
         raise ValueError(msg)
-    requires_python, current = parse_project(manifest.read_text(encoding="utf-8"), toolchain=toolchain)
+    requires_python, current = parse_project(manifest.read_text(encoding="utf-8"), toolchain=toolchain, preserve=preserve)
     python_resolution.policy(manifest.read_text(encoding="utf-8"), manifest.parent)
     python_locks.versions(uv_lock.read_bytes() if uv_lock.exists() else None)
     if not current:
@@ -407,7 +414,7 @@ def update_dev_pins(
             env=env,
             timeout=UV_ADD_TIMEOUT_SECONDS,
         )
-        _require_applied_pins(manifest, latest, snapshots[manifest] or b"", toolchain=toolchain)
+        _require_applied_pins(manifest, latest, snapshots[manifest] or b"", toolchain=toolchain, preserve=preserve)
         python_locks.require_no_downgrades(snapshots[uv_lock], uv_lock)
     return changes
 

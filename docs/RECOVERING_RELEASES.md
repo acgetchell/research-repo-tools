@@ -483,7 +483,7 @@ PR or main CI run. If tracked inputs need corrections, return to steps 2 and 3.
 #### 4.2. Create or inspect the replacement local tag
 
 Require the values recorded in steps 1 and 3 and a clean checkout at that exact
-validated commit. `just tag "$TAG" --force` runs the existing metadata,
+validated commit. `just tag "$TAG" --commit "$RELEASE_COMMIT" --force` runs the metadata,
 dependency and release-note checks before replacing the **local** annotated tag.
 It does not push or publish. The old local ref remains in place if those checks
 fail; there is no delete-and-restore interval.
@@ -506,7 +506,7 @@ checkout still has the older recipe, return to steps 2 and 3 before continuing.
   test "$(git --no-pager rev-parse HEAD)" = "$RELEASE_COMMIT"
   CURRENT_TAG_OBJECT=$(git --no-pager rev-parse --verify "refs/tags/$TAG")
   if [ "$CURRENT_TAG_OBJECT" = "$OLD_TAG_OBJECT" ]; then
-    just tag "$TAG" --force
+    just tag "$TAG" --commit "$RELEASE_COMMIT" --force
   else
     printf 'Inspecting the existing replacement local tag: %s\n' "$CURRENT_TAG_OBJECT"
   fi
@@ -643,5 +643,6 @@ gh api "repos/$REPO/actions/workflows/publish.yml" --jq .state
 
 Require `active` before publication. Keep the release tracker open until registry
 publication and required post-publication verification succeed. Continue with
-[Publish the reviewed draft and approve PyPI publication](RELEASING.md#7-publish-the-reviewed-draft-and-approve-pypi-publication),
-then the registry/consumer and applicable Zenodo verification in that guide.
+[publishing the reviewed GitHub Release](RELEASING.md#7-publish-the-reviewed-github-release),
+then [approving the PyPI deployment](RELEASING.md#8-approve-the-pypi-deployment)
+and completing registry, consumer, and applicable Zenodo verification.

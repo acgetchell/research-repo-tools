@@ -121,7 +121,9 @@ class TestToolingRuntime(unittest.TestCase):
         self.launch.assert_not_called()
         policy.write_bytes((header + f'version="{VERSION}"\n').encode())
         release_args = ["release", "--isolated-runtime", "dependencies"]
-        self.assertEqual(runtime.main([*selector, "--release-intent", "--arguments-json", json.dumps(release_args)]), 7)
+        with patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "180"}):
+            self.assertEqual(runtime.main([*selector, "--release-intent", "--arguments-json", json.dumps(release_args)]), 7)
+        self.assertEqual(self.launch.call_args.kwargs["env"]["RRT_REGISTRY_TIMEOUT_SECONDS"], "180")
         command = self.launch.call_args.args[0]
         self.assertEqual(
             command[command.index("--from") + 1 :],

@@ -75,6 +75,25 @@ class TestExecutionPreflight(Consumer):
         self.assertEqual(set(self.root.rglob("*")), entries)
         self.assertEqual({path: path.read_bytes() for path in originals}, originals)
 
+    def test_clear_preserves_a_notebook_edited_before_publication(self):
+        from research_repo_tools import files
+
+        before = code("value = 'original'\n")
+        self.write([{**before, "execution_count": 1}])
+        original_publish = files.replace_many
+        edit = {**before, "source": "value = 'concurrent edit'\n", "execution_count": 2}
+
+        def publish(updates, **kwargs):
+            self.write([edit])
+            return original_publish(updates, **kwargs)
+
+        errors = io.StringIO()
+        with patch.object(files, "replace_many", side_effect=publish), contextlib.redirect_stderr(errors):
+            status = main(["--root", str(self.root), "notebooks", "clear", str(self.path)])
+        self.assertEqual(status, 1, errors.getvalue())
+        self.assertIn("changed before publication", errors.getvalue())
+        self.assertEqual(json.loads(self.path.read_bytes())["cells"], [edit])
+
     def test_output_root_and_all_ancestors_are_checked_before_any_kernel(self):
         second = self.path.parent / "blocked" / "second.ipynb"
         second.parent.mkdir()

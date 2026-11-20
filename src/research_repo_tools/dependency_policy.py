@@ -110,12 +110,15 @@ def parse_policy(value: object) -> DependencyPolicy:
 
 
 def load_policy(root: Path) -> DependencyPolicy | None:
+    return observe_policy(root)[0]
+
+
+def observe_policy(root: Path) -> tuple[DependencyPolicy | None, InputSnapshot]:
+    """Parse only the bounded bytes captured for a subsequent input check."""
     path = root / POLICY_FILE
-    if not path.exists():
-        return None
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("dependency policy must be a regular source file")
-    return parse_policy(tomllib.loads(path.read_text(encoding="utf-8")))
+    payload = _read_input(path, min(MAX_SNAPSHOT_FILE_BYTES, MAX_SNAPSHOT_BYTES))
+    snapshot = InputSnapshot(((path, payload),), _environment())
+    return (None if payload is None else parse_policy(tomllib.loads(payload.decode("utf-8")))), snapshot
 
 
 def inside(root: Path, relative: str) -> Path:
@@ -163,6 +166,22 @@ def configuration_paths(root: Path, ecosystem: Ecosystem) -> tuple[Path, ...]:
     return tuple(dict.fromkeys(paths))
 
 
+def _read_input(path: Path, limit: int) -> bytes | None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError, NotADirectoryError:
+        return None
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f"dependency input must be a regular file, not a symlink: {path}")
+    if metadata.st_size > limit:
+        raise ValueError(f"dependency snapshot exceeds the per-file or aggregate byte limit: {path}")
+    with path.open("rb") as stream:
+        content = stream.read(limit + 1)
+    if len(content) > limit:
+        raise ValueError(f"dependency snapshot exceeds the per-file or aggregate byte limit: {path}")
+    return content
+
+
 @dataclass(frozen=True, slots=True)
 class InputSnapshot:
     """Exact bytes and absence assertions, rechecked around all effects."""
@@ -181,21 +200,9 @@ class InputSnapshot:
             if len(seen) >= MAX_SNAPSHOT_FILES:
                 raise ValueError("dependency snapshot exceeds the file-count limit")
             seen.add(path)
-            try:
-                metadata = path.lstat()
-            except FileNotFoundError, NotADirectoryError:
-                files.append((path, None))
-                continue
-            if not stat.S_ISREG(metadata.st_mode):
-                raise ValueError(f"dependency input must be a regular file, not a symlink: {path}")
-            limit = min(MAX_SNAPSHOT_FILE_BYTES, remaining)
-            if metadata.st_size > limit:
-                raise ValueError(f"dependency snapshot exceeds the per-file or aggregate byte limit: {path}")
-            with path.open("rb") as stream:
-                content = stream.read(limit + 1)
-            if len(content) > limit:
-                raise ValueError(f"dependency snapshot exceeds the per-file or aggregate byte limit: {path}")
-            remaining -= len(content)
+            content = _read_input(path, min(MAX_SNAPSHOT_FILE_BYTES, remaining))
+            if content is not None:
+                remaining -= len(content)
             files.append((path, content))
         return cls(tuple(files), _environment())
 

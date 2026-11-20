@@ -526,12 +526,13 @@ class TestReuseConsumer(unittest.TestCase):
     def test_publication_rechecks_the_same_selection_before_any_mutation(self):
         provider = self.provider()
         saved = self.verify(provider)
-        draft = GitHubRelease("example/project", "v1.2.3", 1, True, False, False, ())
+        draft = GitHubRelease("example/project", "v1.2.3", 1, True, False, False, (("sample-1.2.3.tgz", 2, 20, None),))
         with tempfile.TemporaryDirectory() as temporary:
             settings = self.settings(Path(temporary))
             with (
                 patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, RELEASE)),
-                patch("research_repo_tools.release_publishing.check_reviewed_release", side_effect=[draft, ValueError("approved reuse changed")]) as gate,
+                patch("research_repo_tools.release_publishing._check_release_source", side_effect=[RELEASE, ValueError("approved reuse changed")]) as gate,
+                patch("research_repo_tools.release_publishing.lookup_release", return_value=draft),
                 patch("research_repo_tools.release_publishing._publish_release") as publish,
             ):
                 with self.assertRaisesRegex(ValueError, "approved reuse changed"):

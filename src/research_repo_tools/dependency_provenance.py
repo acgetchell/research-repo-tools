@@ -32,6 +32,7 @@ from research_repo_tools._dependency_probe import MAX_NATIVE_BYTES, inspect_inst
 from research_repo_tools._git_checkout import _in_checkout
 from research_repo_tools._venv_config import isolated_configuration
 from research_repo_tools.dependency_progress import DependencyProgress, report, reporting
+from research_repo_tools.dependency_sources import RegistryRelease, VerifiedSource
 from research_repo_tools.evidence import _load_json, deterministic_json, sha256
 from research_repo_tools.release_policy import dependency_names
 
@@ -286,6 +287,30 @@ def check_development_dependency(root: Path, name: str = PACKAGE, *, document: d
     return DependencyIdentity(name, version, url, revision)
 
 
+def _pypi_inventory(name: str, version: str) -> dict[str, tuple[object, object, int]]:
+    from research_repo_tools import registry
+
+    data = registry._json(f"https://pypi.org/pypi/{name}/{version}/json")
+    data = _table(data, "PyPI exact-version response")
+    info = _table(data.get("info"), "PyPI identity")
+    if not isinstance(info.get("name"), str) or canonicalize_name(info["name"]) != name or info.get("version") != version:
+        raise ValueError(f"{name}: published identity differs")
+    uploads = data.get("urls")
+    if not isinstance(uploads, list) or not uploads or any(not isinstance(item, dict) for item in uploads):
+        raise ValueError(f"{name}: missing or malformed registry artifacts")
+    by_url = {}
+    for item in uploads:
+        url = item.get("url")
+        if not isinstance(url, str) or url in by_url:
+            raise ValueError(f"{name}: ambiguous published artifacts")
+        by_url[url] = item
+    return {
+        url: (item.get("filename"), item["digests"].get("sha256"), item["size"])
+        for url, item in by_url.items()
+        if item.get("yanked") is False and type(item.get("size")) is int and isinstance(item.get("digests"), dict)
+    }
+
+
 def _published_wheel(
     name: str,
     version: str,
@@ -295,36 +320,20 @@ def _published_wheel(
     require_sdist: bool = True,
     limit: int = 32 * 1024 * 1024,
     scripts: Path | None = None,
+    verified: VerifiedSource | None = None,
 ) -> None:
     from research_repo_tools import registry
 
-    data = registry._json(f"https://pypi.org/pypi/{name}/{version}/json")
-    data = _table(data, "PyPI exact-version response")
-    info = _table(data.get("info"), "PyPI identity")
-    if not isinstance(info.get("name"), str) or canonicalize_name(info["name"]) != name or info.get("version") != version:
-        raise ValueError(f"{name}: published identity differs")
-    uploads = data.get("urls")
     artifacts = _artifacts(locked, require_sdist=require_sdist)
-    if not isinstance(uploads, list) or not uploads or any(not isinstance(item, dict) for item in uploads):
-        raise ValueError(f"{name}: missing or malformed registry/locked artifacts")
-    by_url = {}
-    for item in uploads:
-        url = item.get("url")
-        if not isinstance(url, str) or url in by_url:
-            raise ValueError(f"{name}: ambiguous published artifacts")
-        by_url[url] = item
+    if verified is None:
+        by_url = _pypi_inventory(name, version)
+    else:
+        if verified.source != RegistryRelease("python", name, version) or verified.version != version:
+            raise ValueError(f"{name}: verified source differs from the locked Python identity")
+        by_url = {artifact.url: (artifact.filename, artifact.sha256, artifact.size) for artifact in verified.artifacts}
     for artifact in artifacts:
-        upload = by_url.get(artifact.get("url"))
-        digest = artifact.get("hash")
-        if (
-            upload is None
-            or upload.get("yanked") is not False
-            or not isinstance(digest, str)
-            or re.fullmatch(r"sha256:[0-9a-f]{64}", digest) is None
-            or _table(upload.get("digests"), "PyPI artifact hashes").get("sha256") != digest[7:]
-            or type(upload.get("size")) is not int
-            or artifact["size"] != upload.get("size")
-        ):
+        upload = by_url.get(artifact["url"])
+        if upload is None or upload[1:] != (artifact["hash"][7:], artifact["size"]):
             raise ValueError(f"{name}: locked artifact is missing, yanked or differs from PyPI")
     payloads: dict[str, bytes] = {}
     for observed in installed:
@@ -334,8 +343,7 @@ def _published_wheel(
         tags = {tag for raw in Parser().parsestr(wheel).get_all("Tag", []) for tag in parse_tag(raw)}
         candidates = []
         for artifact in locked.get("wheels", []):
-            upload = by_url[artifact["url"]]
-            filename = upload.get("filename")
+            filename = by_url[artifact["url"]][0]
             if not isinstance(filename, str):
                 raise ValueError("published wheel filename is missing")
             parsed_name, parsed_version, _, parsed_tags = parse_wheel_filename(filename)

@@ -24,7 +24,7 @@ from research_repo_tools.dependency_policy import (
     SourceSelection,
     configuration_paths,
     inside,
-    load_policy,
+    observe_policy,
     project_manifests,
 )
 from research_repo_tools.dependency_sources import GitCommit, RegistryRelease, Source, SourceProvider, VerifiedSource, table, verify_source
@@ -297,17 +297,22 @@ def plan_source(root: Path, name: str, *, provider: SourceProvider | None = None
     No consumer startup or build hooks are run (uv resolution uses --no-build).
     """
     root = root.resolve(strict=True)
-    policy = load_policy(root)
+    policy, observed = observe_policy(root)
     selections = [] if policy is None else [item for item in policy.selections if item.name == name]
     if len(selections) != 1:
         raise ValueError("source name must identify one dependency-sources.toml selection")
     selection = selections[0]
     verified = verify_source(selection.source, provider=provider)
-    return _plan_verified_source(root, selection, verified)
+    return _plan_verified_source(root, selection, verified, observed=observed)
 
 
 def _plan_verified_source(
-    root: Path, selection: SourceSelection, verified: VerifiedSource, *, transition_policy: tuple[bytes, bytes] | None = None
+    root: Path,
+    selection: SourceSelection,
+    verified: VerifiedSource,
+    *,
+    observed: InputSnapshot,
+    transition_policy: bytes | None = None,
 ) -> SourcePlan:
     project_root = inside(root, selection.project.directory)
     # Capture all copied source/harness bytes so a plan cannot publish a lock
@@ -316,15 +321,14 @@ def _plan_verified_source(
     files = _source_files(root, manifests)
     snapshot = InputSnapshot.capture((*files, *configuration_paths(project_root, selection.project.ecosystem)))
     originals = dict(snapshot.files)
+    if observed.environment != snapshot.environment or any(path not in originals or originals[path] != payload for path, payload in observed.files):
+        raise ValueError("dependency inputs changed during source lookup; prepare a new plan")
     from research_repo_tools.dependency_graphs import _check_configuration
 
     _check_configuration(project_root, selection.project.ecosystem)
     changes: dict[Path, bytes] = {}
     if transition_policy is not None:
-        original_policy, next_policy = transition_policy
-        if originals.get(root / POLICY_FILE) != original_policy:
-            raise ValueError("dependency source policy changed before promotion")
-        changes[root / POLICY_FILE] = next_policy
+        changes[root / POLICY_FILE] = transition_policy
     declared = False
     transform = _python_selection if selection.project.ecosystem == "python" else _cargo_selection
     for path in manifests:
@@ -413,8 +417,7 @@ def apply_source(plan: SourcePlan, *, provider: SourceProvider | None = None) ->
 
 def check_dependency_policy(root: Path, *, provider: SourceProvider | None = None) -> tuple[VerifiedSource, ...]:
     """Recheck every configured project before release effects, without mutation."""
-    policy_snapshot = InputSnapshot.capture((root / POLICY_FILE,))
-    policy = load_policy(root)
+    policy, policy_snapshot = observe_policy(root)
     retain_guard(policy_snapshot.verify, policy_snapshot.digest)
     if policy is None:
         _require_dependency_free(root)

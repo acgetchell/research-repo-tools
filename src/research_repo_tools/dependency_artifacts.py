@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 from research_repo_tools._archive_paths import ArchivePaths
 from research_repo_tools._dependency_observation import retain_guard
 from research_repo_tools._venv_config import isolated_configuration
-from research_repo_tools.dependency_policy import MAX_SNAPSHOT_FILE_BYTES, MAX_SNAPSHOT_FILES, InputSnapshot
+from research_repo_tools.dependency_policy import MAX_SNAPSHOT_FILE_BYTES, MAX_SNAPSHOT_FILES, InputSnapshot, _read_input
 from research_repo_tools.dependency_progress import report
 from research_repo_tools.dependency_sources import HttpSourceProvider, SourceProvider, VerifiedSource, table
 from research_repo_tools.evidence import deterministic_json, sha256
@@ -50,14 +50,25 @@ def verify_cargo_input(path: Path, verified: VerifiedSource, *, provider: Source
 
 
 def _cargo_input(path: Path, verified: VerifiedSource, *, provider: SourceProvider | None) -> InputSnapshot:
-    """Verify used extracted crate files against a downloaded locked .crate."""
+    """Verify used extracted crate files against the exact published .crate."""
     (artifact,) = verified.artifacts
     prefix = f"{verified.source.package}-{verified.version}"
     if artifact.size > CARGO_MAX_COMPRESSED_BYTES:
         raise ValueError(f"{prefix}: Cargo archive exceeds the {CARGO_MAX_COMPRESSED_BYTES}-byte compressed limit")
-    payload = (provider or HttpSourceProvider()).read(artifact.url)
-    if len(payload) != artifact.size or hashlib.sha256(payload).hexdigest() != artifact.sha256:
-        raise ValueError("Cargo dependency archive bytes differ from crates.io and the lock")
+    # Cargo uses the same registry directory name under src and cache. The
+    # layout can change, so treat it as a hint and authenticate either source.
+    source = path.parent.parent
+    payload = None
+    if source.name == "src" and source.parent.name == "registry" and path.name == prefix:
+        cached = source.parent / "cache" / path.parent.name / artifact.filename
+        try:
+            payload = _read_input(cached, artifact.size)
+        except OSError, ValueError:
+            pass
+    if payload is None or len(payload) != artifact.size or hashlib.sha256(payload).hexdigest() != artifact.sha256:
+        payload = (provider or HttpSourceProvider()).read(artifact.url)
+        if len(payload) != artifact.size or hashlib.sha256(payload).hexdigest() != artifact.sha256:
+            raise ValueError("Cargo dependency archive bytes differ from crates.io and the lock")
     expected: set[str] = set()
     observed: list[tuple[Path, bytes]] = []
     paths = ArchivePaths()
@@ -137,7 +148,7 @@ def python_environment_layout(graph: DependencyGraph) -> tuple[Path, tuple[Path,
     return environment, sites
 
 
-def verify_python_environment(graph: DependencyGraph, *, build_directory: Path | None = None) -> None:
+def verify_python_environment(graph: DependencyGraph, *, build_directory: Path | None = None, sources: tuple[VerifiedSource, ...] = ()) -> None:
     """Inspect existing site-packages statically; never import consumer packages.
 
     Universal locks prove all target/extra variants. For distributions actually
@@ -192,6 +203,7 @@ def verify_python_environment(graph: DependencyGraph, *, build_directory: Path |
     # The locked Linux Semgrep wheel expands to 286,642,049 bytes (>256 MiB).
     # Keep a finite package bound without changing selected-tool verification defaults.
     native_limit = MAX_NATIVE_BYTES
+    verified_sources = {(source.source.package, source.version): source for source in sources}
     observations = []
     source_wheels = []
     scripts = environment / ("Scripts" if os.name == "nt" else "bin")
@@ -212,8 +224,16 @@ def verify_python_environment(graph: DependencyGraph, *, build_directory: Path |
             verify_wheel_payload(name, receipt.payload, observed, scripts=scripts, limit=MAX_WHEEL_BYTES)
             source_wheels.append((name, version, source, observed))
         else:
+            version = matches[0]["version"]
             _published_wheel(
-                name, matches[0]["version"], table(matches[0], "locked package"), (observed,), require_sdist=False, limit=native_limit, scripts=scripts
+                name,
+                version,
+                table(matches[0], "locked package"),
+                (observed,),
+                require_sdist=False,
+                limit=native_limit,
+                scripts=scripts,
+                verified=verified_sources.get((name, version)),
             )
         observations.append((name, observed))
         report("verified", "installed bytes", graph=scope, checked=index + 1, total=len(installed - owned), detail=name)

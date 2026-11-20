@@ -1,267 +1,95 @@
 # Releasing
 
-Prepare each `vX.Y.Z` release in a dedicated PR. After that PR is merged,
-create the annotated tag and a draft GitHub release. Review and publish the
-draft with `just release-publish`, then approve the registry deployment to
-permit the package upload.
+1. Prepare the version, generated notes, and any benchmark report in a
+   dedicated release PR. Pass local validation and merge after review.
+2. Require complete trusted main CI and any benchmark acceptance for the final
+   commit. Create the annotated tag and push it explicitly.
+3. Review the original draft and attached evidence. Publish the GitHub Release
+   from a human GitHub CLI session.
+4. Approve the protected registry deployment after verification passes.
+5. Verify the exact published package and record downstream verification.
 
-For a new candidate, the changelog is generated before the tag exists; no
-temporary local tag is needed. Repeating
-`changelog-release` with unchanged history and configuration reuses the prepared
-citation date. The `declared` date policy permits preparation and tagging on
-different UTC days when citation and changelog dates agree.
-
-## Choose where to resume
-
-| Your situation | Next step |
-| --- | --- |
-| New release; no tag or draft | Prepare the environment and follow Step 1. |
-| Release PR merged; no tag or draft | Start Step 2 with the final commit's complete main CI and any benchmark acceptance. |
-| Existing candidate; commit unchanged; preparation or upload failed | Follow [Recovering a failed run](#recovering-a-failed-run). Preserve the tag and original receipts while inspecting the failure. |
-| Existing tag or draft; another PR must be included | Start with the shared [recovery guide's writer check](https://github.com/acgetchell/research-repo-tools/blob/main/docs/RECOVERING_RELEASES.md#check-the-consumers-draft-writer), then prepare the correction and replacement. |
-| GitHub or registry publication already exists | Preserve it. Finish verification/publication of the same bytes; use a new version for corrected contents. |
-
-An unpublished replacement keeps the version while replacing the annotated tag,
-draft, and final-commit evidence. Keep the old remote candidate until corrected
-source and generated notes merge and final main CI succeeds. Do not rerun
-dependency updates or the version bump solely to recover. Benchmark consumers
-must separately apply the
-[benchmark recovery decision table](https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_BENCHMARKS.md#release-recovery-decisions):
-original measurements may remain usable, but acceptance must bind the final
-commit and current native evidence.
+Follow the shared steps, then use the registry instructions for
+[Rust crates on crates.io](#rust-crates-on-cratesio) or
+[Python packages on PyPI](#python-packages-on-pypi).
 
 ## Prepare the environment
 
-Declare `published-dependencies = ["research-repo-tools"]`
-under `[tool.research-repo-tools.release]` in the consumer's `pyproject.toml`.
-Development and CI may use a reviewed full Git commit. Before release work,
-publish the supplying version, remove its development override, reconcile normal
-and isolated runtime pins, and resolve/sync the final lock deliberately.
-`just release-dependencies` verifies the published artifacts and installed bytes.
-Pass `--release-intent` to performance preparation/acquisition for an early check.
-Dependency or harness changes invalidate prior evidence under the existing
-freshness rules; retain rehearsals and acquire fresh final inputs when required.
-Pre-tag evidence and later approval/upload paths enforce the same policy again.
+Set `TAG=vX.Y.Z` and start from clean, current `main`. Check `gh auth status`
+and [Trusted Publishing](#configure-trusted-publishing-before-the-next-release).
+Use `just setup` for the locked development tools. Land any tool or dependency
+updates separately before preparing the release PR.
+[Consumer setup](https://github.com/acgetchell/research-repo-tools/blob/main/README.md#install-with-uv)
 
-Set the target tag once:
-
-```bash
-TAG=vX.Y.Z
-```
-
-Verify GitHub authentication and the repository remotes, then synchronize
-`main`:
-
-```bash
-gh auth status
-git --no-pager remote -v
-git switch main
-git pull --ff-only
-```
-
-Install or verify the declared development tools before running maintenance
-recipes. Install uv, keep an exact published research-repo-tools pin in the
-locked tooling group, and start with a clean working tree. Setup installs
-user-level Just. If `just` is not on PATH yet, complete the
-[one-time consumer setup](https://github.com/acgetchell/research-repo-tools/blob/main/README.md#install-with-uv)
-first. Subsequent setup runs need no environment activation:
-
-```bash
-just setup
-```
-
-Refresh tools and dependencies before creating the release branch:
-
-```bash
-just update
-```
-
-Review any tracked dependency or tool changes and land them separately before
-continuing with the release PR, then synchronize `main` again. Dependency and
-tool upgrades remain independently reviewable; `just update-version`
-deliberately does not run `just update`. Ensure the declared git-cliff version
-is installed and registry publishing and deployment approval are configured.
+Declare `published-dependencies = ["research-repo-tools"]` in
+`[tool.research-repo-tools.release]`. Use the exact verified PyPI release in
+the manifest, lock, and isolated runtime. Full Git SHAs are available for ordinary
+CI and rehearsal. Use `--release-intent` when preparing or acquiring release
+performance evidence.
+[Supplier adoption and release checks](https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_DEPENDENCIES.md)
 
 ## Step 1: Prepare the release PR
 
-Keep the release PR focused on version metadata, the generated changelog,
-and release documentation. Major code changes should already be on `main`.
-
-### 1. Create the release branch
-
 ```bash
 git switch -c "release/$TAG"
-```
-
-### 2. Update release metadata
-
-```bash
 just update-version "$TAG"
-```
-
-The recipe discovers the previous published stable GitHub release and prepares
-today's UTC date. Pass `--previous-release TAG` or `--date YYYY-MM-DD` to select
-those inputs deliberately. Review the resulting metadata diff before continuing.
-For a first stable release, use `just release-first "$TAG" YYYY-MM-DD` instead;
-it verifies that no stable release has been published and prepares metadata
-without a predecessor. The date must be the intended release date in UTC.
-
-### 3. Generate the release changelog
-
-```bash
 just changelog-release "$TAG"
 ```
 
-This generates `CHANGELOG.md` as though the target tag already existed,
-archives completed minor series, and uses `date-released` from `CITATION.cff`.
-The packaged configuration sets `changelog.date-source = "citation"`, so no
-separate date variable is needed. Use `just changelog-preview --tag "$TAG"` for
-a read-only preview with the same prepared date. Do not edit generated notes.
+For a first stable release, use `just release-first "$TAG" YYYY-MM-DD` in place
+of `update-version`. The changelog generator uses the prepared citation date.
+Review the metadata, lock, changelog, and generated archive diff.
 
-If the repository requires release performance evidence, acquire and retain it
-before validation. Consumers retain their scientific workload and benchmark
-policies. For a release with a published predecessor, run
-`just performance-prepare tooling/performance-release.toml`,
-`just performance-release tooling/performance-release.toml`, and
-`just performance-readme tooling/performance-release.toml`, in that order.
-README retries consume retained results without repeating measurements.
-Use the acquisition-owner, `performance capture`, and `performance first-release`
-recipes from the installed tooling version.
-For a scheduled candidate acquisition with a schema-2 report, add
-`--owner "$OWNER_RECORD"` to `just performance-release`. Choose a new trusted
-directory outside the checkout. Recover a completed acquisition with
-`just performance capture tooling/performance-release.toml --owner "$OWNER_RECORD" --promote`
-using the same scratch evidence.
-
-For a first stable release, prepare the package version and an unscheduled
-schema-5 suite declaration. Use `just performance first-release` with the
-repository, schema-2 report declaration, scratch evidence paths and external
-owner directory. This promotes the absolute timing report. Use this procedure
-instead of the paired preparation and measurement commands above, and do not run
-`just performance-readme`: paired schema-2 README publication rejects first-release
-v6 evidence. See the
-[candidate workflow example](https://github.com/acgetchell/research-repo-tools/blob/main/docs/candidate-reuse-api.md#committed-publisher-evidence).
-
-Retain the acquisition and publication digests through separate trusted
-handoffs. Commit the generated run files, index/latest and reports. Keep
-final-commit acceptance and attestations as release assets or trusted scratch
-files. The supplying package must be published and normally resolvable before
-adoption.
-Fetching tags requires explicit `--fetch-tags --allow-git-mutations` during
-preparation.
-
-### 4. Validate the release branch
+For a Cargo project, prepare the locked graph with `just release-cargo-fetch`
+before checking dependencies or acquiring release benchmarks. If the Cargo
+project lives in a subdirectory, pass `--manifest-path PATH` for its manifest.
+When there is no root `Cargo.toml`, set `release_cargo := "true"` in the Justfile.
+The managed release commands use the same cache and root toolchain declaration.
 
 ```bash
 just release-dependency-builds
 just release-dependencies
-just ci
+```
+
+When release performance evidence is required, run the repository's declared
+acquisition and report commands after these dependency checks. Keep the original
+acquisition, checkpoints, publication receipt, and digests outside the checkout.
+Include the generated report in the release PR.
+[Benchmark acquisition and recovery](https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_BENCHMARKS.md)
+
+```bash
 just release-version-check
+just ci
 ```
 
-Consumers retain their packaging, feature, MSRV, platform and scientific checks.
-`release-dependency-builds` prepares explicitly configured Python source builds;
-it has no effects when the policy does not select any. Repeat it after changes
-to the lock, policy, manifest, interpreter or builder. Its authenticated receipts
-are machine-local evidence, not portable attestations or published wheel claims.
-`release-dependencies` verifies the checked-in `dependency-sources.toml`, registry
-sources, and installed dependency provenance before the release PR is merged.
-Declare each dependency-bearing project and its release-owned package boundaries;
-include build requirements in the native lock and retain the policy in source
-distributions and release evidence.
-Run additional registry dry-run checks here if they are not already part of
-`just ci`. The final version check requires matching metadata and complete,
-dated release notes.
-
-### 5. Review, stage, and commit the release artifacts
-
-Inspect all changes before staging:
-
-```bash
-git --no-pager status --short
-git --no-pager diff
-```
-
-Stage only reviewed paths, including package metadata, lockfiles, `CITATION.cff`,
-`CHANGELOG.md`, and generated archives. Do not stage unrelated work or the entire
-`docs/` tree without inspecting it. Then inspect and commit the staged delta:
-
-```bash
-git --no-pager diff --cached
-
-git commit -m "chore(release): release $TAG
-
-- Bump version to $TAG
-- Update citation and package metadata
-- Generate the release changelog
-- Update release documentation"
-```
-
-### 6. Push the branch and open the PR
-
-```bash
-git push -u origin "release/$TAG"
-```
-
-Use `chore(release): release $TAG` as the PR title and describe the PR as a
-focused release preparation without feature work. Include validation results
-and skipped checks. Resolve review findings before merging.
-
-### Handling fixes found during preparation
-
-Commit required corrections, regenerate notes, review and commit the generated
-outputs separately, and repeat affected checks and the final release gate.
-File issues for deferred work instead of hand-editing the generated changelog.
-Retries preserve the declared release date unless the maintainer deliberately
-advances it with `update-version` and regenerates the matching changelog.
-
-### Resuming an unpublished release after another PR
-
-A corrective PR can regenerate affected artifacts and validate them. Do not
-repeat the version bump or dependency updates solely because another PR is
-needed. Commit required source, recipe, and documentation changes first, then
-generate and commit notes in the same corrective PR. With no tag or draft,
-resume Step 2 after merge from the corrected clean
-`main` commit and require its complete validation. With an existing candidate,
-follow the shared
-[recovery guide](https://github.com/acgetchell/research-repo-tools/blob/main/docs/RECOVERING_RELEASES.md),
-including local tag handling during note generation and the benchmark reuse
-decision. Apply the repository's draft receipt and preparation workflow rules.
-Never replace a published release; use a new version for corrected contents.
+Require verified published dependencies, synchronized metadata and dated
+notes, and the repository's packaging, platform, and scientific checks.
+Commit the reviewed release artifacts, push the branch after its review gates
+pass, and open the PR. Record any separately retained evidence in the
+release tracker.
 
 ## Step 2: Publish after the PR is merged
 
 ### 1. Synchronize `main`
 
-```bash
-git switch main
-git pull --ff-only
-```
-
-Use a clean checkout of the reviewed release commit. Require its configured
-native checks and trusted main-push evidence before any tag-triggered promotion.
-For consumers adopting candidate reuse, run the configured Step 2 composition
-here, before tagging, using a trusted installed interpreter outside this checkout.
-The packaged `release-evidence` recipe uses its project's uv environment; use
-the [external-runtime invocation](https://github.com/acgetchell/research-repo-tools/blob/main/README.md#performance)
-when observing that same project. Pass the original policy, acquisition digest,
-publication receipt/digest and `--format summary` to the shared candidate verifier.
-Save its acceptance outside the checkout. Step 2 and publication retries
-derive and verify archives from that acquisition without measuring or repeating
-build/test gates. At approval, pass the original `--acceptance` and revalidate the
-same native selection before acquiring publication credentials. Missing or changed
-evidence blocks continuation; never silently select a replacement acquisition.
+Use a clean checkout at the reviewed merged commit. Save its full SHA as
+`RELEASE_COMMIT`. Require the complete exact main-push run, package producer,
+and native checks. If benchmarks are required, verify and save acceptance for
+that commit using the original acquisition and publication receipts, and the
+repository's external trusted runtime.
+[Verifying release evidence](https://github.com/acgetchell/research-repo-tools/blob/main/docs/VERIFYING_RELEASE_EVIDENCE.md)
 
 ### 2. Create and verify the annotated tag
 
 ```bash
-just tag "$TAG"
-git --no-pager tag -l --format='%(contents)' "$TAG"
+just tag "$TAG" --commit "$RELEASE_COMMIT"
 ```
 
-`just tag` first runs `release-version-check`, then builds the annotation from
-the matching active or archived changelog section. Use `just tag-preview "$TAG"`
-for an optional read-only preview. Never move a published tag.
+Success prints the local tag, reviewed SHA, and annotation or canonical
+changelog link. Use `just tag-preview "$TAG" --commit "$RELEASE_COMMIT"` for
+optional inspection. For a cold managed Cargo cache, run `just release-cargo-fetch`
+and retry the same tag and commit. Projects with additional independent Cargo
+roots can pass `--manifest-path PATH` to fetch each declared lock.
 
 ### 3. Push the tag
 
@@ -271,110 +99,121 @@ git push origin "$TAG"
 
 ### 4. Verify the release commit
 
-Require the repository's successful native checks, package producer, and
-retained evidence for this exact commit in a complete trusted main-push attempt.
-Use the repository's evidence workflow or adapter to verify its artifact policy.
-PR, manual-dispatch and partial-rerun evidence cannot substitute for it.
+Use the repository's evidence workflow or `just release-evidence` wrapper with
+its reviewed selection. Record the run, attempt, artifact IDs, and digests for
+the exact tagged commit.
 
 ### 5. Create the draft GitHub release
 
-Let the repository's preparation workflow create the draft and required assets.
-Use `release assets plan` and `release assets prepare-authenticated`
-to compose signed retained evidence with the
-[isolated writer and receipt-recovery procedure](https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md).
-Preserve its captured release ID and original receipt for every retry.
-If no workflow creates a draft and the consumer's provenance policy permits
-manual creation, create it in GitHub from the existing tag and notes. Keep the
-title identical to the tag, including its leading `v`, and leave it as a stable
-draft until asset preparation and review are complete.
+Let the configured preparation workflow create the draft. Record its original
+run, draft ID, and captured target. Use the repository's
+`just release-assets retrieve` command with the original full SHA and output
+directory to retrieve or reverify those records.
+[Draft preparation and receipt retrieval](https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md#retrieve-original-preparation-output)
 
 ### 6. Review the draft
 
-Inspect the draft, successful preparation run, required assets, and generated
-notes before publishing:
+Require the expected stable tag, title, generated notes, and complete required
+assets. If the repository attaches benchmarks separately, run its attachment
+recipe with the original acceptance and captured draft target.
 
-```bash
-just release-notes "$TAG"
-```
+For the [Cargo publication workflow template](https://github.com/acgetchell/research-repo-tools/blob/main/src/research_repo_tools/templates/publish-crates.yml),
+enable immutable releases and attach the exact `PACKAGE-VERSION.crate` retained
+by validation to this draft. Include its name pattern in `publishing.required-assets`
+so `just release-publish` requires it at the GitHub approval step.
 
-Complete any repository-specific benchmark or artifact attachment workflow.
-Do not move the tag or publish while preparation is running.
-
-### 7. Publish the reviewed draft and approve registry publication
-
-From the clean tagged checkout, using your human GitHub CLI session, run:
+### 7. Publish the reviewed GitHub Release
 
 ```bash
 just release-publish "$TAG"
 ```
 
-This command authorizes GitHub Release publication. The shared gate checks the
-checkout, metadata, tag, reviewed commit, CI and required assets. Approve the
-resulting registry deployment in GitHub and wait for the upload workflow to
-complete. Keep automated drafts unpublished until review.
+Preserve any required receipt and acceptance arguments from the repository's
+publication policy. Publish from a human GitHub CLI session. For repositories
+that dispatch the registry workflow explicitly, use the same tag and original
+approved handoff.
 
-### 8. Verify registry availability and downstream resolution
+### 8. Approve the registry deployment
 
-After the publishing workflow completes:
+Approve the protected deployment after verification succeeds, then wait for
+the upload job. Use the registry-specific check below to confirm what it published.
+
+### 9. Verify registry availability and downstream resolution
 
 ```bash
 just release-verify "$TAG"
 ```
 
-The recipe makes up to seven attempts at ten-second intervals for registry
-visibility. Check installation from the exact published version in a fresh
-consumer and record the release, workflow, artifact, and consumer evidence in
-the release PR or tracking issue.
+Require the published stable GitHub Release, its required assets, and the exact
+registry version. Check the package in a fresh consumer and record the release,
+workflow, artifact, and consumer identities after its registry checksum check passes.
+
+#### Rust crates on crates.io
+
+`cargo publish` packages the reviewed checkout for upload. The `--no-verify`
+flag skips the verification build. The packaged workflow checks that the
+immutable GitHub Release has the retained `.crate` before obtaining a registry
+token. After upload, it compares the crates.io SHA-256 with the SHA-256 GitHub
+records for that attachment. A mismatch fails the workflow. To repeat this check,
+run `just release-verify "$TAG" --require-crate-asset --publication-only`.
+The workflow checks current dependency yank status after deployment approval,
+before requesting the token.
+
+For a manual check from outside the checkout, set `REPOSITORY` to the GitHub
+`owner/repo` and `PACKAGE` to the crates.io name, then run the installed CLI:
+
+```sh
+research-repo-tools release visibility "$TAG" \
+  --repository "$REPOSITORY" --registry crates-io --package "$PACKAGE"
+```
+
+Pass `--target PATH` if you have the original captured release target. Compare
+the printed `Registry archive SHA-256` with the SHA-256 of the retained `.crate`.
+Require an exact match before recording the upload as verified.
+
+#### Python packages on PyPI
+
+The publication workflow downloads the wheel and sdist attached to the GitHub
+Release, verifies them against signed evidence, and uploads those exact files.
+Compare the published wheel and sdist with the approved hashes of those
+attachments before recording the upload as verified.
+[Published distribution verification](https://github.com/acgetchell/research-repo-tools/blob/main/docs/publishing-api.md#reviewed-registry-publication-api)
+
+### 10. Verify the Zenodo release metadata
+
+If enabled, verify the new version-specific record against the citation
+metadata and record its DOI.
+
+### 11. Remove the merged release branch
+
+Remove the merged release branch locally and on the remote after registry,
+asset, consumer, and applicable Zenodo verification.
+
+## Choose where to resume
+
+Restore the tag, reviewed SHA and original run IDs from the release tracker.
+Reuse the retained owner directory, acceptance, receipt, and captured target
+paths when running the same recipes from a new shell.
+
+| Stop | Next operation |
+| --- | --- |
+| Notes failed after metadata was prepared | Fix the generator prerequisite and rerun `just changelog-release "$TAG"`. |
+| Acquisition or rendering interrupted | Resume the repository's capture command with its original owner directory and evidence. [Benchmark recovery](https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_BENCHMARKS.md#release-recovery-decisions) |
+| Main CI pending or tag preflight failed | Wait for the original exact CI run, fix the reported prerequisite, and retry `just tag "$TAG" --commit "$RELEASE_COMMIT"`. |
+| Draft retrieval or attachment interrupted | Reuse the original output directory with `just release-assets retrieve`, then retry the configured attachment recipe with that target. [Draft recovery](https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md#retry-and-recovery) |
+| GitHub Release published, registry approval pending | Review the verification result and approve the protected registry deployment in the original publishing run. |
+| Registry upload interrupted | Inspect the original GitHub Release and publishing run. Check the exact registry version with `just release-registry "$TAG" --expect present` and compare any published checksums before deciding whether to retry. |
+| Registry verification timed out | Rerun the failing recipe with `RRT_REGISTRY_TIMEOUT_SECONDS=180` and the same candidate records. |
 
 ### Recovering a failed run
 
-If preparation only timed out while healthy main CI was still running, wait for
-that complete attempt and keep its successful, unexpired evidence. Resume using
-the owning writer's recovery contract. RRT permits a failed-job retry; the shared
-authenticated writer requires its original attempt-1 handoff and retained state,
-so an automatic Actions rerun cannot create fresh state. Follow its
-[recovery procedure](https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md#retry-and-recovery).
-If main CI itself failed or retained evidence needs recovery,
-rerun all jobs of the original trusted main-push run within its rerun window,
-including the producer and every required validation gate. A partial main rerun
-cannot establish a complete attempt. Require new attempt-specific artifacts and
-a new reviewed evidence selection; do not silently replace an approved handoff.
-The authenticated writer pins the original handoff's evidence selection. If
-that retained evidence has expired, a successful main rerun does not make a new
-selection valid with the original handoff. If the writer rejects that selection,
-or the original run cannot be recovered, use the shared
-[unpublished-candidate replacement procedure](https://github.com/acgetchell/research-repo-tools/blob/main/docs/RECOVERING_RELEASES.md#replace-an-unpublished-candidate),
-including its consumer writer check. Preserve the original handoff and journal;
-do not substitute the new selection to force a retry.
-Draft preparation retries must retain the original receipt and captured release
-ID. An uncertain creation requires explicit recovery before another attempt.
-
-Inspect a failed run and exact registry version before retrying. Cargo can
-report a timeout after a successful upload. Verify an existing publication
-instead of uploading again. Registry lookup errors never prove absence.
-Corrections to published contents require a new version. If the intended date
-changes, prepare it with `just update-version "$TAG" --date YYYY-MM-DD`,
-regenerate notes, and repeat validation and review before tagging.
-
-### 9. Verify the Zenodo release metadata
-
-If Zenodo integration is enabled, verify the new version-specific archive and
-its citation metadata. The concept landing page alone is not evidence for the
-new record. Record the release DOI without moving the published tag.
-
-### 10. Remove the merged release branch
-
-After registry, GitHub, asset, consumer, and applicable Zenodo verification
-succeed:
-
-```bash
-git branch -d "release/$TAG"
-git push origin --delete "release/$TAG"
-```
+Preserve the original tag, evidence and draft while diagnosing a failure. Use
+the [shared recovery guide](https://github.com/acgetchell/research-repo-tools/blob/main/docs/RECOVERING_RELEASES.md)
+for failed workflow attempts, uncertain writes, and unpublished candidate
+replacement. Corrections to already published contents require a new version.
 
 ## Configure Trusted Publishing before the next release
 
-Configure the repository's registry publisher and required deployment approvals
-before starting. Keep account setup in the maintainer's private checklist.
-Workflow YAML does not configure these accounts. Re-read live settings before
-changing them, preserving newer entries.
+Configure the registry publisher and deployment reviewers before starting.
+Keep account setup in the maintainer's private checklist.
+[GitHub release configuration](https://github.com/acgetchell/research-repo-tools/blob/main/docs/CONFIGURING_GITHUB.md#release-configuration)

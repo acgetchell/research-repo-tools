@@ -51,6 +51,7 @@ arguments in lexicographic order.
 | `just python-fix` | Apply configured Ruff fixes and formatting to the same complete inventory |
 | `just python-typecheck` | Run native ty without modifying source |
 | `just release-assets COMMAND...` | Prepare drafts, retrieve original tag-push receipts, capture/revalidate targets or explicitly upload attachments |
+| `just release-cargo-fetch [--manifest-path PATH]` | Prepare locked dependencies in the managed Cargo cache used for offline release checks. Set `release_cargo := "true"` if Cargo is declared only in a subdirectory. |
 | `just release-check TAG` | Check final release metadata and generated notes |
 | `just release-dependencies` | Verify selected upstream published pins, lock and executing runtime bytes |
 | `just release-dependency-builds` | Rebuild configured Python sources and authenticate their local wheel outputs |
@@ -75,8 +76,8 @@ arguments in lexicographic order.
 | `just setup` | Install and verify declared tools, then synchronize the Python environment |
 | `just shared-python-plan VERSION` | Preview mandatory Python-minimum and optional tool-profile adoption outside the old environment |
 | `just shared-python-update VERSION` | Apply the migration and recreate the locked environment and notebook kernel |
-| `just tag TAG [--force]` | Create a local annotated tag from validated release notes. The v0.3.0 recipe forwards `--force` for guarded recovery. |
-| `just tag-preview TAG` | Inspect the release annotation without changing Git state |
+| `just tag TAG [--commit SHA] [--force]` | Verify the target and release prerequisites, then report the created local tag and annotation |
+| `just tag-preview TAG [--commit SHA]` | Inspect the release annotation without changing Git state |
 | `just tectonic COMMAND...` | Discover or export existing native dependency environments |
 | `just templates ARGS...` | Export a packaged configuration or workflow template |
 | `just tooling-run ARGS...` | Verify a released version or GitHub commit and run isolated tooling |

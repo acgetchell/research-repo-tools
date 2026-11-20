@@ -15,7 +15,7 @@ from typing import cast
 from urllib.parse import quote
 
 from research_repo_tools._git_checkout import git_context, require_checkout
-from research_repo_tools.archives import ArchiveLimits, extract_archive
+from research_repo_tools.archives import ArchiveLimits, _extract_archive
 from research_repo_tools.criterion import SAMPLE_SCHEMA, Sample, parse_sample, serialize_sample
 from research_repo_tools.evidence import (
     Evidence,
@@ -26,6 +26,7 @@ from research_repo_tools.evidence import (
     deterministic_json,
     parse_evidence,
     serialize_evidence,
+    sha256,
     verify_sha256,
 )
 from research_repo_tools.files import replace_many
@@ -490,14 +491,14 @@ def read_baseline(
 ) -> tuple[Sample, Provenance]:
     """Extract bounded shared assets and verify original bytes before parsing."""
     with tempfile.TemporaryDirectory(prefix="research-baseline-") as directory:
-        root = Path(directory) / "baseline"
-        extract_archive(archive, root, limits=limits)
+        root = Path(directory).resolve() / "baseline"
+        archived = _extract_archive(archive, root, limits=limits)
         if legacy_configuration is not None and not (root / "sample.json").exists() and not (root / "provenance.json").exists():
-            from research_repo_tools.legacy_evidence import read_legacy_baseline
+            from research_repo_tools.legacy_evidence import _read_legacy_baseline
 
             if expected_tag is None:
                 raise ValueError("legacy baseline reading requires an expected release tag")
-            return read_legacy_baseline(archive, legacy_configuration, expected_tag, limits=limits)
+            return _read_legacy_baseline(root, legacy_configuration, expected_tag, sha256(archived))
         if {path.name for path in root.iterdir()} != {"sample.json", "provenance.json"}:
             raise ValueError("baseline archive requires exactly sample.json and provenance.json")
         retained = parse_evidence((root / "sample.json").read_bytes(), (root / "provenance.json").read_bytes())

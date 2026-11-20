@@ -60,6 +60,7 @@ def parser() -> argparse.ArgumentParser:
         if name in {"generate", "tag"}:
             command.add_argument("--dry-run", action="store_true", help="print candidate output without publishing")
         if name == "tag":
+            command.add_argument("--commit", help="require a clean checkout at this reviewed full commit SHA")
             command.add_argument("--force", action="store_true", help="replace an existing local tag")
     ci = groups.add_parser("ci", help="export validated CI environment values").add_subparsers(dest="action", required=True)
     command = ci.add_parser("export", help="append checked single-line values to GITHUB_ENV")
@@ -83,8 +84,10 @@ def parser() -> argparse.ArgumentParser:
     source.add_argument("name", help="configured source selection name")
     source.add_argument("--apply", action="store_true", help="apply the resolved manifest/lock candidate with recoverable multi-file publication")
     python_update = deps.add_parser("update-python")
+    supplier = python_update.add_mutually_exclusive_group()
+    supplier.add_argument("--adopt-supplier", metavar="SOURCE", help="adopt a newer compatible published RRT or promote its attested Git pin")
     python_update.add_argument("--all-projects", action="store_true", help="also upgrade locks and sync the main and declared independent Python projects")
-    python_update.add_argument("--promote", metavar="SOURCE", help="promote a named exact Git source only if verified published artifacts contain the pin")
+    supplier.add_argument("--promote", metavar="SOURCE", help="promote a named exact Git source only if verified published artifacts contain the pin")
     python_update.add_argument("--promotion-prereleases", action="store_true", help="allow prereleases when selecting a verified promotion")
     python_update.add_argument("--promotion-versions", default="", help="PEP 440 version specifier restricting promotion candidates")
     tools = deps.add_parser("update-tools")
@@ -183,6 +186,7 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("tag")
     command.add_argument("--reuse-evidence", type=Path, help="revalidate a saved CI reuse approval under the configured opt-in policy")
     command.add_argument("--target", type=Path, help="original captured release target; must also match the published event")
+    command.add_argument("--require-crate-asset", action="store_true", help="require the retained .crate with SHA-256 on the immutable release before upload")
     command = release.add_parser(
         "publish",
         help="approve a validated draft GitHub Release and trigger its publication workflow",
@@ -214,7 +218,9 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("tag")
     command.add_argument("--attempts", type=int, default=1)
     command.add_argument("--interval", type=int, default=10)
+    command.add_argument("--publication-only", action="store_true", help="verify GitHub and registry publication after the separate pre-upload dependency gate")
     command.add_argument("--target", type=Path, help="independently captured release target to preserve through final verification")
+    command.add_argument("--require-crate-asset", action="store_true", help="compare the crates.io SHA-256 with the retained .crate on the immutable release")
     command = release.add_parser("visibility", help="check immutable GitHub publication and the exact registry version without a checkout")
     command.add_argument("tag")
     command.add_argument("--attempts", type=int, default=1)
@@ -773,9 +779,11 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
 
             if args.promote is None and (args.promotion_versions or args.promotion_prereleases):
                 raise ValueError("promotion options require --promote SOURCE")
-            if args.all_projects or args.promote is not None:
+            if args.all_projects or args.adopt_supplier is not None or args.promote is not None:
                 from research_repo_tools.python_updates import update
 
+                if args.adopt_supplier is not None:
+                    return update(settings, adopt_supplier=args.adopt_supplier)
                 if args.promote is None:
                     return update(settings)
                 return update(settings, promote=args.promote, versions=args.promotion_versions, prereleases=args.promotion_prereleases)
@@ -896,7 +904,9 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             event = release_publishing.validate_event(
                 _load_json(payload, "GitHub release event"), os.environ["GITHUB_REPOSITORY"], os.environ.get("GITHUB_SHA", ""), os.environ.get("GITHUB_REF", "")
             )
-            release_publishing.check_reviewed_release(settings, args.tag, event=event, reuse_evidence=reuse_payload, **target_options)
+            release_publishing.check_reviewed_release(
+                settings, args.tag, event=event, reuse_evidence=reuse_payload, require_crate_asset=args.require_crate_asset, **target_options
+            )
             return 0
         if args.action == "publish":
             release_publishing.publish_reviewed_release(settings, args.tag, reuse_evidence=reuse_payload, **target_options)
@@ -910,7 +920,8 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
                 raise ValueError(f"registry version is {'already present; inspect before retrying uploads' if result.present else 'not yet visible'}")
             return 0
         if args.action == "verify":
-            release_publishing.verify_publication(settings, args.tag, attempts=args.attempts, interval=args.interval, target=target)
+            verify = release_publishing._verify_configured_publication if args.publication_only else release_publishing.verify_publication
+            verify(settings, args.tag, attempts=args.attempts, interval=args.interval, target=target, require_crate_asset=args.require_crate_asset)
             print(f"Verified published GitHub Release and registry version {args.tag}.")
             return 0
         if args.action == "visibility":
@@ -980,11 +991,26 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             notes, _source, _heading = changelog.notes(settings, args.tag)
             _write_stdout(notes.encode("utf-8"))
             return 0
-        body = changelog.tag(settings, args.tag, force=args.force, dry_run=args.dry_run)
+        from research_repo_tools.process import run_git_command
+        from research_repo_tools.release_metadata import check
+
+        commit = args.commit if args.commit is not None else run_git_command(["rev-parse", "HEAD"], cwd=settings.root).stdout.strip()
+        if check(settings.root, policy=replace(settings.release, final_changelog=True)):
+            raise ValueError(f"tagging preflight failed for {args.tag} at {commit}; correct the metadata and rerun just tag {args.tag} --commit {commit}")
+        try:
+            body = changelog.tag(settings, args.tag, commit=commit, force=args.force, dry_run=args.dry_run)
+        except (ValueError, OSError, subprocess.SubprocessError) as error:
+            attempt = "tag-preview" if args.dry_run else "tag"
+            force = " --force" if args.force else ""
+            raise ValueError(
+                f"{args.tag} at {commit}: {format_exception_diagnostics(error)}\n"
+                f"Tag preflight must pass before creation. Resume with just {attempt} {args.tag} --commit {commit}{force}."
+            ) from error
         if args.dry_run:
             _write_stdout(body.encode("utf-8"))
         else:
-            print(f"Created local annotated tag {args.tag}")
+            print(f"Created local annotated tag {args.tag} at {commit}")
+            print(body, end="")
         return 0
     raise ValueError(f"unknown command group: {args.group}")
 
@@ -1000,6 +1026,10 @@ def main(argv: list[str] | None = None) -> int:
         args = parser().parse_args(argv)
         expected_errors = (ExecutableNotFoundError, OSError, ValueError, TypeError, RuntimeError, subprocess.SubprocessError)
         try:
+            if args.group in {"release", "performance"} or (args.group == "changelog" and args.action == "tag"):
+                from research_repo_tools._registry_requests import registry_timeout
+
+                registry_timeout()
             settings = config.load(args.config, args.root)
             runtime_policy = None
             runtime_artifacts = None

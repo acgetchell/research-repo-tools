@@ -342,8 +342,10 @@ def check_native_graph(graph: DependencyGraph, *, sources: tuple[VerifiedSource,
         _check_lock(graph.root)
         from research_repo_tools.dependency_artifacts import verify_python_environment
 
-        verify_python_environment(graph)
+        verify_python_environment(graph, sources=sources)
     else:
+        from subprocess import CalledProcessError
+
         from research_repo_tools.process import run_command
 
         environment = {key: value for key, value in os.environ.items() if not key.upper().startswith(("CARGO_", "RUST"))}
@@ -356,13 +358,23 @@ def check_native_graph(graph: DependencyGraph, *, sources: tuple[VerifiedSource,
         with tempfile.TemporaryDirectory(prefix="dependency-graph-") as directory:
             cwd = Path(directory)
             cargo = _resolve_cargo(cwd=cwd, environment=environment, checkouts=(graph.checkout,))
-            result = run_command(
-                cargo,
-                ["metadata", "--manifest-path", str(graph.root / "Cargo.toml"), "--format-version", "1", "--all-features", "--locked", "--offline"],
-                cwd=cwd,
-                env=environment,
-                timeout=120,
-            )
+            manifest = graph.root / "Cargo.toml"
+            try:
+                result = run_command(
+                    cargo,
+                    ["metadata", "--manifest-path", str(manifest), "--format-version", "1", "--all-features", "--locked", "--offline"],
+                    cwd=cwd,
+                    env=environment,
+                    timeout=120,
+                )
+            except CalledProcessError as error:
+                from research_repo_tools.process import format_exception_diagnostics
+
+                remedy = "just release-cargo-fetch" if graph.root == graph.checkout else f'just release-cargo-fetch --manifest-path "{manifest}"'
+                raise ValueError(
+                    f"locked offline Cargo metadata failed for {manifest}: {format_exception_diagnostics(error)}. "
+                    f"For an incomplete managed Cargo cache, run {remedy} and retry the same release candidate."
+                ) from error
         metadata = table(_load_json(result.stdout.encode("utf-8"), "Cargo metadata"), "Cargo metadata")
         if Path(string(metadata.get("workspace_root"), "workspace root")).resolve() != graph.root:
             raise ValueError("dependency project must identify the complete Cargo workspace root")

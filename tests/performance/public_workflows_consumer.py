@@ -442,6 +442,21 @@ record="$"
             self.assertIsNone(source.harness_sha256)
             self.assertEqual(dict(source.context)["legacy.archive-sha256"], sha256(original))
             self.assertEqual(archive.read_bytes(), original)
+            from research_repo_tools import archives
+
+            extract_members = archives._extract
+
+            def replace_after_extraction(*args):
+                extract_members(*args)
+                archive.write_bytes(b"a later archive revision")
+
+            with patch.object(archives, "_extract", side_effect=replace_after_extraction) as extraction:
+                retained, origin = read_baseline(archive, legacy_configuration=configuration, expected_tag="v1.0.0")
+            extraction.assert_called_once()
+            self.assertEqual(retained, sample)
+            self.assertEqual(dict(origin.context)["legacy.archive-sha256"], sha256(original))
+            self.assertEqual(archive.read_bytes(), b"a later archive revision")
+            archive.write_bytes(original)
             with self.assertRaisesRegex(ValueError, "release|tag"):
                 read_baseline(archive, legacy_configuration=configuration, expected_tag="v1.1.0")
             members["sample.json"] = b"broken shared data"

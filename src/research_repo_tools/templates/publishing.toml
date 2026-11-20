@@ -17,5 +17,7 @@ required-checks = [
     {name = "check (windows-2025)", app-id = 15368},
 ]
 # Native validation must include Cargo package verification for the exact SHA.
-# Declare benchmark assets here only when required by the consumer's policy.
-required-assets = []
+# Attach the exact .crate retained from validation before publishing the draft.
+# Keep the filename prefix aligned with package and add any required benchmarks.
+required-assets = ["example-crate-{version}.crate"]
+require-immutable = true

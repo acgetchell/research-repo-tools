@@ -105,7 +105,7 @@ including changelog and release recipes.
 | `just semgrep-setup` | Verify Semgrep in the shared locked Python environment |
 | `just setup` | Install user Just and synchronize the declared development environment |
 | `just sync` | Synchronize the locked development environment |
-| `just tag TAG [--force]` | Create a local annotated release tag (maintainer only). Use `--force` only for [guarded unpublished-candidate recovery](docs/RECOVERING_RELEASES.md#4-replace-the-superseded-draft-and-tag) |
+| `just tag TAG [--commit SHA] [--force]` | Verify the reviewed commit and print the new local tag and annotation (maintainer only). Use `--force` for [guarded unpublished-candidate recovery](docs/RECOVERING_RELEASES.md#4-replace-the-superseded-draft-and-tag). |
 | `just tag-preview TAG` | Preview the release annotation without changing Git state |
 | `just templates ARGS...` | Export a packaged configuration or workflow template |
 | `just test [PYTEST_ARGS...]` | Run the Python test suite or a selected subset |

@@ -1,6 +1,8 @@
 """Installed publication/configuration/CLI contracts with inert synthetic evidence."""
 
 import contextlib
+import hashlib
+import http.client
 import io
 import json
 import os
@@ -19,6 +21,7 @@ from unittest.mock import patch
 
 from research_repo_tools import changelog, cli, config, registry, release_metadata, toolchain, toolchain_config, update_release
 from research_repo_tools.just_inspect import dry_run, inspect_justfile
+from research_repo_tools.process import run_git_command
 from research_repo_tools.release_assets import GitHubRelease, ReleaseTarget, serialize_release_target
 from research_repo_tools.release_publishing import (
     RequiredCheck,
@@ -125,7 +128,7 @@ class TestPublishingConsumer(unittest.TestCase):
         target = ReleaseTarget("example/project", "v1.2.3", 9, sha, "v1.2.3")
         draft = GitHubRelease("example/project", "v1.2.3", 9, True, False, False, (), title="v1.2.3", body="notes\n")
         with (
-            patch("research_repo_tools.release_publishing.check_release_source", return_value=sha),
+            patch("research_repo_tools.release_publishing._check_release_source", return_value=sha),
             patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, sha, "")),
             patch("research_repo_tools.changelog.notes", return_value=("notes\n", self.root / "CHANGELOG.md", "heading")),
             patch("research_repo_tools.release_publishing.lookup_release", return_value=replace(draft, identifier=10)) as lookup,
@@ -332,7 +335,8 @@ class TestPublishingConsumer(unittest.TestCase):
         draft = GitHubRelease("example/project", "v1.2.3", 9, True, False, False, (), title="v1.2.3", body="notes\n")
         with (
             patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, sha, "")),
-            patch("research_repo_tools.release_publishing.check_reviewed_release", return_value=draft),
+            patch("research_repo_tools.release_publishing._check_release_source", return_value=sha),
+            patch("research_repo_tools.release_publishing.lookup_release", return_value=draft),
             patch("research_repo_tools.release_publishing.revalidate_release_target", return_value=replace(draft, body="edited")),
             patch("research_repo_tools.changelog.notes", return_value=("notes\n", self.root / "CHANGELOG.md", "heading")),
             patch("research_repo_tools.release_publishing._publish_release") as publish,
@@ -687,13 +691,37 @@ class TestPublishingConsumer(unittest.TestCase):
         draft = GitHubRelease("example/project", "v1.2.3", 9, True, False, False, ())
         changed = GitHubRelease("example/project", "v1.2.3", 9, True, True, False, ())
         with (
-            patch("research_repo_tools.release_publishing.check_reviewed_release", side_effect=[draft, changed]),
+            patch("research_repo_tools.release_publishing._check_release_source", return_value="a" * 40),
+            patch("research_repo_tools.release_publishing.lookup_release", side_effect=[draft, changed]),
             patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, "a" * 40, "")),
             patch("research_repo_tools.release_assets.run_command_bytes") as command,
         ):
             with self.assertRaisesRegex(ValueError, "mutable stable draft"):
                 publish_reviewed_release(self.settings("crates-io"), "v1.2.3")
         command.assert_not_called()
+
+    def test_github_publication_refreshes_dependencies_before_changing_the_draft(self):
+        sha = "a" * 40
+        draft = GitHubRelease("example/project", "v1.2.3", 9, True, False, False, ())
+        with (
+            patch("research_repo_tools.release_publishing._check_release_source", return_value=sha) as source,
+            patch("research_repo_tools.release_publishing.lookup_release", return_value=draft),
+            patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, sha, "")),
+            patch("research_repo_tools.release_assets._observe_release_target", return_value=draft),
+            patch("research_repo_tools.dependency_provenance.check_release_dependencies", side_effect=[(), ValueError("upstream crate was yanked")]) as proof,
+            patch("research_repo_tools.release_publishing._publish_release", return_value=replace(draft, draft=False)) as publish,
+        ):
+            with self.assertRaisesRegex(ValueError, "upstream crate was yanked"):
+                publish_reviewed_release(self.settings("crates-io"), "v1.2.3")
+            self.assertEqual(source.call_count, 2)
+            self.assertEqual(proof.call_count, 2)
+            publish.assert_not_called()
+
+            proof.reset_mock(side_effect=True)
+            proof.return_value = ()
+            publish_reviewed_release(self.settings("crates-io"), "v1.2.3")
+            self.assertEqual(proof.call_count, 2)
+            publish.assert_called_once()
 
     def test_exact_registry_http_errors_and_post_upload_timeout(self):
         def absent(request, **kwargs):
@@ -717,6 +745,75 @@ class TestPublishingConsumer(unittest.TestCase):
             with patch("research_repo_tools.registry.lookup_version", return_value=absent_result):
                 with self.assertRaisesRegex(ValueError, "not yet visible"):
                     verify_publication(self.settings("crates-io"), "v1.2.3", attempts=2, interval=0)
+
+    def test_crates_io_workflow_rejects_missing_or_mismatched_retained_archive(self):
+        tag = "v1.2.3"
+        commit = "a" * 40
+        repository = "example/project"
+        checksum = hashlib.sha256(b"retained crate bytes").hexdigest()
+        asset = ("sample-1.2.3.crate", 14, 20, checksum)
+        release = GitHubRelease(repository, tag, 9, False, True, False, (asset,), asset_states=((14, "uploaded"),))
+        policy = self.root / "research.toml"
+        policy.write_bytes(
+            b'[publishing]\nregistry="crates-io"\npackage="sample"\nrepository="example/project"\nrequired-checks=[{name="native",app-id=15368}]\n'
+        )
+        event = self.root / "event.json"
+        event.write_bytes(
+            json.dumps(
+                {"action": "published", "repository": {"full_name": repository}, "release": {"id": 9, "tag_name": tag, "draft": False, "prerelease": False}}
+            ).encode()
+        )
+        environment = {
+            "GITHUB_EVENT_NAME": "release",
+            "GITHUB_EVENT_PATH": str(event),
+            "GITHUB_REF": f"refs/tags/{tag}",
+            "GITHUB_REPOSITORY": repository,
+            "GITHUB_SHA": commit,
+        }
+
+        def command(action, *options):
+            stdout, stderr = io.StringIO(), io.StringIO()
+            with contextlib.redirect_stdout(stdout), contextlib.redirect_stderr(stderr):
+                status = cli.main(["--config", str(policy), "release", action, tag, "--require-crate-asset", *options])
+            return status, stdout.getvalue(), stderr.getvalue()
+
+        with (
+            patch.dict(os.environ, environment),
+            patch("research_repo_tools.release_publishing.check_release_source", return_value=commit),
+            patch("research_repo_tools.release_publishing.lookup_release", return_value=release) as github,
+            patch(
+                "research_repo_tools.registry.lookup_version", return_value=registry.RegistryVersion("crates-io", "sample", "1.2.3", True, checksum)
+            ) as lookup,
+        ):
+            self.assertEqual(command("gate"), (0, "", ""))
+            lookup.assert_not_called()
+            self.assertEqual(command("verify"), (0, "Verified published GitHub Release and registry version v1.2.3.\n", ""))
+            lookup.assert_called_once_with("crates-io", "sample", "1.2.3")
+            lookup.return_value = replace(lookup.return_value, checksum="b" * 64)
+            with patch("research_repo_tools.dependency_provenance.check_release_dependencies", side_effect=AssertionError("post-upload dependency lookup")):
+                status, stdout, stderr = command("verify", "--publication-only")
+            self.assertEqual((status, stdout), (1, ""))
+            self.assertIn(f"expected {checksum} from the retained .crate", stderr)
+
+            lookup.reset_mock()
+            for broken, message in (
+                (replace(release, immutable=False), "requires an immutable GitHub Release"),
+                (replace(release, assets=()), "requires an uploaded sample-1.2.3.crate with a SHA-256"),
+                (replace(release, assets=((asset[0], asset[1], asset[2], None),)), "requires an uploaded sample-1.2.3.crate with a SHA-256"),
+                (replace(release, asset_states=((14, "starter"),)), "requires an uploaded sample-1.2.3.crate with a SHA-256"),
+            ):
+                with self.subTest(broken=broken):
+                    github.return_value = broken
+                    for action in ("gate", "verify"):
+                        status, stdout, stderr = command(action)
+                        self.assertEqual((status, stdout), (1, ""))
+                        self.assertIn(message, stderr)
+            lookup.assert_not_called()
+
+            github.side_effect = [release, replace(release, assets=((asset[0], asset[1], asset[2], "b" * 64),))]
+            status, stdout, stderr = command("verify")
+            self.assertEqual((status, stdout), (1, ""))
+            self.assertIn("retained crate SHA-256 changed during registry verification", stderr)
 
     def test_registry_closes_http_error_responses(self):
         for code in [404, 429]:
@@ -750,6 +847,23 @@ class TestPublishingConsumer(unittest.TestCase):
                 transport.assert_called_once()
                 close.assert_called_once_with()
 
+    def test_truncated_registry_metadata_has_a_typed_error_and_one_attempt(self):
+        class Response(io.BytesIO):
+            status = 200
+            url = "https://pypi.org/pypi/sample/1.2.3/json"
+
+        response = Response(b"partial")
+        failure = http.client.IncompleteRead(b"partial", 100)
+        with (
+            patch.object(registry._OPENER, "open", return_value=response) as opener,
+            patch.object(response, "read1", side_effect=failure),
+            self.assertRaisesRegex(registry.RegistryLookupError, r"pypi.org sample/1.2.3") as caught,
+        ):
+            registry.wait_for_version("pypi", "sample", "1.2.3", attempts=3)
+        self.assertIs(caught.exception.__cause__, failure)
+        self.assertTrue(response.closed)
+        opener.assert_called_once()
+
     def test_installed_resources_and_bounded_dependency_policy(self):
         for name in ["RELEASING.md", "publish-crates.yml", "publishing.toml"]:
             rendered = changelog.template(name, owner="example", repository="project")
@@ -762,21 +876,126 @@ class TestPublishingConsumer(unittest.TestCase):
         with self.assertRaises(ValueError):
             config.parse({"changelog": {"dependency-bodies": "deps-dev"}}, root=self.root)
 
-    def test_installed_release_recipes_use_prepared_metadata_before_tagging(self):
+    def test_installed_release_recipes_forward_tag_preflight_and_use_the_managed_cache(self):
         (self.root / "justfile").write_text(changelog.template("justfile"), encoding="utf-8", newline="\n")
         recipes = inspect_justfile(self.root)
         self.assertFalse(recipes.aliases)
         for recipe in ["release-tag", "release-tag-preview", "release-update"]:
             self.assertNotIn(recipe, recipes.recipes)
-        for recipe in ["tag", "tag-preview"]:
-            with self.subTest(recipe=recipe):
-                output = dry_run(self.root, recipe, ["v1.2.3"]).stderr
-                self.assertLess(output.index("release check --final-release"), output.index("changelog tag"))
-                self.assertEqual("--dry-run" in output, recipe == "tag-preview")
+        for cargo in (False, True):
+            if cargo:
+                (self.root / "Cargo.toml").write_bytes(b"[workspace]\nmembers=[]\n")
+                fetch = dry_run(self.root, "release-cargo-fetch", []).stderr
+                self.assertIn("toolchain run --tool cargo -- cargo fetch --locked", fetch)
+            for recipe in ["tag", "tag-preview"]:
+                with self.subTest(recipe=recipe, cargo=cargo):
+                    output = dry_run(self.root, recipe, ["v1.2.3", "--commit", "a" * 40]).stderr
+                    self.assertIn('changelog tag "$@"', output)
+                    self.assertEqual("toolchain run --tool cargo" in output, cargo)
+                    self.assertEqual("--dry-run" in output, recipe == "tag-preview")
+        (self.root / "Cargo.toml").unlink()
+        manifest = self.root / "crates" / "app" / "Cargo.toml"
+        manifest.parent.mkdir(parents=True)
+        manifest.write_bytes(b"[workspace]\nmembers=[]\n")
+        recipe = self.root / "justfile"
+        recipe.write_bytes(recipe.read_bytes().replace(b'release_cargo := path_exists("Cargo.toml")', b'release_cargo := "true"'))
+        self.assertIn("toolchain run --tool cargo", dry_run(self.root, "tag", ["v1.2.3"]).stderr)
+        self.assertIn("toolchain run --tool cargo", dry_run(self.root, "release-dependencies", []).stderr)
         for arguments in [["v1.2.3"], ["v1.2.3", "--previous-release", "v1.2.2", "--date", "2026-09-01", "--dry-run"]]:
             with self.subTest(arguments=arguments):
                 self.assertIn('release update "$@"', dry_run(self.root, "update-version", arguments).stderr)
         self.assertIn('release verify --attempts 7 --interval 10 "$@"', dry_run(self.root, "release-verify", ["v1.2.3"]).stderr)
+
+    def test_tag_cli_checks_reviewed_commit_and_resumes_after_offline_preflight(self):
+        if os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1":
+            self.skipTest("disposable Git mutations disabled")
+        for cargo in (False, True):
+            with self.subTest(cargo=cargo):
+                checkout = self.root / ("cargo" if cargo else "python")
+                checkout.mkdir()
+                environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
+
+                def git(*args: str) -> str:
+                    return run_git_command(list(args), cwd=checkout, env=environment).stdout.strip()
+
+                annotation = "- Authored notes from the reviewed commit. 修訂"
+                (checkout / "CHANGELOG.md").write_bytes(f"# Changelog\n\n## [1.2.3] - 2026-09-01\n\n{annotation}\n".encode())
+                config = '[tool.research-repo-tools.release]\ndate-policy="declared"\n'
+                files = {"pyproject.toml": '[project]\nname="sample"\nversion="1.2.3"\n' + config}
+                if cargo:
+                    files |= {
+                        "Cargo.toml": '[package]\nname="sample"\nversion="1.2.3"\n',
+                        "Cargo.lock": 'version=4\n[[package]]\nname="sample"\nversion="1.2.3"\n',
+                        "dependency-sources.toml": 'schema=1\n[projects.main]\necosystem="cargo"\n',
+                    }
+                for name, content in files.items():
+                    (checkout / name).write_bytes(content.encode())
+                git("init", "--quiet", "--template=")
+                git("config", "core.hooksPath", ".no-hooks")
+                git("add", ".")
+                git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "candidate")
+                git("config", "user.name", "Fixture")
+                git("config", "user.email", "fixture@example.invalid")
+                git("config", "tag.gpgSign", "false")
+                commit = git("--no-pager", "rev-parse", "HEAD")
+                retained = self.root / (checkout.name + "-reviewed.json")
+                retained.write_bytes(json.dumps({"tag": "v1.2.3", "commit": commit}).encode())
+
+                def invoke(reviewed: str) -> tuple[int, str, str]:
+                    with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+                        result = cli.main(["--root", str(checkout), "changelog", "tag", "v1.2.3", "--commit", reviewed])
+                    return result, out.getvalue(), err.getvalue()
+
+                status, _, errors = invoke("a" * 40)
+                self.assertEqual(status, 1, errors)
+                self.assertIn("differs from the captured commit", errors)
+                self.assertEqual(git("--no-pager", "tag", "--list"), "")
+
+                if cargo:
+                    package = {"id": "sample", "name": "sample", "version": "1.2.3", "manifest_path": str(checkout / "Cargo.toml"), "source": None}
+                    graph = {"workspace_root": str(checkout), "packages": [package], "resolve": {"nodes": [{"id": "sample", "dependencies": []}]}}
+                    with (
+                        patch("research_repo_tools.dependency_graphs._resolve_cargo"),
+                        patch("research_repo_tools.process.run_command") as cargo_command,
+                        patch.dict(os.environ, {"CARGO_HOME": str(self.root / "managed")}),
+                    ):
+                        cargo_command.side_effect = subprocess.CalledProcessError(101, ["cargo", "metadata"], stderr=b"cold cache: failed to download")
+                        status, _, errors = invoke(commit)
+                        self.assertEqual(status, 1, errors)
+                        self.assertIn("cold cache: failed to download", errors)
+                        self.assertIn("just release-cargo-fetch", errors)
+                        self.assertIn(commit, errors)
+                        self.assertEqual(git("--no-pager", "tag", "--list"), "")
+                        cargo_command.side_effect = None
+                        cargo_command.return_value = subprocess.CompletedProcess([], 0, json.dumps(graph), "")
+                        status, output, errors = invoke(json.loads(retained.read_bytes())["commit"])
+                        self.assertIn("--offline", cargo_command.call_args.args[1])
+                        self.assertEqual(cargo_command.call_args.kwargs["env"]["CARGO_HOME"], str(self.root / "managed"))
+                else:
+                    with patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "901"}):
+                        status, _, errors = invoke(commit)
+                    self.assertEqual(status, 1)
+                    self.assertIn("from 1 to 900", errors)
+                    self.assertEqual(git("--no-pager", "tag", "--list"), "")
+                    reviewed = json.loads(retained.read_bytes())
+                    launcher = (
+                        'import sys; from research_repo_tools.cli import main; sys.stdout.reconfigure(encoding="cp1252", errors="strict"); sys.exit(main())'
+                    )
+                    resumed = subprocess.run(
+                        [sys.executable, "-I", "-X", "utf8", "-c", launcher, "changelog", "tag", reviewed["tag"], "--commit", reviewed["commit"]],
+                        cwd=checkout,
+                        env={key: value for key, value in environment.items() if key not in {"CARGO_HOME", "RUSTUP_HOME", "RUSTUP_TOOLCHAIN"}},
+                        capture_output=True,
+                        check=False,
+                        timeout=30,
+                    )
+                    status, output, errors = resumed.returncode, resumed.stdout.decode("cp1252"), resumed.stderr.decode("utf-8")
+                self.assertEqual(status, 0, errors)
+                self.assertIn(f"Created local annotated tag v1.2.3 at {commit}", output)
+                display = annotation if cargo else annotation.encode("cp1252", "backslashreplace").decode("cp1252")
+                self.assertIn(display, output)
+                self.assertEqual(git("--no-pager", "rev-parse", "v1.2.3^{commit}"), commit)
+                self.assertIn(annotation, git("--no-pager", "cat-file", "tag", "v1.2.3"))
 
     def test_installed_cli_generation_with_real_external_generator(self):
         # Synthetic git-cliff context avoids creating Git objects or refs. Hosted

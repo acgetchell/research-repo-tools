@@ -1,5 +1,6 @@
 """Resolve dedicated runtime locks and retain verified portable wheel bundles."""
 
+import http.client
 import json
 import os
 import sys
@@ -218,7 +219,10 @@ def record_runtime_policy(root: Path, destination: Path, *, provider: SourceProv
             if provider is None:
                 from research_repo_tools._registry_requests import read_registry
 
-                payload = read_registry(artifact.url, limit=artifact.size)
+                try:
+                    payload = read_registry(artifact.url, limit=artifact.size)
+                except http.client.HTTPException as error:
+                    raise ValueError(f"{artifact.filename}: runtime wheel download was incomplete or invalid") from error
             else:
                 payload = provider.read(artifact.url)
             if not isinstance(payload, bytes) or len(payload) != artifact.size:

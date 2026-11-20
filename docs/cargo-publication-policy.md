@@ -20,6 +20,13 @@ short-lived credentials, limits, errors, uncertain upload outcomes and registry
 checksum verification. Archive metadata inspection alone does not preserve all
 of Cargo's publication checks.
 
+The [packaged Cargo workflow](../src/research_repo_tools/templates/publish-crates.yml)
+uses the validated `.crate` attached to the immutable GitHub Release as its
+checksum reference. Attach the archive to the draft before publishing on GitHub.
+The workflow checks that attachment before requesting a token and fails
+verification if crates.io reports a different SHA-256 after upload. GitHub
+publication and registry deployment approval remain separate steps.
+
 The bounded alternative review included the upstream command and registry
 interfaces, [cargo-release's publication configuration](https://github.com/crate-ci/cargo-release/blob/main/docs/reference.md),
 and [release-plz's release operation](https://release-plz.dev/docs/usage/release).

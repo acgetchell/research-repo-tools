@@ -1,24 +1,131 @@
 """Bounded retries for exact-URL public registry GETs, never mutations."""
 
+import http.client
+import io
 import math
+import os
 import socket
 import threading
 import time
 import urllib.error
 import urllib.request
 from collections.abc import Callable
+from contextvars import ContextVar
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from urllib.parse import urlsplit
+from typing import cast, override
+from urllib.parse import SplitResult, urlsplit
 
-from research_repo_tools._http import closing_http_errors
+from research_repo_tools._http import close_http_error
 from research_repo_tools.dependency_progress import report
-from research_repo_tools.registry import TransientRegistryError
 
 _LOCK = threading.Lock()
 _requested_at: float | None = None
 _TRANSIENT = frozenset({408, 429, 500, 502, 503, 504})
 _HOSTS = frozenset({"pypi.org", "files.pythonhosted.org", "crates.io", "static.crates.io"})
+_TIMEOUT_ENV = "RRT_REGISTRY_TIMEOUT_SECONDS"
+_CONNECT_TIMEOUT = 30.0
+_READ_TIMEOUT = 30.0
+_CHUNK_SIZE = 64 * 1024
+_remaining: ContextVar[Callable[[], float] | None] = ContextVar("registry_deadline", default=None)
+
+
+def registry_timeout() -> int:
+    """Read the total per-GET budget, in whole seconds, including retries."""
+    value = os.environ.get(_TIMEOUT_ENV, "60")
+    if not (value.isascii() and value.isdecimal() and len(value) <= 3 and 1 <= int(value) <= 900):
+        raise ValueError(f"{_TIMEOUT_ENV} must be a whole number of seconds from 1 to 900 (default 60)")
+    return int(value)
+
+
+def _identity(parsed: SplitResult) -> str:
+    path = parsed.path.strip("/").split("/")
+    if parsed.netloc == "pypi.org" and path[:1] == ["pypi"] and path[-1:] == ["json"]:
+        path = path[1:-1]
+    elif parsed.netloc == "crates.io" and path[:3] == ["api", "v1", "crates"]:
+        path = path[3:]
+    else:
+        path = path[-1:]
+    return f"{parsed.netloc} {'/'.join(path)}".rstrip()
+
+
+class _BudgetExpired(TimeoutError):
+    pass
+
+
+class _StalledRead(TimeoutError):
+    pass
+
+
+def _io_timeout(remaining: Callable[[], float], cap: float) -> float:
+    seconds = remaining()
+    if seconds <= 0:
+        raise _BudgetExpired
+    return min(cap, seconds)
+
+
+class _DeadlineReader(io.RawIOBase):
+    """Apply the remaining budget to each socket read, including HTTP framing."""
+
+    def __init__(self, stream: io.RawIOBase, sock: socket.socket, remaining: Callable[[], float]):
+        self._stream = stream
+        self._socket = sock
+        self._remaining = remaining
+
+    @override
+    def readable(self) -> bool:
+        return True
+
+    @override
+    def readinto(self, buffer) -> int | None:
+        self._socket.settimeout(_io_timeout(self._remaining, _READ_TIMEOUT))
+        return cast("int | None", self._stream.readinto(buffer))
+
+    @override
+    def close(self) -> None:
+        try:
+            self._stream.close()
+        finally:
+            super().close()
+
+
+class RegistryHTTPSHandler(urllib.request.HTTPSHandler):
+    """Keep urllib TLS, proxy and redirect behavior while budgeting socket reads."""
+
+    @override
+    def do_open(self, http_class: Callable[..., http.client.HTTPConnection], req: urllib.request.Request, **http_conn_args):
+        remaining = _remaining.get()
+        if remaining is None:
+            return super().do_open(http_class, req, **http_conn_args)
+
+        class Response(http.client.HTTPResponse):
+            def __init__(self, sock: socket.socket, *args, **kwargs):
+                super().__init__(sock, *args, **kwargs)
+                stream = self.fp
+                assert stream is not None  # HTTPResponse initializes this from the connected socket.
+                self.fp = io.BufferedReader(_DeadlineReader(stream.detach(), sock, remaining))
+
+        def connection(host, timeout=None, **kwargs) -> http.client.HTTPConnection:
+            cap = _CONNECT_TIMEOUT if timeout is None else timeout
+            connected = http_class(host, timeout=_io_timeout(remaining, cap), **kwargs)
+            connected.response_class = Response
+            # HTTPConnection uses this factory to open the TCP socket. Clamp the
+            # timeout again before HTTPSConnection starts its TLS handshake.
+            create_connection: Callable[..., socket.socket] = getattr(connected, "_create_connection")
+
+            def connect(*args):
+                sock = create_connection(*args)
+                try:
+                    sock.settimeout(_io_timeout(remaining, cap))
+                except BaseException:
+                    sock.close()
+                    raise
+                return sock
+
+            setattr(connected, "_create_connection", connect)
+            return connected
+
+        return super().do_open(connection, req, **http_conn_args)
 
 
 def _retry_after(value: str | None) -> float:
@@ -33,17 +140,37 @@ def _retry_after(value: str | None) -> float:
     return max(0.0, delay)
 
 
-def _request(url: str, timeout: float, limit: int) -> bytes:
+def _request(url: str, timeout: float, limit: int, *, remaining: Callable[[], float]) -> bytes:
     from research_repo_tools import registry
 
     request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "research-repo-tools"})
-    with closing_http_errors(), registry._OPENER.open(request, timeout=timeout) as response:
+    token = _remaining.set(remaining)
+    try:
+        response = registry._OPENER.open(request, timeout=timeout)
+    finally:
+        _remaining.reset(token)
+    with response:
         if response.status != 200 or response.url != url:
             raise ValueError("registry returned an unexpected status or redirect")
-        payload = response.read(limit + 1)
-        if not isinstance(payload, bytes) or len(payload) > limit:
-            raise ValueError("registry response exceeds its byte limit or is not bytes")
-        return payload
+        payload = bytearray()
+        while True:
+            if remaining() <= 0:
+                raise _BudgetExpired
+            try:
+                chunk = response.read1(min(_CHUNK_SIZE, limit + 1 - len(payload)))
+            except TimeoutError:
+                if remaining() <= 0:
+                    raise _BudgetExpired from None
+                raise _StalledRead from None
+            if remaining() <= 0:
+                raise _BudgetExpired
+            if not isinstance(chunk, bytes) or len(payload) + len(chunk) > limit:
+                raise ValueError("registry response exceeds its byte limit or is not bytes")
+            if not chunk:
+                if isinstance(response, http.client.HTTPResponse) and response.length:
+                    raise http.client.IncompleteRead(bytes(payload), response.length)
+                return bytes(payload)
+            payload.extend(chunk)
 
 
 def read_registry(
@@ -54,32 +181,41 @@ def read_registry(
     clock: Callable[[], float] | None = None,
     sleep: Callable[[float], None] | None = None,
 ) -> bytes:
-    """At most three attempts within a 60-second retry budget, 30s per I/O.
+    """At most three attempts within the configured total GET budget.
 
     Preserve the exact URL and response limits on every attempt. Every crates.io
     API attempt participates in process-wide one-second pacing. No observation
     survives this call. Integrity/parse errors are never transient failures.
     """
-    transport = transport if transport is not None else _request
+    from research_repo_tools.registry import TransientRegistryError
+
     clock = clock if clock is not None else time.monotonic
     sleep = sleep if sleep is not None else time.sleep
     parsed = urlsplit(url)
     if parsed.scheme != "https" or parsed.netloc not in _HOSTS or parsed.query or parsed.fragment or "\\" in url or any(c.isspace() for c in url):
         raise ValueError("dependency registry URL must use an exact supported public HTTPS origin without credentials or query")
-    deadline = clock() + 60.0
+    if type(limit) is not int or limit < 1:
+        raise ValueError("registry response byte limit must be a positive integer")
+    identity = _identity(parsed)
+    budget = registry_timeout()
+    deadline = clock() + budget
+
+    def remaining() -> float:
+        return deadline - clock()
 
     def request() -> bytes:
-        remaining = deadline - clock()
-        if remaining <= 0:
-            raise TimeoutError("registry retry deadline exhausted")
-        payload = transport(url, min(30.0, remaining), limit)
-        if clock() >= deadline:
-            raise TimeoutError("registry retry deadline exhausted")
+        seconds = remaining()
+        if seconds <= 0:
+            raise _BudgetExpired
+        timeout = min(_CONNECT_TIMEOUT, seconds)
+        payload = _request(url, timeout, limit, remaining=remaining) if transport is None else transport(url, timeout, limit)
+        if remaining() <= 0:
+            raise _BudgetExpired
         if not isinstance(payload, bytes) or len(payload) > limit:
             raise ValueError("registry response exceeds its byte limit or is not bytes")
         return payload
 
-    last_failure = "connection/read timeout"
+    last_failure = "connection timeout or failure"
     for attempt in range(3):
         delay = float(2**attempt)
         # Observer failures belong to the caller, never to transport retries.
@@ -89,14 +225,14 @@ def read_registry(
         try:
             if parsed.netloc == "crates.io" and parsed.path.startswith("/api/"):
                 global _requested_at
-                remaining = deadline - clock()
-                if remaining <= 0 or not _LOCK.acquire(timeout=remaining):
-                    raise TimeoutError("registry retry deadline exhausted")
+                seconds = remaining()
+                if seconds <= 0 or not _LOCK.acquire(timeout=seconds):
+                    raise _BudgetExpired
                 try:
                     if _requested_at is not None:
                         wait = max(0.0, 1.0 - (clock() - _requested_at))
-                        if wait >= deadline - clock():
-                            raise TimeoutError("registry retry deadline exhausted")
+                        if wait >= remaining():
+                            raise _BudgetExpired
                         if wait:
                             sleep(wait)
                     _requested_at = clock()
@@ -105,27 +241,34 @@ def read_registry(
                     _LOCK.release()
             return request()
         except urllib.error.HTTPError as error:
-            with closing_http_errors():
-                try:
-                    if error.url != url or error.code not in _TRANSIENT:
-                        raise
-                    last_failure = f"HTTP {error.code}"
-                    delay = max(delay, _retry_after(error.headers.get("Retry-After")))
-                finally:
-                    error.close()
+            close_http_error(error)
+            if error.url != url or error.code not in _TRANSIENT:
+                raise
+            last_failure = f"HTTP {error.code}"
+            try:
+                delay = max(delay, _retry_after(error.headers.get("Retry-After")))
+            except ValueError as retry_error:
+                raise ValueError(f"registry GET {identity}: {retry_error}") from None
+        except _BudgetExpired:
+            last_failure = "total download budget exhausted"
+            break
+        except _StalledRead:
+            last_failure = "stalled body read"
         except OSError as error:
             reason = error.reason if isinstance(error, urllib.error.URLError) else error
             if isinstance(reason, socket.gaierror) and reason.errno == socket.EAI_AGAIN:
                 last_failure = "temporary DNS lookup failure"
             elif isinstance(reason, (TimeoutError, ConnectionError)):
-                last_failure = "connection/read timeout"
+                last_failure = "total download budget exhausted" if remaining() <= 0 else "connection or response-header timeout/failure"
             else:
-                raise ValueError("registry GET failed; availability is unproven") from None
-        if attempt == 2 or delay >= deadline - clock():
+                raise ValueError(f"registry GET {identity} failed; availability is unproven") from None
+        except ValueError as error:
+            raise ValueError(f"registry GET {identity}: {error}") from None
+        if attempt == 2 or delay >= remaining():
             break
         report("retry", "registry", detail=f"{parsed.netloc}; attempt {attempt + 2}/3 after {delay:g}s")
         sleep(delay)
     raise TransientRegistryError(
-        f"registry GET exhausted three attempts or its 60-second retry budget; last failure: {last_failure}; "
-        "availability is unproven; retry verification with retained evidence"
+        f"registry GET {identity} exhausted three attempts or its {budget}-second retry budget; last failure: {last_failure}; "
+        f"availability is unproven; retry verification with retained evidence (set {_TIMEOUT_ENV} to increase the total budget)"
     )

@@ -271,7 +271,7 @@ class TestDependencyProvenance(unittest.TestCase):
         for stage in ("metadata", "wheel"):
             failure = http.client.IncompleteRead(b"partial", 42)
             self.network.side_effect = failure if stage == "metadata" else None
-            with self.subTest(stage=stage), patch.object(Response, "read", side_effect=failure):
+            with self.subTest(stage=stage), patch.object(Response, "read1", side_effect=failure):
                 with self.assertRaisesRegex(ValueError, "resolve and sync uv.lock") as caught:
                     check_release_dependencies(self.root)
                 self.assertIs(caught.exception.__cause__, failure)

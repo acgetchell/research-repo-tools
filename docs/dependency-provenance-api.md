@@ -166,20 +166,26 @@ prior reporter. If verification is already failing, its original error takes
 precedence over a failure to report it.
 
 One dependency-policy pass shares verified metadata for an exact source identity
-across configured graphs. Every graph still compares its own lock checksums and
-artifacts. A later pass fetches fresh metadata, including current yank status.
+across configured graphs and their installed-wheel checks. Every graph compares
+its own lock checksums and artifacts. Installed wheels are downloaded and compared
+with local files. A later pass fetches fresh metadata, including current yank status.
 Local policy, manifest, lock and environment layout checks precede remote graph
-traversal where their inputs are available. Cargo cache errors identify the
-affected locked crate/path; repair that cache entry. Unexpected installed files
+traversal where their inputs are available. Cargo checks reuse a compressed
+archive from the same registry cache when its SHA-256 and size match the lock
+and fresh registry metadata. They download the archive if the local copy is
+unavailable or fails verification, and compare every extracted input with the
+authenticated bytes. Cargo cache errors identify the affected crate and path.
+Unexpected installed files
 require repair of the named environment from its declared lock. Preserve the
 original benchmark evidence and release handoffs while repairing dependencies.
 
 Public PyPI/crates.io metadata and dependency-artifact GETs allow at most three
 attempts for connection/read timeouts, connection failures and HTTP 408, 429,
 500, 502, 503 or 504. Each attempt preserves the original HTTPS URL, redirect
-rejection and byte bounds. The retry window is 60 seconds with a maximum
-30-second I/O timeout; it is not a whole-graph completion estimate or a hard
-wall-clock bound on system DNS resolution or a slowly streaming response.
+rejection and byte bounds. `RRT_REGISTRY_TIMEOUT_SECONDS` sets the per-GET
+retry window in whole seconds from 1 to 900 (default 60). Connection and
+stalled-read timeout limits are 30 seconds. System DNS resolution can return
+after the per-GET budget expires.
 Waiting for the shared crates.io pacing lock consumes the same retry budget.
 Backoff is one then two seconds. A valid `Retry-After` can extend a delay to at
 most ten seconds; larger or malformed values stop verification for a later
@@ -196,6 +202,11 @@ Between passes it rechecks original local inputs, environment and installed byte
 while live target/asset observations continue. Neither API exposes a caller
 verification override or shares observations across operations. Approval and
 publication still obtain their own fresh checks.
+
+One `release evidence` invocation reuses its entry dependency observation while
+checking the signed evidence and writing the handoff. It rechecks local inputs
+and refreshes registry proof after five minutes. A separate invocation after
+approval starts with fresh registry proof, including current yank status.
 
 Low-level rootless evidence functions still verify their explicit provider and
 artifact inputs; callers composing those primitives must call the dependency gate

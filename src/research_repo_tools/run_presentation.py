@@ -208,7 +208,8 @@ def render_run_table(evidence: Evidence, layout: RunLayout, *, style: RunTableSt
         if headings and len(headings) != len(layout.comparisons):
             raise ValueError("comparison headings must match the number of layout comparisons")
     run, selected = _select(evidence, layout)
-    reasons = () if isinstance(run, SuiteRun) else ratio_incompatibilities(evidence)
+    comparisons = layout.comparisons if style.comparison_columns else ()
+    reasons = () if not comparisons or isinstance(run, SuiteRun) else ratio_incompatibilities(evidence)
     phases = {item.name: item.phase for item in run.series}
     labels = {item.name: item.label for item in layout.series}
     caption = f"Run: `{run_identity(evidence)}`. Statistic: {layout.statistic}. Unit: {layout.unit}."
@@ -227,7 +228,7 @@ def render_run_table(evidence: Evidence, layout: RunLayout, *, style: RunTableSt
     lines.extend(f"- {_markdown_text(item.label)}: {_markdown_text(_attribution(evidence, run, item.name))}." for item in layout.series)
     headers = [_markdown_text(style.row_heading), *(_markdown_text(item.label) for item in layout.series)]
     meanings = []
-    for index, (a, b) in enumerate(layout.comparisons):
+    for index, (a, b) in enumerate(comparisons):
         for column in style.comparison_columns:
             headings = style.ratio_headings if column == "ratio" else style.reduction_headings
             default = f"{labels[a]} / {labels[b]}" if column == "ratio" else f"{labels[a]} → {labels[b]} time reduction (%)"
@@ -252,7 +253,7 @@ def render_run_table(evidence: Evidence, layout: RunLayout, *, style: RunTableSt
                 if estimate is not None
                 else "unavailable"
             )
-        for a, b in layout.comparisons:
+        for a, b in comparisons:
             first, second = selected[a].get(row.key), selected[b].get(row.key)
             row_reasons = _ratio_reasons(run, layout, a, b, row.key) if first is not None and second is not None else ()
             ratio_notes.update(row_reasons)

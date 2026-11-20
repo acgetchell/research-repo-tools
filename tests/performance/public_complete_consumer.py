@@ -1190,6 +1190,13 @@ Selection coverage:
                 else:
                     self.assertNotIn("Reduction &lt;&amp;&gt;", table)
 
+    def test_timing_only_table_skips_arithmetic_for_hidden_comparison_columns(self):
+        evidence = retained_fixture(baseline_point=1e-308)
+        result = render_run_table(evidence, presentation_layout(), style=RunTableStyle(comparison_columns=()))
+        self.assertIn("1e-308 ns", result)
+        self.assertIn("5 ns", result)
+        self.assertNotIn("time reduction", result.lower())
+
     def test_table_style_rejects_invalid_fields_and_heading_counts(self):
         invalid = (
             {"row_heading": ""},

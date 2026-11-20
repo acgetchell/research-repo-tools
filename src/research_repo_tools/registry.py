@@ -1,6 +1,7 @@
 """Bounded, read-only exact-version verification for PyPI and crates.io."""
 
 import hashlib
+import http.client
 import re
 import time
 import urllib.error
@@ -13,6 +14,7 @@ from urllib.parse import urlsplit
 from packaging.utils import canonicalize_name
 
 from research_repo_tools._http import closing_http_errors
+from research_repo_tools._registry_requests import RegistryHTTPSHandler
 from research_repo_tools.evidence import _load_json
 from research_repo_tools.release_validation import MAX_BYTES, distribution_names
 
@@ -28,7 +30,7 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
         return None
 
 
-_OPENER = urllib.request.build_opener(_NoRedirectHandler())
+_OPENER = urllib.request.build_opener(RegistryHTTPSHandler(), _NoRedirectHandler())
 
 
 def pypi_destination(url: str) -> str:
@@ -53,8 +55,8 @@ def verify_published_distributions(package: str, version: str, files: Mapping[st
     """Compare exact registry inventory, declared hashes and downloaded bytes.
 
     Unlike lookup_version, absence is an error here. Callers supply hashes from
-    live verified evidence, never from the registry being checked. No uploads,
-    retries, rebuilds or credentials are performed by this function.
+    live verified evidence, never from the registry being checked. Public PyPI
+    reads use the bounded GET retry policy. There are no uploads or rebuilds.
     """
     files = dict(files)
     names = distribution_names(f"v{version}", package=package, filenames=tuple(files))
@@ -91,14 +93,25 @@ def verify_published_distributions(package: str, version: str, files: Mapping[st
             or not isinstance(upload.get("url"), str)
         ):
             raise RegistryLookupError("published distribution is yanked or differs from expected bytes")
-        download = pypi_destination(upload["url"])
+        host = urlsplit(index_url).netloc
         try:
-            with closing_http_errors(), _OPENER.open(download, timeout=30) as response:
-                payload = response.read(MAX_BYTES + 1)
-                if response.status != 200 or response.url != download:
-                    raise RegistryLookupError("published distribution returned an unexpected status or redirect")
-        except (OSError, urllib.error.URLError) as error:
-            raise RegistryLookupError("published distribution download failed") from error
+            download = pypi_destination(upload["url"])
+            host = urlsplit(download).netloc
+            if index_url == "https://pypi.org":
+                from research_repo_tools._registry_requests import read_registry
+
+                if urlsplit(download).netloc != "files.pythonhosted.org":
+                    raise RegistryLookupError("published distribution requires the exact files.pythonhosted.org origin")
+                payload = read_registry(download, limit=MAX_BYTES)
+            else:
+                with closing_http_errors(), _OPENER.open(download, timeout=30) as response:
+                    payload = response.read(MAX_BYTES + 1)
+                    if response.status != 200 or response.url != download:
+                        raise RegistryLookupError("published distribution returned an unexpected status or redirect")
+        except RegistryLookupError:
+            raise
+        except (OSError, http.client.HTTPException, ValueError) as error:
+            raise RegistryLookupError(f"{host} {name}: published distribution download failed") from error
         if len(payload) != upload["size"] or hashlib.sha256(payload).hexdigest() != digest:
             raise RegistryLookupError("published distribution bytes differ from verified evidence")
         result[name] = digest
@@ -135,15 +148,17 @@ def identity(registry: str, package: str, version: str) -> None:
 
 
 def _json(url: str) -> object:
-    request = urllib.request.Request(
-        url, headers={"Accept": "application/json", "User-Agent": "research-repo-tools (https://github.com/acgetchell/research-repo-tools)"}
-    )
-    try:
-        if urlsplit(url).netloc in {"pypi.org", "crates.io"}:
-            from research_repo_tools._registry_requests import read_registry
+    from research_repo_tools._registry_requests import _identity, read_registry
 
+    parsed = urlsplit(url)
+    identity = _identity(parsed)
+    try:
+        if parsed.netloc in {"pypi.org", "crates.io"}:
             payload = read_registry(url, limit=LIMIT)
         else:
+            request = urllib.request.Request(
+                url, headers={"Accept": "application/json", "User-Agent": "research-repo-tools (https://github.com/acgetchell/research-repo-tools)"}
+            )
             with closing_http_errors(), _OPENER.open(request, timeout=15) as response:
                 payload = response.read(LIMIT + 1)
                 if response.status != 200 or response.url != url:
@@ -151,10 +166,10 @@ def _json(url: str) -> object:
     except urllib.error.HTTPError as error:
         if error.code == 404 and error.url == url:
             return _NOT_FOUND
-        raise RegistryLookupError(f"registry lookup failed with HTTP {error.code}; absence is unproven") from error
-    except (OSError, urllib.error.URLError) as error:
-        raise RegistryLookupError("registry lookup failed; absence is unproven") from error
-    except TransientRegistryError:
+        raise RegistryLookupError(f"registry lookup failed with HTTP {error.code} for {identity}; absence is unproven") from error
+    except (OSError, http.client.HTTPException) as error:
+        raise RegistryLookupError(f"registry lookup failed for {identity}; absence is unproven") from error
+    except RegistryLookupError:
         raise
     except ValueError as error:
         raise RegistryLookupError(str(error)) from error
@@ -215,8 +230,8 @@ def lookup_version(registry: Literal["pypi", "crates-io"], package: str, version
 def wait_for_version(registry: Literal["pypi", "crates-io"], package: str, version: str, *, attempts: int = 1, interval: int = 10) -> RegistryVersion:
     """Poll proven absence at most 31 times with up to 300s total inter-poll delay.
 
-    Public registry GETs separately allow three transient attempts within a
-    60-second retry budget. Exhausted lookups and permanent/integrity failures
+    Public registry GETs separately allow three attempts within the configured
+    timeout. Exhausted lookups and permanent/integrity failures
     stop polling; only an exact 404 permits the next poll. Never retry uploads.
     """
     if type(attempts) is not int or not 1 <= attempts <= 31 or type(interval) is not int or not 0 <= interval <= 10:

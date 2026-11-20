@@ -5,6 +5,7 @@ The provider boundary transports bytes, never executable consumer metadata.
 """
 
 import hashlib
+import http.client
 import json
 import re
 import tomllib
@@ -135,15 +136,18 @@ class SourceProvider(Protocol):
 class HttpSourceProvider:
     def read(self, url: str) -> bytes:
         from research_repo_tools import registry
-        from research_repo_tools._registry_requests import read_registry
+        from research_repo_tools._registry_requests import _identity, read_registry
         from research_repo_tools.tooling_runtime import _read
 
-        host = urlsplit(url).netloc
+        parsed = urlsplit(url)
+        host = parsed.netloc
         if host in {"pypi.org", "crates.io", "files.pythonhosted.org", "static.crates.io"}:
             try:
                 return read_registry(url, limit=registry.MAX_BYTES if host in {"files.pythonhosted.org", "static.crates.io"} else 1024 * 1024)
             except urllib.error.HTTPError as error:
-                raise ValueError(f"registry GET failed with HTTP {error.code}; availability is unproven") from None
+                raise ValueError(f"registry GET failed with HTTP {error.code} for {_identity(parsed)}; availability is unproven") from None
+            except http.client.HTTPException as error:
+                raise ValueError(f"registry GET failed for {_identity(parsed)}; availability is unproven") from error
         return _read(url)
 
 

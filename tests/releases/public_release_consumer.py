@@ -471,6 +471,15 @@ class TestReleaseConsumer(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, "duplicate"):
                 published_releases(self.root)
 
+    def test_full_provider_page_cannot_prove_empty_stable_history(self):
+        import subprocess
+
+        previews = [{"tagName": f"v1.0.{index}-rc.1", "isDraft": False, "isPrerelease": True} for index in range(1000)]
+        response = subprocess.CompletedProcess(["gh"], 0, json.dumps(previews).encode(), b"")
+        with patch("shutil.which", return_value=str(Path(__file__).resolve())), patch("subprocess.run", return_value=response):
+            with self.assertRaisesRegex(ValueError, "1000-release limit"):
+                published_releases(self.root)
+
 
 class TestFirstRelease(unittest.TestCase):
     @override
