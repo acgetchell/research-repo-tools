@@ -121,6 +121,20 @@ def test_unredacted_json_rejected():
         security._gitleaks_report([{"RuleID": "synthetic", "File": "file", "Secret": "not-redacted"}], "json")
 
 
+def test_scanner_does_not_publish_after_serialization_exceeds_read_limit(tmp_path):
+    destination = tmp_path / "report.json"
+    destination.write_bytes(b"old report")
+    payload = b'{"values":[1,2,3]}'
+
+    def native(_binary, args, **_kwargs):
+        Path(args[0]).write_bytes(payload)
+        return subprocess.CompletedProcess(args, 0, b"", b"")
+
+    with patch.object(security, "REPORT_LIMIT", len(payload)), patch.object(security, "run_command_bytes", side_effect=native):
+        assert security._report_run(Path("scanner"), ["{report}"], destination, "json", root=tmp_path, env={}, validate=lambda *_: False) == 1
+    assert not destination.exists()
+
+
 def test_pinned_gitleaks_matches_anchored_working_paths_with_relative_extensions(tmp_path, capsys):
     executable = shutil.which("gitleaks")
     if executable is None or os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1":

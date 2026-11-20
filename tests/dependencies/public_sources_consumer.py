@@ -504,6 +504,37 @@ class TestSources(unittest.TestCase):
         wrap.assert_called_once()
         sock.close.assert_called_once()
 
+    def test_registry_deadline_refreshes_after_tls_before_request_write(self) -> None:
+        now = [0.0]
+        write_timeouts = []
+        sock = MagicMock()
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _registry_requests.RegistryHTTPSHandler(), registry._NoRedirectHandler())
+
+        def handshake(_socket, *, server_hostname):
+            self.assertEqual(server_hostname, "files.pythonhosted.org")
+            now[0] += 4
+            return sock
+
+        def send(_data):
+            timeout = sock.settimeout.call_args.args[0]
+            write_timeouts.append(timeout)
+            now[0] += timeout
+            raise TimeoutError
+
+        sock.sendall.side_effect = send
+        with (
+            patch.object(registry, "_OPENER", opener),
+            patch.object(socket, "getaddrinfo", return_value=[REGISTRY_ADDRESS]),
+            patch.object(socket, "socket", return_value=sock),
+            patch.object(ssl.SSLContext, "wrap_socket", side_effect=handshake),
+            patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "5"}),
+            self.assertRaisesRegex(registry.TransientRegistryError, "total download budget exhausted"),
+        ):
+            _registry_requests.read_registry(PYTHON_URL, limit=32, clock=lambda: now[0])
+        self.assertEqual(write_timeouts, [1])
+        self.assertEqual(now[0], 5)
+        sock.close.assert_called_once()
+
     def test_retry_after_bound_and_failed_progress_do_not_leak_provider_details(self) -> None:
         events = []
         progress = DependencyProgress(mode="none", observer=events.append)

@@ -170,18 +170,27 @@ class RegistryHTTPSHandler(urllib.request.HTTPSHandler):
             connected = http_class(host, timeout=_io_timeout(remaining, cap), **kwargs)
             connected.response_class = Response
             native_tunnel = cast("Callable[[], None]", getattr(connected, "_tunnel"))
+            native_connect = connected.connect
 
             def connect(address, timeout, source_address):
                 return _connect_tcp(address, timeout, source_address, remaining=remaining)
 
+            def refresh_timeout() -> None:
+                sock = connected.sock
+                assert sock is not None  # Successful native connection steps leave the socket open.
+                sock.settimeout(_io_timeout(remaining, cap))
+
             def tunnel() -> None:
                 native_tunnel()
-                sock = connected.sock
-                assert sock is not None  # A successful CONNECT leaves the socket open for TLS.
-                sock.settimeout(_io_timeout(remaining, cap))
+                refresh_timeout()
+
+            def connect_for_request() -> None:
+                native_connect()
+                refresh_timeout()
 
             setattr(connected, "_create_connection", connect)
             setattr(connected, "_tunnel", tunnel)
+            setattr(connected, "connect", connect_for_request)
             return connected
 
         return super().do_open(connection, req, **http_conn_args)

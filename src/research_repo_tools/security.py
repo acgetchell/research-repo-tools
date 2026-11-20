@@ -163,12 +163,15 @@ def _report_run(binary: Path, args: list[str], destination: Path, format_name: s
         try:
             value = _load_report(report)
             findings = validate(value, format_name)
+            payload = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
+            if len(payload) > REPORT_LIMIT:
+                raise ValueError("published scanner report exceeds size limit")
         except OSError, ValueError, TypeError, KeyError:
             print(f"{binary.name}: missing, malformed, incomplete, or unredacted {format_name} report (exit {code}); no report published", file=sys.stderr)
             return code or 1
         # Keep the native schema and diagnostics; Gitleaks metadata redactions
         # above are the only changes to finding content.
-        files.replace_many({destination: (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")})
+        files.replace_many({destination: payload})
         status = code or int(findings)
         if present is not None:
             present(value, format_name, destination, status, findings)

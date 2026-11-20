@@ -2,6 +2,7 @@
 
 import argparse
 import os
+import shlex
 import subprocess
 import sys
 from contextlib import ExitStack
@@ -498,7 +499,6 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         return 0
     if args.group == "tectonic":
         import json
-        import shlex
 
         from research_repo_tools.tectonic import discover_environment
 
@@ -1007,16 +1007,26 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         from research_repo_tools.release_metadata import check
 
         commit = args.commit if args.commit is not None else run_git_command(["rev-parse", "HEAD"], cwd=settings.root).stdout.strip()
-        recipe = "tag-preview" if args.dry_run else "tag"
-        force = " --force" if args.force else ""
-        retry = f"just {recipe} {args.tag} --commit {commit}{force}"
+        tag_args = [args.tag, "--commit", commit]
+        if args.root is not None or args.config is not None:
+            retry_args = ["research-repo-tools", "--root", str(settings.root)]
+            if args.config is not None:
+                retry_args.extend(("--config", str(args.config.absolute())))
+            retry_args.extend(("changelog", "tag", *tag_args))
+            if args.dry_run:
+                retry_args.append("--dry-run")
+        else:
+            retry_args = ["just", "tag-preview" if args.dry_run else "tag", *tag_args]
+        if args.force:
+            retry_args.append("--force")
+        retry = shlex.join(retry_args)
         if check(settings.root, policy=replace(settings.release, final_changelog=True)):
-            raise ValueError(f"tagging preflight failed for {args.tag} at {commit}; correct the metadata and rerun {retry}")
+            raise ValueError(f"tagging preflight failed for {args.tag} at {commit}; correct the metadata and rerun\n{retry}")
         try:
             body = changelog.tag(settings, args.tag, commit=commit, force=args.force, dry_run=args.dry_run)
         except (ValueError, OSError, subprocess.SubprocessError) as error:
             raise ValueError(
-                f"{args.tag} at {commit}: {format_exception_diagnostics(error)}\nTag preflight must pass before creation. Resume with {retry}."
+                f"{args.tag} at {commit}: {format_exception_diagnostics(error)}\nTag preflight must pass before creation. Resume with\n{retry}"
             ) from error
         if args.dry_run:
             _write_stdout(body.encode("utf-8"))
