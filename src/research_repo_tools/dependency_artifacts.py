@@ -95,7 +95,7 @@ def _cargo_input(path: Path, verified: VerifiedSource, *, provider: SourceProvid
             expected.add(relative)
             target = path / relative
             if not target.resolve().is_relative_to(path.resolve()) or target.is_symlink():
-                raise ValueError("Cargo dependency cache contains unsafe links")
+                raise ValueError(f"{prefix}: Cargo dependency cache contains unsafe links at {target}; restore this locked crate's cache entry")
             stream = archive.extractfile(member)
             if stream is None:
                 raise ValueError("Cargo archive member cannot be read")

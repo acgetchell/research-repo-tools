@@ -58,10 +58,12 @@ findings before merging.
 ### 1. Synchronize `main` and wait for CI
 
 From a clean checkout of the reviewed main commit, use its full SHA as
-`RELEASE_COMMIT`. Record the matching run ID and require the complete run to pass.
+`RELEASE_COMMIT`. Enter the matching run ID from the list and require the
+complete run to pass.
 
 ```bash
 gh run list --workflow ci.yml --event push --branch main --commit "$RELEASE_COMMIT" --limit 20
+read -r -p "Main CI run ID: " MAIN_RUN_ID
 gh run watch "$MAIN_RUN_ID" --exit-status
 ```
 
@@ -97,13 +99,16 @@ evidence. See [reusable CI evidence](#reusable-ci-evidence).
 
 ### 5. Wait for the draft GitHub release
 
+Enter the matching preparation run ID from the list.
+
 ```bash
 gh run list --workflow prepare-release.yml --event push --branch "$TAG" --commit "$RELEASE_COMMIT" --limit 20
+read -r -p "Preparation run ID: " PREPARATION_RUN_ID
 gh run watch "$PREPARATION_RUN_ID" --exit-status
 ```
 
-Use the recorded matching run ID. The workflow creates the original draft and
-attaches the validated wheel, sdist, and `release-attestation.json`.
+The workflow creates the original draft and attaches the validated wheel,
+sdist, and `release-attestation.json`.
 
 ### 6. Review the draft
 

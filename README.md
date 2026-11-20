@@ -393,6 +393,32 @@ do not assemble Git URLs or implement their own dependency guard. Workspace
 ownership, registry proof limits and recovery are described in the
 [dependency source guide][dependency-sources].
 
+### Automatically adopting a published supplier
+
+Use an installed version that provides `--adopt-supplier`. Add a named
+`research-repo-tools` selection in `dependency-sources.toml` that matches
+the main Python project's manifest and lock. This example selects version
+`0.3.0` for a project already declared as `[projects.python]`.
+
+```toml
+[sources.tooling]
+project = "python"
+package = "research-repo-tools"
+version = "0.3.0"
+```
+
+Set `supplier_update := "tooling"` in the matching Justfile, using your
+source selection's name. The Python stage of `just update` then runs in an
+isolated environment using the locked `tooling` group. For an existing wrapper,
+use the equivalent command.
+
+```sh
+uv run --isolated --locked --only-group tooling research-repo-tools \
+  deps update-python --all-projects --adopt-supplier tooling
+```
+
+See the [supplier eligibility and provenance rules](docs/UPDATING_DEPENDENCIES.md#automatically-adopting-a-published-supplier).
+
 ### Source-built Python dependencies
 
 When a locked PyPI dependency needs a native source build, explicitly select it

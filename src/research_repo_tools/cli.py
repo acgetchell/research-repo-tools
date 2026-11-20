@@ -1007,16 +1007,16 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         from research_repo_tools.release_metadata import check
 
         commit = args.commit if args.commit is not None else run_git_command(["rev-parse", "HEAD"], cwd=settings.root).stdout.strip()
+        recipe = "tag-preview" if args.dry_run else "tag"
+        force = " --force" if args.force else ""
+        retry = f"just {recipe} {args.tag} --commit {commit}{force}"
         if check(settings.root, policy=replace(settings.release, final_changelog=True)):
-            raise ValueError(f"tagging preflight failed for {args.tag} at {commit}; correct the metadata and rerun just tag {args.tag} --commit {commit}")
+            raise ValueError(f"tagging preflight failed for {args.tag} at {commit}; correct the metadata and rerun {retry}")
         try:
             body = changelog.tag(settings, args.tag, commit=commit, force=args.force, dry_run=args.dry_run)
         except (ValueError, OSError, subprocess.SubprocessError) as error:
-            attempt = "tag-preview" if args.dry_run else "tag"
-            force = " --force" if args.force else ""
             raise ValueError(
-                f"{args.tag} at {commit}: {format_exception_diagnostics(error)}\n"
-                f"Tag preflight must pass before creation. Resume with just {attempt} {args.tag} --commit {commit}{force}."
+                f"{args.tag} at {commit}: {format_exception_diagnostics(error)}\nTag preflight must pass before creation. Resume with {retry}."
             ) from error
         if args.dry_run:
             _write_stdout(body.encode("utf-8"))

@@ -1917,6 +1917,19 @@ class TestPythonDistributionEvidence(unittest.TestCase):
         self.assertTrue(body.closed)
         self.assertIs(caught.exception.__cause__, error)
 
+    def test_public_pypi_host_alias_uses_deadline_for_metadata_and_artifacts(self):
+        metadata_url = "https://pypi.org/pypi/example-app/1.2.3/json"
+        payloads = {metadata_url: encode(self.registry("files.pythonhosted.org"))}
+        payloads.update({f"https://files.pythonhosted.org/{name}": payload for name, payload in self.files.items()})
+
+        def request(url, _timeout, _limit, *, remaining):
+            self.assertGreater(remaining(), 0)
+            return payloads[url]
+
+        with patch("research_repo_tools._registry_requests._request", side_effect=request) as read:
+            self.assertEqual(verify_published_distributions(PYTHON.package, "1.2.3", self.hashes, index_url="https://PYPI.ORG:443"), self.hashes)
+        self.assertEqual([call.args[0] for call in read.call_args_list], list(payloads))
+
     def test_registry_redirects_never_request_the_target_or_read_its_body(self):
         class RedirectResponse(urllib.response.addinfourl):
             msg = "Redirect"

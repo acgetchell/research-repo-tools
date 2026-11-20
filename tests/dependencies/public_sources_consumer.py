@@ -55,6 +55,7 @@ DIGEST = "b" * 64
 PYTHON_URL = "https://files.pythonhosted.org/packages/fixture/sample_pkg-1.2.3-py3-none-any.whl"
 PYTHON_API = "https://pypi.org/pypi/sample-pkg/1.2.3/json"
 CARGO_API = "https://crates.io/api/v1/crates/sample-crate/1.2.3"
+REGISTRY_ADDRESS = (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("192.0.2.1", 443))
 
 
 class Provider:
@@ -279,6 +280,27 @@ class TestSources(unittest.TestCase):
                 _registry_requests.read_registry(url, limit=1024)
             request.assert_not_called()
 
+    def test_registry_404_requires_an_on_time_exact_response(self) -> None:
+        for elapsed in (4.0, 5.0):
+            with self.subTest(elapsed=elapsed):
+                now = [0.0]
+                response = io.BytesIO()
+                missing = urllib.error.HTTPError(PYTHON_API, 404, "not found", Message(), response)
+
+                def transport(*_args):
+                    now[0] = elapsed
+                    raise missing
+
+                with patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "5"}):
+                    if elapsed == 4.0:
+                        with self.assertRaises(urllib.error.HTTPError) as failure:
+                            _registry_requests.read_registry(PYTHON_API, limit=32, transport=transport, clock=lambda: now[0])
+                        self.assertIs(failure.exception, missing)
+                    else:
+                        with self.assertRaisesRegex(registry.TransientRegistryError, "total download budget exhausted"):
+                            _registry_requests.read_registry(PYTHON_API, limit=32, transport=transport, clock=lambda: now[0])
+                self.assertTrue(response.closed)
+
     def test_registry_budget_applies_to_progressing_artifacts_and_stalled_responses(self) -> None:
         now = [0.0]
 
@@ -363,16 +385,97 @@ class TestSources(unittest.TestCase):
                 opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _registry_requests.RegistryHTTPSHandler(), registry._NoRedirectHandler())
                 with (
                     patch.object(registry, "_OPENER", opener),
-                    patch.object(socket, "create_connection", return_value=sock) as connect,
+                    patch.object(socket, "getaddrinfo", return_value=[REGISTRY_ADDRESS]),
+                    patch.object(socket, "socket", return_value=sock),
                     patch.object(ssl.SSLContext, "wrap_socket", return_value=sock),
                     patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "60"}),
                     self.assertRaisesRegex(registry.TransientRegistryError, "total download budget exhausted"),
                 ):
                     _registry_requests.read_registry(PYTHON_URL, limit=32, clock=lambda: now[0])
-                connect.assert_called_once()
+                sock.connect.assert_called_once_with(REGISTRY_ADDRESS[-1])
                 self.assertEqual(now[0], 60.0)
                 self.assertEqual(reads[-1], 20.0)
                 self.assertTrue(stream.closed)
+
+    def test_registry_deadline_recalculates_after_dns_and_between_tcp_addresses(self) -> None:
+        now = [0.0]
+        first, second = MagicMock(), MagicMock()
+        other_address = (*REGISTRY_ADDRESS[:-1], ("192.0.2.2", 443))
+        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _registry_requests.RegistryHTTPSHandler(), registry._NoRedirectHandler())
+
+        def lookup(*_args):
+            now[0] += 1
+            return [REGISTRY_ADDRESS, other_address, REGISTRY_ADDRESS]
+
+        def refuse(_address):
+            now[0] += 2
+            raise ConnectionRefusedError
+
+        def timeout(_address):
+            now[0] += second.settimeout.call_args.args[0]
+            raise TimeoutError
+
+        first.connect.side_effect = refuse
+        second.connect.side_effect = timeout
+        with (
+            patch.object(registry, "_OPENER", opener),
+            patch.object(socket, "getaddrinfo", side_effect=lookup),
+            patch.object(socket, "socket", side_effect=[first, second]) as create_socket,
+            patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "5"}),
+            self.assertRaisesRegex(registry.TransientRegistryError, "total download budget exhausted"),
+        ):
+            _registry_requests.read_registry(PYTHON_URL, limit=32, clock=lambda: now[0])
+        self.assertEqual((now[0], create_socket.call_count), (5, 2))
+        first.settimeout.assert_called_once_with(4)
+        second.settimeout.assert_called_once_with(2)
+        first.close.assert_called_once()
+        second.close.assert_called_once()
+
+    def test_registry_deadline_refreshes_after_proxy_connect_before_tls(self) -> None:
+        now = [0.0]
+        proxy_timeouts = []
+        sock = MagicMock()
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({"https": "http://proxy.example.invalid:8080"}),
+            _registry_requests.RegistryHTTPSHandler(),
+            registry._NoRedirectHandler(),
+        )
+
+        class ProxyResponse(io.RawIOBase):
+            @override
+            def readable(self):
+                return True
+
+            @override
+            def readinto(self, buffer):
+                proxy_timeouts.append(sock.settimeout.call_args.args[0])
+                now[0] += 4
+                payload = b"HTTP/1.1 200 Connection established\r\n\r\n"
+                buffer[: len(payload)] = payload
+                return len(payload)
+
+        sock.makefile.return_value = io.BufferedReader(ProxyResponse())
+
+        def handshake(_socket, *, server_hostname):
+            self.assertEqual(server_hostname, "files.pythonhosted.org")
+            now[0] += sock.settimeout.call_args.args[0]
+            raise TimeoutError
+
+        with (
+            patch.object(registry, "_OPENER", opener),
+            patch.object(urllib.request, "proxy_bypass", return_value=False),
+            patch.object(socket, "getaddrinfo", return_value=[REGISTRY_ADDRESS]) as lookup,
+            patch.object(socket, "socket", return_value=sock),
+            patch.object(ssl.SSLContext, "wrap_socket", side_effect=handshake) as wrap,
+            patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "5"}),
+            self.assertRaisesRegex(registry.TransientRegistryError, "total download budget exhausted"),
+        ):
+            _registry_requests.read_registry(PYTHON_URL, limit=32, clock=lambda: now[0])
+        self.assertEqual(now[0], 5)
+        self.assertEqual(proxy_timeouts, [5])
+        self.assertEqual(lookup.call_args.args[:2], ("proxy.example.invalid", 8080))
+        wrap.assert_called_once()
+        sock.close.assert_called_once()
 
     def test_retry_after_bound_and_failed_progress_do_not_leak_provider_details(self) -> None:
         events = []
@@ -392,6 +495,8 @@ class TestSources(unittest.TestCase):
 
     @override
     def setUp(self) -> None:
+        self.enterContext(patch.dict(os.environ))
+        os.environ.pop("RRT_REGISTRY_TIMEOUT_SECONDS", None)
         self.provider = Provider()
         self.provider.python()
         self.provider.cargo()
@@ -905,6 +1010,19 @@ class TestSourceWorkflows(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "requires dependency-sources.toml"):
             check_release_dependencies(self.root)
 
+    def test_release_rechecks_missing_policy_seen_before_dependency_free_fallback(self) -> None:
+        check_dependency_free = dependency_workflows._require_dependency_free
+
+        def policy_appears(root):
+            (root / "dependency-sources.toml").write_bytes(b"schema=1\n")
+            check_dependency_free(root)
+
+        with (
+            patch.object(dependency_workflows, "_require_dependency_free", side_effect=policy_appears),
+            self.assertRaisesRegex(ValueError, "dependency inputs changed"),
+        ):
+            check_release_dependencies(self.root)
+
     def test_non_directory_configuration_ancestor_is_absent_and_still_checked_for_staleness(self) -> None:
         cargo = self.root / ".cargo"
         cargo.write_bytes(b"not a configuration directory\n")
@@ -1129,7 +1247,10 @@ class TestSourceWorkflows(unittest.TestCase):
         self.provider.put(PYTHON_API, {"info": info, "urls": uploads})
         self.provider.put(
             "https://pypi.org/pypi/sample-pkg/json",
-            {"info": info, "releases": {"1.2.3": uploads, "1.2.4": [{"yanked": True}], "1.3.0rc1": uploads}},
+            {
+                "info": info,
+                "releases": {"1.2.3": uploads, "1.2.4": [{"yanked": True}], "1.3.0rc1": uploads, "1.3.0": [{"yanked": False, "requires_python": ">=3.15.1"}]},
+            },
         )
         built = "d" * 40
         self.provider.git("python", commit=built)
@@ -1177,6 +1298,7 @@ class TestSourceWorkflows(unittest.TestCase):
         with (
             patch.object(python_promotion, "HttpSourceProvider", return_value=self.provider),
             patch.object(python_promotion, "_download", return_value=asset),
+            patch.object(python_promotion.platform, "python_version", return_value="3.15.2"),
             patch.object(release_validation, "verify_attestation") as verify,
             patch.object(dependency_workflows, "_resolve_candidate", side_effect=resolve) as resolve_lock,
             patch.object(toolchain.Runtime, "inspect", return_value=[]),
@@ -1185,6 +1307,7 @@ class TestSourceWorkflows(unittest.TestCase):
         ):
             settings = config.load(root=self.root)
             self.assertEqual(python_updates.update(settings, promote="upstream"), 0)
+            self.assertNotIn("https://api.github.com/repos/example/upstream/releases/tags/v1.3.0", self.provider.calls)
             verify.assert_not_called()
             resolve_lock.assert_not_called()
             self.assertEqual(self.snapshot(), before)

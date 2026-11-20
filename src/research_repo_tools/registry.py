@@ -48,6 +48,8 @@ def pypi_destination(url: str) -> str:
         or "\\" in url
     ):
         raise ValueError("PyPI destination must be an HTTPS origin/prefix without credentials, query, fragment or trailing slash")
+    if parsed.hostname == "pypi.org" and parsed.port in (None, 443):
+        return parsed._replace(netloc="pypi.org").geturl()
     return url
 
 
@@ -62,7 +64,9 @@ def verify_published_distributions(package: str, version: str, files: Mapping[st
     names = distribution_names(f"v{version}", package=package, filenames=tuple(files))
     if any(not isinstance(value, str) or re.fullmatch(r"[0-9a-f]{64}", value) is None for value in files.values()):  # ty: ignore[redundant-condition-strict]  Validate untyped evidence assertions.
         raise ValueError("published distribution assertions require SHA-256 hashes")
-    url = f"{pypi_destination(index_url)}/pypi/{canonicalize_name(package)}/{version}/json"
+    index = pypi_destination(index_url)
+    public_pypi = urlsplit(index).netloc == "pypi.org"
+    url = f"{index}/pypi/{canonicalize_name(package)}/{version}/json"
     data = _json(url)
     if not isinstance(data, dict):
         raise RegistryLookupError("published distributions are missing or malformed")
@@ -93,11 +97,11 @@ def verify_published_distributions(package: str, version: str, files: Mapping[st
             or not isinstance(upload.get("url"), str)
         ):
             raise RegistryLookupError("published distribution is yanked or differs from expected bytes")
-        host = urlsplit(index_url).netloc
+        host = urlsplit(index).netloc
         try:
             download = pypi_destination(upload["url"])
             host = urlsplit(download).netloc
-            if index_url == "https://pypi.org":
+            if public_pypi:
                 from research_repo_tools._registry_requests import read_registry
 
                 if urlsplit(download).netloc != "files.pythonhosted.org":

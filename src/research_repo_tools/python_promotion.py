@@ -242,7 +242,7 @@ def _plan_release(
     return _plan_verified_source(checkout, replace(selection, source=released), verified, observed=graph.snapshot, transition_policy=text.encode())
 
 
-def _supplier_python_support(document: dict[str, object], text: str, package: str) -> tuple[VersionRange, ...]:
+def _declared_python_support(document: dict[str, object], text: str, package: str) -> tuple[VersionRange, ...]:
     from research_repo_tools.dependencies import _python_constraints
 
     project = table(document.get("project", {}), "project")
@@ -250,7 +250,6 @@ def _supplier_python_support(document: dict[str, object], text: str, package: st
     optional = table(project.get("optional-dependencies", {}), "project.optional-dependencies")
 
     def declares(entries: object) -> bool:
-        # `_requirements` has already validated declarations and group includes.
         return isinstance(entries, list) and any(isinstance(raw, str) and canonicalize_name(Requirement(raw).name) == package for raw in entries)
 
     if any(declares(entries) for entries in (project.get("dependencies", []), *optional.values())):
@@ -276,14 +275,14 @@ def plan_supplier(checkout: Path, name: str, *, project: Path, provider: SourceP
     declared = Version(next(iter(requirement.specifier)).version)
     if [(item.source, Version(item.version)) for item in graph.dependencies if item.source.package == PACKAGE] != [(pin, declared)]:
         raise ValueError("supplier pin must agree across the manifest, lock and source policy")
-    python_support = _supplier_python_support(document, manifest, PACKAGE)
     if isinstance(pin, GitCommit):
         if pin.directory != ".":
             raise ValueError("the shared tooling source must identify the repository root")
-        return _plan_promotion(checkout, selection, original, graph, versions="", prereleases=False, provider=provider, python_support=python_support)
+        return _plan_promotion(checkout, selection, original, graph, versions="", prereleases=False, provider=provider)
 
     if _source(document, PACKAGE) is not None:
         raise ValueError("a supplier registry pin cannot have a source override")
+    python_support = _declared_python_support(document, manifest, PACKAGE)
     provider = provider or HttpSourceProvider()
     candidates = _candidates(provider, PACKAGE, Version(pin.version), SpecifierSet(), False, newer=True, python_support=python_support)
     if not candidates:
@@ -310,7 +309,6 @@ def _plan_promotion(
     versions: str,
     prereleases: bool,
     provider: SourceProvider | None,
-    python_support: tuple[VersionRange, ...] = (),
 ) -> SourcePlan:
     pin = selection.source
     if not isinstance(pin, GitCommit):
@@ -318,13 +316,15 @@ def _plan_promotion(
     locked = [dependency for dependency in graph.dependencies if dependency.source.package == pin.package]
     if len(locked) != 1 or locked[0].source != pin:
         raise ValueError("promotion source must match the exact locked development pin")
-    document = tomllib.loads((graph.root / "pyproject.toml").read_text(encoding="utf-8"))
+    manifest = (graph.root / "pyproject.toml").read_text(encoding="utf-8")
+    document = tomllib.loads(manifest)
     override = table(_source(document, pin.package), "development source")
     expected = {"git": pin.url, "rev": pin.commit}
     if pin.directory != ".":
         expected["subdirectory"] = pin.directory
     if override != expected and override != (expected | {"git": pin.url.removesuffix(".git")}):
         raise ValueError("promotion requires the exact development source in the project manifest, lock and policy")
+    python_support = _declared_python_support(document, manifest, pin.package)
     provider = provider or HttpSourceProvider()
     repository = _lookup(provider, f"https://api.github.com/repos/{pin.repository}")
     repository_id = repository.get("id")

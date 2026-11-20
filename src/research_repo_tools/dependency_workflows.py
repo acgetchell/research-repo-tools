@@ -421,6 +421,7 @@ def check_dependency_policy(root: Path, *, provider: SourceProvider | None = Non
     retain_guard(policy_snapshot.verify, policy_snapshot.digest)
     if policy is None:
         _require_dependency_free(root)
+        policy_snapshot.verify()
         return ()
     # Reject a development selection even if the native manifest happens to
     # look registry-only; source, declaration and lock are separate obligations.

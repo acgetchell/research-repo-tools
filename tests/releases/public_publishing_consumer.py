@@ -906,6 +906,17 @@ class TestPublishingConsumer(unittest.TestCase):
                 self.assertIn('release update "$@"', dry_run(self.root, "update-version", arguments).stderr)
         self.assertIn('release verify --attempts 7 --interval 10 "$@"', dry_run(self.root, "release-verify", ["v1.2.3"]).stderr)
 
+    def test_tag_metadata_failure_preserves_preview_and_force_in_recovery_command(self):
+        with (
+            patch("research_repo_tools.release_metadata.check", return_value=1),
+            patch.object(changelog, "tag") as tag,
+            contextlib.redirect_stderr(io.StringIO()) as errors,
+        ):
+            commit = "a" * 40
+            self.assertEqual(cli.main(["--root", str(self.root), "changelog", "tag", "v1.2.3", "--commit", commit, "--dry-run", "--force"]), 1)
+        tag.assert_not_called()
+        self.assertIn(f"rerun just tag-preview v1.2.3 --commit {commit} --force", errors.getvalue())
+
     def test_tag_cli_checks_reviewed_commit_and_resumes_after_offline_preflight(self):
         if os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1":
             self.skipTest("disposable Git mutations disabled")

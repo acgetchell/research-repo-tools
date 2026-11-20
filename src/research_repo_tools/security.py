@@ -226,7 +226,7 @@ def scan_osv(settings: config.Config, lockfiles: tuple[str, ...], *, output: str
     return code
 
 
-def _prepare_secret_scan(settings: config.Config, stage: Path, exclude: tuple[str, ...]) -> tuple[Path, dict[str, str]]:
+def _prepare_gitleaks_scan(settings: config.Config, stage: Path, exclude: tuple[str, ...]) -> tuple[Path, dict[str, str]]:
     shallow = run_git_bytes(["--no-pager", "rev-parse", "--is-shallow-repository"], cwd=settings.root).stdout.strip()
     if shallow != b"false":
         raise ValueError("full-history secret scanning requires a non-shallow checkout (fetch-depth: 0)")
@@ -257,7 +257,7 @@ def _secret_config(settings: config.Config, stage: Path, configuration: str | No
     return stage / "default.toml"
 
 
-def _secret_sources(root: Path, stage: Path) -> tuple[tuple[str, str, Path], ...]:
+def _gitleaks_scan_targets(root: Path, stage: Path) -> tuple[tuple[str, str, Path], ...]:
     return (("history", "git", root), ("working", "dir", stage / "working"))
 
 
@@ -294,9 +294,9 @@ def scan_secrets(settings: config.Config, *, output: str = "target/security", co
     code = 0
     with tempfile.TemporaryDirectory(prefix="research-secret-scan-") as directory:
         stage = Path(directory)
-        binary, env = _prepare_secret_scan(settings, stage, exclude)
+        binary, env = _prepare_gitleaks_scan(settings, stage, exclude)
         selected = _secret_config(settings, stage, configuration)
-        for label, mode, source in _secret_sources(settings.root, stage):
+        for label, mode, source in _gitleaks_scan_targets(settings.root, stage):
             present = FindingOutput("Gitleaks", "history" if label == "history" else "working tree", settings.root, snapshot=stage / "working")
             for format_name in ("json", "sarif"):
                 status = _report_run(
@@ -378,7 +378,7 @@ def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline
     """Compare two Gitleaks policies using one working snapshot and unchanged Git refs."""
     with tempfile.TemporaryDirectory(prefix="research-secret-compare-") as directory:
         stage = Path(directory)
-        binary, env = _prepare_secret_scan(settings, stage, exclude)
+        binary, env = _prepare_gitleaks_scan(settings, stage, exclude)
         original = _secret_config(settings, stage, baseline)
         proposed = _secret_config(settings, stage, candidate)
         if original.samefile(proposed):
@@ -392,7 +392,7 @@ def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline
         results: list[Counter[_SecretFinding]] = []
         for policy in (original, proposed):
             findings: Counter[_SecretFinding] = Counter()
-            for scope, mode, source in _secret_sources(settings.root, stage):
+            for scope, mode, source in _gitleaks_scan_targets(settings.root, stage):
                 report = stage / f"gitleaks-{scope}.json"
                 args = _gitleaks_args(mode, source, stage, policy, "json")
                 args.append(f"--exit-code={GITLEAKS_FINDINGS_EXIT}")

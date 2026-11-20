@@ -64,6 +64,28 @@ def _io_timeout(remaining: Callable[[], float], cap: float) -> float:
     return min(cap, seconds)
 
 
+def _connect_tcp(address: tuple[str, int], cap: float, source_address: tuple[str, int] | None, *, remaining: Callable[[], float]) -> socket.socket:
+    last_error: OSError = OSError("registry DNS lookup returned no TCP addresses")
+    for family, kind, protocol, _, endpoint in socket.getaddrinfo(*address, 0, socket.SOCK_STREAM):
+        timeout = _io_timeout(remaining, cap)
+        sock = None
+        try:
+            sock = socket.socket(family, kind, protocol)
+            sock.settimeout(timeout)
+            if source_address is not None:
+                sock.bind(source_address)
+            sock.connect(endpoint)
+            sock.settimeout(_io_timeout(remaining, cap))
+            return sock
+        except BaseException as error:
+            if sock is not None:
+                sock.close()
+            if not isinstance(error, OSError) or isinstance(error, _BudgetExpired):
+                raise
+            last_error = error
+    raise last_error
+
+
 class _DeadlineReader(io.RawIOBase):
     """Apply the remaining budget to each socket read, including HTTP framing."""
 
@@ -109,20 +131,19 @@ class RegistryHTTPSHandler(urllib.request.HTTPSHandler):
             cap = _CONNECT_TIMEOUT if timeout is None else timeout
             connected = http_class(host, timeout=_io_timeout(remaining, cap), **kwargs)
             connected.response_class = Response
-            # HTTPConnection uses this factory to open the TCP socket. Clamp the
-            # timeout again before HTTPSConnection starts its TLS handshake.
-            create_connection: Callable[..., socket.socket] = getattr(connected, "_create_connection")
+            native_tunnel = cast("Callable[[], None]", getattr(connected, "_tunnel"))
 
-            def connect(*args):
-                sock = create_connection(*args)
-                try:
-                    sock.settimeout(_io_timeout(remaining, cap))
-                except BaseException:
-                    sock.close()
-                    raise
-                return sock
+            def connect(address, timeout, source_address):
+                return _connect_tcp(address, timeout, source_address, remaining=remaining)
+
+            def tunnel() -> None:
+                native_tunnel()
+                sock = connected.sock
+                assert sock is not None  # A successful CONNECT leaves the socket open for TLS.
+                sock.settimeout(_io_timeout(remaining, cap))
 
             setattr(connected, "_create_connection", connect)
+            setattr(connected, "_tunnel", tunnel)
             return connected
 
         return super().do_open(connection, req, **http_conn_args)
@@ -242,6 +263,9 @@ def read_registry(
             return request()
         except urllib.error.HTTPError as error:
             close_http_error(error)
+            if remaining() <= 0:
+                last_failure = "total download budget exhausted"
+                break
             if error.url != url or error.code not in _TRANSIENT:
                 raise
             last_failure = f"HTTP {error.code}"

@@ -183,28 +183,8 @@ at release acquisition, evidence and publication boundaries.
 
 ### Automatically adopting a published supplier
 
-Use an installed version that provides `--adopt-supplier`. Add a named
-`research-repo-tools` selection for the main Python project in
-`dependency-sources.toml`, matching the exact manifest and lock pin. For
-example, if the project is already declared as `[projects.python]` and pins
-version `0.3.0`, add:
-
-```toml
-[sources.tooling]
-project = "python"
-package = "research-repo-tools"
-version = "0.3.0"
-```
-
-Set `supplier_update := "tooling"` in the matching Justfile to opt in, using
-your source selection's name. With this setting, the Python stage of
-`just update` runs in an isolated environment using the locked `tooling`
-group. The equivalent command for an existing wrapper is:
-
-```sh
-uv run --isolated --locked --only-group tooling research-repo-tools \
-  deps update-python --all-projects --adopt-supplier tooling
-```
+Follow the [supplier adoption setup](../README.md#automatically-adopting-a-published-supplier)
+to opt in from a consumer repository.
 
 For a registry pin, the updater checks the newest stable, non-yanked PyPI release
 above that pin that supports the running interpreter and the Python range
@@ -234,8 +214,10 @@ source override, and lock must agree on the exact repository and commit. Add
 `--promotion-versions SPEC` to restrict eligible PEP 440 versions or
 `--promotion-prereleases` to include prereleases.
 
-Promotion considers compatible, non-yanked PyPI releases at or above the
-locked version, newest version first. It requires each distribution's
+Promotion considers non-yanked PyPI releases at or above the locked version,
+newest version first. Candidates must support the running interpreter and the
+Python range of the project or dependency group declaring the package.
+Promotion requires each distribution's
 published bytes to match its signed GitHub release-promotion evidence from
 the declaring repository. The signed commit must equal or descend from the
 Git pin. Upload dates and version numbers alone cannot establish containment.
