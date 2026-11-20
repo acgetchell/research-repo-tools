@@ -1702,7 +1702,7 @@ requires-dist = [
     { name = "ipykernel", marker = "extra == 'notebooks'", specifier = ">=7.3.0,<8" },
     { name = "nbclient", marker = "extra == 'notebooks'", specifier = ">=0.11.0,<1" },
     { name = "nbformat", marker = "extra == 'notebooks'", specifier = ">=5.10.4,<6" },
-    { name = "packaging", specifier = ">=26.1" },
+    { name = "packaging", specifier = ">=26.3" },
     { name = "pypdf", marker = "extra == 'papers'", specifier = ">=6,<7" },
     { name = "pytest", marker = "extra == 'python-tools'", specifier = "==9.1.1" },
     { name = "pyyaml", specifier = ">=6" },

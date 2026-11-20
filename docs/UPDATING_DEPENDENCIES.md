@@ -207,12 +207,15 @@ uv run --isolated --locked --only-group tooling research-repo-tools \
 ```
 
 For a registry pin, the updater checks the newest stable, non-yanked PyPI release
-above that pin that supports the running Python version. uv resolves the resulting
-candidate against the project constraints and stops the update on a resolution
-failure. For an exact Git SHA the updater uses the signed promotion proof
-below, including releases of the same version as the development pin. If there
-is no eligible release, it retains the original source and continues normal
-dependency maintenance. Provider and integrity errors stop the update.
+above that pin that supports the running interpreter and the Python range
+declared where the supplier is used. A dependency group's own Python constraint
+narrows the range for that group's declaration. uv resolves the selected
+candidate and stops the update on a resolution failure. For an exact Git SHA,
+the updater applies the same Python compatibility check and uses the signed
+promotion proof below, including releases of the same version as the development
+pin. If there is no eligible release, it retains the original source and
+continues normal dependency maintenance. Provider and integrity errors stop the
+update.
 
 Successful adoption updates the source declaration, exact manifest requirement,
 registry lock, and installed distribution in one recoverable update. Included

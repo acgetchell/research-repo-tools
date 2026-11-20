@@ -1012,6 +1012,7 @@ class TestSourceWorkflows(unittest.TestCase):
             b'[project]\nname="consumer"\nversion="0.1.0"\nrequires-python=">=3.15"\n'
             b'[dependency-groups]\ntooling=["research-repo-tools[python-tools]==1.2.3"]\ndev=[{include-group="tooling"}]\n'
             b"[tool.uv]\npackage=false\ndefault-groups=[]\n"
+            b'[tool.uv.dependency-groups.tooling]\nrequires-python=">=3.15.1"\n'
         )
         policy.write_bytes(
             b'schema=1\n[projects.main]\necosystem="python"\n[sources.tooling]\nproject="main"\npackage="research-repo-tools"\nversion="1.2.3"\n'
@@ -1020,10 +1021,11 @@ class TestSourceWorkflows(unittest.TestCase):
         release_api = f"https://pypi.org/pypi/{name}/1.3.0/json"
         versions = {
             "1.2.3": [{"yanked": False, "requires_python": ">=3.15"}],
-            "1.3.0": [{"yanked": False, "requires_python": ">=3.15"}],
+            "1.3.0": [{"yanked": False, "requires_python": ">=3.15.1"}],
             "2.0.0": [{"yanked": True, "requires_python": ">=3.15"}],
             "2.1.0": [{"yanked": False, "requires_python": ">=99"}],
             "2.2.0rc1": [{"yanked": False, "requires_python": ">=3.15"}],
+            "2.3.0": [{"yanked": False, "requires_python": ">=3.15.2"}],
         }
         self.provider.put(project_api, {"info": {"name": name}, "releases": versions})
 
@@ -1074,6 +1076,7 @@ class TestSourceWorkflows(unittest.TestCase):
 
         with (
             patch.object(python_promotion, "HttpSourceProvider", return_value=self.provider),
+            patch.object(python_promotion.platform, "python_version", return_value="3.15.3"),
             patch.object(dependency_workflows, "_resolve_candidate", side_effect=resolve) as resolver,
             patch.object(toolchain.Runtime, "inspect", return_value=[]),
             patch.object(toolchain.Runtime, "project_environment", return_value={}),

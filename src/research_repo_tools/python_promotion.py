@@ -10,11 +10,13 @@ import urllib.error
 from dataclasses import replace
 from pathlib import Path
 
+from packaging.ranges import VersionRange
+from packaging.requirements import Requirement
 from packaging.specifiers import SpecifierSet
 from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
-from research_repo_tools import release_validation, toml_source
+from research_repo_tools import python_resolution, release_validation, toml_source
 from research_repo_tools._git_checkout import _in_checkout
 from research_repo_tools.dependency_graphs import DependencyGraph, inspect_project
 from research_repo_tools.dependency_policy import POLICY_FILE, SourceSelection, observe_policy
@@ -45,7 +47,14 @@ def _missing(error: ValueError) -> bool:
 
 
 def _candidates(
-    provider: SourceProvider, package: str, minimum: Version, versions: SpecifierSet, prereleases: bool, *, newer: bool = False
+    provider: SourceProvider,
+    package: str,
+    minimum: Version,
+    versions: SpecifierSet,
+    prereleases: bool,
+    *,
+    newer: bool = False,
+    python_support: tuple[VersionRange, ...] = (),
 ) -> tuple[Version, ...]:
     data = _lookup(provider, f"https://pypi.org/pypi/{package}/json")
     info = table(data.get("info"), "PyPI project")
@@ -68,10 +77,18 @@ def _candidates(
         if not isinstance(uploads, list) or not uploads:
             continue
         records = tuple(table(upload, "PyPI upload") for upload in uploads)
-        if all(upload.get("yanked") is False for upload in records) and any(
-            python in SpecifierSet(str(upload.get("requires_python") or "")) for upload in records
-        ):
-            candidates.append(version)
+        if any(upload.get("yanked") is not False for upload in records):
+            continue
+        requirements = tuple(SpecifierSet(str(upload.get("requires_python") or "")) for upload in records)
+        if not any(python in requirement for requirement in requirements):
+            continue
+        if python_support:
+            coverage = VersionRange.empty()
+            for requirement in requirements:
+                coverage = coverage.union(requirement.to_range())
+            if not all(required.is_subset(coverage) for required in python_support):
+                continue
+        candidates.append(version)
     if not newer and len(candidates) > _MAX_CANDIDATES:
         raise ValueError("promotion has too many candidate releases; narrow the accepted version range")
     return tuple(sorted(candidates, reverse=True))
@@ -225,6 +242,24 @@ def _plan_release(
     return _plan_verified_source(checkout, replace(selection, source=released), verified, observed=graph.snapshot, transition_policy=text.encode())
 
 
+def _supplier_python_support(document: dict[str, object], text: str, package: str) -> tuple[VersionRange, ...]:
+    from research_repo_tools.dependencies import _python_constraints
+
+    project = table(document.get("project", {}), "project")
+    base = _python_constraints(project)
+    optional = table(project.get("optional-dependencies", {}), "project.optional-dependencies")
+
+    def declares(entries: object) -> bool:
+        # `_requirements` has already validated declarations and group includes.
+        return isinstance(entries, list) and any(isinstance(raw, str) and canonicalize_name(Requirement(raw).name) == package for raw in entries)
+
+    if any(declares(entries) for entries in (project.get("dependencies", []), *optional.values())):
+        return (base.to_range(),)
+    constraints = python_resolution.group_constraints(text)
+    groups = table(document.get("dependency-groups", {}), "dependency-groups")
+    return tuple((base & SpecifierSet(constraints.get(group, ""))).to_range() for group, entries in groups.items() if declares(entries))
+
+
 def plan_supplier(checkout: Path, name: str, *, project: Path, provider: SourceProvider | None = None) -> SourcePlan:
     """Resolve the newest compatible RRT release, requiring signed proof for a Git pin."""
     from research_repo_tools.dependency_provenance import _requirements
@@ -235,19 +270,21 @@ def plan_supplier(checkout: Path, name: str, *, project: Path, provider: SourceP
     pin = selection.source
     if pin.package != PACKAGE or graph.root != project:
         raise ValueError("automatic supplier adoption must select research-repo-tools in the main Python project")
-    document = tomllib.loads((graph.root / "pyproject.toml").read_text(encoding="utf-8"))
+    manifest = (graph.root / "pyproject.toml").read_text(encoding="utf-8")
+    document = tomllib.loads(manifest)
     declared = str(_requirements(document, PACKAGE)[0].specifier)
     if [(item.source, f"=={item.version}") for item in graph.dependencies if item.source.package == PACKAGE] != [(pin, declared)]:
         raise ValueError("supplier pin must agree across the manifest, lock and source policy")
+    python_support = _supplier_python_support(document, manifest, PACKAGE)
     if isinstance(pin, GitCommit):
         if pin.directory != ".":
             raise ValueError("the shared tooling source must identify the repository root")
-        return _plan_promotion(checkout, selection, original, graph, versions="", prereleases=False, provider=provider)
+        return _plan_promotion(checkout, selection, original, graph, versions="", prereleases=False, provider=provider, python_support=python_support)
 
     if _source(document, PACKAGE) is not None:
         raise ValueError("a supplier registry pin cannot have a source override")
     provider = provider or HttpSourceProvider()
-    candidates = _candidates(provider, PACKAGE, Version(pin.version), SpecifierSet(), False, newer=True)
+    candidates = _candidates(provider, PACKAGE, Version(pin.version), SpecifierSet(), False, newer=True, python_support=python_support)
     if not candidates:
         graph.snapshot.verify()
         raise NoSupplyingRelease(f"no newer compatible non-yanked PyPI release after {pin.version}")
@@ -272,6 +309,7 @@ def _plan_promotion(
     versions: str,
     prereleases: bool,
     provider: SourceProvider | None,
+    python_support: tuple[VersionRange, ...] = (),
 ) -> SourcePlan:
     pin = selection.source
     if not isinstance(pin, GitCommit):
@@ -292,7 +330,7 @@ def _plan_promotion(
     if repository.get("full_name") != pin.repository or type(repository_id) is not int or repository_id <= 0:
         raise ValueError("promotion requires an exact GitHub repository identity")
     reasons = []
-    for candidate in _candidates(provider, pin.package, Version(locked[0].version), SpecifierSet(versions), prereleases):
+    for candidate in _candidates(provider, pin.package, Version(locked[0].version), SpecifierSet(versions), prereleases, python_support=python_support):
         record = _release_commit(checkout, pin, candidate, provider, repository_id=repository_id)
         if record is None:
             reasons.append(f"{candidate} has no supported release provenance")
