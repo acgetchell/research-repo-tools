@@ -191,7 +191,7 @@ def test_policy_rejects_ambiguous_default_without_extension_path(tmp_path):
     assert not list(stage.iterdir())
 
 
-def test_partial_clone_identifies_missing_history_before_scanning(tmp_path):
+def test_partial_clone_identifies_missing_history_before_scanning(tmp_path, git_mutations_allowed):
     env = git_environment()
     source = tmp_path / "source"
     source.mkdir()
