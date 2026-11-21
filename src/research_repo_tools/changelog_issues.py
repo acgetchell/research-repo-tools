@@ -54,7 +54,7 @@ def _commit_lines(lines: list[str], repository: str) -> Iterator[tuple[int, str]
 def _closing_links(message: str, repository: str) -> list[str]:
     """Read standalone directives, preserving authored order across repositories."""
     links: dict[tuple[str, str], str] = {}
-    for _, line in _prose(message.splitlines()):
+    for _, line in _prose(message.replace("\r\n", "\n").split("\n")):
         if not _CLOSING_LINE.fullmatch(line):
             continue
         for match in _REFERENCE.finditer(line):
@@ -70,7 +70,9 @@ def read_closing_notes(text: str, root: Path, repository: str) -> dict[str, str]
     """Read exactly the rendered commit objects in one offline, read-only Git call."""
     # At this point git-cliff emits the title and hash on a single line.
     # Every body line is indented, including any example commit links.
-    commits = dict.fromkeys(oid for _, line in _prose(text.splitlines()) if line.startswith("- ") and (oid := _entry_oid(line, repository)))
+    commits = dict.fromkeys(
+        oid for _, line in _prose(text.replace("\r\n", "\n").split("\n")) if line.startswith("- ") and (oid := _entry_oid(line, repository))
+    )
     if not commits:
         return {}
     result = run_git_bytes(

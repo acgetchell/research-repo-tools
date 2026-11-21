@@ -12,8 +12,6 @@ from research_repo_tools.postprocess_changelog import (
     MAX_LINE_WIDTH,
     _backtick_span_end,
     _balanced_delimiter_end,
-    _closes_code_fence,
-    _opening_code_fence,
     _reflow_line,
 )
 
@@ -154,16 +152,19 @@ def _map_link_destinations(text: str, destination: Callable[[str], str]) -> str:
         match = re.match(r"(?:\\.|[^\s])+", value)
         return destination(match[0]) + value[match.end() :] if match else value
 
+    from markdown_it import MarkdownIt
+
+    # CommonMark block parsing distinguishes nested/continued list content
+    # from indented code. Its line maps count physical CR, LF and CRLF only.
+    code_lines = {
+        index
+        for token in MarkdownIt("commonmark").parse(text)
+        if token.type in {"fence", "code_block"} and token.map is not None
+        for index in range(*token.map)
+    }
     output = []
-    fence = None
-    for line in text.splitlines(keepends=True):
-        if fence is not None:
-            output.append(line)
-            if _closes_code_fence(line.rstrip("\r\n"), fence):
-                fence = None
-            continue
-        fence = _opening_code_fence(line.rstrip("\r\n"))
-        if fence is not None or line.startswith(("    ", "\t")):
+    for index, line in enumerate(re.split(r"(?<=\n)|(?<=\r)(?!\n)", text)):
+        if index in code_lines:
             output.append(line)
             continue
         definition = re.match(r"( {0,3}\[[^\]\n]+\]:[ \t]*)(.*)", line)

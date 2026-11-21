@@ -122,6 +122,13 @@ def test_plain_squash_title_keeps_feature_details_under_its_entry(tmp_path: Path
     assert postprocess_text(result) == result
 
 
+@pytest.mark.parametrize("subject", ["Closes~123", "Closes~~123", "Closes #123", "closes~123"])
+def test_plain_subject_preserves_marker_spellings(tmp_path: Path, subject: str) -> None:
+    result = render(tmp_path, subject + "\n\nOrdinary body.")
+    assert f"- {subject[0].upper() + subject[1:]} [`" in result
+    assert "Ordinary body." in result
+
+
 def test_plain_dependency_bump_respects_body_policy(tmp_path: Path) -> None:
     message = "Bump toolkit from 1 to 2\n\nSee the [migration guide](https://example.com/migration)."
     concise = render(tmp_path, message)

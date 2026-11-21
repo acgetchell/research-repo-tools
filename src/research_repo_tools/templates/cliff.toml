@@ -131,8 +131,11 @@ sort_commits = "oldest"
 # literal marker spellings. Markdown normalization can then distinguish fenced
 # examples from real issue trailers without losing the surrounding body.
 commit_preprocessors = [
+    # Protect the subject while applying the two line-based body rules.
+    { pattern = '\A', replace = '>' },
     { pattern = '(?m)^([ \t]*Closes)(~+[0-9]+)([ \t]*\r?)$', replace = '${1}~${2}${3}' },
     { pattern = '(?m)^Closes #([0-9]+)(\r?\n\r?\n)', replace = 'Closes~${1}${2}' },
+    { pattern = '\A>', replace = '' },
     { pattern = '\(#(\d+)\)', replace = '[#${1}](https://github.com/__OWNER__/__REPOSITORY__/pull/${1})' },
 ]
 

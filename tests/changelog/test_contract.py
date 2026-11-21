@@ -300,7 +300,7 @@ def test_backfill_links_original_commits_in_retained_and_current_releases(git_co
         "Closed: https://github.com/other/tool/issues/14\n"
         "Refs #15\n> Fixes #16\n    Fixes #17\n\n~~~~text\nCloses #18\n~~~~"
     )
-    run_git_command(["commit", "--allow-empty", "-qm", "Ship reporting (#42)", "-m", body], cwd=git_consumer)
+    run_git_command(["commit", "--allow-empty", "-qm", "Ship\u2028reporting (#42)", "-m", body], cwd=git_consumer)
     run_git_command(["tag", "v1.0.0"], cwd=git_consumer)
     run_git_command(["commit", "--allow-empty", "-qm", "fix: keep reports readable (#43)", "-m", "Fixed #19"], cwd=git_consumer)
     current = changelog.generate(cfg, tag="v1.1.0", released="2026-09-07")
