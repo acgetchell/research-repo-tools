@@ -336,7 +336,10 @@ def test_backfill_links_original_commits_in_retained_and_current_releases(git_co
 def test_generation_recovers_title_only_archive_from_the_same_history(git_consumer: Path) -> None:
     cfg = settings(git_consumer)
     run_git_command(["commit", "--allow-empty", "-qm", "Ship reporting (#42)", "-m", "Record café observations."], cwd=git_consumer)
-    run_git_command(["commit", "--allow-empty", "-qm", "fix: read reports", "-m", "Read samples.\nCloses #31\nPreserve metadata."], cwd=git_consumer)
+    authored = "Closes [#8](https://github.com/example/research/issues/8)."
+    run_git_command(
+        ["commit", "--allow-empty", "-qm", "fix: read reports", "-m", authored + "\n\nRead samples.\nCloses #31\nPreserve metadata."], cwd=git_consumer
+    )
     run_git_command(["tag", "v1.0.0"], cwd=git_consumer)
     run_git_command(["commit", "--allow-empty", "-qm", "fix: next release"], cwd=git_consumer)
     changelog.generate(cfg, tag="v1.1.0", released="2026-09-07")
@@ -344,7 +347,7 @@ def test_generation_recovers_title_only_archive_from_the_same_history(git_consum
     current = archive.read_text(encoding="utf-8").replace("# Changelog - 1.0.x\n", "# Changelog - 1.0.x\n\nRetained introduction.\n")
     assert current.count("Record café observations.") == current.count("Preserve metadata.") == 1
     link = "  Closes [#31](https://github.com/example/research/issues/31).\n"
-    assert current.count(link) == 1 and "  Closes #31\n" not in current
+    assert current.count(link) == current.count(authored) == 1 and "  Closes #31\n" not in current
     title_only = current.replace("\n  Record café observations.\n", "").replace(link, "").replace("  Read samples.\n", "  Read samples.\n  Closes #31\n")
     assert "Record café observations." not in title_only and "  Closes #31\n" in title_only
     archive.write_text(title_only, encoding="utf-8", newline="\n")
@@ -365,7 +368,7 @@ def test_generation_recovers_title_only_archive_from_the_same_history(git_consum
 
 
 @pytest.mark.parametrize("separator", ["", "\n", "\n\n"])
-def test_wrapped_first_issue_link_is_idempotent_and_rejects_drift(separator: str) -> None:
+def test_wrapped_issue_link_is_idempotent_and_preserves_authored_paragraph(separator: str) -> None:
     oid = "a" * 40
     remote = "example/" + "long-name-" * 9 + "tools"
     note = f"  Closes\n  [{remote}#7](https://github.com/{remote}/issues/7)."
@@ -375,8 +378,10 @@ def test_wrapped_first_issue_link_is_idempotent_and_rejects_drift(separator: str
     assert annotated == entry + note + "\n"
     annotated = entry + separator + note + "\n"
     assert changelog_issues.add_closing_notes(annotated, notes, "example/research") == annotated
-    with pytest.raises(ValueError, match="conflicting closed issue links"):
-        changelog_issues.add_closing_notes(annotated.replace("/issues/7)", "/issues/8)"), notes, "example/research")
+    authored = annotated.replace("/issues/7)", "/issues/8)")
+    enriched = changelog_issues.add_closing_notes(authored, notes, "example/research")
+    assert enriched == entry + note + "\n" + authored.removeprefix(entry)
+    assert changelog_issues.add_closing_notes(enriched, notes, "example/research") == enriched
 
 
 def test_strip_only_directives_with_replacement_links_for_that_entry() -> None:
@@ -403,10 +408,22 @@ def test_path_qualified_heading_navigation_survives_regeneration(link: str) -> N
     assert postprocess_changelog.postprocess_text(result) == result
 
 
-def test_reference_heading_reserves_the_rendered_fragment() -> None:
-    source = "# Changelog\n\n## [Unreleased]\n\n### Added\n\n[Second](#verify-2)\n\n#### Verify-1\n\n#### [Verify][v]\n\nFirst.\n\n#### [Verify][v]\n\nSecond.\n\n[v]: https://example.com\n"
+@pytest.mark.parametrize("reserved", ["#### Verify-1", "Verify\n=====", "Verify\n-----"])
+def test_reference_heading_reserves_the_rendered_fragment(reserved: str) -> None:
+    source = f"# Changelog\n\n## [Unreleased]\n\n### Added\n\n[Second](#verify-2)\n\n{reserved}\n\n#### [Verify][v]\n\nFirst.\n\n#### [Verify][v]\n\nSecond.\n\n[v]: https://example.com\n"
     result = postprocess_changelog.postprocess_text(source)
     assert "#### [Verify][v] (2)\n\nSecond." in result
+    assert postprocess_changelog.postprocess_text(result) == result
+
+
+def test_repeated_subsections_keep_indented_fence_delimiters_literal() -> None:
+    from markdown_it import MarkdownIt
+
+    source = "# Changelog\n\n## [Unreleased]\n\n### Changed\n\n" + "#### Example\n\n    ```text\n    sample\n    ```\n\n" * 2
+    result = postprocess_changelog.postprocess_text(source)
+    tokens = MarkdownIt("commonmark").parse(result)
+    assert [token.content for token in tokens if token.type == "code_block"] == ["```text\nsample\n```\n"] * 2
+    assert not any(token.type == "fence" for token in tokens)
     assert postprocess_changelog.postprocess_text(result) == result
 
 

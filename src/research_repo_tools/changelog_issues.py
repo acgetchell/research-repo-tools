@@ -167,7 +167,9 @@ def _following_note(lines: list[str], index: int) -> str | None:
 def retained_notes(text: str, notes: dict[str, str], repository: str) -> dict[str, str]:
     """Select existing notes for reconstructing a retained release from Git."""
     lines = text.split("\n")
-    return {oid: notes[oid] for index, oid in _commit_lines(lines, repository) if oid in notes and _following_note(lines, index) is not None}
+    return {
+        oid: notes[oid] for index, oid in _commit_lines(lines, repository) if oid in notes and _following_note(lines, index) == " ".join(notes[oid].split())
+    }
 
 
 def add_closing_notes(text: str, notes: dict[str, str], repository: str) -> str:
@@ -177,9 +179,8 @@ def add_closing_notes(text: str, notes: dict[str, str], repository: str) -> str:
         if oid not in notes:
             continue
         note = notes[oid]
-        if (existing := _following_note(lines, index)) is not None:
-            if existing != " ".join(note.split()):
-                raise ValueError(f"conflicting closed issue links for commit {oid}")
-        else:
+        # The source is a commit body. Preserve a distinct authored linked
+        # paragraph. Changed notes in stored archives fail the release comparison.
+        if _following_note(lines, index) != " ".join(note.split()):
             lines[index + 1 : index + 1] = note.split("\n")
     return "\n".join(lines)

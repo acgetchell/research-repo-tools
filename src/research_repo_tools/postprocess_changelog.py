@@ -1207,17 +1207,14 @@ def _number_navigable_headings(lines: list[str], repeated: set[int]) -> None:
     """
     from markdown_it import MarkdownIt
 
-    markdown = MarkdownIt("commonmark")
-    environment = {}
-    markdown.parse("\n".join(lines), environment)
+    tokens = MarkdownIt("commonmark").parse("\n".join(lines))
     used: set[str] = set()
     siblings: set[str] = set()
-    for index, line in enumerate(lines):
-        if (heading := _ATX_HEADING_RE.match(line)) is None:
+    for position, heading in enumerate(tokens):
+        if heading.type != "heading_open" or heading.map is None:
             continue
-        title = heading["title"].strip()
-        inline = markdown.parseInline(title, environment)[0].children or []
-        label = "".join(token.content for token in inline if token.type in {"text", "code_inline"})
+        inline = tokens[position + 1]
+        label = "".join(token.content for token in inline.children or () if token.type in {"text", "code_inline"})
         base = re.sub(r"[^\w -]", "", label.lower()).replace(" ", "-")
         anchor = base
         suffix = 0
@@ -1225,10 +1222,14 @@ def _number_navigable_headings(lines: list[str], repeated: set[int]) -> None:
             suffix += 1
             anchor = f"{base}-{suffix}"
         used.add(anchor)
-        level = len(heading["level"])
+        level = int(heading.tag[1:])
         if level < 4:
             siblings.clear()
         elif level == 4:
+            index = heading.map[0]
+            if (source := _ATX_HEADING_RE.match(lines[index])) is None:
+                continue
+            title = source["title"].strip()
             if suffix and (index in repeated or title in siblings):
                 title = f"{title} ({suffix})"
                 lines[index] = f"#### {title}"
@@ -1418,7 +1419,8 @@ def postprocess_text(text: str) -> str:
         if marker in fenced_blocks:
             original, movable = fenced_blocks.pop(marker)
             if not movable:
-                lines[index] = original
+                indent = line[: len(line) - len(marker)]
+                lines[index] = "\n".join(indent + row if row else row for row in original.split("\n"))
                 continue
             block = original.split("\n")
             # Moving a fence with its list must preserve indentation *inside* it.
