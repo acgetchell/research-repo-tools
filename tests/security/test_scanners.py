@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 import shutil
 import subprocess
 from pathlib import Path
@@ -108,14 +109,17 @@ def test_uncommitted_files_and_redacted_reports(consumer):
             assert args[1] == "."
             assert (kwargs["cwd"] / "new file.txt").read_bytes() == b"new uncommitted synthetic secret\r\n"
         else:
-            assert "--log-opts=--all --full-history" in args
+            assert "--log-opts=--all --full-history --no-renames" in args
         fmt = args[args.index("--report-format") + 1]
         record = finding | {"Commit": "a" * 40} if args[0] == "git" else finding
         Path(args[args.index("--report-path") + 1]).write_bytes(json.dumps([record] if fmt == "json" else sarif([sarif_finding])).encode())
         return subprocess.CompletedProcess([], 3, b"raw secret that must not be logged", b"")
 
+    def git(args, **kwargs):
+        return subprocess.CompletedProcess(args, 0, b"a" * 40 + b"\n" if "rev-list" in args else b"false\n", b"")
+
     with (
-        patch.object(security, "run_git_bytes", return_value=subprocess.CompletedProcess([], 0, b"false\n", b"")),
+        patch.object(security, "run_git_bytes", side_effect=git),
         patch.object(security, "security_inventory", return_value=("new file.txt",)),
         patch.object(security, "_binary", return_value=(Path("gitleaks"), {"GITLEAKS_CONFIG": "ambient"})),
         patch.object(security, "run_command_bytes", side_effect=run),
@@ -148,7 +152,7 @@ def test_scanner_does_not_publish_after_serialization_exceeds_read_limit(tmp_pat
     assert not destination.exists()
 
 
-def test_pinned_gitleaks_matches_anchored_working_paths_with_relative_extensions(tmp_path, capsys):
+def pinned_gitleaks() -> Path:
     executable = shutil.which("gitleaks")
     if executable is None or os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1":
         pytest.skip("requires pinned Gitleaks and a disposable Git checkout")
@@ -156,6 +160,11 @@ def test_pinned_gitleaks_matches_anchored_working_paths_with_relative_extensions
     version = subprocess.run([binary, "version"], capture_output=True, check=True, timeout=30)
     if version.stdout.strip() != b"8.30.1":
         pytest.skip("requires Gitleaks 8.30.1")
+    return binary
+
+
+def test_pinned_gitleaks_matches_anchored_working_paths_with_relative_extensions(tmp_path, capsys):
+    binary = pinned_gitleaks()
 
     root = tmp_path.resolve() / "repository"
     root.mkdir()
@@ -169,6 +178,7 @@ def test_pinned_gitleaks_matches_anchored_working_paths_with_relative_extensions
     git("config", "user.name", "Fixture")
     git("config", "user.email", "fixture@example.invalid")
     git("config", "commit.gpgsign", "false")
+    git("config", "diff.renames", "false")
     (root / "policies").mkdir()
     (root / "policies" / "shared.toml").write_bytes(b"extend.path = 'leaf.toml'\n")
     (root / "leaf.toml").write_bytes(
@@ -182,8 +192,14 @@ regex = 'synthetic-scanner-match'
     (root / "candidate.toml").write_bytes(b"Extend = { Path = 'policies/shared.toml' }\n")
     (root / "src").mkdir()
     (root / "src" / "new.txt").write_bytes(b"synthetic-scanner-match\n")
-    git("add", "src/new.txt")
+    (root / "outside.txt").write_bytes(b"synthetic-scanner-match\n")
+    git("add", "src/new.txt", "outside.txt")
     git("commit", "-qm", "fixture")
+    git("mv", "outside.txt", "src/renamed.txt")
+    git("commit", "-qm", "rename fixture")
+    renamed_commit = git("rev-parse", "HEAD")
+    git("rm", "src/renamed.txt")
+    git("commit", "-qm", "remove rename fixture from the working tree")
     captured_commit = git("rev-parse", "HEAD")
     (root / "src" / "late.txt").write_bytes(b"synthetic-scanner-match\n")
     git("add", "src/late.txt")
@@ -212,15 +228,16 @@ regex = 'synthetic-scanner-match'
                     git("update-ref", "-d", "refs/heads/transient")
         return native(binary, args, **kwargs)
 
-    with patch.dict(os.environ, env, clear=True), patch.object(security, "_binary", return_value=(binary, env)):
+    hook_environment = env | {"GIT_DIR": str(root / ".git"), "GIT_WORK_TREE": str(root)}
+    with patch.dict(os.environ, hook_environment, clear=True), patch.object(security, "_binary", return_value=(binary, hook_environment)):
         with patch.object(security, "run_command_bytes", side_effect=scan):
             security.check_secret_exceptions(settings, "candidate.toml")
         output = capsys.readouterr().out
         assert "Suppressed: 0 finding(s)" in output
         assert "Introduced: 0 finding(s)" in output
-        assert "Matching locations: 3 finding(s)" in output
-        assert f"at commit {captured_commit}" in output
+        assert "Matching locations: 4 finding(s)" in output
         assert "linked.txt" in output and f"at commit {linked_commit}" in output
+        assert 'history "src/renamed.txt"' in output and f"at commit {renamed_commit}" in output
         assert 'working "src/new.txt"' in output
         assert "late.txt" not in output
         assert len(history_scans) == 2 and history_scans[0] == history_scans[1] != root
@@ -229,12 +246,47 @@ regex = 'synthetic-scanner-match'
         assert security.scan_secrets(settings) == 1
         report = root / "target" / "security" / "gitleaks-working.json"
         assert [finding["RuleID"] for finding in json.loads(report.read_bytes())] == ["fixture-rule"]
+        native_history = json.loads(report.with_name("gitleaks-history.json").read_bytes())
+        assert any(Path(finding["File"]).name == "renamed.txt" and finding["Commit"] == renamed_commit for finding in native_history)
         (root / ".gitleaksignore").write_bytes(b"src/new.txt:fixture-rule:1\n")
         with pytest.raises(ValueError, match=r"\.gitleaksignore.*absent"):
             security.check_secret_exceptions(settings, "candidate.toml")
         with pytest.raises(ValueError, match=r"\.gitleaksignore.*absent"):
             security.scan_secrets(settings)
         assert not report.exists()
+
+
+def test_pinned_gitleaks_scopes_the_documented_allowlist(tmp_path, capsys):
+    binary = pinned_gitleaks()
+    runbook = (Path(__file__).resolve().parents[2] / "docs" / "RUNNING_CHECKS.md").read_text(encoding="utf-8")
+    policy = next(block for block in re.findall(r"```toml\n(.*?)```", runbook, re.S) if "Reviewed numeric benchmark statistics" in block)
+    match = re.search(r"regexes = \['\^([A-Za-z0-9]+)\$'\]", policy)
+    assert match is not None
+    root = tmp_path.resolve()
+    (root / "proposed.toml").write_bytes(policy.encode("utf-8"))
+    intended = "docs/performance-runs/example/run.json"
+    nested = f"examples/{intended}"
+    for name in (intended, nested):
+        path = root / name
+        path.parent.mkdir(parents=True)
+        path.write_bytes(json.dumps({"api_key": match[1]}).encode("utf-8"))
+    env = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
+    env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
+    with patch.dict(os.environ, env, clear=True), patch.object(security, "_binary", return_value=(binary, env)):
+        run_git_command(["init", "--quiet", "--template="], cwd=root)
+        run_git_command(["add", "--", intended, nested], cwd=root)
+        run_git_command(
+            ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture"], cwd=root
+        )
+        security.check_secret_exceptions(config.Config(root=root), "proposed.toml")
+    output = capsys.readouterr().out
+    suppressed, matching = output.split("Introduced: 0 finding(s)")
+    assert "Suppressed: 2 finding(s)" in suppressed
+    assert f'history "{intended}"' in suppressed and f'working "{intended}"' in suppressed
+    assert nested not in suppressed
+    assert "Matching locations: 2 finding(s)" in matching
+    assert f'history "{nested}"' in matching and f'working "{nested}"' in matching
+    assert match[1] not in output
 
 
 def test_generated_inventory_exclusions(tmp_path):

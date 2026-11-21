@@ -23,9 +23,10 @@ for setup and ordinary workflows.
 - `scan_secrets(settings, *, output="target/security", configuration=None, exclude=())`:
   full reachable history plus current files; rejects shallow history and selected
   links/submodules. Native patch/binary/archive limitations remain applicable.
-- `security_inventory(root, *, include=(), exclude=())`: sorted tracked/nonignored
+- `security_inventory(root, *, include=(), exclude=(), env=None)`: sorted tracked/nonignored
   regular files, excluding standard generated/environment directories. Inclusion
   patterns are Git pathspecs and exclusions are case-sensitive POSIX globs.
+  An explicit `env` replaces the Git subprocess environment.
 - `show_secret_findings(settings, *, reports="target/security")` validates and
   summarizes both redacted native JSON reports without invoking the scanner.
   A completed summary returns `None` even when the reports contain findings.

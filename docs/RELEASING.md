@@ -173,7 +173,8 @@ recorded draft. Keep the retained evidence associated with that candidate.
 | --- | --- |
 | Metadata prepared, notes missing or rendering failed | Fix the reported generator prerequisite and run `just changelog-release "$TAG"` with the prepared date. |
 | Release PR merged, exact CI still pending | Watch the original `MAIN_RUN_ID`. |
-| Exact main CI passed, tag creation stopped | Resolve the reported metadata or dependency prerequisite and retry `just tag "$TAG" --commit "$RELEASE_COMMIT"`. |
+| Tag preflight requires a tracked metadata correction | Commit and review the correction. Wait for main CI on the new commit and retry `just tag "$TAG" --commit "$RELEASE_COMMIT"` with its SHA. |
+| Tag preflight stopped on an external dependency or tool | Resolve the reported prerequisite and retry `just tag "$TAG" --commit "$RELEASE_COMMIT"` with the same reviewed SHA. |
 | Tag pushed, draft pending | Inspect or watch the recorded `PREPARATION_RUN_ID`. |
 | GitHub Release published, PyPI approval pending | Review the verification result and approve the `pypi` deployment in the original publishing run. |
 | PyPI upload interrupted | Inspect the original GitHub Release and publishing run. Check the exact registry version with `just release-registry "$TAG" --expect present` and compare any published file hashes before deciding whether to retry. |

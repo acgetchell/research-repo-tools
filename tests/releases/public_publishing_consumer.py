@@ -918,11 +918,14 @@ class TestPublishingConsumer(unittest.TestCase):
             contextlib.redirect_stderr(io.StringIO()) as errors,
         ):
             self.assertEqual(cli.main(tag_args), 1)
-            self.assertIn(f"just tag-preview v1.2.3 --commit {commit} --force", errors.getvalue())
+            self.assertIn("commit and review the correction", errors.getvalue())
+            self.assertIn("Retry in a POSIX shell", errors.getvalue())
+            self.assertIn("just tag-preview v1.2.3 --commit REVIEWED_COMMIT --force", errors.getvalue())
             root_arg = str(self.root.resolve())
             globals_ = ["--root", root_arg, "--config", str(policy)]
             self.assertEqual(cli.main([*globals_, *tag_args]), 1)
-            self.assertEqual(shlex.split(errors.getvalue().splitlines()[-1]), ["research-repo-tools", *globals_, *tag_args])
+            recovery_args = ["REVIEWED_COMMIT" if value == commit else value for value in tag_args]
+            self.assertEqual(shlex.split(errors.getvalue().splitlines()[-1]), ["research-repo-tools", *globals_, *recovery_args])
         tag.assert_not_called()
 
     def test_tag_cli_checks_reviewed_commit_and_resumes_after_offline_preflight(self):
@@ -988,7 +991,8 @@ class TestPublishingConsumer(unittest.TestCase):
                         self.assertEqual(status, 1, errors)
                         self.assertIn("cold cache: failed to download", errors)
                         self.assertIn("just release-cargo-fetch", errors)
-                        self.assertIn(commit, errors)
+                        self.assertIn("Resume in a POSIX shell", errors)
+                        self.assertIn(f"--commit {commit}", errors)
                         self.assertEqual(git("--no-pager", "tag", "--list"), "")
                         cargo_command.side_effect = None
                         cargo_command.return_value = subprocess.CompletedProcess([], 0, json.dumps(graph), "")

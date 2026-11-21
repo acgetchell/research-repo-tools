@@ -135,14 +135,17 @@ def group_constraints(text: str) -> dict[str, str]:
         specifiers = SpecifierSet(requirement)
         if specifiers.is_unsatisfiable():
             raise ValueError(f"tool.uv.dependency-groups.{name}.requires-python has no matching versions")
-        result[name] = str(specifiers)
+        group = canonicalize_name(name)
+        if group in result:
+            raise ValueError(f"duplicate normalized uv dependency group: {name}")
+        result[group] = str(specifiers)
     return result
 
 
 def _release_series(operator: str, start: str, end: str) -> VersionRange:
     if operator == "==":
-        return SpecifierSet(f">={start},<{end}").to_range()
-    return SpecifierSet(f"<{start}").to_range() | SpecifierSet(f">={end}").to_range()
+        return SpecifierSet(f">={start}.dev0,<{end}").to_range()
+    return SpecifierSet(f"<{start}").to_range() | SpecifierSet(f">={end}.dev0").to_range()
 
 
 def _minor_marker_support(specifier: Specifier) -> VersionRange:
@@ -168,14 +171,14 @@ def _minor_marker_support(specifier: Specifier) -> VersionRange:
         case "<" | "<=":
             return SpecifierSet(f"<{next_minor if inclusive else minor}").to_range()
         case ">" | ">=":
-            return SpecifierSet(f">={minor if inclusive else next_minor}").to_range()
+            return SpecifierSet(f">={minor if inclusive else next_minor}.dev0").to_range()
         case "~=":
             prefix = ".".join(map(str, boundary.release[:-1]))
-            return SpecifierSet(f">={minor if inclusive else next_minor},=={prefix}.*").to_range()
+            return SpecifierSet(f">={minor if inclusive else next_minor}.dev0,=={prefix}.*").to_range()
     return VersionRange.full()  # pragma: no cover - Specifier validates operators
 
 
-def _marker_atom_support(atom: MarkerItem, *, minor_prereleases: bool) -> VersionRange:
+def _marker_atom_support(atom: MarkerItem) -> VersionRange:
     lhs, op, rhs = atom
     operator = op.value
     if isinstance(lhs, Variable) and isinstance(rhs, Value):
@@ -196,12 +199,10 @@ def _marker_atom_support(atom: MarkerItem, *, minor_prereleases: bool) -> Versio
         return VersionRange.full()
     if variable == "python_full_version":
         return SpecifierSet(str(specifier)).to_range()
-    if not minor_prereleases:
-        return _minor_marker_support(specifier)
-    return VersionRange.full()
+    return _minor_marker_support(specifier)
 
 
-def _marker_python_support(markers: MarkerList, *, minor_prereleases: bool) -> VersionRange:
+def _marker_python_support(markers: MarkerList) -> VersionRange:
     # Marker groups join with OR, with AND taking precedence within each group.
     alternatives, group = VersionRange.empty(), VersionRange.full()
     for marker in markers:
@@ -209,13 +210,13 @@ def _marker_python_support(markers: MarkerList, *, minor_prereleases: bool) -> V
             alternatives |= group
             group = VersionRange.full()
         elif isinstance(marker, list):
-            group &= _marker_python_support(marker, minor_prereleases=minor_prereleases)
+            group &= _marker_python_support(marker)
         elif isinstance(marker, tuple):
-            group &= _marker_atom_support(cast(MarkerItem, marker), minor_prereleases=minor_prereleases)
+            group &= _marker_atom_support(cast(MarkerItem, marker))
     return alternatives | group
 
 
-def marker_python_support(marker: Marker | None, *, minor_prereleases: bool) -> VersionRange:
+def marker_python_support(marker: Marker | None) -> VersionRange:
     """Project a dependency marker onto Python versions across environments.
 
     Unknown conditions retain the full possible range. Native uv resolution
@@ -223,7 +224,7 @@ def marker_python_support(marker: Marker | None, *, minor_prereleases: bool) -> 
     """
     # Packaging exposes evaluation for a single environment. Its parsed tree
     # preserves the Boolean structure needed to reason across environments.
-    return VersionRange.full() if marker is None else _marker_python_support(marker._markers, minor_prereleases=minor_prereleases)
+    return VersionRange.full() if marker is None else _marker_python_support(marker._markers)
 
 
 def constrain_group(raw: str, python: str) -> str:

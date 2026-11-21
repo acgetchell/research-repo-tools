@@ -179,12 +179,14 @@ disabled; it does not execute dependency build scripts. Advisory queries need
 network access. Missing inputs, uncovered sources, scanner failures, malformed
 or missing reports, and findings all block the gate.
 
-Gitleaks checks all reachable Git history and a private snapshot of current
+Gitleaks checks a private snapshot of all reachable Git history and of current
 tracked/nonignored files, including uncommitted new files. Full history is
 required (`fetch-depth: 0` in Actions). Environment/build directories are excluded
-from the working snapshot. Selected symlinks and submodules fail explicitly;
-scan submodules as separate repositories. Native history scanning covers patches,
-not unreachable objects, nested repositories, archive contents or binary blobs.
+from the working snapshot. Selected symlinks and submodules fail explicitly.
+Scan submodules as separate repositories. History patches treat renamed files as
+additions at the new path so rules scoped to that path can detect them. Native
+history scanning omits unreachable objects, nested repositories, archive
+contents, and binary blobs.
 Extra working-tree exclusions are explicit `--exclude` arguments.
 Working-tree scan paths are relative to the repository, including when policy
 rules use path anchors. Local TOML `[extend].path` values resolve from the

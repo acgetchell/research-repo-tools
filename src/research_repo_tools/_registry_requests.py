@@ -76,8 +76,20 @@ def _resolve_addresses(address: tuple[str, int], cap: float, remaining: Callable
         _io_timeout(remaining, cap)
         raise TimeoutError("registry DNS resolver slots are busy")
     result: SimpleQueue[Sequence[_AddressInfo] | BaseException] = SimpleQueue()
+    ownership = threading.Lock()
+    claimed = False
+
+    def claim() -> bool:
+        nonlocal claimed
+        with ownership:
+            if claimed:
+                return False
+            claimed = True
+            return True
 
     def resolve() -> None:
+        if not claim():
+            return
         try:
             result.put(socket.getaddrinfo(*address, 0, socket.SOCK_STREAM))
         except BaseException as error:
@@ -89,7 +101,8 @@ def _resolve_addresses(address: tuple[str, int], cap: float, remaining: Callable
         _io_timeout(remaining, cap)
         threading.Thread(target=resolve, daemon=True).start()
     except BaseException:
-        _DNS_SLOTS.release()
+        if claim():
+            _DNS_SLOTS.release()
         raise
     try:
         observed = result.get(timeout=_io_timeout(remaining, cap))

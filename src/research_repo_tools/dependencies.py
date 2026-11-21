@@ -104,6 +104,12 @@ def _group_requirements(
     groups: dict[str, object], name: str, ancestors: tuple[str, ...] = (), *, python_constraints: Mapping[str, str] | None = None
 ) -> list[str]:
     """Expand PEP 735 includes without granting ownership of their version pins."""
+    normalized = canonicalize_name(name)
+    matches = [group for group in groups if canonicalize_name(group) == normalized]
+    if len(matches) > 1:
+        raise ValueError(f"duplicate normalized dependency group: {name}")
+    if matches:
+        name = matches[0]
     if name in ancestors:
         raise ValueError(f"dependency group cycle: {' -> '.join((*ancestors, name))}")
     entries = groups.get(name)
@@ -118,7 +124,7 @@ def _group_requirements(
             result.extend(_group_requirements(groups, entry["include-group"], (*ancestors, name), python_constraints=python_constraints))
         else:
             raise TypeError(f"dependency-groups.{name} entries must be requirements or include-group tables")
-    constraint = (python_constraints or {}).get(name, "")
+    constraint = (python_constraints or {}).get(normalized, "")
     return [python_resolution.constrain_group(raw, constraint) for raw in result]
 
 

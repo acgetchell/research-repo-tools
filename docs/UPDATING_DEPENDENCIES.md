@@ -190,7 +190,9 @@ For a registry pin, the updater checks the newest stable, non-yanked PyPI releas
 above that pin that supports the running interpreter and the Python range
 declared where the supplier is used. A dependency group's own Python constraint
 narrows the range for that group's declaration. uv resolves the selected
-candidate and stops the update on a resolution failure. For an exact Git SHA,
+candidate and stops the update on a resolution failure. If exact registry
+verification confirms a candidate was yanked, the updater checks the next
+eligible release. For an exact Git SHA,
 the updater applies the same Python compatibility check and uses the signed
 promotion proof below, including releases of the same version as the development
 pin. If there is no eligible release, it retains the original source and

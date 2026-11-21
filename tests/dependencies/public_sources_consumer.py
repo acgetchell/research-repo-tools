@@ -486,6 +486,36 @@ class TestSources(unittest.TestCase):
             release.set()
             self.assertTrue(finished.wait(5))
 
+    def test_registry_resolver_releases_its_slot_once_after_interrupted_start(self) -> None:
+        for worker_first in (False, True):
+            with self.subTest(worker_first=worker_first):
+                callbacks = []
+                slots = threading.BoundedSemaphore(1)
+
+                def make_thread(*, target, daemon):
+                    self.assertTrue(daemon)
+                    callbacks.append(target)
+
+                    def start():
+                        if worker_first:
+                            target()
+                        raise KeyboardInterrupt
+
+                    return MagicMock(start=start)
+
+                with (
+                    patch.object(_registry_requests, "_DNS_SLOTS", slots),
+                    patch.object(_registry_requests.threading, "Thread", side_effect=make_thread),
+                    patch.object(_registry_requests.socket, "getaddrinfo", return_value=[REGISTRY_ADDRESS]) as lookup,
+                ):
+                    with self.assertRaises(KeyboardInterrupt):
+                        _registry_requests._resolve_addresses(("pypi.org", 443), 1, lambda: 1)
+                    if not worker_first:
+                        callbacks[0]()
+                    self.assertEqual(lookup.call_count, int(worker_first))
+                self.assertTrue(slots.acquire(blocking=False))
+                slots.release()
+
     def test_registry_deadline_refreshes_after_proxy_connect_before_tls(self) -> None:
         now = [0.0]
         proxy_timeouts = []
@@ -834,6 +864,30 @@ class TestSourceWorkflows(unittest.TestCase):
                 )
                 self.assertEqual(self.snapshot(), before)
                 self.native.assert_called()
+
+    def test_graph_parses_captured_manifest_and_lock_bytes(self) -> None:
+        self.python()
+        manifest, lock = (self.root / name for name in ("pyproject.toml", "uv.lock"))
+        originals = {path: path.read_bytes() for path in (manifest, lock)}
+        capture = dependency_graphs.InputSnapshot.capture
+        captured_once = False
+
+        def edit_between_captures(paths):
+            nonlocal captured_once
+            if captured_once:
+                for path, content in originals.items():
+                    path.write_bytes(content)
+                return capture(paths)
+            result = capture(paths)
+            for path, content in originals.items():
+                path.write_bytes(content.replace(b'version="0.1.0"', b'version="0.2.0"'))
+            captured_once = True
+            return result
+
+        with patch.object(dependency_graphs.InputSnapshot, "capture", side_effect=edit_between_captures):
+            graph = dependency_graphs.inspect_project(self.root, DependencyProject("python"))
+        self.assertEqual(graph.owned, (("consumer", "0.1.0", self.root),))
+        self.assertEqual({path: path.read_bytes() for path in originals}, originals)
 
     def test_source_plan_rejects_a_policy_changed_during_lookup(self) -> None:
         self.python()
@@ -1230,6 +1284,7 @@ class TestSourceWorkflows(unittest.TestCase):
             "2.1.0": [{"yanked": False, "requires_python": ">=99"}],
             "2.2.0rc1": [{"yanked": False, "requires_python": ">=3.15"}],
             "2.3.0": [{"yanked": False, "requires_python": ">=3.15.2"}],
+            "2.4.0": [{"yanked": False, "requires_python": ">=3.15.1"}],
         }
         self.provider.put(project_api, {"info": {"name": name}, "releases": versions})
 
@@ -1250,6 +1305,9 @@ class TestSourceWorkflows(unittest.TestCase):
             ]
 
         self.provider.put(release_api, {"info": {"name": name, "version": "1.3.0"}, "urls": uploads("1.3.0")})
+        yanked_api = f"https://pypi.org/pypi/{name}/2.4.0/json"
+        yanked_uploads = [upload | {"yanked": True} for upload in uploads("2.4.0")]
+        self.provider.put(yanked_api, {"info": {"name": name, "version": "2.4.0"}, "urls": yanked_uploads})
 
         def write_lock(path: Path, version: str) -> None:
             wheel, sdist = uploads(version)
@@ -1308,6 +1366,12 @@ class TestSourceWorkflows(unittest.TestCase):
             patch.object(python_promotion, "check_promoted_installation", side_effect=ValueError("installed bytes differ")) as installed,
             contextlib.redirect_stderr(io.StringIO()) as errors,
         ):
+            self.provider.put(yanked_api, {"info": {"name": name, "version": "2.4.0"}, "urls": [yanked_uploads[0] | {"size": "invalid"}, yanked_uploads[1]]})
+            self.assertEqual(cli.main(arguments), 1)
+            self.assertIn("artifact size must be an integer", errors.getvalue())
+            resolver.assert_not_called()
+            self.assertEqual(self.snapshot(), before)
+            self.provider.put(yanked_api, {"info": {"name": name, "version": "2.4.0"}, "urls": yanked_uploads})
             self.assertEqual(cli.main(arguments), 1)
             self.assertIn("installed bytes differ", errors.getvalue())
             self.assertEqual(self.snapshot(), before)
@@ -1332,12 +1396,12 @@ class TestSourceWorkflows(unittest.TestCase):
         name = "research-repo-tools"
         root_manifest = self.root / "pyproject.toml"
         root_manifest.write_bytes(
-            b'[project]\nrequires-python = ">=3.15"\n[dependency-groups]\ntooling = ["research-repo-tools==1.2.3"]\n'
-            b'[tool.uv.dependency-groups.tooling]\nrequires-python = ">=3.16"\n'
+            b'[project]\nrequires-python = ">=3.15"\n[dependency-groups]\n"Tools_With.Alias" = ["research-repo-tools==1.2.3"]\n'
+            b'[tool.uv.dependency-groups.tools-with-alias]\nrequires-python = ">=3.16"\n'
         )
         member = self.root / "member" / "pyproject.toml"
         member.parent.mkdir()
-        member.write_bytes(b'[project]\nrequires-python = ">=3.15"\ndependencies = ["research-repo-tools==1.2.3"]\n')
+        member.write_bytes(b'[project]\nrequires-python = ">=3.15.1"\ndependencies = ["research-repo-tools==1.2.3"]\n')
         project = DependencyProject("python", ".")
         pin = RegistryRelease("python", name, "1.2.3")
         selection = dependency_policy.SourceSelection("tooling", project, pin)
@@ -1356,7 +1420,7 @@ class TestSourceWorkflows(unittest.TestCase):
             {
                 "info": {"name": name},
                 "releases": {
-                    "1.2.4": [{"yanked": False, "requires_python": ">=3.15"}],
+                    "1.2.4": [{"yanked": False, "requires_python": ">=3.15.1"}],
                     "1.2.5": [{"yanked": False, "requires_python": ">=3.16"}],
                 },
             },
@@ -1376,25 +1440,31 @@ class TestSourceWorkflows(unittest.TestCase):
             {
                 "info": {"name": "sample-pkg"},
                 "releases": {
-                    "1.2.4": [{"yanked": False, "requires_python": ">=3.16"}],
-                    "1.2.5": [{"yanked": False, "requires_python": ">=3.16.1"}],
+                    "1.2.4": [{"yanked": False, "requires_python": ">=3.16.dev0"}],
+                    "1.2.5": [{"yanked": False, "requires_python": ">=3.16"}],
+                    "1.2.6": [{"yanked": False, "requires_python": ">=3.16.1"}],
                 },
             },
         )
-        for marker in (
-            'python_version >= "3.16"',
-            'python_version > "3.15"',
-            '"3.15" < python_version',
-            'python_full_version >= "3.16" and (sys_platform == "win32" or python_version != "3.17")',
-            '(python_version == "3.16" and sys_platform == "win32") or python_version >= "3.17"',
+        for marker, includes_prereleases in (
+            ('python_version == "3.16"', True),
+            ('python_version >= "3.16"', True),
+            ('python_version > "3.15"', True),
+            ('"3.15" < python_version', True),
+            ('python_full_version >= "3.16" and (sys_platform == "win32" or python_version != "3.17")', False),
+            ('(python_version == "3.16" and sys_platform == "win32") or python_version >= "3.17"', True),
         ):
             with self.subTest(marker=marker), patch.object(python_promotion.platform, "python_version", return_value="3.16.2"):
                 entry = json.dumps(f"sample-pkg==1.2.3; {marker}")
                 manifest = f'[project]\nrequires-python = ">=3.15"\ndependencies = [{entry}]\n'
-                support = python_promotion._declared_python_support(tomllib.loads(manifest), manifest, "sample-pkg")
+                (support,) = python_promotion._declared_python_support(tomllib.loads(manifest), manifest, "sample-pkg")
+                self.assertFalse(support.contains("3.15.9"))
+                self.assertEqual(support.contains("3.16.0rc1"), includes_prereleases)
+                self.assertTrue(support.contains("3.16.0"))
+                expected = (Version("1.2.4"),) if includes_prereleases else (Version("1.2.5"), Version("1.2.4"))
                 self.assertEqual(
-                    python_promotion._candidates(self.provider, "sample-pkg", Version("1.2.3"), SpecifierSet(), False, newer=True, python_support=support),
-                    (Version("1.2.4"),),
+                    python_promotion._candidates(self.provider, "sample-pkg", Version("1.2.3"), SpecifierSet(), False, newer=True, python_support=(support,)),
+                    expected,
                 )
 
     def test_promotion_binds_artifacts_to_pin_and_rolls_back_failed_sync(self) -> None:
@@ -1492,6 +1562,12 @@ class TestSourceWorkflows(unittest.TestCase):
             resolve_lock.assert_not_called()
             self.assertEqual(self.snapshot(), before)
             comparison_result("ahead", 0, COMMIT)
+            self.provider.put(PYTHON_API, {"info": info, "urls": [upload | {"yanked": True} for upload in uploads]})
+            self.assertEqual(python_updates.update(settings, promote="upstream"), 0)
+            self.assertEqual(self.snapshot(), before)
+            verify.assert_not_called()
+            resolve_lock.assert_not_called()
+            self.provider.put(PYTHON_API, {"info": info, "urls": uploads})
             verify.side_effect = ValueError("signature mismatch")
             with self.assertRaisesRegex(ValueError, "signature mismatch"):
                 python_updates.update(settings, promote="upstream")

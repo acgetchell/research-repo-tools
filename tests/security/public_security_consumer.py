@@ -19,6 +19,12 @@ from research_repo_tools.toolchain_config import load
 
 
 class TestSharedCapabilities(unittest.TestCase):
+    @staticmethod
+    def _fixture_history(args, **kwargs):
+        if "rev-list" in args:
+            return subprocess.CompletedProcess(args, 0, b"a" * 40 + b"\n", b"")
+        return subprocess.CompletedProcess(args, 0, b"false\n", b"")
+
     def test_gitleaks_findings_requires_both_redacted_reports_and_shows_only_identity(self):
         with tempfile.TemporaryDirectory(prefix="gitleaks findings café ") as directory:
             root = Path(directory).resolve()
@@ -99,8 +105,10 @@ class TestSharedCapabilities(unittest.TestCase):
             candidate.write_bytes(candidate_bytes)
             calls = []
 
-            def git(args, *, cwd):
+            def git(args, *, cwd, env):
                 nonlocal history, captured_refs
+                self.assertNotIn("GIT_DIR", env)
+                self.assertNotIn("GIT_WORK_TREE", env)
                 if "--is-shallow-repository" in args:
                     self.assertEqual(cwd, root)
                     output = b"false\n"
@@ -172,8 +180,9 @@ class TestSharedCapabilities(unittest.TestCase):
             history, captured_refs = root, b""
             with (
                 patch("research_repo_tools.cli.config.load", return_value=settings),
+                patch.dict(os.environ, {"GIT_DIR": str(root / ".git"), "GIT_WORK_TREE": str(root)}),
                 patch.object(security, "security_inventory", return_value=(source.name,)) as inventory,
-                patch.object(security, "_binary", return_value=(root / "gitleaks", {"GITLEAKS_CONFIG": "ambient", "FIXTURE": "1"})),
+                patch.object(security, "_binary", return_value=(root / "gitleaks", {"GIT_DIR": "ambient", "GITLEAKS_CONFIG": "ambient", "FIXTURE": "1"})),
                 patch.object(security, "run_git_bytes", side_effect=git),
                 patch.object(security, "run_command_bytes", side_effect=native),
             ):
@@ -185,7 +194,10 @@ class TestSharedCapabilities(unittest.TestCase):
                 with redirect_stdout(io.StringIO()) as stdout:
                     self.assertEqual(main(arguments), 0)
                 output = stdout.getvalue()
-                inventory.assert_called_once_with(root, exclude=("**/*.bin",))
+                self.assertEqual(inventory.call_count, 1)
+                self.assertEqual(inventory.call_args.args, (root,))
+                self.assertEqual(inventory.call_args.kwargs["exclude"], ("**/*.bin",))
+                self.assertNotIn("GIT_DIR", inventory.call_args.kwargs["env"])
                 self.assertEqual([(mode, proposed) for mode, _, proposed, _ in calls], [("git", False), ("dir", False), ("git", True), ("dir", True)])
                 self.assertEqual(calls[1][1], calls[3][1])
                 self.assertEqual(len({retained for _, _, _, retained in calls}), 1)
@@ -211,7 +223,7 @@ class TestSharedCapabilities(unittest.TestCase):
                 with redirect_stdout(io.StringIO()) as failed, redirect_stderr(io.StringIO()) as errors:
                     self.assertEqual(main([*arguments, "--baseline", str(baseline)]), 1)
                 self.assertEqual(failed.getvalue(), "")
-                self.assertIn("Git refs changed during Gitleaks policy comparison", errors.getvalue())
+                self.assertIn("Git refs changed during Gitleaks scanning", errors.getvalue())
 
                 move_ref = False
                 change_extension = True
@@ -278,7 +290,7 @@ class TestSharedCapabilities(unittest.TestCase):
             with (
                 patch.object(security, "security_inventory", return_value=("source.txt",)),
                 patch.object(security, "_binary", return_value=(root / "gitleaks", {})),
-                patch.object(security, "run_git_bytes", return_value=subprocess.CompletedProcess([], 0, b"false\n", b"")),
+                patch.object(security, "run_git_bytes", side_effect=self._fixture_history),
                 patch.object(security, "run_command_bytes", side_effect=native) as run,
             ):
                 for failure in ("invalid policy", "partial scan", "invalid history identity"):
@@ -329,7 +341,7 @@ class TestSharedCapabilities(unittest.TestCase):
             with (
                 patch.object(security, "security_inventory", return_value=("source.txt",)),
                 patch.object(security, "_binary", return_value=(root / "gitleaks", {})),
-                patch.object(security, "run_git_bytes", return_value=subprocess.CompletedProcess([], 0, b"false\n", b"")),
+                patch.object(security, "run_git_bytes", side_effect=self._fixture_history),
                 patch.object(security, "run_command_bytes", side_effect=native),
                 redirect_stdout(io.StringIO()) as stdout,
                 redirect_stderr(io.StringIO()) as errors,
@@ -472,7 +484,7 @@ class TestSharedCapabilities(unittest.TestCase):
                         patch.object(semgrep_scan, "security_inventory", return_value=("source café.py",)),
                         patch.object(security, "_binary", return_value=(root / "scanner", {})),
                         patch.object(semgrep_scan.semgrep_tool, "setup", return_value=root / "scanner"),
-                        patch.object(security, "run_git_bytes", return_value=subprocess.CompletedProcess([], 0, b"false\n", b"")),
+                        patch.object(security, "run_git_bytes", side_effect=self._fixture_history),
                         patch.object(security, "run_command_bytes", side_effect=native),
                         redirect_stdout(stdout),
                         redirect_stderr(stderr),

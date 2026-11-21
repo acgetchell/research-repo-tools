@@ -21,12 +21,16 @@ from packaging.version import InvalidVersion, Version
 from research_repo_tools.evidence import _load_json
 from research_repo_tools.tool_pins import SEMVER
 
-__all__ = ["Artifact", "GitCommit", "RegistryRelease", "SourceProvider", "VerifiedSource", "parse_source", "verify_source"]
+__all__ = ["Artifact", "GitCommit", "RegistryRelease", "SourceProvider", "VerifiedSource", "YankedPythonRelease", "parse_source", "verify_source"]
 
 type Ecosystem = Literal["python", "cargo"]
 _SHA256 = re.compile(r"[0-9a-f]{64}")
 _COMMIT = re.compile(r"[0-9a-f]{40}")
 _REPOSITORY = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*")
+
+
+class YankedPythonRelease(ValueError):
+    """An otherwise valid exact PyPI release has a yanked upload."""
 
 
 def package_name(ecosystem: Ecosystem, name: str) -> str:
@@ -292,6 +296,7 @@ def verify_source(source: Source, *, provider: SourceProvider | None = None, rel
             raise ValueError("dynamic upstream version metadata cannot provide inert source proof")
         return _verified(source, exact_version(source.ecosystem, version), ())
     artifacts: list[Artifact] = []
+    yanked = False
     if source.ecosystem == "python":
         data = json(f"https://pypi.org/pypi/{source.package}/{source.version}/json")
         info = table(data.get("info"), "PyPI package")
@@ -304,8 +309,10 @@ def verify_source(source: Source, *, provider: SourceProvider | None = None, rel
             upload = table(raw, "PyPI artifact")
             filename = string(upload.get("filename"), "artifact filename")
             kind = upload.get("packagetype")
-            if upload.get("yanked") is not False or kind not in {"bdist_wheel", "sdist"}:
-                raise ValueError("published Python artifact is yanked or unsupported")
+            availability = upload.get("yanked")
+            if type(availability) is not bool or kind not in {"bdist_wheel", "sdist"}:
+                raise ValueError("published Python artifact has invalid availability or an unsupported type")
+            yanked |= availability
             parsed = parse_wheel_filename(filename) if kind == "bdist_wheel" else parse_sdist_filename(filename)
             if parsed[0] != source.package or parsed[1] != Version(source.version):
                 raise ValueError("artifact filename identifies a different package/version")
@@ -331,4 +338,6 @@ def verify_source(source: Source, *, provider: SourceProvider | None = None, rel
         )
     if len({item.url for item in artifacts}) != len(artifacts) or len({item.filename for item in artifacts}) != len(artifacts):
         raise ValueError("published artifacts contain duplicate identities")
+    if yanked:
+        raise YankedPythonRelease("published Python artifact is yanked")
     return _verified(source, source.version, tuple(artifacts))

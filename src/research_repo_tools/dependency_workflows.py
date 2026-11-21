@@ -325,7 +325,7 @@ def _plan_verified_source(
         raise ValueError("dependency inputs changed during source lookup; prepare a new plan")
     from research_repo_tools.dependency_graphs import _check_configuration
 
-    _check_configuration(project_root, selection.project.ecosystem)
+    _check_configuration(project_root, selection.project.ecosystem, snapshot)
     changes: dict[Path, bytes] = {}
     if transition_policy is not None:
         changes[root / POLICY_FILE] = transition_policy
@@ -469,13 +469,15 @@ def _require_dependency_free(root: Path) -> None:
     paths = (root / POLICY_FILE, root / "pyproject.toml", root / "uv.lock", root / "Cargo.toml", root / "Cargo.lock")
     snapshot = InputSnapshot.capture((*paths, *configuration_paths(root, "python"), *configuration_paths(root, "cargo")))
     retain_guard(snapshot.verify, snapshot.digest)
+    captured = dict(snapshot.files)
     for ecosystem, manifest, lock in (("python", paths[1], paths[2]), ("cargo", paths[3], paths[4])):
-        if not manifest.exists():
-            if lock.exists():
+        manifest_bytes, lock_bytes = captured[manifest], captured[lock]
+        if manifest_bytes is None:
+            if lock_bytes is not None:
                 raise ValueError("release dependency graph requires dependency-sources.toml")
             continue
-        _check_configuration(root, ecosystem)
-        data = table(tomllib.loads(manifest.read_text(encoding="utf-8")), "dependency manifest")
+        _check_configuration(root, ecosystem, snapshot)
+        data = table(tomllib.loads(manifest_bytes.decode("utf-8")), "dependency manifest")
         project = table(data.get("project" if ecosystem == "python" else "package", {}), "project")
         owned_name = project.get("name")
         if ecosystem == "python" and isinstance(owned_name, str):
@@ -493,11 +495,11 @@ def _require_dependency_free(root: Path) -> None:
         if not isinstance(members, list):
             raise ValueError("workspace members must be an array")
         configured |= bool(members)
-        if lock.exists():
+        if lock_bytes is not None:
             version = project.get("version")
             if ecosystem == "cargo" and version == {"workspace": True}:
                 version = table(workspace.get("package", {}), "workspace.package").get("version")
-            packages = table(tomllib.loads(lock.read_text(encoding="utf-8")), "lock").get("package")
+            packages = table(tomllib.loads(lock_bytes.decode("utf-8")), "lock").get("package")
             if not isinstance(packages, list):
                 raise ValueError("release dependency graph requires dependency-sources.toml")
             for raw in packages:

@@ -88,7 +88,7 @@ def _cargo_dependencies(document: dict[str, object]) -> Iterator[tuple[str, dict
                 yield name, {"version": raw} if isinstance(raw, str) else table(raw, "Cargo dependency")
 
 
-def _check_configuration(root: Path, ecosystem: str) -> None:
+def _check_configuration(root: Path, ecosystem: str, snapshot: InputSnapshot) -> None:
     prefixes = ("UV_",) if ecosystem == "python" else ("CARGO_", "RUSTC", "RUSTDOC", "RUSTUP_TOOLCHAIN")
     allowed = {
         "UV_CACHE_DIR",
@@ -107,15 +107,19 @@ def _check_configuration(root: Path, ecosystem: str) -> None:
         "CARGO_BUILD_JOBS",
         "RUSTUP_TOOLCHAIN",
     }
-    for key, value in os.environ.items():
+    for key, value in snapshot.environment:
         if value and key.upper().startswith(prefixes) and key.upper() not in allowed:
             raise ValueError(f"dependency proof does not support environment override {key}")
+    captured = dict(snapshot.files)
     for path in configuration_paths(root, "python" if ecosystem == "python" else "cargo"):
-        if not path.exists():
+        if path not in captured:
+            raise ValueError("dependency configuration paths changed during capture; revalidate source and locks")
+        payload = captured[path]
+        if payload is None:
             continue
         if ecosystem == "python":
             raise ValueError("dependency proof requires project-local pyproject.toml uv configuration; uv.toml is unsupported")
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        data = tomllib.loads(payload.decode("utf-8"))
         if set(data) & {"source", "registries", "registry", "paths", "patch", "replace", "env", "unstable"}:
             raise ValueError("Cargo source replacement, path/registry overrides and injected environment are unsupported for release proof")
         if set(table(data.get("build", {}), "Cargo build")) & {"rustc", "rustc-wrapper", "rustc-workspace-wrapper", "rustdoc"}:
@@ -155,8 +159,16 @@ def inspect_project(checkout: Path, project: DependencyProject, *, release: bool
     lock_path = root / ("uv.lock" if project.ecosystem == "python" else "Cargo.lock")
     owner_inputs = tuple(path for path, _ in owner.snapshot.files) if owner else ()
     snapshot = InputSnapshot.capture((checkout / POLICY_FILE, *manifests, lock_path, *configuration_paths(root, project.ecosystem), *owner_inputs))
-    _check_configuration(root, project.ecosystem)
-    documents = {path: table(tomllib.loads(path.read_text(encoding="utf-8")), "manifest") for path in manifests}
+    _check_configuration(root, project.ecosystem, snapshot)
+    captured = dict(snapshot.files)
+
+    def load_document(path: Path, context: str) -> dict[str, object]:
+        payload = captured[path]
+        if payload is None:
+            raise FileNotFoundError(f"dependency input is missing: {path}")
+        return table(tomllib.loads(payload.decode("utf-8")), context)
+
+    documents = {path: load_document(path, "manifest") for path in manifests}
     owned: list[tuple[str, str, Path]] = []
     root_document = documents[root / ("pyproject.toml" if project.ecosystem == "python" else "Cargo.toml")]
     if owner is not None and (
@@ -224,7 +236,7 @@ def inspect_project(checkout: Path, project: DependencyProject, *, release: bool
                         uses_owner = True
     if owner and not uses_owner:
         raise ValueError("Cargo helper must depend by path on its declared owner package")
-    lock = table(tomllib.loads(lock_path.read_text(encoding="utf-8")), "dependency lock")
+    lock = load_document(lock_path, "dependency lock")
     dependencies: list[LockedDependency] = []
     seen: set[tuple[str, str, str]] = set()
     helper_packages = {(name, version) for name, version, _ in owned} if owner else set()

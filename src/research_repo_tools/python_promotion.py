@@ -21,7 +21,16 @@ from research_repo_tools._git_checkout import _in_checkout
 from research_repo_tools.dependency_graphs import DependencyGraph, inspect_project
 from research_repo_tools.dependency_policy import POLICY_FILE, SourceSelection, observe_policy
 from research_repo_tools.dependency_provenance import INDEX, _locked, _published_wheel, _source
-from research_repo_tools.dependency_sources import GitCommit, HttpSourceProvider, RegistryRelease, SourceProvider, VerifiedSource, table, verify_source
+from research_repo_tools.dependency_sources import (
+    GitCommit,
+    HttpSourceProvider,
+    RegistryRelease,
+    SourceProvider,
+    VerifiedSource,
+    YankedPythonRelease,
+    table,
+    verify_source,
+)
 from research_repo_tools.dependency_workflows import SourcePlan, _plan_verified_source
 from research_repo_tools.evidence import _load_json
 from research_repo_tools.process import resolve_executable
@@ -255,7 +264,7 @@ def _declared_python_support(document: dict[str, object], text: str, package: st
             return ()
         scope = support.to_range()
         return tuple(
-            scope & python_resolution.marker_python_support(requirement.marker, minor_prereleases=bool(support.prereleases))
+            scope & python_resolution.marker_python_support(requirement.marker)
             for raw in entries
             if isinstance(raw, str) and canonicalize_name((requirement := Requirement(raw)).name) == package
         )
@@ -270,7 +279,7 @@ def _declared_python_support(document: dict[str, object], text: str, package: st
     constraints = python_resolution.group_constraints(text)
     return (
         *project_ranges,
-        *(required for group, entries in groups.items() for required in declared(entries, base & SpecifierSet(constraints.get(group, "")))),
+        *(required for group, entries in groups.items() for required in declared(entries, base & SpecifierSet(constraints.get(canonicalize_name(group), "")))),
     )
 
 
@@ -322,12 +331,15 @@ def plan_supplier(checkout: Path, name: str, *, project: Path, provider: SourceP
     python_support = _workspace_python_support(graph, document, manifest, PACKAGE)
     provider = provider or HttpSourceProvider()
     candidates = _candidates(provider, PACKAGE, Version(pin.version), SpecifierSet(), False, newer=True, python_support=python_support)
-    if not candidates:
-        graph.snapshot.verify()
-        raise NoSupplyingRelease(f"no newer compatible non-yanked PyPI release after {pin.version}")
-    released = RegistryRelease("python", PACKAGE, str(candidates[0]))
-    verified = verify_source(released, provider=provider, release=True)
-    return _plan_release(checkout, selection, original, graph, released, verified)
+    for candidate in candidates:
+        released = RegistryRelease("python", PACKAGE, str(candidate))
+        try:
+            verified = verify_source(released, provider=provider, release=True)
+        except YankedPythonRelease:
+            continue
+        return _plan_release(checkout, selection, original, graph, released, verified)
+    graph.snapshot.verify()
+    raise NoSupplyingRelease(f"no newer compatible non-yanked PyPI release after {pin.version}")
 
 
 def plan_promotion(checkout: Path, name: str, *, versions: str = "", prereleases: bool = False, provider: SourceProvider | None = None) -> SourcePlan:
@@ -377,7 +389,11 @@ def _plan_promotion(
             reasons.append(f"{candidate} does not contain the pin")
             continue
         released = RegistryRelease("python", pin.package, str(candidate))
-        verified = verify_source(released, provider=provider, release=True)
+        try:
+            verified = verify_source(released, provider=provider, release=True)
+        except YankedPythonRelease:
+            reasons.append(f"{candidate} was yanked before verification")
+            continue
         if verify_source(replace(pin, commit=record[0]), provider=provider).version != released.version:
             raise ValueError("attested source metadata differs from the published version")
         _verify_artifacts(checkout, pin, verified, record, provider)

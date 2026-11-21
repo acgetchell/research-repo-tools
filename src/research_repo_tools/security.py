@@ -1,6 +1,7 @@
 """Native scanner gates with explicit inventory and fresh, validated reports."""
 
 import json
+import os
 import re
 import shutil
 import subprocess
@@ -8,7 +9,7 @@ import sys
 import tempfile
 import tomllib
 from collections import Counter
-from collections.abc import Iterator
+from collections.abc import Callable, Iterator, Mapping
 from dataclasses import dataclass, field
 from functools import partial
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -28,17 +29,34 @@ GENERATED = tuple(f"**/{name}/**" for name in (".venv", "venv", ".tox", ".nox", 
 REPORT_LIMIT = 128 * 1024 * 1024
 GITLEAKS_FINDINGS_EXIT = 3
 GITLEAKS_TIMEOUT = 300
+_GIT_REPOSITORY_ENV = frozenset(
+    {
+        "GIT_ALTERNATE_OBJECT_DIRECTORIES",
+        "GIT_COMMON_DIR",
+        "GIT_DIR",
+        "GIT_GRAFT_FILE",
+        "GIT_IMPLICIT_WORK_TREE",
+        "GIT_INDEX_FILE",
+        "GIT_NAMESPACE",
+        "GIT_OBJECT_DIRECTORY",
+        "GIT_PREFIX",
+        "GIT_QUARANTINE_PATH",
+        "GIT_REPLACE_REF_BASE",
+        "GIT_SHALLOW_FILE",
+        "GIT_WORK_TREE",
+    }
+)
 # The pinned Gitleaks follows at most two local extensions.
 GITLEAKS_EXTEND_DEPTH = 2
 
 
-def security_inventory(root: Path, *, include: tuple[str, ...] = (), exclude: tuple[str, ...] = ()) -> tuple[str, ...]:
+def security_inventory(root: Path, *, include: tuple[str, ...] = (), exclude: tuple[str, ...] = (), env: Mapping[str, str] | None = None) -> tuple[str, ...]:
     """Tracked and nonignored files; reject selected links and submodules.
 
     Standard environment/build directories are excluded even if tracked.
     Consumers supply additional exclusions; ignored untracked files stay out.
     """
-    return select_files(root, include=include, exclude=(*GENERATED, *exclude))
+    return select_files(root, include=include, exclude=(*GENERATED, *exclude), env=env)
 
 
 def _binary(settings: config.Config, name: str) -> tuple[Path, dict[str, str]]:
@@ -257,14 +275,19 @@ def _require_no_gitleaks_ignore(root: Path) -> None:
         raise ValueError(f"managed Gitleaks scans require {path} to be absent; place reviewed exceptions in .gitleaks.toml")
 
 
+def _gitleaks_environment(env: Mapping[str, str]) -> dict[str, str]:
+    return {key: value for key, value in env.items() if not key.upper().startswith("GITLEAKS_") and key.upper() not in _GIT_REPOSITORY_ENV}
+
+
 def _prepare_gitleaks_scan(settings: config.Config, stage: Path, exclude: tuple[str, ...]) -> tuple[Path, dict[str, str]]:
     _require_no_gitleaks_ignore(settings.root)
-    shallow = run_git_bytes(["--no-pager", "rev-parse", "--is-shallow-repository"], cwd=settings.root).stdout.strip()
+    git_env = _gitleaks_environment(os.environ)
+    shallow = run_git_bytes(["--no-pager", "rev-parse", "--is-shallow-repository"], cwd=settings.root, env=git_env).stdout.strip()
     if shallow != b"false":
         raise ValueError("full-history secret scanning requires a non-shallow checkout (fetch-depth: 0)")
     # Also reject an unborn or inaccessible history.
-    run_git_bytes(["--no-pager", "rev-parse", "--verify", "HEAD"], cwd=settings.root)
-    names = security_inventory(settings.root, exclude=exclude)
+    run_git_bytes(["--no-pager", "rev-parse", "--verify", "HEAD"], cwd=settings.root, env=git_env)
+    names = security_inventory(settings.root, exclude=exclude, env=git_env)
     if not names:
         raise ValueError("no working files selected for secret scanning")
     binary, env = _binary(settings, "gitleaks")
@@ -279,7 +302,7 @@ def _prepare_gitleaks_scan(settings: config.Config, stage: Path, exclude: tuple[
     # Explicit defaults avoid ambient config and .gitleaksignore bypasses.
     (stage / "default.toml").write_bytes(b"[extend]\nuseDefault = true\n")
     (stage / "empty-ignore").write_bytes(b"")
-    return binary, {key: value for key, value in env.items() if not key.startswith("GITLEAKS_")}
+    return binary, _gitleaks_environment(env)
 
 
 def _secret_config(settings: config.Config, stage: Path, configuration: str | None) -> Path:
@@ -374,7 +397,7 @@ def _gitleaks_args(mode: str, source: Path, stage: Path, selected: Path, format_
         "{report}",
     ]
     if mode == "git":
-        args.append("--log-opts=--all --full-history")
+        args.append("--log-opts=--all --full-history --no-renames")
     return args
 
 
@@ -396,7 +419,8 @@ def scan_secrets(settings: config.Config, *, output: str = "target/security", co
         stage = Path(directory)
         binary, env = _prepare_gitleaks_scan(settings, stage, exclude)
         selected = _GitleaksPolicySnapshot(settings.root, stage).retain(_secret_config(settings, stage, configuration))
-        for label, mode, source in _gitleaks_scan_targets(settings.root, stage):
+        history, _ = _capture_gitleaks_history(settings.root, stage, env)
+        for label, mode, source in _gitleaks_scan_targets(history, stage):
             present = FindingOutput("Gitleaks", "history" if label == "history" else "working tree", settings.root, snapshot=stage / "working")
             for format_name in ("json", "sarif"):
                 _require_no_gitleaks_ignore(source)
@@ -496,12 +520,40 @@ def show_secret_findings(settings: config.Config, *, reports: str = "target/secu
         _print_secret_findings(scope.capitalize(), records)
 
 
-def _history_tips(root: Path) -> frozenset[bytes]:
+def _history_tips(root: Path, env: Mapping[str, str]) -> frozenset[bytes]:
     # Like git log --all, this includes detached HEADs in linked worktrees.
-    tips = frozenset(run_git_bytes(["--no-pager", "rev-list", "--no-walk=unsorted", "--all"], cwd=root).stdout.splitlines())
+    tips = frozenset(run_git_bytes(["--no-pager", "rev-list", "--no-walk=unsorted", "--all"], cwd=root, env=env).stdout.splitlines())
     if not tips or any(not re.fullmatch(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})", tip) for tip in tips):
         raise ValueError("Git returned invalid or empty history tips for Gitleaks policy comparison")
     return tips
+
+
+def _capture_gitleaks_history(root: Path, stage: Path, env: Mapping[str, str]) -> tuple[Path, Callable[[], None]]:
+    def history_refs(repository: Path) -> bytes:
+        return run_git_bytes(["--no-pager", "show-ref", "--head"], cwd=repository, env=env).stdout
+
+    refs, tips = history_refs(root), _history_tips(root, env)
+    history = stage / "history.git"
+    # Retain selected refs privately while reusing the source object store.
+    run_git_bytes(["--no-pager", "clone", "--mirror", "--shared", "--reject-shallow", "--template=", "--", str(root), str(history)], cwd=root, env=env)
+    if history_refs(history) != refs:
+        raise ValueError("Git refs changed while capturing history for Gitleaks")
+    mirror_tips = _history_tips(history, env)
+    if mirror_tips - tips:
+        raise ValueError("Git history tips changed while capturing history for Gitleaks")
+    # A bare mirror omits detached HEADs from other linked worktrees.
+    if missing := tips - mirror_tips:
+        commands = b"".join(b"create refs/rrt-history/" + tip + b" " + tip + b"\n" for tip in sorted(missing))
+        run_git_bytes(["--no-pager", "update-ref", "--stdin"], cwd=history, env=env, input=commands)
+        if _history_tips(history, env) != tips:
+            raise ValueError("Git history tips changed while capturing history for Gitleaks")
+
+    def verify() -> None:
+        if history_refs(root) != refs or _history_tips(root, env) != tips:
+            raise ValueError("Git refs changed during Gitleaks scanning")
+
+    verify()
+    return history, verify
 
 
 def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline: str | None = None, exclude: tuple[str, ...] = ()) -> None:
@@ -516,28 +568,7 @@ def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline
         policy_snapshots = _GitleaksPolicySnapshot(settings.root, stage)
         retained = (policy_snapshots.retain(original), policy_snapshots.retain(proposed))
 
-        def history_refs(root: Path) -> bytes:
-            return run_git_bytes(["--no-pager", "show-ref", "--head"], cwd=root).stdout
-
-        refs = history_refs(settings.root)
-        tips = _history_tips(settings.root)
-        history = stage / "history.git"
-        # Retain the selected refs privately and reuse the source object store.
-        run_git_bytes(
-            ["--no-pager", "clone", "--mirror", "--shared", "--reject-shallow", "--template=", "--", str(settings.root), str(history)], cwd=settings.root
-        )
-        if history_refs(history) != refs:
-            raise ValueError("Git refs changed while capturing history for Gitleaks policy comparison")
-        mirror_tips = _history_tips(history)
-        if mirror_tips - tips:
-            raise ValueError("Git history tips changed while capturing history for Gitleaks policy comparison")
-        # Bare mirrors omit other worktrees' detached HEADs. Keep their tips
-        # reachable in the private mirror without copying the source objects.
-        if missing := tips - mirror_tips:
-            commands = b"".join(b"create refs/rrt-history/" + tip + b" " + tip + b"\n" for tip in sorted(missing))
-            run_git_bytes(["--no-pager", "update-ref", "--stdin"], cwd=history, input=commands)
-            if _history_tips(history) != tips:
-                raise ValueError("Git history tips changed while capturing history for Gitleaks policy comparison")
+        history, verify_history = _capture_gitleaks_history(settings.root, stage, env)
         results: list[Counter[_SecretFinding]] = []
         for policy in retained:
             findings: Counter[_SecretFinding] = Counter()
@@ -561,8 +592,7 @@ def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline
                     raise ValueError(f"Gitleaks {scope} scan failed during policy comparison (exit {status})")
                 findings.update(_secret_findings(report, scope, source))
             _require_no_gitleaks_ignore(settings.root)
-            if history_refs(settings.root) != refs or _history_tips(settings.root) != tips:
-                raise ValueError("Git refs changed during Gitleaks policy comparison")
+            verify_history()
             default_path = settings.root / ".gitleaks.toml"
             if baseline is None and original == stage / "default.toml" and default_path.exists(follow_symlinks=False):
                 raise ValueError(f"Gitleaks configuration changed during policy comparison: {default_path}")

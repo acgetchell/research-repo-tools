@@ -1021,12 +1021,17 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             retry_args.append("--force")
         retry = shlex.join(retry_args)
         if check(settings.root, policy=replace(settings.release, final_changelog=True)):
-            raise ValueError(f"tagging preflight failed for {args.tag} at {commit}; correct the metadata and rerun\n{retry}")
+            retry_args[retry_args.index("--commit") + 1] = "REVIEWED_COMMIT"
+            raise ValueError(
+                f"tagging preflight failed for {args.tag} at {commit}. Correct the reported metadata. "
+                "If tracked files change, commit and review the correction. Replace REVIEWED_COMMIT with the reviewed SHA. "
+                f"Retry in a POSIX shell with\n{shlex.join(retry_args)}"
+            )
         try:
             body = changelog.tag(settings, args.tag, commit=commit, force=args.force, dry_run=args.dry_run)
         except (ValueError, OSError, subprocess.SubprocessError) as error:
             raise ValueError(
-                f"{args.tag} at {commit}: {format_exception_diagnostics(error)}\nTag preflight must pass before creation. Resume with\n{retry}"
+                f"{args.tag} at {commit}: {format_exception_diagnostics(error)}\nTag preflight must pass before creation. Resume in a POSIX shell with\n{retry}"
             ) from error
         if args.dry_run:
             _write_stdout(body.encode("utf-8"))
