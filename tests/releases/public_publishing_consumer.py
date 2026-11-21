@@ -602,6 +602,29 @@ class TestPublishingConsumer(unittest.TestCase):
         self.assertEqual(cli.main(args), 0)
         self.assertEqual(path.read_bytes(), expected)
 
+    def test_installed_normalizer_preserves_a_linked_detail_and_its_code(self):
+        from markdown_it import MarkdownIt
+
+        path = self.root / "CHANGELOG.md"
+        url = "https://github.com/example/project"
+        commit = f"[`abcdef0`]({url}/commit/abcdef0)"
+        source = (
+            f"# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- First {commit}\n\n  #### Example\n\n"
+            f"  - See [#2]({url}/pull/2) and {commit}\n\n        ```text\n          literal\n        ```\n\n- Next {commit}\n"
+        )
+        path.write_bytes(source.replace("\n", "\r\n").encode())
+        args = ["--root", str(self.root), "changelog", "normalize"]
+        self.assertEqual(cli.main(args), 0)
+        result = path.read_bytes()
+        text = result.decode()
+        self.assertNotIn("### Merged Pull Requests", text)
+        self.assertIn(f"\n---\n\n- Next {commit}", text)
+        self.assertEqual(text.count("\n---\n"), 1)
+        blocks = MarkdownIt("commonmark").parse(text)
+        self.assertEqual([block.content for block in blocks if block.type == "code_block"], ["```text\n  literal\n```\n"])
+        self.assertEqual(cli.main(args), 0)
+        self.assertEqual(path.read_bytes(), result)
+
     def test_python_and_rust_final_metadata_and_cli_contract(self):
         for registry_name in ["pypi", "crates-io"]:
             with self.subTest(registry=registry_name):

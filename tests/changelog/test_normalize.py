@@ -234,6 +234,51 @@ class TestRumdlCompatibility:
         assert "\n\n- Second item\n" not in result
         assert "\n- Second item\n" in result
 
+    @pytest.mark.parametrize("wrap", [" ", "\n    "])
+    def test_authored_commit_citation_stays_in_its_subsection(self, wrap: str) -> None:
+        from markdown_it import MarkdownIt
+
+        first, cited, last = _commit(), _commit("bbbbbbb", "b" * 40), _commit("ccccccc", "c" * 40)
+        source = (
+            f"# Changelog\n\n## [Unreleased]\n\n### Changed\n\n- First {first}\n\n  #### Details\n\n  - Refer to {_pr(24)} at{wrap}{cited}\n\n- Next {last}\n"
+        )
+        result = postprocess_text(source)
+        assert "### Merged Pull Requests" not in result
+        assert result.count("\n---\n") == 1
+        assert f"\n---\n\n- Next {last}" in result
+        assert _pr(24) in result
+        hrefs = [t.attrGet("href") for block in MarkdownIt("commonmark").parse(result) for t in block.children or () if t.type == "link_open"]
+        assert hrefs.count(f"{_COMMIT_URL}/{'b' * 40}") == 1
+        assert postprocess_text(result) == result
+
+    def test_body_citation_preserves_literal_link_markup(self) -> None:
+        cited = _commit()
+        source = (
+            f"# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- First {cited}\n\n  #### Details\n\n"
+            f"  - See {_pr(24)} and ``the literal {cited}\n    without following it``.\n\n- Next {cited}\n"
+        )
+        result = postprocess_text(source)
+        assert f"``the literal {cited}\n" in result
+        assert "### Merged Pull Requests" not in result
+        assert result.count("\n---\n") == 1
+        assert f"\n---\n\n- Next {cited}" in result
+        assert postprocess_text(result) == result
+
+    @pytest.mark.parametrize(("bullet", "code_indent"), [("", "      "), ("  ", "        "), ("  ", "\t\t")])
+    def test_indented_code_example_moves_with_its_list(self, bullet: str, code_indent: str) -> None:
+        from markdown_it import MarkdownIt
+
+        literal = "```text\n\tindented\n\n  end\n```\n"
+        example = "\n".join(code_indent + row if row else "" for row in literal.split("\n"))
+        source = f"# Changelog\n\n## [Unreleased]\n\n### Changed\n\n- Parent {_commit()}\n\n#### Details\n\n{bullet}- Item\n\n{example}"
+        result = postprocess_text(source)
+        for document in (source, result):
+            tokens = MarkdownIt("commonmark").parse(document)
+            assert [token.content for token in tokens if token.type == "code_block"] == [literal]
+        if not bullet:
+            assert example in result
+        assert postprocess_text(result) == result
+
     def test_preserves_blank_after_nested_body_before_top_level_peer(self) -> None:
         content = "# Changelog\n\n## [1.0.0] - 2026-01-01\n\n### Added\n\n- First item\n\n  - Body point\n  - Body point\n\n- Second item\n"
         result = postprocess_text(content)

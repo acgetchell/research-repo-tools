@@ -72,6 +72,7 @@ _PR_LINK_RE = re.compile(r"\[#(\d+)\]\(https://github\.com/[^)]+/pull/\d+\)")
 
 # Commit-hash link to strip from summary lines.
 _COMMIT_LINK_RE = re.compile(r"\s*\[`[a-f0-9]{7}`\]\(https://github\.com/[^)]+/commit/[a-f0-9]+\)")
+_ENTRY_COMMIT_RE = re.compile(r"\[`[a-f0-9]{7}`\]\((?P<url>https://github\.com/[^()\s]+/commit/[a-f0-9]+)\)[ \t]*$")
 
 # Leading git-cliff breaking marker to strip from normalized comparison keys.
 _BREAKING_MARKER_RE = re.compile(r"^\s*(?:[-*]\s+)?\[?\*\*breaking\*\*\]?\s*", re.IGNORECASE)
@@ -386,17 +387,43 @@ def _append_unique(entries: list[str], entry: str) -> None:
         entries.append(entry)
 
 
-def _has_entry_commit(lines: list[str], index: int) -> bool:
-    """A generated entry carries a commit link, sometimes on a continuation line."""
+def _entry_commit_link(lines: list[str], index: int) -> tuple[int, re.Match[str]] | None:
+    """Locate the terminal commit link of a possibly wrapped entry title."""
     while True:
-        if _COMMIT_LINK_RE.search(lines[index]):
-            return True
+        if match := _ENTRY_COMMIT_RE.search(lines[index]):
+            return index, match
         index += 1
         if index == len(lines) or not lines[index].startswith("  "):
-            return False
+            return None
         continuation = lines[index].lstrip()
-        if not continuation or continuation.startswith(("- ", "* ", "#", ">", "```", "~~~")):
-            return False
+        if not continuation or continuation.startswith((*_TOP_LEVEL_LIST_MARKERS, "#", ">", "```", "~~~")):
+            return None
+
+
+def _entry_commit_links(lines: list[str], *, nested: bool = False) -> dict[int, tuple[int, re.Match[str]]]:
+    """Map list items to actual terminal links, excluding literal Markdown examples."""
+    candidates: dict[int, tuple[int, re.Match[str]]] = {}
+    for index, line in enumerate(lines):
+        indent = _list_item_indent(line)
+        if indent is None or bool(indent) != nested:
+            continue
+        if link := _entry_commit_link(lines, index):
+            candidates[index] = link
+    if not candidates:
+        return {}
+
+    # Locate actual links, excluding identical text in code spans or examples.
+    from markdown_it import MarkdownIt
+
+    probe = lines.copy()
+    fragment = "#rrt-citation-"
+    while any(fragment in line for line in lines):
+        fragment += "x"
+    for number, match in candidates.values():
+        end = match.end("url")
+        probe[number] = lines[number][:end] + f"{fragment}{number}" + lines[number][end:]
+    links = {token.attrGet("href") for block in MarkdownIt("commonmark").parse("\n".join(probe)) for token in block.children or () if token.type == "link_open"}
+    return {index: (number, match) for index, (number, match) in candidates.items() if f"{match['url']}{fragment}{number}" in links}
 
 
 def _extract_section_summaries(
@@ -421,12 +448,13 @@ def _extract_section_summaries(
     breaking_entries: list[str] = []
     in_summary = False
     in_subsection = False
+    entries = _entry_commit_links(section)
 
     for index, sline in enumerate(section):
         if sline.startswith("### "):
             in_summary = sline in {"### Merged Pull Requests", "### ⚠️ Breaking Changes"}
             in_subsection = False
-        elif sline.startswith("#### ") or (sline.startswith("- **") and sline.endswith("**") and not _has_entry_commit(section, index)):
+        elif sline.startswith("#### ") or (sline.startswith("- **") and sline.endswith("**") and index not in entries):
             in_subsection = True
             continue
         # Only top-level list items (no leading whitespace).
@@ -435,7 +463,7 @@ def _extract_section_summaries(
         if in_subsection:
             # After an entry heading its body bullets also start at column zero.
             # A real generated entry carries its commit link, possibly wrapped.
-            if not _has_entry_commit(section, index):
+            if index not in entries:
                 continue
             in_subsection = False
 
@@ -975,23 +1003,54 @@ def _strip_dependabot_metadata(text: str) -> str:
     return "\n".join(result)
 
 
-def _indented_fence_examples(text: str) -> dict[int, int]:
-    """Locate indented code blocks containing apparent fence delimiters."""
+def _indent_columns(line: str) -> int:
+    """Count leading Markdown indentation in columns, with four-column tab stops."""
+    return len(line[: len(line) - len(line.lstrip(" \t"))].expandtabs(4))
+
+
+@dataclass(frozen=True)
+class _ProtectedCode:
+    source: str
+    indent: int
+    literal: str | None = None
+
+    def restore(self, indent: int) -> str:
+        if indent == self.indent:
+            return self.source
+        if self.literal is not None:
+            # Rebuild only the container and the four-column code prefix.
+            # Tabs inside the parsed literal remain verbatim.
+            prefix = " " * (indent + 4)
+            return "\n".join(prefix + row if row else "" for row in self.literal.removesuffix("\n").split("\n"))
+        return "\n".join(_move_code_line(row, indent - self.indent) for row in self.source.split("\n"))
+
+
+def _indented_fence_examples(text: str) -> dict[int, tuple[int, _ProtectedCode]]:
+    """Locate literal fence examples and the indentation of their container."""
     if not re.search(r"(?m)^(?: {4}|[ \t]*\t)[ \t]*(?:`{3}|~{3})", text):
         return {}
     from markdown_it import MarkdownIt
 
-    return {
-        token.map[0]: token.map[1]
-        for token in MarkdownIt("commonmark").parse(text)
-        if token.type == "code_block" and token.map is not None and re.search(r"(?m)^[ \t]*(?:`{3}|~{3})", token.content)
-    }
+    lines = text.split("\n")
+    examples = {}
+    for token in MarkdownIt("commonmark").parse(text):
+        if token.type == "code_block" and token.map is not None and re.search(r"(?m)^[ \t]*(?:`{3}|~{3})", token.content):
+            start, end = token.map
+            # An indented code block consumes four columns after its container.
+            literal = token.content.partition("\n")[0]
+            suffix = literal.lstrip(" ")
+            # A tab spanning the boundary appears as spaces in the parsed text.
+            # Tabs in the shared suffix keep their original meaning.
+            padding = len(literal) - len(suffix)
+            indent = max(0, _indent_columns(lines[start].removesuffix(suffix)) - padding - 4)
+            examples[start] = (end, _ProtectedCode("\n".join(lines[start:end]), indent, token.content))
+    return examples
 
 
 def _changelog_prose(lines: list[str], *, require_closed: bool = False) -> Iterator[tuple[int, str]]:
     """Yield prose locations outside fences and literal fence examples."""
     fence = None
-    examples = {i for start, end in _indented_fence_examples("\n".join(lines)).items() for i in range(start, end)}
+    examples = {i for start, (end, _) in _indented_fence_examples("\n".join(lines)).items() for i in range(start, end)}
     for index, line in enumerate(lines):
         if index in examples:
             continue
@@ -1006,7 +1065,7 @@ def _changelog_prose(lines: list[str], *, require_closed: bool = False) -> Itera
         raise ValueError("unclosed changelog fence makes release boundaries ambiguous")
 
 
-def _protect_fenced_blocks(text: str) -> tuple[str, dict[str, tuple[str, bool]]]:
+def _protect_fenced_blocks(text: str) -> tuple[str, dict[str, _ProtectedCode]]:
     """Keep code opaque to document-wide prose transforms, including examples of releases.
 
     Tokens are collision-free within this input. Restoring them after all prose
@@ -1017,15 +1076,15 @@ def _protect_fenced_blocks(text: str) -> tuple[str, dict[str, tuple[str, bool]]]
         prefix += "X"
     lines = text.split("\n")
     result: list[str] = []
-    blocks: dict[str, tuple[str, bool]] = {}
+    blocks: dict[str, _ProtectedCode] = {}
     examples = _indented_fence_examples(text)
     index = 0
     while index < len(lines):
         if index in examples:
-            end = examples[index]
+            end, example = examples[index]
             marker = f"{prefix}{len(blocks)}END"
-            blocks[marker] = ("\n".join(lines[index:end]), False)
-            result.append(marker)
+            blocks[marker] = example
+            result.append(" " * example.indent + marker)
             index = end
             continue
         opener = _opening_code_fence(lines[index])
@@ -1047,13 +1106,29 @@ def _protect_fenced_blocks(text: str) -> tuple[str, dict[str, tuple[str, bool]]]
         if not info.strip():
             block[0] = f"{indent}{delimiter}text"
         marker = f"{prefix}{len(blocks)}END"
-        blocks[marker] = ("\n".join(block), True)
+        blocks[marker] = _ProtectedCode("\n".join(block), _indent_columns(indent))
         if result and result[-1].strip():
             result.append("")
         result.append(indent + marker)
         if index < len(lines) and lines[index].strip():
             result.append("")
     return "\n".join(result), blocks
+
+
+def _move_code_line(line: str, shift: int) -> str:
+    """Move only structural indentation, preserving tabs within the literal."""
+    if not line or shift == 0:
+        return line
+    if shift > 0:
+        return " " * shift + line
+    columns = 0
+    for index, char in enumerate(line):
+        if char not in " \t":
+            return line[index:]
+        columns += 4 - columns % 4 if char == "\t" else 1
+        if columns >= -shift:
+            return " " * (columns + shift) + line[index + 1 :]
+    return ""
 
 
 def _table_cells(line: str) -> list[str]:
@@ -1266,7 +1341,9 @@ def _list_repeated_headings(lines: list[str]) -> None:
             occurrences.setdefault((parent, heading["title"].strip()), []).append(index)
 
     repeated = sorted((index, title) for (_, title), indices in occurrences.items() if len(indices) > 1 for index in indices)
-    if repeated and _has_local_fragment_link(lines):
+    if not repeated:
+        return
+    if _has_local_fragment_link(lines):
         _number_navigable_headings(lines, {index for index, _ in repeated})
         return
     # Footer definitions belong to the whole document. A definition followed
@@ -1275,13 +1352,14 @@ def _list_repeated_headings(lines: list[str]) -> None:
     while body_limit and (not lines[body_limit - 1].strip() or _REFERENCE_DEFINITION_RE.fullmatch(lines[body_limit - 1])):
         body_limit -= 1
     gaps: set[int] = set()
+    entries = _entry_commit_links(lines)
     for index, title in repeated:
         end = index + 1
         while end < body_limit:
             heading = _ATX_HEADING_RE.match(lines[end])
             if heading and len(heading["level"]) <= 4:
                 break
-            if _is_top_level_list_item(lines[end]) and _has_entry_commit(lines, end):
+            if end in entries:
                 break
             end += 1
         body = lines[index + 1 : end]
@@ -1341,11 +1419,12 @@ def _separate_entry_details(lines: list[str]) -> list[str]:
     """End a commit's detail subsection before the next commit starts."""
     result: list[str] = []
     in_details = False
+    entries = _entry_commit_links(lines)
     for index, line in enumerate(lines):
         heading = _ATX_HEADING_RE.match(line)
         if (heading and len(heading["level"]) <= 4) or line == "---":
             in_details = line.startswith("#### ")
-        elif _is_top_level_list_item(line) and _has_entry_commit(lines, index):
+        elif index in entries:
             if in_details:
                 if result and result[-1].strip():
                     result.append("")
@@ -1363,9 +1442,16 @@ def postprocess_text(text: str) -> str:
     text, fenced_blocks = _protect_fenced_blocks(text)
     text = _strip_dependabot_metadata(text)
     text = _normalize_inline_prose(text)
+    lines = text.split("\n")
+    for number, match in _entry_commit_links(lines, nested=True).values():
+        # These body bullets may move to column zero. Angle-delimited Markdown
+        # destinations retain the same visible links without becoming entries.
+        start, end = match.span("url")
+        row = lines[number]
+        lines[number] = row[:start] + "<" + row[start:end] + ">" + row[end:]
 
     # Inject PR / breaking-change summary sections before reflow.
-    text = _inject_summary_sections(text)
+    text = _inject_summary_sections("\n".join(lines))
 
     lines = text.split("\n")
     table_lines = _table_line_indices(lines)
@@ -1417,20 +1503,7 @@ def postprocess_text(text: str) -> str:
     for index, line in enumerate(lines):
         marker = line.lstrip()
         if marker in fenced_blocks:
-            original, movable = fenced_blocks.pop(marker)
-            if not movable:
-                indent = line[: len(line) - len(marker)]
-                lines[index] = "\n".join(indent + row if row else row for row in original.split("\n"))
-                continue
-            block = original.split("\n")
-            # Moving a fence with its list must preserve indentation *inside* it.
-            old_indent = len(block[0]) - len(block[0].lstrip())
-            shift = old_indent - (len(line) - len(marker))
-            if shift > 0:
-                block = [row[min(shift, len(row) - len(row.lstrip(" "))) :] for row in block]
-            elif shift < 0:
-                block = [" " * -shift + row if row else "" for row in block]
-            lines[index] = "\n".join(block)
+            lines[index] = fenced_blocks.pop(marker).restore(_indent_columns(line))
     if fenced_blocks:
         raise ValueError("Changelog normalization would lose a fenced code block")
     return "\n".join(lines) + "\n"
