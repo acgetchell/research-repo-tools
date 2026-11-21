@@ -125,8 +125,8 @@ def existing_archive_link_targets(text: str, source: Path) -> set[str]:
 
     def record(value: str) -> str:
         if value.startswith("../"):
-            path_part = re.split(r"[?#]", value, maxsplit=1)[0]
-            relative = unquote(re.sub(rf"\\([{re.escape(string.punctuation)}])", r"\1", path_part))
+            destination = re.sub(rf"\\([{re.escape(string.punctuation)}])", r"\1", value)
+            relative = unquote(re.split(r"[?#]", destination, maxsplit=1)[0])
             parent = source.parent
             while relative.startswith("../") and not parent.is_dir():
                 parent = parent.parent

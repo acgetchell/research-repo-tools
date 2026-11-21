@@ -283,18 +283,20 @@ def test_generation_retains_date_after_prospective_release_is_tagged(consumer):
 def test_formatted_regeneration_and_next_release_are_stable(consumer, monkeypatch, formatted):
     # List-marker conversion and prose wrapping reproduce the comparison across
     # raw generated blocks and formatter-produced retained archives.
-    history = HISTORY.replace("docs/guide.md", r"docs/guide\(notes\).md").replace("Earlier correction.", " ".join(["Long historical explanation."] * 12))
+    history = HISTORY.replace("docs/guide.md", r"docs/guide\(notes\)%23v1.md\#guide").replace(
+        "Earlier correction.", " ".join(["Long historical explanation."] * 12)
+    )
     monkeypatch.setattr(changelog, "run_safe_command", lambda *args, **kwargs: subprocess.CompletedProcess([], 0, history, ""))
     if formatted:
         consumer = replace(consumer, changelog=replace(consumer.changelog, formatter="rumdl.toml"))
         (consumer.root / "docs").mkdir()
-        (consumer.root / "docs/guide(notes).md").write_bytes(b"# Guide\n")
+        (consumer.root / "docs/guide(notes)#v1.md").write_bytes(b"# Guide\n")
         (consumer.root / "rumdl.toml").write_text(changelog.template("rumdl.toml") + '\n[MD004]\nstyle = "asterisk"\n', newline="\n")
     if formatted == "stub":
         monkeypatch.setattr(changelog, "check_markdown", lambda *args: None)
         monkeypatch.setattr(changelog, "fix_markdown", lambda text, path, rules: text.replace("\n- ", "\n* "))
     if formatted == "rumdl":
-        guide = consumer.root / "docs/guide(notes).md"
+        guide = consumer.root / "docs/guide(notes)#v1.md"
         guide.unlink()
         without_guide = snapshot(consumer.root)
         with pytest.raises(RuntimeError, match="MD057"):
