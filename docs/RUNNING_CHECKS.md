@@ -212,8 +212,9 @@ Run `just security-secrets` to produce fresh history and working-tree reports.
 Use `just security-findings` to read the redacted JSON pair later, for example
 after downloading CI reports. Pass `--reports DIRECTORY` for a different report
 location. The summary shows the rule, file, line and column range, and history
-commit. It reads existing reports and can succeed when those reports have
-findings.
+commit. It requires both reports and can succeed when those reports have
+findings. A managed scan clears previous Gitleaks reports before preflight and
+saves reports only for completed native scans.
 
 Confirm the flagged value is nonsecret using the source at the reported
 location. For a confirmed false positive, copy the existing policy to a

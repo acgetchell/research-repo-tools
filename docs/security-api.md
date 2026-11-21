@@ -36,11 +36,13 @@ nonzero status, 1 for invalid successful reports/findings, or 124 on timeout.
 Invalid arguments/preconditions raise `ValueError`; I/O and Git errors propagate.
 Old OSV reports at the selected output names are removed before scanning. OSV
 also removes all prior numbered JSON/SARIF reports in its output directory,
-including symlinks, so smaller inventories leave no stale reports. OSV and
-Semgrep reject output directories with symlinks or Windows
+including symlinks, so smaller inventories leave no stale reports. Gitleaks
+removes its previous history and working reports before scanner preflight and
+publishes a report only when the native exit status confirms a complete scan.
+OSV, Gitleaks, and Semgrep reject output directories with symlinks or Windows
 junctions in any path component before creating directories or removing reports.
-OSV preserves unrelated files and symlink targets. Semgrep owns and replaces
-its complete output directory through `files.publish_directory`. Native
+OSV and Gitleaks preserve unrelated files and symlink targets. Semgrep owns and
+replaces its complete output directory through `files.publish_directory`. Native
 schemas and locations are retained, with Gitleaks source excerpts/commit messages
 redacted in addition to native detected-secret redaction. Report directories are
 caller-owned outputs. These commands are not an assurance that unknown secrets,

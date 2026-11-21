@@ -928,11 +928,12 @@ class TestPublishingConsumer(unittest.TestCase):
     def test_tag_cli_checks_reviewed_commit_and_resumes_after_offline_preflight(self):
         if os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1":
             self.skipTest("disposable Git mutations disabled")
+        timeout_key = "RRT_REGISTRY_TIMEOUT_SECONDS"
         for cargo in (False, True):
             with self.subTest(cargo=cargo):
                 checkout = self.root / ("cargo" if cargo else "python")
                 checkout.mkdir()
-                environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
+                environment = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_") and key.upper() != timeout_key}
                 environment.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
 
                 def git(*args: str) -> str:
@@ -961,8 +962,11 @@ class TestPublishingConsumer(unittest.TestCase):
                 retained = self.root / (checkout.name + "-reviewed.json")
                 retained.write_bytes(json.dumps({"tag": "v1.2.3", "commit": commit}).encode())
 
-                def invoke(reviewed: str) -> tuple[int, str, str]:
-                    with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+                def invoke(reviewed: str, *, timeout_override: str | None = None) -> tuple[int, str, str]:
+                    with patch.dict(os.environ), contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+                        os.environ.pop(timeout_key, None)
+                        if timeout_override is not None:
+                            os.environ[timeout_key] = timeout_override
                         result = cli.main(["--root", str(checkout), "changelog", "tag", "v1.2.3", "--commit", reviewed])
                     return result, out.getvalue(), err.getvalue()
 
@@ -992,8 +996,7 @@ class TestPublishingConsumer(unittest.TestCase):
                         self.assertIn("--offline", cargo_command.call_args.args[1])
                         self.assertEqual(cargo_command.call_args.kwargs["env"]["CARGO_HOME"], str(self.root / "managed"))
                 else:
-                    with patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "901"}):
-                        status, _, errors = invoke(commit)
+                    status, _, errors = invoke(commit, timeout_override="901")
                     self.assertEqual(status, 1)
                     self.assertIn("from 1 to 900", errors)
                     self.assertEqual(git("--no-pager", "tag", "--list"), "")

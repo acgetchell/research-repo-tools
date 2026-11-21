@@ -92,7 +92,7 @@ def test_uncommitted_files_and_redacted_reports(consumer):
 
     def run(binary, args, **kwargs):
         seen.append(args)
-        assert "--redact=100" in args and "--ignore-gitleaks-allow" in args
+        assert {"--redact=100", "--ignore-gitleaks-allow", "--exit-code=3"}.issubset(args)
         assert not any(key.startswith("GITLEAKS_") for key in kwargs["env"])
         if args[0] == "dir":
             assert args[1] == "."
@@ -101,7 +101,7 @@ def test_uncommitted_files_and_redacted_reports(consumer):
             assert "--log-opts=--all --full-history" in args
         fmt = args[args.index("--report-format") + 1]
         Path(args[args.index("--report-path") + 1]).write_bytes(json.dumps([finding] if fmt == "json" else sarif([sarif_finding])).encode())
-        return subprocess.CompletedProcess([], 1, b"raw secret that must not be logged", b"")
+        return subprocess.CompletedProcess([], 3, b"raw secret that must not be logged", b"")
 
     with (
         patch.object(security, "run_git_bytes", return_value=subprocess.CompletedProcess([], 0, b"false\n", b"")),
@@ -111,7 +111,9 @@ def test_uncommitted_files_and_redacted_reports(consumer):
     ):
         assert security.scan_secrets(consumer) == 1
     assert len(seen) == 4
-    for path in (consumer.root / "target/security").iterdir():
+    reports = list((consumer.root / "target/security").iterdir())
+    assert len(reports) == 4
+    for path in reports:
         assert b"adjacent secret" not in path.read_bytes()
         assert b"commit message secret" not in path.read_bytes()
 
@@ -177,13 +179,14 @@ regex = 'synthetic-scanner-match'
         assert "synthetic-scanner-match" not in output
 
         assert security.scan_secrets(settings) == 1
+        report = root / "target" / "security" / "gitleaks-working.json"
+        assert [finding["RuleID"] for finding in json.loads(report.read_bytes())] == ["fixture-rule"]
         (root / ".gitleaksignore").write_bytes(b"src/new.txt:fixture-rule:1\n")
         with pytest.raises(ValueError, match=r"\.gitleaksignore.*absent"):
             security.check_secret_exceptions(settings, "candidate.toml")
         with pytest.raises(ValueError, match=r"\.gitleaksignore.*absent"):
             security.scan_secrets(settings)
-    report = root / "target" / "security" / "gitleaks-working.json"
-    assert [finding["RuleID"] for finding in json.loads(report.read_bytes())] == ["fixture-rule"]
+        assert not report.exists()
 
 
 def test_generated_inventory_exclusions(tmp_path):

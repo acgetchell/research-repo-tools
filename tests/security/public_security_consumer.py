@@ -199,6 +199,8 @@ class TestSharedCapabilities(unittest.TestCase):
                     self.assertEqual(main(arguments), 1)
                 self.assertEqual(failed.getvalue(), "")
                 self.assertIn("Gitleaks configuration changed during policy comparison", errors.getvalue())
+                self.assertIn(leaf.name, errors.getvalue())
+                self.assertNotIn("# changed inherited policy", errors.getvalue())
 
                 leaf.write_bytes(b"[invalid")
                 with redirect_stderr(io.StringIO()) as errors:
@@ -209,6 +211,51 @@ class TestSharedCapabilities(unittest.TestCase):
                 with redirect_stderr(io.StringIO()) as errors:
                     self.assertEqual(main(["--root", str(root), "security", "check-exceptions", missing]), 1)
                 self.assertIn(missing, errors.getvalue())
+
+    def test_gitleaks_preflight_failure_and_partial_scan_invalidate_old_reports(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "source.txt").write_bytes(b"fixture\n")
+            policy = root / ".gitleaks.toml"
+            settings = config.parse({}, root=root)
+            output = root / "reports"
+            output.mkdir()
+            notes = output / "notes.json"
+            notes.write_bytes(b"unrelated report\n")
+
+            def native(binary, args, **kwargs):
+                self.assertIn("--exit-code=3", args)
+                fmt = args[args.index("--report-format") + 1]
+                result = [] if fmt == "json" else {"version": "2.1.0", "runs": [{"tool": {}, "results": []}]}
+                Path(args[args.index("--report-path") + 1]).write_bytes(json.dumps(result).encode())
+                return subprocess.CompletedProcess(args, native_status, b"RAW_SECRET", b"RAW_SECRET")
+
+            with (
+                patch.object(security, "security_inventory", return_value=("source.txt",)),
+                patch.object(security, "_binary", return_value=(root / "gitleaks", {})),
+                patch.object(security, "run_git_bytes", return_value=subprocess.CompletedProcess([], 0, b"false\n", b"")),
+                patch.object(security, "run_command_bytes", side_effect=native) as run,
+            ):
+                native_status = 0
+                for failure in ("invalid policy", "partial scan"):
+                    with self.subTest(failure=failure), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as errors:
+                        self.assertEqual(security.scan_secrets(settings, output=output.name), 0)
+                        self.assertIsNone(security.show_secret_findings(settings, reports=output.name))
+                        run.reset_mock()
+                        if failure == "invalid policy":
+                            policy.write_bytes(b"[invalid")
+                            with self.assertRaisesRegex(ValueError, "valid UTF-8 TOML"):
+                                security.scan_secrets(settings, output=output.name)
+                            run.assert_not_called()
+                            policy.unlink()
+                        else:
+                            native_status = 1
+                            self.assertEqual(security.scan_secrets(settings, output=output.name), 1)
+                            self.assertIn("scan did not complete", errors.getvalue())
+                        self.assertEqual(list(output.iterdir()), [notes])
+                        self.assertNotIn("RAW_SECRET", errors.getvalue())
+                        with self.assertRaisesRegex(ValueError, "gitleaks-history.json"):
+                            security.show_secret_findings(settings, reports=output.name)
 
     def test_cli_findings_are_actionable_once_per_scan_and_never_echo_matches(self):
         for scanner in ("osv", "secrets", "semgrep"):
@@ -325,7 +372,8 @@ class TestSharedCapabilities(unittest.TestCase):
                         destination.write_bytes(b"malformed" if behavior == "malformed" else json.dumps(value).encode())
                         if scanner == "semgrep":
                             Path(args[args.index("--sarif-output") + 1]).write_bytes(json.dumps(sarif).encode())
-                        return subprocess.CompletedProcess([], 23 if behavior == "error" else 0, b"RAW_SECRET", b"RAW_SECRET")
+                        status = 23 if behavior == "error" else 3 if scanner == "secrets" and found else 0
+                        return subprocess.CompletedProcess([], status, b"RAW_SECRET", b"RAW_SECRET")
 
                     stdout, stderr = io.StringIO(), io.StringIO()
                     with (
@@ -373,6 +421,9 @@ class TestSharedCapabilities(unittest.TestCase):
                             if scanner == "secrets":
                                 self.assertIn("Gitleaks (history)", output)
                                 self.assertIn("Gitleaks (working tree)", output)
+                    elif scanner == "secrets" and behavior == "error":
+                        self.assertIn("exit 23); no report published", output)
+                        self.assertEqual(list((root / "target").rglob("gitleaks-*")), [])
                     elif behavior in {"clean", "error"}:
                         self.assertIn("0 finding(s)", output)
                         self.assertIn(f"exit {expected}", output)
@@ -390,7 +441,7 @@ class TestSharedCapabilities(unittest.TestCase):
             external = root / "external"
             (external / "nested").mkdir(parents=True)
             for parent in (external, external / "nested"):
-                for name in ("osv-12.json", "osv-12.sarif", "12.json", "12.sarif"):
+                for name in ("osv-12.json", "osv-12.sarif", "gitleaks-history.json", "gitleaks-history.sarif", "12.json", "12.sarif"):
                     (parent / name).write_bytes(b"external report\n")
             original = {path.relative_to(external): path.read_bytes() for path in external.rglob("*") if path.is_file()}
             alias = root / "output link"
@@ -402,7 +453,7 @@ class TestSharedCapabilities(unittest.TestCase):
                 self.assertTrue(alias.is_symlink())
             self.assertEqual(alias.resolve(), external)
             settings = config.parse({"semgrep": {"config": "rules.yml"}}, root=root)
-            for scanner in ("osv", "semgrep"):
+            for scanner in ("osv", "secrets", "semgrep"):
                 for suffix in ("", "nested", "new/child"):
                     with self.subTest(scanner=scanner, suffix=suffix):
                         output = str(alias / suffix)
@@ -416,6 +467,8 @@ class TestSharedCapabilities(unittest.TestCase):
                             with self.assertRaisesRegex(ValueError, "report directory.*(?:symlink|junction)"):
                                 if scanner == "osv":
                                     security.scan_osv(settings, ("uv.lock",), output=output)
+                                elif scanner == "secrets":
+                                    security.scan_secrets(settings, output=output)
                                 else:
                                     semgrep_scan.scan(settings, include=("*.py",), output=output)
                             run.assert_not_called()

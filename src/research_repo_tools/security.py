@@ -144,7 +144,18 @@ def _load_report(path: Path) -> object:
         raise ValueError(f"invalid JSON in scanner report {path}") from None
 
 
-def _report_run(binary: Path, args: list[str], destination: Path, format_name: str, *, root: Path, env: dict[str, str], validate, present=None) -> int:
+def _report_run(
+    binary: Path,
+    args: list[str],
+    destination: Path,
+    format_name: str,
+    *,
+    root: Path,
+    env: dict[str, str],
+    validate,
+    present=None,
+    findings_exit: int | None = None,
+) -> int:
     if destination.is_symlink():
         raise ValueError("report destination must not be a symlink")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -160,9 +171,14 @@ def _report_run(binary: Path, args: list[str], destination: Path, format_name: s
             print(f"{binary.name}: scan timed out; no report published", file=sys.stderr)
             return 124
         code = result.returncode if result.returncode >= 0 else 128 - result.returncode
+        if findings_exit is not None and code not in (0, findings_exit):
+            print(f"{binary.name}: scan did not complete (exit {code}); no report published", file=sys.stderr)
+            return code
         try:
             value = _load_report(report)
             findings = validate(value, format_name)
+            if findings_exit is not None and code != (findings_exit if findings else 0):
+                raise ValueError("scanner exit status does not match report findings")
             payload = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
             if len(payload) > REPORT_LIMIT:
                 raise ValueError("published scanner report exceeds size limit")
@@ -174,16 +190,20 @@ def _report_run(binary: Path, args: list[str], destination: Path, format_name: s
         files.replace_many({destination: payload})
         status = code or int(findings)
         if present is not None:
-            present(value, format_name, destination, status, findings)
+            present(value, format_name, destination, int(findings) if findings_exit is not None else status, findings)
         return status
 
 
-def _clear_numbered_reports(directory: Path, *, prefix: str = "") -> None:
-    """Unlink this scanner's old reports, including links, without following them."""
+def _ensure_report_directory(directory: Path) -> None:
     for component in (*reversed(directory.parents), directory):
         if component.is_symlink() or component.is_junction():
             raise ValueError(f"report directory must not contain symlinks or junctions: {component}")
     directory.mkdir(parents=True, exist_ok=True)
+
+
+def _clear_numbered_reports(directory: Path, *, prefix: str = "") -> None:
+    """Unlink this scanner's old reports, including links, without following them."""
+    _ensure_report_directory(directory)
     for report in directory.iterdir():
         if re.fullmatch(re.escape(prefix) + r"[0-9]+\.(?:json|sarif)", report.name):
             report.unlink(missing_ok=True)
@@ -320,8 +340,13 @@ class _GitleaksPolicySnapshot:
         return output
 
     def verify(self) -> None:
-        if any(not path.is_file() or path.read_bytes() != payload for path, payload in self.observed.items()):
-            raise ValueError("Gitleaks configuration changed during policy comparison")
+        for path, payload in self.observed.items():
+            try:
+                unchanged = path.is_file() and path.read_bytes() == payload
+            except OSError:
+                unchanged = False
+            if not unchanged:
+                raise ValueError(f"Gitleaks configuration changed during policy comparison: {path}")
 
 
 def _gitleaks_field(table: dict[str, object], field_name: str, path: Path) -> str:
@@ -348,6 +373,7 @@ def _gitleaks_args(mode: str, source: Path, stage: Path, selected: Path, format_
         "--gitleaks-ignore-path",
         str(stage / "empty-ignore"),
         "--timeout=300",
+        f"--exit-code={GITLEAKS_FINDINGS_EXIT}",
         "--report-format",
         format_name,
         "--report-path",
@@ -365,6 +391,11 @@ def scan_secrets(settings: config.Config, *, output: str = "target/security", co
     coverage. History follows native Gitleaks patch semantics, not submodule
     contents, ignored files, binary blobs, archives or unreachable Git objects.
     """
+    destination = settings.path(output)
+    _ensure_report_directory(destination)
+    for label in ("history", "working"):
+        for format_name in ("json", "sarif"):
+            (destination / f"gitleaks-{label}.{format_name}").unlink(missing_ok=True)
     code = 0
     with tempfile.TemporaryDirectory(prefix="research-secret-scan-") as directory:
         stage = Path(directory)
@@ -377,15 +408,16 @@ def scan_secrets(settings: config.Config, *, output: str = "target/security", co
                 status = _report_run(
                     binary,
                     _gitleaks_args(mode, source, stage, selected, format_name),
-                    settings.path(output) / f"gitleaks-{label}.{format_name}",
+                    destination / f"gitleaks-{label}.{format_name}",
                     format_name,
                     root=source,
                     env=env,
                     validate=_gitleaks_report,
                     present=present,
+                    findings_exit=GITLEAKS_FINDINGS_EXIT,
                 )
                 _require_no_gitleaks_ignore(source)
-                code = code or status
+                code = code or (1 if status == GITLEAKS_FINDINGS_EXIT else status)
     return code
 
 
@@ -472,16 +504,12 @@ def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline
             for scope, mode, source in _gitleaks_scan_targets(settings.root, stage):
                 report = stage / f"gitleaks-{scope}.json"
                 args = _gitleaks_args(mode, source, stage, policy, "json")
-                args.append(f"--exit-code={GITLEAKS_FINDINGS_EXIT}")
                 _require_no_gitleaks_ignore(source)
-                status = _report_run(binary, args, report, "json", root=source, env=env, validate=_gitleaks_report)
+                status = _report_run(binary, args, report, "json", root=source, env=env, validate=_gitleaks_report, findings_exit=GITLEAKS_FINDINGS_EXIT)
                 _require_no_gitleaks_ignore(source)
                 if status not in (0, GITLEAKS_FINDINGS_EXIT) or not report.is_file():
                     raise ValueError(f"Gitleaks {scope} scan failed during policy comparison (exit {status})")
-                observed = _secret_findings(report, scope, source)
-                if status != (GITLEAKS_FINDINGS_EXIT if observed else 0):
-                    raise ValueError(f"Gitleaks {scope} scan returned an inconsistent findings status")
-                findings.update(observed)
+                findings.update(_secret_findings(report, scope, source))
             if history_refs() != refs:
                 raise ValueError("Git refs changed during Gitleaks policy comparison")
             policy_snapshots.verify()
