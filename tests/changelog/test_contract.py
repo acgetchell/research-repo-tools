@@ -421,13 +421,15 @@ def test_reference_heading_reserves_the_rendered_fragment(reserved: str) -> None
     assert postprocess_changelog.postprocess_text(result) == result
 
 
-def test_repeated_subsections_keep_indented_fence_delimiters_literal() -> None:
+@pytest.mark.parametrize("literal", ["```text\nsample\n```\n", "if ready:\n    publish()\n"])
+def test_repeated_subsections_keep_indented_code_literal(literal: str) -> None:
     from markdown_it import MarkdownIt
 
-    source = "# Changelog\n\n## [Unreleased]\n\n### Changed\n\n" + "#### Example\n\n    ```text\n    sample\n    ```\n\n" * 2
+    code = "".join("    " + line for line in literal.splitlines(keepends=True))
+    source = "# Changelog\n\n## [Unreleased]\n\n### Changed\n\n" + f"#### Example\n\n{code}\n" * 2
     result = postprocess_changelog.postprocess_text(source)
     tokens = MarkdownIt("commonmark").parse(result)
-    assert [token.content for token in tokens if token.type == "code_block"] == ["```text\nsample\n```\n"] * 2
+    assert [token.content for token in tokens if token.type == "code_block"] == [literal] * 2
     assert not any(token.type == "fence" for token in tokens)
     assert postprocess_changelog.postprocess_text(result) == result
 

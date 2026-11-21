@@ -68,6 +68,28 @@ def test_generation_rotates_minor_series_and_preview_matches_publication(consume
     assert snapshot(consumer.root) == once
 
 
+@pytest.mark.parametrize("cross_file", [False, True])
+def test_heading_fragments_are_numbered_in_their_output_file(consumer, monkeypatch, cross_file):
+    archive_link = "[Second archived check](docs/archives/changelog/1.0.md#verify-1)."
+    local_link = "[First](#verify), [second](#verify-1)."
+    history = (
+        "# Changelog\n\n## [2.0.0]\n\n### Added\n\n#### Verify\n\nCurrent check.\n\n"
+        f"{archive_link if cross_file else ''}\n\n## [1.0.0]\n\n### Added\n\n{'' if cross_file else local_link}\n\n"
+        "#### Verify\n\nFirst archived check.\n\n#### Verify\n\nSecond archived check.\n"
+    )
+    monkeypatch.setattr(changelog, "_run_cliff", lambda *args, **kwargs: history)
+    root = changelog.generate(consumer)
+    assert "#### Verify\n\nCurrent check." in root
+    archive_path = consumer.root / "docs/archives/changelog/1.0.md"
+    archive = archive_path.read_text(encoding="utf-8")
+    assert "#### Verify\n\nFirst archived check." in archive
+    assert "#### Verify (1)\n\nSecond archived check." in archive
+    assert (archive_link in root) if cross_file else (local_link in archive)
+    once = snapshot(consumer.root)
+    assert changelog.generate(consumer) == root
+    assert snapshot(consumer.root) == once
+
+
 def test_custom_template_retains_closing_directives_in_root_and_archive(consumer, monkeypatch):
     history = HISTORY.replace("Upcoming work.", "Upcoming work.\n\n  Closes #12\n").replace("Earlier correction.", "Earlier correction.\n\n  Closes #13\n")
     (consumer.root / "cliff.toml").write_bytes(b'[changelog]\nbody = "custom"\n')

@@ -218,7 +218,7 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
         if tag:
             assert released is not None
             raw = archive.replace_release_date(raw, tag.removeprefix("v"), released, required=True)
-        return postprocess_text(_preserve_declared_dates(raw, dates))
+        return _preserve_declared_dates(raw, dates)
 
     @cache
     def previous_history() -> str:
@@ -262,7 +262,8 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
             retained_histories=retained_histories if context is not None else None,
         )
     )
-    candidates.setdefault(path, result)
+    if path not in candidates:
+        candidates[path] = postprocess_text(result)
     candidates = {target: format_candidate(candidate, target) for target, candidate in candidates.items()}
     outputs = {target: candidate.encode("utf-8") for target, candidate in candidates.items()}
     if formatter is not None:

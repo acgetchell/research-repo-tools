@@ -625,6 +625,18 @@ class TestPublishingConsumer(unittest.TestCase):
         self.assertEqual(cli.main(args), 0)
         self.assertEqual(path.read_bytes(), result)
 
+    def test_generated_archive_has_its_own_heading_targets(self):
+        history = (
+            "# Changelog\n\n## [2.0.0]\n\n### Added\n\n#### Verify\n\nSee [the second check](docs/archives/changelog/1.0.md#verify-1).\n\n"
+            "## [1.0.0]\n\n### Added\n\n#### Verify\n\nFirst.\n\n#### Verify\n\nSecond.\n"
+        )
+        settings = config.parse({"changelog": {"owner": "example", "repository": "project"}}, root=self.root)
+        archive = self.root / "docs/archives/changelog/1.0.md"
+        with patch.object(changelog, "_run_cliff", return_value=history):
+            root = changelog.generate(settings)
+            self.assertIn("docs/archives/changelog/1.0.md#verify-1", root)
+            self.assertIn(b"#### Verify\n\nFirst.\n\n#### Verify (1)\n\nSecond.", archive.read_bytes())
+
     def test_python_and_rust_final_metadata_and_cli_contract(self):
         for registry_name in ["pypi", "crates-io"]:
             with self.subTest(registry=registry_name):

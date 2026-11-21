@@ -1025,16 +1025,16 @@ class _ProtectedCode:
         return "\n".join(_move_code_line(row, indent - self.indent) for row in self.source.split("\n"))
 
 
-def _indented_fence_examples(text: str) -> dict[int, tuple[int, _ProtectedCode]]:
-    """Locate literal fence examples and the indentation of their container."""
-    if not re.search(r"(?m)^(?: {4}|[ \t]*\t)[ \t]*(?:`{3}|~{3})", text):
+def _indented_code_blocks(text: str) -> dict[int, tuple[int, _ProtectedCode]]:
+    """Locate indented code and the indentation of its container."""
+    if not re.search(r"(?m)^(?: {4}|[ \t]*\t)", text):
         return {}
     from markdown_it import MarkdownIt
 
     lines = text.split("\n")
     examples = {}
     for token in MarkdownIt("commonmark").parse(text):
-        if token.type == "code_block" and token.map is not None and re.search(r"(?m)^[ \t]*(?:`{3}|~{3})", token.content):
+        if token.type == "code_block" and token.map is not None:
             start, end = token.map
             # An indented code block consumes four columns after its container.
             literal = token.content.partition("\n")[0]
@@ -1050,7 +1050,7 @@ def _indented_fence_examples(text: str) -> dict[int, tuple[int, _ProtectedCode]]
 def _changelog_prose(lines: list[str], *, require_closed: bool = False) -> Iterator[tuple[int, str]]:
     """Yield prose locations outside fences and literal fence examples."""
     fence = None
-    examples = {i for start, (end, _) in _indented_fence_examples("\n".join(lines)).items() for i in range(start, end)}
+    examples = {i for start, (end, _) in _indented_code_blocks("\n".join(lines)).items() for i in range(start, end)}
     for index, line in enumerate(lines):
         if index in examples:
             continue
@@ -1065,7 +1065,7 @@ def _changelog_prose(lines: list[str], *, require_closed: bool = False) -> Itera
         raise ValueError("unclosed changelog fence makes release boundaries ambiguous")
 
 
-def _protect_fenced_blocks(text: str) -> tuple[str, dict[str, _ProtectedCode]]:
+def _protect_code_blocks(text: str) -> tuple[str, dict[str, _ProtectedCode]]:
     """Keep code opaque to document-wide prose transforms, including examples of releases.
 
     Tokens are collision-free within this input. Restoring them after all prose
@@ -1077,7 +1077,7 @@ def _protect_fenced_blocks(text: str) -> tuple[str, dict[str, _ProtectedCode]]:
     lines = text.split("\n")
     result: list[str] = []
     blocks: dict[str, _ProtectedCode] = {}
-    examples = _indented_fence_examples(text)
+    examples = _indented_code_blocks(text)
     index = 0
     while index < len(lines):
         if index in examples:
@@ -1315,8 +1315,7 @@ def _has_local_fragment_link(lines: list[str]) -> bool:
     """Keep heading targets reachable by fragment-only and path-qualified links."""
     from markdown_it import MarkdownIt
 
-    # A full history is normalized before it is split into its output files.
-    # A relative destination can therefore address the root or a minor archive.
+    # Relative destinations can address either the root or a minor archive.
     for block in MarkdownIt("commonmark").parse("\n".join(lines)):
         for token in block.children or ():
             if token.type == "link_open":
@@ -1326,7 +1325,7 @@ def _has_local_fragment_link(lines: list[str]) -> bool:
     return False
 
 
-def _list_repeated_headings(lines: list[str]) -> None:
+def _list_repeated_headings(lines: list[str], *, keep_heading_targets: bool = False) -> None:
     """Keep duplicate sibling titles and their bodies together as list items."""
     occurrences: dict[tuple[int, str], list[int]] = {}
     parent = 0
@@ -1343,7 +1342,7 @@ def _list_repeated_headings(lines: list[str]) -> None:
     repeated = sorted((index, title) for (_, title), indices in occurrences.items() if len(indices) > 1 for index in indices)
     if not repeated:
         return
-    if _has_local_fragment_link(lines):
+    if keep_heading_targets or _has_local_fragment_link(lines):
         _number_navigable_headings(lines, {index for index, _ in repeated})
         return
     # Footer definitions belong to the whole document. A definition followed
@@ -1436,10 +1435,10 @@ def _separate_entry_details(lines: list[str]) -> list[str]:
     return result
 
 
-def postprocess_text(text: str) -> str:
+def postprocess_text(text: str, *, keep_heading_targets: bool = False) -> str:
     """Apply one common Markdown policy, preserving fenced code and reference links."""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
-    text, fenced_blocks = _protect_fenced_blocks(text)
+    text, code_blocks = _protect_code_blocks(text)
     text = _strip_dependabot_metadata(text)
     text = _normalize_inline_prose(text)
     lines = text.split("\n")
@@ -1494,18 +1493,18 @@ def postprocess_text(text: str) -> str:
     # 1. Reassemble and strip trailing blank lines.
     lines = "\n".join(result).split("\n")
     _normalize_entry_lists(lines)
-    _list_repeated_headings(lines)
+    _list_repeated_headings(lines, keep_heading_targets=keep_heading_targets)
     text = _block_spacing(_separate_entry_details(lines))
     text = text.rstrip() + "\n"
-    if any(text.count(marker) != 1 for marker in fenced_blocks):
-        raise ValueError("Changelog normalization would lose a fenced code block")
+    if any(text.count(marker) != 1 for marker in code_blocks):
+        raise ValueError("Changelog normalization would lose a code block")
     lines = text.rstrip("\n").split("\n")
     for index, line in enumerate(lines):
         marker = line.lstrip()
-        if marker in fenced_blocks:
-            lines[index] = fenced_blocks.pop(marker).restore(_indent_columns(line))
-    if fenced_blocks:
-        raise ValueError("Changelog normalization would lose a fenced code block")
+        if marker in code_blocks:
+            lines[index] = code_blocks.pop(marker).restore(_indent_columns(line))
+    if code_blocks:
+        raise ValueError("Changelog normalization would lose a code block")
     return "\n".join(lines) + "\n"
 
 
