@@ -1171,6 +1171,37 @@ def _nest_subsection_body(body: list[str]) -> list[str]:
     return nested
 
 
+def _number_navigable_headings(lines: list[str], repeated: set[int]) -> None:
+    """Keep real heading targets in documents with local fragment navigation.
+
+    Use the original document order for suffixes, including headings outside
+    the repeated category and collisions with pre-existing numbered titles.
+    """
+    used: set[str] = set()
+    siblings: set[str] = set()
+    for index, line in enumerate(lines):
+        if (heading := _ATX_HEADING_RE.match(line)) is None:
+            continue
+        title = heading["title"].strip()
+        # Formatting punctuation disappears when GitHub derives a fragment.
+        label = re.sub(r"\[([^]\n]+)\]\([^)]+\)", r"\1", title)
+        base = re.sub(r"[^\w -]", "", label.lower()).replace(" ", "-")
+        anchor = base
+        suffix = 0
+        while anchor in used:
+            suffix += 1
+            anchor = f"{base}-{suffix}"
+        used.add(anchor)
+        level = len(heading["level"])
+        if level < 4:
+            siblings.clear()
+        elif level == 4:
+            if suffix and (index in repeated or title in siblings):
+                title = f"{title} ({suffix})"
+                lines[index] = f"#### {title}"
+            siblings.add(title)
+
+
 def _list_repeated_headings(lines: list[str]) -> None:
     """Keep duplicate sibling titles and their bodies together as list items."""
     occurrences: dict[tuple[int, str], list[int]] = {}
@@ -1186,6 +1217,9 @@ def _list_repeated_headings(lines: list[str]) -> None:
             occurrences.setdefault((parent, heading["title"].strip()), []).append(index)
 
     repeated = sorted((index, title) for (_, title), indices in occurrences.items() if len(indices) > 1 for index in indices)
+    if repeated and any(re.search(r"(?:\]\(\s*|^ {0,3}\[[^\]]+\]:\s*)<?#\S", line) for line in lines):
+        _number_navigable_headings(lines, {index for index, _ in repeated})
+        return
     gaps: set[int] = set()
     for index, title in repeated:
         end = index + 1

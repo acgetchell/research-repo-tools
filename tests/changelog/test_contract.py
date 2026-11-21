@@ -9,7 +9,7 @@ from pathlib import Path
 
 import pytest
 
-from research_repo_tools import archive_changelog, changelog, cli, config, postprocess_changelog, update_release
+from research_repo_tools import archive_changelog, changelog, changelog_issues, cli, config, postprocess_changelog, update_release
 from research_repo_tools.markdown import relocate_links
 from research_repo_tools.process import run_git_command, run_safe_command
 
@@ -322,6 +322,34 @@ def test_backfill_links_original_commits_in_retained_and_current_releases(git_co
     with pytest.raises(ValueError, match="conflicting"):
         changelog.generate(cfg, tag="v1.1.0", released="2026-09-07")
     assert archive.read_bytes() == damaged
+
+
+def test_wrapped_first_issue_link_is_idempotent_and_rejects_drift() -> None:
+    oid = "a" * 40
+    remote = "example/" + "long-name-" * 9 + "tools"
+    note = f"  Closes\n  [{remote}#7](https://github.com/{remote}/issues/7)."
+    notes = {oid: note}
+    entry = f"- Report [`{oid[:7]}`](https://github.com/example/research/commit/{oid})\n"
+    annotated = changelog_issues.add_closing_notes(entry, notes, "example/research")
+    assert annotated == entry + note + "\n"
+    assert changelog_issues.add_closing_notes(annotated, notes, "example/research") == annotated
+    with pytest.raises(ValueError, match="conflicting closed issue links"):
+        changelog_issues.add_closing_notes(annotated.replace("/issues/7)", "/issues/8)"), notes, "example/research")
+
+
+@pytest.mark.skipif(shutil.which("rumdl") is None, reason="external rumdl validates the generated heading targets")
+def test_repeated_headings_preserve_local_navigation(tmp_path: Path) -> None:
+    source = (
+        "# Changelog\n\n## [Unreleased]\n\n### Added\n\n[First](#verify), [second][again], [reserved](#verify-1), and [later](#verify-2-1).\n\n"
+        "#### Verify-1\n\nReserved.\n\n#### Verify\n\nFirst details.\n\n#### Verify\n\nSecond details.\n\n#### Verify (2)\n\nLater details.\n\n[again]: #verify-2\n"
+    )
+    result = postprocess_changelog.postprocess_text(source)
+    assert "#### Verify\n\nFirst details." in result
+    assert "#### Verify (2)\n\nSecond details." in result
+    assert postprocess_changelog.postprocess_text(result) == result
+    rules = tmp_path / "rules.toml"
+    rules.write_text(changelog.template("rumdl.toml"), encoding="utf-8", newline="\n")
+    postprocess_changelog.check_markdown(result, tmp_path / "CHANGELOG.md", rules)
 
 
 def test_tag_preserves_utf8_notes_and_force_replaces_atomically(git_consumer: Path) -> None:

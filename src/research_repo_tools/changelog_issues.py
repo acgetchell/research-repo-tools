@@ -14,7 +14,7 @@ _SLUG = r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*"
 _TARGET = rf"(?:(?:{_SLUG})?#[1-9][0-9]*|https://github\.com/{_SLUG}/issues/[1-9][0-9]*)"
 _CLOSING_LINE = re.compile(rf"{_KEYWORD}:?[ \t]+{_TARGET}(?:,[ \t]+(?:{_KEYWORD}:?[ \t]+)?{_TARGET})*\.?[ \t]*", re.IGNORECASE | re.ASCII)
 _REFERENCE = re.compile(rf"(?:https://github\.com/(?P<url>{_SLUG})/issues/|(?P<slug>{_SLUG})?#)(?P<number>[1-9][0-9]*)", re.IGNORECASE | re.ASCII)
-_CLOSING_NOTE = re.compile(rf"^ +Closes \[(?:{_SLUG})?#[1-9][0-9]*\]\(")
+_CLOSING_NOTE = re.compile(rf"^Closes \[(?:{_SLUG})?#[1-9][0-9]*\]\(")
 _COMMIT = re.compile(rf"\[`(?P<short>[a-f0-9]{{7}})`\]\(https://github\.com/(?P<slug>{_SLUG})/commit/(?P<oid>[a-f0-9]{{40}}(?:[a-f0-9]{{24}})?)\)$")
 
 
@@ -105,7 +105,8 @@ def add_closing_notes(text: str, notes: dict[str, str], repository: str) -> str:
         if oid not in notes:
             continue
         note = notes[oid]
-        if index + 1 < len(lines) and _CLOSING_NOTE.match(lines[index + 1]):
+        prefix = " ".join(line.strip() for line in lines[index + 1 : index + 3])
+        if _CLOSING_NOTE.match(prefix):
             # A formatter may wrap the same links at a different column.
             parts = []
             for line in lines[index + 1 :]:
