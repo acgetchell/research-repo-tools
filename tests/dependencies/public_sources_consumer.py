@@ -1328,6 +1328,48 @@ class TestSourceWorkflows(unittest.TestCase):
         self.assertTrue(required.contains("3.15.0"))
         self.assertFalse(required.contains("3.16.0"))
 
+    def test_supplier_plan_accounts_for_each_captured_workspace_manifest(self) -> None:
+        name = "research-repo-tools"
+        root_manifest = self.root / "pyproject.toml"
+        root_manifest.write_bytes(
+            b'[project]\nrequires-python = ">=3.15"\n[dependency-groups]\ntooling = ["research-repo-tools==1.2.3"]\n'
+            b'[tool.uv.dependency-groups.tooling]\nrequires-python = ">=3.16"\n'
+        )
+        member = self.root / "member" / "pyproject.toml"
+        member.parent.mkdir()
+        member.write_bytes(b'[project]\nrequires-python = ">=3.15"\ndependencies = ["research-repo-tools==1.2.3"]\n')
+        project = DependencyProject("python", ".")
+        pin = RegistryRelease("python", name, "1.2.3")
+        selection = dependency_policy.SourceSelection("tooling", project, pin)
+        manifests = (root_manifest, member)
+        graph = dependency_graphs.DependencyGraph(
+            project,
+            self.root,
+            dependency_graphs.InputSnapshot.capture(manifests),
+            manifests,
+            (dependency_graphs.LockedDependency(pin, "1.2.3"),),
+            (),
+            self.root,
+        )
+        self.provider.put(
+            f"https://pypi.org/pypi/{name}/json",
+            {
+                "info": {"name": name},
+                "releases": {
+                    "1.2.4": [{"yanked": False, "requires_python": ">=3.15"}],
+                    "1.2.5": [{"yanked": False, "requires_python": ">=3.16"}],
+                },
+            },
+        )
+        with (
+            patch.object(python_promotion, "_selection", return_value=(selection, b"policy", graph)),
+            patch.object(python_promotion.platform, "python_version", return_value="3.16.1"),
+            patch.object(python_promotion, "verify_source") as verify,
+            patch.object(python_promotion, "_plan_release") as plan,
+        ):
+            self.assertIs(python_promotion.plan_supplier(self.root, "tooling", project=self.root, provider=self.provider), plan.return_value)
+        verify.assert_called_once_with(RegistryRelease("python", name, "1.2.4"), provider=self.provider, release=True)
+
     def test_promotion_selects_release_covering_the_marked_python_range(self) -> None:
         self.provider.put(
             "https://pypi.org/pypi/sample-pkg/json",

@@ -282,6 +282,20 @@ def _captured_manifest(graph: DependencyGraph) -> str:
     return payload.decode("utf-8")
 
 
+def _workspace_python_support(graph: DependencyGraph, document: dict[str, object], text: str, package: str) -> tuple[VersionRange, ...]:
+    required = list(_declared_python_support(document, text, package))
+    captured = dict(graph.snapshot.files)
+    for path in graph.manifests:
+        if path == graph.root / "pyproject.toml":
+            continue
+        payload = captured.get(path)
+        if payload is None:
+            raise ValueError(f"supplier selection requires a captured Python manifest: {path}")
+        member = payload.decode("utf-8")
+        required.extend(_declared_python_support(tomllib.loads(member), member, package))
+    return tuple(required)
+
+
 def plan_supplier(checkout: Path, name: str, *, project: Path, provider: SourceProvider | None = None) -> SourcePlan:
     """Resolve the newest compatible RRT release, requiring signed proof for a Git pin."""
     from research_repo_tools.dependency_provenance import _requirements
@@ -305,7 +319,7 @@ def plan_supplier(checkout: Path, name: str, *, project: Path, provider: SourceP
 
     if _source(document, PACKAGE) is not None:
         raise ValueError("a supplier registry pin cannot have a source override")
-    python_support = _declared_python_support(document, manifest, PACKAGE)
+    python_support = _workspace_python_support(graph, document, manifest, PACKAGE)
     provider = provider or HttpSourceProvider()
     candidates = _candidates(provider, PACKAGE, Version(pin.version), SpecifierSet(), False, newer=True, python_support=python_support)
     if not candidates:
@@ -347,7 +361,7 @@ def _plan_promotion(
         expected["subdirectory"] = pin.directory
     if override != expected and override != (expected | {"git": pin.url.removesuffix(".git")}):
         raise ValueError("promotion requires the exact development source in the project manifest, lock and policy")
-    python_support = _declared_python_support(document, manifest, pin.package)
+    python_support = _workspace_python_support(graph, document, manifest, pin.package)
     provider = provider or HttpSourceProvider()
     repository = _lookup(provider, f"https://api.github.com/repos/{pin.repository}")
     repository_id = repository.get("id")

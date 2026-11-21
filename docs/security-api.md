@@ -30,9 +30,12 @@ for setup and ordinary workflows.
   summarizes both redacted native JSON reports without invoking the scanner.
   A completed summary returns `None` even when the reports contain findings.
 
-Scans require declared, already installed exact managed binaries. They return
-zero only for complete scans without findings, otherwise the first native
-nonzero status, 1 for invalid successful reports/findings, or 124 on timeout.
+Scans require declared, already installed exact managed binaries. A complete
+Gitleaks scan returns 0 when clean or 1 when it finds secrets. The first failed
+scan takes precedence over findings. Gitleaks returns 2 for invalid reports or
+native status 1, and preserves other failure statuses, including 124 for a
+process timeout. OSV returns its first nonzero status, 1 for invalid reports or
+findings with a successful native exit, and 124 for a process timeout.
 Invalid arguments/preconditions raise `ValueError`; I/O and Git errors propagate.
 Old OSV reports at the selected output names are removed before scanning. OSV
 also removes all prior numbered JSON/SARIF reports in its output directory,

@@ -264,8 +264,9 @@ equivalent `research-repo-tools security findings` and
 `research-repo-tools security check-exceptions` subcommands through their
 pinned tooling setup. See the [Gitleaks configuration reference](https://github.com/gitleaks/gitleaks#configuration)
 for allowlist syntax.
-The first nonzero scanner status is returned; invalid successful reports return
-1, and timeouts return 124. Checks never install or select an ambient scanner.
+A completed Gitleaks scan returns 1 if it found secrets. If a scan fails, the
+failure status takes precedence. Invalid Gitleaks reports and native exit 1
+return 2. A process timeout returns 124. Checks use declared, managed scanners.
 
 The standalone binaries require neither a paid GitHub security product nor a
 Gitleaks Action license. Consumers own exceptions, schedules, Actions permissions,

@@ -164,7 +164,7 @@ def _report_run(
         code = result.returncode if result.returncode >= 0 else 128 - result.returncode
         if findings_exit is not None and code not in (0, findings_exit):
             print(f"{binary.name}: scan did not complete (exit {code}); no report published", file=sys.stderr)
-            return code
+            return 2 if code == 1 else code
         try:
             value = _load_report(report)
             findings = validate(value, format_name)
@@ -175,7 +175,7 @@ def _report_run(
                 raise ValueError("published scanner report exceeds size limit")
         except OSError, ValueError, TypeError, KeyError:
             print(f"{binary.name}: missing, malformed, incomplete, or unredacted {format_name} report (exit {code}); no report published", file=sys.stderr)
-            return code or 1
+            return 2 if findings_exit is not None else code or 1
         # Keep the native schema and diagnostics; Gitleaks metadata redactions
         # above are the only changes to finding content.
         files.replace_many({destination: payload})
@@ -284,8 +284,8 @@ def _secret_config(settings: config.Config, stage: Path, configuration: str | No
     selected = settings.path(configuration) if configuration is not None else settings.root / ".gitleaks.toml"
     if selected.is_file():
         return selected
-    if configuration is not None:
-        raise ValueError(f"requested Gitleaks configuration is missing or is not a file: {selected}")
+    if configuration is not None or selected.exists(follow_symlinks=False):
+        raise ValueError(f"Gitleaks configuration is missing or is not a regular file: {selected}")
     return stage / "default.toml"
 
 
@@ -390,6 +390,7 @@ def scan_secrets(settings: config.Config, *, output: str = "target/security", co
         for format_name in ("json", "sarif"):
             (destination / f"gitleaks-{label}.{format_name}").unlink(missing_ok=True)
     code = 0
+    found = False
     with tempfile.TemporaryDirectory(prefix="research-secret-scan-") as directory:
         stage = Path(directory)
         binary, env = _prepare_gitleaks_scan(settings, stage, exclude)
@@ -410,8 +411,11 @@ def scan_secrets(settings: config.Config, *, output: str = "target/security", co
                     findings_exit=GITLEAKS_FINDINGS_EXIT,
                 )
                 _require_no_gitleaks_ignore(source)
-                code = code or (1 if status == GITLEAKS_FINDINGS_EXIT else status)
-    return code
+                if status == GITLEAKS_FINDINGS_EXIT:
+                    found = True
+                else:
+                    code = code or status
+    return code or int(found)
 
 
 @dataclass(frozen=True, order=True, slots=True)

@@ -227,6 +227,13 @@ class TestSharedCapabilities(unittest.TestCase):
                 with redirect_stderr(io.StringIO()) as errors:
                     self.assertEqual(main(["--root", str(root), "security", "check-exceptions", missing]), 1)
                 self.assertIn(missing, errors.getvalue())
+                candidate.write_bytes(candidate_bytes)
+                baseline.unlink()
+                baseline.mkdir()
+                with redirect_stderr(io.StringIO()) as errors:
+                    self.assertEqual(main(arguments), 1)
+                self.assertIn(baseline.name, errors.getvalue())
+                self.assertIn("regular file", errors.getvalue())
 
     def test_gitleaks_preflight_failure_and_partial_scan_invalidate_old_reports(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -268,17 +275,49 @@ class TestSharedCapabilities(unittest.TestCase):
                             policy.unlink()
                         elif failure == "partial scan":
                             native_status = 1
-                            self.assertEqual(security.scan_secrets(settings, output=output.name), 1)
+                            self.assertEqual(security.scan_secrets(settings, output=output.name), 2)
                             self.assertIn("scan did not complete", errors.getvalue())
                         else:
                             native_status = 3
-                            self.assertEqual(security.scan_secrets(settings, output=output.name), 1)
+                            self.assertEqual(security.scan_secrets(settings, output=output.name), 2)
                             self.assertIn("incomplete", errors.getvalue())
                         expected = {notes} if native_status != 3 else {notes, output / "gitleaks-working.json"}
                         self.assertEqual(set(output.iterdir()), expected)
                         self.assertNotIn("RAW_SECRET", errors.getvalue())
                         with self.assertRaisesRegex(ValueError, "gitleaks-history.json"):
                             security.show_secret_findings(settings, reports=output.name)
+
+    def test_gitleaks_findings_do_not_mask_a_later_native_timeout(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "source.txt").write_bytes(b"fixture\n")
+            settings = config.parse({}, root=root)
+
+            def native(binary, args, **kwargs):
+                history = args[0] == "git"
+                fmt = args[args.index("--report-format") + 1]
+                if history and fmt == "sarif":
+                    raise subprocess.TimeoutExpired(binary, 600)
+                result = [self.secret_finding("a" * 40, "source.txt", 1)] if history else []
+                if fmt == "sarif":
+                    result = {"version": "2.1.0", "runs": [{"tool": {}, "results": []}]}
+                Path(args[args.index("--report-path") + 1]).write_bytes(json.dumps(result).encode())
+                return subprocess.CompletedProcess(args, 3 if history else 0, b"", b"")
+
+            with (
+                patch.object(security, "security_inventory", return_value=("source.txt",)),
+                patch.object(security, "_binary", return_value=(root / "gitleaks", {})),
+                patch.object(security, "run_git_bytes", return_value=subprocess.CompletedProcess([], 0, b"false\n", b"")),
+                patch.object(security, "run_command_bytes", side_effect=native),
+                redirect_stdout(io.StringIO()) as stdout,
+                redirect_stderr(io.StringIO()) as errors,
+            ):
+                self.assertEqual(security.scan_secrets(settings), 124)
+                self.assertIn("Gitleaks (history): 1 finding(s)", stdout.getvalue())
+                self.assertIn("scan timed out", errors.getvalue())
+            self.assertEqual(
+                {path.name for path in (root / "target" / "security").iterdir()}, {"gitleaks-history.json", "gitleaks-working.json", "gitleaks-working.sarif"}
+            )
 
     def test_cli_findings_are_actionable_once_per_scan_and_never_echo_matches(self):
         for scanner in ("osv", "secrets", "semgrep"):
@@ -292,6 +331,8 @@ class TestSharedCapabilities(unittest.TestCase):
                 ("timeout", 124),
             ):
                 with self.subTest(scanner=scanner, behavior=behavior), tempfile.TemporaryDirectory(prefix="scan café ") as directory:
+                    if scanner == "secrets" and behavior == "malformed":
+                        expected = 2
                     root = Path(directory).resolve()
                     (root / "uv.lock").write_bytes(b"version=1\n")
                     (root / "source café.py").write_bytes(b"value = 1\n")
