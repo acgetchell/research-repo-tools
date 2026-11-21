@@ -1449,15 +1449,22 @@ class TestSourceWorkflows(unittest.TestCase):
             {
                 "info": {"name": name},
                 "releases": {
+                    "1.2.3.post1": [{"yanked": False, "requires_python": ">=3.15"}],
                     "1.2.4": [{"yanked": False, "requires_python": ">=3.15.1"}],
                     "1.2.5": [{"yanked": False, "requires_python": ">=3.16"}],
+                    "1.2.6": [{"yanked": False, "requires_python": ">=3.14,<3.15"}],
                 },
             },
         )
         root_dependency = b'[project]\nrequires-python = ">=3.15"\ndependencies = ["research-repo-tools==1.2.3"]\n'
-        for root_bytes, member_bytes, expected in (
-            (grouped, b'[project]\nrequires-python = ">=3.15.1"\ndependencies = ["research-repo-tools==1.2.3"]\n', "1.2.4"),
-            (root_dependency, b'[project]\nrequires-python = ">=3.16"\n', "1.2.5"),
+        supplier = b'dependencies = ["research-repo-tools==1.2.3"]\n'
+        older_python = b'requires-python = ">=3.14,<3.15"\n'
+        for root_bytes, member_bytes, interpreter, expected in (
+            (grouped, b'[project]\nrequires-python = ">=3.15.1"\n' + supplier, "3.16.1", "1.2.4"),
+            (root_dependency, b'[project]\nrequires-python = ">=3.16"\n', "3.16.1", "1.2.5"),
+            (b"[project]\n" + supplier, b"[project]\n" + older_python, "3.14.7", "1.2.6"),
+            (b"[project]\n" + older_python + supplier, b"[project]\n", "3.14.7", "1.2.6"),
+            (b"[project]\n" + supplier, b"[project]\n", "3.16.1", "1.2.3.post1"),
         ):
             root_manifest.write_bytes(root_bytes)
             member.write_bytes(member_bytes)
@@ -1471,9 +1478,9 @@ class TestSourceWorkflows(unittest.TestCase):
                 self.root,
             )
             with (
-                self.subTest(expected=expected),
+                self.subTest(root=root_bytes, member=member_bytes),
                 patch.object(python_promotion, "_selection", return_value=(selection, b"policy", graph)),
-                patch.object(python_promotion.platform, "python_version", return_value="3.16.1"),
+                patch.object(python_promotion.platform, "python_version", return_value=interpreter),
                 patch.object(python_promotion, "_compatible_release") as verify,
                 patch.object(python_promotion, "_plan_release") as plan,
             ):

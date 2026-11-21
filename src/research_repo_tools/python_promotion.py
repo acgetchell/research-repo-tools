@@ -327,7 +327,6 @@ def _workspace_python_support(graph: DependencyGraph, document: dict[str, object
     """Limit every supplier declaration to the shared Python range of the captured workspace."""
     from research_repo_tools.dependencies import _python_constraints
 
-    workspace = _python_constraints(table(document.get("project", {}), "project"))
     manifests = [(document, text)]
     captured = dict(graph.snapshot.files)
     for path in graph.manifests:
@@ -337,11 +336,15 @@ def _workspace_python_support(graph: DependencyGraph, document: dict[str, object
         if payload is None:
             raise ValueError(f"supplier selection requires a captured Python manifest: {path}")
         member = payload.decode("utf-8")
-        parsed = tomllib.loads(member)
+        manifests.append((tomllib.loads(member), member))
+    workspace = None
+    for parsed, _ in manifests:
         project = table(parsed.get("project", {}), "project")
         if "requires-python" in project:
-            workspace &= _python_constraints(project)
-        manifests.append((parsed, member))
+            requirement = _python_constraints(project)
+            workspace = requirement if workspace is None else workspace & requirement
+    if workspace is None:
+        workspace = _python_constraints({})
     if workspace.is_unsatisfiable():
         raise ValueError("workspace members have no common supported Python version")
     return tuple(required for manifest, source in manifests for required in _declared_python_support(manifest, source, package, workspace=workspace))

@@ -189,8 +189,11 @@ to opt in from a consumer repository.
 
 For a registry pin, the updater checks the newest stable, non-yanked PyPI release
 above that pin that supports the running interpreter and the Python range
-declared where the supplier is used. A dependency group's own Python constraint
-narrows the range for that group's declaration. uv resolves the selected
+declared where the supplier is used. For a workspace, the updater intersects
+every explicit `project.requires-python` from the root and its members. If
+all omit it, the updater uses its default of `>=3.15`. Dependency markers and
+a dependency group's Python constraint narrow that shared range for each
+declaration. uv resolves the selected
 candidate and stops the update on a resolution failure. If exact registry
 verification confirms a candidate was yanked, the updater checks the next
 eligible release. For an exact Git SHA,
