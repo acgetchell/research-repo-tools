@@ -8,7 +8,9 @@ import sys
 import tempfile
 import tomllib
 from collections import Counter
+from collections.abc import Iterator
 from dataclasses import dataclass, field
+from functools import partial
 from pathlib import Path, PurePosixPath, PureWindowsPath
 from typing import Any, cast
 
@@ -94,7 +96,7 @@ def _osv_report(value: object, lockfiles: set[Path]) -> bool:
     return found
 
 
-def _gitleaks_report(value: object, format_name: str) -> bool:
+def _gitleaks_report(value: object, format_name: str, *, scope: str) -> bool:
     if format_name == "sarif":
         results = _sarif(value)
         for finding in results:
@@ -117,18 +119,7 @@ def _gitleaks_report(value: object, format_name: str) -> bool:
             if fingerprints.get("commitMessage"):
                 fingerprints["commitMessage"] = "REDACTED"
         return bool(results)
-    if not isinstance(value, list):
-        raise ValueError("invalid Gitleaks JSON report")
-    for finding in value:
-        if not isinstance(finding, dict) or not isinstance(finding.get("RuleID"), str) or not isinstance(finding.get("File"), str):
-            raise ValueError("invalid Gitleaks finding")
-        if finding.get("Secret") != "REDACTED":
-            raise ValueError("Gitleaks JSON contains an unredacted secret")
-        # Adjacent source text can contain other secrets, so omit it wholesale.
-        for key in ("Match", "Message", "Fragment"):
-            if finding.get(key):
-                finding[key] = None if key == "Fragment" else "REDACTED"
-    return bool(value)
+    return sum(1 for _ in _gitleaks_identities(value, scope)) > 0
 
 
 def _load_report(path: Path) -> object:
@@ -319,6 +310,8 @@ class _GitleaksPolicySnapshot:
         except ValueError:
             raise ValueError(f"Gitleaks policy must be valid UTF-8 TOML: {path}") from None
         if depth < GITLEAKS_EXTEND_DEPTH:
+            if any(key.casefold().startswith("extend.") for key in document):
+                raise ValueError(f"Gitleaks policy must place extension keys in the [extend] table: {path}")
             extend_key = _gitleaks_field(document, "extend", path)
             extend = document.get(extend_key, {})
             if not isinstance(extend, dict):
@@ -412,7 +405,7 @@ def scan_secrets(settings: config.Config, *, output: str = "target/security", co
                     format_name,
                     root=source,
                     env=env,
-                    validate=_gitleaks_report,
+                    validate=partial(_gitleaks_report, scope=label),
                     present=present,
                     findings_exit=GITLEAKS_FINDINGS_EXIT,
                 )
@@ -445,15 +438,20 @@ def _secret_path(path: str, scope: str, source: Path) -> str:
     return native.as_posix()
 
 
-def _secret_findings(report: Path, scope: str, source: Path) -> Counter[_SecretFinding]:
-    value = _load_report(report)
-    _gitleaks_report(value, "json")
-    findings: Counter[_SecretFinding] = Counter()
-    for item in cast(list[dict[str, Any]], value):
-        path, rule, commit = item["File"], item["RuleID"], item.get("Commit", "")
+def _gitleaks_identities(value: object, scope: str) -> Iterator[_SecretFinding]:
+    if not isinstance(value, list):
+        raise ValueError("invalid Gitleaks JSON report")
+    for item in value:
+        if not isinstance(item, dict):
+            raise ValueError(f"invalid Gitleaks {scope} finding")
+        if item.get("Secret") != "REDACTED":
+            raise ValueError("Gitleaks JSON contains an unredacted secret")
+        path, rule, commit = item.get("File"), item.get("RuleID"), item.get("Commit", "")
         position = tuple(item.get(field) for field in ("StartLine", "StartColumn", "EndLine", "EndColumn"))
         if (
-            not path
+            not isinstance(path, str)
+            or not path
+            or not isinstance(rule, str)
             or not rule
             or not isinstance(commit, str)
             or (scope == "history" and not re.fullmatch(r"(?:[0-9a-f]{40}|[0-9a-f]{64})", commit))
@@ -461,8 +459,18 @@ def _secret_findings(report: Path, scope: str, source: Path) -> Counter[_SecretF
             or any(type(part) is not int or part < 0 for part in position)
         ):
             raise ValueError(f"invalid Gitleaks {scope} finding identity")
-        findings[_SecretFinding(scope, _secret_path(path, scope, source), cast(tuple[int, int, int, int], position), rule, commit)] += 1
-    return findings
+        # Adjacent source text can contain other secrets, so omit it wholesale.
+        for key in ("Match", "Message", "Fragment"):
+            if item.get(key):
+                item[key] = None if key == "Fragment" else "REDACTED"
+        yield _SecretFinding(scope, path, cast(tuple[int, int, int, int], position), rule, commit)
+
+
+def _secret_findings(report: Path, scope: str, source: Path) -> Counter[_SecretFinding]:
+    return Counter(
+        _SecretFinding(item.scope, _secret_path(item.path, scope, source), item.position, item.rule, item.commit)
+        for item in _gitleaks_identities(_load_report(report), scope)
+    )
 
 
 def _print_secret_findings(label: str, findings: Counter[_SecretFinding]) -> None:
@@ -483,7 +491,7 @@ def show_secret_findings(settings: config.Config, *, reports: str = "target/secu
 
 
 def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline: str | None = None, exclude: tuple[str, ...] = ()) -> None:
-    """Compare two Gitleaks policies using one working snapshot and unchanged Git refs."""
+    """Compare two Gitleaks policies against the same captured files and history."""
     with tempfile.TemporaryDirectory(prefix="research-secret-compare-") as directory:
         stage = Path(directory)
         binary, env = _prepare_gitleaks_scan(settings, stage, exclude)
@@ -494,23 +502,40 @@ def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline
         policy_snapshots = _GitleaksPolicySnapshot(settings.root, stage)
         retained = (policy_snapshots.retain(original), policy_snapshots.retain(proposed))
 
-        def history_refs() -> bytes:
-            return run_git_bytes(["--no-pager", "show-ref", "--head"], cwd=settings.root).stdout
+        def history_refs(root: Path) -> bytes:
+            return run_git_bytes(["--no-pager", "show-ref", "--head"], cwd=root).stdout
 
-        refs = history_refs()
+        refs = history_refs(settings.root)
+        history = stage / "history.git"
+        # Retain the selected refs privately and reuse the source object store.
+        run_git_bytes(
+            ["--no-pager", "clone", "--mirror", "--shared", "--reject-shallow", "--template=", "--", str(settings.root), str(history)], cwd=settings.root
+        )
+        if history_refs(history) != refs:
+            raise ValueError("Git refs changed while capturing history for Gitleaks policy comparison")
         results: list[Counter[_SecretFinding]] = []
         for policy in retained:
             findings: Counter[_SecretFinding] = Counter()
-            for scope, mode, source in _gitleaks_scan_targets(settings.root, stage):
+            for scope, mode, source in _gitleaks_scan_targets(history, stage):
                 report = stage / f"gitleaks-{scope}.json"
                 args = _gitleaks_args(mode, source, stage, policy, "json")
                 _require_no_gitleaks_ignore(source)
-                status = _report_run(binary, args, report, "json", root=source, env=env, validate=_gitleaks_report, findings_exit=GITLEAKS_FINDINGS_EXIT)
+                status = _report_run(
+                    binary,
+                    args,
+                    report,
+                    "json",
+                    root=source,
+                    env=env,
+                    validate=partial(_gitleaks_report, scope=scope),
+                    findings_exit=GITLEAKS_FINDINGS_EXIT,
+                )
                 _require_no_gitleaks_ignore(source)
                 if status not in (0, GITLEAKS_FINDINGS_EXIT) or not report.is_file():
                     raise ValueError(f"Gitleaks {scope} scan failed during policy comparison (exit {status})")
                 findings.update(_secret_findings(report, scope, source))
-            if history_refs() != refs:
+            _require_no_gitleaks_ignore(settings.root)
+            if history_refs(settings.root) != refs:
                 raise ValueError("Git refs changed during Gitleaks policy comparison")
             policy_snapshots.verify()
             results.append(findings)

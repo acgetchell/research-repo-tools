@@ -338,6 +338,8 @@ def read_registry(
         if attempt == 2 or delay >= remaining():
             break
         report("retry", "registry", detail=f"{parsed.netloc}; attempt {attempt + 2}/3 after {delay:g}s")
+        if delay >= remaining():
+            break
         sleep(delay)
     raise TransientRegistryError(
         f"registry GET {identity} exhausted three attempts or its {budget}-second retry budget; last failure: {last_failure}; "

@@ -251,6 +251,31 @@ class TestSources(unittest.TestCase):
         self.assertIsNone(events[0]["total"])
         self.assertNotIn("eta_seconds", events[-1])
 
+    def test_registry_retry_observer_can_use_the_remaining_backoff_budget(self) -> None:
+        now = 0.0
+
+        def transport(_url: str, _timeout: float, _limit: int) -> bytes:
+            nonlocal now
+            now = 1.5
+            raise TimeoutError
+
+        def observe(event: dict[str, object]) -> None:
+            nonlocal now
+            if event["event"] == "retry":
+                now += 1.0
+
+        sleep = MagicMock()
+        progress = DependencyProgress(mode="none", observer=observe)
+        with (
+            patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "3"}),
+            reporting(progress, "fixture"),
+            self.assertRaisesRegex(ValueError, "3-second retry budget"),
+        ):
+            _registry_requests.read_registry(PYTHON_API, limit=1024, transport=transport, clock=lambda: now, sleep=sleep)
+        self.assertEqual((progress.requests, progress.retries), (1, 1))
+        self.assertEqual(now, 2.5)
+        sleep.assert_not_called()
+
     def test_registry_retry_deadline_and_permanent_failures(self) -> None:
         now = [0.0]
         timeouts = []

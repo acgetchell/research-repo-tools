@@ -83,7 +83,17 @@ def test_shallow_history_blocks_before_scanner(consumer):
 
 def test_uncommitted_files_and_redacted_reports(consumer):
     seen = []
-    finding = {"RuleID": "synthetic", "File": "new file.txt", "Secret": "REDACTED", "Match": "adjacent secret", "Message": "commit message secret"}
+    finding = {
+        "RuleID": "synthetic",
+        "File": "new file.txt",
+        "Secret": "REDACTED",
+        "Match": "adjacent secret",
+        "Message": "commit message secret",
+        "StartLine": 1,
+        "StartColumn": 1,
+        "EndLine": 1,
+        "EndColumn": 5,
+    }
     sarif_finding = {
         "message": {"text": "synthetic"},
         "locations": [{"physicalLocation": {"region": {"snippet": {"text": "REDACTED"}}}}],
@@ -100,7 +110,8 @@ def test_uncommitted_files_and_redacted_reports(consumer):
         else:
             assert "--log-opts=--all --full-history" in args
         fmt = args[args.index("--report-format") + 1]
-        Path(args[args.index("--report-path") + 1]).write_bytes(json.dumps([finding] if fmt == "json" else sarif([sarif_finding])).encode())
+        record = finding | {"Commit": "a" * 40} if args[0] == "git" else finding
+        Path(args[args.index("--report-path") + 1]).write_bytes(json.dumps([record] if fmt == "json" else sarif([sarif_finding])).encode())
         return subprocess.CompletedProcess([], 3, b"raw secret that must not be logged", b"")
 
     with (
@@ -120,7 +131,7 @@ def test_uncommitted_files_and_redacted_reports(consumer):
 
 def test_unredacted_json_rejected():
     with pytest.raises(ValueError, match="unredacted"):
-        security._gitleaks_report([{"RuleID": "synthetic", "File": "file", "Secret": "not-redacted"}], "json")
+        security._gitleaks_report([{"RuleID": "synthetic", "File": "file", "Secret": "not-redacted"}], "json", scope="working")
 
 
 def test_scanner_does_not_publish_after_serialization_exceeds_read_limit(tmp_path):
@@ -149,12 +160,14 @@ def test_pinned_gitleaks_matches_anchored_working_paths_with_relative_extensions
     root = tmp_path.resolve()
     env = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
     env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
-    run_git_command(["init", "--quiet", "--template="], cwd=root, env=env)
-    run_git_command(
-        ["-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "--allow-empty", "-qm", "fixture"],
-        cwd=root,
-        env=env,
-    )
+
+    def git(*args: str) -> str:
+        return run_git_command(list(args), cwd=root, env=env).stdout.strip()
+
+    git("init", "--quiet", "--template=")
+    git("config", "user.name", "Fixture")
+    git("config", "user.email", "fixture@example.invalid")
+    git("config", "commit.gpgsign", "false")
     (root / "policies").mkdir()
     (root / "policies" / "shared.toml").write_bytes(b"extend.path = 'leaf.toml'\n")
     (root / "leaf.toml").write_bytes(
@@ -168,14 +181,41 @@ regex = 'synthetic-scanner-match'
     (root / "candidate.toml").write_bytes(b"Extend = { Path = 'policies/shared.toml' }\n")
     (root / "src").mkdir()
     (root / "src" / "new.txt").write_bytes(b"synthetic-scanner-match\n")
+    git("add", "src/new.txt")
+    git("commit", "-qm", "fixture")
+    captured_commit = git("rev-parse", "HEAD")
+    (root / "src" / "late.txt").write_bytes(b"synthetic-scanner-match\n")
+    git("add", "src/late.txt")
+    git("commit", "-qm", "transient fixture")
+    transient_commit = git("rev-parse", "HEAD")
+    git("reset", "--hard", captured_commit)
     settings = config.Config(root=root)
 
+    native = security.run_command_bytes
+    history_scans: list[Path] = []
+
+    def scan(binary, args, **kwargs):
+        if args[0] == "git":
+            history_scans.append(kwargs["cwd"])
+            if len(history_scans) == 2:
+                git("update-ref", "refs/heads/transient", transient_commit)
+                try:
+                    return native(binary, args, **kwargs)
+                finally:
+                    git("update-ref", "-d", "refs/heads/transient")
+        return native(binary, args, **kwargs)
+
     with patch.dict(os.environ, env, clear=True), patch.object(security, "_binary", return_value=(binary, env)):
-        security.check_secret_exceptions(settings, "candidate.toml")
+        with patch.object(security, "run_command_bytes", side_effect=scan):
+            security.check_secret_exceptions(settings, "candidate.toml")
         output = capsys.readouterr().out
         assert "Suppressed: 0 finding(s)" in output
-        assert "Matching locations: 1 finding(s)" in output
+        assert "Introduced: 0 finding(s)" in output
+        assert "Matching locations: 2 finding(s)" in output
+        assert f"at commit {captured_commit}" in output
         assert 'working "src/new.txt"' in output
+        assert "late.txt" not in output
+        assert len(history_scans) == 2 and history_scans[0] == history_scans[1] != root
         assert "synthetic-scanner-match" not in output
 
         assert security.scan_secrets(settings) == 1

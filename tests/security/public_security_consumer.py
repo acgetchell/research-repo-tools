@@ -100,12 +100,21 @@ class TestSharedCapabilities(unittest.TestCase):
             calls = []
 
             def git(args, *, cwd):
-                self.assertEqual(cwd, root)
+                nonlocal history, captured_refs
                 if "--is-shallow-repository" in args:
+                    self.assertEqual(cwd, root)
                     output = b"false\n"
                 elif "show-ref" in args:
-                    output = refs
+                    self.assertIn(cwd, (root, history))
+                    output = refs if cwd == root else captured_refs
+                elif "clone" in args:
+                    self.assertEqual(cwd, root)
+                    self.assertIn("--mirror", args)
+                    self.assertEqual(Path(args[-2]), root)
+                    history, captured_refs = Path(args[-1]), refs
+                    output = b""
                 else:
+                    self.assertEqual(cwd, root)
                     self.assertEqual(args, ["--no-pager", "rev-parse", "--verify", "HEAD"])
                     output = b"a" * 40 + b"\n"
                 return subprocess.CompletedProcess(args, 0, output, b"")
@@ -131,8 +140,8 @@ class TestSharedCapabilities(unittest.TestCase):
                     self.assertEqual((target / source.name).read_bytes(), b"retained fixture\r\n")
                     path, commit = source.name, ""
                 else:
-                    self.assertEqual(target, root)
-                    self.assertEqual(Path(args[1]), root)
+                    self.assertEqual(target, history)
+                    self.assertEqual(Path(args[1]), history)
                     path, commit = source.name, "a" * 40
                 records = [self.secret_finding(commit, path, 7)]
                 if not is_candidate:
@@ -150,6 +159,7 @@ class TestSharedCapabilities(unittest.TestCase):
 
             settings = config.parse({}, root=root)
             arguments = ["--root", str(root), "security", "check-exceptions", candidate.name, "--exclude", "**/*.bin"]
+            history, captured_refs = root, b""
             with (
                 patch("research_repo_tools.cli.config.load", return_value=settings),
                 patch.object(security, "security_inventory", return_value=(source.name,)) as inventory,
@@ -207,6 +217,12 @@ class TestSharedCapabilities(unittest.TestCase):
                     self.assertEqual(main(arguments), 1)
                 self.assertIn(leaf.name, errors.getvalue())
                 self.assertNotIn("[invalid", errors.getvalue())
+                leaf.write_bytes(leaf_bytes)
+                candidate.write_bytes(b'"extend.path" = "policy inputs/parent.toml"\n')
+                with redirect_stderr(io.StringIO()) as errors:
+                    self.assertEqual(main(arguments), 1)
+                self.assertIn(candidate.name, errors.getvalue())
+                self.assertIn("[extend] table", errors.getvalue())
                 missing = "missing candidate.toml"
                 with redirect_stderr(io.StringIO()) as errors:
                     self.assertEqual(main(["--root", str(root), "security", "check-exceptions", missing]), 1)
@@ -227,6 +243,8 @@ class TestSharedCapabilities(unittest.TestCase):
                 self.assertIn("--exit-code=3", args)
                 fmt = args[args.index("--report-format") + 1]
                 result = [] if fmt == "json" else {"version": "2.1.0", "runs": [{"tool": {}, "results": []}]}
+                if fmt == "json" and native_status == 3:
+                    result = [self.secret_finding("", "source.txt", 1)]
                 Path(args[args.index("--report-path") + 1]).write_bytes(json.dumps(result).encode())
                 return subprocess.CompletedProcess(args, native_status, b"RAW_SECRET", b"RAW_SECRET")
 
@@ -236,9 +254,9 @@ class TestSharedCapabilities(unittest.TestCase):
                 patch.object(security, "run_git_bytes", return_value=subprocess.CompletedProcess([], 0, b"false\n", b"")),
                 patch.object(security, "run_command_bytes", side_effect=native) as run,
             ):
-                native_status = 0
-                for failure in ("invalid policy", "partial scan"):
+                for failure in ("invalid policy", "partial scan", "invalid history identity"):
                     with self.subTest(failure=failure), redirect_stdout(io.StringIO()), redirect_stderr(io.StringIO()) as errors:
+                        native_status = 0
                         self.assertEqual(security.scan_secrets(settings, output=output.name), 0)
                         self.assertIsNone(security.show_secret_findings(settings, reports=output.name))
                         run.reset_mock()
@@ -248,11 +266,16 @@ class TestSharedCapabilities(unittest.TestCase):
                                 security.scan_secrets(settings, output=output.name)
                             run.assert_not_called()
                             policy.unlink()
-                        else:
+                        elif failure == "partial scan":
                             native_status = 1
                             self.assertEqual(security.scan_secrets(settings, output=output.name), 1)
                             self.assertIn("scan did not complete", errors.getvalue())
-                        self.assertEqual(list(output.iterdir()), [notes])
+                        else:
+                            native_status = 3
+                            self.assertEqual(security.scan_secrets(settings, output=output.name), 1)
+                            self.assertIn("incomplete", errors.getvalue())
+                        expected = {notes} if native_status != 3 else {notes, output / "gitleaks-working.json"}
+                        self.assertEqual(set(output.iterdir()), expected)
                         self.assertNotIn("RAW_SECRET", errors.getvalue())
                         with self.assertRaisesRegex(ValueError, "gitleaks-history.json"):
                             security.show_secret_findings(settings, reports=output.name)
@@ -343,6 +366,10 @@ class TestSharedCapabilities(unittest.TestCase):
                                         "RuleID": "FAKE-RULE",
                                         "File": "source café.py",
                                         "StartLine": 7,
+                                        "StartColumn": 1,
+                                        "EndLine": 7,
+                                        "EndColumn": 2,
+                                        "Commit": "a" * 40 if args[0] == "git" else "",
                                         "Secret": "REDACTED",
                                         "Match": "MATCH_SECRET",
                                         "Message": "COMMIT_SECRET",

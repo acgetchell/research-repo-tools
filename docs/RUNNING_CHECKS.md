@@ -248,8 +248,8 @@ just security-check-exceptions /path/to/candidate.toml
 The baseline is the repository's `.gitleaks.toml`, or the built-in default rules
 when the repository has no policy. Use `--baseline PATH` for an explicitly saved
 baseline. Pass the same `--exclude` options used by the regular scan. The command
-scans reachable history and one working-tree snapshot with each policy, then
-shows suppressed and introduced findings and matching locations. Findings are
+scans the same captured set of Git refs and working-tree snapshot with each
+policy, then shows suppressed and introduced findings and matching locations. Findings are
 paired by rule ID, file, line and column range, and commit. Review matching
 locations when a detection rule changes because the rule may select a different
 value at the same location. The command retains both policy
@@ -293,8 +293,8 @@ Semgrep 1.183.0 has no native Intel macOS wheel.
 See the [Semgrep release files](https://pypi.org/project/semgrep/1.183.0/#files).
 
 Semgrep's published transitive pins need shared temporary overrides. The packaged
-`semgrep-constraints.txt` owns the tested policy: current tomli/jsonschema, patched
-MCP and a consistent OpenTelemetry release family, and pywin32 312 for Windows
+`semgrep-constraints.txt` pins current tomli and jsonschema, patched MCP and
+wcmatch, a consistent OpenTelemetry release family, and pywin32 312 for Windows
 Python 3.15. Root uv overrides cannot propagate through an extra. The normal
 `toolchain adopt` workflow adds this policy for shared-package pins requesting
 `[semgrep]`, rejects competing overrides, resolves a private candidate and

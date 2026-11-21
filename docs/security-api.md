@@ -12,8 +12,8 @@ for setup and ordinary workflows.
 
 - `check_secret_exceptions(settings, candidate, *, baseline=None, exclude=())`
   compares two native Gitleaks configurations against the same working-tree
-  snapshot and checks for changes to Git refs and retained TOML policies,
-  including local extensions. It prints suppressed and introduced findings
+  snapshot and captured Git refs. It checks for changes to live refs and retained
+  TOML policies, including local extensions. It prints suppressed and introduced findings
   and matching locations. It returns `None` when the comparison completes.
   The default baseline is the repository's
   `.gitleaks.toml` or the native default rules.
