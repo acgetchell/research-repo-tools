@@ -487,6 +487,13 @@ def test_draft_creation_rejects_a_different_selected_repository(remote, tmp_path
     assert not (tmp_path / release.BUNDLE).exists()
 
 
+def test_evidence_comparison_preserves_json_types_and_ignores_object_key_order():
+    """Compare nested signed data without conflating numeric spellings or array order."""
+    assert release._same_json({"runs": [1, True], "jobs": []}, {"jobs": [], "runs": [1, True]})
+    for observed, expected in ((True, 1), (1, 1.0), (-0.0, 0.0), ([1, 2], [2, 1])):
+        assert not release._same_json({"runs": [observed]}, {"runs": [expected]})
+
+
 def test_modified_promotion_predicate_requires_a_new_signature(remote, tmp_path):
     """A valid local edit after signing must fail before GitHub receives a write."""
     bundle = prepare(tmp_path, remote)

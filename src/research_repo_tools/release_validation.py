@@ -148,7 +148,15 @@ def _bytes(value: Any) -> bytes:
 
 def _same_json(observed: object, expected: object) -> bool:
     """Compare parsed evidence independent of key order, preserving booleans and numeric types."""
-    return _bytes(observed) == _bytes(expected)
+    if type(observed) is not type(expected):
+        return False
+    if isinstance(observed, dict) and isinstance(expected, dict):
+        return observed.keys() == expected.keys() and all(_same_json(value, expected[key]) for key, value in observed.items())
+    if isinstance(observed, list) and isinstance(expected, list):
+        return len(observed) == len(expected) and all(_same_json(left, right) for left, right in zip(observed, expected, strict=True))
+    if isinstance(observed, float) and isinstance(expected, float):
+        return observed.hex() == expected.hex()  # Preserve signed zero in recorded evidence.
+    return observed == expected
 
 
 def _sha(payload: bytes) -> str:

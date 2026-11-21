@@ -348,11 +348,12 @@ class _GitleaksPolicySnapshot:
             if not isinstance(extend, dict):
                 raise ValueError(f"Gitleaks extend must be a table: {path}")
             path_key = _gitleaks_field(extend, "path", path)
+            default_key = _gitleaks_field(extend, "usedefault", path)
             extension = extend.get(path_key, "")
             if not isinstance(extension, str):
                 raise ValueError(f"Gitleaks extend.path must be a string: {path}")
             if extension:
-                if extend.get(_gitleaks_field(extend, "usedefault", path)) is True:
+                if extend.get(default_key) is True:
                     raise ValueError(f"Gitleaks extend.path and extend.useDefault cannot both be set: {path}")
                 # Native extension paths resolve from the original invocation
                 # directory, even in nested configuration files.
@@ -539,27 +540,36 @@ def _capture_gitleaks_history(root: Path, stage: Path, env: Mapping[str, str]) -
     """
 
     def history_refs(repository: Path) -> bytes:
-        return run_git_bytes(["--no-pager", "show-ref", "--head"], cwd=repository, env=env).stdout
+        try:
+            return run_git_bytes(["--no-pager", "show-ref", "--head"], cwd=repository, env=env).stdout
+        except subprocess.CalledProcessError as error:
+            # A clone with every ref hidden, including HEAD, has an empty inventory.
+            if error.returncode == 1 and not error.stderr:
+                return b""
+            raise
 
     refs, tips = history_refs(root), _history_tips(root, env)
     history = stage / "history.git"
     # Retain selected refs privately while reusing the source object store.
     run_git_bytes(["--no-pager", "clone", "--mirror", "--shared", "--reject-shallow", "--template=", "--", str(root), str(history)], cwd=root, env=env)
-    # The shared object store includes objects behind refs hidden by upload-pack.
-    # Restore omitted refs from the local inventory. Detach HEAD independently
-    # so a transaction never updates both a symbolic HEAD and its referent.
-    copied_refs = set(run_git_bytes(["--no-pager", "for-each-ref", "--format=%(objectname) %(refname)"], cwd=history, env=env).stdout.splitlines())
-    updates = bytearray()
-    for line in refs.splitlines():
-        oid, ref = line.split(b" ", 1)
-        if ref == b"HEAD":
-            run_git_bytes(["--no-pager", "update-ref", "--no-deref", "HEAD", oid.decode("ascii")], cwd=history, env=env)
-        elif line not in copied_refs:
-            updates.extend(b"update " + ref + b" " + oid + b"\n")
-    if updates:
-        run_git_bytes(["--no-pager", "update-ref", "--no-deref", "--stdin"], cwd=history, env=env, input=bytes(updates))
-    if history_refs(history) != refs:
-        raise ValueError("Git refs changed while capturing history for Gitleaks")
+    copied = history_refs(history)
+    if copied != refs:
+        # Local cloning shares the objects even when upload-pack hides their refs.
+        expected, observed = set(refs.splitlines()), set(copied.splitlines())
+        if any(not line.endswith(b" HEAD") for line in observed - expected):
+            raise ValueError("Git refs changed while capturing history for Gitleaks")
+        missing_refs = bytearray()
+        for line in sorted(expected - observed):
+            oid, ref = line.split(b" ", 1)
+            if ref == b"HEAD":
+                # Updating a symbolic HEAD and its referent needs separate transactions.
+                run_git_bytes(["--no-pager", "update-ref", "--no-deref", "HEAD", oid.decode("ascii")], cwd=history, env=env)
+            else:
+                missing_refs.extend(b"create " + ref + b" " + oid + b"\n")
+        if missing_refs:
+            run_git_bytes(["--no-pager", "update-ref", "--stdin"], cwd=history, env=env, input=bytes(missing_refs))
+        if history_refs(history) != refs:
+            raise ValueError("Git refs changed while capturing history for Gitleaks")
     mirror_tips = _history_tips(history, env)
     if mirror_tips - tips:
         raise ValueError("Git history tips changed while capturing history for Gitleaks")

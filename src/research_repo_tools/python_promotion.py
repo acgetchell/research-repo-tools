@@ -28,6 +28,7 @@ from research_repo_tools.dependency_sources import (
     SourceProvider,
     VerifiedSource,
     YankedPythonRelease,
+    _observe_pypi_release,
     table,
     verify_source,
 )
@@ -65,6 +66,25 @@ def _upload_python(value: object) -> SpecifierSet:
         return SpecifierSet(value)
     except InvalidSpecifier as error:
         raise ValueError("PyPI requires_python must be a valid version specifier") from error
+
+
+def _supports_python(uploads: tuple[dict[str, object], ...], python: Version, required: tuple[VersionRange, ...]) -> bool:
+    """Check the current interpreter and coverage of every declared range across uploads."""
+    requirements = tuple(_upload_python(upload.get("requires_python")) for upload in uploads)
+    if not any(python in requirement for requirement in requirements):
+        return False
+    if not required:
+        return True
+    coverage = VersionRange.empty()
+    for requirement in requirements:
+        coverage = coverage.union(requirement.to_range())
+    return all(item.is_subset(coverage) for item in required)
+
+
+def _compatible_release(source: RegistryRelease, provider: SourceProvider, required: tuple[VersionRange, ...]) -> VerifiedSource | None:
+    """Recheck coverage using the uploads that supply the verified artifact identities."""
+    verified, uploads = _observe_pypi_release(source, provider)
+    return verified if _supports_python(uploads, Version(platform.python_version()), required) else None
 
 
 def _candidates(
@@ -105,15 +125,8 @@ def _candidates(
             raise ValueError("PyPI upload yanked status must be a boolean")
         if any(upload["yanked"] is True for upload in records):
             continue
-        requirements = tuple(_upload_python(upload.get("requires_python")) for upload in records)
-        if not any(python in requirement for requirement in requirements):
+        if not _supports_python(records, python, python_support):
             continue
-        if python_support:
-            coverage = VersionRange.empty()
-            for requirement in requirements:
-                coverage = coverage.union(requirement.to_range())
-            if not all(required.is_subset(coverage) for required in python_support):
-                continue
         candidates.append(version)
     if not newer and len(candidates) > _MAX_CANDIDATES:
         raise ValueError("promotion has too many candidate releases; narrow the accepted version range")
@@ -353,8 +366,10 @@ def plan_supplier(checkout: Path, name: str, *, project: Path, provider: SourceP
     for candidate in candidates:
         released = RegistryRelease("python", PACKAGE, str(candidate))
         try:
-            verified = verify_source(released, provider=provider, release=True)
+            verified = _compatible_release(released, provider, python_support)
         except YankedPythonRelease:
+            continue
+        if verified is None:
             continue
         return _plan_release(checkout, selection, original, graph, released, verified)
     graph.snapshot.verify()
@@ -411,9 +426,12 @@ def _plan_promotion(
             continue
         released = RegistryRelease("python", pin.package, str(candidate))
         try:
-            verified = verify_source(released, provider=provider, release=True)
+            verified = _compatible_release(released, provider, python_support)
         except YankedPythonRelease:
             reasons.append(f"{candidate} was yanked before verification")
+            continue
+        if verified is None:
+            reasons.append(f"{candidate} no longer covers the required Python versions")
             continue
         if verify_source(replace(pin, commit=record[0]), provider=provider).version != released.version:
             raise ValueError("attested source metadata differs from the published version")

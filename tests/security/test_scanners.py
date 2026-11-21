@@ -178,6 +178,16 @@ def pinned_gitleaks() -> Path:
     return binary
 
 
+def test_policy_rejects_ambiguous_default_without_extension_path(tmp_path):
+    policy = tmp_path / ".gitleaks.toml"
+    policy.write_bytes(b"[extend]\nuseDefault = true\nusedefault = false\n")
+    stage = tmp_path / "snapshot"
+    stage.mkdir()
+    with pytest.raises(ValueError, match="ambiguous usedefault keys"):
+        security._GitleaksPolicySnapshot(tmp_path, stage).retain(policy)
+    assert not list(stage.iterdir())
+
+
 def test_pinned_gitleaks_matches_anchored_working_paths_with_relative_extensions(tmp_path, capsys):
     binary = pinned_gitleaks()
 

@@ -26,8 +26,10 @@ def test_script_metadata_preserves_unicode_inside_index_urls(tmp_path):
     url = "https://example.invalid/pac\u2028kages/🧪"
     source = f'[[tool.uv.index]]\nname = "private"\nurl = "{url}"\n'
     script = python_resolution.script_metadata(source, tmp_path, ">=3.15", [])
-    lines = script.split("\n")[1:-2]
-    metadata = tomllib.loads("\n".join(line.removeprefix("# ") for line in lines))
+    opening, *lines, closing, trailing = script.split("\n")
+    assert (opening, closing, trailing) == ("# /// script", "# ///", "")
+    assert all(line == "#" or line.startswith("# ") for line in lines)
+    metadata = tomllib.loads("\n".join(line[2:] for line in lines))
     assert metadata["tool"]["uv"]["index"] == [{"name": "private", "url": url}]
 
 

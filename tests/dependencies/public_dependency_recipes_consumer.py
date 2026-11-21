@@ -70,6 +70,8 @@ class TestDependencyRecipes(unittest.TestCase):
                         self.assertEqual(any("secrets" in call for call in calls), recipe == "security" and failure == 0)
 
             (root / "calls.jsonl").unlink()
+            for name in locks:
+                (root / name).write_bytes(b"before supplier adoption\n")
             result = subprocess.run(
                 [resolve_executable("just"), "--justfile", str(root / "justfile"), "supplier_update=tooling", "update"],
                 cwd=root,
@@ -82,6 +84,9 @@ class TestDependencyRecipes(unittest.TestCase):
             self.assertEqual(result.returncode, 0, result.stderr)
             calls = [json.loads(line) for line in (root / "calls.jsonl").read_text(encoding="utf-8").splitlines()]
             update = [call for call in calls if "update-python" in call]
+            audits = [call for call in calls if "osv" in call]
+            self.assertEqual(len(audits), 1)
+            self.assertIs(calls[-1], audits[0])
             self.assertEqual(
                 update,
                 [

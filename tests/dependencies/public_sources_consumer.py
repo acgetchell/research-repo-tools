@@ -1319,6 +1319,7 @@ class TestSourceWorkflows(unittest.TestCase):
             "2.2.0rc1": [{"yanked": False, "requires_python": ">=3.15"}],
             "2.3.0": [{"yanked": False, "requires_python": ">=3.15.2"}],
             "2.4.0": [{"yanked": False, "requires_python": ">=3.15.1"}],
+            "2.3.1": [{"yanked": False, "requires_python": ">=3.15.1"}],
         }
         self.provider.put(project_api, {"info": {"name": name}, "releases": versions})
 
@@ -1339,6 +1340,8 @@ class TestSourceWorkflows(unittest.TestCase):
             ]
 
         self.provider.put(release_api, {"info": {"name": name, "version": "1.3.0"}, "urls": uploads("1.3.0")})
+        narrowed_api = f"https://pypi.org/pypi/{name}/2.3.1/json"
+        self.provider.put(narrowed_api, {"info": {"name": name, "version": "2.3.1"}, "urls": [u | {"requires_python": ">=3.15.2"} for u in uploads("2.3.1")]})
         yanked_api = f"https://pypi.org/pypi/{name}/2.4.0/json"
         yanked_uploads = [upload | {"yanked": True} for upload in uploads("2.4.0")]
         self.provider.put(yanked_api, {"info": {"name": name, "version": "2.4.0"}, "urls": yanked_uploads})
@@ -1406,8 +1409,10 @@ class TestSourceWorkflows(unittest.TestCase):
             resolver.assert_not_called()
             self.assertEqual(self.snapshot(), before)
             self.provider.put(yanked_api, {"info": {"name": name, "version": "2.4.0"}, "urls": yanked_uploads})
+            self.provider.calls.clear()
             self.assertEqual(cli.main(arguments), 1)
             self.assertIn("installed bytes differ", errors.getvalue())
+            self.assertEqual(self.provider.calls.count(narrowed_api), 1)
             self.assertEqual(self.snapshot(), before)
             installed.side_effect = None
             self.assertEqual(cli.main(arguments), 0, errors.getvalue())
@@ -1462,11 +1467,13 @@ class TestSourceWorkflows(unittest.TestCase):
         with (
             patch.object(python_promotion, "_selection", return_value=(selection, b"policy", graph)),
             patch.object(python_promotion.platform, "python_version", return_value="3.16.1"),
-            patch.object(python_promotion, "verify_source") as verify,
+            patch.object(python_promotion, "_compatible_release") as verify,
             patch.object(python_promotion, "_plan_release") as plan,
         ):
             self.assertIs(python_promotion.plan_supplier(self.root, "tooling", project=self.root, provider=self.provider), plan.return_value)
-        verify.assert_called_once_with(RegistryRelease("python", name, "1.2.4"), provider=self.provider, release=True)
+        verify.assert_called_once()
+        self.assertEqual(verify.call_args.args[:2], (RegistryRelease("python", name, "1.2.4"), self.provider))
+        self.assertTrue(verify.call_args.args[2])
 
     def test_promotion_selects_release_covering_the_marked_python_range(self) -> None:
         self.provider.put(

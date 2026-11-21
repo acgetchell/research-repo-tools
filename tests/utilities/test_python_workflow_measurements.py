@@ -252,7 +252,7 @@ def test_harness_change_rejects_input_verification(harness, tmp_path):
         harness.verify_inputs({}, script, "0" * 64)
 
 
-@pytest.mark.parametrize("worker_result", ["", "[]", "invalid JSON", '{"seconds":-1}', '{"seconds":NaN}', '{"seconds":1}', '{"seconds":true}'])
+@pytest.mark.parametrize("worker_result", ["", "[]", "invalid JSON", '{"seconds":1}'])
 def test_unusable_worker_measurements_preserve_prior_evidence(harness, experiment, monkeypatch, worker_result):
     """A process exiting successfully still has to return a valid timed observation."""
     _, _, output, execute = experiment
@@ -264,6 +264,24 @@ def test_unusable_worker_measurements_preserve_prior_evidence(harness, experimen
 
     monkeypatch.setattr(harness, "execute", malformed)
     with pytest.raises(ValueError, match="worker"):
+        harness.main()
+    assert output.read_bytes() == b"retained evidence"
+
+
+@pytest.mark.parametrize("seconds", [-1, float("nan"), True], ids=["negative", "nan", "boolean"])
+def test_worker_duration_must_be_finite_and_nonnegative(harness, experiment, monkeypatch, seconds):
+    _, _, output, execute = experiment
+
+    def invalid_duration(command, **kwargs):
+        result = execute(command, **kwargs)
+        if "--worker" in command:
+            record = json.loads(result.stdout)
+            record["seconds"] = seconds
+            result.stdout = json.dumps(record)
+        return result
+
+    monkeypatch.setattr(harness, "execute", invalid_duration)
+    with pytest.raises(ValueError, match="worker requires finite nonnegative seconds"):
         harness.main()
     assert output.read_bytes() == b"retained evidence"
 
