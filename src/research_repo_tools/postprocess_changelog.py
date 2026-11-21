@@ -1220,12 +1220,17 @@ def _list_repeated_headings(lines: list[str]) -> None:
     if repeated and any(re.search(r"(?:\]\(\s*|^ {0,3}\[[^\]]+\]:\s*)<?#\S", line) for line in lines):
         _number_navigable_headings(lines, {index for index, _ in repeated})
         return
+    # Footer definitions belong to the whole document. A definition followed
+    # by more subsection prose stays in that subsection alongside its uses.
+    body_limit = len(lines)
+    while body_limit and (not lines[body_limit - 1].strip() or _REFERENCE_DEFINITION_RE.fullmatch(lines[body_limit - 1])):
+        body_limit -= 1
     gaps: set[int] = set()
     for index, title in repeated:
         end = index + 1
-        while end < len(lines):
+        while end < body_limit:
             heading = _ATX_HEADING_RE.match(lines[end])
-            if (heading and len(heading["level"]) <= 4) or _REFERENCE_DEFINITION_RE.match(lines[end]):
+            if heading and len(heading["level"]) <= 4:
                 break
             if _is_top_level_list_item(lines[end]) and _has_entry_commit(lines, end):
                 break

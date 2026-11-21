@@ -809,6 +809,17 @@ class TestSquashHeadingNormalization:
         assert f"- **Verify**\n\n  - Then publish.\n\n{wrapped}\n" in result
         assert postprocess_text(result) == result
 
+    def test_repeated_subsection_keeps_prose_after_local_definitions_and_preserves_footer(self) -> None:
+        source = (
+            "# Changelog\n\n## [Unreleased]\n\n### Added\n\n#### Verify\n\nSee the [guide].\n\n"
+            "[guide]: https://example.org/guide\n\nRead it before installing.\n\n"
+            "#### Verify\n\nUse the [reference].\n\n[reference]: https://example.org/reference\n"
+        )
+        result = postprocess_text(source)
+        assert "  See the [guide].\n\n  [guide]: https://example.org/guide\n\n  Read it before installing." in result
+        assert result.endswith("- **Verify**\n\n  Use the [reference].\n\n[reference]: https://example.org/reference\n")
+        assert postprocess_text(result) == result
+
     def test_full_pipeline_resets_parent_summary_at_version_heading(self, tmp_path: Path) -> None:
         """Version headings reset duplicate-squash tracking between releases."""
         f = tmp_path / "CHANGELOG.md"
