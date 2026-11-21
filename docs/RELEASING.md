@@ -202,6 +202,24 @@ This retry is for an RRT preparation run that stopped while waiting for CI,
 before draft creation. For an interrupted draft or asset write, first reconcile
 the original draft and its inventory using the recovery guide.
 
+#### Draft creation or upload failed
+
+Staging writes `release-attestation.json` beside `dist/` before contacting
+GitHub to create the draft or upload assets. It keeps the attachment if either
+operation fails. On a hosted runner, download `draft-recovery-<attempt>` from
+the failed preparation run when available. The artifact contains the attachment
+for inspection.
+
+Inspect the release for the tag, including its ID, draft state, asset names,
+sizes, and digests. A transport error can occur after GitHub accepted a write.
+If the release is still a draft and all three assets match the signed evidence,
+continue with the draft review. For a published release, check the publishing
+run and its registry approval.
+For partial or conflicting assets, follow the [recovery guide](RECOVERING_RELEASES.md).
+If the draft is absent or empty and the verified inputs still match, keep a
+copy of the attachment before retrying. In a reused working directory, move
+the inspected attachment aside first. Staging refuses to overwrite it.
+
 #### Artifact retention and recovery window
 
 The distributions and signed validation artifacts are retained for 30 days.

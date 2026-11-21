@@ -609,7 +609,7 @@ def test_local_attachment_failure_precedes_remote_release_creation(remote, tmp_p
 
 @pytest.mark.parametrize("replacement", ["truncated", "same-bytes", "removed"])
 def test_failed_draft_upload_preserves_concurrent_attachment_change(remote, tmp_path, monkeypatch, replacement):
-    """Rollback must preserve another writer's file and report the original transport failure."""
+    """A failed upload leaves concurrent edits alone and reports its original transport error."""
     bundle = prepare(tmp_path, remote)
     attachment = tmp_path / release.BUNDLE
     gh = release.gh
@@ -641,7 +641,8 @@ def test_failed_draft_upload_preserves_concurrent_attachment_change(remote, tmp_
 
 
 @pytest.mark.parametrize("operation", ["create", "upload"])
-def test_remote_staging_failure_removes_new_attachment_so_it_can_be_retried(remote, tmp_path, monkeypatch, operation):
+def test_remote_staging_failure_retains_evidence_until_operator_inspection(remote, tmp_path, monkeypatch, operation):
+    """Keep the signed envelope and block a retry before any further GitHub requests."""
     bundle = prepare(tmp_path, remote)
     gh = release.gh
     failure = subprocess.CalledProcessError(1, ["gh", "release", operation], stderr="fixture transport failed")
@@ -655,12 +656,27 @@ def test_remote_staging_failure_removes_new_attachment_so_it_can_be_retried(remo
     with pytest.raises(subprocess.CalledProcessError) as caught:
         release.stage(TAG, tmp_path / "dist", bundle, tmp_path / "promotion.json")
     assert caught.value is failure
-    assert not (tmp_path / release.BUNDLE).exists()
+    attachment = tmp_path / release.BUNDLE
+    diagnostic = release.format_exception_diagnostics(caught.value)
+    assert "fixture transport failed" in diagnostic
+    assert str(attachment) in diagnostic and f"GitHub release for {TAG}" in diagnostic and "before retrying" in diagnostic
+    retained = attachment.read_bytes()
+    assert json.loads(retained) == {
+        "schema": release.PROMOTION,
+        "evidence": json.loads(remote["signed_predicate"]),
+        "promotion_bundle": bundle.read_text(encoding="utf-8"),
+    }
     monkeypatch.setattr(release, "gh", gh)
+    remote["calls"].clear()
+    with pytest.raises(FileExistsError, match="Inspect"):
+        release.stage(TAG, tmp_path / "dist", bundle, tmp_path / "promotion.json")
+    assert remote["calls"] == []
+    assert attachment.read_bytes() == retained
     if operation == "upload":
         remote["listing"] = [{"tag_name": TAG, "draft": True, "prerelease": False, "assets": []}]
+    attachment.rename(tmp_path / "inspected-attestation.json")
     release.stage(TAG, tmp_path / "dist", bundle, tmp_path / "promotion.json")
-    assert remote["uploaded"] is not None
+    assert remote["uploaded"][release.BUNDLE] == retained
 
 
 @pytest.mark.parametrize(
@@ -1008,10 +1024,17 @@ def test_workflows_preserve_native_gates_and_promote_without_rebuilding():
     assert "ci.yml" not in stage_text and "just build" not in stage_text and "just ci" not in stage_text
     assert "predicate-path" in stage_text and release.PROMOTION in stage_text
     assert "just audit" in json.dumps(prepare["jobs"]["preflight"])
+    draft, recovery = stage["steps"][-2:]
+    assert draft["id"] == "draft" and "release_assets.py stage" in draft["run"]
+    assert recovery["uses"].startswith("actions/upload-artifact@")
+    assert recovery["with"]["path"] == release.BUNDLE and recovery["with"]["name"] == "draft-recovery-${{ github.run_attempt }}"
+    assert recovery["if"] == "${{ failure() && steps.draft.outcome == 'failure' && hashFiles('release-attestation.json') != '' }}"
     for job in [*prepare["jobs"].values(), *publish["jobs"].values()]:
         assert job.get("continue-on-error", "false") == "false"
         for step in job.get("steps", []):
-            assert "if" not in step and step.get("continue-on-error", "false") == "false"
+            assert step.get("continue-on-error", "false") == "false"
+            if step is not recovery:
+                assert "if" not in step
     final = publish["jobs"]["publish"]
     assert final["needs"] == "verify" and final["environment"]["name"] == "pypi"
     assert final["permissions"] == {"id-token": "write"}

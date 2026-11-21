@@ -1065,11 +1065,11 @@ def _release_identity(release: dict[str, Any]) -> dict[str, Any]:
 
 
 def stage(tag: str, dist: Path, bundle: Path, evidence: Path) -> None:
-    """Attach verified distributions and provenance to a draft release without overwriting assets."""
+    """Stage verified assets, keeping the signed attachment for inspection after a remote failure."""
     document = _object(_json(_read_release_file(evidence)), "promotion evidence")
     attachment = dist.parent / BUNDLE
     if os.path.lexists(attachment):
-        raise FileExistsError(f"release attachment already exists: {attachment}")
+        raise FileExistsError(f"release attachment already exists: {attachment}. Inspect it and the GitHub release for {tag} before retrying.")
     with tempfile.TemporaryDirectory(prefix="research-release-upload-") as temporary:
         root = Path(temporary)
         snapshot = root / "dist"
@@ -1082,7 +1082,7 @@ def stage(tag: str, dist: Path, bundle: Path, evidence: Path) -> None:
 
 
 def _stage_snapshot(tag: str, dist: Path, bundle: Path, document: dict[str, Any], attachment: Path) -> None:
-    """Verify and upload the same private copies, retaining the local envelope on success."""
+    """Retain a signed envelope locally before uploading the verified private copies."""
     commit = _commit(document.get("commit", ""))
     run_id = _integer(document.get("promotion_run"), "promotion run ID")
     attempt = _integer(document.get("promotion_attempt"), "promotion attempt")
@@ -1114,7 +1114,7 @@ def _stage_snapshot(tag: str, dist: Path, bundle: Path, document: dict[str, Any]
     if matches:
         require_release(matches[0], tag, draft=True)
         if matches[0].get("assets") != []:
-            raise ValueError("draft already has assets; inspect and remove the incomplete draft before retrying; assets are never overwritten")
+            raise ValueError("draft already has assets; inspect the draft and compare its assets with the signed evidence before retrying")
     _remote_tag(tag, commit)
     # --notes-from-tag requires gh to infer its repository from local context.
     if not matches and gh("repo", "view", "--json", "url", "--jq", ".url").strip().casefold() != f"https://github.com/{REPOSITORY}".casefold():
@@ -1125,25 +1125,12 @@ def _stage_snapshot(tag: str, dist: Path, bundle: Path, document: dict[str, Any]
     upload = dist.parent / BUNDLE
     upload.write_bytes(envelope)
     _publish_new_file(attachment, envelope)
-    retained = attachment.lstat()
     try:
         if not matches:
             gh("release", "create", tag, "--draft", "--verify-tag", "--title", tag, "--notes-from-tag")
         gh("release", "upload", tag, "--repo", REPOSITORY, *(str(dist / name) for name in distribution_names(tag)), str(upload))
     except BaseException as error:
-        try:
-            current = attachment.lstat()
-            if (
-                os.path.samestat(retained, current)
-                and stat.S_ISREG(current.st_mode)
-                and current.st_size == len(envelope)
-                and attachment.read_bytes() == envelope
-            ):
-                attachment.unlink()
-        except FileNotFoundError:
-            pass  # Another process already removed the retained copy.
-        except OSError as cleanup:
-            raise BaseExceptionGroup("release staging and attachment cleanup failed", [error, cleanup]) from None
+        error.add_note(f"Inspect {attachment} and the GitHub release for {tag}, including any uploaded assets, before retrying.")
         raise
     print(f"Draft {tag} contains the same validated wheel/sdist and signed main-validation plus promotion provenance. Review before publishing.")
 
