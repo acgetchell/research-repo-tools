@@ -1092,16 +1092,29 @@ def main(argv: Sequence[str] | None = None) -> int:
             return 1
 
 
+def _flush_stdout() -> None:
+    """Flush process output and prevent a second failed flush at interpreter shutdown."""
+    try:
+        sys.stdout.flush()
+    except OSError:
+        # Windows can report a closed pipe as EINVAL. Handle the failed stream
+        # here so neither its errno nor its buffer size determines the exit code.
+        with open(os.devnull, "wb") as sink:
+            os.dup2(sink.fileno(), sys.stdout.fileno())
+        raise
+
+
 def entrypoint() -> int:
     """Handle process interruption and early pipeline closure at the executable boundary."""
     try:
-        status = main()
-        sys.stdout.flush()
-        return status
+        try:
+            return main()
+        finally:
+            _flush_stdout()
     except BrokenPipeError:
-        # Prevent interpreter shutdown from flushing the same closed pipe again.
-        with open(os.devnull, "wb") as sink:
-            os.dup2(sink.fileno(), sys.stdout.fileno())
+        return 1
+    except OSError as error:
+        print(f"research-repo-tools: {format_exception_diagnostics(error)}", file=sys.stderr)
         return 1
     except KeyboardInterrupt:
         print("research-repo-tools: interrupted", file=sys.stderr)

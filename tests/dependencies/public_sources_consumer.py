@@ -1296,6 +1296,13 @@ class TestSourceWorkflows(unittest.TestCase):
         self.native.assert_not_called()
 
     def test_automatic_supplier_adopts_exact_registry_release_and_recovers_on_sync_failure(self) -> None:
+        self._exercise_registry_adoption(workspace=False)
+
+    def test_workspace_supplier_adopts_and_rolls_back_member_declarations(self) -> None:
+        self._exercise_registry_adoption(workspace=True)
+
+    def _exercise_registry_adoption(self, *, workspace: bool) -> None:
+        """Exercise selection, installation failure, recovery, and repeated adoption via the CLI."""
         from research_repo_tools import cli, python_promotion, python_updates, toolchain, tooling_runtime
 
         name = "research-repo-tools"
@@ -1309,6 +1316,15 @@ class TestSourceWorkflows(unittest.TestCase):
         policy.write_bytes(
             b'schema=1\n[projects.main]\necosystem="python"\n[sources.tooling]\nproject="main"\npackage="research-repo-tools"\nversion="1.2.3"\n'
         )
+        member = self.root / "member" / "pyproject.toml"
+        if workspace:
+            manifest.write_bytes(manifest.read_bytes() + b'[tool.uv.workspace]\nmembers=["member"]\n')
+            member.parent.mkdir()
+            member.write_bytes(
+                b'[project]\nname="member"\nversion="0.1.0"\nrequires-python=">=3.15.1"\n'
+                b'dependencies=["research-repo-tools==1.2.3"]\n[tool.uv]\npackage=false\n'
+            )
+            policy.write_bytes(policy.read_bytes().replace(b'ecosystem="python"', b'ecosystem="python"\nrelease-owned=[".", "member"]'))
         project_api = f"https://pypi.org/pypi/{name}/json"
         release_api = f"https://pypi.org/pypi/{name}/1.3.0/json"
         versions = {
@@ -1356,6 +1372,9 @@ class TestSourceWorkflows(unittest.TestCase):
                     f'sdist={{url="{sdist["url"]}",hash="sha256:{DIGEST}",size=12}}\n'
                 ).encode()
             )
+
+            if workspace:
+                path.write_bytes(path.read_bytes() + b'[[package]]\nname="member"\nversion="0.1.0"\nsource={virtual="member"}\n')
 
         write_lock(lock, "1.2.3")
         environment = self.root / ".venv"
@@ -1421,6 +1440,8 @@ class TestSourceWorkflows(unittest.TestCase):
             self.assertEqual(installed.call_count, 2)
         self.assertEqual(tomllib.loads(manifest.read_text(encoding="utf-8"))["dependency-groups"]["tooling"], [f"{name}[python-tools]==1.3.0"])
         self.assertEqual(tomllib.loads(lock.read_text(encoding="utf-8"))["package"][1]["version"], "1.3.0")
+        if workspace:
+            self.assertEqual(tomllib.loads(member.read_bytes().decode())["project"]["dependencies"], [f"{name}==1.3.0"])
         self.assertEqual(tooling_runtime._policy_source(policy, "tooling"), tooling_runtime.ReleasePin("1.3.0"))
         with patch("research_repo_tools.dependency_artifacts.python_environment_layout"):
             self.assertEqual(check_dependency_policy(self.root, provider=self.provider)[0].source, RegistryRelease("python", name, "1.3.0"))

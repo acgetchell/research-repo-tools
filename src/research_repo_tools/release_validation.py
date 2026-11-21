@@ -15,6 +15,7 @@ import json
 import math
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -310,7 +311,14 @@ POLICY = ValidationPolicy(
 
 def gh(*args: str, cwd: Path | None = None) -> str:
     """Run the selected GitHub CLI executable and capture UTF-8 stdout within two minutes."""
-    return subprocess.run([_GH_EXECUTABLE.get(), *args], cwd=cwd, check=True, capture_output=True, text=True, encoding="utf-8", timeout=120).stdout
+    executable = _GH_EXECUTABLE.get()
+    if cwd is not None:
+        # Relative PATH entries belong to the caller, even when gh reads assets from a private snapshot.
+        selected = shutil.which(executable)
+        if selected is None:
+            raise FileNotFoundError(f"GitHub CLI executable not found: {executable}")
+        executable = str(Path(selected).absolute())
+    return subprocess.run([executable, *args], cwd=cwd, check=True, capture_output=True, text=True, encoding="utf-8", timeout=120).stdout
 
 
 def api(endpoint: str, *, repository: str = REPOSITORY) -> Any:

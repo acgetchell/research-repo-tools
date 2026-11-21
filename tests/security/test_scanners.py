@@ -117,7 +117,7 @@ def test_uncommitted_files_and_redacted_reports(consumer):
             assert args[1] == "."
             assert (kwargs["cwd"] / "new file.txt").read_bytes() == b"new uncommitted synthetic secret\r\n"
         else:
-            assert "--log-opts=--all --full-history --no-renames" in args
+            assert "--log-opts=--all --full-history --diff-merges=first-parent --no-renames" in args
         fmt = args[args.index("--report-format") + 1]
         record = finding | {"Commit": "a" * 40} if args[0] == "git" else finding
         Path(args[args.index("--report-path") + 1]).write_bytes(json.dumps([record] if fmt == "json" else sarif([sarif_finding])).encode())
@@ -259,6 +259,26 @@ regex = 'synthetic-scanner-match'
     assert git("ls-remote", str(root), hidden_ref) == ""
     git("rm", "src/renamed.txt")
     git("commit", "-qm", "remove rename fixture from the working tree")
+    # A merge-only finding vanishes from the checkout. A local attributes rule
+    # makes this file a text diff despite its committed binary declaration.
+    primary = git("branch", "--show-current")
+    (root / ".gitattributes").write_bytes(b"src/merge.txt -diff\n")
+    git("add", ".gitattributes")
+    git("commit", "-qm", "declare binary diff")
+    git("switch", "-qc", "side-fixture")
+    (root / "side.txt").write_bytes(b"side branch\n")
+    git("add", "side.txt")
+    git("commit", "-qm", "side branch")
+    git("switch", "-q", primary)
+    git("merge", "--no-ff", "--no-commit", "side-fixture")
+    (root / "src" / "merge.txt").write_bytes(b"synthetic-scanner-match\n")
+    git("add", "src/merge.txt")
+    git("commit", "-qm", "merge fixture")
+    merged_commit = git("rev-parse", "HEAD")
+    git("rm", "src/merge.txt")
+    git("commit", "-qm", "remove merge fixture")
+    (root / ".git" / "info").mkdir(exist_ok=True)
+    (root / ".git" / "info" / "attributes").write_bytes(b"src/merge.txt diff\n")
     captured_commit = git("rev-parse", "HEAD")
     (root / "src" / "late.txt").write_bytes(b"synthetic-scanner-match\n")
     git("add", "src/late.txt")
@@ -295,7 +315,7 @@ regex = 'synthetic-scanner-match'
         output = capsys.readouterr().out
         assert "Suppressed: 0 finding(s)" in output
         assert "Introduced: 0 finding(s)" in output
-        assert "Matching locations: 4 finding(s)" in output
+        assert "Matching locations: 5 finding(s)" in output
         assert "linked.txt" in output and f"at commit {linked_commit}" in output
         assert 'history "src/renamed.txt"' in output and f"at commit {renamed_commit}" in output
         assert 'working "src/new.txt"' in output
@@ -308,6 +328,7 @@ regex = 'synthetic-scanner-match'
         assert [finding["RuleID"] for finding in json.loads(report.read_bytes())] == ["fixture-rule"]
         native_history = json.loads(report.with_name("gitleaks-history.json").read_bytes())
         assert any(Path(finding["File"]).name == "renamed.txt" and finding["Commit"] == renamed_commit for finding in native_history)
+        assert any(Path(finding["File"]).name == "merge.txt" and finding["Commit"] == merged_commit for finding in native_history)
         (root / ".gitleaksignore").write_bytes(b"src/new.txt:fixture-rule:1\n")
         with pytest.raises(ValueError, match=r"\.gitleaksignore.*absent"):
             security.check_secret_exceptions(settings, "candidate.toml")

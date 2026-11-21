@@ -1,6 +1,7 @@
 """Installed CLI checks with native validators and small consumer fixtures."""
 
 import contextlib
+import errno
 import io
 import json
 import os
@@ -14,7 +15,7 @@ from pathlib import Path
 from typing import Any, cast, override
 from unittest.mock import patch
 
-from research_repo_tools.cli import main
+from research_repo_tools.cli import entrypoint, main
 
 _SUPPORT = Path(__file__).resolve().with_name("fixture_environment.py")
 if not _SUPPORT.is_file():
@@ -42,9 +43,25 @@ class TestCommandStreams(unittest.TestCase):
                     timeout=30,
                     check=False,
                 )
-            self.assertEqual(result.returncode, 1)
+            self.assertEqual(result.returncode, 1, result.stderr)
             self.assertNotIn(b"Traceback", result.stderr)
             self.assertNotIn(b"Exception ignored", result.stderr)
+
+    def test_failed_stdout_flush_cannot_override_the_process_exit_status(self):
+        # Model the Windows runtime's EINVAL without changing the process stdout descriptor.
+        with (
+            tempfile.TemporaryFile() as original,
+            os.fdopen(os.dup(original.fileno()), "wb") as writer,
+            patch.object(sys, "stdout", wraps=writer) as output,
+            contextlib.redirect_stderr(io.StringIO()) as error,
+            patch("research_repo_tools.cli.main", return_value=0),
+        ):
+            output.flush.side_effect = OSError(errno.EINVAL, "output pipe closed")
+            self.assertEqual(entrypoint(), 1)
+            self.assertIn("output pipe closed", error.getvalue())
+            writer.write(b"pending output")
+            writer.flush()
+            self.assertEqual(os.fstat(original.fileno()).st_size, 0)
 
     def test_malformed_default_configuration_identifies_its_path_before_export(self):
         with tempfile.TemporaryDirectory() as directory:

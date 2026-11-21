@@ -9,12 +9,13 @@ from dataclasses import replace
 from pathlib import Path
 
 from research_repo_tools import config, dependencies, files, python_baseline, python_locks, python_resolution, python_tools, toolchain, toolchain_config
+from research_repo_tools.dependency_policy import project_manifests
 from research_repo_tools.process import run_command_live
 from research_repo_tools.release_policy import relative_path
 
 
-def _projects(settings: config.Config) -> tuple[Path, ...]:
-    """Check the complete project inventory before invoking any updater."""
+def _projects(settings: config.Config, *, adopt_supplier: bool) -> tuple[tuple[Path, ...], tuple[Path, ...]]:
+    """Identify independent lock roots and manifests sharing the supplier workspace lock."""
     root = settings.root.resolve()
     main = settings.path(settings.deps.pyproject)
     if not main.is_relative_to(root):
@@ -27,6 +28,7 @@ def _projects(settings: config.Config) -> tuple[Path, ...]:
         except ValueError as error:
             raise ValueError(f"deps.python-projects: {error}") from error
         projects.append(root / name)
+    workspace: tuple[Path, ...] = ()
     seen: set[str] = set()
     for project in projects:
         if not project.is_relative_to(root):
@@ -46,9 +48,15 @@ def _projects(settings: config.Config) -> tuple[Path, ...]:
                 raise ValueError(f"Python update target must not be a link: {path}")
         try:
             manifest = dependencies._conventional_manifest(project / "pyproject.toml")
-            data = tomllib.loads(manifest.read_text(encoding="utf-8"))
+            text = manifest.read_text(encoding="utf-8")
+            data = tomllib.loads(text)
             dependencies._python_constraints(dependencies._required_table(data, "project"))
-            python_resolution.policy(manifest.read_text(encoding="utf-8"), project)
+            tool = config._table(data.get("tool", {}), "tool")
+            uv = config._table(tool.get("uv", {}), "tool.uv")
+            if adopt_supplier and project == main.parent and "workspace" in uv:
+                workspace = project_manifests(project, "python")
+            else:
+                python_resolution.policy(text, project)
             lock = project / "uv.lock"
             python_locks.versions(lock.read_bytes() if lock.exists() else None)
             if (project / ".venv").exists() and not lock.exists():
@@ -60,7 +68,7 @@ def _projects(settings: config.Config) -> tuple[Path, ...]:
     # Preserve the existing main-manifest and development-group contracts.
     dependencies._conventional_manifest(main)
     dependencies.parse_project(main.read_text(encoding="utf-8"), toolchain=settings.toolchain)
-    return tuple(projects)
+    return tuple(projects), workspace
 
 
 def update(settings: config.Config, *, adopt_supplier: str | None = None, promote: str | None = None, versions: str = "", prereleases: bool = False) -> int:
@@ -75,7 +83,7 @@ def update(settings: config.Config, *, adopt_supplier: str | None = None, promot
     runtime_settings = (
         settings if promote is None else replace(settings, toolchain=replace(settings.toolchain, inherit_python=False, inherit_python_tools=False))
     )
-    projects = _projects(runtime_settings)
+    projects, workspace = _projects(runtime_settings, adopt_supplier=adopt_supplier is not None)
     promotion = None
     promotion_root = None
     selection = adopt_supplier if adopt_supplier is not None else promote
@@ -112,8 +120,8 @@ def update(settings: config.Config, *, adopt_supplier: str | None = None, promot
     uv = settings.executable(settings.deps.uv)
     active_projects = (promotion_root,) if promote is not None and promotion_root is not None else projects
     targets = tuple(project / name for project in active_projects for name in ("pyproject.toml", "uv.lock"))
-    if promotion is not None:
-        targets = tuple(dict.fromkeys((*targets, *(path for path, _ in promotion.writes))))
+    planned = dict(promotion.writes) if promotion is not None else {}
+    targets = tuple(dict.fromkeys((*targets, *workspace, *planned)))
     had_environment = {project: (project / ".venv").exists() for project in active_projects}
     attempted_sync: list[Path] = []
     originals: Mapping[Path, bytes | None] = dict[Path, bytes | None]()
@@ -129,7 +137,9 @@ def update(settings: config.Config, *, adopt_supplier: str | None = None, promot
             if promotion is not None:
                 files.replace_many(dict(promotion.writes), verify=promotion.snapshot.verify)
             changes = {}
-            if promote is None:
+            # The isolated script resolver cannot model a shared workspace lock.
+            # Native uv refreshes it below, retaining exact non-supplier pins.
+            if promote is None and not workspace:
                 options = {}
                 pin_toolchain = settings.toolchain
                 if adopt_supplier is not None:
@@ -165,6 +175,9 @@ def update(settings: config.Config, *, adopt_supplier: str | None = None, promot
                     from research_repo_tools.python_adoption import _check_tools
 
                     _check_tools(promotion_root, settings.toolchain.inherit_python_tools)
+            for manifest in workspace:
+                if manifest.read_bytes() != planned.get(manifest, originals[manifest]):
+                    raise ValueError(f"workspace manifest changed during supplier update: {manifest}")
     except BaseException as error:
         # Restore environments only after preserve_files has restored the exact
         # original manifests/locks. A failed file rollback retains its backups.

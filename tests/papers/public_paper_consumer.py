@@ -166,6 +166,12 @@ class TestPdf(unittest.TestCase):
         self.assertEqual(normalize_pdf(self.pdf, tex=self.tex, identity="example/reviewer").page_count, 1)
         self.assertEqual(self.pdf.read_bytes(), normalized)
 
+    def test_relative_input_and_absolute_output_refresh_the_same_pdf(self) -> None:
+        with contextlib.chdir(self.root):
+            result = normalize_pdf(Path(self.pdf.name), tex=self.tex, identity="stable", output=self.pdf, reference=self.pdf)
+        self.assertEqual(result.page_count, 1)
+        self.assertEqual(self.pdf.read_bytes(), normalize_pdf_bytes(self.original, date=read_source_date(self.tex), identity="stable"))
+
     def test_output_refresh_and_policy_failures_preserve_all_artifacts(self) -> None:
         destination = self.root / "reviewer.pdf"
         destination.write_bytes(b"prior artifact")
@@ -206,7 +212,7 @@ class TestPdf(unittest.TestCase):
             self.assertEqual(out.getvalue(), "")
             self.assertEqual(self.pdf.read_bytes(), self.original)
             self.assertEqual(main([*args, "published.pdf"]), 0)
-            self.assertIn(str(self.root / "published.pdf"), out.getvalue())
+            self.assertEqual(out.getvalue(), f"OK {(self.root / 'published.pdf').resolve(strict=True)}: 1 page(s)\n")
             self.assertEqual(self.pdf.read_bytes(), self.original)
             self.assertEqual(check_pdf(self.root / "published.pdf").page_count, 1)
 

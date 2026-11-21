@@ -4,6 +4,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -29,6 +30,8 @@ GENERATED = tuple(f"**/{name}/**" for name in (".venv", "venv", ".tox", ".nox", 
 REPORT_LIMIT = 128 * 1024 * 1024
 GITLEAKS_FINDINGS_EXIT = 3
 GITLEAKS_TIMEOUT = 300
+# Git ignores attribute files at or above this size (attr.h, ATTR_MAX_FILE_SIZE).
+_GIT_ATTRIBUTES_LIMIT = 100 * 1024 * 1024
 _GIT_REPOSITORY_ENV = frozenset(
     {
         "GIT_ALTERNATE_OBJECT_DIRECTORIES",
@@ -405,7 +408,7 @@ def _gitleaks_args(mode: str, source: Path, stage: Path, selected: Path, format_
         "{report}",
     ]
     if mode == "git":
-        args.append("--log-opts=--all --full-history --no-renames")
+        args.append("--log-opts=--all --full-history --diff-merges=first-parent --no-renames")
     return args
 
 
@@ -571,9 +574,34 @@ def _capture_gitleaks_history(root: Path, stage: Path, env: Mapping[str, str]) -
 
     _require_local_history(root, env)
     refs, tips = history_refs(root), _history_tips(root, env)
+    attributes_path = root / os.fsdecode(
+        run_git_bytes(["--no-pager", "rev-parse", "--git-path", "info/attributes"], cwd=root, env=env).stdout.removesuffix(b"\n")
+    )
+
+    def local_attributes() -> bytes | None:
+        """Capture repository-private diff overrides, including those shared by linked worktrees."""
+        try:
+            descriptor = os.open(attributes_path, os.O_RDONLY | getattr(os, "O_NONBLOCK", 0) | getattr(os, "O_BINARY", 0))
+        except FileNotFoundError:
+            return None
+        with os.fdopen(descriptor, "rb") as stream:
+            info = os.fstat(descriptor)
+            if not stat.S_ISREG(info.st_mode):
+                raise ValueError("Git info/attributes must be a regular file")
+            if info.st_size >= _GIT_ATTRIBUTES_LIMIT:
+                return None
+            data = stream.read(info.st_size + 1)
+            if len(data) != info.st_size:
+                raise ValueError("Git info/attributes changed during capture")
+            return data
+
+    attributes = local_attributes()
     history = stage / "history.git"
     # Retain selected refs privately while reusing the source object store.
     run_git_bytes(["--no-pager", "clone", "--mirror", "--shared", "--reject-shallow", "--template=", "--", str(root), str(history)], cwd=root, env=env)
+    if attributes is not None:
+        (history / "info").mkdir(exist_ok=True)
+        (history / "info" / "attributes").write_bytes(attributes)
     copied = history_refs(history)
     if copied != refs:
         # Local cloning shares the objects even when upload-pack hides their refs.
@@ -603,6 +631,8 @@ def _capture_gitleaks_history(root: Path, stage: Path, env: Mapping[str, str]) -
             raise ValueError("Git history tips changed while capturing history for Gitleaks")
 
     def verify() -> None:
+        if local_attributes() != attributes:
+            raise ValueError("Git info/attributes changed during Gitleaks scanning")
         if history_refs(root) != refs or _history_tips(root, env) != tips:
             raise ValueError("Git refs changed during Gitleaks scanning")
 

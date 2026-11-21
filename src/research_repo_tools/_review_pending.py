@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from research_repo_tools._review_identity import ReviewIdentity
-from research_repo_tools.evidence import _digest, _load_json, deterministic_json, sha256
+from research_repo_tools.evidence import _digest, _unique_object, deterministic_json, sha256
 from research_repo_tools.path_identity import RegularFile, observe_paths
 from research_repo_tools.review_protocol import ConsentRequired, ReviewApproval, ReviewQuote
 
@@ -98,6 +98,32 @@ def save(path: Path, *, root: Path, base: str | None, observed: ReviewIdentity, 
     )
 
 
+def _parse_record(payload: bytes, path: Path) -> PendingReview:
+    """Decode a local record, preserving native path spellings and strict provider JSON."""
+    try:
+        data = json.loads(payload.decode("utf-8"), object_pairs_hook=_unique_object)
+    except (ValueError, RecursionError) as error:
+        raise ValueError(f"invalid pending review: {error}") from error
+    if not isinstance(data, dict) or set(data) != {"schema", "nonce", "path", "root", "worktree", "base", "content", "quote"} or data["schema"] != _SCHEMA:
+        raise ValueError("unsupported pending review schema")
+    for key in ("nonce", "content"):
+        _digest(data[key], key)
+    for key in ("path", "root", "worktree"):
+        if not isinstance(data[key], str) or "\0" in data[key] or not Path(data[key]).is_absolute():
+            raise ValueError(f"pending {key} must be an absolute native path")
+        os.fsencode(data[key])
+    if data["path"] != str(path):
+        raise ValueError("pending review was moved; request a new quote")
+    base = data["base"]
+    if base is not None and (not isinstance(base, str) or not base or base.startswith("-") or any(c.isspace() or c == "\0" for c in base)):
+        raise ValueError("invalid pending review base")
+    if base is not None:
+        os.fsencode(base)
+    return PendingReview(
+        path, sha256(payload), Path(data["root"]), Path(data["worktree"]), base, data["content"], ReviewQuote(deterministic_json(data["quote"]))
+    )
+
+
 def load(path: Path) -> PendingReview:
     """Read a pending review from its original location and recover its content identity."""
     if path.is_symlink() or path.is_junction():
@@ -106,24 +132,12 @@ def load(path: Path) -> PendingReview:
     observed = observe_paths(path.parent, [path.name], max_file_bytes=_MAX_RECORD_BYTES).observations[0].value
     if not isinstance(observed, RegularFile):
         raise ValueError("pending review requires a regular file")
-    data = _load_json(observed.content, "pending review")
-    if not isinstance(data, dict) or set(data) != {"schema", "nonce", "path", "root", "worktree", "base", "content", "quote"} or data["schema"] != _SCHEMA:
-        raise ValueError("unsupported pending review schema")
-    for key in ("nonce", "content"):
-        _digest(data[key], key)
-    for key in ("path", "root", "worktree"):
-        if not isinstance(data[key], str) or "\0" in data[key] or not Path(data[key]).is_absolute():
-            raise ValueError(f"pending {key} must be an absolute native path")
-    if data["path"] != str(path):
-        raise ValueError("pending review was moved; request a new quote")
-    root, worktree = Path(data["root"]), Path(data["worktree"])
+    pending = _parse_record(observed.content, path)
+    root, worktree = pending.root, pending.worktree
     if root.resolve(strict=True) != root or worktree.resolve(strict=True) != worktree or not root.is_relative_to(worktree):
         raise ValueError("pending repository location changed")
     destination(path, worktree)
-    base = data["base"]
-    if base is not None and (not isinstance(base, str) or not base or base.startswith("-") or any(c.isspace() or c == "\0" for c in base)):
-        raise ValueError("invalid pending review base")
-    return PendingReview(path, sha256(observed.content), root, worktree, base, data["content"], ReviewQuote(deterministic_json(data["quote"])))
+    return pending
 
 
 def consume(pending: PendingReview, approval: ReviewApproval | None) -> None:

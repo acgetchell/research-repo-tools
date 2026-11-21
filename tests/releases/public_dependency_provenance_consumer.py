@@ -300,7 +300,7 @@ class TestDependencyProvenance(unittest.TestCase):
     def test_transient_dns_retries_read_only_and_exhaustion_blocks_evidence_creation(self):
         failure = urllib.error.URLError(socket.gaierror(socket.EAI_AGAIN, "private resolver detail"))
         before = self.snapshot()
-        with patch("research_repo_tools._registry_requests.time.sleep") as wait:
+        with patch.dict(os.environ, RRT_REGISTRY_TIMEOUT_SECONDS="60"), patch("research_repo_tools._registry_requests.time.sleep") as wait:
             with patch.object(_registry_requests._OPENER, "open", side_effect=[failure, Response(self.wheel)]) as download:
                 self.assertEqual(check_release_dependencies(self.root)[0].version, VERSION)
             self.assertEqual(download.call_count, 2)

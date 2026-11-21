@@ -114,6 +114,9 @@ class TestSharedCapabilities(unittest.TestCase):
                 if "--is-shallow-repository" in args:
                     self.assertEqual(cwd, root)
                     output = b"false\n"
+                elif args == ["--no-pager", "rev-parse", "--git-path", "info/attributes"]:
+                    self.assertEqual(cwd, root)
+                    output = b".git/info/attributes\n"
                 elif "show-ref" in args:
                     self.assertIn(cwd, (root, history))
                     output = refs if cwd == root else captured_refs

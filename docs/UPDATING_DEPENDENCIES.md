@@ -193,8 +193,10 @@ declared where the supplier is used. For a workspace, the updater intersects
 every explicit `project.requires-python` from the root and its members. If
 all omit it, the updater uses its default of `>=3.15`. Dependency markers and
 a dependency group's Python constraint narrow that shared range for each
-declaration. uv resolves the selected
-candidate and stops the update on a resolution failure. If exact registry
+declaration. Workspace adoption refreshes the shared lock with native uv and
+retains exact development pins other than the supplier. The workspace root and
+member manifests participate in rollback. The standalone pin resolver continues
+to require an independent project. uv resolves the selected candidate and stops the update on a resolution failure. If exact registry
 verification confirms a candidate was yanked, the updater checks the next
 eligible release. For an exact Git SHA,
 the updater applies the same Python compatibility check and uses the signed

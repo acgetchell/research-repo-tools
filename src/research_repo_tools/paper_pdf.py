@@ -251,14 +251,18 @@ def normalize_pdf(
         raise ValueError(f"{tex}: failed to read paper source date: {error}") from error
     retained = None
     if reference is not None:
-        originals[reference] = reference.read_bytes()
-        retained = _inspect(originals[reference])
-    if destination.exists() and destination not in originals:
+        if reference.resolve() == path.resolve() and not reference.is_symlink():
+            retained = _inspect(originals[path])
+        else:
+            originals[reference] = reference.read_bytes()
+            retained = _inspect(originals[reference])
+    replacing = destination.exists()
+    if replacing and not any(_paths_alias(destination, source) for source in originals):
         originals[destination] = destination.read_bytes()
     candidate = normalize_pdf_bytes(originals[path], date=date, identity=identity)
     inspection = _inspect(candidate)
     _check(inspection, policy, retained)
-    if destination in originals:
+    if replacing:
         replace_many({destination: candidate}, expected=originals)
     else:
 

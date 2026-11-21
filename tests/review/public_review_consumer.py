@@ -492,18 +492,30 @@ class TestReviewConsumer(unittest.TestCase):
             self.start()
         self.assertEqual(self.calls, [])
 
-    def test_pending_serialization_preserves_native_path_surrogates(self) -> None:
-        # Model POSIX surrogateescape without requiring a filesystem that accepts
-        # non-UTF-8 names (APFS and Windows do not). Only publication is replaced.
+    def test_pending_record_round_trips_native_path_surrogates(self) -> None:
+        # Exercise the on-disk format even when the host cannot create this name.
         native_name = "native-\udcff"
         path, root = self.area / native_name / "pending.json", self.root / native_name
         identity = _review_identity.ReviewIdentity(root, "f" * 64, SHA, None, 1)
         with patch.object(_review_pending, "_create") as create:
             saved = _review_pending.save(path, root=root, base=None, observed=identity, quote=ReviewQuote(deterministic_json(QUOTE)))
         payload = create.call_args.args[1]
-        self.assertEqual(json.loads(payload)["path"], str(path))
-        self.assertEqual(json.loads(payload)["root"], str(root))
+        restored = _review_pending._parse_record(payload, path)
+        self.assertEqual((restored.path, restored.root, restored.worktree), (path, root, identity.worktree))
+        self.assertEqual(restored.identity, saved.pending_identity)
+        self.assertEqual(restored.quote, saved.quote)
         self.assertEqual(saved.repository, str(root))
+
+    def test_pending_record_rejects_malformed_provider_terms(self) -> None:
+        self.start()
+        original = self.pending.read_bytes()
+        term = b'"promotionTerms": "synthetic fixture only"'
+        self.assertIn(term, original)
+        for replacement in (rb'"promotionTerms": "\udcff"', b'"promotionTerms": NaN', term + b", " + term):
+            with self.subTest(replacement=replacement):
+                self.pending.write_bytes(original.replace(term, replacement))
+                with self.assertRaises(ValueError):
+                    _review_pending.load(self.pending)
 
     def test_pending_serialized_size_is_checked_before_publication(self) -> None:
         identity = _review_identity.ReviewIdentity(self.root, "f" * 64, SHA, None, 1)
