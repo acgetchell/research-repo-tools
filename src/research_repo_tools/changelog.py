@@ -205,11 +205,11 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
     if not generated.strip():
         raise ValueError("git-cliff returned empty changelog output")
 
-    def prepare(raw: str, *, strip_closing_directives: bool) -> str:
+    def prepare(raw: str) -> str:
         if tag:
             assert released is not None
             raw = archive.replace_release_date(raw, tag.removeprefix("v"), released, required=True)
-        return postprocess_text(_preserve_declared_dates(raw, dates), strip_closing_directives=strip_closing_directives)
+        return postprocess_text(_preserve_declared_dates(raw, dates))
 
     def previous_history() -> str:
         # The old template emitted only git-cliff's parsed commit.body. Fall
@@ -218,15 +218,14 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
         previous = _template("cliff.toml", section.owner, section.repository, section.dependency_bodies, body="commit.body")
         # Retained archives could also contain standalone directives in the
         # parsed body. Compare their original text before adopting today's links.
-        return prepare(_run_cliff(config.root, previous, [], context=context), strip_closing_directives=False)
+        return prepare(_run_cliff(config.root, previous, [], context=context))
 
-    result = prepare(generated, strip_closing_directives=shared)
+    repository = f"{section.owner}/{section.repository}"
+    closing_notes = changelog_issues.read_closing_notes(generated, config.root, repository) if shared else {}
+    result = prepare(changelog_issues.strip_linked_directives(generated, closing_notes, repository) if closing_notes else generated)
     parsed = archive.parse_changelog(archive._extract_link_defs(result)[0])
     if parsed.unreleased is None and not parsed.version_blocks:
         raise ValueError("git-cliff must generate at least one release or Unreleased section")
-
-    repository = f"{section.owner}/{section.repository}"
-    closing_notes = changelog_issues.read_closing_notes(generated, config.root, repository) if section.cliff_config is None else {}
 
     def format_candidate(candidate: str, target: Path) -> str:
         expected = archive.parse_changelog(archive._extract_link_defs(candidate)[0])

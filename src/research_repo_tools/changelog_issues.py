@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import cast
 
 from research_repo_tools._git_checkout import READ_ONLY_OPTIONS
-from research_repo_tools.postprocess_changelog import _closes_code_fence, _literal_directive_lines, _opening_code_fence, _reflow_line
+from research_repo_tools.postprocess_changelog import _closes_code_fence, _opening_code_fence, _reflow_line
 from research_repo_tools.process import run_git_bytes
 
 _KEYWORD = r"(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)"
@@ -16,6 +16,30 @@ _CLOSING_LINE = re.compile(rf"{_KEYWORD}:?[ \t]+{_TARGET}(?:,[ \t]+(?:{_KEYWORD}
 _REFERENCE = re.compile(rf"(?:https://github\.com/(?P<url>{_SLUG})/issues/|(?P<slug>{_SLUG})?#)(?P<number>[1-9][0-9]*)", re.IGNORECASE | re.ASCII)
 _CLOSING_NOTE = re.compile(rf"^Closes \[(?:{_SLUG})?#[1-9][0-9]*\]\(")
 _COMMIT = re.compile(rf"\[`(?P<short>[a-f0-9]{{7}})`\]\(https://github\.com/(?P<slug>{_SLUG})/commit/(?P<oid>[a-f0-9]{{40}}(?:[a-f0-9]{{24}})?)\)$")
+
+
+def _literal_directive_lines(lines: list[str], directives: set[int]) -> set[int]:
+    """Identify candidate lines which CommonMark renders as literal code."""
+    if not directives or not any("`" in line for line in lines):
+        return set()
+    from markdown_it import MarkdownIt
+
+    # Inline code tokens normalize newlines and have no source line numbers.
+    # Mark only complete standalone directives in the parser's private copy.
+    prefix = "RRTDIRECTIVE"
+    while any(prefix in line for line in lines):
+        prefix += "X"
+    marked = "\n".join(line + f"{prefix}{i}END" if i in directives else line for i, line in enumerate(lines))
+    marker = re.compile(rf"{prefix}(\d+)END")
+    tokens = MarkdownIt("commonmark").parse(marked)
+    literal: set[int] = set()
+    while tokens:
+        token = tokens.pop()
+        if token.type in {"code_inline", "code_block", "fence"}:
+            literal.update(int(number) for number in marker.findall(token.content))
+        if token.children:
+            tokens.extend(token.children)
+    return literal
 
 
 def _prose(lines: list[str]) -> Iterator[tuple[int, str]]:
@@ -51,6 +75,11 @@ def _commit_lines(lines: list[str], repository: str) -> Iterator[tuple[int, str]
             in_title = False
 
 
+def _targets(line: str, repository: str) -> Iterator[tuple[str, str]]:
+    for match in _REFERENCE.finditer(line):
+        yield cast("str", match["url"] or match["slug"] or repository), cast("str", match["number"])
+
+
 def _closing_links(message: str, repository: str) -> list[str]:
     """Read standalone directives, preserving authored order across repositories."""
     links: dict[tuple[str, str], str] = {}
@@ -60,13 +89,43 @@ def _closing_links(message: str, repository: str) -> list[str]:
     for index, line in directives.items():
         if index in example_lines:
             continue
-        for match in _REFERENCE.finditer(line):
-            slug = match["url"] or match["slug"] or repository
-            number = match["number"]
+        for slug, number in _targets(line, repository):
             local = slug.casefold() == repository.casefold()
             label = f"#{number}" if local else f"{slug}#{number}"
             links.setdefault((slug.casefold(), number), f"[{label}](https://github.com/{repository if local else slug}/issues/{number})")
     return list(links.values())
+
+
+def strip_linked_directives(text: str, notes: dict[str, str], repository: str) -> str:
+    """Remove trailers with replacement links in the packaged release."""
+    # Git-cliff indents every body line. Only template-owned release headings
+    # can begin at column zero here, before Markdown normalization.
+    return "".join(_strip_release_directives(release, notes, repository) for release in re.split(r"(?m)(?=^## )", text.replace("\r\n", "\n")))
+
+
+def _strip_release_directives(release: str, notes: dict[str, str], repository: str) -> str:
+    lines = release.split("\n")
+    prose = list(_prose(lines))
+    entries = {i: notes[oid].casefold() for i, line in prose if line.startswith("- ") and (oid := _entry_oid(line, repository)) and oid in notes}
+    if not entries:
+        return release
+    # Breaking descriptions precede the categorized entries that carry their
+    # hashes. A duplicate directive there must have a replacement in this release.
+    summary_notes = " ".join(entries.values())
+    breaking_summary = False
+    directives: set[int] = set()
+    note = ""
+    for index, line in prose:
+        if line.startswith("### "):
+            breaking_summary = line == "### ⚠️ Breaking Changes"
+        if line and not line[0].isspace():
+            note = summary_notes if breaking_summary else entries.get(index, "")
+        elif note and line.startswith("  ") and _CLOSING_LINE.fullmatch(line[2:]):
+            if all(f"(https://github.com/{slug}/issues/{number})".casefold() in note for slug, number in _targets(line, repository)):
+                directives.add(index)
+    directives -= _literal_directive_lines(lines, directives)
+    omit = directives | {i + 1 for i in directives if i + 1 < len(lines) - 1 and not lines[i + 1].strip()}
+    return "\n".join(line for index, line in enumerate(lines) if index not in omit)
 
 
 def read_closing_notes(text: str, root: Path, repository: str) -> dict[str, str]:

@@ -171,41 +171,6 @@ def _backtick_span_end(text: str, start: int) -> int | None:
     return None
 
 
-def _literal_directive_lines(lines: list[str], directives: set[int]) -> set[int]:
-    """Identify candidate lines which CommonMark renders as literal code."""
-    if not directives or not any("`" in line for line in lines):
-        return set()
-    from markdown_it import MarkdownIt
-
-    # Inline code tokens normalize newlines and have no source line numbers.
-    # Mark only complete standalone directives in the parser's private copy.
-    prefix = "RRTDIRECTIVE"
-    while any(prefix in line for line in lines):
-        prefix += "X"
-    marked = "\n".join(line + f"{prefix}{i}END" if i in directives else line for i, line in enumerate(lines))
-    marker = re.compile(rf"{prefix}(\d+)END")
-    tokens = MarkdownIt("commonmark").parse(marked)
-    literal: set[int] = set()
-    while tokens:
-        token = tokens.pop()
-        if token.type in {"code_inline", "code_block", "fence"}:
-            literal.update(int(number) for number in marker.findall(token.content))
-        if token.children:
-            tokens.extend(token.children)
-    return literal
-
-
-def _strip_closing_directives(text: str) -> str:
-    """Remove packaged issue trailers while keeping directive examples literal."""
-    lines = text.split("\n")
-    directives = {index for index, line in enumerate(lines) if re.fullmatch(r"  Closes #[0-9]+[ \t]*", line)}
-    if not directives:
-        return text
-    directives -= _literal_directive_lines(lines, directives)
-    omit = directives | {i + 1 for i in directives if i + 1 < len(lines) and not lines[i + 1].strip()}
-    return "\n".join(line for index, line in enumerate(lines) if index not in omit)
-
-
 def _delimiter_run_end(text: str, start: int, delimiter: str) -> int:
     """Return the exclusive end of one repeated Markdown delimiter run."""
     end = start + 1
@@ -1361,14 +1326,10 @@ def _separate_entry_details(lines: list[str]) -> list[str]:
     return result
 
 
-def postprocess_text(text: str, *, strip_closing_directives: bool = False) -> str:
+def postprocess_text(text: str) -> str:
     """Apply one common Markdown policy, preserving fenced code and reference links."""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text, fenced_blocks = _protect_fenced_blocks(text)
-    # Actual issue links come from their original Git messages. Remove raw
-    # trailer lines from entry bodies only after protecting literal examples.
-    if strip_closing_directives:
-        text = _strip_closing_directives(text)
     text = _strip_dependabot_metadata(text)
     text = _normalize_inline_prose(text)
 

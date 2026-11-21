@@ -313,6 +313,7 @@ def test_backfill_links_original_commits_in_retained_and_current_releases(git_co
     for number in (11, 12, 13, 21):
         assert original.count(f"[#{number}](https://github.com/example/research/issues/{number})".encode()) == 1
     assert original.count(b"[other/tool#14](https://github.com/other/tool/issues/14)") == 1
+    assert b"Fixes EXAMPLE/research#11" not in original and b"Closed: https://github.com/other/tool/issues/14" not in original
     for number in (15, 16, 17, 18, 19, 20):
         assert f"/issues/{number})".encode() not in original
     archive.write_bytes(original[: note.start()] + original[note.end() + 1 :])
@@ -370,6 +371,21 @@ def test_wrapped_first_issue_link_is_idempotent_and_rejects_drift(separator: str
     assert changelog_issues.add_closing_notes(annotated, notes, "example/research") == annotated
     with pytest.raises(ValueError, match="conflicting closed issue links"):
         changelog_issues.add_closing_notes(annotated.replace("/issues/7)", "/issues/8)"), notes, "example/research")
+
+
+def test_strip_only_directives_with_replacement_links_for_that_entry() -> None:
+    first, second = "a" * 40, "b" * 40
+    notes = {first: "  Closes [#7](https://github.com/example/research/issues/7)."}
+    text = (
+        f"- First [`{first[:7]}`](https://github.com/example/research/commit/{first})\n\n"
+        "  Fixes #7\n  Closes #7, #8\n  Closes #9\n\n"
+        f"- Second [`{second[:7]}`](https://github.com/example/research/commit/{second})\n\n  Closes #7\n"
+    )
+    assert changelog_issues.strip_linked_directives(text, notes, "example/research") == text.replace("  Fixes #7\n", "")
+    summary = "### ⚠️ Breaking Changes\n\n- Changed API.\n  Fixes #7\n\n### Changed\n\n"
+    history = "## [Unreleased]\n\n" + summary + text + "\n## [1.0.0]\n\n" + summary + "- Historical detail.\n"
+    before, after = changelog_issues.strip_linked_directives(history, notes, "example/research").split("## [1.0.0]")
+    assert "  Fixes #7\n" not in before and "  Fixes #7\n" in after
 
 
 @pytest.mark.parametrize("link", ["[Second](CHANGELOG.md#verify-1)", "[Second][again]\n\n[again]: ./CHANGELOG.md#verify-1"])
