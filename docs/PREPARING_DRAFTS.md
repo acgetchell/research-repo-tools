@@ -1,8 +1,8 @@
 # Preparing an unpublished release draft
 
-The shared planning and authenticated-writer examples pin v0.3.0. Verify the
-[published version](../README.md#release-availability) and test it in the
-installed consumer before adopting the workflow.
+The planning and authenticated-writer jobs both pin v0.3.1. Confirm the version
+on [PyPI](https://pypi.org/project/research-repo-tools/) and test both jobs in
+the consumer before adopting the workflow.
 
 The [public contract](release-evidence-api.md#draft-preparation) composes retained
 signed evidence with existing captured release targets. Consumer policy owns
@@ -100,11 +100,11 @@ jobs:
           commit=$(git --no-pager rev-parse "$GITHUB_REF^{commit}")
           mkdir "$RUNNER_TEMP/handoff"
           uv run --no-config --no-project --isolated --no-cache --python 3.15 \
-            --with research-repo-tools==0.3.0 python -I -m research_repo_tools \
+            --with research-repo-tools==0.3.1 python -I -m research_repo_tools \
             --root "$GITHUB_WORKSPACE" release evidence wait tooling/release-evidence.toml \
             --commit "$commit" --attempts 241 --interval 30
           uv run --no-config --no-project --isolated --no-cache --python 3.15 \
-            --with research-repo-tools==0.3.0 python -I -m research_repo_tools \
+            --with research-repo-tools==0.3.1 python -I -m research_repo_tools \
             --root "$GITHUB_WORKSPACE" release assets plan tooling/release-evidence.toml \
             --repository "$GITHUB_REPOSITORY" --event "$GITHUB_EVENT_NAME" \
             --tag "$RELEASE_TAG" --commit "$commit" \
@@ -151,7 +151,7 @@ jobs:
           runner-labels = ["ubuntu-24.04"]
           TOML
           uv run --no-config --no-project --isolated --no-cache --python 3.15 \
-            --with research-repo-tools==0.3.0 python -I -m research_repo_tools \
+            --with research-repo-tools==0.3.1 python -I -m research_repo_tools \
             release assets prepare-authenticated handoff-policy.toml \
             --repository "$GITHUB_REPOSITORY" --tag "$RELEASE_TAG" --commit "$RELEASE_COMMIT" \
             --run-id "$GITHUB_RUN_ID" --attempt 1 \

@@ -399,7 +399,7 @@ def workflow_fixture(arguments):
         "--python",
         "3.15",
         "--with",
-        "research-repo-tools==0.3.0",
+        "research-repo-tools==0.3.1",
         "python",
         "-I",
         "-m",

@@ -20,30 +20,24 @@ then choose a [capability](#capability-index). Package development belongs in
 
 ## Release availability
 
-Install **v0.3.0** from [PyPI][pypi-v030]. See [CHANGELOG.md][changelog-history]
-for release notes. Use templates from the same installed release, a reviewed
-full commit for rehearsal, and a verified published pin for release-intent workflows.
+The examples below target **v0.3.1**. Confirm that version is available on
+[PyPI][pypi] before installing it, and use the Justfile and bootstrap helper
+from the same release. See the [generated changelog][changelog-history] for release notes.
 
-v0.3.0 adds checkout-independent release visibility checks and opt-in reuse of
-verified benchmark preparation inputs. It also makes unpublished-candidate
-recovery resumable, tightens archive path validation, and retains nanosecond
-precision in command-timing summaries.
-
-Automatic supplier adoption, `just release-cargo-fetch`, `just tag TAG --commit SHA`,
-and `RRT_REGISTRY_TIMEOUT_SECONDS` require a supplying release or a reviewed
-development commit for rehearsal. See the [command reference][commands] for
-current-source examples.
+- To keep a consumer's tooling pin current, opt in to [automatic supplier adoption](#automatically-adopting-a-published-supplier).
+- To tag the commit that passed review, use `just tag TAG --commit SHA`. Cargo consumers can
+  populate the managed cache with `just release-cargo-fetch` and verify the published crate's
+  checksum against the archive attached to the immutable GitHub Release. [Registry verification][publishing-api]
+- To inspect redacted Gitleaks findings or compare a proposed exception with the current policy,
+  use `just security-findings` or `just security-check-exceptions CANDIDATE`. [Gitleaks review][gitleaks-review]
 
 **v0.2.7 includes breaking Python API changes.** Update callers to the documented
 typed variants, including [trial orders][complete-api] and
 [release-rule replacements][publishing-api]. Review the current
 [API contracts][api] when upgrading custom integrations.
 
-An upstream merge, local wheel or passing source test does not publish a package.
-Before adopting a new capability, verify its exact PyPI release, update your
-consumer's pin and lockfile, and run its integration checks. Keep working adapters
-until that adoption succeeds. [Migration guidance][migration] covers
-compatibility changes.
+For an existing consumer, review the [migration guidance][migration] and run
+its integration checks against the updated lockfile.
 
 ## Install with uv
 
@@ -56,7 +50,7 @@ the published package requires Python 3.15 or newer.
 From the consumer root, add the exact published package:
 
 ```sh
-uv add --group tooling --no-sync "research-repo-tools==0.3.0"
+uv add --group tooling --no-sync "research-repo-tools==0.3.1"
 ```
 
 Include `tooling` from `dev`, retaining your other dependencies. Set
@@ -66,7 +60,7 @@ if the project currently requires an older interpreter.
 
 ```toml
 [dependency-groups]
-tooling = ["research-repo-tools==0.3.0"]
+tooling = ["research-repo-tools==0.3.1"]
 dev = [{include-group = "tooling"}]
 ```
 
@@ -205,7 +199,7 @@ published version for isolated release-intent commands:
 
 ```sh
 just templates python-bootstrap.py --output python-bootstrap.py
-just tooling-run --version 0.3.0 --release-intent --arguments-json '["release","dependencies"]'
+just tooling-run --version 0.3.1 --release-intent --arguments-json '["release","dependencies"]'
 ```
 
 For development, replace `--version` with `--github acgetchell/research-repo-tools
@@ -216,12 +210,12 @@ missing commits and failed lookups stop before tooling starts; there is no fallb
 
 GitHub Actions can use the same implementation, with uv already installed.
 Replace `FULL_40_CHARACTER_SHA` with the reviewed commit targeted by the
-v0.3.0 release tag before adding this step.
+v0.3.1 release tag before adding this step.
 
 ```yaml
-- uses: acgetchell/research-repo-tools/.github/actions/run-tooling@FULL_40_CHARACTER_SHA # v0.3.0
+- uses: acgetchell/research-repo-tools/.github/actions/run-tooling@FULL_40_CHARACTER_SHA # v0.3.1
   with:
-    version: '0.3.0'
+    version: '0.3.1'
     release-intent: 'true'
     arguments: '["release", "dependencies"]'
 ```
@@ -248,11 +242,11 @@ continues to resolve its transitive dependencies independently; `--locked` with
 `--no-project` does not turn that environment into a locked runtime.
 
 Use a trusted bootstrap installation outside the consumer checkout, with the
-matching `release-runtime` recipe from the shipped Justfile. With v0.3.0 installed,
+matching `release-runtime` recipe from the shipped Justfile. With v0.3.1 installed,
 resolve the dedicated project there:
 
 ```sh
-just release-runtime resolve --directory /trusted/runtime-project --require 'research-repo-tools==0.3.0'
+just release-runtime resolve --directory /trusted/runtime-project --require 'research-repo-tools==0.3.1'
 ```
 
 Keep uv as a prerequisite. Add these bootstrap recipes alongside the trusted
@@ -308,8 +302,12 @@ Launch release writers through a recipe using the exact installed interpreter,
 place of `bin/python`. For example, define the following in the trusted Justfile:
 
 ```just
+[positional-arguments]
 runtime-release python policy digest root +args:
-    runtime_python="$1"; runtime_policy="$2"; runtime_digest="$3"; runtime_root="$4"; shift 4; "$runtime_python" -I -B -m research_repo_tools.cli --root "$runtime_root" release --isolated-runtime --runtime-policy "$runtime_policy" --runtime-policy-sha256 "$runtime_digest" "$@"
+    runtime_python="$1" runtime_policy="$2" runtime_digest="$3" runtime_root="$4"; \
+    shift 4; \
+    "$runtime_python" -I -B -m research_repo_tools --root "$runtime_root" release \
+        --isolated-runtime --runtime-policy "$runtime_policy" --runtime-policy-sha256 "$runtime_digest" "$@"
 ```
 
 Pass the existing `assets`, `evidence` or other release arguments unchanged.
@@ -395,29 +393,33 @@ ownership, registry proof limits and recovery are described in the
 
 ### Automatically adopting a published supplier
 
-Use an installed version that provides `--adopt-supplier`. Add a named
-`research-repo-tools` selection in `dependency-sources.toml` that matches
-the main Python project's manifest and lock. This example selects version
-`0.3.0` for a project already declared as `[projects.python]`.
+If your consumer pins v0.3.0 on PyPI, use its existing shared Python bootstrap
+for the first upgrade. Once v0.3.1 is available on PyPI, preview the changes,
+review the proposed manifest and lockfile, then apply them.
+
+```sh
+just shared-python-plan 0.3.1
+just shared-python-update 0.3.1
+```
+
+With v0.3.1 installed, merge its `update-python-dependencies` recipe and
+`supplier_update` setting into the consumer Justfile. In `dependency-sources.toml`,
+add or update the named selection to match the exact package pin in the main
+project's manifest and lockfile. This example assumes an existing `[projects.python]`.
 
 ```toml
 [sources.tooling]
 project = "python"
 package = "research-repo-tools"
-version = "0.3.0"
+version = "0.3.1"
 ```
 
-Set `supplier_update := "tooling"` in the matching Justfile, using your
-source selection's name. The Python stage of `just update` then runs in an
-isolated environment using the locked `tooling` group. For an existing wrapper,
-use the equivalent command.
-
-```sh
-uv run --isolated --locked --only-group tooling research-repo-tools \
-  deps update-python --all-projects --adopt-supplier tooling
-```
-
-See the [supplier eligibility and provenance rules](docs/UPDATING_DEPENDENCIES.md#automatically-adopting-a-published-supplier).
+Set `supplier_update := "tooling"` to select that entry. On subsequent runs,
+`just update-python-dependencies` checks for a newer compatible release;
+`just update` includes the same check. The recipe runs the updater in an
+isolated environment using the locked `tooling` group and passes
+`--adopt-supplier tooling` to `deps update-python`.
+See the [supplier eligibility and provenance rules][supplier-adoption].
 
 ### Source-built Python dependencies
 
@@ -593,7 +595,7 @@ for exhaustive arguments, configuration and Python contracts.
 | Publish reports and figures | [Preview and publish retained evidence][reports-guide] | [Publication APIs][publication-api] |
 | Publish to PyPI or crates.io | [Reviewed release procedure][publishing] | [Exact-commit evidence][evidence-guide], [optional reuse][reuse-guide] |
 | Record complete performance results | [Prepare, measure/retain, publish README][performance-guide] | [Measurement policy][performance-policy], [complete-run APIs][complete-api] |
-| Review secret findings and false-positive exceptions | [Gitleaks exception review](docs/RUNNING_CHECKS.md#reviewing-gitleaks-exceptions) | [Security APIs][security-api] |
+| Review secret findings and false-positive exceptions | [Gitleaks exception review][gitleaks-review] | [Security APIs][security-api] |
 | Select files, run commands and export CI values | [Consumer checks and integration][checks-guide] | [File APIs][files-api], [process/Just APIs][process-api], [workflow APIs][workflow-api] |
 | Set up or repair tools | [Installation and ownership][toolchain] | [Toolchain APIs][toolchain-api] |
 | Time external commands | [Exploratory command timing][timing-guide] | [Timing evidence contract][timing-api] |
@@ -810,9 +812,16 @@ TAG=v1.2.3
 just release-registry "$TAG" --expect absent
 ```
 
-Use `--expect present` to require an existing version. Lookup failures stop the
-check; they never count as absence. Full publication verification still requires
-`just release-verify "$TAG"` and the repository's post-publication checks.
+Use `--expect present` to require an existing version. If a registry GET times
+out, the diagnostic identifies the package or artifact. Set
+`RRT_REGISTRY_TIMEOUT_SECONDS=180` in the environment to give a retry a longer
+per-request budget. Keep the same release tag and dependency pins.
+
+After publication, run `just release-verify "$TAG"`. Cargo consumers that attach
+the validated `.crate` to an immutable GitHub Release can run
+`just release-verify "$TAG" --require-crate-asset` to compare its SHA-256 with
+crates.io. For PyPI, compare the published wheel and sdist with the signed
+distribution records. [Publication checks][publishing-api]
 
 With the installed CLI on PATH, `release visibility` checks an immutable release
 on GitHub and the registry from any directory. Pass each required asset by its
@@ -1066,6 +1075,7 @@ BSD-3-Clause. See [LICENSE][license].
 [files-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/files-api.md
 [git-inspection-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/process-api.md#python-git-inspection-api
 [github-settings]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/CONFIGURING_GITHUB.md
+[gitleaks-review]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_CHECKS.md#reviewing-gitleaks-exceptions
 [just-template]: https://github.com/acgetchell/research-repo-tools/blob/main/src/research_repo_tools/templates/justfile
 [license]: https://github.com/acgetchell/research-repo-tools/blob/main/LICENSE
 [license-badge]: https://badgen.net/github/license/acgetchell/research-repo-tools
@@ -1083,7 +1093,6 @@ BSD-3-Clause. See [LICENSE][license].
 [publishing-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/publishing-api.md
 [pypi]: https://pypi.org/project/research-repo-tools/
 [pypi-badge]: https://badgen.net/pypi/v/research-repo-tools
-[pypi-v030]: https://pypi.org/project/research-repo-tools/0.3.0/
 [python-adoption]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_DEPENDENCIES.md#shared-python-adoption
 [python-evidence]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/release-evidence-api.md#python-distribution-evidence
 [recovery-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RECOVERING_RELEASES.md
@@ -1095,6 +1104,7 @@ BSD-3-Clause. See [LICENSE][license].
 [rust-scans]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_CHECKS.md#rust-documentation-scans
 [security-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/security-api.md
 [selected-tools-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/toolchain-api.md#selected-managed-tools
+[supplier-adoption]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_DEPENDENCIES.md#automatically-adopting-a-published-supplier
 [timing-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/command-timing-api.md
 [timing-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/TIMING_COMMANDS.md
 [toolchain]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/INSTALLING.md

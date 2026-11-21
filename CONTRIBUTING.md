@@ -101,12 +101,14 @@ including changelog and release recipes.
 | `just review-resume PENDING ARGS...` | Attempt one explicitly approved review; the provider does not enforce the quote |
 | `just review-uncommitted` | Run opt-in CodeRabbit review of local changes only |
 | `just security` | Audit locked Python dependencies and scan history/current files for secrets |
+| `just security-check-exceptions CANDIDATE [ARGS...]` | Compare proposed Gitleaks exceptions with the baseline policy |
+| `just security-findings [ARGS...]` | Summarize the redacted reports from a completed Gitleaks scan |
 | `just security-secrets [ARGS...]` | Run the pinned managed Gitleaks scanner |
 | `just semgrep-setup` | Verify Semgrep in the shared locked Python environment |
 | `just setup` | Install user Just and synchronize the declared development environment |
 | `just sync` | Synchronize the locked development environment |
 | `just tag TAG [--commit SHA] [--force]` | Verify the reviewed commit and print the new local tag and annotation (maintainer only). Use `--force` for [guarded unpublished-candidate recovery](docs/RECOVERING_RELEASES.md#4-replace-the-superseded-draft-and-tag). |
-| `just tag-preview TAG` | Preview the release annotation without changing Git state |
+| `just tag-preview TAG [--commit SHA] [--force]` | Check the reviewed commit and preview the annotation, including for an unpublished replacement |
 | `just templates ARGS...` | Export a packaged configuration or workflow template |
 | `just test [PYTEST_ARGS...]` | Run the Python test suite or a selected subset |
 | `just tooling-run ARGS...` | Exercise the shared exact-release/GitHub-commit wrapper |

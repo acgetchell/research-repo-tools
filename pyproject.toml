@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "research-repo-tools"
-version = "0.3.0"
+version = "0.3.1"
 description = "Shared maintenance and validation for research software repositories"
 readme = "README.md"
 requires-python = ">=3.15"
@@ -42,7 +42,7 @@ build = [
 ]
 dev = [
     "actionlint-py==1.7.12.25",
-    "coverage==7.17.3",
+    "coverage==7.17.4",
     "ipykernel==7.4.0",
     "nbclient==0.11.0",
     "nbformat==5.11.1",

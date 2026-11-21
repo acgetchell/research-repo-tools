@@ -161,7 +161,8 @@ The consumer template provides:
 - `just update-cargo-dependencies`: upgrade root Cargo requirements and lock resolution, if present.
 - `just update-cargo-tools`: upgrade declared Cargo tools and publish verified TOML pins.
 - `just update-dependencies`: run the Cargo and Python dependency workflows.
-- `just update-python-dependencies`: update main dev pins, then upgrade locks and sync the main and declared independent Python projects.
+- `just update-python-dependencies`: update main dev pins, refresh project locks and sync their environments.
+  Enable `supplier_update` to include the shared package pin.
 - `just update-tools`: upgrade uv and declared tools without shell/bootstrap setup.
 - `just update-uv`: upgrade uv through its installation owner and reconcile its pin.
 - `just workflow-allowlist-check`: check external workflow/composite references against strict consumer selected-actions policy.
@@ -406,15 +407,15 @@ Upgrading the user-level uv affects other checkouts using it. Their exact uv pin
 must also be reconciled before running their locked commands. An installed uv
 upgrade cannot be rolled back if
 writing the project pin fails. Fix the reported cause and rerun `just update`.
-The remaining tools steps upgrade and synchronize declared tools, retaining
-the Rust compiler and shared package pins. Changing those pins remains a manual,
-reviewed operation. The dependency steps then update Cargo requirements and
-resolution, update main Python pins, refresh the full main lock, sync dev, and
-refresh and sync any declared independent Python projects.
+The tools steps retain the Rust compiler and shared package pins. Review compiler
+pin changes separately. The dependency steps update Cargo requirements and
+resolution, update main Python pins, refresh the main lock, sync dev, and
+refresh and sync any declared independent Python projects. With
+[supplier adoption](UPDATING_DEPENDENCIES.md#automatically-adopting-a-published-supplier)
+enabled, the Python step can also advance the named shared package pin.
 See the [consumer update recipes](UPDATING_DEPENDENCIES.md#dependency-and-tool-updates) for
 Cargo exclusions, extra manifests, and Python-only behavior.
-The Python pin updater preserves included tooling-group pins as resolver
-constraints; it updates only direct exact `dev` requirements.
+Other included tooling-group pins remain resolver constraints.
 
 Use `just update-cargo-tools` for declared managed Cargo tools and release binaries.
 It resolves the latest non-yanked stable Cargo releases from the crates.io sparse
