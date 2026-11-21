@@ -1,5 +1,6 @@
 """Resolve dedicated runtime locks and retain verified portable wheel bundles."""
 
+import http.client
 import json
 import os
 import sys
@@ -27,6 +28,7 @@ from research_repo_tools.runtime_policy import (
     MAX_NATIVE_BYTES,
     SCHEMA,
     RuntimePolicy,
+    _build_evidence_names,
     _closure,
     _context,
     _inventory,
@@ -160,7 +162,8 @@ def record_runtime_policy(root: Path, destination: Path, *, provider: SourceProv
     graph = inspect_project(root, policy.projects[0])
     entry.verify()
     _check_lock(root)
-    sources = verify_graph(graph, provider=provider or HttpSourceProvider())
+    source_provider = HttpSourceProvider() if provider is None else provider
+    sources = verify_graph(graph, provider=source_provider)
     configuration = read_regular(environment / "pyvenv.cfg", 65536)
     inventory, observations = _inventory(environment)
     inputs = {name: sha256(read_regular(root / name, 4 * 1024 * 1024)) for name in ("pyproject.toml", "uv.lock", "dependency-sources.toml")}
@@ -195,11 +198,12 @@ def record_runtime_policy(root: Path, destination: Path, *, provider: SourceProv
                 "inputs": inputs,
             }
             payload, filename = receipt.payload, receipt.wheel.name
-            updates[destination / (sha256(receipt_bytes) + ".receipt.json")] = receipt_bytes
+            receipt_name, log_name = _build_evidence_names(provenance)
+            updates[destination / receipt_name] = receipt_bytes
             log_hash = envelope["payload"]["build_log_sha256"]
-            log = read_regular(build_store(root, build_directory) / (log_hash + ".log"), 4 * 1024 * 1024)
+            log = read_regular(build_store(root, build_directory) / log_name, 4 * 1024 * 1024)
             verify_sha256(log, log_hash)
-            updates[destination / (log_hash + ".log")] = log
+            updates[destination / log_name] = log
             native.append((name, build_version, sdist, sha256(payload), receipt_path, receipt_bytes))
         else:
             tags = {tag for raw in Parser().parsestr(inventory[name].wheel or "").get_all("Tag", []) for tag in parse_tag(raw)}
@@ -218,7 +222,10 @@ def record_runtime_policy(root: Path, destination: Path, *, provider: SourceProv
             if provider is None:
                 from research_repo_tools._registry_requests import read_registry
 
-                payload = read_registry(artifact.url, limit=artifact.size)
+                try:
+                    payload = read_registry(artifact.url, limit=artifact.size)
+                except http.client.HTTPException as error:
+                    raise ValueError(f"{artifact.filename}: runtime wheel download was incomplete or invalid") from error
             else:
                 payload = provider.read(artifact.url)
             if not isinstance(payload, bytes) or len(payload) != artifact.size:

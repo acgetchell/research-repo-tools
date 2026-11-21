@@ -4,7 +4,6 @@ import csv
 import io
 import json
 import os
-import runpy
 import shutil
 import subprocess
 import sys
@@ -16,10 +15,13 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from research_repo_tools.ci import export_environment
 from research_repo_tools.cli import main
-from research_repo_tools.criterion import COMPARISON_SCHEMA, ConfidenceInterval, Estimate, Sample, compare_samples, parse_comparison, serialize_comparison
-from research_repo_tools.evidence import Evidence, Provenance, deterministic_json, publish_evidence, sha256
+from research_repo_tools.criterion import ConfidenceInterval, Estimate, Sample, parse_comparison
+from research_repo_tools.evidence import Provenance, deterministic_json, publish_evidence, sha256
 from research_repo_tools.legacy_evidence import convert_csv
 from research_repo_tools.measurement import MeasurementConfig, measure_checkout, measure_pair
 from research_repo_tools.performance_reports import load_report_plan
@@ -30,11 +32,8 @@ from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.selection import argument_batches
 from research_repo_tools.validation import run_checks
 from research_repo_tools.worktrees import apply_snapshot, capture_snapshot, temporary_worktree
-
-_SUPPORT = Path(__file__).resolve().with_name("fixture_environment.py")
-if not _SUPPORT.is_file():
-    _SUPPORT = Path(__file__).resolve().parents[1] / "fixture_environment.py"
-git_environment = runpy.run_path(str(_SUPPORT))["git_environment"]
+from tests.fixture_environment import git_environment
+from tests.fixtures.performance_reports import retained
 
 LEGACY_CONFIG = b"""schema = 1
 schema-field = "schema"
@@ -82,17 +81,6 @@ def legacy() -> tuple[bytes, bytes]:
         }
     )
     return payload, manifest
-
-
-def retained(current: str = "v1.1.0", baseline: str = "v1.0.0", point: float = 5) -> Evidence:
-    comparison = compare_samples(
-        Sample((("shared", Estimate(10, ConfidenceInterval(8, 12))),)), Sample((("shared", Estimate(point, ConfidenceInterval(4, 6))),))
-    )
-    return Evidence(
-        serialize_comparison(comparison),
-        COMPARISON_SCHEMA,
-        (("baseline", Provenance("a" * 40, context=(("release", baseline),))), ("current", Provenance("c" * 40, context=(("release", current),)))),
-    )
 
 
 class TestWorkflowConsumer(unittest.TestCase):
@@ -442,6 +430,21 @@ record="$"
             self.assertIsNone(source.harness_sha256)
             self.assertEqual(dict(source.context)["legacy.archive-sha256"], sha256(original))
             self.assertEqual(archive.read_bytes(), original)
+            from research_repo_tools import archives
+
+            extract_members = archives._extract
+
+            def replace_after_extraction(*args):
+                extract_members(*args)
+                archive.write_bytes(b"a later archive revision")
+
+            with patch.object(archives, "_extract", side_effect=replace_after_extraction) as extraction:
+                retained, origin = read_baseline(archive, legacy_configuration=configuration, expected_tag="v1.0.0")
+            extraction.assert_called_once()
+            self.assertEqual(retained, sample)
+            self.assertEqual(dict(origin.context)["legacy.archive-sha256"], sha256(original))
+            self.assertEqual(archive.read_bytes(), b"a later archive revision")
+            archive.write_bytes(original)
             with self.assertRaisesRegex(ValueError, "release|tag"):
                 read_baseline(archive, legacy_configuration=configuration, expected_tag="v1.1.0")
             members["sample.json"] = b"broken shared data"
@@ -579,6 +582,31 @@ record="$"
         data["sha256"] = sha256(malformed)
         with self.assertRaisesRegex(ValueError, "coverage"):
             convert_csv(malformed, deterministic_json(data), LEGACY_CONFIG)
+
+    def test_legacy_identity_comparisons_preserve_nested_json_types(self) -> None:
+        payload, manifest = legacy()
+        data = json.loads(manifest)
+        data.update(first={"flags": [True]}, second={"flags": [1]})
+        config = LEGACY_CONFIG.replace(b'"baseline.release", "baseline.label"', b'"first", "second"')
+        with self.assertRaisesRegex(ValueError, "identity selectors differ"):
+            convert_csv(payload, deterministic_json(data), config)
+        with self.assertRaisesRegex(ValueError, "legacy assertion failed"):
+            convert_csv(payload, deterministic_json(data), LEGACY_CONFIG + b"\n[assertions.first]\nflags=[1]\n")
+        config = LEGACY_CONFIG.replace(b'missing = "missing"', b'missing = "added"')
+        with self.assertRaisesRegex(ValueError, "distinct CSV strings"):
+            convert_csv(payload, manifest, config)
+
+    def test_legacy_csv_provenance_uses_original_quoted_multiline_records(self) -> None:
+        payload, manifest = legacy()
+        payload = payload.replace(b"schema,name,", b"notes,schema,name,").replace(b"old-csv/v1,", b'"memo,\r\nline two",old-csv/v1,')
+        data = json.loads(manifest)
+        data["sha256"] = sha256(payload)
+        config = LEGACY_CONFIG.replace(b'header = ["schema"', b'header = ["notes", "schema"')
+        converted = convert_csv(payload, deterministic_json(data), config)
+        comparison = parse_comparison(converted.payload)
+        self.assertEqual(comparison.comparisons[0].speedup, 2)
+        self.assertEqual(comparison.missing_baseline, ("new",))
+        self.assertEqual(dict(converted.sources[0][1].context)["legacy.payload-sha256"], data["sha256"])
 
     def test_cli_conversion_promotion_rerender_and_export(self) -> None:
         with tempfile.TemporaryDirectory() as directory:

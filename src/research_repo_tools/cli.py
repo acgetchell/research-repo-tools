@@ -2,17 +2,28 @@
 
 import argparse
 import os
+import shlex
 import subprocess
 import sys
+from collections.abc import Sequence
 from contextlib import ExitStack
 from dataclasses import replace
 from io import TextIOWrapper
 from pathlib import Path
 
 from research_repo_tools import __version__
+from research_repo_tools._console import write_json_stdout
+from research_repo_tools._console import write_stdout as _write_stdout
+from research_repo_tools._diagnostics import workflow_diagnostic
 from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics
 lazy import research_repo_tools.config as config
-lazy from research_repo_tools.performance import _write_stdout
+
+
+class _CommandParser(argparse.ArgumentParser):
+    """Require exact long options on the root parser and every subcommand."""
+
+    def __init__(self, *args, allow_abbrev: bool = False, **kwargs) -> None:
+        super().__init__(*args, allow_abbrev=allow_abbrev, **kwargs)
 
 
 def _clean_mode(command: argparse.ArgumentParser) -> None:
@@ -22,7 +33,8 @@ def _clean_mode(command: argparse.ArgumentParser) -> None:
 
 
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    """Build the shared CLI and its command-specific options."""
+    result = _CommandParser(description=__doc__)
     result.add_argument("--version", action="version", version=__version__)
     result.add_argument("--config", type=Path, help="TOML config; defaults to [tool.research-repo-tools] in pyproject.toml")
     result.add_argument("--root", type=Path, help="consumer root; defaults to the configuration directory")
@@ -60,6 +72,7 @@ def parser() -> argparse.ArgumentParser:
         if name in {"generate", "tag"}:
             command.add_argument("--dry-run", action="store_true", help="print candidate output without publishing")
         if name == "tag":
+            command.add_argument("--commit", help="require a clean checkout at this reviewed full commit SHA")
             command.add_argument("--force", action="store_true", help="replace an existing local tag")
     ci = groups.add_parser("ci", help="export validated CI environment values").add_subparsers(dest="action", required=True)
     command = ci.add_parser("export", help="append checked single-line values to GITHUB_ENV")
@@ -83,8 +96,10 @@ def parser() -> argparse.ArgumentParser:
     source.add_argument("name", help="configured source selection name")
     source.add_argument("--apply", action="store_true", help="apply the resolved manifest/lock candidate with recoverable multi-file publication")
     python_update = deps.add_parser("update-python")
+    supplier = python_update.add_mutually_exclusive_group()
+    supplier.add_argument("--adopt-supplier", metavar="SOURCE", help="adopt a newer compatible published RRT or promote its attested Git pin")
     python_update.add_argument("--all-projects", action="store_true", help="also upgrade locks and sync the main and declared independent Python projects")
-    python_update.add_argument("--promote", metavar="SOURCE", help="promote a named exact Git source only if verified published artifacts contain the pin")
+    supplier.add_argument("--promote", metavar="SOURCE", help="promote a named exact Git source only if verified published artifacts contain the pin")
     python_update.add_argument("--promotion-prereleases", action="store_true", help="allow prereleases when selecting a verified promotion")
     python_update.add_argument("--promotion-versions", default="", help="PEP 440 version specifier restricting promotion candidates")
     tools = deps.add_parser("update-tools")
@@ -183,6 +198,7 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("tag")
     command.add_argument("--reuse-evidence", type=Path, help="revalidate a saved CI reuse approval under the configured opt-in policy")
     command.add_argument("--target", type=Path, help="original captured release target; must also match the published event")
+    command.add_argument("--require-crate-asset", action="store_true", help="require the retained .crate with SHA-256 on the immutable release before upload")
     command = release.add_parser(
         "publish",
         help="approve a validated draft GitHub Release and trigger its publication workflow",
@@ -214,7 +230,9 @@ def parser() -> argparse.ArgumentParser:
     command.add_argument("tag")
     command.add_argument("--attempts", type=int, default=1)
     command.add_argument("--interval", type=int, default=10)
+    command.add_argument("--publication-only", action="store_true", help="verify GitHub and registry publication after the separate pre-upload dependency gate")
     command.add_argument("--target", type=Path, help="independently captured release target to preserve through final verification")
+    command.add_argument("--require-crate-asset", action="store_true", help="compare the crates.io SHA-256 with the retained .crate on the immutable release")
     command = release.add_parser("visibility", help="check immutable GitHub publication and the exact registry version without a checkout")
     command.add_argument("tag")
     command.add_argument("--attempts", type=int, default=1)
@@ -249,6 +267,12 @@ def parser() -> argparse.ArgumentParser:
     split.add_argument("--github-output", type=Path, help="append SARIF_DIRECTORY, SARIF_HAS_UPLOADABLE_RUNS and SARIF_RUN_COUNT after publication")
     split.add_argument("--output", required=True, help="owned directory replaced as a complete generation")
     security = groups.add_parser("security", help="run managed native dependency and secret scanners").add_subparsers(dest="action", required=True)
+    exceptions = security.add_parser("check-exceptions", help="compare a proposed Gitleaks policy to the current policy")
+    exceptions.add_argument("candidate", help="path to the proposed Gitleaks configuration")
+    exceptions.add_argument("--baseline", help="path to the baseline configuration; defaults to the current repository policy")
+    exceptions.add_argument("--exclude", action="append", default=[], help="exclude this working-tree glob from both scans")
+    findings = security.add_parser("findings", help="summarize existing redacted Gitleaks JSON reports")
+    findings.add_argument("--reports", default="target/security", help="directory containing the Gitleaks report pair")
     osv = security.add_parser("osv", help="scan explicit tracked/nonignored uv.lock and Cargo.lock files")
     osv.add_argument("lockfiles", nargs="+")
     osv.add_argument("--output", default="target/security")
@@ -347,6 +371,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace, settings: config.Config) -> int:
+    """Dispatch a parsed command with the resolved consumer configuration and return its exit status."""
     if args.group == "clean":
         from research_repo_tools import coverage_clean, toolchain_clean
 
@@ -388,7 +413,6 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         from research_repo_tools.validation import check_cargo_metadata, require_executables, run_checks
 
         if args.action == "cargo-docs":
-            import json
             from dataclasses import asdict
 
             from research_repo_tools.cargo_docs import check_documentation
@@ -402,7 +426,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
                 cfg=tuple(args.cfg),
                 target=args.target,
             )
-            print(json.dumps(asdict(evidence), sort_keys=True))
+            write_json_stdout(asdict(evidence), sort_keys=True)
         elif args.action == "cargo-examples":
             from research_repo_tools.cargo_examples import run_examples
 
@@ -456,8 +480,8 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         from research_repo_tools.paper_dates import read_source_date
         from research_repo_tools.paper_pdf import PdfPolicy, check_pdf, normalize_pdf
 
-        document = settings.papers.get(args.paper) if args.paper else None
-        if args.paper and document is None:
+        document = settings.papers.get(args.paper) if args.paper is not None else None
+        if args.paper is not None and document is None:
             raise ValueError(f"unknown papers.documents declaration: {args.paper}")
         if args.action == "source-date":
             path = document.tex if document is not None else args.path
@@ -479,15 +503,14 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             identity = args.identity if args.identity is not None else document.identity if document is not None else None
             if tex is None or identity is None:
                 raise ValueError("papers normalize requires --tex and --identity, or a named --paper declaration")
-            inspection = normalize_pdf(
-                path, tex=settings.path(tex), identity=identity, output=settings.path(args.output) if args.output else None, policy=policy, reference=reference
-            )
+            if args.output == "":
+                raise ValueError("--output must be a nonempty path")
+            destination = settings.path(args.output) if args.output is not None else path
+            inspection = normalize_pdf(path, tex=settings.path(tex), identity=identity, output=destination, policy=policy, reference=reference)
+            path = destination
         print(f"OK {path}: {inspection.page_count} page(s)")
         return 0
     if args.group == "tectonic":
-        import json
-        import shlex
-
         from research_repo_tools.tectonic import discover_environment
 
         environment = discover_environment(pkg_config=settings.executable(args.pkg_config), prefixes=tuple(settings.path(path) for path in args.prefix))
@@ -499,7 +522,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
                 raise ValueError("tectonic export requires --file or GITHUB_ENV")
             export_environment(Path(destination), sorted(environment), environment=environment)
         elif args.format == "json":
-            print(json.dumps(environment, ensure_ascii=True, sort_keys=True))
+            write_json_stdout(environment, sort_keys=True)
         else:
             _write_stdout("".join(f"export {name}={shlex.quote(value)}\n" for name, value in sorted(environment.items())).encode("utf-8"))
         return 0
@@ -710,11 +733,17 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         _print(f"Published {len(outputs)} uploadable SARIF run(s)")
         return 0
     if args.group == "security":
-        from research_repo_tools.security import scan_osv, scan_secrets
+        from research_repo_tools import security
 
+        if args.action == "check-exceptions":
+            security.check_secret_exceptions(settings, args.candidate, baseline=args.baseline, exclude=tuple(args.exclude))
+            return 0
+        if args.action == "findings":
+            security.show_secret_findings(settings, reports=args.reports)
+            return 0
         if args.action == "osv":
-            return scan_osv(settings, tuple(args.lockfiles), output=args.output, configuration=args.scanner_config)
-        return scan_secrets(settings, output=args.output, configuration=args.scanner_config, exclude=tuple(args.exclude))
+            return security.scan_osv(settings, tuple(args.lockfiles), output=args.output, configuration=args.scanner_config)
+        return security.scan_secrets(settings, output=args.output, configuration=args.scanner_config, exclude=tuple(args.exclude))
     if args.group == "semgrep":
         if args.action == "check-reports":
             from research_repo_tools.semgrep_scan import require_current_reports
@@ -773,9 +802,11 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
 
             if args.promote is None and (args.promotion_versions or args.promotion_prereleases):
                 raise ValueError("promotion options require --promote SOURCE")
-            if args.all_projects or args.promote is not None:
+            if args.all_projects or args.adopt_supplier is not None or args.promote is not None:
                 from research_repo_tools.python_updates import update
 
+                if args.adopt_supplier is not None:
+                    return update(settings, adopt_supplier=args.adopt_supplier)
                 if args.promote is None:
                     return update(settings)
                 return update(settings, promote=args.promote, versions=args.promotion_versions, prereleases=args.promotion_prereleases)
@@ -854,15 +885,19 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             if len(reuse_payload) > 1024 * 1024:
                 raise ValueError("CI reuse approval exceeds the byte limit")
         if args.action == "reuse":
+            from research_repo_tools._git_checkout import _in_checkout
+            from research_repo_tools.files import _publish_new_file
             from research_repo_tools.release_reuse import verify_ci_reuse
 
             publishing = release_publishing._settings(settings)
             if publishing.reuse is None:
                 raise ValueError("configure publishing.reuse before selecting CI evidence")
-            output, root = settings.path(str(args.output)).resolve(), settings.root.resolve()
-            # Filesystem identity also covers case aliases on macOS volumes.
-            if output.is_relative_to(root) or any(parent.exists() and parent.samefile(root) for parent in output.parents):
+            output = settings.path(str(args.output))
+            if _in_checkout(output, settings.root.resolve()):
                 raise ValueError("save CI reuse approval outside the reviewed checkout; publication requires a clean checkout")
+            output = output.parent.resolve(strict=True) / output.name
+            if os.path.lexists(output):
+                raise FileExistsError(f"CI reuse approval output already exists: {output}")
             payload = verify_ci_reuse(
                 publishing.reuse,
                 args.commit,
@@ -871,8 +906,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
                 run_id=args.run_id,
                 attempt=args.attempt,
             )
-            with output.open("xb") as stream:
-                stream.write(payload)
+            _publish_new_file(output, payload)
             print("Saved verified CI reuse selection; revalidate it with --reuse-evidence at the release gate.")
             return 0
         target = None
@@ -896,7 +930,9 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             event = release_publishing.validate_event(
                 _load_json(payload, "GitHub release event"), os.environ["GITHUB_REPOSITORY"], os.environ.get("GITHUB_SHA", ""), os.environ.get("GITHUB_REF", "")
             )
-            release_publishing.check_reviewed_release(settings, args.tag, event=event, reuse_evidence=reuse_payload, **target_options)
+            release_publishing.check_reviewed_release(
+                settings, args.tag, event=event, reuse_evidence=reuse_payload, require_crate_asset=args.require_crate_asset, **target_options
+            )
             return 0
         if args.action == "publish":
             release_publishing.publish_reviewed_release(settings, args.tag, reuse_evidence=reuse_payload, **target_options)
@@ -910,7 +946,8 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
                 raise ValueError(f"registry version is {'already present; inspect before retrying uploads' if result.present else 'not yet visible'}")
             return 0
         if args.action == "verify":
-            release_publishing.verify_publication(settings, args.tag, attempts=args.attempts, interval=args.interval, target=target)
+            verify = release_publishing._verify_configured_publication if args.publication_only else release_publishing.verify_publication
+            verify(settings, args.tag, attempts=args.attempts, interval=args.interval, target=target, require_crate_asset=args.require_crate_asset)
             print(f"Verified published GitHub Release and registry version {args.tag}.")
             return 0
         if args.action == "visibility":
@@ -980,16 +1017,26 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             notes, _source, _heading = changelog.notes(settings, args.tag)
             _write_stdout(notes.encode("utf-8"))
             return 0
-        body = changelog.tag(settings, args.tag, force=args.force, dry_run=args.dry_run)
+        commit, body = changelog.tag_with_preflight(
+            settings,
+            args.tag,
+            commit=args.commit,
+            force=args.force,
+            dry_run=args.dry_run,
+            explicit_root=args.root is not None,
+            config_file=args.config,
+        )
         if args.dry_run:
             _write_stdout(body.encode("utf-8"))
         else:
-            print(f"Created local annotated tag {args.tag}")
+            print(f"Created local annotated tag {args.tag} at {commit}")
+            print(body, end="")
         return 0
     raise ValueError(f"unknown command group: {args.group}")
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the command line and report expected command failures as nonzero exit statuses."""
     # Reporting a completed mutation must not fail on an unencodable path.
     # Preserve the encoding and restore caller-owned stream policies on exit.
     with ExitStack() as streams:
@@ -1000,6 +1047,10 @@ def main(argv: list[str] | None = None) -> int:
         args = parser().parse_args(argv)
         expected_errors = (ExecutableNotFoundError, OSError, ValueError, TypeError, RuntimeError, subprocess.SubprocessError)
         try:
+            if args.group in {"release", "performance"} or (args.group == "changelog" and args.action == "tag"):
+                from research_repo_tools._registry_requests import registry_timeout
+
+                registry_timeout()
             settings = config.load(args.config, args.root)
             runtime_policy = None
             runtime_artifacts = None
@@ -1026,14 +1077,49 @@ def main(argv: list[str] | None = None) -> int:
         except ExceptionGroup as error:
             expected, unexpected = error.split(expected_errors)
             if expected is not None:
-                print(f"research-repo-tools: {format_exception_diagnostics(expected)}", file=sys.stderr)
+                detail = format_exception_diagnostics(expected)
+                if args.group in {"deps", "release"}:
+                    detail = workflow_diagnostic(detail)
+                print(f"research-repo-tools: {detail}", file=sys.stderr)
             if unexpected is not None:
                 raise unexpected from None
             return 1
         except expected_errors as error:
-            print(f"research-repo-tools: {format_exception_diagnostics(error, single_line=args.group == 'deps')}", file=sys.stderr)
+            detail = format_exception_diagnostics(error)
+            if args.group in {"deps", "release"}:
+                detail = workflow_diagnostic(detail, single_line=args.group == "deps")
+            print(f"research-repo-tools: {detail}", file=sys.stderr)
             return 1
 
 
+def _flush_stdout() -> None:
+    """Flush process output and prevent a second failed flush at interpreter shutdown."""
+    try:
+        sys.stdout.flush()
+    except OSError:
+        # Windows can report a closed pipe as EINVAL. Handle the failed stream
+        # here so neither its errno nor its buffer size determines the exit code.
+        with open(os.devnull, "wb") as sink:
+            os.dup2(sink.fileno(), sys.stdout.fileno())
+        raise
+
+
+def entrypoint() -> int:
+    """Handle process interruption and early pipeline closure at the executable boundary."""
+    try:
+        try:
+            return main()
+        finally:
+            _flush_stdout()
+    except BrokenPipeError:
+        return 1
+    except OSError as error:
+        print(f"research-repo-tools: {format_exception_diagnostics(error)}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        print("research-repo-tools: interrupted", file=sys.stderr)
+        return 130
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(entrypoint())

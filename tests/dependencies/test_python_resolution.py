@@ -6,8 +6,31 @@ import tomllib
 from pathlib import Path
 
 import pytest
+from packaging.markers import Marker
+from packaging.version import Version
 
 from research_repo_tools import dependencies, python_locks, python_resolution
+
+
+def test_marker_projection_preserves_nested_boolean_groups_and_minor_prereleases():
+    marker = Marker(
+        '(python_version == "3.15" and (sys_platform == "win32" or python_full_version >= "3.15.2"))'
+        ' or (python_version == "3.16" and python_full_version >= "3.16.2")'
+    )
+    support = python_resolution.marker_python_support(marker)
+    assert all(Version(version) in support for version in ("3.15.0a1", "3.15.0", "3.15.2", "3.16.2"))
+    assert all(Version(version) not in support for version in ("3.14.9", "3.16.0a1", "3.16.1", "3.17.0"))
+
+
+def test_script_metadata_preserves_unicode_inside_index_urls(tmp_path):
+    url = "https://example.invalid/pac\u2028kages/🧪"
+    source = f'[[tool.uv.index]]\nname = "private"\nurl = "{url}"\n'
+    script = python_resolution.script_metadata(source, tmp_path, ">=3.15", [])
+    opening, *lines, closing, trailing = script.split("\n")
+    assert (opening, closing, trailing) == ("# /// script", "# ///", "")
+    assert all(line == "#" or line.startswith("# ") for line in lines)
+    metadata = tomllib.loads("\n".join(line[2:] for line in lines))
+    assert metadata["tool"]["uv"]["index"] == [{"name": "private", "url": url}]
 
 
 @pytest.mark.parametrize(

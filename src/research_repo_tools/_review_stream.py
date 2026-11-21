@@ -29,6 +29,11 @@ def stream_review(
     output: Callable[[bytes], None],
     timeout: float | None,
 ) -> CompletedReview | ConsentRequired | FailedReview:
+    """Run CodeRabbit and forward bounded output while collecting the review or consent result.
+
+    The loop stops the child on timeout or interruption. The output callback runs
+    synchronously and must return promptly for the loop to enforce its deadline.
+    """
     events = AgentEvents()
     # Separate file offsets avoid pipe deadlocks and preserve Windows bytes.
     # A descendant retaining stdout cannot prevent the direct child timeout.

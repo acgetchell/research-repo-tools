@@ -17,10 +17,16 @@ def environment(source: Mapping[str, str] | None = None) -> dict[str, str]:
     return {name: value for name, value in (os.environ if source is None else source).items() if name.upper() not in VARIABLES}
 
 
+def redact(text: str, child: Mapping[str, str] | None = None) -> str:
+    """Mask parent and child release credentials while preserving stream formatting."""
+    environments = (os.environ,) if child is None else (os.environ, child)
+    secrets = {value for source in environments for name, value in source.items() if name.upper() in VARIABLES and value}
+    for secret in sorted(secrets, key=len, reverse=True):
+        text = text.replace(secret, "[REDACTED]")
+    return text
+
+
 def diagnostics(error: BaseException, *, single_line: bool = False) -> str:
     """Redact both inherited lookup credentials before formatting diagnostics."""
-    detail = format_exception_diagnostics(error)
-    secrets = {value for name, value in os.environ.items() if name.upper() in VARIABLES and value}
-    for secret in sorted(secrets, key=len, reverse=True):
-        detail = detail.replace(secret, "[REDACTED]")
+    detail = redact(format_exception_diagnostics(error))
     return format_exception_diagnostics(RuntimeError(detail), single_line=single_line)

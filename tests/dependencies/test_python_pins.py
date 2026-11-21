@@ -53,15 +53,16 @@ def test_parse_project_accepts_group_without_exact_pins() -> None:
     assert pins == []
 
 
-def test_tooling_group_is_a_retained_constraint_not_an_upgrade_target():
-    text = project_text("ruff==0.16.2").replace("dev = [", 'tooling = ["research-repo-tools==0.1.0", "ruff<0.17"]\ndev = [{include-group="tooling"},')
+@pytest.mark.parametrize(("name", "include"), [("tooling", "tooling"), ("tooling-extra", "Tooling.Extra")])
+def test_tooling_group_is_a_retained_constraint_not_an_upgrade_target(name, include):
+    text = project_text("ruff==0.16.2").replace("dev = [", f'{name} = ["research-repo-tools==0.1.0", "ruff<0.17"]\ndev = [{{include-group="{include}"}},')
     _, pins = update_python_dev_pins.parse_project(text)
     assert pins == [update_python_dev_pins.DevPin("ruff", "0.16.2")]
     requirements = update_python_dev_pins._resolution_requirements(text, pins)
     assert requirements == ["packaging>=26", "research-repo-tools==0.1.0", "ruff<0.17", "ruff>=0.16.2"]
     masked_groups = update_python_dev_pins._masked_manifest(text, frozenset({"ruff"}))["dependency-groups"]
     assert isinstance(masked_groups, dict)
-    assert masked_groups["tooling"] == [
+    assert masked_groups[name] == [
         "research-repo-tools==0.1.0",
         "ruff<0.17",
     ]

@@ -147,10 +147,10 @@ from pathlib import Path
 from research_repo_tools import cli, files
 
 publish = files.replace_many
-def record(updates):
+def record(updates, **kwargs):
     with Path(sys.argv[1]).open("a", encoding="utf-8", newline="\\n") as stream:
         stream.write(json.dumps({str(path): payload.hex() for path, payload in updates.items()}) + "\\n")
-    publish(updates)
+    publish(updates, **kwargs)
 
 files.replace_many = record
 raise SystemExit(cli.main(sys.argv[2:]))

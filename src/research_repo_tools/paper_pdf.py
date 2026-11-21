@@ -9,7 +9,7 @@ from io import BytesIO
 from pathlib import Path
 from xml.etree import ElementTree
 
-from research_repo_tools.files import _paths_alias, replace_many
+from research_repo_tools.files import _paths_alias, _publish_new_file, replace_many
 from research_repo_tools.paper_dates import PaperDate, parse_source_date
 
 __all__ = ["PdfInspection", "PdfPage", "PdfPolicy", "check_pdf", "compare_structure", "inspect_pdf", "normalize_pdf", "normalize_pdf_bytes"]
@@ -17,6 +17,8 @@ __all__ = ["PdfInspection", "PdfPage", "PdfPolicy", "check_pdf", "compare_struct
 
 @dataclass(frozen=True, slots=True)
 class PdfPolicy:
+    """Minimum page count and text requirements for checking a built paper."""
+
     min_pages: int = 1
     required_text: tuple[str, ...] = ()
     forbidden_text: tuple[str, ...] = ()
@@ -32,6 +34,8 @@ class PdfPolicy:
 
 @dataclass(frozen=True, slots=True)
 class PdfPage:
+    """Extracted text and page geometry used for structural PDF comparisons."""
+
     text: str
     media_box: tuple[float, ...]
     crop_box: tuple[float, ...]
@@ -41,14 +45,18 @@ class PdfPage:
 
 @dataclass(frozen=True, slots=True)
 class PdfInspection:
+    """An ordered sequence of inspected PDF pages."""
+
     pages: tuple[PdfPage, ...]
 
     @property
     def page_count(self) -> int:
+        """Return the number of pages in the inspected document."""
         return len(self.pages)
 
     @property
     def text(self) -> str:
+        """Join extracted page text in document order with an LF between pages."""
         return "\n".join(page.text for page in self.pages)
 
 
@@ -234,6 +242,8 @@ def normalize_pdf(
     destination = path if output is None else output
     if _paths_alias(destination, tex):
         raise ValueError("PDF output must not replace its TeX source")
+    if reference is not None and _paths_alias(destination, reference) and not _paths_alias(path, reference):
+        raise ValueError("PDF output must not replace its reference PDF")
     originals = {path: path.read_bytes(), tex: tex.read_bytes()}
     try:
         date = parse_source_date(originals[tex].decode("utf-8"))
@@ -241,15 +251,26 @@ def normalize_pdf(
         raise ValueError(f"{tex}: failed to read paper source date: {error}") from error
     retained = None
     if reference is not None:
-        originals[reference] = reference.read_bytes()
-        retained = _inspect(originals[reference])
-    if destination.exists() and destination not in originals:
+        if reference.resolve() == path.resolve() and not reference.is_symlink():
+            retained = _inspect(originals[path])
+        else:
+            originals[reference] = reference.read_bytes()
+            retained = _inspect(originals[reference])
+    replacing = destination.exists()
+    if replacing and not any(_paths_alias(destination, source) for source in originals):
         originals[destination] = destination.read_bytes()
     candidate = normalize_pdf_bytes(originals[path], date=date, identity=identity)
     inspection = _inspect(candidate)
     _check(inspection, policy, retained)
-    for source, original in originals.items():
-        if source.read_bytes() != original:
-            raise ValueError(f"file changed before publication: {source}")
-    replace_many({destination: candidate}, expected=originals if destination in originals else None)
+    if replacing:
+        replace_many({destination: candidate}, expected=originals)
+    else:
+
+        def verify_inputs() -> None:
+            """Require the same source and reference bytes after staging the new PDF."""
+            for source, original in originals.items():
+                if source.read_bytes() != original:
+                    raise ValueError(f"file changed before publication: {source}")
+
+        _publish_new_file(destination, candidate, verify=verify_inputs)
     return inspection

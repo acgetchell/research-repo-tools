@@ -29,6 +29,11 @@ verified benchmark preparation inputs. It also makes unpublished-candidate
 recovery resumable, tightens archive path validation, and retains nanosecond
 precision in command-timing summaries.
 
+Automatic supplier adoption, `just release-cargo-fetch`, `just tag TAG --commit SHA`,
+and `RRT_REGISTRY_TIMEOUT_SECONDS` require a supplying release or a reviewed
+development commit for rehearsal. See the [command reference][commands] for
+current-source examples.
+
 **v0.2.7 includes breaking Python API changes.** Update callers to the documented
 typed variants, including [trial orders][complete-api] and
 [release-rule replacements][publishing-api]. Review the current
@@ -388,6 +393,32 @@ do not assemble Git URLs or implement their own dependency guard. Workspace
 ownership, registry proof limits and recovery are described in the
 [dependency source guide][dependency-sources].
 
+### Automatically adopting a published supplier
+
+Use an installed version that provides `--adopt-supplier`. Add a named
+`research-repo-tools` selection in `dependency-sources.toml` that matches
+the main Python project's manifest and lock. This example selects version
+`0.3.0` for a project already declared as `[projects.python]`.
+
+```toml
+[sources.tooling]
+project = "python"
+package = "research-repo-tools"
+version = "0.3.0"
+```
+
+Set `supplier_update := "tooling"` in the matching Justfile, using your
+source selection's name. The Python stage of `just update` then runs in an
+isolated environment using the locked `tooling` group. For an existing wrapper,
+use the equivalent command.
+
+```sh
+uv run --isolated --locked --only-group tooling research-repo-tools \
+  deps update-python --all-projects --adopt-supplier tooling
+```
+
+See the [supplier eligibility and provenance rules](docs/UPDATING_DEPENDENCIES.md#automatically-adopting-a-published-supplier).
+
 ### Source-built Python dependencies
 
 When a locked PyPI dependency needs a native source build, explicitly select it
@@ -562,6 +593,7 @@ for exhaustive arguments, configuration and Python contracts.
 | Publish reports and figures | [Preview and publish retained evidence][reports-guide] | [Publication APIs][publication-api] |
 | Publish to PyPI or crates.io | [Reviewed release procedure][publishing] | [Exact-commit evidence][evidence-guide], [optional reuse][reuse-guide] |
 | Record complete performance results | [Prepare, measure/retain, publish README][performance-guide] | [Measurement policy][performance-policy], [complete-run APIs][complete-api] |
+| Review secret findings and false-positive exceptions | [Gitleaks exception review](docs/RUNNING_CHECKS.md#reviewing-gitleaks-exceptions) | [Security APIs][security-api] |
 | Select files, run commands and export CI values | [Consumer checks and integration][checks-guide] | [File APIs][files-api], [process/Just APIs][process-api], [workflow APIs][workflow-api] |
 | Set up or repair tools | [Installation and ownership][toolchain] | [Toolchain APIs][toolchain-api] |
 | Time external commands | [Exploratory command timing][timing-guide] | [Timing evidence contract][timing-api] |
@@ -670,8 +702,11 @@ from research_repo_tools.benchmark_reuse import plan_reuse_archive
 from research_repo_tools.publication import publish_publication
 
 candidate = plan_reuse_archive(
-    Path.cwd(), "target/run.json", "target/evidence.json",
-    "tooling/reuse-policy.json", "target/benchmark-release.tar.gz",
+    Path.cwd(),
+    "target/run.json",
+    "target/evidence.json",
+    "tooling/reuse-policy.json",
+    "target/benchmark-release.tar.gz",
 )
 publish_publication(candidate)
 ```
@@ -718,14 +753,19 @@ human` or `--progress json` for dependency phases and request/retry counts;
 For committed schema-2 publisher histories, retain a publication receipt and
 declare the original report configuration in
 `CandidatePolicy(report="tooling/performance-report.toml", ...)`.
-Before promotion, freeze the shared publisher's exact outputs under acquisition-owner
-control:
+Before promotion, the acquisition owner freezes the publisher's outputs in the
+consumer checkout (`root`) using the original Step 1 policy and its trusted
+acquisition digest:
 
 ```python
 from research_repo_tools.candidate_publication import plan_candidate_publication
+from research_repo_tools.publication import publish_publication
 
 plan, receipt = plan_candidate_publication(
-    root, "target/run.json", "target/evidence.json", step_one_policy,
+    root,
+    "target/run.json",
+    "target/evidence.json",
+    step_one_policy,
     acquisition_sha256=trusted_acquisition_digest,
 )
 # Save receipt and its SHA-256 through the separate trusted handoff.
@@ -751,8 +791,9 @@ record saved by `--output`; default shared CLI status messages remain compatible
 Checks that are not configured are labeled explicitly. Failures print diagnostics
 and a nonzero status, without a success summary or replacement acceptance.
 
-Follow the [ordered release procedure][publishing] and matching installed
-`RELEASING.md` template. Exact-commit checks are the default. [CI reuse][reuse-guide]
+Follow the ordered release procedure in the matching installed `RELEASING.md`
+template and adapt it to your repository. The [RRT release guide][publishing]
+is a worked Python publication workflow. Exact-commit checks are the default. [CI reuse][reuse-guide]
 is an explicit reviewed option with its own eligibility and revalidation;
 package and artifact checks still apply. Approval, registry publication,
 attachment uploads and downstream adoption remain distinct actions.
@@ -784,8 +825,10 @@ research-repo-tools release visibility v1.2.3 \
 ```
 
 The command requires completed, nonempty assets and prints the crates.io
-archive checksum. Use `--target PATH` to also require the captured release ID
-and tag commit. Only an exact registry 404 permits another poll.
+archive checksum. Compare it with the SHA-256 of the retained `.crate` from
+validation before marking registry publication verified. Use `--target PATH`
+to also require the captured release ID and tag commit. Only an exact registry
+404 permits another poll.
 
 The `release assets plan` command verifies independent repository/tag/commit
 and push-event assertions, protected-default-branch ancestry, required checks,

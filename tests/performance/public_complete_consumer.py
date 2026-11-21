@@ -6,7 +6,6 @@ import json
 import math
 import os
 import re
-import runpy
 import shutil
 import subprocess
 import sys
@@ -25,6 +24,9 @@ from types import SimpleNamespace
 from typing import override
 from unittest.mock import patch
 from urllib.parse import unquote
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from research_repo_tools import process
 from research_repo_tools.cli import main
@@ -69,26 +71,8 @@ from research_repo_tools.run_presentation import (
 )
 from research_repo_tools.run_reports import load_latest_run, load_run_report_plan
 from research_repo_tools.text_lines import inspect_lines
-
-BENCHMARK = """import json, os
-from pathlib import Path
-point = float(Path('src/point.txt').read_text(encoding='utf-8'))
-for identity in ['library / 2'] + (['reference / 2'] if os.environ['PHASE'] == 'baseline' else []):
-    target = Path('target/criterion') / identity.replace(' / ', '_') / 'new'
-    target.mkdir(parents=True)
-    def write(name, value):
-        (target / name).write_bytes((json.dumps(value) + '\\r\\n').encode('utf-8'))
-    write('benchmark.json', {'full_id': identity})
-    write('sample.json', {'iters': [1, 2, 3], 'times': [point, point * 2, point * 3]})
-    write('estimates.json', {stat: {'point_estimate': point, 'confidence_interval': {'lower_bound': point * .9, 'upper_bound': point * 1.1, 'confidence_level': .95}} for stat in ('mean', 'median')})
-"""
-GATE = """import os, tomllib
-from pathlib import Path
-assert os.environ['PHASE'] in {'baseline', 'current'}
-assert tomllib.loads(Path('rust-toolchain.toml').read_text(encoding='utf-8'))['toolchain']['channel'] == '1.90.0'
-assert tomllib.loads(Path('Cargo.lock').read_text(encoding='utf-8'))['package'][0]['version'] == '2.0.0'
-assert float(Path('src/point.txt').read_text(encoding='utf-8')) > 0
-"""
+from tests.fixture_environment import git_environment
+from tests.fixtures.measurements import BENCHMARK, GATE, fixture, measured
 
 # A small renderer-1 report fixture, independent of the current renderer. Its
 # identity comes from exact evidence bytes; the historical presentation is fixed.
@@ -244,65 +228,6 @@ def report_rows(report: str) -> list[tuple[str, ...]]:
     return rows
 
 
-def fixture(root: Path) -> CommonHarnessPlan:
-    root.mkdir(parents=True, exist_ok=True)
-    (root / "src").mkdir(exist_ok=True)
-    (root / "src/point.txt").write_bytes(b"5")
-    (root / "Cargo.toml").write_bytes(b'[package]\nname="fixture"\nversion="1.1.0"\n')
-    (root / "Cargo.lock").write_bytes(b'[[package]]\nname="reference"\nversion="2.0.0"\n')
-    (root / "rust-toolchain.toml").write_bytes(b'[toolchain]\nchannel="1.90.0"\n')
-    (root / "bench.py").write_text(BENCHMARK, encoding="utf-8", newline="\n")
-    (root / "gate.py").write_text(GATE, encoding="utf-8", newline="\n")
-    python = json.dumps(sys.executable)
-    config = f"""schema=2
-sources=["src/*.txt", "Cargo.toml"]
-harness=["bench.py", "gate.py", "Cargo.lock", "Cargo.toml", "rust-toolchain.toml"]
-sample-count=3
-[probes]
-python=[{python}, "--version"]
-[dependencies]
-reference="Cargo.lock"
-[phases.baseline]
-command=[{python}, "bench.py"]
-gate=[{python}, "gate.py"]
-expected=["library / 2", "reference / 2"]
-environment={{PHASE="baseline"}}
-[phases.current]
-command=[{python}, "bench.py"]
-gate=[{python}, "gate.py"]
-expected=["library / 2"]
-environment={{PHASE="current"}}
-[[series]]
-name="Library baseline"
-phase="baseline"
-rows={{"size 2"="library / 2"}}
-[[series]]
-name="Library current"
-phase="current"
-rows={{"size 2"="library / 2"}}
-[[series]]
-name="Reference reused"
-phase="baseline"
-rows={{"size 2"="reference / 2"}}
-"""
-    (root / "benchmark.toml").write_text(config, encoding="utf-8", newline="\n")
-    plan = load_measurement(root, "benchmark.toml")
-    assert isinstance(plan, CommonHarnessPlan)
-    return plan
-
-
-def measured(parent: Path, *, point: bytes = b"10", same_label: bool = False) -> Evidence:
-    current, baseline = parent / "current", parent / "baseline"
-    plan = fixture(current)
-    shutil.copytree(current, baseline)
-    (baseline / "src/point.txt").write_bytes(point)
-    (baseline / "bench.py").write_bytes(b'raise RuntimeError("old harness must not run")\n')
-    (baseline / "Cargo.lock").write_bytes(b'[[package]]\nname="reference"\nversion="1.0.0"\n')
-    (baseline / "Cargo.toml").write_bytes(b'[package]\nname="fixture"\nversion="1.0.0"\n')
-    with patch("research_repo_tools.measurement.resolve_revision", side_effect=lambda root, ref: ("a" if root.name == "baseline" else "b") * 40):
-        return measure_prepared_pair(baseline, current, plan, ReleasePair("v1.1.0", "v1.1.0" if same_label else "v1.0.0"))
-
-
 def retained_fixture(*, baseline_point: float = 10, mean_offset: float = 0, confidence_level: float = 0.95) -> Evidence:
     """Synthetic retained inputs for rendering/publication, without acquisition."""
     phases, sources = [], []
@@ -422,6 +347,13 @@ source="tag"
 
 
 class TestCompleteConsumer(unittest.TestCase):
+    def test_measurement_commands_preserve_the_interpreter_path(self):
+        python = r"C:\build tools\🧪\python.exe"
+        with tempfile.TemporaryDirectory() as directory, patch.object(sys, "executable", python):
+            plan = fixture(Path(directory))
+        for phase in (plan.baseline, plan.current):
+            self.assertEqual((phase.command[0], phase.gate[0]), (python, python))
+
     def test_complete_plan_checks_nested_types_before_reading_fields(self):
         with tempfile.TemporaryDirectory() as directory:
             plan = fixture(Path(directory))
@@ -565,11 +497,7 @@ class TestCompleteConsumer(unittest.TestCase):
 
     def _declarative_workflow(self, *, native):
         if native:
-            support = Path(__file__).resolve().with_name("fixture_environment.py")
-            if not support.is_file():
-                support = Path(__file__).resolve().parents[1] / "fixture_environment.py"
-            environment = runpy.run_path(str(support))["git_environment"]()
-            self.enterContext(patch.dict(os.environ, environment, clear=True))
+            self.enterContext(patch.dict(os.environ, git_environment(), clear=True))
         with tempfile.TemporaryDirectory(prefix="consumer café ") as directory:
             root = Path(directory).resolve() / "consumer"
             fixture(root)
@@ -1189,6 +1117,13 @@ Selection coverage:
                     self.assertIn("100 × (numerator − denominator) / numerator", table)
                 else:
                     self.assertNotIn("Reduction &lt;&amp;&gt;", table)
+
+    def test_timing_only_table_skips_arithmetic_for_hidden_comparison_columns(self):
+        evidence = retained_fixture(baseline_point=1e-308)
+        result = render_run_table(evidence, presentation_layout(), style=RunTableStyle(comparison_columns=()))
+        self.assertIn("1e-308 ns", result)
+        self.assertIn("5 ns", result)
+        self.assertNotIn("time reduction", result.lower())
 
     def test_table_style_rejects_invalid_fields_and_heading_counts(self):
         invalid = (

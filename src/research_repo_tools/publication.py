@@ -1,10 +1,9 @@
 """Byte-preserving document sections, retained timing renderers, and publication plans."""
 
-import difflib
 import html
 import posixpath
 import re
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -12,7 +11,7 @@ from urllib.parse import quote
 
 from research_repo_tools.criterion import Comparison, ComparisonSet, Unit, _format_estimate, _markdown_text, _unit
 from research_repo_tools.evidence import _string, sha256
-from research_repo_tools.files import _validate_distinct_paths, replace_many
+from research_repo_tools.files import _text_diff, _validate_distinct_paths, replace_many
 from research_repo_tools.process import run_git_bytes
 from research_repo_tools.release_policy import FixedValue, ReleaseRule, relative_path
 
@@ -240,10 +239,12 @@ class GlobCheck:
     paths: tuple[str, ...]
 
     def __post_init__(self) -> None:
-        if isinstance(self.patterns, str) or isinstance(self.paths, str) or not self.patterns or not self.paths:
+        if isinstance(self.patterns, (str, bytes)) or isinstance(self.paths, (str, bytes)):
             raise ValueError("glob check requires nonempty pattern and path sequences")
         object.__setattr__(self, "patterns", tuple(_string(pattern, "glob pattern") for pattern in self.patterns))
         paths = tuple(_publication_name(path) for path in self.paths)
+        if not self.patterns or not paths:
+            raise ValueError("glob check requires nonempty pattern and path sequences")
         if len(set(paths)) != len(paths):
             raise ValueError("glob check paths must be unique")
         object.__setattr__(self, "paths", tuple(sorted(paths)))
@@ -268,6 +269,8 @@ class GitCheck:
             raise ValueError("allow_missing must be a boolean")
         if self.allow_missing and re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", self.tag) is None:
             raise ValueError("future publication tags must use canonical stable vX.Y.Z syntax")
+        if isinstance(self.paths, (str, bytes)):
+            raise ValueError("Git check paths must be a sequence of file names")
         paths = tuple(_publication_name(path) for path in self.paths)
         if len(set(paths)) != len(paths) or (not paths and self.revision is None):
             raise ValueError("Git check requires unique paths or a source revision")
@@ -350,11 +353,12 @@ class PublicationPlan:
 
     @property
     def changed_paths(self) -> tuple[Path, ...]:
+        """Return output paths whose planned bytes differ from the captured originals."""
         original = dict(self.originals)
         return tuple(self.root / name for name, data in self.outputs if original[name] != data)
 
 
-def plan_outputs(root: Path, outputs: Mapping[str, bytes], *, inputs: Mapping[str, bytes], immutable: Sequence[str] = ()) -> PublicationPlan:
+def plan_outputs(root: Path, outputs: Mapping[str, bytes], *, inputs: Mapping[str, bytes], immutable: Iterable[str] = ()) -> PublicationPlan:
     """Snapshot a fully rendered multi-output publication without writing files.
 
     Inputs may overlap outputs only when their exact bytes remain unchanged.
@@ -366,7 +370,10 @@ def plan_outputs(root: Path, outputs: Mapping[str, bytes], *, inputs: Mapping[st
         raise ValueError("output publication requires candidates and validated inputs")
     if any(not isinstance(data, bytes) for data in (*outputs.values(), *inputs.values())):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
         raise TypeError("publication inputs and outputs must be bytes")
-    if set(immutable) - outputs.keys():
+    if isinstance(immutable, str):
+        raise ValueError("immutable files must be an iterable of output names")
+    protected_names = tuple(immutable)
+    if set(protected_names) - outputs.keys():
         raise ValueError("immutable files must be publication outputs")
     names = tuple(dict.fromkeys([*inputs, *outputs]))
     _validate_distinct_paths(tuple(_path(root, name) for name in names))
@@ -377,7 +384,7 @@ def plan_outputs(root: Path, outputs: Mapping[str, bytes], *, inputs: Mapping[st
     for name, expected in inputs.items():
         if originals[name] != expected or (name in outputs and outputs[name] != expected):
             raise ValueError(f"validated input changed or would be overwritten: {name}")
-    for name in immutable:
+    for name in protected_names:
         if originals[name] is not None and originals[name] != outputs[name]:
             raise ValueError(f"immutable output differs: {name}")
     plan = PublicationPlan(root, tuple(outputs.items()), tuple(originals.items()), ())
@@ -393,10 +400,10 @@ def plan_publication(
     *,
     inputs: Mapping[str, bytes],
     figures: Mapping[str, bytes] | None = None,
-    references: Sequence[ReleaseRule] = (),
-    git_checks: Sequence[GitCheck] = (),
-    glob_checks: Sequence[GlobCheck] = (),
-    run_checks: Sequence[RunSelectionCheck] = (),
+    references: Iterable[ReleaseRule] = (),
+    git_checks: Iterable[GitCheck] = (),
+    glob_checks: Iterable[GlobCheck] = (),
+    run_checks: Iterable[RunSelectionCheck] = (),
     formatter: str | None = None,
 ) -> PublicationPlan:
     """Validate all candidates without writes, directories, measurement, or network.
@@ -411,10 +418,13 @@ def plan_publication(
     root = root.resolve(strict=True)
     if not inputs:
         raise ValueError("publication requires retained evidence inputs")
+    glob_checks = tuple(glob_checks)
+    run_checks = tuple(run_checks)
     for check in glob_checks:
         if set(check.paths) - inputs.keys():
             raise ValueError("glob checks require every selected path in validated inputs")
-    writes = [(document, None), *(figures or {}).items()]
+    figure_bytes: dict[str, bytes] = {} if figures is None else dict(figures)
+    writes = [(document, None), *figure_bytes.items()]
     for check in run_checks:
         _validate_distinct_paths((root / check.archive, *(_path(root, name) for name, _ in writes)))
     # Check sequences before making a dictionary: never collapse duplicate paths.
@@ -432,8 +442,8 @@ def plan_publication(
     original = originals[document]
     if original is None:
         raise FileNotFoundError(f"publication document is missing: {document}")
-    outputs = {document: replace_section(original, markers, content), **(figures or {})}
-    if any(not isinstance(data, bytes) for data in outputs.values()):
+    outputs = {document: replace_section(original, markers, content), **figure_bytes}
+    if any(not isinstance(data, bytes) for data in outputs.values()):  # ty: ignore[redundant-condition-strict]  Check figure bytes from untyped callers.
         raise TypeError("publication outputs must be bytes")
     if formatter is not None:
         from research_repo_tools.postprocess_changelog import format_markdown
@@ -444,7 +454,7 @@ def plan_publication(
             outputs[document].decode("utf-8"),
             _path(root, document),
             _path(root, formatter),
-            candidates={_path(root, name): data for name, data in (figures or {}).items()},
+            candidates={_path(root, name): data for name, data in figure_bytes.items()},
         ).encode("utf-8")
         # Formatting must retain exactly one valid pair of document markers.
         replace_section(outputs[document], markers, content)
@@ -459,7 +469,7 @@ def plan_publication(
         if any(match.group("value") != rule.replacement.value for match in rule.matches(data.decode("utf-8"))):
             raise ValueError(f"{rule.path}: publication reference does not match {rule.replacement.value!r}")
     _validate_distinct_paths(tuple(_path(root, name) for name in originals))
-    plan = PublicationPlan(root, tuple(outputs.items()), tuple(originals.items()), tuple(git_checks), tuple(glob_checks), tuple(run_checks))
+    plan = PublicationPlan(root, tuple(outputs.items()), tuple(originals.items()), tuple(git_checks), glob_checks, run_checks)
     _verify_plan(plan)
     return plan
 
@@ -524,10 +534,7 @@ def preview_publication(plan: PublicationPlan) -> str:
         if before == data:
             continue
         try:
-            old, new = (before or b"").decode("utf-8"), data.decode("utf-8")
+            chunks.append(_text_diff(before, data, fromfile=f"a/{name}", tofile=f"b/{name}"))
         except UnicodeError:
             chunks.append(f"{name}: SHA-256 {sha256(before) if before is not None else '(absent)'} -> {sha256(data)}\n")
-        else:
-            for line in difflib.unified_diff(old.splitlines(keepends=True), new.splitlines(keepends=True), fromfile=f"a/{name}", tofile=f"b/{name}"):
-                chunks.append(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n")
     return "".join(chunks)

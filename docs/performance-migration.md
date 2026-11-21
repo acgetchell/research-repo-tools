@@ -56,7 +56,9 @@ At the raw boundary, use the original bytes:
 ```python
 from research_repo_tools.evidence import verify_sha256
 
+
 def verified_legacy_csv(csv_path, recorded_sha256):
+    """Decode the legacy CSV only after its original bytes match the recorded SHA-256."""
     payload = csv_path.read_bytes()
     verify_sha256(payload, recorded_sha256)
     return payload.decode("utf-8")

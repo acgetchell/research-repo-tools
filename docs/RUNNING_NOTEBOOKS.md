@@ -116,8 +116,10 @@ lack of asyncio subprocess support does not prevent startup. See Python's
 and [Windows loop limitations](https://docs.python.org/3.15/library/asyncio-platforms.html#windows).
 
 Output cleanup validates every selected notebook before publishing any change.
-It uses rollback-capable file replacement; incomplete recovery reports backup
-paths. Structure validation never generates or repairs cell IDs. Missing optional
+It rechecks the selected source bytes before replacement and stops if a notebook
+was edited after loading. File replacement supports rollback, and incomplete
+recovery reports backup paths. Structure validation preserves existing cell IDs
+and reports missing or invalid IDs. Missing optional
 dependencies produce installation guidance rather than a Python traceback.
 Non-finite JSON numbers, including exponent overflow, are rejected during loading
 before any selected notebook is changed or executed.

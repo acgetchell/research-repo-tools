@@ -1,9 +1,10 @@
 """Compact, non-normalizing inspection of nbformat 4 notebooks awaiting repair."""
 
-import json
+from collections.abc import Iterable
 from pathlib import Path
 from typing import Any, cast
 
+from research_repo_tools._console import write_json_stdout
 from research_repo_tools.notebooks import CELL_ID, read_raw, selected_paths
 
 
@@ -16,6 +17,7 @@ def _source(value: object) -> str | None:
 
 
 def _summary(path: Path, *, preview: bool) -> dict[str, Any]:
+    """Collect per-cell diagnostics and optional source previews from a notebook, including cells with malformed metadata."""
     _, raw = read_raw(path)
     problems = []
     minor = raw.get("nbformat_minor")
@@ -75,12 +77,11 @@ def _summary(path: Path, *, preview: bool) -> dict[str, Any]:
     return {"path": str(path), "nbformat": 4, "nbformat_minor": minor if type(minor) is int else None, "problems": problems, "cells": cells}
 
 
-def inspect(paths: list[Path], *, preview: bool = True, as_json: bool = False) -> None:
-    # Build the whole report before publishing so a bad later input cannot leave
-    # a truncated JSON document or a misleading partial inventory on stdout.
+def inspect(paths: Iterable[Path], *, preview: bool = True, as_json: bool = False) -> None:
+    """Inspect every selected notebook before printing the report so an invalid input leaves stdout untouched."""
     report = {"schema": 1, "notebooks": [_summary(path, preview=preview) for path in selected_paths(paths)]}
     if as_json:
-        print(json.dumps(report, ensure_ascii=True, allow_nan=False, indent=2))
+        write_json_stdout(report, indent=2)
         return
     for notebook in report["notebooks"]:
         print(f"{notebook['path']}: nbformat 4.{notebook['nbformat_minor']}; {len(notebook['cells'])} cells")

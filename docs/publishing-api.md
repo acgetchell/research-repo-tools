@@ -77,13 +77,33 @@ retains exact-commit checks. `require_checks` always retains exact-SHA semantics
 that GitHub Release as the invoking maintainer. Calling it constitutes approval;
 the CLI additionally requires `--approve`. It never changes Git state or uploads
 registry packages. Consumers retain native Cargo packaging/upload commands.
+The command checks dependencies on entry and refreshes them before the
+publication request. The intermediate draft, tag, and CI recheck shares this
+operation's entry proof.
 It captures the reviewed commit, revalidates the exact release ID and tag commit
 before mutation, and validates the publication response through the shared
 [release-target contract](workflow-api.md#release-assets). An invalid/unavailable
 publication response raises `release_assets.ReleasePublicationUnknownError`;
 inspect the captured ID before retrying because publication may have succeeded.
-`verify_publication(config, tag, *, attempts=1, interval=10)` requires a published
-stable GitHub Release, configured assets and the exact registry version.
+`verify_publication(config, tag, *, attempts=1, interval=10, target=None,
+require_crate_asset=False)`
+rechecks upstream dependencies and requires a published stable GitHub Release,
+configured assets, and the exact registry version.
+
+For the packaged Cargo workflow, attach the exact `.crate` retained by validation
+to the draft as `PACKAGE-VERSION.crate`. Enable immutable releases and require
+that attachment in the publishing policy. `release gate --require-crate-asset`
+requires the completed attachment and its GitHub-recorded SHA-256 before upload.
+`release verify --require-crate-asset` checks that same digest against the
+crates.io checksum for the configured package and exact version. A mismatch
+fails verification. Both flags require an immutable GitHub Release and a
+`crates-io` publication policy.
+
+The Cargo workflow runs the dependency gate again after deployment approval and
+before requesting its token. After upload it uses `release verify --publication-only`
+with the checksum flag to verify the configured GitHub assertions and exact
+registry version without another dependency pass. Use plain `release verify`
+when the current upstream dependency proof is also needed.
 
 `verify_publication_visibility(root, repository, tag, *, registry, package,
 required_assets=(), attempts=1, interval=10, target=None)` is a v0.3.0 API.
@@ -97,25 +117,42 @@ checks run without checkout, generated notes, or dependency provenance.
 `lookup_version(registry, package, version)` and `wait_for_version(...)`.
 `present=False` means only a proven exact-endpoint 404. Every unavailable,
 malformed, yanked, mismatched or partial-upload response raises an error.
-Verification asserts metadata visibility, not archive-byte provenance. Waits
-poll only absence, with 1..31 observations and a 0..10 second interval.
-Public registry GETs make up to three attempts within a 60-second retry budget
-per observation. In v0.3.0, `TransientRegistryError` identifies exhausted
-transient retries, and `RegistryVersion.checksum` exposes the crates.io archive
+Waits poll only absence, with 1 through 31 observations and an interval of 0
+through 10 seconds. For an exact Cargo artifact check, compare the returned
+registry checksum with the independently retained `.crate` digest. For PyPI,
+`verify_published_distributions(package, version, files, *, index_url="https://pypi.org")`
+takes the approved `{filename: sha256}` mapping. It requires the matching
+non-yanked wheel and sdist inventory, downloads both, and compares their bytes
+with those hashes. It returns the verified mapping. Supply the expected hashes
+from independently trusted validation evidence.
+
+Public registry metadata and artifact GETs make up to three attempts per
+request. `RRT_REGISTRY_TIMEOUT_SECONDS` sets the total per-request budget in
+whole seconds, including pacing and retries. It defaults to `60` and accepts
+`1` through `900`. Connection/response-header and stalled-body waits each keep
+a 30-second limit. The deadline also bounds socket reads within HTTP headers
+and chunk framing, as well as time waiting for system DNS.
+The isolated release runtime inherits the setting. For
+example, run `RRT_REGISTRY_TIMEOUT_SECONDS=180 just release-verify "$TAG"` to
+retry a delayed verification of the same candidate.
+`TransientRegistryError` identifies exhausted transient retries, and
+`RegistryVersion.checksum` exposes the crates.io archive
 checksum for a present version. Release dependency verification recommends
 retrying the read-only check with the same pins and retaining the original CI
 source and attempt assertions. PyPI requires both wheel and sdist upload evidence.
 Crates.io requires a valid archive checksum.
 
-The canonical release recipe surface is identical in root and consumer templates:
+The root and consumer Justfiles share these release recipes.
 `release-check TAG`, `release-first TAG DATE`, `release-notes TAG`,
 `release-publish TAG [ARGS...]`, `release-registry TAG --expect absent|present`,
 `release-reuse COMMIT ARGS...`,
-`release-verify TAG [ARGS...]`, `release-version-check`, `tag TAG`,
-`tag-preview TAG`, and `update-version TAG [ARGS...]`.
+`release-verify TAG [ARGS...]`, `release-version-check`, `tag TAG [--commit SHA] [--force]`,
+`tag-preview TAG [--commit SHA]`, and `update-version TAG [ARGS...]`.
 `release-verify` defaults to seven attempts at ten-second intervals; optional
 flags override those defaults. `release-version-check` validates the current
-prepared version without a tag argument; `tag` and `tag-preview` run it first.
+prepared version without a tag argument. `tag TAG [--commit SHA]` and
+`tag-preview TAG [--commit SHA]` perform the final metadata and dependency
+checks themselves. Tag creation reports the commit and annotation.
 The low-level CLI also retains untagged `release check` for metadata inspection.
 
 ## Python release API
@@ -228,7 +265,10 @@ from pathlib import Path
 from research_repo_tools.releases import apply_release, plan_release
 
 plan = plan_release(
-    Path.cwd(), "v1.2.4", previous_tag="v1.2.3", release_date="2026-09-20",
+    Path.cwd(),
+    "v1.2.4",
+    previous_tag="v1.2.3",
+    release_date="2026-09-20",
 )
 for edit in plan.edits:
     print(edit.path)  # Inspect edit.before and edit.after for the exact byte diff.

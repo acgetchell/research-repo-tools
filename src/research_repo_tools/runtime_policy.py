@@ -15,7 +15,7 @@ from dataclasses import dataclass
 from email.parser import BytesParser
 from importlib.machinery import all_suffixes
 from importlib.metadata import MetadataNotFound
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from typing import Any
 from urllib.parse import urlsplit
 
@@ -81,6 +81,7 @@ class RuntimePolicy:
 
     @property
     def digest(self) -> str:
+        """Return the SHA-256 of the serialized runtime policy."""
         return sha256(self.payload)
 
 
@@ -183,6 +184,7 @@ def _layout(environment: Path) -> Path:
 
 
 def _inventory(environment: Path) -> tuple[dict[str, Any], dict[str, dict[str, Any]]]:
+    """Inventory the environment's installed distributions and reject unexpected files, links, and Python startup hooks."""
     site = _layout(environment)
     count = 0
     distribution_count = 0
@@ -268,8 +270,10 @@ def _closure(requirements: list[str], metadata: dict[str, Any]) -> None:
 
 def _wheel_metadata(payload: bytes, name: str, version: str) -> Any:
     with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-        paths = [path for path in archive.namelist() if len(Path(path).parts) == 2 and path.endswith(".dist-info/METADATA")]
-        if len(paths) != 1 or archive.getinfo(paths[0]).file_size > MAX_POLICY_BYTES:
+        paths = [
+            entry for entry in archive.infolist() if len(PurePosixPath(entry.orig_filename).parts) == 2 and entry.orig_filename.endswith(".dist-info/METADATA")
+        ]
+        if len(paths) != 1 or paths[0].file_size > MAX_POLICY_BYTES:
             raise ValueError("runtime wheel has missing or excessive metadata")
         metadata = BytesParser().parsebytes(archive.read(paths[0]))
     if canonicalize_name(metadata.get("Name", "")) != name or metadata.get("Version") != version:
@@ -279,12 +283,18 @@ def _wheel_metadata(payload: bytes, name: str, version: str) -> Any:
     return metadata
 
 
+def _build_evidence_names(provenance: dict[str, Any]) -> tuple[str, str]:
+    """Return the receipt and log filenames bound to source-build provenance."""
+    return f"{provenance['receipt_sha256']}.receipt.json", f"{provenance['build_log_sha256']}.log"
+
+
 def _native_evidence(item: dict[str, Any], artifacts: Path, inputs: dict[str, str]) -> None:
     provenance = item["provenance"]
     if provenance["kind"] != "source-build":
         return
-    receipt = read_regular(artifacts / (provenance["receipt_sha256"] + ".receipt.json"), MAX_POLICY_BYTES)
-    log = read_regular(artifacts / (provenance["build_log_sha256"] + ".log"), MAX_POLICY_BYTES)
+    receipt_name, log_name = _build_evidence_names(provenance)
+    receipt = read_regular(artifacts / receipt_name, MAX_POLICY_BYTES)
+    log = read_regular(artifacts / log_name, MAX_POLICY_BYTES)
     verify_sha256(receipt, provenance["receipt_sha256"])
     verify_sha256(log, provenance["build_log_sha256"])
     envelope = _fields(_load_json(receipt, "runtime build receipt"), {"payload", "mac"}, "build receipt")

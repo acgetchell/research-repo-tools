@@ -171,9 +171,11 @@ see the [worked example](process-api.md#calling-from-python).
 
 - `research_repo_tools.__version__` is a string read from installed distribution
   metadata. `project.version` in this package's `pyproject.toml` is its authority.
-- `research_repo_tools.cli.main(argv: list[str] | None = None) -> int` accepts
+- `research_repo_tools.cli.main(argv: Sequence[str] | None = None) -> int` accepts
   arguments without the executable name. `None` uses the process arguments.
   It writes to the process stdout/stderr and returns the command status.
+  Machine-readable JSON on stdout uses UTF-8 and ends with LF even when
+  the console is configured for another encoding or newline convention.
   Unsupported output characters are escaped during the call; the streams retain
   their encodings and their original error policies are restored on exit.
   Argument parsing raises `SystemExit(0)` for help/version and `SystemExit(2)`

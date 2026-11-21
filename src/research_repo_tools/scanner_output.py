@@ -21,6 +21,8 @@ def _print(line: str) -> None:
 
 @dataclass
 class FindingOutput:
+    """Scanner output state for reporting findings against the original checkout."""
+
     scanner: str
     label: str
     root: Path

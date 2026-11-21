@@ -30,11 +30,15 @@ __all__ = [
 
 
 class NativePathPolicy(StrEnum):
+    """The native filename and executable-bit conventions used by a path inventory."""
+
     POSIX = "posix-bytes-executable-v1"
     WINDOWS = "windows-utf8-no-executable-v1"
 
 
 class PathProblem(StrEnum):
+    """Failure categories reported when a path inventory cannot be obtained."""
+
     INVALID = "invalid-inventory"
     UNSUPPORTED = "unsupported-kind"
     UNREADABLE = "unreadable"
@@ -58,6 +62,8 @@ class MissingPath:
 
 @dataclass(frozen=True, slots=True)
 class RegularFile:
+    """Captured file bytes and executable status under the inventory's native policy."""
+
     content: bytes
     executable: bool
 
@@ -82,6 +88,8 @@ type PathValue = MissingPath | RegularFile | Symlink
 
 @dataclass(frozen=True, slots=True)
 class PathObservation:
+    """A relative filename in native bytes paired with its observed state."""
+
     name: bytes
     value: PathValue
 
@@ -94,6 +102,8 @@ class PathObservation:
 
 @dataclass(frozen=True, slots=True)
 class PathInventory:
+    """A collection of distinct path observations interpreted under one native filename policy."""
+
     policy: NativePathPolicy
     observations: tuple[PathObservation, ...]
 

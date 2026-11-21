@@ -7,7 +7,7 @@ from pathlib import Path
 from research_repo_tools._console import write_stdout as _write_stdout
 lazy from research_repo_tools import archives, criterion, evidence
 lazy from research_repo_tools.config import Config
-lazy from research_repo_tools.files import _paths_alias, replace_many
+lazy from research_repo_tools.files import _paths_alias, _publish_new_file, replace_many
 
 
 def _run_report_paths(settings: Config, payload: str, manifest: str, output: str | None) -> dict[str, str]:
@@ -27,6 +27,7 @@ def _run_report_paths(settings: Config, payload: str, manifest: str, output: str
 
 
 def add_commands(groups) -> None:
+    """Register the shared benchmark acquisition, comparison, and evidence commands."""
     from research_repo_tools.performance_workflows import add_command
 
     commands = groups.add_parser("performance", help="compare timings and verify retained evidence").add_subparsers(dest="action", required=True)
@@ -117,6 +118,7 @@ def add_commands(groups) -> None:
 
 
 def run(args: argparse.Namespace, settings: Config) -> int:
+    """Dispatch a performance command using the consumer configuration and return its exit status."""
     from research_repo_tools import performance_workflows
 
     if args.action in performance_workflows.COMMANDS:
@@ -163,7 +165,7 @@ def run(args: argparse.Namespace, settings: Config) -> int:
         if output.exists():
             raise ValueError("inventory output already exists; select a new path to preserve evidence")
         inventory = discover_inventory(settings.root, load_discovery(settings.root, args.configuration))
-        replace_many({output: serialize_inventory(inventory)})
+        _publish_new_file(output, serialize_inventory(inventory))
     elif args.action == "verify-saved":
         from research_repo_tools.criterion_baselines import load_saved_sample, validate_saved_sample
         from research_repo_tools.criterion_inventory import _directory
@@ -238,6 +240,8 @@ def run(args: argparse.Namespace, settings: Config) -> int:
             validate_run_policy(result, load_measurement(settings.root, args.measurement))
         print(f"Verified envelope and payload SHA-256: {result.payload_schema}")
     else:
+        if args.output == "":
+            raise ValueError("--output must be a nonempty path")
         if args.action == "compare":
             roots = (settings.path(args.baseline), settings.path(args.current))
             baseline = criterion.collect_sample(roots[0], args.baseline_sample, statistic=args.statistic, unit=args.unit)

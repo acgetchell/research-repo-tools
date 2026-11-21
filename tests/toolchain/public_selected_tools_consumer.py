@@ -1,6 +1,7 @@
 """Selected tool contracts, repeated from isolated wheel and sdist installs."""
 
 import contextlib
+import hashlib
 import io
 import json
 import os
@@ -168,12 +169,13 @@ class TestSelectedTools(unittest.TestCase):
         self.assertFalse((self.root / ".venv").exists())
 
     def test_api_binary_and_multiple_selections_freeze_names_and_export_verified_paths(self):
-        for selected in (["gitleaks"], ["zizmor", "gitleaks"]):
-            with self.subTest(selected=selected):
+        for names, expected in ((("gitleaks",), ["gitleaks"]), (("zizmor", "gitleaks"), ["rustup", "rustc", "cargo", "zizmor", "gitleaks"])):
+            with self.subTest(names=names):
+                selected = list(names)
                 runtime = toolchain.Runtime(self.tools.plan, tools=selected)
                 selected.clear()
                 runtime.sync()
-                self.assertTrue(all(status.ok for status in runtime.inspect()))
+                self.assertCountEqual([(status.name, status.ok) for status in runtime.inspect()], [(name, True) for name in expected])
                 output = self.root / "api export"
                 runtime.export_environment(output)
                 self.assertIn(str(runtime.binary_path(runtime.plan.binaries[0]).parent), runtime.environment()["PATH"].split(os.pathsep))
@@ -199,7 +201,7 @@ class TestSelectedTools(unittest.TestCase):
     def test_api_selection_and_run_preserve_native_environment_exit_and_credentials(self):
         runtime = toolchain.Runtime(self.tools.plan, tools=["cargo"])
         runtime.sync()
-        self.assertTrue(all(status.ok for status in runtime.inspect()))
+        self.assertCountEqual([(status.name, status.ok) for status in runtime.inspect()], [("rustup", True), ("rustc", True), ("cargo", True)])
         self.assertEqual(runtime.plan.rust, toolchain_config.RustToolchain("1.98.0", (), (), "minimal"))
         self.tools.fail = "publish"
         self.assertEqual(toolchain.run_command(runtime, ["cargo", "publish", "--locked", "--registry", "crates-io"]), 101)
@@ -226,7 +228,9 @@ class TestSelectedTools(unittest.TestCase):
                     self.assertEqual(stream.errors, "strict")
                     stream.flush()
                     self.assertIn(str(self.root).encode("ascii", errors="backslashreplace"), buffer.getvalue())
-        self.assertTrue(all(status.ok for status in runtime.inspect()))
+        self.assertCountEqual(
+            [(status.name, status.ok) for status in runtime.inspect()], [(name, True) for name in ("rustup", "rustc", "cargo", "zizmor", "gitleaks")]
+        )
 
     def test_selected_cli_keeps_python_declarations_without_probing_inherited_tools(self):
         manifest = self.root / "pyproject.toml"
@@ -295,6 +299,18 @@ def cargo_workflow_fixture(arguments):
     fixture = SelectedTools(root)
     fixture.fail = "publish" if os.environ.get("FIXTURE_UPLOAD_TIMEOUT") else None
     sha = "a" * 40
+    retained_crate = b"fixture crate bytes"
+    checksum = hashlib.sha256(retained_crate).hexdigest()
+    release = GitHubRelease(
+        "example/package",
+        "v1.2.3",
+        91,
+        False,
+        True,
+        False,
+        (("sample-1.2.3.crate", 15, len(retained_crate), checksum),),
+        asset_states=((15, "uploaded"),),
+    )
     remote = {
         "": {"full_name": "example/package", "default_branch": "main"},
         "branches/main": {"name": "main", "protected": True},
@@ -309,20 +325,24 @@ def cargo_workflow_fixture(arguments):
 
     def registry_read(url):
         assert url == "https://crates.io/api/v1/crates/sample/1.2.3"
-        return {"version": {"crate": "sample", "num": "1.2.3", "yanked": False, "checksum": "b" * 64}} if (root / "published").exists() else registry._NOT_FOUND
+        if (root / "published").exists():
+            return {"version": {"crate": "sample", "num": "1.2.3", "yanked": False, "checksum": checksum}}
+        return registry._NOT_FOUND
+
+    def check_dependencies(*args, **kwargs):
+        assert not (root / "published").exists(), "post-upload recovery rescanned dependencies"
+        return ()
 
     with contextlib.ExitStack() as stack:
         fixture.patches(stack)
         # Bootstrap is inert here. Installed dependency provenance has its own
         # consumer suite; this fixture owns shell composition and tool selection.
-        stack.enter_context(patch("research_repo_tools.dependency_provenance.check_release_dependencies", return_value=()))
+        stack.enter_context(patch("research_repo_tools.dependency_provenance.check_release_dependencies", side_effect=check_dependencies))
         stack.enter_context(patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, sha, "")))
         stack.enter_context(patch("research_repo_tools.release_publishing.require_release_checkout"))
         stack.enter_context(patch("research_repo_tools.release_publishing._remote_commit", return_value=sha))
         stack.enter_context(patch("research_repo_tools.release_publishing._api", side_effect=lambda root, repo, endpoint, **kw: remote[endpoint]))
-        stack.enter_context(
-            patch("research_repo_tools.release_publishing.lookup_release", return_value=GitHubRelease("example/package", "v1.2.3", 91, False, False, False, ()))
-        )
+        stack.enter_context(patch("research_repo_tools.release_publishing.lookup_release", return_value=release))
         stack.enter_context(patch.object(registry, "_json", side_effect=registry_read))
         sys.argv = ["research_repo_tools", *arguments[4:]]
         runpy.run_module("research_repo_tools", run_name="__main__")
@@ -405,7 +425,9 @@ class TestCargoWorkflowShell(unittest.TestCase):
                         self.assertTrue((root / "published").exists())
             calls = [json.loads(line) for line in (root / "calls.jsonl").read_text(encoding="utf-8").splitlines()]
             self.assertEqual(sum("publish" in args and "--dry-run" not in args for args in calls), 1)
-            self.assertEqual(calls[-1][-7:], ["release", "verify", "v1.2.3", "--attempts", "7", "--interval", "10"])
+            self.assertEqual(
+                calls[-1][4:], ["release", "verify", "v1.2.3", "--attempts", "7", "--interval", "10", "--require-crate-asset", "--publication-only"]
+            )
             self.assertEqual({path: path.read_bytes() for path in original}, original)
             self.assertFalse((root / ".venv").exists())
 

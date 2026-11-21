@@ -203,6 +203,14 @@ review-uncommitted:
 # Audit locked dependencies and scan full history/current files for secrets.
 security: audit security-secrets
 
+# Compare a proposed Gitleaks configuration with the baseline.
+security-check-exceptions candidate *args:
+    uv run --locked research-repo-tools security check-exceptions "$@"
+
+# Summarize existing redacted Gitleaks reports.
+security-findings *args:
+    uv run --locked research-repo-tools security findings "$@"
+
 # Scan full history and current tracked/nonignored files with managed Gitleaks.
 security-secrets *args:
     uv run --locked research-repo-tools security secrets "$@"
@@ -220,12 +228,12 @@ sync:
     uv sync --locked
 
 # Create a local annotated release tag after checking final metadata.
-tag tag *args: release-version-check
+tag tag *args:
     uv run --locked research-repo-tools changelog tag "$@"
 
 # Preview the release annotation without changing Git state.
-tag-preview tag: release-version-check
-    uv run --locked research-repo-tools changelog tag "$1" --dry-run
+tag-preview tag *args:
+    uv run --locked research-repo-tools changelog tag "$@" --dry-run
 
 # Export a packaged configuration or workflow template.
 templates +args:

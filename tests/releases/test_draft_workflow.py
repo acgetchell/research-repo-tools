@@ -13,7 +13,8 @@ import yaml
 from research_repo_tools import cli, release_interfaces, release_validation
 from research_repo_tools.release_assets import ReleaseTarget, parse_release_target
 from research_repo_tools.release_receipts import TagSource, retrieve_draft_receipt
-from tests.releases import public_evidence_consumer, public_receipts_consumer
+from tests.fixtures.receipts import Provider
+from tests.fixtures.release_evidence import COMMIT, AuthenticatedDraft
 from tests.releases.public_evidence_consumer import TestDraftWorkflowShell as TestDraftWorkflowShell
 
 SHA = "a" * 40
@@ -27,12 +28,18 @@ def test_documented_receipt_policy_retrieves_the_example_target(tmp_path, monkey
     configuration = tmp_path / "receipt.toml"
     configuration.write_text(document.replace("OWNER/REPO", "example/package"), encoding="utf-8", newline="\n")
     policy = release_interfaces.load_receipt_policy(configuration)
-    monkeypatch.setattr(public_receipts_consumer, "POLICY", policy)
-    provider = public_receipts_consumer.Provider()
+    provider = Provider(policy)
     provider.workflow_text = source.encode("utf-8")
     monkeypatch.setattr(release_validation.subprocess, "run", provider.execute)
     result = retrieve_draft_receipt(policy, TagSource("refs/tags/v1.2.3", SHA), provider.read)
     assert result.target == parse_release_target(result.target_bytes) == ReleaseTarget("example/package", "v1.2.3", 91, SHA, "v1.2.3")
+
+
+@pytest.fixture
+def authenticated_draft():
+    """Keep the provider patches and both checkouts alive for one writer scenario."""
+    with contextlib.ExitStack() as stack:
+        yield AuthenticatedDraft(stack)
 
 
 @pytest.mark.parametrize(
@@ -49,17 +56,14 @@ def test_documented_receipt_policy_retrieves_the_example_target(tmp_path, monkey
         "attempt-changed-during-download",
     ),
 )
-def test_documented_writer_requires_original_handoff_and_first_tag_intent(request, monkeypatch, scenario):
+def test_documented_writer_requires_original_handoff_and_first_tag_intent(authenticated_draft, monkeypatch, scenario):
     guide = Path(__file__).resolve().parents[2] / "docs/PREPARING_DRAFTS.md"
     source = guide.read_text(encoding="utf-8").split("```yaml\n", 1)[1].split("\n```", 1)[0]
     workflow = yaml.safe_load(source)
     command = workflow["jobs"]["prepare"]["steps"][1]["run"]
-    case = public_evidence_consumer.TestAuthenticatedDraftWorkflow()
-    request.addfinalizer(case.doCleanups)
-    case.setUp()
-    provider = case.provider
-    monkeypatch.chdir(case.writer)
-    policy_file = case.writer / "handoff-policy.toml"
+    provider = authenticated_draft.provider
+    monkeypatch.chdir(authenticated_draft.writer)
+    policy_file = authenticated_draft.writer / "handoff-policy.toml"
     policy_file.write_text(command.split("<<'TOML'\n", 1)[1].split("\nTOML", 1)[0].replace("OWNER/REPO", "example/package"), encoding="utf-8", newline="\n")
     policy = release_interfaces.load_receipt_policy(policy_file)
     provider.tag_workflow.update(path=policy.workflow, name=policy.workflow_name)
@@ -75,10 +79,10 @@ def test_documented_writer_requires_original_handoff_and_first_tag_intent(reques
         "GITHUB_RUN_ID": "101",
         "GITHUB_RUN_ATTEMPT": "1",
         "RELEASE_TAG": "v1.2.3",
-        "RELEASE_COMMIT": public_evidence_consumer.COMMIT,
+        "RELEASE_COMMIT": COMMIT,
         "HANDOFF_ID": "301",
-        "HANDOFF_SHA256": case.selected.sha256,
-        "RUNNER_TEMP": str(case.writer),
+        "HANDOFF_SHA256": authenticated_draft.selected.sha256,
+        "RUNNER_TEMP": str(authenticated_draft.writer),
     }.items():
         monkeypatch.setenv(name, value)
     current = provider.tag_run
@@ -111,8 +115,8 @@ def test_documented_writer_requires_original_handoff_and_first_tag_intent(reques
     arguments = command.split("python -I -m research_repo_tools", 1)[1].replace("\\\n", "")
     args = [os.path.expandvars(value) for value in shlex.split(arguments)]
     with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as errors:
-        status = cli.main(["--root", str(case.writer), *args])
-    state = case.writer / "draft-state"
+        status = cli.main(["--root", str(authenticated_draft.writer), *args])
+    state = authenticated_draft.writer / "draft-state"
     if scenario == "first-run":
         assert status == 0, errors.getvalue()
         assert len(provider.posts) == 1

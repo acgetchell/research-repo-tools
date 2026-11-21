@@ -6,13 +6,23 @@ from collections.abc import Iterable, Mapping, Sequence
 from pathlib import Path, PurePosixPath
 
 from research_repo_tools.files import _validate_distinct_paths
-from research_repo_tools.process import resolve_executable, run_command_live, run_git_bytes
+from research_repo_tools.process import _positive_timeout, resolve_executable, run_command_live, run_git_bytes
 from research_repo_tools.publication import _path
 
 __all__ = ["argument_batches", "run_selected", "select_files"]
 
 
-def select_files(root: Path, *, include: Sequence[str] = (), exclude: Sequence[str] = (), env: Mapping[str, str] | None = None) -> tuple[str, ...]:
+def _patterns(values: Iterable[str]) -> tuple[str, ...]:
+    """Capture a pattern input once so validation and selection use the same values."""
+    if isinstance(values, (str, bytes)):
+        raise ValueError("file patterns must be nonempty strings without NUL")
+    patterns = tuple(values)
+    if any(not isinstance(item, str) or not item or "\0" in item for item in patterns):  # ty: ignore[redundant-condition-strict]  Check untyped callers.
+        raise ValueError("file patterns must be nonempty strings without NUL")
+    return patterns
+
+
+def select_files(root: Path, *, include: Iterable[str] = (), exclude: Iterable[str] = (), env: Mapping[str, str] | None = None) -> tuple[str, ...]:
     """Select existing regular tracked and nonignored untracked files, sorted.
 
     Includes use Git pathspec syntax; exclusions use case-sensitive POSIX globs.
@@ -22,9 +32,7 @@ def select_files(root: Path, *, include: Sequence[str] = (), exclude: Sequence[s
     although control characters in portable input names are rejected.
     """
     root = root.resolve(strict=True)
-    for patterns in (include, exclude):
-        if isinstance(patterns, (str, bytes)) or any(not isinstance(item, str) or not item or "\0" in item for item in patterns):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
-            raise ValueError("file patterns must be nonempty strings without NUL")
+    include, exclude = _patterns(include), _patterns(exclude)
     result = run_git_bytes(
         ["--no-pager", "ls-files", "--cached", "--others", "--exclude-standard", "-z", "--", *include], cwd=root, **({"env": env} if env is not None else {})
     )
@@ -51,13 +59,21 @@ def _argument_sizes(args: Sequence[str]) -> tuple[int, int]:
     return windows, sum(len(os.fsencode(arg)) + 1 for arg in args)
 
 
-def argument_batches(command: Sequence[str], files: Iterable[str], *, batch_size: int = 100, argument_limit: int = 24000) -> tuple[tuple[str, ...], ...]:
+def _command_vector(command: Iterable[str]) -> tuple[str, ...]:
+    """Capture an argument vector without treating a scalar command name as its arguments."""
+    if isinstance(command, (str, bytes)):
+        raise ValueError("command must be a nonempty argument vector without NUL")
+    return tuple(command)
+
+
+def argument_batches(command: Iterable[str], files: Iterable[str], *, batch_size: int = 100, argument_limit: int = 24000) -> tuple[tuple[str, ...], ...]:
     """Append whole file arguments without shell quoting or splitting names.
 
     Validate all batches before execution. Empty input produces no invocation;
     an individual oversized argument fails instead of relying on platform limits.
     """
-    if not command or isinstance(command, (str, bytes)) or any(not isinstance(arg, str) or "\0" in arg for arg in command):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
+    command = _command_vector(command)
+    if not command or any(not isinstance(arg, str) or "\0" in arg for arg in command):  # ty: ignore[redundant-condition-strict]  Check untyped callers.
         raise ValueError("command must be a nonempty argument vector without NUL")
     if isinstance(files, (str, bytes)):
         raise ValueError("file arguments must be an iterable of filenames, not a single string")
@@ -91,10 +107,10 @@ def argument_batches(command: Sequence[str], files: Iterable[str], *, batch_size
 
 def run_selected(
     root: Path,
-    command: Sequence[str],
+    command: Iterable[str],
     *,
-    include: Sequence[str] = (),
-    exclude: Sequence[str] = (),
+    include: Iterable[str] = (),
+    exclude: Iterable[str] = (),
     batch_size: int = 100,
     env: Mapping[str, str] | None = None,
     timeout: float | None = 300,
@@ -105,8 +121,11 @@ def run_selected(
     An empty selection returns zero. A failed batch raises the process error
     and prevents later batches from running.
     """
+    command = _command_vector(command)
     if not command:
         raise ValueError("files run requires a command after --")
+    if timeout is not None:
+        timeout = _positive_timeout(timeout, "files run timeout")
     argument_batches(command, (), batch_size=batch_size)
     files = select_files(root, include=include, exclude=exclude, env=env)
     if not files:

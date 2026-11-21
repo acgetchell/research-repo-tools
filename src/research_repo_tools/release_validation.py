@@ -15,6 +15,7 @@ import json
 import math
 import os
 import re
+import shutil
 import stat
 import subprocess
 import sys
@@ -24,20 +25,21 @@ import time
 import tomllib
 import zipfile
 import zlib
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
 from contextvars import ContextVar
 from dataclasses import dataclass
 from email.parser import BytesParser
 from pathlib import Path, PurePosixPath
 from typing import Any
-from urllib.parse import quote, urlsplit
+from urllib.parse import quote
 
 if __package__:
     from research_repo_tools._archive_paths import ArchivePaths
     from research_repo_tools._console import console_text, write_stdout
     from research_repo_tools._diagnostics import format_exception_diagnostics
+    from research_repo_tools._diagnostics import redact_credentials as redact_release_diagnostic
     from research_repo_tools._git_checkout import READ_ONLY_OPTIONS, git_context, require_checkout
-    from research_repo_tools.files import replace_many
+    from research_repo_tools.files import _publish_new_file, replace_many
     from research_repo_tools.release_summary import render_distribution_summary
 else:
     # The install-free runner loads reviewed sibling source, never site packages.
@@ -46,11 +48,14 @@ else:
     ArchivePaths = runpy.run_path(str(Path(__file__).with_name("_archive_paths.py")))["ArchivePaths"]
     _console_helpers = runpy.run_path(str(Path(__file__).with_name("_console.py")))
     console_text, write_stdout = _console_helpers["console_text"], _console_helpers["write_stdout"]
-    format_exception_diagnostics = runpy.run_path(str(Path(__file__).with_name("_diagnostics.py")))["format_exception_diagnostics"]
+    _diagnostic_helpers = runpy.run_path(str(Path(__file__).with_name("_diagnostics.py")))
+    format_exception_diagnostics = _diagnostic_helpers["format_exception_diagnostics"]
+    redact_release_diagnostic = _diagnostic_helpers["redact_credentials"]
     _checkout_helpers = runpy.run_path(str(Path(__file__).with_name("_git_checkout.py")))
     READ_ONLY_OPTIONS, require_checkout = _checkout_helpers["READ_ONLY_OPTIONS"], _checkout_helpers["require_checkout"]
     git_context = _checkout_helpers["git_context"]
-    replace_many = runpy.run_path(str(Path(__file__).with_name("files.py")))["replace_many"]
+    _file_helpers = runpy.run_path(str(Path(__file__).with_name("files.py")))
+    replace_many, _publish_new_file = _file_helpers["replace_many"], _file_helpers["_publish_new_file"]
     render_distribution_summary = runpy.run_path(str(Path(__file__).with_name("release_summary.py")))["render_distribution_summary"]
 
 __all__ = [
@@ -142,6 +147,19 @@ def _bytes(value: Any) -> bytes:
     return (json.dumps(value, sort_keys=True, indent=2, allow_nan=False) + "\n").encode("utf-8")
 
 
+def _same_json(observed: object, expected: object) -> bool:
+    """Compare parsed evidence independent of key order, preserving booleans and numeric types."""
+    if type(observed) is not type(expected):
+        return False
+    if isinstance(observed, dict) and isinstance(expected, dict):
+        return observed.keys() == expected.keys() and all(_same_json(value, expected[key]) for key, value in observed.items())
+    if isinstance(observed, list) and isinstance(expected, list):
+        return len(observed) == len(expected) and all(_same_json(left, right) for left, right in zip(observed, expected, strict=True))
+    if isinstance(observed, float) and isinstance(expected, float):
+        return observed.hex() == expected.hex()  # Preserve signed zero in recorded evidence.
+    return observed == expected
+
+
 def _sha(payload: bytes) -> str:
     return hashlib.sha256(payload).hexdigest()
 
@@ -170,19 +188,25 @@ def _python_package(package: str) -> str:
     return re.sub(r"[-_.]+", "_", package).lower()
 
 
+def _stable_tag(value: object) -> str:
+    """Parse the exact stable tag used to identify distribution artifacts."""
+    if not isinstance(value, str) or re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", value) is None:
+        raise ValueError("release assets require a canonical stable vX.Y.Z tag")
+    return value
+
+
 def distribution_names(tag: str, *, package: str = "research-repo-tools", filenames: tuple[str, ...] | None = None) -> tuple[str, ...]:
     """Validate a stable version's explicit wheel/sdist inventory, without a tag lookup.
 
     Omitted filenames select one universal wheel and sdist. Native wheels and
     multiple wheel tags require an explicit inventory; no globbing is performed.
     """
-    if re.fullmatch(r"v(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", tag) is None:
-        raise ValueError("release assets require a canonical stable vX.Y.Z tag")
-    prefix = f"{_python_package(package)}-{tag[1:]}"
+    prefix = f"{_python_package(package)}-{_stable_tag(tag)[1:]}"
     names = tuple(filenames) if filenames is not None else (f"{prefix}-py3-none-any.whl", f"{prefix}.tar.gz")
     wheel = re.escape(prefix) + r"-(?:[0-9][A-Za-z0-9_]*-)?[A-Za-z0-9_.]+-[A-Za-z0-9_.]+-[A-Za-z0-9_.]+\.whl"
     if (
         not 2 <= len(names) <= 64
+        or any(not isinstance(name, str) for name in names)  # ty: ignore[redundant-condition-strict]  Validate untyped distribution manifests.
         or len({name.casefold() for name in names}) != len(names)
         or names.count(f"{prefix}.tar.gz") != 1
         or any(name != f"{prefix}.tar.gz" and re.fullmatch(wheel, name) is None for name in names)
@@ -285,11 +309,20 @@ POLICY = ValidationPolicy(
 )
 
 
-def gh(*args: str) -> str:
-    return subprocess.run([_GH_EXECUTABLE.get(), *args], check=True, capture_output=True, text=True, encoding="utf-8", timeout=120).stdout
+def gh(*args: str, cwd: Path | None = None) -> str:
+    """Run the selected GitHub CLI executable and capture UTF-8 stdout within two minutes."""
+    executable = _GH_EXECUTABLE.get()
+    if cwd is not None:
+        # Relative PATH entries belong to the caller, even when gh reads assets from a private snapshot.
+        selected = shutil.which(executable)
+        if selected is None:
+            raise FileNotFoundError(f"GitHub CLI executable not found: {executable}")
+        executable = str(Path(selected).absolute())
+    return subprocess.run([executable, *args], cwd=cwd, check=True, capture_output=True, text=True, encoding="utf-8", timeout=120).stdout
 
 
 def api(endpoint: str, *, repository: str = REPOSITORY) -> Any:
+    """Fetch and decode a GitHub REST response relative to the selected repository."""
     path = f"repos/{_repository(repository)}"
     if endpoint:
         path = f"{path}/{endpoint}"
@@ -358,7 +391,7 @@ def validate_run(policy: ValidationPolicy, run: dict[str, Any], commit: str, wor
         or run.get("event") != "push"
         or run.get("head_branch") != policy.branch
         or run.get("head_sha") != commit
-        or run.get("pull_requests")
+        or run.get("pull_requests", []) != []
     ):
         raise ValueError("expected the exact commit's trusted main-push Package checks run")
     if completed and (run.get("status") != "completed" or run.get("conclusion") != "success"):
@@ -428,6 +461,7 @@ def _validate_jobs(
     *,
     recovery: str,
 ) -> dict[str, int]:
+    """Check each required job, runner, and step against the selected workflow attempt and return the verified job IDs."""
     result = {}
     for name, steps in required_steps:
         matches = [job for job in jobs if job.get("name") == name]
@@ -506,9 +540,13 @@ def _find_artifact(run: dict[str, Any], name: str) -> dict[str, Any]:
     return _artifact(matches[0], run, name)
 
 
-def _available_artifact(identifier: int) -> dict[str, Any]:
+def _available_artifact(identifier: object) -> dict[str, Any]:
+    artifact_id = _integer(identifier, "artifact ID")
     try:
-        return _object(api(f"actions/artifacts/{_integer(identifier, 'artifact ID')}"), "artifact")
+        artifact = _object(api(f"actions/artifacts/{artifact_id}"), "artifact")
+        if _integer(artifact.get("id"), "observed artifact ID") != artifact_id:
+            raise ValueError("GitHub returned a different artifact ID")
+        return artifact
     except subprocess.CalledProcessError as error:
         detail = _diagnostic(error.stderr or error.stdout or str(error))
         raise ValueError(
@@ -609,6 +647,7 @@ def _distribution_member(name: str, paths: ArchivePaths, *, directory: bool) -> 
 
 
 def _distribution_metadata(payload: bytes, name: str, prefix: str) -> bytes:
+    """Read the wheel or sdist package metadata after checking member types, inventory, and size bounds."""
     paths = ArchivePaths()
     content = None
     if name.endswith(".whl"):
@@ -658,6 +697,25 @@ def _distribution_metadata(payload: bytes, name: str, prefix: str) -> bytes:
     return content
 
 
+def _read_release_file(path: Path) -> bytes:
+    """Read a bounded, nonempty regular file for release verification."""
+    if path.is_symlink() or not path.is_file():
+        raise ValueError(f"release inputs must be bounded nonempty regular files: {path}")
+    with path.open("rb") as source:
+        payload = source.read(MAX_BYTES + 1)
+    if not 0 < len(payload) <= MAX_BYTES:
+        raise ValueError(f"release inputs must be bounded nonempty regular files: {path}")
+    return payload
+
+
+def _distribution_payloads(dist: Path, names: tuple[str, ...]) -> Iterator[tuple[str, bytes]]:
+    """Require the exact named inventory and read each original file once."""
+    if {path.name for path in dist.iterdir()} != set(names):
+        raise ValueError(f"expected exactly these distributions: {', '.join(names)}")
+    for name in names:
+        yield name, _read_release_file(dist / name)
+
+
 def verify_distributions(
     dist: Path, tag: str, *, package: str = "research-repo-tools", filenames: tuple[str, ...] | None = None, max_total_bytes: int | None = None
 ) -> dict[str, str]:
@@ -670,19 +728,10 @@ def verify_distributions(
     if max_total_bytes is not None:
         _integer(max_total_bytes, "total distribution byte limit")
     names = distribution_names(tag, package=package, filenames=filenames)
-    if {path.name for path in dist.iterdir()} != set(names):
-        raise ValueError(f"expected exactly these distributions: {', '.join(names)}")
     result = {}
     total = 0
     prefix = f"{_python_package(package)}-{tag[1:]}"
-    for name in names:
-        path = dist / name
-        if path.is_symlink() or not path.is_file():
-            raise ValueError("distributions must be bounded nonempty regular files")
-        with path.open("rb") as source:
-            payload = source.read(MAX_BYTES + 1)
-        if not 0 < len(payload) <= MAX_BYTES:
-            raise ValueError("distributions must be bounded nonempty regular files")
+    for name, payload in _distribution_payloads(dist, names):
         total += len(payload)
         if max_total_bytes is not None and total > max_total_bytes:
             raise ValueError("distribution inventory exceeds the total byte bound")
@@ -702,7 +751,7 @@ def _jobs(run: dict[str, Any]) -> list[dict[str, Any]]:
 
 
 def _identity(run: dict[str, Any]) -> dict[str, Any]:
-    return {key: run[key] for key in ("id", "run_attempt", "head_sha", "head_branch", "workflow_id", "path", "event")}
+    return {key: run.get(key) for key in ("id", "run_attempt", "head_sha", "head_branch", "workflow_id", "path", "event")}
 
 
 def _current(run: dict[str, Any], *, completed: bool = True) -> dict[str, Any]:
@@ -711,7 +760,7 @@ def _current(run: dict[str, Any], *, completed: bool = True) -> dict[str, Any]:
     _commit(run.get("head_sha", ""))
     current = _object(api(f"actions/runs/{identifier}"), "run")
     validate_run(POLICY, current, run["head_sha"], api("actions/workflows/ci.yml"), completed=completed)
-    if _identity(current) != _identity(run):
+    if not _same_json(_identity(current), _identity(run)):
         raise ValueError("validation run or attempt changed during promotion; retry after inspecting current evidence")
     return current
 
@@ -795,7 +844,7 @@ def verify_attestation(
     invocation = f"https://github.com/{repository}/actions/runs/{run_id}/attempts/{attempt}"
     if certificate.get("runInvocationURI") != invocation or certificate.get("buildTrigger") != event:
         raise ValueError("attestation certificate run, attempt or expected event differs")
-    if predicate is not None and _object(verified.get("statement"), "verified statement").get("predicate") != predicate:
+    if predicate is not None and not _same_json(_object(verified.get("statement"), "verified statement").get("predicate"), predicate):
         raise ValueError("signed promotion predicate differs from the retained evidence")
 
 
@@ -820,8 +869,8 @@ def seal(run_id: int, attempt: int, artifact_id: int, output: Path) -> None:
     """After native CI, capture job/artifact identities for signing on main only."""
     run = api(f"actions/runs/{_integer(run_id, 'run ID')}")
     validate_run(POLICY, run, os.environ.get("GITHUB_SHA", ""), api("actions/workflows/ci.yml"), completed=False)
-    if run["run_attempt"] != _integer(attempt, "attempt"):
-        raise ValueError("seal attempt differs from the executing main run")
+    if run["id"] != run_id or run["run_attempt"] != _integer(attempt, "attempt"):
+        raise ValueError("seal run ID or attempt differs from the executing main run")
     jobs = validate_jobs(POLICY, run, _jobs(run))
     artifact = _artifact(_available_artifact(artifact_id), run, f"distributions-{attempt}")
     with tempfile.TemporaryDirectory() as temporary:
@@ -880,31 +929,31 @@ def _validate_evidence(document: dict[str, Any], tag: str, commit: str, dist: Pa
     """Recheck signed original validation and live attempt association, never rebuild."""
     if document.get("tag") != tag or document.get("commit") != commit:
         raise ValueError("promotion evidence tag or commit differs")
-    manifest_text, bundle_text = document["manifest"], document["validation_bundle"]
+    manifest_text, bundle_text = document.get("manifest"), document.get("validation_bundle")
     if not isinstance(manifest_text, str) or not isinstance(bundle_text, str):
         raise ValueError("validation manifest and bundle must retain original UTF-8 bytes")
     manifest = _object(_json(manifest_text), "validation manifest")
     if manifest.get("schema") != SCHEMA or manifest.get("repository") != REPOSITORY or manifest.get("version") != tag[1:]:
         raise ValueError("validation manifest schema, repository or version differs")
-    run = _current(manifest["run"])
-    if run["head_sha"] != commit or manifest.get("repository_id") != run["repository"]["id"]:
+    run = _current(_object(manifest.get("run"), "validation manifest run"))
+    if run["head_sha"] != commit or _integer(manifest.get("repository_id"), "signed repository ID") != run["repository"]["id"]:
         raise ValueError("validation manifest source association differs")
-    if validate_jobs(POLICY, run, _jobs(run)) != manifest.get("jobs"):
+    if not _same_json(validate_jobs(POLICY, run, _jobs(run)), manifest.get("jobs")):
         raise ValueError("validation results changed or belong to another attempt")
     if manifest.get("files") != verify_distributions(dist, tag):
         raise ValueError("distribution bytes differ from signed main validation")
-    artifact = manifest["artifact"]
-    if _artifact(_available_artifact(artifact["id"]), run, f"distributions-{run['run_attempt']}") != artifact:
+    artifact = _object(manifest.get("artifact"), "signed distribution artifact")
+    if not _same_json(_artifact(_available_artifact(artifact.get("id")), run, f"distributions-{run['run_attempt']}"), artifact):
         raise ValueError("origin artifact identity changed")
-    evidence = document["evidence_artifact"]
-    if _artifact(_available_artifact(evidence["id"]), run, f"validated-evidence-{run['run_attempt']}") != evidence:
+    evidence = _object(document.get("evidence_artifact"), "signed validation evidence artifact")
+    if not _same_json(_artifact(_available_artifact(evidence.get("id")), run, f"validated-evidence-{run['run_attempt']}"), evidence):
         raise ValueError("validation evidence artifact identity changed")
     sealing = [job for job in _jobs(run) if job.get("name") == "release-evidence"]
     if (
         len(sealing) != 1
         or sealing[0].get("status") != "completed"
         or sealing[0].get("conclusion") != "success"
-        or sealing[0].get("run_attempt") != run["run_attempt"]
+        or _integer(sealing[0].get("run_attempt"), "sealing job attempt") != run["run_attempt"]
     ):
         raise ValueError("main validation evidence job did not succeed in the selected attempt")
     with tempfile.TemporaryDirectory() as temporary:
@@ -986,6 +1035,7 @@ def inspect_evidence(root: Path) -> dict[str, Any]:
 
 
 def promote(tag: str, commit: str, dist: Path, evidence: Path, *, attempts: int = _DEFAULT_WAIT_ATTEMPTS, interval: int = _DEFAULT_WAIT_INTERVAL) -> None:
+    """Collect release-promotion evidence bound to the selected tag, commit, and workflow attempt."""
     promotion_run = _integer(int(os.environ.get("GITHUB_RUN_ID", "0")), "promotion run")
     promotion_attempt = _integer(int(os.environ.get("GITHUB_RUN_ATTEMPT", "0")), "promotion attempt")
     with tempfile.TemporaryDirectory() as temporary:
@@ -1002,6 +1052,7 @@ def promote(tag: str, commit: str, dist: Path, evidence: Path, *, attempts: int 
 
 
 def require_release(release: dict[str, Any], tag: str, *, draft: bool) -> None:
+    """Require a stable release for the exact tag in the requested draft state."""
     _object(release, "release")
     if release.get("tag_name") != tag or release.get("draft") is not draft or release.get("prerelease") is not False:
         raise ValueError(f"expected {'draft' if draft else 'published'} stable release for {tag}")
@@ -1009,15 +1060,40 @@ def require_release(release: dict[str, Any], tag: str, *, draft: bool) -> None:
 
 def _release_identity(release: dict[str, Any]) -> dict[str, Any]:
     """Exclude mutable download counters; retain every publication input."""
+    assets = _object(release, "release").get("assets")
+    if not isinstance(assets, list) or any(not isinstance(asset, dict) for asset in assets):
+        raise ValueError("release assets must be an array of objects")
     return {
         **{key: release.get(key) for key in ("id", "tag_name", "target_commitish", "draft", "prerelease", "immutable", "body")},
-        "assets": [{key: asset.get(key) for key in ("id", "name", "size", "state", "digest", "updated_at")} for asset in release["assets"]],
+        "assets": [
+            {key: asset.get(key) for key in ("id", "name", "size", "state", "digest", "updated_at")}
+            for asset in sorted(assets, key=lambda item: _integer(item.get("id"), "release asset ID"))
+        ],
     }
 
 
 def stage(tag: str, dist: Path, bundle: Path, evidence: Path) -> None:
-    document = _object(_json(evidence.read_bytes()), "promotion evidence")
-    commit = _commit(document["commit"])
+    """Stage verified assets, keeping the signed attachment for inspection after a remote failure."""
+    document = _object(_json(_read_release_file(evidence)), "promotion evidence")
+    attachment = dist.parent / BUNDLE
+    if os.path.lexists(attachment):
+        raise FileExistsError(f"release attachment already exists: {attachment}. Inspect it and the GitHub release for {tag} before retrying.")
+    with tempfile.TemporaryDirectory(prefix="research-release-upload-") as temporary:
+        root = Path(temporary)
+        snapshot = root / "dist"
+        snapshot.mkdir()
+        for name, payload in _distribution_payloads(dist, distribution_names(tag)):
+            (snapshot / name).write_bytes(payload)
+        signature = root / "promotion.sigstore.json"
+        signature.write_bytes(_read_release_file(bundle))
+        _stage_snapshot(tag, snapshot, signature, document, attachment)
+
+
+def _stage_snapshot(tag: str, dist: Path, bundle: Path, document: dict[str, Any], attachment: Path) -> None:
+    """Retain a signed envelope locally before uploading the verified private copies."""
+    commit = _commit(document.get("commit", ""))
+    run_id = _integer(document.get("promotion_run"), "promotion run ID")
+    attempt = _integer(document.get("promotion_attempt"), "promotion attempt")
     _validate_evidence(document, tag, commit, dist)
     for name in distribution_names(tag):
         _signature(
@@ -1026,56 +1102,84 @@ def stage(tag: str, dist: Path, bundle: Path, evidence: Path) -> None:
             commit,
             ".github/workflows/prepare-release.yml",
             f"refs/tags/{tag}",
-            document["promotion_run"],
-            document["promotion_attempt"],
+            run_id,
+            attempt,
             predicate=document,
         )
     pages = _json(gh("api", "--paginate", "--slurp", f"repos/{REPOSITORY}/releases?per_page=100"))
-    matches = [release for page in pages for release in page if release["tag_name"] == tag]
+    if not isinstance(pages, list) or not pages or any(not isinstance(page, list) for page in pages):
+        raise ValueError("GitHub releases require paginated arrays")
+    matches = []
+    for page in pages:
+        for record in page:
+            release = _object(record, "listed release")
+            if not isinstance(release.get("tag_name"), str) or not release["tag_name"]:
+                raise ValueError("listed release requires a tag name")
+            if release["tag_name"] == tag:
+                matches.append(release)
     if len(matches) > 1:
         raise ValueError("multiple releases name the target tag")
     if matches:
         require_release(matches[0], tag, draft=True)
-        if matches[0].get("assets"):
-            raise ValueError("draft already has assets; inspect and remove the incomplete draft before retrying; assets are never overwritten")
+        if matches[0].get("assets") != []:
+            raise ValueError("draft already has assets; inspect the draft and compare its assets with the signed evidence before retrying")
     _remote_tag(tag, commit)
-    attachment = dist.parent / BUNDLE
-    if attachment.exists() or attachment.is_symlink() or attachment.is_junction():
-        raise FileExistsError(f"release attachment already exists: {attachment}")
-    replace_many({attachment: _bytes({"schema": PROMOTION, "evidence": document, "promotion_bundle": bundle.read_bytes().decode("utf-8")})})
+    # --notes-from-tag requires gh to infer its repository from local context.
+    if not matches and gh("repo", "view", "--json", "url", "--jq", ".url").strip().casefold() != f"https://github.com/{REPOSITORY}".casefold():
+        raise ValueError("draft creation requires the selected GitHub repository to match the promotion evidence")
+    envelope = _bytes({"schema": PROMOTION, "evidence": document, "promotion_bundle": bundle.read_bytes().decode("utf-8")})
+    if len(envelope) > MAX_BYTES:
+        raise ValueError("release attachment exceeds the verification byte limit")
+    upload = dist.parent / BUNDLE
+    upload.write_bytes(envelope)
+    _publish_new_file(attachment, envelope)
     try:
         if not matches:
             gh("release", "create", tag, "--draft", "--verify-tag", "--title", tag, "--notes-from-tag")
-        gh("release", "upload", tag, "--repo", REPOSITORY, *(str(dist / name) for name in distribution_names(tag)), str(attachment))
+        # gh interprets '#' in an asset argument as the start of its display label.
+        gh("release", "upload", tag, "--repo", REPOSITORY, *(f"{dist.name}/{name}" for name in distribution_names(tag)), upload.name, cwd=upload.parent)
     except BaseException as error:
-        try:
-            attachment.unlink()
-        except OSError as cleanup:
-            raise BaseExceptionGroup("release staging and attachment cleanup failed", [error, cleanup]) from None
+        error.add_note(f"Inspect {attachment} and the GitHub release for {tag}, including any uploaded assets, before retrying.")
         raise
     print(f"Draft {tag} contains the same validated wheel/sdist and signed main-validation plus promotion provenance. Review before publishing.")
 
 
 def verify(event: dict[str, Any], commit: str, output: Path) -> None:
+    """Validate the published release event and its signed assets before writing the retained proof."""
     _object(event, "event")
     repository = _object(event.get("repository"), "event.repository")
     if event.get("action") != "published" or repository.get("full_name") != REPOSITORY:
         raise ValueError("expected a published release event from the owning repository")
     _commit(commit)
     released = _object(event.get("release"), "event.release")
-    tag = released["tag_name"]
+    tag = _stable_tag(released.get("tag_name"))
     names = distribution_names(tag)
     require_release(released, tag, draft=False)
-    release_id = _integer(released["id"], "release ID")
+    release_id = _integer(released.get("id"), "release ID")
     _remote_tag(tag, commit)
-    current = api(f"releases/{release_id}")
+    current = _release_identity(api(f"releases/{release_id}"))
     require_release(current, tag, draft=False)
+    if current["immutable"] is not True:
+        raise ValueError("PyPI publication requires an immutable GitHub Release")
     assets = current["assets"]
-    if current.get("id") != release_id or len(assets) != 3 or {asset["name"] for asset in assets} != {*names, BUNDLE}:
+    if (
+        _integer(current.get("id"), "release ID") != release_id
+        or len(assets) != 3
+        or any(not isinstance(asset.get("name"), str) for asset in assets)
+        or {asset["name"] for asset in assets} != {*names, BUNDLE}
+    ):
         raise ValueError("release must contain exactly the wheel, sdist, and signed provenance")
-    identifiers = [_integer(asset["id"], "release asset ID") for asset in assets]
+    identifiers = [_integer(asset.get("id"), "release asset ID") for asset in assets]
     if len(set(identifiers)) != 3:
         raise ValueError("release asset IDs must be unique")
+    for asset in assets:
+        if (
+            asset.get("state") != "uploaded"
+            or _integer(asset.get("size"), "release asset size") > MAX_BYTES
+            or not isinstance(asset.get("digest"), str)
+            or re.fullmatch(r"sha256:[0-9a-f]{64}", asset["digest"]) is None
+        ):
+            raise ValueError("release assets must be uploaded with bounded sizes and SHA-256 digests")
     proof = output.parent / BUNDLE
     if proof.exists() or proof.is_symlink() or proof.is_junction():
         raise FileExistsError(f"release proof already exists: {proof}")
@@ -1093,14 +1197,19 @@ def verify(event: dict[str, Any], commit: str, output: Path) -> None:
                     check=True,
                     timeout=120,
                 )
-            if target.stat().st_size > MAX_BYTES or f"sha256:{_sha(target.read_bytes())}" != asset.get("digest"):
+            if target.stat().st_size != asset["size"] or f"sha256:{_sha(target.read_bytes())}" != asset["digest"]:
                 raise ValueError("downloaded release asset differs from its authoritative digest")
         envelope = _object(_json(bundle.read_bytes()), "promotion envelope")
         if envelope.get("schema") != PROMOTION:
             raise ValueError("expected signed validation and release-promotion provenance")
         document = _object(envelope.get("evidence"), "promotion evidence")
         signed = Path(temporary) / "promotion.sigstore.json"
-        signed.write_bytes(envelope["promotion_bundle"].encode("utf-8"))
+        promotion_bundle = envelope.get("promotion_bundle")
+        if not isinstance(promotion_bundle, str) or not promotion_bundle:
+            raise ValueError("promotion envelope requires a nonempty signature bundle")
+        run_id = _integer(document.get("promotion_run"), "promotion run ID")
+        attempt = _integer(document.get("promotion_attempt"), "promotion attempt")
+        signed.write_bytes(promotion_bundle.encode("utf-8"))
         for name in names:
             _signature(
                 candidate / name,
@@ -1108,44 +1217,22 @@ def verify(event: dict[str, Any], commit: str, output: Path) -> None:
                 commit,
                 ".github/workflows/prepare-release.yml",
                 f"refs/tags/{tag}",
-                document["promotion_run"],
-                document["promotion_attempt"],
+                run_id,
+                attempt,
                 predicate=document,
             )
         _validate_evidence(document, tag, commit, candidate)
-        if _release_identity(api(f"releases/{release_id}")) != _release_identity(current):
+        if not _same_json(_release_identity(api(f"releases/{release_id}")), current):
             raise ValueError("release metadata or assets changed during verification; inspect before retrying")
         _publish_distributions(output, {name: (candidate / name).read_bytes() for name in names}, evidence=(proof, bundle.read_bytes()))
     print(f"Verified main-validation and promotion provenance for {tag} at {commit}; ready for the approval-gated upload.")
-
-
-def redact_release_diagnostic(value: str | bytes) -> str:
-    """Remove URL credentials, queries/fragments and recognizable GitHub tokens.
-
-    Apply to rendered subprocess diagnostics before logging them. This cannot
-    identify arbitrary secrets in free text; never include tokens in commands.
-    """
-    if isinstance(value, bytes):
-        value = value.decode("utf-8", errors="replace")
-
-    def url(match: re.Match[str]) -> str:
-        try:
-            parsed = urlsplit(match[0])
-            if not parsed.hostname:
-                return "<redacted-url>"
-            suffix = "?<redacted>" if parsed.query or parsed.fragment or parsed.username or parsed.password else ""
-            return f"{parsed.scheme}://{parsed.hostname}{parsed.path}{suffix}"
-        except ValueError:
-            return "<redacted-url>"
-
-    value = re.sub(r"https?://[^\s\"<>]+", url, value)
-    return re.sub(r"\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b", "<redacted-token>", value).strip()
 
 
 _diagnostic = redact_release_diagnostic
 
 
 def main() -> int:
+    """Run the validation workflow helper and report expected failures as exit status one."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     command = commands.add_parser("consume")

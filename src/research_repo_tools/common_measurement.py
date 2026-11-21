@@ -80,6 +80,7 @@ class DiscoveredSeries:
         object.__setattr__(self, "exclude", _strings(self.exclude, "exclude", nonempty=False))
 
     def resolve(self, expected: tuple[str, ...]) -> RunSeries:
+        """Select expected workload IDs in inventory order by applying include and exclude patterns."""
         rows = tuple(
             (identity, identity)
             for identity in expected
@@ -110,6 +111,8 @@ class DiscoveryPolicy:
 
 @dataclass(frozen=True, slots=True)
 class MeasurementPhase:
+    """Commands, environment, and workload policy for one side of a benchmark run."""
+
     command: tuple[str, ...]
     gate: tuple[str, ...]
     policy: CompletePolicy | DiscoveryPolicy
@@ -130,6 +133,8 @@ class MeasurementPhase:
 
 @dataclass(frozen=True, slots=True)
 class CompleteMeasurementPlan:
+    """A two-phase acquisition plan with its harness mode, collection backend, and reported series."""
+
     measurement: MeasurementConfig
     baseline: MeasurementPhase
     current: MeasurementPhase
@@ -192,10 +197,12 @@ class CompleteMeasurementPlan:
 
     @property
     def sources(self) -> tuple[str, ...]:
+        """Return the shared source patterns from the measurement declaration."""
         return self.measurement.sources
 
     @property
     def harness(self) -> tuple[str, ...]:
+        """Return the declared harness patterns used to identify measurement code."""
         return self.measurement.harness
 
     def phase_sources(self, phase: str) -> tuple[str, ...]:
@@ -217,6 +224,7 @@ class CommonHarnessPlan(CompleteMeasurementPlan):
 
 
 def parse_plan(document: dict[str, Any]) -> CompleteMeasurementPlan:
+    """Validate a versioned measurement plan before selecting its harness and acquisition backend."""
     raw = _table(
         document,
         "common measurement",
@@ -489,7 +497,7 @@ def _prepare_phases(
     on_phase_failure: Callable[[str, int, Path, BaseException], None] | None = None,
 ) -> tuple[dict[str, CompletePolicy], dict[str, Provenance], Callable[[], tuple[tuple[tuple[str, CompleteSample], ...], tuple[tuple[str, Provenance], ...]]]]:
     """Prepare a complete unit; return the same validated sampler used by v1-v3."""
-    reporter = progress or ProgressReporter(mode="none")
+    reporter = ProgressReporter(mode="none") if progress is None else progress
     phases = {"current"} if isinstance(pair, FirstRelease) else {"baseline", "current"}
     if len(phase_order) != len(phases) or set(phase_order) != phases:
         raise ValueError("phase order must contain each selected source exactly once")
@@ -807,7 +815,7 @@ def measure_prepared_pair(
     timing. Retained raw files survive checkout cleanup. No Git state is mutated by
     this function; measure_pair owns optional worktree lifecycle.
     """
-    reporter = progress or ProgressReporter(mode="none")
+    reporter = ProgressReporter(mode="none") if progress is None else progress
 
     def accepted_sample(phase: str, sample: CompleteSample, elapsed: float) -> None:
         reporter.accept(phase, len(sample.cases), elapsed)
@@ -834,6 +842,7 @@ def measure_prepared_pair(
 
 
 def _plan_document(plan: CompleteMeasurementPlan) -> dict[str, Any]:
+    """Serialize the measurement declaration with its phase-specific workload policies and report series."""
     config = plan.measurement
     document: dict[str, Any] = {
         "schema": 4,

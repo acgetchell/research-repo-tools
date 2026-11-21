@@ -1,8 +1,10 @@
 """Installed generic release-validation API, independent of registry/upload policy."""
 
+import contextlib
 import copy
 import hashlib
 import io
+import os
 import subprocess
 import tempfile
 import unittest
@@ -12,7 +14,7 @@ from typing import Any, cast
 from unittest.mock import patch
 
 from research_repo_tools import files
-from research_repo_tools.release_validation import ValidationPolicy, api, download_artifact, select_main_run, validate_jobs, validate_run
+from research_repo_tools.release_validation import ValidationPolicy, api, download_artifact, gh, select_main_run, validate_jobs, validate_run
 
 COMMIT = "a" * 40
 POLICY = ValidationPolicy("example/package", ".github/workflows/package.yml", "Package", (("build", ("Build",)), ("native", ("Install wheel and sdist",))))
@@ -139,7 +141,39 @@ class TestValidationConsumer(unittest.TestCase):
                         execute.return_value = subprocess.CompletedProcess([], 0, stdout='{"id": 7}')
                         result = api(endpoint) if repository == "acgetchell/research-repo-tools" else api(endpoint, repository=repository)
                         self.assertEqual(result, {"id": 7})
-                        execute.assert_called_once_with(["gh", "api", expected_path], check=True, capture_output=True, text=True, encoding="utf-8", timeout=120)
+                        execute.assert_called_once_with(
+                            ["gh", "api", expected_path], cwd=None, check=True, capture_output=True, text=True, encoding="utf-8", timeout=120
+                        )
+
+    def test_gh_resolves_relative_path_entries_before_using_the_upload_directory(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            snapshot = root / "build#1" / "snapshot"
+            snapshot.mkdir(parents=True)
+            binaries = root / "cli tools"
+            binaries.mkdir()
+            executable = binaries / ("gh.exe" if os.name == "nt" else "gh")
+            executable.touch(mode=0o700)
+            with (
+                contextlib.chdir(root),
+                patch.dict(os.environ, PATH=binaries.name, PATHEXT=".exe"),
+                patch("research_repo_tools.release_validation.subprocess.run") as execute,
+            ):
+                gh("release", "upload", "v1.0.0", "dist/fixture.whl", cwd=snapshot)
+                execute.assert_called_once_with(
+                    [str(executable), "release", "upload", "v1.0.0", "dist/fixture.whl"],
+                    cwd=snapshot,
+                    check=True,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    timeout=120,
+                )
+                execute.reset_mock()
+                executable.unlink()
+                with self.assertRaises(FileNotFoundError):
+                    gh("release", "upload", "v1.0.0", "dist/fixture.whl", cwd=snapshot)
+                execute.assert_not_called()
 
     def test_selection_never_uses_dispatch_pr_or_another_commit(self):
         for field, value in (

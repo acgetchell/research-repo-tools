@@ -38,6 +38,8 @@ class SarifPolicy:
 
 @dataclass(frozen=True, slots=True)
 class SarifOutput:
+    """A serialized SARIF document paired with its output filename and upload category."""
+
     filename: str
     category: str
     payload: bytes

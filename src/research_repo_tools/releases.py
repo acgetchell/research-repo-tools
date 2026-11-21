@@ -10,6 +10,7 @@ import tempfile
 from collections.abc import Callable, Mapping, Sequence
 from dataclasses import dataclass
 from datetime import UTC, date, datetime
+from itertools import pairwise
 from pathlib import Path
 from typing import assert_never
 
@@ -67,12 +68,15 @@ class StaleReleasePlanError(ValueError):
 
 @dataclass(frozen=True, slots=True)
 class ReleaseContext:
+    """Tag, optional previous tag, and release date supplied to metadata rules and adapters."""
+
     tag: str
     previous_tag: str | None
     release_date: str
 
     @property
     def version(self) -> str:
+        """Return the release version with the leading v removed."""
         return self.tag.removeprefix("v")
 
 
@@ -91,11 +95,15 @@ class ReleaseAdapter:
     validate: Callable[[Path, ReleaseContext], Sequence[str]] | None = None
 
     def __post_init__(self) -> None:
+        if isinstance(self.input_files, (str, bytes)):
+            raise ValueError("release adapter input_files must be a sequence of relative paths")
         object.__setattr__(self, "input_files", tuple(relative_path(path) for path in self.input_files))
 
 
 @dataclass(frozen=True, slots=True)
 class ReleaseDiscovery:
+    """The package, files, and version references discovered under a consumer release policy."""
+
     root: Path
     package: PackageInfo
     files: tuple[Path, ...]
@@ -105,16 +113,21 @@ class ReleaseDiscovery:
 
 @dataclass(frozen=True, slots=True)
 class ReleaseCheckResult:
+    """Discovery results and the problems that must be resolved for the release check to pass."""
+
     discovery: ReleaseDiscovery
     problems: tuple[str, ...]
 
     @property
     def ok(self) -> bool:
+        """Return true when release discovery and validation reported no problems."""
         return not self.problems
 
 
 @dataclass(frozen=True, slots=True)
 class ReleaseEdit:
+    """A planned replacement with the original and proposed file bytes."""
+
     path: Path
     before: bytes
     after: bytes
@@ -131,11 +144,14 @@ class ReleasePlan:
 
     @property
     def edits(self) -> tuple[ReleaseEdit, ...]:
+        """Select the planned files whose contents change."""
         return tuple(edit for edit in self.files if edit.before != edit.after)
 
 
 @dataclass(frozen=True, slots=True)
 class ReleaseResult:
+    """The applied release context and the paths updated by the release operation."""
+
     context: ReleaseContext
     changed_paths: tuple[Path, ...]
 
@@ -187,7 +203,7 @@ def discover_release(
     """Discover the shared and explicitly selected release files without a network call."""
     root = root.resolve()
     policy = load(root=root).release if policy is None else policy
-    paths = _inventory(root, policy, adapter.input_files if adapter else ())
+    paths = _inventory(root, policy, adapter.input_files if adapter is not None else ())
     package = metadata.read_package_info(root)
     references = tuple(metadata._version_references(root, package, policy, allow_unreleased=allow_unreleased))
     captures: dict[str, list[tuple[int, int]]] = {}
@@ -197,7 +213,7 @@ def discover_release(
             captures.setdefault(rule.path, []).extend(match.span("value") for match in matches)
     for path, spans in captures.items():
         spans.sort()
-        if any(left[1] > right[0] for left, right in zip(spans, spans[1:])):
+        if any(left[1] > right[0] for left, right in pairwise(spans)):
             raise ValueError(f"{path}: overlapping release rule captures")
     return ReleaseDiscovery(root, package, paths, references, policy)
 
@@ -359,7 +375,7 @@ def _edit_rules(root: Path, policy: ReleasePolicy, context: ReleaseContext, *, i
             edits.setdefault(rule.path, []).append((start, end, _expected(rule, context)))
     for path, replacements in edits.items():
         replacements.sort()
-        if any(left[1] > right[0] for left, right in zip(replacements, replacements[1:])):
+        if any(left[1] > right[0] for left, right in pairwise(replacements)):
             raise ValueError(f"{path}: overlapping release rule captures")
         target = root / path
         text = target.read_bytes().decode("utf-8")
@@ -441,7 +457,7 @@ def plan_release(
         if problems:
             raise ReleaseValidationError(problems)
         files = tuple(ReleaseEdit(path, original, (staged / path).read_bytes()) for path, original in originals.items())
-    return ReleasePlan(discovery, context, files, adapter.input_files if adapter else ())
+    return ReleasePlan(discovery, context, files, adapter.input_files if adapter is not None else ())
 
 
 def apply_release(plan: ReleasePlan) -> ReleaseResult:

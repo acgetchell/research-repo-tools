@@ -9,7 +9,7 @@ import tempfile
 import unittest
 from dataclasses import replace
 from pathlib import Path
-from typing import override
+from typing import Any, cast, override
 from unittest.mock import patch
 
 from research_repo_tools.cli import main
@@ -182,6 +182,8 @@ class TestReleaseConsumer(unittest.TestCase):
 
     def test_nonportable_release_paths_fail_at_construction(self) -> None:
         before = self.snapshot()
+        with self.assertRaisesRegex(ValueError, "sequence of relative paths"):
+            ReleaseAdapter(cast(Any, "README.md"))
         for name in ("docs/file.md:stream", "docs/NUL.txt", "docs/CON", "docs/file.", "docs/file ", "docs/bad\0name", "docs/bad\nname", "docs/bad\ud800"):
             with self.subTest(name=name):
                 for construct in (
@@ -278,7 +280,11 @@ class TestReleaseConsumer(unittest.TestCase):
             report = json.loads((candidate / "evidence.json").read_bytes())
             return () if report == {"measured": "1.1.0", "release": context.version} else ("invalid evidence selection",)
 
-        adapter = ReleaseAdapter(("evidence.json",), prepare, validate)
+        class ConsumerAdapter(ReleaseAdapter):
+            def __bool__(self) -> bool:
+                return False
+
+        adapter = ConsumerAdapter(("evidence.json",), prepare, validate)
         self.policy = replace(self.policy, final_changelog=True)
         original = self.snapshot()
         preview = self.plan(adapter=adapter)
@@ -469,6 +475,15 @@ class TestReleaseConsumer(unittest.TestCase):
         response = subprocess.CompletedProcess(["gh"], 0, payload, b"")
         with patch("shutil.which", return_value=str(Path(__file__).resolve())), patch("subprocess.run", return_value=response):
             with self.assertRaisesRegex(ValueError, "duplicate"):
+                published_releases(self.root)
+
+    def test_full_provider_page_cannot_prove_empty_stable_history(self):
+        import subprocess
+
+        previews = [{"tagName": f"v1.0.{index}-rc.1", "isDraft": False, "isPrerelease": True} for index in range(1000)]
+        response = subprocess.CompletedProcess(["gh"], 0, json.dumps(previews).encode(), b"")
+        with patch("shutil.which", return_value=str(Path(__file__).resolve())), patch("subprocess.run", return_value=response):
+            with self.assertRaisesRegex(ValueError, "1000-release limit"):
                 published_releases(self.root)
 
 

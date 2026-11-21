@@ -6,10 +6,12 @@ from collections.abc import Callable
 from contextvars import ContextVar
 from pathlib import Path
 
+_REFRESH_INTERVAL_SECONDS = 5 * 60
 _GUARDS: ContextVar[list[tuple[Callable[[], None], str]] | None] = ContextVar("dependency_guards", default=None)
 
 
 def retain_guard(verify: Callable[[], None], identity: str) -> None:
+    """Register a dependency freshness check and its identity with the active observation, if any."""
     guards = _GUARDS.get()
     if guards is not None:
         guards.append((verify, identity))
@@ -30,6 +32,7 @@ class DependencyOperation:
         self.refresh()
 
     def refresh(self) -> None:
+        """Refresh dependency evidence and reject any change to the guarded inputs or runtime."""
         from research_repo_tools.dependency_provenance import check_release_dependencies
 
         for verify, _ in self.guards:
@@ -48,14 +51,17 @@ class DependencyOperation:
         self.checked_at = time.monotonic()
 
     def check_inputs(self) -> None:
+        """Recheck the exact local inputs retained by this operation."""
         for verify, _ in self.guards:
             verify()
 
     def verify(self) -> None:
+        """Recheck local inputs and refresh registry observations after five minutes."""
         self.check_inputs()
-        if time.monotonic() - self.checked_at >= 300:
+        if time.monotonic() - self.checked_at >= _REFRESH_INTERVAL_SECONDS:
             self.refresh()
 
     @property
     def digest(self) -> str:
+        """Hash the ordered identities of the retained dependency guards."""
         return hashlib.sha256("\n".join(identity for _, identity in self.guards).encode("ascii")).hexdigest()

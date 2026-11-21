@@ -34,6 +34,8 @@ def _count(value: object) -> int | None:
 
 @dataclass(frozen=True, slots=True)
 class HostMetadata:
+    """Recorded host and tool facts, with unavailable measurements represented by None."""
+
     os: str | None
     architecture: str | None
     cpu: str | None
@@ -61,10 +63,12 @@ class HostMetadata:
 
 
 def serialize_host(host: HostMetadata) -> bytes:
+    """Encode host facts and tool versions in deterministic, schema-versioned JSON."""
     return deterministic_json({"schema": HOST_SCHEMA, **asdict(host), "tools": dict(host.tools)})
 
 
 def parse_host(payload: bytes) -> HostMetadata:
+    """Read retained host facts and tool versions without probing the current host."""
     raw = _object(
         _load_json(payload, "host metadata"),
         "host metadata",

@@ -1,12 +1,14 @@
 """CLI composition for dedicated runtime locks and portable verified bundles."""
 
 import argparse
+import json
 from pathlib import Path
 
 lazy from research_repo_tools.config import Config
 
 
 def add_commands(release) -> None:
+    """Register commands for resolving, recording, and verifying isolated Python runtimes."""
     commands = release.add_parser("runtime", help="resolve, record and verify a dedicated isolated Python runtime").add_subparsers(
         dest="operation", required=True
     )
@@ -32,9 +34,10 @@ def add_commands(release) -> None:
 
 
 def run(args: argparse.Namespace, settings: Config) -> int:
+    """Dispatch a runtime-policy operation with paths resolved through the consumer configuration."""
     from research_repo_tools.dependency_build_receipts import read_regular
     from research_repo_tools.files import _validate_distinct_paths, replace_many
-    from research_repo_tools.runtime_policy import MAX_POLICY_BYTES, parse_runtime_policy, runtime_requirements, verify_runtime
+    from research_repo_tools.runtime_policy import MAX_POLICY_BYTES, _build_evidence_names, parse_runtime_policy, runtime_requirements, verify_runtime
     from research_repo_tools.runtime_policy_build import install_runtime, record_runtime_policy, resolve_runtime
 
     def path(value: Path) -> Path:
@@ -52,7 +55,13 @@ def run(args: argparse.Namespace, settings: Config) -> int:
             print(install_runtime(policy, path(args.directory), artifacts=policy_path.parent))
         elif args.operation == "requirements":
             output = path(args.output)
-            _validate_distinct_paths((policy_path, output))
+            retained = set()
+            for item in json.loads(policy.payload)["packages"]:
+                retained.add(item["filename"])
+                provenance = item["provenance"]
+                if provenance["kind"] == "source-build":
+                    retained.update(_build_evidence_names(provenance))
+            _validate_distinct_paths((policy_path, *(policy_path.parent / name for name in sorted(retained)), output))
             replace_many({output: runtime_requirements(policy)})
         else:
             names = verify_runtime(policy, environment=path(args.environment), artifacts=policy_path.parent)

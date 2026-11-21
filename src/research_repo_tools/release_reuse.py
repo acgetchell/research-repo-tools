@@ -307,6 +307,7 @@ def create_reuse_manifest(
 def _relationship(
     policy: ReusePolicy, release_commit: str, pull_request: int, run: dict[str, Any], checkout: str, read: Callable[[str], Any]
 ) -> dict[str, Any]:
+    """Verify the merged pull request's base and tree before accepting its tested commit for the release."""
     repository = policy.validation.repository
     branch_name = policy.validation.branch
     repo = _object(read(""))

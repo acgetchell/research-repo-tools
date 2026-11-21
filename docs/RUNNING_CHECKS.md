@@ -179,19 +179,27 @@ disabled; it does not execute dependency build scripts. Advisory queries need
 network access. Missing inputs, uncovered sources, scanner failures, malformed
 or missing reports, and findings all block the gate.
 
-Gitleaks checks all reachable Git history and a private snapshot of current
+Gitleaks checks a private snapshot of all reachable Git history and of current
 tracked/nonignored files, including uncommitted new files. Full history is
-required (`fetch-depth: 0` in Actions). Environment/build directories are excluded
-from the working snapshot. Selected symlinks and submodules fail explicitly;
-scan submodules as separate repositories. Native history scanning covers patches,
-not unreachable objects, nested repositories, archive contents or binary blobs.
+required (`fetch-depth: 0` in Actions). A partial clone must have all reachable
+Git objects locally. If the scan reports a missing object ID, fetch the missing
+history or run the check in a full clone. Environment/build directories are excluded
+from the working snapshot. Selected symlinks and submodules fail explicitly.
+Scan submodules as separate repositories. History patches treat renamed files as
+additions at the new path so rules scoped to that path can detect them. Native
+history scanning omits unreachable objects, nested repositories, archive
+contents, and binary blobs.
 Extra working-tree exclusions are explicit `--exclude` arguments.
+Working-tree scan paths are relative to the repository, including when policy
+rules use path anchors. Local TOML `[extend].path` values resolve from the
+repository root.
 
 Reports go to `target/security`: numbered OSV JSON/SARIF pairs and Gitleaks
 history/working pairs. Findings retain native rule IDs and locations. Gitleaks
 uses complete native secret redaction; surrounding match text and commit messages
-are also removed before reports are published. Inline `gitleaks:allow` and
-ambient `.gitleaksignore` bypasses are disabled. Consumer `.gitleaks.toml` policy
+are also removed before reports are published. Inline `gitleaks:allow` comments
+are disabled. Managed scans require any repository-root `.gitleaksignore` file
+to be removed from the checkout. Consumer `.gitleaks.toml` policy
 is honored; use `--scanner-config PATH` for another reviewed configuration.
 Raw scanner logs are not echoed because they can include sensitive metadata.
 Validated findings are printed by default: OSV identifies the lockfile,
@@ -201,8 +209,75 @@ location. Each scan prints a finding count and published report paths, with
 findings listed once across JSON and SARIF. Terminal output omits descriptions
 that could interpolate source values, snippets, adjacent matches and commit
 messages. Extend the aggregate `just security` recipe with consumer-owned policy.
-The first nonzero scanner status is returned; invalid successful reports return
-1, and timeouts return 124. Checks never install or select an ambient scanner.
+
+### Reviewing Gitleaks exceptions
+
+Run `just security-secrets` to produce fresh history and working-tree reports.
+Use `just security-findings` to read the redacted JSON pair later, for example
+after downloading CI reports. Pass `--reports DIRECTORY` for a different report
+location. The summary shows the rule, file, line and column range, and history
+commit. It requires both reports and can succeed when those reports have
+findings. A managed scan clears previous Gitleaks reports before preflight and
+saves reports only for completed native scans.
+
+For a history finding, inspect the reported path and line at the reported
+commit. For a working-tree finding, inspect the current file at that location.
+After confirming the value is nonsecret, copy the existing policy to a
+candidate file. Keep the default rules enabled and scope the exception to the
+specific rule, file, and known nonsecret value. In this example, the flagged
+value is a base64-encoded array of four numeric benchmark statistics. The
+exception applies to that exact value in one generated report.
+
+```toml
+[extend]
+useDefault = true
+
+[[rules]]
+id = "generic-api-key"
+
+[[rules.allowlists]]
+description = "Reviewed numeric benchmark statistics in retained run data"
+condition = "AND"
+paths = ['^docs[/\\]performance-runs[/\\]example[/\\]run\.json$']
+regexTarget = "secret"
+regexes = ['^WzE0MTgxLjY4Nzg2MDk5ODYsMTIuODcyLDczLjMwLDU3Ljhd$']
+```
+
+Save the proposed policy separately from `.gitleaks.toml` and compare it before
+replacing the active policy.
+
+```sh
+just security-check-exceptions /path/to/candidate.toml
+```
+
+The baseline is the repository's `.gitleaks.toml`, or the built-in default rules
+when the repository has no policy. Use `--baseline PATH` for an explicitly saved
+baseline. Pass the same `--exclude` options used by the regular scan. The command
+scans the same captured set of Git refs and working-tree snapshot with each
+policy, then shows suppressed and introduced findings and matching locations. Findings are
+paired by rule ID, file, line and column range, and commit. Review matching
+locations when a detection rule changes because the rule may select a different
+value at the same location. The command retains both policy
+files and their local extensions and checks them for changes during comparison.
+Keep Git refs stable during the comparison. A zero exit means the comparison
+completed. Review every suppressed location before committing the approved
+exception to `.gitleaks.toml`, then run the regular scan to verify the resulting
+policy. The regular scan still fails on findings.
+
+Consumers can use these recipes from the shipped Justfile or invoke the
+equivalent `research-repo-tools security findings` and
+`research-repo-tools security check-exceptions` subcommands through their
+pinned tooling setup. See the [Gitleaks configuration reference](https://github.com/gitleaks/gitleaks#configuration)
+for allowlist syntax.
+`security secrets` exits 0 for a clean scan and 1 for findings. If any scan
+fails, the command returns the first scan failure. Invalid reports and native
+exit 1 produce status 2. A timeout produces status 124. For example, an invalid
+history JSON report followed by a SARIF timeout leaves the command status at 2.
+
+`security check-exceptions` exits 0 after a complete comparison, including when
+it finds differences. A failed scan stops the comparison and the command exits
+1. Its diagnostic includes the individual scan status, such as 124 for a
+baseline timeout. Both commands use the declared, managed scanner.
 
 The standalone binaries require neither a paid GitHub security product nor a
 Gitleaks Action license. Consumers own exceptions, schedules, Actions permissions,
@@ -230,8 +305,8 @@ Semgrep 1.183.0 has no native Intel macOS wheel.
 See the [Semgrep release files](https://pypi.org/project/semgrep/1.183.0/#files).
 
 Semgrep's published transitive pins need shared temporary overrides. The packaged
-`semgrep-constraints.txt` owns the tested policy: current tomli/jsonschema, patched
-MCP and a consistent OpenTelemetry release family, and pywin32 312 for Windows
+`semgrep-constraints.txt` pins current tomli and jsonschema, patched MCP and
+wcmatch, a consistent OpenTelemetry release family, and pywin32 312 for Windows
 Python 3.15. Root uv overrides cannot propagate through an extra. The normal
 `toolchain adopt` workflow adds this policy for shared-package pins requesting
 `[semgrep]`, rejects competing overrides, resolves a private candidate and

@@ -68,6 +68,7 @@ class TrialSchedule:
 
     @property
     def phases(self) -> tuple[tuple[str, str], ...]:
+        """Return the deterministic baseline/current order for every trial."""
         ordering = self.order
         match ordering:
             case AlternatingOrder():
@@ -82,6 +83,7 @@ class TrialSchedule:
         return tuple(("current", "baseline") if i in reverse else ("baseline", "current") for i in range(self.trials))
 
     def document(self) -> dict[str, object]:
+        """Record the ordering rule, seed, and derived phase order for each trial."""
         ordering = self.order
         match ordering:
             case AlternatingOrder():
@@ -96,6 +98,7 @@ class TrialSchedule:
 
 
 def parse_schedule(value: object) -> TrialSchedule:
+    """Validate the trial count and ordering and verify any retained phases against the declared algorithm."""
     raw = _object(value, "schedule")
     if {"trials", "order"} - raw.keys() or raw.keys() - {"trials", "order", "seed", "phases"}:
         raise ValueError("invalid schedule fields")

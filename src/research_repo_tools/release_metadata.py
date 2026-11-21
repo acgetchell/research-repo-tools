@@ -11,14 +11,14 @@ from dataclasses import dataclass
 from datetime import date
 from enum import StrEnum
 from pathlib import Path
-from typing import Literal, TypeGuard, cast
+from typing import Literal, TypeIs, cast
 
 from packaging.utils import canonicalize_name
 
 from research_repo_tools.archive_changelog import ParsedChangelog, parse_changelog
 from research_repo_tools.config import ReleasePolicy, load
 from research_repo_tools.release_tags import SEMVER_PATTERN
-from research_repo_tools.toml_source import key_line
+from research_repo_tools.toml_source import inherits_workspace, key_line
 
 SKIP_DIRS = frozenset(
     {
@@ -45,7 +45,7 @@ class ReleaseCheckError(ValueError):
     """Raised when release metadata cannot be parsed unambiguously."""
 
 
-def _is_parsed_object(value: object) -> TypeGuard[ParsedObject]:
+def _is_parsed_object(value: object) -> TypeIs[ParsedObject]:
     """Return true when a parsed TOML value is an object with string keys."""
     return isinstance(value, dict) and all(isinstance(key, str) for key in value)
 
@@ -182,7 +182,7 @@ def read_package_info(root: Path, *, kind: Literal["auto", "cargo", "python"] = 
         if "package" in data:
             package = _require_table(data, "package", cargo)
             version_source = package
-            if package.get("version") == {"workspace": True}:
+            if inherits_workspace(package.get("version")):
                 version_source = _require_table(_require_table(data, "workspace", cargo), "package", cargo)
             return PackageInfo(_require_string(package, "name", str(cargo)), _require_string(version_source, "version", str(cargo)))
         workspace = _require_table(data, "workspace", cargo)
@@ -193,10 +193,11 @@ def read_package_info(root: Path, *, kind: Literal["auto", "cargo", "python"] = 
 
 
 def package_version_reference(root: Path, package: PackageInfo) -> tuple[Path, int]:
+    """Locate the version declaration and its physical line in the relevant package manifest."""
     cargo = root / "Cargo.toml"
     if cargo.is_file():
         package_table = _read_toml(cargo).get("package")
-        table = "package" if isinstance(package_table, dict) and package_table.get("version") != {"workspace": True} else "workspace.package"
+        table = "package" if isinstance(package_table, dict) and not inherits_workspace(package_table.get("version")) else "workspace.package"
         return cargo, _toml_table_key_line(cargo, table, "version")
     project = root / "pyproject.toml"
     return project, _toml_table_key_line(project, "project", "version")
@@ -237,7 +238,7 @@ def cargo_lock_references(root: Path, package: PackageInfo) -> list[VersionRefer
     data = _read_toml(cargo)
     root_package = data.get("package")
     references: list[VersionReference] = [_cargo_lock_reference(root / "Cargo.lock", package)] if root_package is not None else []
-    if isinstance(root_package, dict) and root_package.get("version") != {"workspace": True}:
+    if isinstance(root_package, dict) and not inherits_workspace(root_package.get("version")):
         return references
     workspace = _require_table(data, "workspace", cargo)
     if not workspace.get("members"):
@@ -245,7 +246,7 @@ def cargo_lock_references(root: Path, package: PackageInfo) -> list[VersionRefer
     seen = {package.name} if root_package is not None else set()
     for manifest in workspace_member_manifests(root):
         data = _require_table(_read_toml(manifest), "package", manifest)
-        if data.get("version") != {"workspace": True}:
+        if not inherits_workspace(data.get("version")):
             continue
         name = _require_string(data, "name", str(manifest))
         if name not in seen:
@@ -650,8 +651,8 @@ def _parse_args(argv: Sequence[str]) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def check(root: Path, *, policy: ReleasePolicy | None = None, previous_tag: str | None = None) -> int:
-    """Print the structured release check result for command-line consumers."""
+def check(root: Path, *, policy: ReleasePolicy | None = None, previous_tag: str | None = None, quiet: bool = False) -> int:
+    """Report release metadata problems on stderr and suppress success output when quiet."""
     from research_repo_tools.releases import check_release
 
     try:
@@ -664,7 +665,8 @@ def check(root: Path, *, policy: ReleasePolicy | None = None, previous_tag: str 
         for problem in result.problems:
             print(f"  {problem}", file=sys.stderr)
         return 1
-    print(f"Release metadata is synchronized at {result.discovery.package.version}.")
+    if not quiet:
+        print(f"Release metadata is synchronized at {result.discovery.package.version}.")
     return 0
 
 

@@ -49,6 +49,8 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class RequiredCheck:
+    """A required GitHub check identified by both its name and reporting app ID."""
+
     name: str
     app_id: int
 
@@ -61,6 +63,8 @@ class RequiredCheck:
 
 @dataclass(frozen=True, slots=True)
 class PublishingSettings:
+    """Consumer requirements for the release repository, registry destination, checks, and assets."""
+
     registry: Literal["pypi", "crates-io"]
     package: str
     repository: str
@@ -152,6 +156,8 @@ def _tag(tag: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class ReviewedRelease:
+    """The release ID, tag, and commit selected for publication review."""
+
     tag: str
     commit: str
     release_id: int
@@ -278,6 +284,19 @@ def _assets(release: GitHubRelease, settings: PublishingSettings, version: str) 
             raise ValueError(f"required release asset {name!r} is missing or empty")
 
 
+def _retained_crate_sha256(release: GitHubRelease, registry: str, package: str, version: str) -> str:
+    if registry != "crates-io":
+        raise ValueError("retained crate verification requires crates.io publication")
+    if not release.immutable:
+        raise ValueError("retained crate verification requires an immutable GitHub Release")
+    filename = f"{package}-{version}.crate"
+    states = dict(release.asset_states)
+    for name, identifier, size, digest in release.assets:
+        if name == filename and size > 0 and states.get(identifier) == "uploaded" and digest is not None:
+            return digest
+    raise ValueError(f"immutable GitHub Release requires an uploaded {filename} with a SHA-256 for the retained crate")
+
+
 def _release_assertions(config: "Config", release: GitHubRelease, tag: str, *, draft: bool) -> None:
     from research_repo_tools.changelog import notes
 
@@ -319,6 +338,11 @@ def check_release_source(config: "Config", tag: str, *, commit: str | None = Non
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
     check_release_dependencies(config.root, packages=config.release.published_dependencies)
+    return _check_release_source(config, tag, commit=commit, reuse_evidence=reuse_evidence)
+
+
+def _check_release_source(config: "Config", tag: str, *, commit: str | None, reuse_evidence: bytes | None) -> str:
+    """Recheck source and provider assertions within a dependency-verified operation."""
     settings = _settings(config)
     check_metadata(config, tag)
     head = _sha(run_git_command(["--no-pager", "rev-parse", "HEAD"], cwd=config.root).stdout.strip())
@@ -352,19 +376,30 @@ def check_reviewed_release(
     draft: bool = False,
     reuse_evidence: bytes | None = None,
     target: ReleaseTarget | None = None,
+    require_crate_asset: bool = False,
 ) -> GitHubRelease:
     """Read-only final source gate plus captured release lifecycle and assertions."""
     if event is not None and event.tag != tag:
         raise ValueError("release event and checkout tag/commit differ")
     head = check_release_source(config, tag, commit=None if event is None else event.commit, reuse_evidence=reuse_evidence)
+    return _check_reviewed_target(config, tag, head, event=event, draft=draft, target=target, require_crate_asset=require_crate_asset)
+
+
+def _check_reviewed_target(
+    config: "Config", tag: str, head: str, *, draft: bool, target: ReleaseTarget | None, event: ReviewedRelease | None = None, require_crate_asset: bool = False
+) -> GitHubRelease:
     settings = _settings(config)
     if target is not None and (target.repository, target.tag, target.commit) != (settings.repository, tag, head):
         raise ValueError("captured release target differs from configured repository/tag/source")
     release = lookup_release(config.root, settings.repository, tag)
     if release.prerelease or release.draft != draft or (event is not None and release.identifier != event.release_id):
         raise ValueError("GitHub release lifecycle or identity differs from the reviewed release")
-    _require_identity(release, target or ReleaseTarget(settings.repository, tag, event.release_id if event is not None else release.identifier, head))
+    if target is None:
+        target = ReleaseTarget(settings.repository, tag, event.release_id if event is not None else release.identifier, head)
+    _require_identity(release, target)
     _release_assertions(config, release, tag, draft=draft)
+    if require_crate_asset:
+        _retained_crate_sha256(release, settings.registry, settings.package, _tag(tag))
     return release
 
 
@@ -377,12 +412,15 @@ def publish_reviewed_release(config: "Config", tag: str, *, reuse_evidence: byte
     head = _sha(run_git_command(["--no-pager", "rev-parse", "HEAD"], cwd=config.root).stdout.strip())
     release = check_reviewed_release(config, tag, draft=True, reuse_evidence=reuse_evidence, target=target)
     require_draft(release)
-    # Recheck immediately before the one lifecycle mutation, including tag/checks.
-    current = check_reviewed_release(config, tag, draft=True, reuse_evidence=reuse_evidence, target=target)
+    # Recheck tag and CI here. The final target observation runs the fresh
+    # dependency check immediately before the one lifecycle mutation.
+    current_head = _check_release_source(config, tag, commit=head, reuse_evidence=reuse_evidence)
+    current = _check_reviewed_target(config, tag, current_head, draft=True, target=target)
     require_draft(current)
     if current.identifier != release.identifier:
         raise ValueError("draft release identity changed before publication")
-    target = target or ReleaseTarget(release.repository, tag, release.identifier, head)
+    if target is None:
+        target = ReleaseTarget(release.repository, tag, release.identifier, head)
     final = revalidate_release_target(config.root, target, dependencies=config.release.published_dependencies)
     _release_assertions(config, final, tag, draft=True)
     published = _publish_release(config.root, target)
@@ -394,11 +432,20 @@ def publish_reviewed_release(config: "Config", tag: str, *, reuse_evidence: byte
         ) from error
 
 
-def verify_publication(config: "Config", tag: str, *, attempts: int = 1, interval: int = 10, target: ReleaseTarget | None = None) -> None:
-    """Require the published stable GitHub release/assets and exact registry version."""
+def verify_publication(
+    config: "Config", tag: str, *, attempts: int = 1, interval: int = 10, target: ReleaseTarget | None = None, require_crate_asset: bool = False
+) -> None:
+    """Check publication, optionally binding the registry checksum to an immutable crate asset."""
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
     check_release_dependencies(config.root, packages=config.release.published_dependencies)
+    _verify_configured_publication(config, tag, attempts=attempts, interval=interval, target=target, require_crate_asset=require_crate_asset)
+
+
+def _verify_configured_publication(
+    config: "Config", tag: str, *, attempts: int, interval: int, target: ReleaseTarget | None, require_crate_asset: bool
+) -> None:
+    """Observe GitHub and registry publication using the configured assertions."""
     settings = _settings(config)
     _verify_publication(
         config.root,
@@ -410,6 +457,7 @@ def verify_publication(config: "Config", tag: str, *, attempts: int = 1, interva
         attempts=attempts,
         interval=interval,
         target=target,
+        require_crate_asset=require_crate_asset,
     )
 
 
@@ -453,27 +501,34 @@ def _verify_publication(
     attempts: int,
     interval: int,
     target: ReleaseTarget | None,
+    require_crate_asset: bool = False,
 ) -> RegistryVersion:
+    """Poll for the exact registry version and recheck the release, comparing crates.io's SHA-256 with the retained archive."""
     _repository(repository)
     version = _tag(tag)
     identity(registry, package, version)
     if target is not None and (target.repository != repository or target.tag != tag):
         raise ValueError("publication target differs from configured repository/tag")
 
-    def observe() -> GitHubRelease:
+    def observe() -> tuple[GitHubRelease, str | None]:
         release = lookup_release(root, repository, tag)
         if target is not None:
             _require_identity(release, target)
             if _remote_commit(root, target.repository, tag) != target.commit:
                 raise ValueError("published tag differs from captured source")
         check(release)
-        return release
+        checksum = _retained_crate_sha256(release, registry, package, version) if require_crate_asset else None
+        return release, checksum
 
-    release = observe()
+    release, retained_checksum = observe()
     result = wait_for_version(registry, package, version, attempts=attempts, interval=interval)
     if not result.present:
         raise ValueError("exact registry version is not yet visible; inspect the upload before retrying")
-    current = observe()
+    current, current_checksum = observe()
     if current.identifier != release.identifier:
         raise ValueError("published release identity changed during registry verification")
+    if current_checksum != retained_checksum:
+        raise ValueError("retained crate SHA-256 changed during registry verification")
+    if retained_checksum is not None and result.checksum != retained_checksum:
+        raise ValueError(f"crates.io SHA-256 for {package} {version} is {result.checksum}, expected {retained_checksum} from the retained .crate")
     return result

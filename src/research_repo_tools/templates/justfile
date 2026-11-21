@@ -7,6 +7,13 @@ set positional-arguments
 # + " " + quote(".github/actions/setup-just/action.yml") to this expression.
 actions_inputs := quote(".github/workflows")
 
+# Set to "true" for a Cargo project declared only in a subdirectory.
+release_cargo := path_exists("Cargo.toml")
+release_tooling := if release_cargo == "true" { "toolchain run --tool cargo -- research-repo-tools " } else { "" }
+
+# Opt in by naming the trusted research-repo-tools selection in dependency-sources.toml.
+supplier_update := ""
+
 # Check Actions pins offline using the provisioned environment without syncing.
 actions-check:
     uv run --no-sync --no-python-downloads --offline research-repo-tools actions check --policy .github/action-updates.toml {{ actions_inputs }}
@@ -145,13 +152,17 @@ python-typecheck:
 release-assets +args:
     uv run --locked --group dev research-repo-tools release assets "$@"
 
+# Populate the managed Cargo cache for the exact locked release graph on all targets.
+release-cargo-fetch *args:
+    uv run --locked --group dev research-repo-tools toolchain run --tool cargo -- cargo fetch --locked "$@"
+
 # Check final release metadata and dated notes against the canonical stable tag.
 release-check tag:
     uv run --locked --group dev research-repo-tools release check "$1"
 
 # Verify selected published upstream dependencies before release work.
 release-dependencies:
-    uv run --locked --group dev research-repo-tools release dependencies
+    uv run --locked --group dev research-repo-tools {{ release_tooling }}release dependencies
 
 # Rebuild configured source dependencies and authenticate local wheel outputs.
 release-dependency-builds:
@@ -171,7 +182,7 @@ release-notes tag:
 
 # Approve the reviewed draft GitHub Release and trigger registry publication.
 release-publish tag *args:
-    uv run --locked --group dev research-repo-tools release publish "$@" --approve
+    uv run --locked --group dev research-repo-tools {{ release_tooling }}release publish "$@" --approve
 
 # Check the configured package's exact registry version without uploading.
 release-registry tag +args:
@@ -187,7 +198,7 @@ release-runtime +args:
 
 # Require the stable GitHub Release/assets and exact published registry version.
 release-verify tag *args:
-    uv run --locked --group dev research-repo-tools release verify --attempts 7 --interval 10 "$@"
+    uv run --locked --group dev research-repo-tools {{ release_tooling }}release verify --attempts 7 --interval 10 "$@"
 
 # Require synchronized package metadata and complete dated release notes.
 release-version-check:
@@ -211,6 +222,14 @@ review-uncommitted:
 
 # Audit selected dependencies and then scan for secrets; add consumer policy here.
 security: audit security-secrets
+
+# Compare a proposed Gitleaks configuration with the baseline.
+security-check-exceptions candidate *args:
+    uv run --locked --group dev research-repo-tools security check-exceptions "$@"
+
+# Summarize existing redacted Gitleaks reports.
+security-findings *args:
+    uv run --locked --group dev research-repo-tools security findings "$@"
 
 # Audit explicitly selected uv.lock/Cargo.lock files with the managed OSV scanner.
 security-osv +lockfiles:
@@ -241,12 +260,12 @@ shared-python-update version:
     uv run --no-config --no-project --isolated --managed-python --script python-bootstrap.py "$1" --apply
 
 # Create a local annotated release tag after checking final metadata.
-tag tag *args: release-version-check
-    uv run --locked --group dev research-repo-tools changelog tag "$@"
+tag tag *args:
+    uv run --locked --group dev research-repo-tools {{ release_tooling }}changelog tag "$@"
 
 # Preview the release annotation without changing Git state.
-tag-preview tag: release-version-check
-    uv run --locked --group dev research-repo-tools changelog tag "$1" --dry-run
+tag-preview tag *args:
+    uv run --locked --group dev research-repo-tools {{ release_tooling }}changelog tag "$@" --dry-run
 
 # Discover/export existing native dependencies; never install host packages.
 tectonic +args:
@@ -305,7 +324,7 @@ update-dependencies: update-cargo-dependencies update-python-dependencies audit
 
 # Update main dev pins, then upgrade and sync all declared Python projects.
 update-python-dependencies:
-    uv run --locked --only-group tooling --inexact research-repo-tools deps update-python --all-projects
+    if [ -n {{ quote(supplier_update) }} ]; then uv run --isolated --locked --only-group tooling research-repo-tools deps update-python --all-projects --adopt-supplier {{ quote(supplier_update) }}; else uv run --locked --only-group tooling --inexact research-repo-tools deps update-python --all-projects; fi
 
 # Upgrade uv and declared tools, then sync without shell/bootstrap configuration.
 update-tools: update-uv update-cargo-tools

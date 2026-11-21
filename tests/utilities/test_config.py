@@ -3,10 +3,28 @@
 import operator
 import tomllib
 from dataclasses import FrozenInstanceError, replace
+from typing import Any, cast
 
 import pytest
 
 from research_repo_tools import config, toml_source
+
+
+def test_direct_settings_preserve_path_and_scalar_constraints():
+    paths = ["src"]
+    valid = config.TextSettings(include=cast(Any, paths))
+    paths.clear()
+    assert valid.include == ("src",)
+    with pytest.raises(ValueError, match="line-limit"):
+        replace(valid, line_limit=True)
+    with pytest.raises(ValueError, match="timeout"):
+        config.ZizmorSettings(timeout=0)
+    with pytest.raises(ValueError, match="sequence"):
+        config.ReleasePolicy(exclude=cast(Any, "archive"))
+    with pytest.raises(ValueError, match="inherit-python"):
+        config.ToolchainSettings(inherit_python=cast(Any, 1))
+    with pytest.raises(ValueError, match="python-projects"):
+        config.DependencySettings(python_projects=cast(Any, "src"))
 
 
 def test_parsed_settings_detach_nested_inputs_and_reject_mutation(tmp_path):
@@ -114,3 +132,20 @@ def test_edits_use_physical_lines_and_leave_decoy_declarations_unchanged(separat
     expected = (preamble + "[project]\n" + changed + ("\n" if final_newline else "")).replace("\n", newline)
     assert result == expected
     assert tomllib.loads(result)["description"] == tomllib.loads(original)["description"]
+
+
+@pytest.mark.parametrize("value", ["experiment 🧪", "🧪's label", "first\nsecond", "first\x7fsecond", "it's ready"])
+def test_string_edits_round_trip_values_that_need_escaping(value):
+    original = "[project]\r\nname = 'old' # keep\r\nnames = ['old', 'keep']\r\n"
+    edited = toml_source.replace_string(original, "project", "name", value)
+    edited = toml_source.replace_array_strings(edited, "project", "names", {"old": value})
+    assert tomllib.loads(edited)["project"] == {"name": value, "names": [value, "keep"]}
+    assert " # keep\r\n" in edited
+    assert "\n" not in edited.replace("\r\n", "")
+
+
+def test_set_value_round_trips_a_non_bmp_key():
+    original = '[project]\r\nname = "preserved"\r\n'
+    edited = toml_source.set_value(original, "project", "🧪.label", "1")
+    assert tomllib.loads(edited)["project"] == {"name": "preserved", "🧪.label": 1}
+    assert original.splitlines(keepends=True)[1] in edited

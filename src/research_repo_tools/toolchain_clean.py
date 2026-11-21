@@ -106,6 +106,7 @@ def _venv_interpreters(directory: Path) -> tuple[Path, ...]:
 
 
 def _python_removals(runtime: toolchain.Runtime, plans: list[toolchain_config.Toolchain]) -> list[Removal]:
+    """Plan removal of unused private CPython installs and aliases, preserving interpreters required by retained environments."""
     directory = runtime.base / "python"
     _plain(directory)
     if not directory.exists():

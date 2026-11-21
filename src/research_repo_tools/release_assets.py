@@ -15,7 +15,7 @@ from typing import cast
 from urllib.parse import quote
 
 from research_repo_tools._git_checkout import git_context, require_checkout
-from research_repo_tools.archives import ArchiveLimits, extract_archive
+from research_repo_tools.archives import ArchiveLimits, _extract_archive
 from research_repo_tools.criterion import SAMPLE_SCHEMA, Sample, parse_sample, serialize_sample
 from research_repo_tools.evidence import (
     Evidence,
@@ -26,6 +26,7 @@ from research_repo_tools.evidence import (
     deterministic_json,
     parse_evidence,
     serialize_evidence,
+    sha256,
     verify_sha256,
 )
 from research_repo_tools.files import replace_many
@@ -181,6 +182,8 @@ def _resolve_tag_commit(tag: str, read: Callable[[str], object]) -> str:
 
 @dataclass(frozen=True, slots=True)
 class GitHubRelease:
+    """Observed GitHub release identity, publication state, and attached asset metadata."""
+
     repository: str
     tag: str
     identifier: int
@@ -221,6 +224,7 @@ def _require_response_identity(data: dict[str, object], repository: str, tag: st
 
 
 def _parse_release(data: dict[str, object], repository: str, tag: str, expected_identifier: int) -> GitHubRelease:
+    """Validate GitHub's release and asset records, rejecting ambiguous asset names or IDs."""
     _require_response_identity(data, repository, tag, expected_identifier)
     if "name" not in data or (data["name"] is not None and not isinstance(data["name"], str)):
         raise ValueError("GitHub release title must be a string or null")
@@ -490,14 +494,14 @@ def read_baseline(
 ) -> tuple[Sample, Provenance]:
     """Extract bounded shared assets and verify original bytes before parsing."""
     with tempfile.TemporaryDirectory(prefix="research-baseline-") as directory:
-        root = Path(directory) / "baseline"
-        extract_archive(archive, root, limits=limits)
+        root = Path(directory).resolve() / "baseline"
+        archived = _extract_archive(archive, root, limits=limits)
         if legacy_configuration is not None and not (root / "sample.json").exists() and not (root / "provenance.json").exists():
-            from research_repo_tools.legacy_evidence import read_legacy_baseline
+            from research_repo_tools.legacy_evidence import _read_legacy_baseline
 
             if expected_tag is None:
                 raise ValueError("legacy baseline reading requires an expected release tag")
-            return read_legacy_baseline(archive, legacy_configuration, expected_tag, limits=limits)
+            return _read_legacy_baseline(root, legacy_configuration, expected_tag, sha256(archived))
         if {path.name for path in root.iterdir()} != {"sample.json", "provenance.json"}:
             raise ValueError("baseline archive requires exactly sample.json and provenance.json")
         retained = parse_evidence((root / "sample.json").read_bytes(), (root / "provenance.json").read_bytes())
@@ -561,6 +565,7 @@ def _publish_release_asset(
     dependencies: tuple[str, ...],
     expected_sha256: str | None = None,
 ) -> tuple[str, int, int, str | None]:
+    """Read the original asset bytes and bind the upload to the selected release target."""
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
     check_release_dependencies(checkout if checkout is not None else root, packages=dependencies)
@@ -606,6 +611,7 @@ def _upload_asset(
     publish: bool,
     observe: Callable[[], GitHubRelease],
 ) -> tuple[str, int, int, str | None]:
+    """Verify the attached bytes by downloading them, then recheck the asset ID before optional publication."""
     with tempfile.TemporaryDirectory(prefix="research-release-upload-") as directory:
         staged = Path(directory) / name
         staged.write_bytes(original)

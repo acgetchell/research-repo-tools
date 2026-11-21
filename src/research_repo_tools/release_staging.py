@@ -89,6 +89,7 @@ def _stage(
     limits: ArchiveLimits,
     verify_inputs: Callable[[], None] | None,
 ) -> bytes:
+    """Resume uploads from the journal and retain the transfer after verifying the complete batch."""
     if approve is not True or not isinstance(target, ReleaseTarget):
         raise ValueError("asset staging requires explicit approval and an independently captured ReleaseTarget")
     if not 1 <= len(assets) <= 64:

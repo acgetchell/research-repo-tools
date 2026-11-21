@@ -29,14 +29,17 @@ SCHEMA = "research-repo-tools/source-build/v1"
 
 
 def digest(data: bytes) -> str:
+    """Return the lowercase hexadecimal SHA-256 of receipt or artifact bytes."""
     return hashlib.sha256(data).hexdigest()
 
 
 def canonical(data: object) -> bytes:
+    """Encode the stable JSON bytes used when hashing build evidence."""
     return json.dumps(data, sort_keys=True, separators=(",", ":"), ensure_ascii=True, allow_nan=False).encode("ascii")
 
 
 def read_regular(path: Path, limit: int) -> bytes:
+    """Read at most the declared number of bytes from a regular build evidence file."""
     if path.is_symlink() or not path.is_file():
         raise ValueError(f"build evidence requires a regular file: {path}")
     with path.open("rb") as stream:
@@ -47,6 +50,7 @@ def read_regular(path: Path, limit: int) -> bytes:
 
 
 def context(root: Path) -> dict[str, object]:
+    """Identify the checkout, interpreter, builder, and exact inputs bound to a build receipt."""
     root = root.resolve(strict=True)
     return {
         "root": str(root),
@@ -60,6 +64,7 @@ def context(root: Path) -> dict[str, object]:
 
 
 def build_store(root: Path, directory: Path | None = None) -> Path:
+    """Locate the configured signing store and require it to be separate from the checkout."""
     selected = directory or Path(os.environ.get("RESEARCH_REPO_TOOLS_BUILD_STORE", str(Path.home() / ".research-repo-tools" / "source-builds")))
     if not selected.is_absolute() or selected.is_symlink() or selected.is_junction():
         raise ValueError("source-build store must be an absolute directory without links")

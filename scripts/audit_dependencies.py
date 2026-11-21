@@ -5,12 +5,14 @@ import sys
 import tempfile
 from pathlib import Path
 
+from research_repo_tools._diagnostics import redact_credentials
 from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics, run_safe_command
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def main() -> int:
+    """Audit the locked dependencies in a disposable directory and return the audit status."""
     with tempfile.TemporaryDirectory(prefix="research-repo-tools-audit-") as directory:
         requirements = Path(directory) / "requirements.txt"
         run_safe_command(
@@ -21,6 +23,7 @@ def main() -> int:
                 str(ROOT),
                 "--locked",
                 "--all-groups",
+                "--all-extras",
                 "--no-emit-project",
                 "--format",
                 "requirements-txt",
@@ -30,6 +33,8 @@ def main() -> int:
             cwd=ROOT,
             timeout=120,
         )
+        if not any(line.strip() and not line.lstrip().startswith(("#", "-")) for line in requirements.read_text(encoding="utf-8").splitlines()):
+            raise ValueError("uv exported no third-party requirements to audit")
         return run_safe_command(
             sys.executable,
             [
@@ -53,6 +58,6 @@ def main() -> int:
 if __name__ == "__main__":
     try:
         raise SystemExit(main())
-    except (ExecutableNotFoundError, OSError, subprocess.SubprocessError) as error:
-        print(f"Dependency audit failed: {format_exception_diagnostics(error)}", file=sys.stderr)
+    except (ExecutableNotFoundError, OSError, ValueError, subprocess.SubprocessError) as error:
+        print(f"Dependency audit failed: {redact_credentials(format_exception_diagnostics(error))}", file=sys.stderr)
         raise SystemExit(1) from error

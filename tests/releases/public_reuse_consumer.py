@@ -526,12 +526,13 @@ class TestReuseConsumer(unittest.TestCase):
     def test_publication_rechecks_the_same_selection_before_any_mutation(self):
         provider = self.provider()
         saved = self.verify(provider)
-        draft = GitHubRelease("example/project", "v1.2.3", 1, True, False, False, ())
+        draft = GitHubRelease("example/project", "v1.2.3", 1, True, False, False, (("sample-1.2.3.tgz", 2, 20, None),))
         with tempfile.TemporaryDirectory() as temporary:
             settings = self.settings(Path(temporary))
             with (
                 patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, RELEASE)),
-                patch("research_repo_tools.release_publishing.check_reviewed_release", side_effect=[draft, ValueError("approved reuse changed")]) as gate,
+                patch("research_repo_tools.release_publishing._check_release_source", side_effect=[RELEASE, ValueError("approved reuse changed")]) as gate,
+                patch("research_repo_tools.release_publishing.lookup_release", return_value=draft),
                 patch("research_repo_tools.release_publishing._publish_release") as publish,
             ):
                 with self.assertRaisesRegex(ValueError, "approved reuse changed"):
@@ -559,6 +560,7 @@ class TestReuseConsumer(unittest.TestCase):
                 self.assertEqual(verify.call_args.kwargs, {"pull_request": 9, "run_id": 123, "attempt": 2})
                 self.assertNotEqual(cli.main(args), 0)
                 self.assertEqual(output.read_bytes(), saved)
+                verify.assert_called_once()
                 with patch("research_repo_tools.release_publishing.publish_reviewed_release") as publish:
                     self.assertEqual(cli.main(["release", "publish", "v1.2.3", "--approve", "--reuse-evidence", str(output)]), 0)
                     self.assertEqual(publish.call_args.kwargs, {"reuse_evidence": saved})
@@ -566,6 +568,33 @@ class TestReuseConsumer(unittest.TestCase):
                 verify.side_effect = ValueError("evidence rejected")
                 self.assertEqual(cli.main(args), 1)
                 self.assertFalse(output.exists())
+
+    def test_cli_preserves_dangling_approval_symlink_before_verification(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory) / "checkout"
+            root.mkdir()
+            output = root.parent / "approval.json"
+            target = root.parent / "unrelated.json"
+            try:
+                output.symlink_to(target)
+            except OSError as error:
+                if getattr(error, "winerror", None) == 1314:
+                    self.skipTest("Windows symlink privilege is unavailable")
+                raise
+            original_link = output.readlink()
+            with (
+                patch("research_repo_tools.cli.config.load", return_value=self.settings(root)),
+                patch("research_repo_tools.release_reuse.verify_ci_reuse", return_value=b"approval") as verify,
+                contextlib.redirect_stderr(io.StringIO()) as errors,
+            ):
+                self.assertEqual(
+                    cli.main(["release", "reuse", RELEASE, "--attempt", "2", "--output", str(output), "--pull-request", "9", "--run-id", "123"]), 1
+                )
+            self.assertIn("already exists", errors.getvalue())
+            verify.assert_not_called()
+            self.assertTrue(output.is_symlink())
+            self.assertEqual(output.readlink(), original_link)
+            self.assertFalse(target.exists())
 
     def test_cli_rejects_approval_inside_checkout_before_verification(self):
         with tempfile.TemporaryDirectory(prefix="reuse destination café ") as temporary:

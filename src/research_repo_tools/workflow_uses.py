@@ -12,6 +12,7 @@ SHA = re.compile(r"[a-fA-F0-9]{40}")
 
 
 def identity(value: str) -> str:
+    """Canonicalize the owner and repository of an exact Action identity while preserving its subpath."""
     if IDENTITY.fullmatch(value) is None or any(part in {".", ".."} for part in value.split("/")):
         raise ValueError(f"expected exact owner/repo[/path] identity: {value!r}")
     owner, repo, *path = value.split("/")
@@ -20,6 +21,8 @@ def identity(value: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class Use:
+    """A workflow reference with its YAML location and character offsets for targeted edits."""
+
     path: Path
     node: ScalarNode
     context: str
@@ -32,6 +35,7 @@ class Use:
 
     @property
     def location(self) -> str:
+        """Format the workflow path, line, column, and context for diagnostics."""
         return f"{self.path}:{self.line}:{self.column} ({self.context})"
 
 

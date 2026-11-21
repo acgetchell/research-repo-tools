@@ -100,6 +100,8 @@ def _directory(root: Path, name: str) -> Path:
 
 @dataclass(frozen=True, slots=True)
 class DiscoveryCommand:
+    """One suite's benchmark-listing command, working directory, environment, and timeout in seconds."""
+
     name: str
     command: tuple[str, ...]
     cwd: str = "."
@@ -118,6 +120,8 @@ class DiscoveryCommand:
 
 @dataclass(frozen=True, slots=True)
 class CriterionInventory:
+    """Workload IDs grouped by suite, together with the explicit exclusions."""
+
     suites: tuple[tuple[str, tuple[str, ...]], ...]
     excluded: tuple[str, ...] = ()
 
@@ -138,11 +142,14 @@ class CriterionInventory:
 
     @property
     def expected(self) -> tuple[str, ...]:
+        """Return the sorted distinct workload IDs after excluding declared cases."""
         return tuple(sorted({value for _, values in self.suites for value in values} - set(self.excluded)))
 
 
 @dataclass(frozen=True, slots=True)
 class DiscoveryPlan:
+    """Benchmark discovery commands and the required and excluded workload IDs."""
+
     suites: tuple[DiscoveryCommand, ...]
     required: tuple[str, ...] = ()
     excluded: tuple[str, ...] = ()
@@ -222,10 +229,12 @@ def discover_inventory(root: Path, plan: DiscoveryPlan, *, env: Mapping[str, str
 
 
 def serialize_inventory(inventory: CriterionInventory) -> bytes:
+    """Encode benchmark suite membership and exclusions in deterministic JSON."""
     return deterministic_json({"schema": INVENTORY_SCHEMA, "suites": dict(inventory.suites), "excluded": inventory.excluded})
 
 
 def parse_inventory(payload: bytes) -> CriterionInventory:
+    """Validate the retained Criterion suite and exclusion inventory."""
     raw = _object(_load_json(payload, "Criterion inventory"), "Criterion inventory", {"schema", "suites", "excluded"})
     if raw["schema"] != INVENTORY_SCHEMA:
         raise ValueError("unsupported Criterion inventory schema")

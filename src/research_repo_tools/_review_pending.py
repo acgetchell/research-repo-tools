@@ -12,7 +12,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from research_repo_tools._review_identity import ReviewIdentity
-from research_repo_tools.evidence import _digest, _load_json, deterministic_json, sha256
+from research_repo_tools.evidence import _digest, _unique_object, deterministic_json, sha256
 from research_repo_tools.path_identity import RegularFile, observe_paths
 from research_repo_tools.review_protocol import ConsentRequired, ReviewApproval, ReviewQuote
 
@@ -22,6 +22,8 @@ _MAX_RECORD_BYTES = 2 * 1024 * 1024
 
 @dataclass(frozen=True, slots=True)
 class PendingReview:
+    """A saved quote tied to its original location, checkout, and content digest."""
+
     path: Path
     identity: str
     root: Path
@@ -38,6 +40,7 @@ def _contained(parent: Path, worktree: Path) -> bool:
 
 
 def temporary_parent(worktree: Path) -> Path:
+    """Select system temporary storage outside the reviewed worktree."""
     parent = Path(tempfile.gettempdir()).resolve(strict=True)
     if _contained(parent, worktree):
         raise ValueError("review temporary storage must be outside the Git worktree; select an outside system temporary directory")
@@ -45,6 +48,7 @@ def temporary_parent(worktree: Path) -> Path:
 
 
 def destination(path: Path | None, worktree: Path) -> Path:
+    """Resolve a pending review destination outside the worktree and reject link targets."""
     if path is None:
         parent = temporary_parent(worktree)
         path = Path(tempfile.mkdtemp(prefix="rrt-pending-review-", dir=parent)) / "pending.json"
@@ -66,6 +70,7 @@ def _create(path: Path, payload: bytes) -> None:
 
 
 def save(path: Path, *, root: Path, base: str | None, observed: ReviewIdentity, quote: ReviewQuote) -> ConsentRequired:
+    """Create a bounded, single-use pending record bound to the quote and observed review inputs."""
     # ASCII escapes preserve POSIX surrogateescape paths in portable JSON bytes.
     payload = (
         json.dumps(
@@ -93,14 +98,12 @@ def save(path: Path, *, root: Path, base: str | None, observed: ReviewIdentity, 
     )
 
 
-def load(path: Path) -> PendingReview:
-    if path.is_symlink() or path.is_junction():
-        raise ValueError("pending review must not be a link")
-    path = path.parent.resolve(strict=True) / path.name
-    observed = observe_paths(path.parent, [path.name], max_file_bytes=_MAX_RECORD_BYTES).observations[0].value
-    if not isinstance(observed, RegularFile):
-        raise ValueError("pending review requires a regular file")
-    data = _load_json(observed.content, "pending review")
+def _parse_record(payload: bytes, path: Path) -> PendingReview:
+    """Decode a local record, preserving native path spellings and strict provider JSON."""
+    try:
+        data = json.loads(payload.decode("utf-8"), object_pairs_hook=_unique_object)
+    except (ValueError, RecursionError) as error:
+        raise ValueError(f"invalid pending review: {error}") from error
     if not isinstance(data, dict) or set(data) != {"schema", "nonce", "path", "root", "worktree", "base", "content", "quote"} or data["schema"] != _SCHEMA:
         raise ValueError("unsupported pending review schema")
     for key in ("nonce", "content"):
@@ -108,19 +111,37 @@ def load(path: Path) -> PendingReview:
     for key in ("path", "root", "worktree"):
         if not isinstance(data[key], str) or "\0" in data[key] or not Path(data[key]).is_absolute():
             raise ValueError(f"pending {key} must be an absolute native path")
+        os.fsencode(data[key])
     if data["path"] != str(path):
         raise ValueError("pending review was moved; request a new quote")
-    root, worktree = Path(data["root"]), Path(data["worktree"])
-    if root.resolve(strict=True) != root or worktree.resolve(strict=True) != worktree or not root.is_relative_to(worktree):
-        raise ValueError("pending repository location changed")
-    destination(path, worktree)
     base = data["base"]
     if base is not None and (not isinstance(base, str) or not base or base.startswith("-") or any(c.isspace() or c == "\0" for c in base)):
         raise ValueError("invalid pending review base")
-    return PendingReview(path, sha256(observed.content), root, worktree, base, data["content"], ReviewQuote(deterministic_json(data["quote"])))
+    if base is not None:
+        os.fsencode(base)
+    return PendingReview(
+        path, sha256(payload), Path(data["root"]), Path(data["worktree"]), base, data["content"], ReviewQuote(deterministic_json(data["quote"]))
+    )
+
+
+def load(path: Path) -> PendingReview:
+    """Read a pending review from its original location and recover its content identity."""
+    if path.is_symlink() or path.is_junction():
+        raise ValueError("pending review must not be a link")
+    path = path.parent.resolve(strict=True) / path.name
+    observed = observe_paths(path.parent, [path.name], max_file_bytes=_MAX_RECORD_BYTES).observations[0].value
+    if not isinstance(observed, RegularFile):
+        raise ValueError("pending review requires a regular file")
+    pending = _parse_record(observed.content, path)
+    root, worktree = pending.root, pending.worktree
+    if root.resolve(strict=True) != root or worktree.resolve(strict=True) != worktree or not root.is_relative_to(worktree):
+        raise ValueError("pending repository location changed")
+    destination(path, worktree)
+    return pending
 
 
 def consume(pending: PendingReview, approval: ReviewApproval | None) -> None:
+    """Atomically mark a pending quote used or denied before any paid attempt can proceed."""
     if approval is not None and approval.pending_identity != pending.identity:
         raise ValueError("approval does not match this pending review")
     payload = deterministic_json(

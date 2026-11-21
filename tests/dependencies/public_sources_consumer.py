@@ -3,19 +3,23 @@
 import contextlib
 import contextvars
 import hashlib
+import http.client
 import io
 import json
 import os
 import runpy
 import shutil
 import socket
+import ssl
 import subprocess
 import sys
 import tarfile
 import tempfile
+import threading
 import tomllib
 import unittest
 import urllib.error
+import urllib.request
 import zipfile
 from dataclasses import FrozenInstanceError
 from email.message import Message
@@ -23,6 +27,9 @@ from pathlib import Path
 from typing import override
 from unittest.mock import MagicMock, patch
 from urllib.parse import urlsplit
+
+from packaging.specifiers import SpecifierSet
+from packaging.version import Version
 
 from research_repo_tools import (
     _registry_requests,
@@ -53,9 +60,12 @@ DIGEST = "b" * 64
 PYTHON_URL = "https://files.pythonhosted.org/packages/fixture/sample_pkg-1.2.3-py3-none-any.whl"
 PYTHON_API = "https://pypi.org/pypi/sample-pkg/1.2.3/json"
 CARGO_API = "https://crates.io/api/v1/crates/sample-crate/1.2.3"
+REGISTRY_ADDRESS = (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", ("192.0.2.1", 443))
 
 
 class Provider:
+    """Serve registered registry and GitHub responses offline, recording each requested URL in order."""
+
     def __init__(self) -> None:
         self.responses: dict[str, bytes] = {}
         self.calls: list[str] = []
@@ -244,6 +254,31 @@ class TestSources(unittest.TestCase):
         self.assertIsNone(events[0]["total"])
         self.assertNotIn("eta_seconds", events[-1])
 
+    def test_registry_retry_observer_can_use_the_remaining_backoff_budget(self) -> None:
+        now = 0.0
+
+        def transport(_url: str, _timeout: float, _limit: int) -> bytes:
+            nonlocal now
+            now = 1.5
+            raise TimeoutError
+
+        def observe(event: dict[str, object]) -> None:
+            nonlocal now
+            if event["event"] == "retry":
+                now += 1.0
+
+        sleep = MagicMock()
+        progress = DependencyProgress(mode="none", observer=observe)
+        with (
+            patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "3"}),
+            reporting(progress, "fixture"),
+            self.assertRaisesRegex(ValueError, "3-second retry budget"),
+        ):
+            _registry_requests.read_registry(PYTHON_API, limit=1024, transport=transport, clock=lambda: now, sleep=sleep)
+        self.assertEqual((progress.requests, progress.retries), (1, 1))
+        self.assertEqual(now, 2.5)
+        sleep.assert_not_called()
+
     def test_registry_retry_deadline_and_permanent_failures(self) -> None:
         now = [0.0]
         timeouts = []
@@ -277,6 +312,299 @@ class TestSources(unittest.TestCase):
                 _registry_requests.read_registry(url, limit=1024)
             request.assert_not_called()
 
+    def test_registry_404_requires_an_on_time_exact_response(self) -> None:
+        for elapsed in (4.0, 5.0):
+            with self.subTest(elapsed=elapsed):
+                now = [0.0]
+                response = io.BytesIO()
+                missing = urllib.error.HTTPError(PYTHON_API, 404, "not found", Message(), response)
+
+                def transport(*_args):
+                    now[0] = elapsed
+                    raise missing
+
+                with patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "5"}):
+                    if elapsed == 4.0:
+                        with self.assertRaises(urllib.error.HTTPError) as failure:
+                            _registry_requests.read_registry(PYTHON_API, limit=32, transport=transport, clock=lambda: now[0])
+                        self.assertIs(failure.exception, missing)
+                    else:
+                        with self.assertRaisesRegex(registry.TransientRegistryError, "total download budget exhausted"):
+                            _registry_requests.read_registry(PYTHON_API, limit=32, transport=transport, clock=lambda: now[0])
+                self.assertTrue(response.closed)
+
+    def test_registry_budget_applies_to_progressing_artifacts_and_stalled_responses(self) -> None:
+        now = [0.0]
+
+        class Response(io.BytesIO):
+            status = 200
+
+            def __init__(self, url: str, *, stall: bool = False):
+                super().__init__(b"wheel")
+                self.url = url
+                self.stall = stall
+
+            @override
+            def read1(self, size=-1) -> bytes:
+                chunk = super().read1(min(size, 1))
+                if self.stall:
+                    now[0] += 30
+                    raise TimeoutError("private connection data")
+                if chunk:
+                    now[0] += 13
+                return chunk
+
+        def read(url: str) -> bytes:
+            return _registry_requests.read_registry(url, limit=16, clock=lambda: now[0], sleep=lambda delay: now.__setitem__(0, now[0] + delay))
+
+        with patch("research_repo_tools._registry_requests._OPENER.open", return_value=Response(PYTHON_URL)) as opener:
+            with patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "90"}):
+                self.assertEqual(read(PYTHON_URL), b"wheel")
+            self.assertEqual(now[0], 65.0)
+            self.assertEqual(opener.call_args.kwargs["timeout"], 30.0)
+
+        now[0] = 0.0
+        with (
+            patch("research_repo_tools._registry_requests._OPENER.open", return_value=Response(PYTHON_URL)) as opener,
+            patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "60"}),
+            self.assertRaisesRegex(ValueError, r"files.pythonhosted.org sample_pkg.*total download budget exhausted"),
+        ):
+            read(PYTHON_URL)
+        opener.assert_called_once()
+
+        now[0] = 0.0
+        with (
+            patch("research_repo_tools._registry_requests._OPENER.open", side_effect=lambda *_args, **_kwargs: Response(PYTHON_API, stall=True)) as opener,
+            patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "120"}),
+            self.assertRaisesRegex(ValueError, r"pypi.org sample-pkg/1.2.3.*stalled body read") as failure,
+        ):
+            read(PYTHON_API)
+        self.assertEqual(opener.call_count, 3)
+        self.assertNotIn("private", str(failure.exception))
+
+    def test_registry_deadline_bounds_raw_reads_inside_http_framing(self) -> None:
+        from research_repo_tools import registry
+
+        headers = b"HTTP/1.1 200 OK\r\nConnection: close\r\nTransfer-Encoding: chunked\r\n"
+        for phase, fragments in (
+            ("headers", [(20, b"HTTP/1.1 200 OK\r\n"), (20, b"Connection: close\r\n"), (21, b"\r\n")]),
+            ("chunk header", [(0, headers + b"\r\n"), (20, b"5;"), (20, b"option="), (21, b"value\r\nwheel\r\n0\r\n\r\n")]),
+        ):
+            with self.subTest(phase=phase):
+                now = [0.0]
+                reads = []
+                records = iter(fragments)
+                sock = MagicMock()
+
+                class Network(io.RawIOBase):
+                    @override
+                    def readable(self):
+                        return True
+
+                    @override
+                    def readinto(self, buffer):
+                        timeout = sock.settimeout.call_args.args[0]
+                        reads.append(timeout)
+                        delay, payload = next(records, (0, b""))
+                        now[0] += min(delay, timeout)
+                        if delay > timeout:
+                            raise TimeoutError("socket inactivity")
+                        buffer[: len(payload)] = payload
+                        return len(payload)
+
+                stream = Network()
+                sock.makefile.return_value = io.BufferedReader(stream)
+                opener = urllib.request.build_opener(
+                    urllib.request.ProxyHandler({}), _registry_requests.RegistryHTTPSHandler(), _registry_requests._NoRedirectHandler()
+                )
+                with (
+                    patch.object(_registry_requests, "_OPENER", opener),
+                    patch.object(socket, "getaddrinfo", return_value=[REGISTRY_ADDRESS]),
+                    patch.object(socket, "socket", return_value=sock),
+                    patch.object(ssl.SSLContext, "wrap_socket", return_value=sock),
+                    patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "60"}),
+                    self.assertRaisesRegex(registry.TransientRegistryError, "total download budget exhausted"),
+                ):
+                    _registry_requests.read_registry(PYTHON_URL, limit=32, clock=lambda: now[0])
+                sock.connect.assert_called_once_with(REGISTRY_ADDRESS[-1])
+                self.assertEqual(now[0], 60.0)
+                self.assertEqual(reads[-1], 20.0)
+                self.assertTrue(stream.closed)
+
+    def test_registry_deadline_recalculates_after_dns_and_between_tcp_addresses(self) -> None:
+        now = [0.0]
+        first, second = MagicMock(), MagicMock()
+        other_address = (*REGISTRY_ADDRESS[:-1], ("192.0.2.2", 443))
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _registry_requests.RegistryHTTPSHandler(), _registry_requests._NoRedirectHandler()
+        )
+
+        def lookup(*_args):
+            now[0] += 1
+            return [REGISTRY_ADDRESS, other_address, REGISTRY_ADDRESS]
+
+        def refuse(_address):
+            now[0] += 2
+            raise ConnectionRefusedError
+
+        def timeout(_address):
+            now[0] += second.settimeout.call_args.args[0]
+            raise TimeoutError
+
+        first.connect.side_effect = refuse
+        second.connect.side_effect = timeout
+        with (
+            patch.object(_registry_requests, "_OPENER", opener),
+            patch.object(socket, "getaddrinfo", side_effect=lookup),
+            patch.object(socket, "socket", side_effect=[first, second]) as create_socket,
+            patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "5"}),
+            self.assertRaisesRegex(registry.TransientRegistryError, "total download budget exhausted"),
+        ):
+            _registry_requests.read_registry(PYTHON_URL, limit=32, clock=lambda: now[0])
+        self.assertEqual((now[0], create_socket.call_count), (5, 2))
+        first.settimeout.assert_called_once_with(4)
+        second.settimeout.assert_called_once_with(2)
+        first.close.assert_called_once()
+        second.close.assert_called_once()
+
+    def test_registry_deadline_returns_while_native_dns_is_blocked(self) -> None:
+        started, release, finished = threading.Event(), threading.Event(), threading.Event()
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _registry_requests.RegistryHTTPSHandler(), _registry_requests._NoRedirectHandler()
+        )
+
+        def lookup(*_args):
+            started.set()
+            release.wait(5)
+            finished.set()
+            return [REGISTRY_ADDRESS]
+
+        try:
+            with (
+                patch.object(_registry_requests, "_OPENER", opener),
+                patch.object(socket, "getaddrinfo", side_effect=lookup),
+                patch.object(socket, "socket") as connect,
+                patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "1"}),
+                self.assertRaisesRegex(registry.TransientRegistryError, "total download budget exhausted"),
+            ):
+                _registry_requests.read_registry(PYTHON_URL, limit=32)
+            self.assertTrue(started.is_set())
+            self.assertFalse(finished.is_set())
+            connect.assert_not_called()
+        finally:
+            release.set()
+            if started.is_set():
+                self.assertTrue(finished.wait(5))
+
+    def test_registry_resolver_releases_its_slot_once_after_interrupted_start(self) -> None:
+        for worker_first in (False, True):
+            with self.subTest(worker_first=worker_first):
+                callbacks = []
+                slots = threading.BoundedSemaphore(1)
+
+                def make_thread(*, target, daemon):
+                    self.assertTrue(daemon)
+                    callbacks.append(target)
+
+                    def start():
+                        if worker_first:
+                            target()
+                        raise KeyboardInterrupt
+
+                    return MagicMock(start=start)
+
+                with (
+                    patch.object(_registry_requests, "_DNS_SLOTS", slots),
+                    patch.object(_registry_requests.threading, "Thread", side_effect=make_thread),
+                    patch.object(_registry_requests.socket, "getaddrinfo", return_value=[REGISTRY_ADDRESS]) as lookup,
+                ):
+                    with self.assertRaises(KeyboardInterrupt):
+                        _registry_requests._resolve_addresses(("pypi.org", 443), 1, lambda: 1)
+                    if not worker_first:
+                        callbacks[0]()
+                    self.assertEqual(lookup.call_count, int(worker_first))
+                self.assertTrue(slots.acquire(blocking=False))
+                slots.release()
+
+    def test_registry_deadline_refreshes_after_proxy_connect_before_tls(self) -> None:
+        now = [0.0]
+        proxy_timeouts = []
+        sock = MagicMock()
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({"https": "http://proxy.example.invalid:8080"}),
+            _registry_requests.RegistryHTTPSHandler(),
+            _registry_requests._NoRedirectHandler(),
+        )
+
+        class ProxyResponse(io.RawIOBase):
+            @override
+            def readable(self):
+                return True
+
+            @override
+            def readinto(self, buffer):
+                proxy_timeouts.append(sock.settimeout.call_args.args[0])
+                now[0] += 4
+                payload = b"HTTP/1.1 200 Connection established\r\n\r\n"
+                buffer[: len(payload)] = payload
+                return len(payload)
+
+        sock.makefile.return_value = io.BufferedReader(ProxyResponse())
+
+        def handshake(_socket, *, server_hostname):
+            self.assertEqual(server_hostname, "files.pythonhosted.org")
+            now[0] += sock.settimeout.call_args.args[0]
+            raise TimeoutError
+
+        with (
+            patch.object(_registry_requests, "_OPENER", opener),
+            patch.object(urllib.request, "proxy_bypass", return_value=False),
+            patch.object(socket, "getaddrinfo", return_value=[REGISTRY_ADDRESS]) as lookup,
+            patch.object(socket, "socket", return_value=sock),
+            patch.object(ssl.SSLContext, "wrap_socket", side_effect=handshake) as wrap,
+            patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "5"}),
+            self.assertRaisesRegex(registry.TransientRegistryError, "total download budget exhausted"),
+        ):
+            _registry_requests.read_registry(PYTHON_URL, limit=32, clock=lambda: now[0])
+        self.assertEqual(now[0], 5)
+        self.assertEqual(proxy_timeouts, [5])
+        self.assertEqual(lookup.call_args.args[:2], ("proxy.example.invalid", 8080))
+        wrap.assert_called_once()
+        sock.close.assert_called_once()
+
+    def test_registry_deadline_refreshes_after_tls_before_request_write(self) -> None:
+        now = [0.0]
+        write_timeouts = []
+        sock = MagicMock()
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _registry_requests.RegistryHTTPSHandler(), _registry_requests._NoRedirectHandler()
+        )
+
+        def handshake(_socket, *, server_hostname):
+            self.assertEqual(server_hostname, "files.pythonhosted.org")
+            now[0] += 4
+            return sock
+
+        def send(_data):
+            timeout = sock.settimeout.call_args.args[0]
+            write_timeouts.append(timeout)
+            now[0] += timeout
+            raise TimeoutError
+
+        sock.sendall.side_effect = send
+        with (
+            patch.object(_registry_requests, "_OPENER", opener),
+            patch.object(socket, "getaddrinfo", return_value=[REGISTRY_ADDRESS]),
+            patch.object(socket, "socket", return_value=sock),
+            patch.object(ssl.SSLContext, "wrap_socket", side_effect=handshake),
+            patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "5"}),
+            self.assertRaisesRegex(registry.TransientRegistryError, "total download budget exhausted"),
+        ):
+            _registry_requests.read_registry(PYTHON_URL, limit=32, clock=lambda: now[0])
+        self.assertEqual(write_timeouts, [1])
+        self.assertEqual(now[0], 5)
+        sock.close.assert_called_once()
+
     def test_retry_after_bound_and_failed_progress_do_not_leak_provider_details(self) -> None:
         events = []
         progress = DependencyProgress(mode="none", observer=events.append)
@@ -295,6 +623,8 @@ class TestSources(unittest.TestCase):
 
     @override
     def setUp(self) -> None:
+        self.enterContext(patch.dict(os.environ))
+        os.environ.pop("RRT_REGISTRY_TIMEOUT_SECONDS", None)
         self.provider = Provider()
         self.provider.python()
         self.provider.cargo()
@@ -313,11 +643,26 @@ class TestSources(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "verify_source"):
             VerifiedSource()
 
+    def test_explicit_provider_is_selected_even_when_falsey(self) -> None:
+        class OfflineProvider(Provider):
+            def __bool__(self) -> bool:
+                return False
+
+        provider = OfflineProvider()
+        provider.python()
+        with patch.object(dependency_sources.HttpSourceProvider, "read", side_effect=AssertionError("unexpected HTTP lookup")):
+            verified = verify_source(RegistryRelease("python", "sample-pkg", "1.2.3"), provider=provider)
+        self.assertEqual(verified.artifacts[0].sha256, DIGEST)
+        self.assertEqual(provider.calls, [PYTHON_API])
+
     def test_floating_competing_and_unsupported_selectors_fail_before_lookup(self) -> None:
         baseline = {"ecosystem": "cargo", "package": "sample-crate", "github": "example/upstream", "commit": COMMIT}
         for changes in (
             {"commit": "main"},
             {"commit": COMMIT[:12]},
+            {"directory": "work/NUL.txt"},
+            {"directory": ".git/refs"},
+            {"directory": "aux."},
             {"version": "1.2.3"},
             {"branch": "main"},
             {"github": "https://github.com/example/upstream"},
@@ -374,7 +719,7 @@ class TestSources(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 verify_source(python, provider=self.provider)
         self.provider.python()
-        for changes in ({"yanked": True}, {"crate": "another"}, {"num": "1.2.4"}, {"checksum": "invalid"}, {"crate_size": 0}):
+        for changes in ({"yanked": True}, {"crate": "another"}, {"num": "1.2.4"}, {"checksum": "invalid"}, {"crate_size": 0}, {"description": "\ud800"}):
             self.provider.cargo(**changes)
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 verify_source(cargo, provider=self.provider)
@@ -547,6 +892,49 @@ class TestSourceWorkflows(unittest.TestCase):
                 self.assertEqual(self.snapshot(), before)
                 self.native.assert_called()
 
+    def test_graph_parses_captured_manifest_and_lock_bytes(self) -> None:
+        self.python()
+        manifest, lock = (self.root / name for name in ("pyproject.toml", "uv.lock"))
+        originals = {path: path.read_bytes() for path in (manifest, lock)}
+        capture = dependency_graphs.InputSnapshot.capture
+        captured_once = False
+
+        def edit_between_captures(paths):
+            nonlocal captured_once
+            if captured_once:
+                for path, content in originals.items():
+                    path.write_bytes(content)
+                return capture(paths)
+            result = capture(paths)
+            for path, content in originals.items():
+                path.write_bytes(content.replace(b'version="0.1.0"', b'version="0.2.0"'))
+            captured_once = True
+            return result
+
+        with patch.object(dependency_graphs.InputSnapshot, "capture", side_effect=edit_between_captures):
+            graph = dependency_graphs.inspect_project(self.root, DependencyProject("python"))
+        self.assertEqual(graph.owned, (("consumer", "0.1.0", self.root),))
+        self.assertEqual({path: path.read_bytes() for path in originals}, originals)
+
+    def test_source_plan_rejects_a_policy_changed_during_lookup(self) -> None:
+        self.python()
+        policy = self.root / "dependency-sources.toml"
+        replacement = policy.read_bytes().replace(b'version="1.2.3"', b'version="1.2.4"')
+        read_source = self.provider.read
+
+        def read(url: str) -> bytes:
+            result = read_source(url)
+            policy.write_bytes(replacement)
+            return result
+
+        with (
+            patch.object(self.provider, "read", side_effect=read),
+            patch.object(dependency_workflows, "_resolve_candidate", side_effect=AssertionError("resolver started after policy changed")),
+            self.assertRaisesRegex(ValueError, "dependency inputs changed"),
+        ):
+            plan_source(self.root, "upstream", provider=self.provider)
+        self.assertEqual(policy.read_bytes(), replacement)
+
     def test_source_plan_rejects_junction_before_snapshot_or_resolution(self) -> None:
         self.python()
         self.policy("python", git=True)
@@ -707,7 +1095,7 @@ class TestSourceWorkflows(unittest.TestCase):
         now = [0.0]
         requests = []
 
-        def read(url: str, timeout: float, limit: int) -> bytes:
+        def read(url: str, timeout: float, limit: int, **_options) -> bytes:
             requests.append((url, now[0]))
             if url == Response.url:
                 return b"archive"
@@ -785,8 +1173,28 @@ class TestSourceWorkflows(unittest.TestCase):
         before = self.snapshot()
         self.assertEqual(check_release_dependencies(self.root), ())
         self.assertEqual(self.snapshot(), before)
+        manifest = self.root / "Cargo.toml"
+        valid = manifest.read_bytes()
+        for value in (b"1", b"1.0"):
+            manifest.write_bytes(valid.replace(b"version.workspace=true", b"version.workspace=" + value))
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                check_release_dependencies(self.root)
+        manifest.write_bytes(valid)
         lock.write_bytes(b'version=4\n[[package]]\nname="consumer"\nversion="1.2.4"\n')
         with self.assertRaisesRegex(ValueError, "requires dependency-sources.toml"):
+            check_release_dependencies(self.root)
+
+    def test_release_rechecks_missing_policy_seen_before_dependency_free_fallback(self) -> None:
+        check_dependency_free = dependency_workflows._require_dependency_free
+
+        def policy_appears(root):
+            (root / "dependency-sources.toml").write_bytes(b"schema=1\n")
+            check_dependency_free(root)
+
+        with (
+            patch.object(dependency_workflows, "_require_dependency_free", side_effect=policy_appears),
+            self.assertRaisesRegex(ValueError, "dependency inputs changed"),
+        ):
             check_release_dependencies(self.root)
 
     def test_non_directory_configuration_ancestor_is_absent_and_still_checked_for_staleness(self) -> None:
@@ -887,6 +1295,281 @@ class TestSourceWorkflows(unittest.TestCase):
         self.assertEqual(self.provider.calls, [])
         self.native.assert_not_called()
 
+    def test_automatic_supplier_adopts_exact_registry_release_and_recovers_on_sync_failure(self) -> None:
+        self._exercise_registry_adoption(workspace=False)
+
+    def test_workspace_supplier_adopts_and_rolls_back_member_declarations(self) -> None:
+        self._exercise_registry_adoption(workspace=True)
+
+    def _exercise_registry_adoption(self, *, workspace: bool) -> None:
+        """Exercise selection, installation failure, recovery, and repeated adoption via the CLI."""
+        from research_repo_tools import cli, python_promotion, python_updates, toolchain, tooling_runtime
+
+        name = "research-repo-tools"
+        manifest, lock, policy = (self.root / filename for filename in ("pyproject.toml", "uv.lock", "dependency-sources.toml"))
+        manifest.write_bytes(
+            b'[project]\nname="consumer"\nversion="0.1.0"\nrequires-python=">=3.15"\n'
+            b'[dependency-groups]\ntooling=["research-repo-tools[python-tools]==1.2.3.0"]\ndev=[{include-group="tooling"}]\n'
+            b"[tool.uv]\npackage=false\ndefault-groups=[]\n"
+            b'[tool.uv.dependency-groups.tooling]\nrequires-python=">=3.15.1"\n'
+        )
+        policy.write_bytes(
+            b'schema=1\n[projects.main]\necosystem="python"\n[sources.tooling]\nproject="main"\npackage="research-repo-tools"\nversion="1.2.3"\n'
+        )
+        member = self.root / "member" / "pyproject.toml"
+        if workspace:
+            manifest.write_bytes(manifest.read_bytes() + b'[tool.uv.workspace]\nmembers=["member"]\n')
+            member.parent.mkdir()
+            member.write_bytes(
+                b'[project]\nname="member"\nversion="0.1.0"\nrequires-python=">=3.15.1"\n'
+                b'dependencies=["research-repo-tools==1.2.3"]\n[tool.uv]\npackage=false\n'
+            )
+            policy.write_bytes(policy.read_bytes().replace(b'ecosystem="python"', b'ecosystem="python"\nrelease-owned=[".", "member"]'))
+        project_api = f"https://pypi.org/pypi/{name}/json"
+        release_api = f"https://pypi.org/pypi/{name}/1.3.0/json"
+        versions = {
+            "1.2.3": [{"yanked": False, "requires_python": ">=3.15"}],
+            "1.3.0": [{"yanked": False, "requires_python": ">=3.15.1"}],
+            "2.0.0": [{"yanked": True, "requires_python": ">=3.15"}],
+            "2.1.0": [{"yanked": False, "requires_python": ">=99"}],
+            "2.2.0rc1": [{"yanked": False, "requires_python": ">=3.15"}],
+            "2.3.0": [{"yanked": False, "requires_python": ">=3.15.2"}],
+            "2.4.0": [{"yanked": False, "requires_python": ">=3.15.1"}],
+            "2.3.1": [{"yanked": False, "requires_python": ">=3.15.1"}],
+        }
+        self.provider.put(project_api, {"info": {"name": name}, "releases": versions})
+
+        def uploads(version: str) -> list[dict[str, object]]:
+            return [
+                {
+                    "filename": filename,
+                    "url": f"https://files.pythonhosted.org/packages/fixture/{filename}",
+                    "yanked": False,
+                    "packagetype": kind,
+                    "size": 12,
+                    "digests": {"sha256": DIGEST},
+                }
+                for filename, kind in (
+                    (f"research_repo_tools-{version}-py3-none-any.whl", "bdist_wheel"),
+                    (f"research_repo_tools-{version}.tar.gz", "sdist"),
+                )
+            ]
+
+        self.provider.put(release_api, {"info": {"name": name, "version": "1.3.0"}, "urls": uploads("1.3.0")})
+        narrowed_api = f"https://pypi.org/pypi/{name}/2.3.1/json"
+        self.provider.put(narrowed_api, {"info": {"name": name, "version": "2.3.1"}, "urls": [u | {"requires_python": ">=3.15.2"} for u in uploads("2.3.1")]})
+        yanked_api = f"https://pypi.org/pypi/{name}/2.4.0/json"
+        yanked_uploads = [upload | {"yanked": True} for upload in uploads("2.4.0")]
+        self.provider.put(yanked_api, {"info": {"name": name, "version": "2.4.0"}, "urls": yanked_uploads})
+
+        def write_lock(path: Path, version: str) -> None:
+            wheel, sdist = uploads(version)
+            path.write_bytes(
+                (
+                    'version=1\n[[package]]\nname="consumer"\nversion="0.1.0"\nsource={virtual="."}\n'
+                    f'[[package]]\nname="{name}"\nversion="{version}"\nsource={{registry="https://pypi.org/simple"}}\n'
+                    f'wheels=[{{url="{wheel["url"]}",hash="sha256:{DIGEST}",size=12}}]\n'
+                    f'sdist={{url="{sdist["url"]}",hash="sha256:{DIGEST}",size=12}}\n'
+                ).encode()
+            )
+
+            if workspace:
+                path.write_bytes(path.read_bytes() + b'[[package]]\nname="member"\nversion="0.1.0"\nsource={virtual="member"}\n')
+
+        write_lock(lock, "1.2.3")
+        environment = self.root / ".venv"
+        environment.mkdir()
+        (environment / "pyvenv.cfg").write_bytes(b"original")
+        before = self.snapshot()
+        arguments = ["--root", str(self.root), "deps", "update-python", "--all-projects", "--adopt-supplier", "tooling"]
+
+        def resolve(root: Path, verified, **_options) -> None:
+            self.assertEqual(verified.version, "1.3.0")
+            write_lock(root / "uv.lock", verified.version)
+
+        def sync(_uv, args, **_kwargs) -> None:
+            if args[0] == "sync":
+                environment.mkdir(exist_ok=True)
+                (environment / "pyvenv.cfg").write_bytes(b"candidate")
+
+        original_manifest = manifest.read_bytes()
+        transient_manifest = original_manifest.replace(b'requires-python=">=3.15.1"', b'requires-python=">=3.15.2"')
+        self.assertNotEqual(transient_manifest, original_manifest)
+        select = python_promotion._selection
+        read = self.provider.read
+
+        def select_before_edit(checkout: Path, source_name: str):
+            selected = select(checkout, source_name)
+            if manifest.read_bytes() == original_manifest:
+                manifest.write_bytes(transient_manifest)
+            return selected
+
+        def read_after_revert(url: str) -> bytes:
+            if url == project_api and manifest.read_bytes() == transient_manifest:
+                manifest.write_bytes(original_manifest)
+            return read(url)
+
+        with (
+            patch.object(python_promotion, "HttpSourceProvider", return_value=self.provider),
+            patch.object(python_promotion, "_selection", side_effect=select_before_edit),
+            patch.object(self.provider, "read", side_effect=read_after_revert),
+            patch.object(python_promotion.platform, "python_version", return_value="3.15.3"),
+            patch.object(dependency_workflows, "_resolve_candidate", side_effect=resolve) as resolver,
+            patch.object(toolchain.Runtime, "inspect", return_value=[]),
+            patch.object(toolchain.Runtime, "project_environment", return_value={}),
+            patch.object(python_updates.toolchain_config, "load"),
+            patch.object(python_updates, "run_command_live", side_effect=sync),
+            patch.object(python_promotion, "check_promoted_installation", side_effect=ValueError("installed bytes differ")) as installed,
+            contextlib.redirect_stderr(io.StringIO()) as errors,
+        ):
+            self.provider.put(yanked_api, {"info": {"name": name, "version": "2.4.0"}, "urls": [yanked_uploads[0] | {"size": "invalid"}, yanked_uploads[1]]})
+            self.assertEqual(cli.main(arguments), 1)
+            self.assertIn("artifact size must be an integer", errors.getvalue())
+            resolver.assert_not_called()
+            self.assertEqual(self.snapshot(), before)
+            self.provider.put(yanked_api, {"info": {"name": name, "version": "2.4.0"}, "urls": yanked_uploads})
+            self.provider.calls.clear()
+            self.assertEqual(cli.main(arguments), 1)
+            self.assertIn("installed bytes differ", errors.getvalue())
+            self.assertEqual(self.provider.calls.count(narrowed_api), 1)
+            self.assertEqual(self.snapshot(), before)
+            installed.side_effect = None
+            self.assertEqual(cli.main(arguments), 0, errors.getvalue())
+            self.assertEqual(cli.main(arguments), 0, errors.getvalue())
+            self.assertEqual(resolver.call_count, 2)
+            self.assertEqual(installed.call_count, 2)
+        self.assertEqual(tomllib.loads(manifest.read_text(encoding="utf-8"))["dependency-groups"]["tooling"], [f"{name}[python-tools]==1.3.0"])
+        self.assertEqual(tomllib.loads(lock.read_text(encoding="utf-8"))["package"][1]["version"], "1.3.0")
+        if workspace:
+            self.assertEqual(tomllib.loads(member.read_bytes().decode())["project"]["dependencies"], [f"{name}==1.3.0"])
+        self.assertEqual(tooling_runtime._policy_source(policy, "tooling"), tooling_runtime.ReleasePin("1.3.0"))
+        with patch("research_repo_tools.dependency_artifacts.python_environment_layout"):
+            self.assertEqual(check_dependency_policy(self.root, provider=self.provider)[0].source, RegistryRelease("python", name, "1.3.0"))
+
+    def test_promotion_uses_project_python_range_for_build_only_declaration(self) -> None:
+        text = '[project]\nrequires-python = ">=3.15,<3.16"\n[build-system]\nrequires = ["sample-pkg==1.2.3"]\n'
+        (required,) = python_promotion._declared_python_support(tomllib.loads(text), text, "sample-pkg")
+        self.assertTrue(required.contains("3.15.0"))
+        self.assertFalse(required.contains("3.16.0"))
+
+    def test_supplier_plan_accounts_for_each_captured_workspace_manifest(self) -> None:
+        name = "research-repo-tools"
+        root_manifest = self.root / "pyproject.toml"
+        grouped = (
+            b'[project]\nrequires-python = ">=3.15"\n[dependency-groups]\n"Tools_With.Alias" = ["research-repo-tools==1.2.3"]\n'
+            b'[tool.uv.dependency-groups.tools-with-alias]\nrequires-python = ">=3.16"\n'
+        )
+        member = self.root / "member" / "pyproject.toml"
+        member.parent.mkdir()
+        project = DependencyProject("python", ".")
+        pin = RegistryRelease("python", name, "1.2.3")
+        selection = dependency_policy.SourceSelection("tooling", project, pin)
+        manifests = (root_manifest, member)
+        self.provider.put(
+            f"https://pypi.org/pypi/{name}/json",
+            {
+                "info": {"name": name},
+                "releases": {
+                    "1.2.3.post1": [{"yanked": False, "requires_python": ">=3.15"}],
+                    "1.2.4": [{"yanked": False, "requires_python": ">=3.15.1"}],
+                    "1.2.5": [{"yanked": False, "requires_python": ">=3.16"}],
+                    "1.2.6": [{"yanked": False, "requires_python": ">=3.14,<3.15"}],
+                },
+            },
+        )
+        root_dependency = b'[project]\nrequires-python = ">=3.15"\ndependencies = ["research-repo-tools==1.2.3"]\n'
+        supplier = b'dependencies = ["research-repo-tools==1.2.3"]\n'
+        older_python = b'requires-python = ">=3.14,<3.15"\n'
+        for root_bytes, member_bytes, interpreter, expected in (
+            (grouped, b'[project]\nrequires-python = ">=3.15.1"\n' + supplier, "3.16.1", "1.2.4"),
+            (root_dependency, b'[project]\nrequires-python = ">=3.16"\n', "3.16.1", "1.2.5"),
+            (b"[project]\n" + supplier, b"[project]\n" + older_python, "3.14.7", "1.2.6"),
+            (b"[project]\n" + older_python + supplier, b"[project]\n", "3.14.7", "1.2.6"),
+            (b"[project]\n" + supplier, b"[project]\n", "3.16.1", "1.2.3.post1"),
+        ):
+            root_manifest.write_bytes(root_bytes)
+            member.write_bytes(member_bytes)
+            graph = dependency_graphs.DependencyGraph(
+                project,
+                self.root,
+                dependency_graphs.InputSnapshot.capture(manifests),
+                manifests,
+                (dependency_graphs.LockedDependency(pin, "1.2.3"),),
+                (),
+                self.root,
+            )
+            with (
+                self.subTest(root=root_bytes, member=member_bytes),
+                patch.object(python_promotion, "_selection", return_value=(selection, b"policy", graph)),
+                patch.object(python_promotion.platform, "python_version", return_value=interpreter),
+                patch.object(python_promotion, "_compatible_release") as verify,
+                patch.object(python_promotion, "_plan_release") as plan,
+            ):
+                self.assertIs(python_promotion.plan_supplier(self.root, "tooling", project=self.root, provider=self.provider), plan.return_value)
+                verify.assert_called_once()
+                self.assertEqual(verify.call_args.args[:2], (RegistryRelease("python", name, expected), self.provider))
+                self.assertTrue(verify.call_args.args[2])
+
+    def test_workspace_exclusion_keeps_the_root_in_the_snapshot(self) -> None:
+        manifest = self.root / "pyproject.toml"
+        manifest.write_bytes(b'[tool.uv.workspace]\nmembers=["members/*"]\nexclude=["**"]\n')
+        member = self.root / "members" / "example"
+        member.mkdir(parents=True)
+        (member / "pyproject.toml").write_bytes(b'[project]\nname="excluded-member"\n')
+        paths = dependency_policy.project_manifests(self.root, "python")
+        self.assertEqual(paths, (manifest.resolve(),))
+        snapshot = dependency_graphs.InputSnapshot.capture(paths)
+        manifest.write_bytes(b"[tool.uv.workspace]\nmembers=[]\n")
+        with self.assertRaisesRegex(ValueError, "changed"):
+            snapshot.verify()
+
+    def test_promotion_selects_release_covering_the_marked_python_range(self) -> None:
+        self.provider.put(
+            "https://pypi.org/pypi/sample-pkg/json",
+            {
+                "info": {"name": "sample-pkg"},
+                "releases": {
+                    "1.2.4": [{"yanked": False, "requires_python": ">=3.16.dev0"}],
+                    "1.2.5": [{"yanked": False, "requires_python": ">=3.16"}],
+                    "1.2.6": [{"yanked": False, "requires_python": ">=3.16.1"}],
+                },
+            },
+        )
+        for marker, includes_prereleases in (
+            ('python_version == "3.16"', True),
+            ('python_version >= "3.16"', True),
+            ('python_version > "3.15"', True),
+            ('"3.15" < python_version', True),
+            ('python_full_version >= "3.16" and (sys_platform == "win32" or python_version != "3.17")', False),
+            ('(python_version == "3.16" and sys_platform == "win32") or python_version >= "3.17"', True),
+        ):
+            with self.subTest(marker=marker), patch.object(python_promotion.platform, "python_version", return_value="3.16.2"):
+                entry = json.dumps(f"sample-pkg==1.2.3; {marker}")
+                manifest = f'[project]\nrequires-python = ">=3.15"\ndependencies = [{entry}]\n'
+                (support,) = python_promotion._declared_python_support(tomllib.loads(manifest), manifest, "sample-pkg")
+                self.assertFalse(support.contains("3.15.9"))
+                self.assertEqual(support.contains("3.16.0rc1"), includes_prereleases)
+                self.assertTrue(support.contains("3.16.0"))
+                expected = (Version("1.2.4"),) if includes_prereleases else (Version("1.2.5"), Version("1.2.4"))
+                self.assertEqual(
+                    python_promotion._candidates(self.provider, "sample-pkg", Version("1.2.3"), SpecifierSet(), False, newer=True, python_support=(support,)),
+                    expected,
+                )
+
+    def test_promotion_requires_typed_python_constraints_on_candidate_uploads(self) -> None:
+        url = "https://pypi.org/pypi/sample-pkg/json"
+        for raw in (False, 0, [], {}):
+            self.provider.put(url, {"info": {"name": "sample-pkg"}, "releases": {"1.2.4": [{"yanked": False, "requires_python": raw}]}})
+            with self.subTest(raw=raw), self.assertRaisesRegex(ValueError, "requires_python"):
+                python_promotion._candidates(self.provider, "sample-pkg", Version("1.2.3"), SpecifierSet(), False)
+        for upload in ({"yanked": False}, {"yanked": False, "requires_python": None}, {"yanked": False, "requires_python": ""}):
+            self.provider.put(url, {"info": {"name": "sample-pkg"}, "releases": {"1.2.4": [upload]}})
+            self.assertEqual(python_promotion._candidates(self.provider, "sample-pkg", Version("1.2.3"), SpecifierSet(), False), (Version("1.2.4"),))
+        for uploads in ({}, [False], [{}], [{"yanked": 0}]):
+            self.provider.put(url, {"info": {"name": "sample-pkg"}, "releases": {"1.2.4": [{"yanked": False}], "1.2.5": uploads}})
+            with self.subTest(uploads=uploads), self.assertRaises(ValueError):
+                python_promotion._candidates(self.provider, "sample-pkg", Version("1.2.3"), SpecifierSet(), False)
+
     def test_promotion_binds_artifacts_to_pin_and_rolls_back_failed_sync(self) -> None:
         self.python(git=True)
         manifest = self.root / "pyproject.toml"
@@ -917,7 +1600,10 @@ class TestSourceWorkflows(unittest.TestCase):
         self.provider.put(PYTHON_API, {"info": info, "urls": uploads})
         self.provider.put(
             "https://pypi.org/pypi/sample-pkg/json",
-            {"info": info, "releases": {"1.2.3": uploads, "1.2.4": [{"yanked": True}], "1.3.0rc1": uploads}},
+            {
+                "info": info,
+                "releases": {"1.2.3": uploads, "1.2.4": [{"yanked": True}], "1.3.0rc1": uploads, "1.3.0": [{"yanked": False, "requires_python": ">=3.15.1"}]},
+            },
         )
         built = "d" * 40
         self.provider.git("python", commit=built)
@@ -965,6 +1651,7 @@ class TestSourceWorkflows(unittest.TestCase):
         with (
             patch.object(python_promotion, "HttpSourceProvider", return_value=self.provider),
             patch.object(python_promotion, "_download", return_value=asset),
+            patch.object(python_promotion.platform, "python_version", return_value="3.15.2"),
             patch.object(release_validation, "verify_attestation") as verify,
             patch.object(dependency_workflows, "_resolve_candidate", side_effect=resolve) as resolve_lock,
             patch.object(toolchain.Runtime, "inspect", return_value=[]),
@@ -973,10 +1660,17 @@ class TestSourceWorkflows(unittest.TestCase):
         ):
             settings = config.load(root=self.root)
             self.assertEqual(python_updates.update(settings, promote="upstream"), 0)
+            self.assertNotIn("https://api.github.com/repos/example/upstream/releases/tags/v1.3.0", self.provider.calls)
             verify.assert_not_called()
             resolve_lock.assert_not_called()
             self.assertEqual(self.snapshot(), before)
             comparison_result("ahead", 0, COMMIT)
+            self.provider.put(PYTHON_API, {"info": info, "urls": [upload | {"yanked": True} for upload in uploads]})
+            self.assertEqual(python_updates.update(settings, promote="upstream"), 0)
+            self.assertEqual(self.snapshot(), before)
+            verify.assert_not_called()
+            resolve_lock.assert_not_called()
+            self.provider.put(PYTHON_API, {"info": info, "urls": uploads})
             verify.side_effect = ValueError("signature mismatch")
             with self.assertRaisesRegex(ValueError, "signature mismatch"):
                 python_updates.update(settings, promote="upstream")
@@ -1406,8 +2100,10 @@ class TestSourceWorkflows(unittest.TestCase):
 
     def test_native_cargo_graph_and_published_archive_detect_cache_tampering(self) -> None:
         self.cargo()
-        cached = self.root / "registry cache"
-        cached.mkdir()
+        registry_cache = self.root / "managed Cargo" / "registry"
+        index = "index.crates.io-example"
+        cached = registry_cache / "src" / index / "sample-crate-1.2.3"
+        cached.mkdir(parents=True)
         content = {"Cargo.toml": b'[package]\nname="sample-crate"\nversion="1.2.3"\n', "src/lib.rs": b"pub fn value() -> u8 { 42 }\r\n"}
         stream = io.BytesIO()
         with tarfile.open(fileobj=stream, mode="w:gz") as archive:
@@ -1421,7 +2117,8 @@ class TestSourceWorkflows(unittest.TestCase):
         payload = stream.getvalue()
         digest = hashlib.sha256(payload).hexdigest()
         self.provider.cargo(checksum=digest, crate_size=len(payload))
-        self.provider.responses["https://static.crates.io/crates/sample-crate/sample-crate-1.2.3.crate"] = payload
+        url = "https://static.crates.io/crates/sample-crate/sample-crate-1.2.3.crate"
+        self.provider.responses[url] = payload
         lock = self.root / "Cargo.lock"
         lock.write_bytes(lock.read_bytes().replace(DIGEST.encode(), digest.encode()))
         graph = dependency_graphs.inspect_project(self.root, DependencyProject("cargo"))
@@ -1444,12 +2141,29 @@ class TestSourceWorkflows(unittest.TestCase):
             patch.object(dependency_graphs, "_resolve_cargo", return_value=Path(sys.executable)),
             patch.object(process, "run_command", return_value=subprocess.CompletedProcess([], 0, json.dumps(metadata), "")) as command,
         ):
+            self.provider.calls.clear()
             dependency_graphs.check_native_graph(graph, sources=verified, provider=self.provider)
+            self.assertEqual(self.provider.calls, [url])
+            compressed = registry_cache / "cache" / index / "sample-crate-1.2.3.crate"
+            compressed.parent.mkdir(parents=True)
+            damaged = bytes((payload[0] ^ 1,)) + payload[1:]
+            compressed.write_bytes(damaged)
+            self.provider.calls.clear()
+            dependency_graphs.check_native_graph(graph, sources=verified, provider=self.provider)
+            self.assertEqual(self.provider.calls, [url])
+            self.assertEqual(compressed.read_bytes(), damaged)
+            compressed.write_bytes(payload)
+            self.provider.calls.clear()
             with (
                 patch.object(dependency_sources.HttpSourceProvider, "read", side_effect=self.provider.read),
                 patch.object(self.native, "side_effect", dependency_graphs.check_native_graph),
             ):
                 operation = DependencyOperation(self.root, ())
+                self.assertEqual(self.provider.calls, [CARGO_API])
+                self.provider.cargo(checksum=digest, crate_size=len(payload), yanked=True)
+                with self.assertRaisesRegex(ValueError, "yanked"):
+                    check_dependency_policy(self.root)
+                self.assertEqual(self.provider.calls, [CARGO_API, CARGO_API])
             arguments = command.call_args.args[1]
             self.assertIn("--all-features", arguments)
             self.assertIn("--locked", arguments)
@@ -1553,7 +2267,15 @@ class TestSourceWorkflows(unittest.TestCase):
 
         with (
             patch.object(registry, "_json", return_value=json.loads(self.provider.responses[PYTHON_API])),
-            patch.object(registry._OPENER, "open", side_effect=lambda *_args, **_kwargs: Response(payload)),
+            patch.object(_registry_requests._OPENER, "open", side_effect=http.client.IncompleteRead(payload[:-1], 1)) as opener,
+            self.assertRaisesRegex(ValueError, "sample-pkg: published dependency wheel download was truncated"),
+        ):
+            dependency_artifacts.verify_python_environment(graph)
+        opener.assert_called_once()
+
+        with (
+            patch.object(registry, "_json", return_value=json.loads(self.provider.responses[PYTHON_API])) as metadata,
+            patch.object(_registry_requests._OPENER, "open", side_effect=lambda *_args, **_kwargs: Response(payload)) as opener,
         ):
             before = self.snapshot()
             dependency_artifacts.verify_python_environment(graph)
@@ -1573,12 +2295,26 @@ class TestSourceWorkflows(unittest.TestCase):
                     dependency_artifacts.verify_python_environment(graph)
                 self.assertEqual(self.snapshot(), before)
                 target.write_bytes(original)
+            metadata.reset_mock()
+            opener.reset_mock()
+            self.provider.calls.clear()
             with (
                 patch.object(dependency_sources.HttpSourceProvider, "read", side_effect=self.provider.read),
                 patch.object(self.native, "side_effect", dependency_graphs.check_native_graph),
                 patch("research_repo_tools.dependency_provenance._check_lock"),
             ):
                 operation = DependencyOperation(self.root, ())
+                self.assertEqual(self.provider.calls, [PYTHON_API])
+                metadata.assert_not_called()
+                opener.assert_called_once()
+                self.assertEqual(opener.call_args.args[0].full_url, PYTHON_URL)
+                response = json.loads(self.provider.responses[PYTHON_API])
+                response["urls"][0]["yanked"] = True
+                self.provider.put(PYTHON_API, response)
+                with self.assertRaisesRegex(ValueError, "yanked"):
+                    check_dependency_policy(self.root)
+                self.assertEqual(self.provider.calls, [PYTHON_API, PYTHON_API])
+                opener.assert_called_once()
             hook = site / "injected.pth"
             hook.write_bytes(b"import unpublished_hook\n")
             with self.assertRaisesRegex(ValueError, "startup hooks"):

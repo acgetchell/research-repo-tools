@@ -8,7 +8,7 @@ from research_repo_tools import files
 from research_repo_tools.evidence import publish_evidence
 from research_repo_tools.performance_reports import load_report_plan
 from research_repo_tools.publication import publish_publication
-from tests.performance.public_workflows_consumer import retained
+from tests.fixtures.performance_reports import retained
 
 
 def test_index_failure_restores_current_and_removes_partial_outputs(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:

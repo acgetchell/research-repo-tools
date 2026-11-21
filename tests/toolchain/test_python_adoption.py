@@ -61,6 +61,28 @@ def test_installable_package_inherits_minimum_with_tooling_constraints(consumer,
     }
 
 
+@pytest.mark.parametrize(
+    "constraint",
+    [
+        b'[tool.uv.dependency-groups]\r\n"Lint.Tools" = { requires-python = ">=3.15.1" } # retain\r\n',
+        b'[tool.uv.dependency-groups."Lint.Tools"]\r\nrequires-python = ">=3.15.1" # retain\r\n',
+    ],
+)
+def test_adoption_retains_uv_constraints_under_their_existing_group_name(consumer, constraint):
+    root, _ = consumer
+    manifest = root / "pyproject.toml"
+    original = manifest.read_bytes().replace(b"package = false", b"package = true").replace(b"tooling", b"lint_tools")
+    manifest.write_bytes(original + b"\r\n" + constraint)
+    plan = adoption.plan_python_adoption(config.load(root=root))
+    edited = dict(plan.replacements)["pyproject.toml"]
+    groups = tomllib.loads(edited.decode())["tool"]["uv"]["dependency-groups"]
+    assert set(groups) == {"Lint.Tools", "notebook"}
+    assert SpecifierSet(groups["Lint.Tools"]["requires-python"]) == SpecifierSet(">=3.15,>=3.15.1")
+    assert b"# retain\r\n" in edited
+    adoption.apply_python_adoption(plan)
+    assert python_baseline.drift(root) == ()
+
+
 @pytest.mark.parametrize("requirement,accepts_zero", [(">=3.14,!=3.15.1,<4", True), (">=3.15.2,<3.16", False)])
 def test_resolution_and_sync_honor_project_patch_constraints(consumer, requirement, accepts_zero):
     root, calls = consumer

@@ -18,7 +18,7 @@ from research_repo_tools.publication import publish_publication
 from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.run_reports import load_latest_run
 from research_repo_tools.scanner_output import FindingOutput
-from tests.performance.public_complete_consumer import fixture, measured
+from tests.fixtures.measurements import fixture, measured
 
 
 def test_failed_pointer_promotion_restores_every_file(tmp_path, monkeypatch):

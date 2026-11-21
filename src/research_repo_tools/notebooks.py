@@ -10,8 +10,9 @@ import re
 import sys
 import tempfile
 import tomllib
-from collections.abc import Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from importlib import import_module
 from importlib.metadata import version
@@ -31,6 +32,7 @@ CELL_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
 
 
 def dependency(name: str):
+    """Import an optional notebook dependency or explain how to install it."""
     try:
         return import_module(name)
     except ImportError as error:
@@ -41,6 +43,8 @@ def dependency(name: str):
 
 @dataclass(frozen=True)
 class Notebook:
+    """A parsed notebook paired with its path and original bytes for guarded updates."""
+
     path: Path
     original: bytes
     node: "NotebookNode"
@@ -57,6 +61,7 @@ class NotebookExecution:
 
     @property
     def returncode(self) -> int:
+        """Return zero for a passing notebook report and one for any other reported status."""
         return 0 if self.report["status"] == "passed" else 1
 
 
@@ -105,7 +110,7 @@ def read_raw(path: Path) -> tuple[bytes, dict[str, Any]]:
         if not isinstance(raw.get("cells"), list):
             raise ValueError("cells must be an array")
         return original, raw
-    except (ValueError, UnicodeError) as error:
+    except (ValueError, RecursionError) as error:
         raise ValueError(f"{path}: {error}") from error
 
 
@@ -142,26 +147,30 @@ def load(path: Path) -> Notebook:
         raise ValueError(f"{path}: {error}") from error
 
 
-def selected_paths(paths: list[Path]) -> list[Path]:
-    if not paths:
+def selected_paths(paths: Iterable[Path]) -> list[Path]:
+    """Require explicitly selected existing notebooks and reject aliases to the same file."""
+    resolved = list(files._validate_distinct_paths(tuple(paths)))
+    if not resolved:
         raise ValueError("select at least one notebook explicitly")
-    resolved = list(files._validate_distinct_paths(paths))
     if any(path.suffix != ".ipynb" or not path.is_file() for path in resolved):
         raise ValueError("selected notebooks must be existing .ipynb files")
     return resolved
 
 
-def selected(paths: list[Path]) -> list[Notebook]:
+def selected(paths: Iterable[Path]) -> list[Notebook]:
+    """Load and validate explicitly selected notebook files."""
     return [load(path) for path in selected_paths(paths)]
 
 
 def generated_state(node: "NotebookNode") -> bool:
+    """Detect widget state, code outputs, execution counts, or timing metadata in a notebook."""
     return "widgets" in node.metadata or any(
         cell.cell_type == "code" and (cell.outputs or cell.execution_count is not None or "execution" in cell.metadata) for cell in node.cells
     )
 
 
 def clear_node(node: "NotebookNode") -> None:
+    """Remove generated execution and widget state from the supplied notebook in place."""
     node.metadata.pop("widgets", None)
     for cell in node.cells:
         if cell.cell_type == "code":
@@ -171,10 +180,12 @@ def clear_node(node: "NotebookNode") -> None:
 
 
 def serialize(node: "NotebookNode") -> bytes:
+    """Encode a notebook as UTF-8 JSON with a trailing LF."""
     return (json.dumps(node, ensure_ascii=False, indent=2, allow_nan=False) + "\n").encode("utf-8")
 
 
-def check(paths: list[Path], *, outputs: Literal["clear", "preserve"] = "clear") -> None:
+def check(paths: Iterable[Path], *, outputs: Literal["clear", "preserve"] = "clear") -> None:
+    """Validate the selected notebooks and enforce the requested generated-output policy."""
     outputs = notebook_output_policy(outputs)
     notebooks = selected(paths)
     for notebook in notebooks:
@@ -183,24 +194,27 @@ def check(paths: list[Path], *, outputs: Literal["clear", "preserve"] = "clear")
         print(f"OK checked {notebook.path}")
 
 
-def clear(paths: list[Path]) -> None:
+def clear(paths: Iterable[Path]) -> None:
+    """Clear generated state and publish the changed notebooks only if their original bytes still match."""
     notebooks = selected(paths)
     updates = {}
     for notebook in notebooks:
         if generated_state(notebook.node):
             clear_node(notebook.node)
             updates[notebook.path] = serialize(notebook.node)
-    files.replace_many(updates)
+    files.replace_many(updates, expected={notebook.path: notebook.original for notebook in notebooks})
     for notebook in notebooks:
         print(f"OK {'cleared' if notebook.path in updates else 'already clean'} {notebook.path}")
 
 
 def project_environment(root: Path) -> Path:
+    """Resolve the configured uv environment path relative to the consumer root."""
     path = Path(os.environ.get("UV_PROJECT_ENVIRONMENT") or ".venv")
     return (root / path).resolve()
 
 
 def runtime(settings: Config) -> toolchain.Runtime:
+    """Require the selected uv version, declared notebook group, and consumer lockfile."""
     result = toolchain.Runtime(toolchain_config.load(settings))
     uv = result.uv_status()
     if not uv.ok:
@@ -215,6 +229,7 @@ def runtime(settings: Config) -> toolchain.Runtime:
 
 
 def sync(settings: Config) -> None:
+    """Synchronize the locked notebook group and install its environment-local kernel."""
     managed = runtime(settings)
     environment = project_environment(settings.root)
     if managed.plan.rust is not None and not all(status.ok for status in managed.rust_statuses()):
@@ -240,7 +255,31 @@ def sync(settings: Config) -> None:
     )
 
 
+@contextmanager
+def _kernel_socket_directory() -> Iterator[str]:
+    """Choose a private directory whose five Jupyter channel names fit a Unix socket address."""
+    limit = dependency("zmq").IPC_PATH_MAX_LEN
+    parents = dict.fromkeys((tempfile.gettempdir(), "/tmp"))
+    for parent in parents:
+        try:
+            sockets = tempfile.TemporaryDirectory(prefix="rrt-", dir=parent)
+        except OSError:
+            continue
+        with sockets as directory:
+            # Jupyter numbers the five channels from 1 in a fresh directory.
+            # PyZMQ encodes the endpoint as UTF-8 before handing it to libzmq.
+            try:
+                endpoint = (Path(directory) / "kernel-5").as_posix().encode("utf-8")
+            except UnicodeEncodeError:
+                continue
+            if len(endpoint) <= limit:
+                yield directory
+                return
+    raise OSError(f"Cannot create a kernel socket under {', '.join(map(repr, parents))}. Set TMPDIR to a short writable path (socket limit {limit} bytes).")
+
+
 def _execute(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str], progress: list[int]) -> None:
+    """Run the notebook on a worker-owned event loop and wait for worker cleanup if the caller is interrupted."""
     # Own a loop without reading/replacing the process-wide asyncio policy or
     # caller's current loop. PyZMQ needs socket readers on Windows. The local
     # Jupyter provisioner starts the kernel via Popen, not asyncio subprocesses.
@@ -253,9 +292,12 @@ def _execute(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str]
     def run():
         try:
             # Acquire the loop only after submission succeeds, on its owner thread.
-            with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
+            # Jupyter releases its probed TCP ports before the child binds them.
+            # Private Unix sockets avoid collisions between concurrent kernels.
+            sockets = _kernel_socket_directory() if os.name == "posix" else nullcontext(None)
+            with sockets as socket_dir, asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
                 loop = runner.get_loop()
-                task = loop.create_task(_execute_async(node, cwd=cwd, timeout=timeout, env=env, progress=progress))
+                task = loop.create_task(_execute_async(node, cwd=cwd, timeout=timeout, env=env, progress=progress, socket_dir=socket_dir))
                 active.append((loop, task))
                 # Publishing the handles before checking closes the startup race:
                 # the caller either schedules cancellation or this check sees it.
@@ -289,7 +331,8 @@ def _execute(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str]
         raise
 
 
-async def _execute_async(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str], progress: list[int]) -> None:
+async def _execute_async(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str], progress: list[int], socket_dir: str | None) -> None:
+    """Execute cells in the project kernel, track the current cell index, and shut down the kernel on exit."""
     nbclient = dependency("nbclient")
     kernelspec = dependency("jupyter_client.kernelspec")
     manager = dependency("jupyter_client.manager")
@@ -312,6 +355,7 @@ async def _execute_async(node: NotebookNode, *, cwd: Path, timeout: int, env: di
         kernel_name=KERNEL,
         kernel_spec_manager=ProjectKernel(),
         connection_file=str(Path(env["JUPYTER_RUNTIME_DIR"]) / "kernel.json"),
+        **({"transport": "ipc", "ip": str(Path(socket_dir) / "kernel")} if socket_dir is not None else {}),
     )
     skip_tag = "research-repo-tools-never-skip"
     while any(skip_tag in cell.metadata.get("tags", []) for cell in node.cells):
@@ -354,13 +398,14 @@ async def _execute_async(node: NotebookNode, *, cwd: Path, timeout: int, env: di
                 raise
 
 
-def execute(settings: Config, paths: list[Path], *, cwd: str | None = None, output_dir: str | None = None, timeout: int | None = None) -> int:
+def execute(settings: Config, paths: Iterable[Path], *, cwd: str | None = None, output_dir: str | None = None, timeout: int | None = None) -> int:
+    """Run the selected notebooks and return one if any execution fails."""
     return int(any(result.returncode for result in _execute_reports(settings, paths, cwd=cwd, output_dir=output_dir, timeout=timeout)))
 
 
 def _execute_reports(
     settings: Config,
-    paths: list[Path],
+    paths: Iterable[Path],
     *,
     cwd: str | None = None,
     output_dir: str | None = None,
@@ -369,6 +414,7 @@ def _execute_reports(
     kernel_env: Mapping[str, str | None] | None = None,
     runtime_dir: Path | None = None,
 ) -> tuple[NotebookExecution, ...]:
+    """Write each executed notebook and its report together, stopping after the first execution failure."""
     options = settings.notebooks
     limit = options.timeout if timeout is None else timeout
     if type(limit) is not int or limit <= 0:

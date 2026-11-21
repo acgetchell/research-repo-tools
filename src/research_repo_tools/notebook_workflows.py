@@ -217,6 +217,7 @@ def _validate_cleanup_tree(path: Path, sources: Sequence[Path]) -> None:
 
 
 def _plan(settings: Config, paths: Sequence[Path], revision: str | None, env: dict[str, str]) -> NotebookResetPlan:
+    """Resolve the restore tree and cleanup paths, rejecting overlaps with tracked files and protected notebook sources."""
     declared = paths or tuple(Path(value) for value in settings.notebooks.reset.sources)
     if not declared:
         raise ValueError("select notebook reset source files/directories explicitly or configure notebooks.reset.sources")

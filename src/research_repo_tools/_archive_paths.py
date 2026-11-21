@@ -45,6 +45,7 @@ class ArchivePaths:
         self._spellings: dict[str, str] = {}
 
     def add(self, name: str, *, directory: bool) -> PurePosixPath:
+        """Register a canonical archive path and reject duplicate, aliased, or overlapping members."""
         path = _member_path(name, directory=directory)
         key = _portable_key(path)
         if key in self._members:

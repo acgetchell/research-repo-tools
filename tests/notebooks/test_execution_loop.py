@@ -4,12 +4,45 @@ import asyncio
 import threading
 import warnings
 from concurrent.futures import Future, ThreadPoolExecutor
+from contextlib import nullcontext
 from unittest.mock import Mock
 
 import nbformat
 import pytest
+import zmq
 
 from research_repo_tools import notebooks
+
+
+@pytest.mark.parametrize(
+    ("configured", "writable", "expected"),
+    [
+        ("/scratch", {"/scratch"}, "/scratch"),
+        ("/" + "é" * 50, {"/" + "é" * 50, "/tmp"}, "/tmp"),
+        ("/scratch", {"/tmp"}, "/tmp"),
+        ("/scratch", set(), None),
+    ],
+)
+def test_socket_directory_uses_a_writable_parent_with_room_for_utf8_channel_names(monkeypatch, configured, writable, expected):
+    """Model host temp locations and the byte limit independently of the test runner's filesystem."""
+    attempted = []
+
+    def temporary_directory(*, prefix, dir):
+        attempted.append(dir)
+        if dir not in writable:
+            raise PermissionError(dir)
+        return nullcontext(f"{dir}/{prefix}abcdefgh")
+
+    monkeypatch.setattr(notebooks.tempfile, "gettempdir", lambda: configured)
+    monkeypatch.setattr(notebooks.tempfile, "TemporaryDirectory", temporary_directory)
+    monkeypatch.setattr(zmq, "IPC_PATH_MAX_LEN", 100, raising=False)
+    if expected is None:
+        with pytest.raises(OSError, match="Set TMPDIR to a short writable path"), notebooks._kernel_socket_directory():
+            pytest.fail("no suitable socket parent")
+    else:
+        with notebooks._kernel_socket_directory() as selected:
+            assert selected.startswith(f"{expected}/")
+    assert attempted == ([configured] if expected == configured else [configured, "/tmp"])
 
 
 @pytest.mark.parametrize("failure", [False, True])

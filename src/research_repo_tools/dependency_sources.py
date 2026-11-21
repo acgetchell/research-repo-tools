@@ -5,6 +5,7 @@ The provider boundary transports bytes, never executable consumer metadata.
 """
 
 import hashlib
+import http.client
 import json
 import re
 import tomllib
@@ -18,9 +19,11 @@ from packaging.utils import canonicalize_name, parse_sdist_filename, parse_wheel
 from packaging.version import InvalidVersion, Version
 
 from research_repo_tools.evidence import _load_json
+from research_repo_tools.release_policy import _relative_path, relative_path
+from research_repo_tools.toml_source import inherits_workspace
 from research_repo_tools.tool_pins import SEMVER
 
-__all__ = ["Artifact", "GitCommit", "RegistryRelease", "SourceProvider", "VerifiedSource", "parse_source", "verify_source"]
+__all__ = ["Artifact", "GitCommit", "RegistryRelease", "SourceProvider", "VerifiedSource", "YankedPythonRelease", "parse_source", "verify_source"]
 
 type Ecosystem = Literal["python", "cargo"]
 _SHA256 = re.compile(r"[0-9a-f]{64}")
@@ -28,7 +31,13 @@ _COMMIT = re.compile(r"[0-9a-f]{40}")
 _REPOSITORY = re.compile(r"[A-Za-z0-9][A-Za-z0-9-]*/[A-Za-z0-9_][A-Za-z0-9_.-]*")
 
 
+class YankedPythonRelease(ValueError):
+    """An otherwise valid exact PyPI release has a yanked upload."""
+
+
 def package_name(ecosystem: Ecosystem, name: str) -> str:
+    """Normalize a validated Python distribution name or preserve an exact Cargo crate name."""
+    name = string(name, "dependency package name")
     if ecosystem == "python":
         return canonicalize_name(name, validate=True)
     if ecosystem != "cargo" or re.fullmatch(r"[A-Za-z][A-Za-z0-9_-]*", name) is None:
@@ -37,6 +46,7 @@ def package_name(ecosystem: Ecosystem, name: str) -> str:
 
 
 def exact_version(ecosystem: Ecosystem, value: object) -> str:
+    """Require a canonical public Python version or an exact Cargo SemVer version."""
     if not isinstance(value, str):
         raise ValueError("dependency version must be an exact version string")
     if ecosystem == "python":
@@ -51,17 +61,17 @@ def exact_version(ecosystem: Ecosystem, value: object) -> str:
     return value
 
 
-def relative_directory(value: object) -> str:
-    if not isinstance(value, str) or not value or "\\" in value or ":" in value or any(ord(c) < 32 for c in value):
+def relative_directory(value: object, *, patterns: bool = False) -> str:
+    """Require a normalized portable directory without traversal components."""
+    if not isinstance(value, str):
         raise ValueError("dependency directory must be a portable relative POSIX path")
-    path = PurePosixPath(value)
-    if path.is_absolute() or ".." in path.parts or path.as_posix() != value:
-        raise ValueError("dependency directory must be a normalized relative path without traversal")
-    return value
+    return "." if value == "." else _relative_path(value, patterns=patterns)
 
 
 @dataclass(frozen=True, slots=True)
 class RegistryRelease:
+    """An exact Python or Cargo package version selected from its registry."""
+
     ecosystem: Ecosystem
     package: str
     version: str
@@ -73,6 +83,8 @@ class RegistryRelease:
 
 @dataclass(frozen=True, slots=True)
 class GitCommit:
+    """A dependency selected by GitHub repository, full commit ID, and package directory."""
+
     ecosystem: Ecosystem
     package: str
     repository: str
@@ -81,14 +93,15 @@ class GitCommit:
 
     def __post_init__(self) -> None:
         object.__setattr__(self, "package", package_name(self.ecosystem, self.package))
-        if _REPOSITORY.fullmatch(self.repository) is None or self.repository.endswith(".git"):
+        if _REPOSITORY.fullmatch(string(self.repository, "repository")) is None or self.repository.endswith(".git"):
             raise ValueError("repository must be a GitHub owner/name without URL or .git suffix")
-        if _COMMIT.fullmatch(self.commit) is None:
+        if _COMMIT.fullmatch(string(self.commit, "commit SHA")) is None:
             raise ValueError("development source requires a full lowercase 40-character commit SHA")
         relative_directory(self.directory)
 
     @property
     def url(self) -> str:
+        """Return the GitHub HTTPS clone URL for the selected repository."""
         return f"https://github.com/{self.repository}.git"
 
 
@@ -100,12 +113,14 @@ def _is_table(value: object) -> TypeIs[dict[str, object]]:
 
 
 def table(value: object, context: str) -> dict[str, object]:
+    """Require a mapping with string keys and identify the field in diagnostics."""
     if not _is_table(value):
         raise ValueError(f"{context} must be a table")
     return value
 
 
 def string(value: object, context: str) -> str:
+    """Require a nonempty string and identify the field in diagnostics."""
     if not isinstance(value, str) or not value:
         raise ValueError(f"{context} must be a nonempty string")
     return value
@@ -129,38 +144,55 @@ def parse_source(value: object) -> Source:
 class SourceProvider(Protocol):
     """Read bounded exact-URL bytes; raise on absence, redirect or lookup failure."""
 
-    def read(self, url: str) -> bytes: ...
+    def read(self, url: str) -> bytes:
+        """Return the bytes for the requested source URL."""
+        ...
 
 
 class HttpSourceProvider:
+    """The network reader used to obtain registry and GitHub dependency evidence."""
+
     def read(self, url: str) -> bytes:
+        """Read source bytes with the transport and response limits for the destination host."""
         from research_repo_tools import registry
-        from research_repo_tools._registry_requests import read_registry
+        from research_repo_tools._registry_requests import _identity, read_registry
         from research_repo_tools.tooling_runtime import _read
 
-        host = urlsplit(url).netloc
+        parsed = urlsplit(url)
+        host = parsed.netloc
         if host in {"pypi.org", "crates.io", "files.pythonhosted.org", "static.crates.io"}:
             try:
                 return read_registry(url, limit=registry.MAX_BYTES if host in {"files.pythonhosted.org", "static.crates.io"} else 1024 * 1024)
             except urllib.error.HTTPError as error:
-                raise ValueError(f"registry GET failed with HTTP {error.code}; availability is unproven") from None
+                raise ValueError(f"registry GET failed with HTTP {error.code} for {_identity(parsed)}; availability is unproven") from None
+            except http.client.HTTPException as error:
+                raise ValueError(f"registry GET failed for {_identity(parsed)}; availability is unproven") from error
         return _read(url)
 
 
 @dataclass(frozen=True, slots=True)
 class Artifact:
+    """The published filename, URL, SHA-256, and byte count for one source artifact."""
+
     filename: str
     url: str
     sha256: str
     size: int
 
     def __post_init__(self) -> None:
-        if not self.filename or PurePosixPath(self.filename).name != self.filename or "\\" in self.filename:
+        if "/" in relative_path(self.filename):
             raise ValueError("artifact requires a plain filename")
-        if _SHA256.fullmatch(self.sha256) is None or type(self.size) is not int or self.size <= 0:
+        if _SHA256.fullmatch(string(self.sha256, "artifact SHA-256")) is None or type(self.size) is not int or self.size <= 0:
             raise ValueError("artifact requires a SHA-256 and positive byte size")
-        parsed = urlsplit(self.url)
-        if parsed.scheme != "https" or parsed.netloc not in {"files.pythonhosted.org", "static.crates.io"} or parsed.query or parsed.fragment:
+        url = string(self.url, "artifact URL")
+        parsed = urlsplit(url)
+        if (
+            parsed.scheme != "https"
+            or parsed.netloc not in {"files.pythonhosted.org", "static.crates.io"}
+            or "?" in url
+            or "#" in url
+            or any(c.isspace() or ord(c) < 32 or ord(c) == 127 for c in url)
+        ):
             raise ValueError("artifact requires an uncredentialed supported registry URL")
 
 
@@ -168,8 +200,10 @@ class Artifact:
 class VerifiedSource:
     """In-process availability evidence, never accepted by deserialization.
 
-    Reverify immediately before a dependent operation. Metadata fingerprints
-    identify observations; they do not turn saved JSON into trusted evidence.
+    Read-only checks in one verification pass share this registry observation.
+    A subsequent pass refreshes availability. Publication callers obtain a
+    fresh observation before mutation. Metadata fingerprints identify the
+    observation and confer no trust on saved JSON.
     """
 
     source: Source
@@ -196,6 +230,53 @@ def _verified(source: Source, version: str, artifacts: tuple[Artifact, ...]) -> 
     return result
 
 
+def _source_bytes(provider: SourceProvider, url: str) -> bytes:
+    """Read one bounded metadata response from the selected source provider."""
+    payload: object = provider.read(url)
+    if not isinstance(payload, bytes) or len(payload) > 1024 * 1024:
+        raise ValueError("source metadata must be bounded bytes")
+    return payload
+
+
+def _observe_pypi_release(source: RegistryRelease, provider: SourceProvider) -> tuple[VerifiedSource, tuple[dict[str, object], ...]]:
+    """Verify artifact identities and return the uploads from that same exact-version response."""
+    data = table(
+        _load_json(_source_bytes(provider, f"https://pypi.org/pypi/{source.package}/{source.version}/json"), "dependency source metadata"), "source metadata"
+    )
+    artifacts = []
+    yanked = False
+    info = table(data.get("info"), "PyPI package")
+    if canonicalize_name(string(info.get("name"), "PyPI name")) != source.package or info.get("version") != source.version:
+        raise ValueError("published Python package identity differs")
+    uploads = data.get("urls")
+    if not isinstance(uploads, list) or not uploads:
+        raise ValueError("published Python release has no artifacts")
+    records = tuple(table(raw, "PyPI artifact") for raw in uploads)
+    for upload in records:
+        filename = string(upload.get("filename"), "artifact filename")
+        kind = upload.get("packagetype")
+        availability = upload.get("yanked")
+        if type(availability) is not bool or kind not in ("bdist_wheel", "sdist"):
+            raise ValueError("published Python artifact has invalid availability or an unsupported type")
+        yanked |= availability
+        parsed = parse_wheel_filename(filename) if kind == "bdist_wheel" else parse_sdist_filename(filename)
+        if parsed[0] != source.package or parsed[1] != Version(source.version):
+            raise ValueError("artifact filename identifies a different package/version")
+        size = upload.get("size")
+        if type(size) is not int:
+            raise ValueError("artifact size must be an integer")
+        artifacts.append(
+            Artifact(filename, string(upload.get("url"), "artifact URL"), string(table(upload.get("digests"), "digests").get("sha256"), "digest"), size)
+        )
+        if urlsplit(artifacts[-1].url).netloc != "files.pythonhosted.org":
+            raise ValueError("Python artifact must come from PyPI")
+    if len({item.url for item in artifacts}) != len(artifacts) or len({item.filename for item in artifacts}) != len(artifacts):
+        raise ValueError("published artifacts contain duplicate identities")
+    if yanked:
+        raise YankedPythonRelease("published Python artifact is yanked")
+    return _verified(source, source.version, tuple(artifacts)), records
+
+
 def verify_source(source: Source, *, provider: SourceProvider | None = None, release: bool = False) -> VerifiedSource:
     """Verify an exact public registry release or GitHub commit without processes.
 
@@ -207,16 +288,11 @@ def verify_source(source: Source, *, provider: SourceProvider | None = None, rel
         raise TypeError("source must be a parsed RegistryRelease or GitCommit")
     if release and isinstance(source, GitCommit):
         raise ValueError("release requires a published registry source; commits are development-only")
-    provider = provider or HttpSourceProvider()
-
-    def read(url: str) -> bytes:
-        payload: object = provider.read(url)
-        if not isinstance(payload, bytes) or len(payload) > 1024 * 1024:
-            raise ValueError("source metadata must be bounded bytes")
-        return payload
+    if provider is None:
+        provider = HttpSourceProvider()
 
     def json(url: str) -> dict[str, object]:
-        return table(_load_json(read(url), "dependency source metadata"), "source metadata")
+        return table(_load_json(_source_bytes(provider, url), "dependency source metadata"), "source metadata")
 
     if isinstance(source, GitCommit):
         repository = json(f"https://api.github.com/repos/{source.repository}")
@@ -228,7 +304,7 @@ def verify_source(source: Source, *, provider: SourceProvider | None = None, rel
         filename = "pyproject.toml" if source.ecosystem == "python" else "Cargo.toml"
         prefix = f"https://raw.githubusercontent.com/{source.repository}/{source.commit}/"
         path = (PurePosixPath(source.directory) / filename).as_posix()
-        manifest_bytes = read(prefix + quote(path))
+        manifest_bytes = _source_bytes(provider, prefix + quote(path))
         manifest = tomllib.loads(manifest_bytes.decode("utf-8"))
         project = table(manifest.get("project" if source.ecosystem == "python" else "package"), "upstream package")
         verified_manifests: dict[str, dict[str, object]] = {}
@@ -260,7 +336,7 @@ def verify_source(source: Source, *, provider: SourceProvider | None = None, rel
             if not manifests or len(manifests) > 100:
                 raise ValueError("Cargo source proof supports 1..100 repository manifests")
             for member, blob in manifests:
-                payload = manifest_bytes if member == path else read(prefix + quote(member))
+                payload = manifest_bytes if member == path else _source_bytes(provider, prefix + quote(member))
                 if hashlib.sha1(f"blob {len(payload)}\0".encode() + payload).hexdigest() != blob:
                     raise ValueError("Cargo manifest bytes differ from the verified commit tree")
                 verified_manifests[member] = tomllib.loads(payload.decode("utf-8"))
@@ -270,7 +346,7 @@ def verify_source(source: Source, *, provider: SourceProvider | None = None, rel
             if matches != [path]:
                 raise ValueError("Cargo repository must contain exactly one requested package at the selected directory")
         version = project.get("version")
-        if source.ecosystem == "cargo" and version == {"workspace": True}:
+        if source.ecosystem == "cargo" and inherits_workspace(version):
             # Find the nearest ancestor workspace; never infer inheritance from
             # a repository root unrelated to this package.
             directory = PurePosixPath(source.directory)
@@ -285,44 +361,16 @@ def verify_source(source: Source, *, provider: SourceProvider | None = None, rel
         if source.ecosystem == "python" and "version" in dynamic:
             raise ValueError("dynamic upstream version metadata cannot provide inert source proof")
         return _verified(source, exact_version(source.ecosystem, version), ())
-    artifacts: list[Artifact] = []
     if source.ecosystem == "python":
-        data = json(f"https://pypi.org/pypi/{source.package}/{source.version}/json")
-        info = table(data.get("info"), "PyPI package")
-        if canonicalize_name(string(info.get("name"), "PyPI name")) != source.package or info.get("version") != source.version:
-            raise ValueError("published Python package identity differs")
-        uploads = data.get("urls")
-        if not isinstance(uploads, list) or not uploads:
-            raise ValueError("published Python release has no artifacts")
-        for raw in uploads:
-            upload = table(raw, "PyPI artifact")
-            filename = string(upload.get("filename"), "artifact filename")
-            kind = upload.get("packagetype")
-            if upload.get("yanked") is not False or kind not in {"bdist_wheel", "sdist"}:
-                raise ValueError("published Python artifact is yanked or unsupported")
-            parsed = parse_wheel_filename(filename) if kind == "bdist_wheel" else parse_sdist_filename(filename)
-            if parsed[0] != source.package or parsed[1] != Version(source.version):
-                raise ValueError("artifact filename identifies a different package/version")
-            size = upload.get("size")
-            if type(size) is not int:
-                raise ValueError("artifact size must be an integer")
-            artifacts.append(
-                Artifact(filename, string(upload.get("url"), "artifact URL"), string(table(upload.get("digests"), "digests").get("sha256"), "digest"), size)
-            )
-            if urlsplit(artifacts[-1].url).netloc != "files.pythonhosted.org":
-                raise ValueError("Python artifact must come from PyPI")
-    else:
-        data = json(f"https://crates.io/api/v1/crates/{source.package}/{source.version}")
-        info = table(data.get("version"), "crates.io version")
-        if info.get("crate") != source.package or info.get("num") != source.version or info.get("yanked") is not False:
-            raise ValueError("published Cargo package identity differs or is yanked")
-        size = info.get("crate_size")
-        if type(size) is not int:
-            raise ValueError("published Cargo archive requires its byte size")
-        filename = f"{source.package}-{source.version}.crate"
-        artifacts.append(
-            Artifact(filename, f"https://static.crates.io/crates/{source.package}/{filename}", string(info.get("checksum"), "crate checksum"), size)
-        )
-    if len({item.url for item in artifacts}) != len(artifacts) or len({item.filename for item in artifacts}) != len(artifacts):
-        raise ValueError("published artifacts contain duplicate identities")
-    return _verified(source, source.version, tuple(artifacts))
+        verified, _ = _observe_pypi_release(source, provider)
+        return verified
+    data = json(f"https://crates.io/api/v1/crates/{source.package}/{source.version}")
+    info = table(data.get("version"), "crates.io version")
+    if info.get("crate") != source.package or info.get("num") != source.version or info.get("yanked") is not False:
+        raise ValueError("published Cargo package identity differs or is yanked")
+    size = info.get("crate_size")
+    if type(size) is not int:
+        raise ValueError("published Cargo archive requires its byte size")
+    filename = f"{source.package}-{source.version}.crate"
+    artifact = Artifact(filename, f"https://static.crates.io/crates/{source.package}/{filename}", string(info.get("checksum"), "crate checksum"), size)
+    return _verified(source, source.version, (artifact,))

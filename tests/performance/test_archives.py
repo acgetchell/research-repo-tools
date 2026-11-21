@@ -12,7 +12,7 @@ from research_repo_tools import archives
 from research_repo_tools._archive_paths import _member_path
 from research_repo_tools.archives import ArchiveLimits, download_asset, extract_archive
 from research_repo_tools.evidence import sha256
-from tests.performance.public_performance_consumer import zip_asset
+from tests.fixtures.archives import zip_asset
 
 
 def tar_asset(path: Path, entries: list[tuple[str, bytes | str]]) -> None:

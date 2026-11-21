@@ -38,6 +38,8 @@ def export_environment(destination: Path, names: Sequence[str], *, environment: 
     payload = "".join(lines).encode("utf-8")
     if destination.is_symlink():
         raise ValueError(f"environment command file must not be a symlink: {destination}")
+    if destination.exists() and not destination.is_file():
+        raise ValueError(f"environment command file must be a regular file: {destination}")
     with destination.open("a+b") as stream:
         if stream.seek(0, os.SEEK_END):
             stream.seek(-1, os.SEEK_END)

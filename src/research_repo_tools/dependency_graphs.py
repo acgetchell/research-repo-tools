@@ -28,6 +28,7 @@ from research_repo_tools.dependency_sources import (
     verify_source,
 )
 from research_repo_tools.evidence import _load_json
+from research_repo_tools.toml_source import inherits_workspace
 
 PYPI = "https://pypi.org/simple"
 CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
@@ -35,6 +36,8 @@ CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
 
 @dataclass(frozen=True, slots=True)
 class LockedDependency:
+    """A resolved package source and version with the artifact identities recorded in its lockfile."""
+
     source: Source
     version: str
     artifacts: tuple[tuple[str, str, int], ...] = ()
@@ -43,6 +46,8 @@ class LockedDependency:
 
 @dataclass(frozen=True, slots=True)
 class DependencyGraph:
+    """A project's locked dependencies and owned packages bound to the inputs captured during inspection."""
+
     project: DependencyProject
     root: Path
     snapshot: InputSnapshot
@@ -88,7 +93,8 @@ def _cargo_dependencies(document: dict[str, object]) -> Iterator[tuple[str, dict
                 yield name, {"version": raw} if isinstance(raw, str) else table(raw, "Cargo dependency")
 
 
-def _check_configuration(root: Path, ecosystem: str) -> None:
+def _check_configuration(root: Path, ecosystem: str, snapshot: InputSnapshot) -> None:
+    """Reject source-affecting overrides using the same captured inputs as the graph."""
     prefixes = ("UV_",) if ecosystem == "python" else ("CARGO_", "RUSTC", "RUSTDOC", "RUSTUP_TOOLCHAIN")
     allowed = {
         "UV_CACHE_DIR",
@@ -107,15 +113,19 @@ def _check_configuration(root: Path, ecosystem: str) -> None:
         "CARGO_BUILD_JOBS",
         "RUSTUP_TOOLCHAIN",
     }
-    for key, value in os.environ.items():
+    for key, value in snapshot.environment:
         if value and key.upper().startswith(prefixes) and key.upper() not in allowed:
             raise ValueError(f"dependency proof does not support environment override {key}")
+    captured = dict(snapshot.files)
     for path in configuration_paths(root, "python" if ecosystem == "python" else "cargo"):
-        if not path.exists():
+        if path not in captured:
+            raise ValueError("dependency configuration paths changed during capture; revalidate source and locks")
+        payload = captured[path]
+        if payload is None:
             continue
         if ecosystem == "python":
             raise ValueError("dependency proof requires project-local pyproject.toml uv configuration; uv.toml is unsupported")
-        data = tomllib.loads(path.read_text(encoding="utf-8"))
+        data = tomllib.loads(payload.decode("utf-8"))
         if set(data) & {"source", "registries", "registry", "paths", "patch", "replace", "env", "unstable"}:
             raise ValueError("Cargo source replacement, path/registry overrides and injected environment are unsupported for release proof")
         if set(table(data.get("build", {}), "Cargo build")) & {"rustc", "rustc-wrapper", "rustc-workspace-wrapper", "rustdoc"}:
@@ -155,8 +165,16 @@ def inspect_project(checkout: Path, project: DependencyProject, *, release: bool
     lock_path = root / ("uv.lock" if project.ecosystem == "python" else "Cargo.lock")
     owner_inputs = tuple(path for path, _ in owner.snapshot.files) if owner else ()
     snapshot = InputSnapshot.capture((checkout / POLICY_FILE, *manifests, lock_path, *configuration_paths(root, project.ecosystem), *owner_inputs))
-    _check_configuration(root, project.ecosystem)
-    documents = {path: table(tomllib.loads(path.read_text(encoding="utf-8")), "manifest") for path in manifests}
+    _check_configuration(root, project.ecosystem, snapshot)
+    captured = dict(snapshot.files)
+
+    def load_document(path: Path, context: str) -> dict[str, object]:
+        payload = captured[path]
+        if payload is None:
+            raise FileNotFoundError(f"dependency input is missing: {path}")
+        return table(tomllib.loads(payload.decode("utf-8")), context)
+
+    documents = {path: load_document(path, "manifest") for path in manifests}
     owned: list[tuple[str, str, Path]] = []
     root_document = documents[root / ("pyproject.toml" if project.ecosystem == "python" else "Cargo.toml")]
     if owner is not None and (
@@ -169,7 +187,7 @@ def inspect_project(checkout: Path, project: DependencyProject, *, release: bool
             raise ValueError("release-owned packages must be declared members of this workspace")
         data = table(documents[path].get("project" if project.ecosystem == "python" else "package"), "release-owned package")
         version = data.get("version")
-        if project.ecosystem == "cargo" and version == {"workspace": True}:
+        if project.ecosystem == "cargo" and inherits_workspace(version):
             version = table(table(root_document.get("workspace"), "workspace").get("package"), "workspace.package").get("version")
         name = package_name(project.ecosystem, string(data.get("name"), "owned package name"))
         pin = RegistryRelease(project.ecosystem, name, string(version, "owned package version"))
@@ -200,7 +218,7 @@ def inspect_project(checkout: Path, project: DependencyProject, *, release: bool
                 if requirement.url and release:
                     raise ValueError("Python release dependency declarations cannot use direct URLs, Git or paths")
             for name, raw in table(uv.get("sources", {}), "uv sources").items():
-                if release and not (canonicalize_name(name) in owned_names and raw == {"workspace": True}):
+                if release and not (canonicalize_name(name) in owned_names and inherits_workspace(raw)):
                     raise ValueError("Python release source overrides must select release-owned workspace packages only")
         else:
             patches = table(document.get("patch", {}), "Cargo patches")
@@ -224,7 +242,7 @@ def inspect_project(checkout: Path, project: DependencyProject, *, release: bool
                         uses_owner = True
     if owner and not uses_owner:
         raise ValueError("Cargo helper must depend by path on its declared owner package")
-    lock = table(tomllib.loads(lock_path.read_text(encoding="utf-8")), "dependency lock")
+    lock = load_document(lock_path, "dependency lock")
     dependencies: list[LockedDependency] = []
     seen: set[tuple[str, str, str]] = set()
     helper_packages = {(name, version) for name, version, _ in owned} if owner else set()
@@ -342,8 +360,10 @@ def check_native_graph(graph: DependencyGraph, *, sources: tuple[VerifiedSource,
         _check_lock(graph.root)
         from research_repo_tools.dependency_artifacts import verify_python_environment
 
-        verify_python_environment(graph)
+        verify_python_environment(graph, sources=sources)
     else:
+        from subprocess import CalledProcessError
+
         from research_repo_tools.process import run_command
 
         environment = {key: value for key, value in os.environ.items() if not key.upper().startswith(("CARGO_", "RUST"))}
@@ -356,13 +376,23 @@ def check_native_graph(graph: DependencyGraph, *, sources: tuple[VerifiedSource,
         with tempfile.TemporaryDirectory(prefix="dependency-graph-") as directory:
             cwd = Path(directory)
             cargo = _resolve_cargo(cwd=cwd, environment=environment, checkouts=(graph.checkout,))
-            result = run_command(
-                cargo,
-                ["metadata", "--manifest-path", str(graph.root / "Cargo.toml"), "--format-version", "1", "--all-features", "--locked", "--offline"],
-                cwd=cwd,
-                env=environment,
-                timeout=120,
-            )
+            manifest = graph.root / "Cargo.toml"
+            try:
+                result = run_command(
+                    cargo,
+                    ["metadata", "--manifest-path", str(manifest), "--format-version", "1", "--all-features", "--locked", "--offline"],
+                    cwd=cwd,
+                    env=environment,
+                    timeout=120,
+                )
+            except CalledProcessError as error:
+                from research_repo_tools.process import format_exception_diagnostics
+
+                remedy = "just release-cargo-fetch" if graph.root == graph.checkout else f'just release-cargo-fetch --manifest-path "{manifest}"'
+                raise ValueError(
+                    f"locked offline Cargo metadata failed for {manifest}: {format_exception_diagnostics(error)}. "
+                    f"For an incomplete managed Cargo cache, run {remedy} and retry the same release candidate."
+                ) from error
         metadata = table(_load_json(result.stdout.encode("utf-8"), "Cargo metadata"), "Cargo metadata")
         if Path(string(metadata.get("workspace_root"), "workspace root")).resolve() != graph.root:
             raise ValueError("dependency project must identify the complete Cargo workspace root")

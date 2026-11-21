@@ -250,3 +250,64 @@ def test_harness_change_rejects_input_verification(harness, tmp_path):
     script.write_bytes(b"# replaced harness\n")
     with pytest.raises(ValueError, match="measurement harness changed"):
         harness.verify_inputs({}, script, "0" * 64)
+
+
+@pytest.mark.parametrize("worker_result", ["", "[]", "invalid JSON", '{"seconds":1}'])
+def test_unusable_worker_measurements_preserve_prior_evidence(harness, experiment, monkeypatch, worker_result):
+    """A process exiting successfully still has to return a valid timed observation."""
+    _, _, output, execute = experiment
+
+    def malformed(command, **kwargs):
+        if "--worker" in command:
+            return subprocess.CompletedProcess(command, 0, worker_result, "")
+        return execute(command, **kwargs)
+
+    monkeypatch.setattr(harness, "execute", malformed)
+    with pytest.raises(ValueError, match="worker"):
+        harness.main()
+    assert output.read_bytes() == b"retained evidence"
+
+
+@pytest.mark.parametrize("seconds", [-1, float("nan"), True], ids=["negative", "nan", "boolean"])
+def test_worker_duration_must_be_finite_and_nonnegative(harness, experiment, monkeypatch, seconds):
+    _, _, output, execute = experiment
+
+    def invalid_duration(command, **kwargs):
+        result = execute(command, **kwargs)
+        if "--worker" in command:
+            record = json.loads(result.stdout)
+            record["seconds"] = seconds
+            result.stdout = json.dumps(record)
+        return result
+
+    monkeypatch.setattr(harness, "execute", invalid_duration)
+    with pytest.raises(ValueError, match="worker requires finite nonnegative seconds"):
+        harness.main()
+    assert output.read_bytes() == b"retained evidence"
+
+
+@pytest.mark.parametrize("target", ["source", "validator"])
+def test_measurement_output_cannot_replace_its_inputs(harness, experiment, monkeypatch, target):
+    _, origin, output, _ = experiment
+    selected = origin if target == "source" else output.parent / "ruff"
+    before = selected.read_bytes()
+    args = sys.argv.copy()
+    args[args.index("--output") + 1] = str(selected)
+    monkeypatch.setattr(sys, "argv", args)
+    with pytest.raises(ValueError, match="output overlaps"):
+        harness.main()
+    assert selected.read_bytes() == before
+
+
+def test_source_digest_preserves_posix_component_order_across_platforms(harness, tmp_path):
+    """Order the logical source paths consistently even when native Path compares case-insensitively."""
+    import hashlib
+
+    names = ["Z.py", "a/nested.py", "a.py"]
+    for name in reversed(names):
+        path = tmp_path / name
+        path.parent.mkdir(exist_ok=True)
+        path.write_bytes(b"pass\n")
+    digest = hashlib.sha256(b"pass\n").hexdigest()
+    expected = json.dumps([[name, digest] for name in names], separators=(",", ":")).encode()
+    assert harness.source_digest(tmp_path) == hashlib.sha256(expected).hexdigest()

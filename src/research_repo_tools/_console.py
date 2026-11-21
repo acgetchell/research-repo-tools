@@ -1,5 +1,6 @@
 """Standard-library output boundaries shared by installed and source runners."""
 
+import json
 import sys
 from typing import TextIO
 
@@ -19,3 +20,9 @@ def write_stdout(output: bytes) -> None:
         sys.stdout.buffer.write(output)
     else:
         sys.stdout.write(output.decode("utf-8"))
+
+
+def write_json_stdout(value: object, *, indent: int | None = None, sort_keys: bool = False) -> None:
+    """Emit a complete JSON result in UTF-8 with one final LF."""
+    text = json.dumps(value, ensure_ascii=True, allow_nan=False, indent=indent, sort_keys=sort_keys)
+    write_stdout((text + "\n").encode("utf-8"))

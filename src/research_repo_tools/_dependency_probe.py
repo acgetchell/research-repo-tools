@@ -1,7 +1,9 @@
 """Inert installed-distribution observation; never start a consumer interpreter."""
 
 import hashlib
+import os
 import re
+import stat
 from dataclasses import dataclass
 from importlib.metadata import Distribution, distributions
 from pathlib import Path, PurePosixPath, PureWindowsPath
@@ -40,12 +42,13 @@ class DistributionSnapshot:
         files = dist.files
         if files is None:
             raise ValueError(f"{name}: installed RECORD is missing")
-        if any(path.is_absolute() or PureWindowsPath(str(path)).drive or "\\" in str(path) for path in files):
+        records = tuple(PurePosixPath(str(path).replace(os.sep, "/")) for path in files)
+        if any(path.is_absolute() or PureWindowsPath(str(path)).drive or "\\" in str(path) for path in records):
             raise ValueError(f"{name}: installed RECORD contains an unsafe path")
         object.__setattr__(self, "name", _normalized(name))
         object.__setattr__(self, "version", version)
         object.__setattr__(self, "location", Path(str(dist.locate_file(""))))
-        object.__setattr__(self, "records", tuple(PurePosixPath(path) for path in files))
+        object.__setattr__(self, "records", records)
         object.__setattr__(self, "direct_url", dist.read_text("direct_url.json"))
         object.__setattr__(self, "wheel", dist.read_text("WHEEL"))
 
@@ -62,6 +65,7 @@ def distribution_inventory(paths: tuple[Path, ...]) -> dict[str, DistributionSna
 
 
 def _hashes(dist: DistributionSnapshot, *, limit: int = MAX_INSTALLED_BYTES, shared_files: frozenset[str] = frozenset()) -> dict[str, str]:
+    """Hash installed distribution files under a total byte limit, excluding bytecode and generated wrappers outside site-packages."""
     if type(limit) is not int or not 0 < limit <= MAX_NATIVE_BYTES:
         raise ValueError("installed package byte limit must be positive and at most 512 MiB")
     base = dist.location
@@ -75,26 +79,46 @@ def _hashes(dist: DistributionSnapshot, *, limit: int = MAX_INSTALLED_BYTES, sha
         names.add(str(path))
         if len(path.parts) > 1 and not path.parts[0].endswith(".dist-info"):
             roots.add(path.parts[0])
+
+    def raise_walk_error(error: OSError) -> None:
+        """A partially readable package tree cannot establish the installed inventory."""
+        raise error
+
     for root in sorted(roots):
         directory = base / root
-        if directory.is_symlink():
+        if directory.is_symlink() or directory.is_junction():
             raise ValueError("published dependency proof does not support symlinked package directories")
-        for path in directory.rglob("*"):
-            if path.is_symlink() and path.is_dir():
-                raise ValueError("published dependency proof does not support symlinked package directories")
-            if path.is_file() and path.suffix != ".pyc":
+        for parent, directories, filenames in directory.walk(on_error=raise_walk_error):
+            for leaf in directories:
+                if (parent / leaf).is_junction():
+                    raise ValueError("published dependency proof does not support symlinked package directories")
+            for leaf in filenames:
+                path = parent / leaf
+                if path.is_junction() or path.is_symlink() and path.is_dir():
+                    raise ValueError("published dependency proof does not support symlinked package directories")
+                if path.suffix == ".pyc":
+                    continue
                 relative = path.relative_to(base).as_posix()
                 if relative not in shared_files:
                     names.add(relative)
-            if len(names) > MAX_INSTALLED_FILES:
-                raise ValueError("installed package exceeds file limits")
+                    if len(names) > MAX_INSTALLED_FILES:
+                        raise ValueError("installed package exceeds file limits")
     if len(names) > MAX_INSTALLED_FILES:
         raise ValueError("installed package exceeds file limits")
     result = {}
     remaining = limit
     for name in sorted(names):
         digest = hashlib.sha256()
-        with (base / name).open("rb") as stream:
+        target = base / name
+        try:
+            mode = target.stat().st_mode
+        except FileNotFoundError as error:
+            if target.is_symlink():
+                raise ValueError(f"installed package requires a regular file: {name}") from error
+            raise
+        if not stat.S_ISREG(mode):
+            raise ValueError(f"installed package requires a regular file: {name}")
+        with target.open("rb") as stream:
             # read(n) can reserve n bytes even for a tiny file. Keep the buffer
             # independent of the package allowance, which can be 512 MiB.
             while data := stream.read(min(1024 * 1024, remaining + 1)):

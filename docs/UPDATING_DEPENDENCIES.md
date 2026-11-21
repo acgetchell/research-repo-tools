@@ -67,7 +67,8 @@ and the configured notebook group's project kernel.
 Resolution and candidate installation must succeed before publication.
 
 For offline bootstrap or local wheel/sdist evaluation, the helper accepts
-`--metadata-file PATH` containing saved exact-release PyPI JSON. Supply the local
+`--metadata-file PATH` containing saved exact-release PyPI JSON. The same 1 MiB
+limit applies to saved and downloaded metadata. Supply the local
 artifact registry through uv's `UV_FIND_LINKS`; target name/version are verified,
 and the installed distribution still enforces its own metadata before adoption.
 
@@ -181,6 +182,39 @@ when inherited through `tooling`. They are not registry upgrade targets, even
 when the registry has the same version. Development Git pins remain prohibited
 at release acquisition, evidence and publication boundaries.
 
+### Automatically adopting a published supplier
+
+Follow the [supplier adoption setup](../README.md#automatically-adopting-a-published-supplier)
+to opt in from a consumer repository.
+
+For a registry pin, the updater checks the newest stable, non-yanked PyPI release
+above that pin that supports the running interpreter and the Python range
+declared where the supplier is used. For a workspace, the updater intersects
+every explicit `project.requires-python` from the root and its members. If
+all omit it, the updater uses its default of `>=3.15`. Dependency markers and
+a dependency group's Python constraint narrow that shared range for each
+declaration. Workspace adoption refreshes the shared lock with native uv and
+retains exact development pins other than the supplier. The workspace root and
+member manifests participate in rollback. The standalone pin resolver continues
+to require an independent project. uv resolves the selected candidate and stops the update on a resolution failure. If exact registry
+verification confirms a candidate was yanked, the updater checks the next
+eligible release. For an exact Git SHA,
+the updater applies the same Python compatibility check and uses the signed
+promotion proof below, including releases of the same version as the development
+pin. If there is no eligible release, it retains the original source and
+continues normal dependency maintenance. Provider and integrity errors stop
+the update. An absent, null or empty upload
+`requires_python` declares no interpreter restriction. A malformed constraint
+or an upload without a boolean yank status stops the update.
+
+Successful adoption updates the source declaration, exact manifest requirement,
+registry lock, and installed distribution in one recoverable update. Included
+groups and extras stay selected and the resolved release supplies any inherited
+Python-tool pins. Set `--source-policy dependency-sources.toml --selection tooling`
+on isolated recipes and workflows that can trust the same declaration. For
+release controllers using an independently reviewed source, verify their exact
+selector through that controller's approval process.
+
 ### Promoting an exact development pin
 
 From an external installed RRT version that supports promotion, run
@@ -190,8 +224,10 @@ source override, and lock must agree on the exact repository and commit. Add
 `--promotion-versions SPEC` to restrict eligible PEP 440 versions or
 `--promotion-prereleases` to include prereleases.
 
-Promotion considers compatible, non-yanked PyPI releases at or above the
-locked version, newest version first. It requires each distribution's
+Promotion considers non-yanked PyPI releases at or above the locked version,
+newest version first. Candidates must support the running interpreter and the
+Python range of the project or dependency group declaring the package.
+Promotion requires each distribution's
 published bytes to match its signed GitHub release-promotion evidence from
 the declaring repository. The signed commit must equal or descend from the
 Git pin. Upload dates and version numbers alone cannot establish containment.
@@ -632,7 +668,10 @@ in an isolated build environment.
 
 Availability proof binds exact PyPI upload URLs, sizes and SHA-256 digests, or
 the crates.io archive checksum and size, and rejects yanked uploads. Cargo's
-resolved cached input files are compared with the downloaded published archive.
+resolved input files are compared with an archive authenticated against the
+lock and fresh crates.io metadata. The verifier uses matching compressed bytes
+from the same Cargo cache when available and fetches the published archive on
+a cache miss or mismatch.
 Each Cargo archive is limited to 32 MiB compressed, 32 MiB per member, 64 MiB
 expanded in total, and 10,000 members. Size diagnostics identify the crate and
 the exceeded limit.

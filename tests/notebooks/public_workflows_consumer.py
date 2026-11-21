@@ -4,16 +4,21 @@ import contextlib
 import io
 import json
 import os
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 from typing import override
 from unittest.mock import patch
 
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from research_repo_tools.cli import main
 from research_repo_tools.config import load, parse
 from research_repo_tools.notebook_workflows import launch, reset
-from research_repo_tools.process import run_command, run_git_bytes
+from research_repo_tools.process import run_command
+from tests.fixtures.notebooks import fixture_git
 
 
 class Consumer(unittest.TestCase):
@@ -191,32 +196,23 @@ class TestReset(Consumer):
         if os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1":
             self.skipTest("Git mutations disabled by RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS=1")
         super().setUp()
-        self.git("init", "--template=")
-        self.git("config", "user.name", "Notebook fixture")
-        self.git("config", "user.email", "notebook@example.invalid")
+        fixture_git(self.root, "init", "--template=")
+        fixture_git(self.root, "config", "user.name", "Notebook fixture")
+        fixture_git(self.root, "config", "user.email", "notebook@example.invalid")
         self.relative = "notebooks/analysis with spaces.ipynb"
         self.path = self.root / self.relative
         self.path.parent.mkdir()
         self.original = b"revision notebook\r\n"
         self.path.write_bytes(self.original)
         (self.root / "keep.txt").write_bytes(b"tracked other file\n")
-        self.git("add", "--", self.relative, "keep.txt")
-        self.git("commit", "-m", "fixture")
-        self.revision = self.git("rev-parse", "HEAD").stdout.decode().strip()
-
-    def git(self, *args):
-        env = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
-        env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
-        return run_git_bytes(
-            ["--no-pager", "-c", "core.autocrlf=false", "-c", f"core.hooksPath={self.root / 'disabled-hooks'}", "-c", "commit.gpgsign=false", *args],
-            cwd=self.root,
-            env=env,
-        )
+        fixture_git(self.root, "add", "--", self.relative, "keep.txt")
+        fixture_git(self.root, "commit", "-m", "fixture")
+        self.revision = fixture_git(self.root, "rev-parse", "HEAD").stdout.decode().strip()
 
     def test_preview_and_apply_restore_deleted_and_modified_index_notebooks_without_touching_index(self):
         self.path.write_bytes(b"staged notebook\r\n")
-        self.git("add", "--", self.relative)
-        index = self.git("ls-files", "--stage", "-z").stdout
+        fixture_git(self.root, "add", "--", self.relative)
+        index = fixture_git(self.root, "ls-files", "--stage", "-z").stdout
         self.path.unlink()
         other = self.root / "keep.txt"
         other.write_bytes(b"local other file")
@@ -237,20 +233,20 @@ class TestReset(Consumer):
         self.assertTrue(checkpoint.is_dir() and scratch.is_dir())
         reset(settings, apply=True)
         self.assertEqual(self.path.read_bytes(), b"staged notebook\r\n")
-        self.assertEqual(self.git("ls-files", "--stage", "-z").stdout, index)
+        self.assertEqual(fixture_git(self.root, "ls-files", "--stage", "-z").stdout, index)
         self.assertFalse(checkpoint.exists() or scratch.exists())
         self.assertEqual(other.read_bytes(), b"local other file")
         self.assertEqual(untracked.read_bytes(), b"untracked source")
 
     def test_revision_restore_pins_the_tree_and_preserves_index_and_unselected_sources(self):
         self.path.write_bytes(b"staged replacement")
-        self.git("add", "--", self.relative)
-        index = self.git("ls-files", "--stage", "-z").stdout
+        fixture_git(self.root, "add", "--", self.relative)
+        index = fixture_git(self.root, "ls-files", "--stage", "-z").stdout
         self.path.write_bytes(b"local replacement")
         plan = reset(parse({}, root=self.root), [Path(self.relative)], revision=self.revision, apply=True)
         self.assertEqual(self.path.read_bytes(), self.original)
-        self.assertEqual(plan.revision, self.git("rev-parse", "HEAD^{tree}").stdout.decode().strip())
-        self.assertEqual(self.git("ls-files", "--stage", "-z").stdout, index)
+        self.assertEqual(plan.revision, fixture_git(self.root, "rev-parse", "HEAD^{tree}").stdout.decode().strip())
+        self.assertEqual(fixture_git(self.root, "ls-files", "--stage", "-z").stdout, index)
 
     def test_literal_git_magic_spaces_and_native_newline_names(self):
         names = ["notebooks/[literal].ipynb", "notebooks/colon : name.ipynb"] if os.name != "nt" else ["notebooks/[literal].ipynb"]
@@ -258,7 +254,7 @@ class TestReset(Consumer):
             names.append("notebooks/new\nline.ipynb")
         for name in names:
             (self.root / name).write_bytes(b"literal original\r\n")
-        self.git("add", "--", *[":(literal)" + name for name in names])
+        fixture_git(self.root, "add", "--", *[":(literal)" + name for name in names])
         for name in names:
             (self.root / name).unlink()
         reset(parse({}, root=self.root), [Path("notebooks")], apply=True)

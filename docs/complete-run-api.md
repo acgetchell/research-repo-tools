@@ -119,8 +119,9 @@ Current document-input checks derive from each suite's recorded declarations.
 
 `performance_progress.ProgressReporter(*, mode="human", cadence=300, stream=None,
 observer=None, clock=time.monotonic)` exposes the documented event contract.
-The default stream is stderr. An observer receives event dictionaries; heartbeats
-invoke it on a background thread. Keep custom observers fast and nonblocking.
+The default stream is stderr. Each observer call receives its own event
+dictionary. Editing its fields does not change the streamed event. Heartbeats
+invoke the observer on a background thread. Keep custom observers fast and nonblocking.
 Heartbeat errors propagate when the stage ends, after its worker stops. If
 acquisition and reporting both fail, an exception group preserves both errors.
 Checkpoint cleanup failures likewise preserve the acquisition error and identify
@@ -482,7 +483,7 @@ controls and their matching schema-2 `table` keys are:
 
 | Style field / TOML key | Contract |
 | --- | --- |
-| `comparison_columns` / `comparison-columns` | Ordered unique selection of `ratio` and/or `reduction`, emitted for each comparison; empty means timing columns only |
+| `comparison_columns` / `comparison-columns` | Ordered unique selection of `ratio` and/or `reduction`, emitted for each comparison. An empty selection renders timing columns and skips comparison calculations and eligibility checks in the Markdown table. |
 | `intervals` / `intervals` | `inline` (default) or `below`, which inserts `<br>` between the point and both recorded bounds |
 | `ratio_headings` / `ratio-headings` | Empty uses numerator/denominator series labels; otherwise one nonempty heading per comparison, in layout order |
 | `ratio_suffix` / `ratio-suffix` | Empty by default; `×` appends the multiplication sign to each available point ratio |

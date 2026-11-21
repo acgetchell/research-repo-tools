@@ -19,6 +19,7 @@ def configuration_fields(configuration: str) -> dict[str, str]:
 
 
 def isolated_configuration(configuration: str) -> dict[str, str]:
+    """Parse virtual environment settings and require explicit isolation from system site packages."""
     fields = configuration_fields(configuration)
     if fields.get("include-system-site-packages", "").lower() != "false":
         raise ValueError("pyvenv.cfg requires include-system-site-packages explicitly set to false")

@@ -2,6 +2,7 @@
 
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
@@ -16,6 +17,7 @@ from research_repo_tools.files import replace_many
 
 
 def main(arguments: list[str]) -> int:
+    """Run pytest with the coverage environment and write the Cobertura report."""
     root = Path.cwd()
     report = root / "coverage" / "cobertura.xml"
     report.parent.mkdir(exist_ok=True)
@@ -24,28 +26,37 @@ def main(arguments: list[str]) -> int:
         cleanup.callback(shutil.rmtree, directory)
         data = Path(directory) / ".coverage"
         env = os.environ | {"COVERAGE_FILE": str(data)}
-        result = subprocess.run(
-            [
-                sys.executable,
-                "-m",
-                "coverage",
-                "run",
-                "--parallel-mode",
-                "-m",
-                "pytest",
-                "-p",
-                "no:cov",
-                f"--junitxml={Path(directory) / 'pytest.xml'}",
-                *arguments,
-            ],
-            cwd=root,
-            env=env,
-            check=False,
-        )
-        if result.returncode:
+        command = [
+            sys.executable,
+            "-m",
+            "coverage",
+            "run",
+            "--parallel-mode",
+            "-m",
+            "pytest",
+            "-p",
+            "no:cov",
+            f"--junitxml={data.parent / 'pytest.xml'}",
+            *arguments,
+        ]
+        try:
+            status = subprocess.run(command, cwd=root, env=env, check=False).returncode
+        except KeyboardInterrupt:
+            status = 130
+        if status:
             # Keep the failure report even if aggregation or publication fails.
             # Parallel installed-consumer output can obscure pytest's traceback.
             cleanup.pop_all()
+        # A signaled test driver can leave workers finishing their last shard.
+        # Windows reports Ctrl-C as the unsigned STATUS_CONTROL_C_EXIT.
+        if status in {130, -signal.SIGINT, 0xC000013A}:
+            print(f"Coverage interrupted. Diagnostics retained at {data.parent}", file=sys.stderr)
+            return 130
+        if status not in (0, 1):
+            # pytest reserves 1 for completed tests with failing assertions.
+            # A collection, usage, or internal error cannot yield a full report.
+            print(f"Pytest did not complete (exit status {status}). Diagnostics retained at {data.parent}", file=sys.stderr)
+            return 128 - status if status < 0 else status
         # Terminated children can leave a zero-byte SQLite file. It contains no
         # measurements, and coverage's read-only combiner cannot initialize it.
         for shard in data.parent.glob(".coverage.*"):
@@ -71,9 +82,9 @@ def main(arguments: list[str]) -> int:
         staged_report = Path(directory) / report.name
         coverage.xml_report(outfile=str(staged_report))
         replace_many({root / ".coverage": data.read_bytes(), report: staged_report.read_bytes()})
-        if result.returncode:
-            print(f"Pytest failed with exit status {result.returncode}. Diagnostics retained at {data.parent}", file=sys.stderr)
-    return result.returncode
+        if status:
+            print(f"Pytest failed with exit status {status}. Diagnostics retained at {data.parent}", file=sys.stderr)
+    return status
 
 
 if __name__ == "__main__":

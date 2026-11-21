@@ -2,7 +2,6 @@
 
 import io
 import os
-import runpy
 import shutil
 import subprocess
 import sys
@@ -11,18 +10,21 @@ import unittest
 import xml.etree.ElementTree as ET
 from dataclasses import replace
 from pathlib import Path
+from typing import Any, cast
 from unittest.mock import patch
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from research_repo_tools import files as publication_files
 from research_repo_tools.cli import main
-from research_repo_tools.criterion import COMPARISON_SCHEMA, ConfidenceInterval, Estimate, Sample, compare_samples, serialize_comparison
-from research_repo_tools.evidence import Evidence, Provenance, fingerprint_files, load_evidence, publish_evidence, serialize_evidence
+from research_repo_tools.evidence import Evidence, fingerprint_files, load_evidence, publish_evidence
 from research_repo_tools.postprocess_changelog import MarkdownFormatError
 from research_repo_tools.publication import (
     GitCheck,
     GlobCheck,
     MarkerPair,
-    TableLayout,
+    plan_outputs,
     plan_publication,
     preview_publication,
     publish_publication,
@@ -34,77 +36,8 @@ from research_repo_tools.publication import (
 from research_repo_tools.publication_config import load_publication
 from research_repo_tools.release_policy import FixedValue
 from research_repo_tools.releases import ReleaseRule
-
-_SUPPORT = Path(__file__).resolve().with_name("fixture_environment.py")
-if not _SUPPORT.is_file():
-    _SUPPORT = Path(__file__).resolve().parents[1] / "fixture_environment.py"
-git_environment = runpy.run_path(str(_SUPPORT))["git_environment"]
-
-MARKERS = MarkerPair("<!-- PERFORMANCE:BEGIN -->", "<!-- PERFORMANCE:END -->")
-DOCUMENT = b"\xef\xbb\xbf# Results\r\n[Historical](old/v0.9/report.md)\r\n" + MARKERS.begin.encode() + b"\r\nstale\r\n" + MARKERS.end.encode() + b"\r\nTail\r\n"
-LAYOUT = TableLayout((("step/2", "Step | <two>"), ("tiny", "Tiny")), "v1.0.0", "v1.1.0", "ns")
-
-
-def comparison():
-    return compare_samples(
-        Sample((("step/2", Estimate(100, ConfidenceInterval(90, 110, 0.95))), ("tiny", Estimate(3)), ("gone", Estimate(2)))),
-        Sample((("step/2", Estimate(80)), ("tiny", Estimate(6)), ("added", Estimate(4)))),
-    )
-
-
-def make_fixture(root: Path) -> str:
-    root.joinpath("README.md").write_bytes(DOCUMENT)
-    root.joinpath("Cargo.toml").write_bytes(b'[package]\nname="fixture"\nversion="1.1.0"\n')
-    root.joinpath("report.md").write_bytes(b"Baseline: v1.0.0\r\nCurrent: v1.1.0\r\n")
-    retained = Evidence(
-        serialize_comparison(comparison()),
-        COMPARISON_SCHEMA,
-        (
-            ("baseline", Provenance("a" * 40, harness_sha256="c" * 64, context=(("release", "v1.0.0"),))),
-            ("current", Provenance("b" * 40, harness_sha256="c" * 64, context=(("release", "v1.1.0"),))),
-        ),
-    )
-    payload, manifest = serialize_evidence(retained)
-    root.joinpath("evidence.json").write_bytes(payload)
-    root.joinpath("manifest.json").write_bytes(manifest)
-    configuration = f'''schema = 1
-document = "README.md"
-payload = "evidence.json"
-manifest = "manifest.json"
-begin = "{MARKERS.begin}"
-end = "{MARKERS.end}"
-unit = "ns"
-svg = "figures/timing.svg"
-rows = [{{benchmark = "step/2", label = "Step | <two>"}}, {{benchmark = "tiny", label = "Tiny"}}]
-links = [{{label = "Report", path = "report.md"}}, {{label = "Evidence", path = "evidence.json"}}]
-
-[provenance.baseline]
-revision = "{"a" * 40}"
-release = "v1.0.0"
-harness-sha256 = "{"c" * 64}"
-
-[provenance.current]
-revision = "{"b" * 40}"
-release = "v1.1.0"
-harness-sha256 = "{"c" * 64}"
-
-[[references]]
-path = "Cargo.toml"
-pattern = '^version="(?P<value>[^"]+)"\\r?$'
-source = "version"
-
-[[references]]
-path = "report.md"
-pattern = '^Baseline: (?P<value>[^\\r\\n]+)'
-source = "previous-tag"
-
-[[references]]
-path = "report.md"
-pattern = '^Current: (?P<value>[^\\r\\n]+)'
-source = "tag"
-'''
-    root.joinpath("publication.toml").write_text(configuration, encoding="utf-8", newline="\n")
-    return configuration
+from tests.fixture_environment import git_environment
+from tests.fixtures.publication import DOCUMENT, LAYOUT, MARKERS, comparison, make_fixture
 
 
 def fixture_git(root: Path, *args: str, input: bytes | None = None) -> bytes:
@@ -121,6 +54,51 @@ def fixture_git(root: Path, *args: str, input: bytes | None = None) -> bytes:
 
 
 class TestPublicationConsumer(unittest.TestCase):
+    def test_publication_checks_require_distinct_path_entries(self):
+        with self.assertRaisesRegex(ValueError, "sequence"):
+            GitCheck("v1.0.0", cast(Any, "ab"))
+        for patterns, paths in ((iter(()), ("report",)), (("*.md",), iter(()))):
+            with self.subTest(patterns=patterns, paths=paths), self.assertRaisesRegex(ValueError, "nonempty"):
+                GlobCheck(cast(Any, patterns), cast(Any, paths))
+
+    def test_preview_distinguishes_creating_an_empty_output_from_a_noop(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            (root / "source").write_bytes(b"source")
+            outputs, inputs = {"empty.txt": b""}, {"source": b"source"}
+            plan = plan_outputs(root, outputs, inputs=inputs)
+            self.assertIn("empty.txt", preview_publication(plan))
+            self.assertFalse((root / "empty.txt").exists())
+            self.assertEqual(publish_publication(plan), (root / "empty.txt",))
+            self.assertEqual((root / "empty.txt").read_bytes(), b"")
+            self.assertEqual(preview_publication(plan_outputs(root, outputs, inputs=inputs)), "")
+
+    def test_one_shot_protections_survive_planning_and_revalidation(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "input.txt").write_bytes(b"source")
+            (root / "retained").write_bytes(b"original")
+            inputs = {"input.txt": b"source"}
+            with self.assertRaisesRegex(ValueError, "immutable output differs"):
+                plan_outputs(root, {"retained": b"replacement"}, inputs=inputs, immutable=iter(["retained"]))
+            document = b"<!-- begin -->\nold\n<!-- end -->\n"
+            (root / "README.md").write_bytes(document)
+            glob = GlobCheck(("*.txt",), ("input.txt",))
+            plan = plan_publication(root, "README.md", MarkerPair("<!-- begin -->", "<!-- end -->"), "new", inputs=inputs, glob_checks=iter([glob]))
+            (root / "added.txt").write_bytes(b"new input")
+            with self.assertRaisesRegex(ValueError, "inventory changed"):
+                publish_publication(plan)
+            self.assertEqual((root / "README.md").read_bytes(), document)
+
+    def test_preview_preserves_unicode_separators_and_unterminated_lines(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "input").write_bytes(b"source")
+            (root / "report").write_bytes("old\u2028value".encode())
+            plan = plan_outputs(root, {"report": "new\u2028value".encode()}, inputs={"input": b"source"})
+            preview = preview_publication(plan)
+            self.assertIn("-old\u2028value\n\\ No newline at end of file\n+new\u2028value\n\\ No newline at end of file\n", preview)
+
     def test_staging_edits_reject_before_replacing_any_output(self) -> None:
         for changed in ("evidence.json", "README.md", "figures/timing.svg"):
             with self.subTest(changed=changed), tempfile.TemporaryDirectory(prefix="publication café ") as temporary:

@@ -7,7 +7,7 @@ from importlib.metadata import PackageNotFoundError
 import pytest
 
 from research_repo_tools import cli, config, notebook_lint, notebooks
-from tests.notebooks.public_notebook_consumer import code
+from tests.fixtures.notebooks import code
 
 
 @pytest.mark.parametrize(

@@ -1,6 +1,7 @@
 """Provenance must join one immutable producer, complete attempt and promotion."""
 
 import copy
+import gzip
 import hashlib
 import inspect
 import io
@@ -67,19 +68,19 @@ def distributions(*, version="0.2.3", package="research-repo-tools"):
     metadata = f"Metadata-Version: 2.3\nName: {package}\nVersion: {version}\n".encode()
     wheel, sdist = io.BytesIO(), io.BytesIO()
     with zipfile.ZipFile(wheel, "w") as archive:
-        archive.writestr("research_repo_tools-0.2.3.dist-info/METADATA", metadata)
-    with tarfile.open(fileobj=sdist, mode="w:gz") as archive:
+        archive.writestr(zipfile.ZipInfo("research_repo_tools-0.2.3.dist-info/METADATA"), metadata)
+    with tarfile.open(fileobj=sdist, mode="w:") as archive:
         member = tarfile.TarInfo("research_repo_tools-0.2.3/PKG-INFO")
         member.size = len(metadata)
         archive.addfile(member, io.BytesIO(metadata))
-    return dict(zip(NAMES, (wheel.getvalue(), sdist.getvalue()), strict=True))
+    return dict(zip(NAMES, (wheel.getvalue(), gzip.compress(sdist.getvalue(), mtime=0)), strict=True))
 
 
 def zipped(contents):
     result = io.BytesIO()
     with zipfile.ZipFile(result, "w") as archive:
         for name, payload in contents.items():
-            archive.writestr(name, payload)
+            archive.writestr(zipfile.ZipInfo(name), payload)
     return result.getvalue()
 
 
@@ -94,7 +95,7 @@ def artifact(identifier, name, payload, *, commit=COMMIT):
     }
 
 
-def mock_remote(monkeypatch, tmp_path, *, commit=COMMIT):
+def mock_remote(monkeypatch, *, commit=COMMIT):
     """Fake authenticated transport, not selection, extraction or verification policy."""
     run_command = subprocess.run
     contents = distributions()
@@ -153,7 +154,7 @@ def mock_remote(monkeypatch, tmp_path, *, commit=COMMIT):
             return copy.deepcopy(state["release"])
         pytest.fail(f"unexpected API endpoint {endpoint}")
 
-    def gh(*args):
+    def gh(*args, cwd=None):
         state["calls"].append(args)
         if args[:2] == ("attestation", "verify"):
             # Preserve verification as an explicit trust boundary: verify CLI
@@ -173,7 +174,9 @@ def mock_remote(monkeypatch, tmp_path, *, commit=COMMIT):
                 assert Path(args[2]).read_bytes() == state["manifest"]
                 predicate = {}
             else:
-                predicate = json.loads((tmp_path / "promotion.json").read_bytes())
+                subject = Path(args[2])
+                assert subject.read_bytes() == state["contents"][subject.name]
+                predicate = json.loads(state["signed_predicate"])
             run_id, attempt = (123, 1) if origin else (456, 1)
             certificate = {"runInvocationURI": f"https://github.com/{release.REPOSITORY}/actions/runs/{run_id}/attempts/{attempt}", "buildTrigger": "push"}
             if state["signature_defect"] == "attempt":
@@ -185,12 +188,15 @@ def mock_remote(monkeypatch, tmp_path, *, commit=COMMIT):
             return json.dumps([{"verificationResult": {"signature": {"certificate": certificate}, "statement": {"predicate": predicate}}}])
         if args[:3] == ("api", "--paginate", "--slurp"):
             return json.dumps([state["listing"]])
+        if args == ("repo", "view", "--json", "url", "--jq", ".url"):
+            return f"https://github.com/{release.REPOSITORY}\n"
         if args[:2] == ("release", "create"):
-            assert "--draft" in args and "--verify-tag" in args and "--repo" not in args
+            assert cwd is None and "--draft" in args and "--verify-tag" in args and "--repo" not in args
             return ""
         if args[:2] == ("release", "upload"):
             assert "--clobber" not in args
-            state["uploaded"] = {Path(name).name: Path(name).read_bytes() for name in args[-3:]}
+            assert cwd is not None and all(not Path(name).is_absolute() and "#" not in name for name in args[-3:])
+            state["uploaded"] = {Path(name).name: (cwd / name).read_bytes() for name in args[-3:]}
             return ""
         pytest.fail(f"unexpected gh args {args}")
 
@@ -215,12 +221,14 @@ def mock_remote(monkeypatch, tmp_path, *, commit=COMMIT):
 
 
 @pytest.fixture
-def remote(monkeypatch, tmp_path):
-    return mock_remote(monkeypatch, tmp_path)
+def remote(monkeypatch):
+    return mock_remote(monkeypatch)
 
 
-def prepare(tmp_path):
+def prepare(tmp_path, remote):
+    """Seal the simulated signer's predicate once, independently of subsequent checkout edits."""
     release.promote(TAG, COMMIT, tmp_path / "dist", tmp_path / "promotion.json", attempts=1, interval=0)
+    remote["signed_predicate"] = (tmp_path / "promotion.json").read_bytes()
     bundle = tmp_path / "promotion.sigstore.json"
     bundle.write_bytes(b"signed promotion bundle")
     return bundle
@@ -269,7 +277,7 @@ def checkout(tmp_path, monkeypatch, git_mutations_allowed):
     git("add", "--", ".gitignore", "pyproject.toml")
     git("commit", "--quiet", "-m", "Release fixture")
     assert git("status", "--porcelain", "--untracked-files=all") == ""
-    remote = mock_remote(monkeypatch, tmp_path, commit=git("rev-parse", "HEAD"))
+    remote = mock_remote(monkeypatch, commit=git("rev-parse", "HEAD"))
     select_run = release.select_main_run
 
     def select_without_waiting(*args, **kwargs):
@@ -419,7 +427,7 @@ def test_maintainer_evidence_recipe_accepts_local_and_shared_commands():
 
 @pytest.fixture
 def published(remote, tmp_path):
-    bundle = prepare(tmp_path)
+    bundle = prepare(tmp_path, remote)
     release.stage(TAG, tmp_path / "dist", bundle, tmp_path / "promotion.json")
     uploaded = remote["uploaded"]
     assert set(uploaded) == {*NAMES, release.BUNDLE}
@@ -431,14 +439,101 @@ def published(remote, tmp_path):
         {"id": index, "name": name, "digest": f"sha256:{hashlib.sha256(payload).hexdigest()}", "size": len(payload), "state": "uploaded"}
         for index, (name, payload) in enumerate(uploaded.items(), 1)
     ]
-    remote["release"] = {"id": 17, "tag_name": TAG, "draft": False, "prerelease": False, "assets": assets}
+    remote["release"] = {"id": 17, "tag_name": TAG, "draft": False, "prerelease": False, "immutable": True, "assets": assets}
     remote["downloads"] = {asset["id"]: uploaded[asset["name"]] for asset in assets}
     return {"action": "published", "repository": {"full_name": release.REPOSITORY}, "release": remote["release"]}
 
 
-def test_end_to_end_promotes_exact_original_bytes_and_verifies_both_signatures(remote, tmp_path, published):
+@pytest.mark.parametrize("immutable", [False, None, "true"])
+def test_pypi_requires_live_immutable_release_before_download(remote, tmp_path, published, immutable):
+    """A published event cannot substitute for the current repository immutability guarantee."""
+    event = copy.deepcopy(published)
+    if immutable is None:
+        del remote["release"]["immutable"]
+    else:
+        remote["release"]["immutable"] = immutable
+    remote["calls"].clear()
+    output = tmp_path / "published" / "verified-dist"
+    with pytest.raises(ValueError, match="immutable GitHub Release"):
+        release.verify(event, COMMIT, output)
+    assert not output.parent.exists()
+    assert not any(isinstance(call, tuple) and "/releases/assets/" in str(call) for call in remote["calls"])
+
+
+def test_draft_upload_uses_verified_snapshot_after_checkout_inputs_change(remote, tmp_path, monkeypatch):
+    """Changing local artifacts at draft creation cannot change the uploaded bytes."""
+    bundle = prepare(tmp_path, remote)
+    dist = tmp_path / "dist"
+    gh = release.gh
+
+    temporary = tmp_path / "build#1"
+    temporary.mkdir()
+    monkeypatch.setattr(release.tempfile, "tempdir", str(temporary))
+
+    def change_inputs(*args, cwd=None):
+        if args[:2] == ("release", "create"):
+            for path in (*dist.iterdir(), bundle, tmp_path / release.BUNDLE):
+                path.write_bytes(b"concurrent edit")
+        if args[:2] == ("release", "upload"):
+            assert cwd is not None and cwd.is_relative_to(temporary)
+        return gh(*args, cwd=cwd)
+
+    monkeypatch.setattr(release, "gh", change_inputs)
+    release.stage(TAG, dist, bundle, tmp_path / "promotion.json")
+    assert {name: remote["uploaded"][name] for name in NAMES} == remote["contents"]
+    assert json.loads(remote["uploaded"][release.BUNDLE])["promotion_bundle"] == "signed promotion bundle"
+
+
+def test_draft_creation_rejects_a_different_selected_repository(remote, tmp_path, monkeypatch):
+    bundle = prepare(tmp_path, remote)
+    gh = release.gh
+    monkeypatch.setattr(release, "gh", lambda *args: "https://github.com/other/project" if args[:2] == ("repo", "view") else gh(*args))
+    with pytest.raises(ValueError, match="selected GitHub repository"):
+        release.stage(TAG, tmp_path / "dist", bundle, tmp_path / "promotion.json")
+    assert not any(isinstance(call, tuple) and call[0] == "release" for call in remote["calls"])
+    assert not (tmp_path / release.BUNDLE).exists()
+
+
+def test_evidence_comparison_preserves_json_types_and_ignores_object_key_order():
+    """Compare nested signed data without conflating numeric spellings or array order."""
+    assert release._same_json({"runs": [1, True], "jobs": []}, {"jobs": [], "runs": [1, True]})
+    for observed, expected in ((True, 1), (1, 1.0), (-0.0, 0.0), ([1, 2], [2, 1])):
+        assert not release._same_json({"runs": [observed]}, {"runs": [expected]})
+
+
+def test_modified_promotion_predicate_requires_a_new_signature(remote, tmp_path):
+    """A valid local edit after signing must fail before GitHub receives a write."""
+    bundle = prepare(tmp_path, remote)
+    evidence = tmp_path / "promotion.json"
+    evidence.write_bytes(json.dumps({**json.loads(evidence.read_bytes()), "extra": "unsigned edit"}).encode("utf-8"))
+    with pytest.raises(ValueError, match="predicate"):
+        release.stage(TAG, tmp_path / "dist", bundle, evidence)
+    assert not (tmp_path / release.BUNDLE).exists()
+    assert not any(isinstance(call, tuple) and call[0] == "release" for call in remote["calls"])
+
+
+def test_end_to_end_promotes_exact_original_bytes_and_verifies_both_signatures(remote, tmp_path, published, monkeypatch):
+    """A fresh publisher needs only retained assets, even when GitHub reorders them."""
+    (tmp_path / "promotion.json").unlink()
+    (tmp_path / "promotion.sigstore.json").unlink()
+    (tmp_path / release.BUNDLE).unlink()
+    shutil.rmtree(tmp_path / "dist")
+    api = release.api
+    reads = 0
+
+    def reordered(endpoint, **kwargs):
+        nonlocal reads
+        data = api(endpoint, **kwargs)
+        if endpoint == "releases/17":
+            reads += 1
+            if reads == 2:
+                data["assets"].reverse()
+        return data
+
+    monkeypatch.setattr(release, "api", reordered)
     output = tmp_path / "published" / "verified-dist"
     release.verify(published, COMMIT, output)
+    assert reads == 2
     assert {path.name: path.read_bytes() for path in output.iterdir()} == remote["contents"]
     assert any(isinstance(call, tuple) and "/actions/artifacts/31/zip" in call[2] for call in remote["calls"] if len(call) > 2)
 
@@ -449,7 +544,8 @@ def test_failed_verification_keeps_output_and_proof_absent(remote, tmp_path, pub
     output.parent.mkdir()
     proof = output.parent / release.BUNDLE
     if failure == "digest":
-        remote["downloads"][1] = b"wrong bytes"
+        original = remote["downloads"][1]
+        remote["downloads"][1] = bytes([original[0] ^ 1]) + original[1:]
     elif failure == "signature":
         remote["signature_defect"] = "predicate"
     else:
@@ -490,26 +586,27 @@ def test_failed_promotion_publication_keeps_prior_evidence_and_no_distribution(r
 
     monkeypatch.setattr(os, "replace", fail_evidence)
     with pytest.raises(OSError, match="injected evidence publication"):
-        prepare(tmp_path)
+        prepare(tmp_path, remote)
     assert evidence.read_bytes() == b"prior promotion"
     assert not (tmp_path / "dist").exists()
 
 
 @pytest.mark.parametrize("failure", ["existing", "write"])
 def test_local_attachment_failure_precedes_remote_release_creation(remote, tmp_path, monkeypatch, failure):
-    bundle = prepare(tmp_path)
+    bundle = prepare(tmp_path, remote)
     attachment = tmp_path / release.BUNDLE
     if failure == "existing":
         attachment.write_bytes(b"prior attachment")
     else:
-        replace = os.replace
+        operation = "rename" if os.name == "nt" else "link"
+        publish = getattr(os, operation)
 
         def fail_attachment(source, target):
             if Path(target) == attachment:
                 raise OSError("injected attachment publication failure")
-            return replace(source, target)
+            return publish(source, target)
 
-        monkeypatch.setattr(os, "replace", fail_attachment)
+        monkeypatch.setattr(os, operation, fail_attachment)
     with pytest.raises(OSError):
         release.stage(TAG, tmp_path / "dist", bundle, tmp_path / "promotion.json")
     assert remote["uploaded"] is None
@@ -517,27 +614,76 @@ def test_local_attachment_failure_precedes_remote_release_creation(remote, tmp_p
     assert attachment.read_bytes() == b"prior attachment" if failure == "existing" else not attachment.exists()
 
 
-@pytest.mark.parametrize("operation", ["create", "upload"])
-def test_remote_staging_failure_removes_new_attachment_so_it_can_be_retried(remote, tmp_path, monkeypatch, operation):
-    bundle = prepare(tmp_path)
+@pytest.mark.parametrize("replacement", ["truncated", "same-bytes", "removed"])
+def test_failed_draft_upload_preserves_concurrent_attachment_change(remote, tmp_path, monkeypatch, replacement):
+    """A failed upload leaves concurrent edits alone and reports its original transport error."""
+    bundle = prepare(tmp_path, remote)
+    attachment = tmp_path / release.BUNDLE
     gh = release.gh
-    failure = subprocess.CalledProcessError(1, ["gh", "release", operation], stderr="fixture transport failed")
+    failure = subprocess.CalledProcessError(1, ["gh", "release", "upload"])
 
-    def fail(*arguments):
-        if arguments[:2] == ("release", operation):
+    def fail(*arguments, cwd=None):
+        if arguments[:2] == ("release", "upload"):
+            if replacement == "truncated":
+                attachment.write_bytes(b"")
+            elif replacement == "same-bytes":
+                copy = tmp_path / "independent-copy"
+                copy.write_bytes(attachment.read_bytes())
+                copy.replace(attachment)
+            else:
+                attachment.unlink()
             raise failure
-        return gh(*arguments)
+        return gh(*arguments, cwd=cwd)
 
     monkeypatch.setattr(release, "gh", fail)
     with pytest.raises(subprocess.CalledProcessError) as caught:
         release.stage(TAG, tmp_path / "dist", bundle, tmp_path / "promotion.json")
     assert caught.value is failure
-    assert not (tmp_path / release.BUNDLE).exists()
+    if replacement == "same-bytes":
+        assert json.loads(attachment.read_bytes())["promotion_bundle"] == "signed promotion bundle"
+    elif replacement == "truncated":
+        assert attachment.read_bytes() == b""
+    else:
+        assert not attachment.exists()
+
+
+@pytest.mark.parametrize("operation", ["create", "upload"])
+def test_remote_staging_failure_retains_evidence_until_operator_inspection(remote, tmp_path, monkeypatch, operation):
+    """Keep the signed envelope and block a retry before any further GitHub requests."""
+    bundle = prepare(tmp_path, remote)
+    gh = release.gh
+    failure = subprocess.CalledProcessError(1, ["gh", "release", operation], stderr="fixture transport failed")
+
+    def fail(*arguments, cwd=None):
+        if arguments[:2] == ("release", operation):
+            raise failure
+        return gh(*arguments, cwd=cwd)
+
+    monkeypatch.setattr(release, "gh", fail)
+    with pytest.raises(subprocess.CalledProcessError) as caught:
+        release.stage(TAG, tmp_path / "dist", bundle, tmp_path / "promotion.json")
+    assert caught.value is failure
+    attachment = tmp_path / release.BUNDLE
+    diagnostic = release.format_exception_diagnostics(caught.value)
+    assert "fixture transport failed" in diagnostic
+    assert str(attachment) in diagnostic and f"GitHub release for {TAG}" in diagnostic and "before retrying" in diagnostic
+    retained = attachment.read_bytes()
+    assert json.loads(retained) == {
+        "schema": release.PROMOTION,
+        "evidence": json.loads(remote["signed_predicate"]),
+        "promotion_bundle": bundle.read_text(encoding="utf-8"),
+    }
     monkeypatch.setattr(release, "gh", gh)
+    remote["calls"].clear()
+    with pytest.raises(FileExistsError, match="Inspect"):
+        release.stage(TAG, tmp_path / "dist", bundle, tmp_path / "promotion.json")
+    assert remote["calls"] == []
+    assert attachment.read_bytes() == retained
     if operation == "upload":
         remote["listing"] = [{"tag_name": TAG, "draft": True, "prerelease": False, "assets": []}]
+    attachment.rename(tmp_path / "inspected-attestation.json")
     release.stage(TAG, tmp_path / "dist", bundle, tmp_path / "promotion.json")
-    assert remote["uploaded"] is not None
+    assert remote["uploaded"][release.BUNDLE] == retained
 
 
 @pytest.mark.parametrize(
@@ -554,12 +700,18 @@ def test_remote_staging_failure_removes_new_attachment_so_it_can_be_retried(remo
         ("run_attempt", 0),
         ("id", True),
         ("pull_requests", [{"id": 1}]),
+        ("pull_requests", False),
+        ("pull_requests", {}),
     ],
 )
 def test_wrong_run_identity_never_reaches_artifact_retrieval(remote, tmp_path, field, value):
     remote["runs"][0][field] = value
-    with pytest.raises(ValueError):
-        prepare(tmp_path)
+    diagnostic = {"run_attempt": "run attempt must be a positive integer", "id": "run ID must be a positive integer"}.get(
+        field, "exact commit's trusted main-push"
+    )
+    with pytest.raises(ValueError, match=diagnostic):
+        prepare(tmp_path, remote)
+    assert not any(isinstance(call, str) and "/artifacts" in call for call in remote["calls"])
     assert not (tmp_path / "dist").exists()
 
 
@@ -567,11 +719,20 @@ def test_wrong_run_identity_never_reaches_artifact_retrieval(remote, tmp_path, f
 def test_wrong_repository_or_fork_is_not_trusted(remote, tmp_path, field):
     remote["runs"][0][field] = {"id": 100, "full_name": "fork/research-repo-tools"}
     with pytest.raises(ValueError, match="repository"):
-        prepare(tmp_path)
+        prepare(tmp_path, remote)
 
 
-@pytest.mark.parametrize("state", ["missing", "failed", "cancelled", "ambiguous", "pending"])
-def test_missing_failed_ambiguous_and_bounded_pending_validation(remote, tmp_path, state):
+@pytest.mark.parametrize(
+    ("state", "diagnostic"),
+    [
+        ("missing", "missing or failed"),
+        ("failed", "missing or failed"),
+        ("cancelled", "missing or failed"),
+        ("ambiguous", "ambiguous"),
+        ("pending", "still pending"),
+    ],
+)
+def test_missing_failed_ambiguous_and_bounded_pending_validation(remote, tmp_path, state, diagnostic):
     if state == "missing":
         remote["runs"] = []
     elif state in {"failed", "cancelled"}:
@@ -580,8 +741,8 @@ def test_missing_failed_ambiguous_and_bounded_pending_validation(remote, tmp_pat
         remote["runs"].append({**run(), "id": 124})
     else:
         remote["runs"][0].update(status="in_progress", conclusion=None)
-    with pytest.raises(ValueError, match="ambiguous|missing or failed|bounded wait"):
-        prepare(tmp_path)
+    with pytest.raises(ValueError, match=diagnostic):
+        prepare(tmp_path, remote)
     assert not (tmp_path / "dist").exists()
 
 
@@ -615,7 +776,7 @@ def test_complete_attempt_and_installed_validation_are_required(remote, tmp_path
     else:
         selected[1][{"wrong-run": "run_id", "wrong-attempt": "run_attempt", "wrong-commit": "head_sha"}[defect]] = 999
     with pytest.raises(ValueError):
-        prepare(tmp_path)
+        prepare(tmp_path, remote)
     assert not (tmp_path / "dist").exists()
 
 
@@ -635,22 +796,22 @@ def test_every_parallel_stage_is_bound_to_the_complete_successful_attempt(name, 
 
 
 @pytest.mark.parametrize(
-    "defect",
+    ("defect", "diagnostic"),
     [
-        "missing",
-        "expired",
-        "duplicate",
-        "wrong-run",
-        "wrong-repo",
-        "wrong-commit",
-        "missing-digest",
-        "wrong-digest",
-        "wrong-size",
-        "wrong-inventory",
-        "symlink",
+        ("missing", "missing or ambiguous distributions-1"),
+        ("expired", "expired or mismatched distributions-1"),
+        ("duplicate", "missing or ambiguous distributions-1"),
+        ("wrong-run", "artifact is associated with another"),
+        ("wrong-repo", "artifact is associated with another"),
+        ("wrong-commit", "artifact is associated with another"),
+        ("missing-digest", "lacks an authoritative SHA-256 digest"),
+        ("wrong-digest", "ZIP size or SHA-256 differs"),
+        ("wrong-size", "ZIP size or SHA-256 differs"),
+        ("wrong-inventory", "artifact must contain exactly"),
+        ("symlink", "artifact entries must be regular"),
     ],
 )
-def test_artifact_identity_integrity_and_inventory_fail_closed(remote, tmp_path, defect):
+def test_artifact_identity_integrity_and_inventory_fail_closed(remote, tmp_path, defect, diagnostic):
     original = remote["artifacts"][0]
     if defect == "missing":
         remote["artifacts"].pop(0)
@@ -659,11 +820,16 @@ def test_artifact_identity_integrity_and_inventory_fail_closed(remote, tmp_path,
     elif defect == "duplicate":
         remote["artifacts"].append(copy.deepcopy(original))
     elif defect in {"wrong-run", "wrong-repo", "wrong-commit"}:
-        original["workflow_run"][{"wrong-run": "id", "wrong-repo": "head_repository_id", "wrong-commit": "head_sha"}[defect]] = 999
+        original["workflow_run"][{"wrong-run": "id", "wrong-repo": "head_repository_id", "wrong-commit": "head_sha"}[defect]] = (
+            "b" * 40 if defect == "wrong-commit" else 999
+        )
     elif defect == "missing-digest":
         original.pop("digest")
     elif defect == "wrong-digest":
-        remote["zip"][31] += b"changed bytes"
+        # Same valid members and length. Only a digest check can distinguish this ZIP.
+        reordered = zipped(dict(reversed(remote["contents"].items())))
+        assert len(reordered) == original["size_in_bytes"] and reordered != remote["zip"][31]
+        remote["zip"][31] = reordered
     elif defect == "wrong-size":
         original["size_in_bytes"] += 1
     else:
@@ -678,35 +844,38 @@ def test_artifact_identity_integrity_and_inventory_fail_closed(remote, tmp_path,
                 archive.writestr(entry, payload)
         remote["zip"][31] = data.getvalue()
         original.update(digest=f"sha256:{hashlib.sha256(data.getvalue()).hexdigest()}", size_in_bytes=len(data.getvalue()))
-        # Keep signed evidence consistent so extraction itself must reject it.
+    if defect in {"wrong-size", "wrong-inventory", "symlink"}:
+        # The provider and signer agree. The transfer or archive check must reject the bytes.
         manifest = json.loads(remote["manifest"])
         manifest["artifact"] = release._artifact(original, run(), "distributions-1")
         remote["manifest"] = release._bytes(manifest)
         proof = zipped({release.MANIFEST: remote["manifest"], release.VALIDATION_BUNDLE: b"original signed main bundle"})
         remote["zip"][32] = proof
         remote["artifacts"][1].update(digest=f"sha256:{hashlib.sha256(proof).hexdigest()}", size_in_bytes=len(proof))
-    with pytest.raises(ValueError):
-        prepare(tmp_path)
-    assert remote["uploaded"] is None and not (tmp_path / "escape").exists()
+    with pytest.raises(ValueError, match=diagnostic):
+        prepare(tmp_path, remote)
+    assert remote["uploaded"] is None
+    for output in ("dist", "promotion.json", "escape"):
+        assert not (tmp_path / output).exists()
 
 
 @pytest.mark.parametrize("defect", ["signature", "attempt", "event", "predicate"])
 def test_origin_and_promotion_signatures_are_both_required(remote, tmp_path, defect):
     if defect == "predicate":
-        bundle = prepare(tmp_path)
+        bundle = prepare(tmp_path, remote)
         remote["signature_defect"] = defect
         with pytest.raises(ValueError, match="predicate"):
             release.stage(TAG, tmp_path / "dist", bundle, tmp_path / "promotion.json")
     else:
         remote["signature_defect"] = defect
         with pytest.raises((ValueError, subprocess.CalledProcessError)):
-            prepare(tmp_path)
+            prepare(tmp_path, remote)
     assert remote["uploaded"] is None
 
 
 @pytest.mark.parametrize("defect", ["moved-tag", "rerun", "changed-job", "changed-artifact", "changed-bytes", "published", "prerelease", "partial-assets"])
 def test_state_is_rechecked_before_any_release_write(remote, tmp_path, defect):
-    bundle = prepare(tmp_path)
+    bundle = prepare(tmp_path, remote)
     if defect == "moved-tag":
         remote["tag_commit"] = "c" * 40
     elif defect == "rerun":
@@ -730,6 +899,32 @@ def test_state_is_rechecked_before_any_release_write(remote, tmp_path, defect):
         release.stage(TAG, tmp_path / "dist", bundle, tmp_path / "promotion.json")
     assert remote["uploaded"] is None
     assert not any(isinstance(call, tuple) and call[:2] == ("release", "create") for call in remote["calls"])
+
+
+@pytest.mark.parametrize("pages", [[], {}, [None], [[{}]], [[{"tag_name": TAG, "draft": True, "prerelease": False, "assets": None}]]])
+def test_invalid_release_listing_cannot_authorize_staging(remote, tmp_path, monkeypatch, pages):
+    bundle = prepare(tmp_path, remote)
+    gh = release.gh
+
+    def read(*arguments):
+        if arguments[:3] == ("api", "--paginate", "--slurp"):
+            return json.dumps(pages)
+        return gh(*arguments)
+
+    monkeypatch.setattr(release, "gh", read)
+    with pytest.raises(ValueError):
+        release.stage(TAG, tmp_path / "dist", bundle, tmp_path / "promotion.json")
+    assert not (tmp_path / release.BUNDLE).exists()
+    assert not any(isinstance(call, tuple) and call[:1] == ("release",) for call in remote["calls"])
+
+
+@pytest.mark.parametrize(("field", "value"), [("state", "new"), ("size", True), ("size", 1), ("digest", None)])
+def test_invalid_asset_metadata_leaves_no_retained_output(remote, published, tmp_path, field, value):
+    remote["release"]["assets"][0][field] = value
+    output = tmp_path / "published" / "verified-dist"
+    with pytest.raises(ValueError, match="asset"):
+        release.verify(published, COMMIT, output)
+    assert not output.parent.exists()
 
 
 @pytest.mark.parametrize(("version", "package"), [("0.2.2", "research-repo-tools"), ("0.2.3", "other-package")])
@@ -836,10 +1031,17 @@ def test_workflows_preserve_native_gates_and_promote_without_rebuilding():
     assert "ci.yml" not in stage_text and "just build" not in stage_text and "just ci" not in stage_text
     assert "predicate-path" in stage_text and release.PROMOTION in stage_text
     assert "just audit" in json.dumps(prepare["jobs"]["preflight"])
+    draft, recovery = stage["steps"][-2:]
+    assert draft["id"] == "draft" and "release_assets.py stage" in draft["run"]
+    assert recovery["uses"].startswith("actions/upload-artifact@")
+    assert recovery["with"]["path"] == release.BUNDLE and recovery["with"]["name"] == "draft-recovery-${{ github.run_attempt }}"
+    assert recovery["if"] == "${{ failure() && steps.draft.outcome == 'failure' && hashFiles('release-attestation.json') != '' }}"
     for job in [*prepare["jobs"].values(), *publish["jobs"].values()]:
         assert job.get("continue-on-error", "false") == "false"
         for step in job.get("steps", []):
-            assert "if" not in step and step.get("continue-on-error", "false") == "false"
+            assert step.get("continue-on-error", "false") == "false"
+            if step is not recovery:
+                assert "if" not in step
     final = publish["jobs"]["publish"]
     assert final["needs"] == "verify" and final["environment"]["name"] == "pypi"
     assert final["permissions"] == {"id-token": "write"}
@@ -882,7 +1084,7 @@ def test_changes_during_promotion_fail_before_emitting_signable_evidence(remote,
 
     monkeypatch.setattr(release, "api", changed)
     with pytest.raises(ValueError, match="changed|moved"):
-        prepare(tmp_path)
+        prepare(tmp_path, remote)
     assert not (tmp_path / "promotion.json").exists()
 
 

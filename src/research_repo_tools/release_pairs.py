@@ -24,6 +24,8 @@ class FirstRelease:
 
 @dataclass(frozen=True, slots=True)
 class ReleasePair:
+    """Current and baseline release labels in comparison order."""
+
     current: str
     baseline: str
 
@@ -33,6 +35,7 @@ class ReleasePair:
 
     @property
     def stem(self) -> str:
+        """Return the current-vs-baseline filename stem used for retained comparisons."""
         return f"{self.current}-vs-{self.baseline}"
 
 

@@ -1,7 +1,5 @@
 """Verified source transitions and published-only dependency release checks."""
 
-import difflib
-import json
 import os
 import sys
 import tempfile
@@ -24,11 +22,11 @@ from research_repo_tools.dependency_policy import (
     SourceSelection,
     configuration_paths,
     inside,
-    load_policy,
+    observe_policy,
     project_manifests,
 )
 from research_repo_tools.dependency_sources import GitCommit, RegistryRelease, Source, SourceProvider, VerifiedSource, table, verify_source
-from research_repo_tools.files import replace_many
+from research_repo_tools.files import _text_diff, replace_many
 
 __all__ = ["SourcePlan", "apply_source", "check_dependency_policy", "plan_source"]
 
@@ -47,33 +45,28 @@ class SourcePlan:
         raise TypeError("use plan_source to obtain a SourcePlan")
 
     def diff(self) -> str:
+        """Preview planned text changes against the captured files without reading the live checkout."""
         originals = dict(self.snapshot.files)
-        return "".join(
-            "".join(
-                difflib.unified_diff(
-                    (originals[path] or b"").decode("utf-8").splitlines(keepends=True),
-                    content.decode("utf-8").splitlines(keepends=True),
-                    fromfile=str(path.relative_to(self.root)),
-                    tofile=str(path.relative_to(self.root)),
-                )
-            )
-            for path, content in self.writes
-        )
+        chunks = []
+        for path, content in self.writes:
+            name = path.relative_to(self.root).as_posix()
+            chunks.append(_text_diff(originals[path], content, fromfile=name, tofile=name))
+        return "".join(chunks)
 
 
 def _table_name(parts: tuple[str, ...]) -> str:
-    return ".".join(json.dumps(part) for part in parts)
+    return ".".join(toml_source.string_literal(part) for part in parts)
 
 
 def _literal(value: object) -> str:
     if isinstance(value, str):
-        return json.dumps(value)
+        return toml_source.string_literal(value)
     if type(value) is bool:
         return "true" if value else "false"
     if isinstance(value, list):
         return "[" + ", ".join(_literal(item) for item in value) + "]"
     if isinstance(value, dict):
-        return "{ " + ", ".join(json.dumps(key) + " = " + _literal(item) for key, item in value.items()) + " }"
+        return "{ " + ", ".join(toml_source.string_literal(key) + " = " + _literal(item) for key, item in value.items()) + " }"
     raise ValueError("unsupported dependency declaration value")
 
 
@@ -157,6 +150,7 @@ def _cargo_tables(document: dict[str, object]) -> Iterator[tuple[tuple[str, ...]
 
 
 def _cargo_selection(text: str, verified: VerifiedSource) -> str:
+    """Rewrite Cargo declarations for the verified source while preserving unrelated table entries."""
     source = verified.source
     document = table(tomllib.loads(text), "Cargo manifest")
     patches = table(table(document.get("patch", {}), "patch").get("crates-io", {}), "crates.io patches")
@@ -223,6 +217,7 @@ def _source_files(root: Path, manifests: tuple[Path, ...]) -> tuple[Path, ...]:
 
 
 def _resolve_candidate(root: Path, verified: VerifiedSource, *, checkout: Path, candidate_checkout: Path, allow_python_builds: bool = False) -> None:
+    """Run the external resolver against the candidate checkout to reconcile its lockfile with the selected source."""
     from research_repo_tools.process import resolve_executable, run_command
     from research_repo_tools.release_credentials import environment as without_credentials
 
@@ -297,18 +292,24 @@ def plan_source(root: Path, name: str, *, provider: SourceProvider | None = None
     No consumer startup or build hooks are run (uv resolution uses --no-build).
     """
     root = root.resolve(strict=True)
-    policy = load_policy(root)
+    policy, observed = observe_policy(root)
     selections = [] if policy is None else [item for item in policy.selections if item.name == name]
     if len(selections) != 1:
         raise ValueError("source name must identify one dependency-sources.toml selection")
     selection = selections[0]
     verified = verify_source(selection.source, provider=provider)
-    return _plan_verified_source(root, selection, verified)
+    return _plan_verified_source(root, selection, verified, observed=observed)
 
 
 def _plan_verified_source(
-    root: Path, selection: SourceSelection, verified: VerifiedSource, *, transition_policy: tuple[bytes, bytes] | None = None
+    root: Path,
+    selection: SourceSelection,
+    verified: VerifiedSource,
+    *,
+    observed: InputSnapshot,
+    transition_policy: bytes | None = None,
 ) -> SourcePlan:
+    """Resolve and validate a source transition in a disposable copy of the captured checkout."""
     project_root = inside(root, selection.project.directory)
     # Capture all copied source/harness bytes so a plan cannot publish a lock
     # resolved against a different workspace or silently preserve old evidence.
@@ -316,15 +317,14 @@ def _plan_verified_source(
     files = _source_files(root, manifests)
     snapshot = InputSnapshot.capture((*files, *configuration_paths(project_root, selection.project.ecosystem)))
     originals = dict(snapshot.files)
+    if observed.environment != snapshot.environment or any(path not in originals or originals[path] != payload for path, payload in observed.files):
+        raise ValueError("dependency inputs changed during source lookup; prepare a new plan")
     from research_repo_tools.dependency_graphs import _check_configuration
 
-    _check_configuration(project_root, selection.project.ecosystem)
+    _check_configuration(project_root, selection.project.ecosystem, snapshot)
     changes: dict[Path, bytes] = {}
     if transition_policy is not None:
-        original_policy, next_policy = transition_policy
-        if originals.get(root / POLICY_FILE) != original_policy:
-            raise ValueError("dependency source policy changed before promotion")
-        changes[root / POLICY_FILE] = next_policy
+        changes[root / POLICY_FILE] = transition_policy
     declared = False
     transform = _python_selection if selection.project.ecosystem == "python" else _cargo_selection
     for path in manifests:
@@ -413,11 +413,11 @@ def apply_source(plan: SourcePlan, *, provider: SourceProvider | None = None) ->
 
 def check_dependency_policy(root: Path, *, provider: SourceProvider | None = None) -> tuple[VerifiedSource, ...]:
     """Recheck every configured project before release effects, without mutation."""
-    policy_snapshot = InputSnapshot.capture((root / POLICY_FILE,))
-    policy = load_policy(root)
+    policy, policy_snapshot = observe_policy(root)
     retain_guard(policy_snapshot.verify, policy_snapshot.digest)
     if policy is None:
         _require_dependency_free(root)
+        policy_snapshot.verify()
         return ()
     # Reject a development selection even if the native manifest happens to
     # look registry-only; source, declaration and lock are separate obligations.
@@ -465,13 +465,15 @@ def _require_dependency_free(root: Path) -> None:
     paths = (root / POLICY_FILE, root / "pyproject.toml", root / "uv.lock", root / "Cargo.toml", root / "Cargo.lock")
     snapshot = InputSnapshot.capture((*paths, *configuration_paths(root, "python"), *configuration_paths(root, "cargo")))
     retain_guard(snapshot.verify, snapshot.digest)
+    captured = dict(snapshot.files)
     for ecosystem, manifest, lock in (("python", paths[1], paths[2]), ("cargo", paths[3], paths[4])):
-        if not manifest.exists():
-            if lock.exists():
+        manifest_bytes, lock_bytes = captured[manifest], captured[lock]
+        if manifest_bytes is None:
+            if lock_bytes is not None:
                 raise ValueError("release dependency graph requires dependency-sources.toml")
             continue
-        _check_configuration(root, ecosystem)
-        data = table(tomllib.loads(manifest.read_text(encoding="utf-8")), "dependency manifest")
+        _check_configuration(root, ecosystem, snapshot)
+        data = table(tomllib.loads(manifest_bytes.decode("utf-8")), "dependency manifest")
         project = table(data.get("project" if ecosystem == "python" else "package", {}), "project")
         owned_name = project.get("name")
         if ecosystem == "python" and isinstance(owned_name, str):
@@ -489,11 +491,11 @@ def _require_dependency_free(root: Path) -> None:
         if not isinstance(members, list):
             raise ValueError("workspace members must be an array")
         configured |= bool(members)
-        if lock.exists():
+        if lock_bytes is not None:
             version = project.get("version")
-            if ecosystem == "cargo" and version == {"workspace": True}:
+            if ecosystem == "cargo" and toml_source.inherits_workspace(version):
                 version = table(workspace.get("package", {}), "workspace.package").get("version")
-            packages = table(tomllib.loads(lock.read_text(encoding="utf-8")), "lock").get("package")
+            packages = table(tomllib.loads(lock_bytes.decode("utf-8")), "lock").get("package")
             if not isinstance(packages, list):
                 raise ValueError("release dependency graph requires dependency-sources.toml")
             for raw in packages:

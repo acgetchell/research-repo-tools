@@ -46,8 +46,10 @@ left alone and do not create a requirement to add a project DOI.
 
 Without `--previous-release`, GitHub CLI discovers the previous published stable
 release, excluding drafts and prereleases. An explicit prior release allows
-offline preparation. Release metadata updates require canonical stable SemVer;
-changelog parsing and tags also support prereleases and build metadata.
+offline preparation. If the GitHub CLI returns the full 1,000-release listing
+limit, review the release history independently and pass `--previous-release`.
+Release metadata updates require a stable SemVer. Changelog parsing and tags
+also support prereleases and build metadata.
 
 Preparation may precede the new changelog section. Existing current-version
 headings have their dates synchronized; old release notes remain intact.
@@ -67,8 +69,8 @@ Python adapters extend preparation as described below.
 First-release mode prepares metadata without inventing a predecessor. Run
 `just release-first v0.1.0 YYYY-MM-DD` with the intended target and UTC date.
 The command checks GitHub's published stable history and refuses first-release
-preparation if any stable release exists. Authentication or lookup failures also
-fail; they do not establish empty history.
+preparation if any stable release exists. Authentication failures, lookup
+failures, and a listing that reaches the provider limit stop preparation.
 
 The underlying `release update --first-release` command supports `--dry-run` for
 preview. Add `--offline` only when empty history has been independently reviewed;

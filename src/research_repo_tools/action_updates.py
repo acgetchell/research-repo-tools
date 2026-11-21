@@ -101,7 +101,7 @@ def _compatible(action: str, sha: str, path: str, version: str, root: Path) -> N
         if not line.strip() or line.lstrip().startswith("#"):
             continue
         key = line.split()[0]
-        if key != "latest" and STABLE.fullmatch(key) is None or key in supported:
+        if key in supported or (key != "latest" and STABLE.fullmatch(key) is None):
             raise ValueError(f"{action}: support inventory requires unique stable versions in the first column (or latest)")
         supported.add(key)
     if version not in supported:
@@ -109,6 +109,10 @@ def _compatible(action: str, sha: str, path: str, version: str, root: Path) -> N
 
 
 def update(settings: config.Config, policy: Path, inputs: list[str], *, dry_run: bool = False, check: bool = False) -> int:
+    """Resolve policy-selected Action pins and replace workflows after rechecking their bytes.
+
+    Dry runs report the proposed edits. Check mode reports whether edits are needed without writing workflows.
+    """
     declaration = load_policy(policy)
     targets, checks = declaration.targets, declaration.compatibility
     paths = workflow_paths(settings.root, inputs)

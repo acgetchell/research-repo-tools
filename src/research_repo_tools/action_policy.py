@@ -12,12 +12,15 @@ TAG = re.compile(r"v?(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){0,2}")
 
 @dataclass(frozen=True, slots=True)
 class ActionPolicy:
+    """Upstream Action targets, wrapper compatibility checks, and identities whose pins must agree."""
+
     targets: dict[str, str]
     compatibility: dict[str, tuple[str, str]]
     consistency: tuple[str, ...]
 
 
 def load_policy(path: Path) -> ActionPolicy:
+    """Read accepted Action targets, compatibility constraints, and the list of pins to check."""
     try:
         data = tomllib.loads(path.read_bytes().decode("utf-8"))
     except (ValueError, UnicodeError) as error:

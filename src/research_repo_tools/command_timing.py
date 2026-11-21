@@ -18,7 +18,7 @@ from pathlib import Path, PurePosixPath, PureWindowsPath
 
 from research_repo_tools import __version__
 from research_repo_tools.evidence import _digest, _load_json, _object, _string, deterministic_json
-from research_repo_tools.files import _validate_distinct_paths, replace_many
+from research_repo_tools.files import _publish_new_file, _validate_distinct_paths
 from research_repo_tools.host_metadata import capture_host, parse_host, serialize_host
 from research_repo_tools.process import _windows_environment, resolve_executable, run_command_bytes, run_command_live
 from research_repo_tools.publication import _inventory, _path
@@ -99,6 +99,7 @@ class _Plan:
 
 
 def _plan(value: object) -> _Plan:
+    """Parse a timing declaration with unique case IDs and environment names that stay distinct on Windows."""
     raw = _table(value, "command timing", {"schema", "sources", "cases"}, _POLICY - {"schema", "sources", "cases"})
     if type(raw["schema"]) is not int or raw["schema"] != 1:
         raise ValueError("command timing schema must be integer 1")
@@ -159,6 +160,7 @@ def _command(root: Path, argv: tuple[str, ...], env: Mapping[str, str]) -> dict[
 
 
 def _acquire(root: Path, configuration: str) -> tuple[bytes, Callable[[], None]]:
+    """Run preflight and timed commands, then return the recorded bytes and a callback that rechecks their inputs."""
     root = root.resolve(strict=True)
     declaration = _path(root, configuration).read_bytes()
     plan = _plan(tomllib.loads(declaration.decode("utf-8")))
@@ -278,11 +280,12 @@ def publish_command_timing(root: Path, configuration: str, output: str) -> bytes
         _validate_distinct_paths((target, *(_path(root, name) for name in sources)))
         verify()
 
-    replace_many({target: payload}, verify=verify_publication)
+    _publish_new_file(target, payload, verify=verify_publication)
     return payload
 
 
 def _report(payload: bytes) -> dict[str, list[int]]:
+    """Validate the retained observations against the declared schedule and return measured durations by case."""
     raw = _table(
         _load_json(payload, "command timing report"),
         "command timing report",

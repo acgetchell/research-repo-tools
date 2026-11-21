@@ -83,11 +83,15 @@ import json
 from pathlib import Path
 
 from research_repo_tools.releases import (
-    ReleaseAdapter, ReleaseContext, apply_release, check_release, plan_release,
+    ReleaseAdapter,
+    ReleaseContext,
+    apply_release,
+    plan_release,
 )
 
 
 def evidence_edits(candidate: Path, context: ReleaseContext) -> dict[str, bytes]:
+    """Propose replacement bytes for the evidence index under the candidate root."""
     path = "evidence.json"
     evidence = json.loads((candidate / path).read_bytes())
     evidence["release"] = context.version
@@ -95,6 +99,7 @@ def evidence_edits(candidate: Path, context: ReleaseContext) -> dict[str, bytes]
 
 
 def evidence_problems(candidate: Path, context: ReleaseContext) -> tuple[str, ...]:
+    """Return any release or measurement problems in the prepared candidate index."""
     evidence = json.loads((candidate / "evidence.json").read_bytes())
     if evidence.get("release") != context.version:
         return ("evidence index does not identify the prepared release",)
@@ -110,7 +115,10 @@ adapter = ReleaseAdapter(
 )
 root = Path(__file__).resolve().parents[1]
 plan = plan_release(
-    root, "v1.2.4", previous_tag="v1.2.3", release_date="2026-09-20",
+    root,
+    "v1.2.4",
+    previous_tag="v1.2.3",
+    release_date="2026-09-20",
     adapter=adapter,
 )
 for edit in plan.edits:

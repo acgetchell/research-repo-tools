@@ -8,6 +8,7 @@ See [release availability](../README.md#release-availability) before adoption.
 
 ```python
 from pathlib import Path
+
 from research_repo_tools.path_identity import fingerprint_paths, observe_paths
 
 inventory = observe_paths(Path("/absolute/checkout"), [b"script.py", b"removed.py"])

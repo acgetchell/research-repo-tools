@@ -134,6 +134,7 @@ def _freeze_handoff(
     preparation: bytes | None = None,
     producer: AcquisitionProducer | None = None,
 ) -> tuple[PublicationPlan, str, str]:
+    """Capture handoff records in the owner directory and reject conflicting bytes on retries."""
     destination = owner.absolute()
     owner = _directory_target(destination)
     _validate_distinct_paths((root, owner))

@@ -8,7 +8,7 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from research_repo_tools.evidence import _load_json, _object, deterministic_json, sha256
-from research_repo_tools.files import replace_many
+from research_repo_tools.files import _sibling_temporary_stem, replace_many
 
 __all__ = ["Checkpoint", "open_checkpoint"]
 
@@ -29,9 +29,11 @@ class Checkpoint:
             raise ValueError("checkpoint handle is closed; use open_checkpoint for exclusive ownership")
 
     def read(self) -> dict[str, dict[str, object]]:
+        """Read accepted checkpoint units after verifying writer ownership and the on-disk layout."""
         self._require_owner()
         accepted = {}
         allowed = {"header.json", ".writer", *(f"unit-{name}.json" for name in self.units)}
+        unit_stems = {_sibling_temporary_stem(f"unit-{name}.json") for name in self.units}
         if self.events_enabled:
             allowed.add("events.jsonl")
         for path in self.root.iterdir():
@@ -43,7 +45,8 @@ class Checkpoint:
                 raise ValueError("checkpoint entries must be regular files")
             if path.name not in allowed:
                 # Only unpublished files created by replace_many are leftovers.
-                if re.fullmatch(r"\.(?:header|unit-[a-z][a-z0-9-]*)\.json\.[0-9a-f]{24}\.(?:tmp|bak)", path.name):
+                leftover = re.fullmatch(r"\.(.+)\.[0-9a-f]{24}\.(?:tmp|bak)", path.name)
+                if leftover and (leftover[1] in unit_stems or re.fullmatch(r"(?:header|unit-[a-z][a-z0-9-]*)\.json", leftover[1])):
                     continue
                 raise ValueError(f"unexpected checkpoint entry: {path.name}")
             if path.name in {"header.json", "events.jsonl"}:

@@ -1,6 +1,8 @@
 """Standard-library exception rendering shared with the install-free runner."""
 
+import re
 import subprocess
+from urllib.parse import urlsplit
 
 
 def _diagnostic_stream(value: str | bytes | None) -> str:
@@ -23,17 +25,53 @@ def format_exception_diagnostics(error: BaseException, *, single_line: bool = Fa
     """Render nested diagnostics, optionally bounded for a terse CLI operation."""
     result = _format_exception_diagnostics(error)
     result += "".join(f"\n{note}" for note in getattr(error, "__notes__", ()))
-    if single_line:
-        # Remove terminal escape sequences before folding control characters.
-        import re
+    return _single_line(_strip_terminal_escapes(result)) if single_line else result
 
-        result = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", result)
-        result = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result)
-        result = re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", result)
-        result = " ".join(result.split())
-        if len(result) > 400:
-            result = result[:399] + "…"
-    return result
+
+def _strip_terminal_escapes(text: str) -> str:
+    """Remove terminal control strings before interpreting the visible diagnostic."""
+    text = re.sub(r"(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)", "", text)
+    return re.sub(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]", "", text)
+
+
+def _single_line(result: str) -> str:
+    """Fold control characters and bound the length of a plain-text diagnostic."""
+    result = re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", result)
+    result = " ".join(result.split())
+    return result if len(result) <= 400 else result[:399] + "…"
+
+
+def redact_credentials(value: str | bytes) -> str:
+    """Redact GitHub tokens and strip user information, queries, and fragments from URLs.
+
+    Apply to rendered subprocess diagnostics before logging them. This cannot
+    identify arbitrary secrets in free text; never include tokens in commands.
+    """
+    if isinstance(value, bytes):
+        value = value.decode("utf-8", errors="replace")
+    value = _strip_terminal_escapes(value)
+
+    def url(match: re.Match[str]) -> str:
+        try:
+            parsed = urlsplit(match[0])
+            if not parsed.hostname:
+                return "<redacted-url>"
+            if not (parsed.query or parsed.fragment or parsed.username is not None or parsed.password is not None):
+                return match[0]
+            host = f"[{parsed.hostname}]" if ":" in parsed.hostname else parsed.hostname
+            port = f":{parsed.port}" if parsed.port is not None else ""
+            return f"{parsed.scheme}://{host}{port}{parsed.path}?<redacted>"
+        except ValueError:
+            return "<redacted-url>"
+
+    value = re.sub(r"(?i)https?://[^\s\"<>]+", url, value)
+    return re.sub(r"\b(?:gh[pousr]_[A-Za-z0-9_]+|github_pat_[A-Za-z0-9_]+)\b", "<redacted-token>", value).strip()
+
+
+def workflow_diagnostic(message: str, *, single_line: bool = False) -> str:
+    """Redact registry and release credentials before optionally shortening the message."""
+    safe = redact_credentials(message)
+    return _single_line(safe) if single_line else safe
 
 
 def _format_exception_diagnostics(error: BaseException) -> str:

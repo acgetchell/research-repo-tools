@@ -10,27 +10,43 @@ for setup and ordinary workflows.
 
 `research_repo_tools.security` exports:
 
+- `check_secret_exceptions(settings, candidate, *, baseline=None, exclude=())`
+  compares two native Gitleaks configurations against the same working-tree
+  snapshot and captured Git refs. It checks for changes to live refs and retained
+  TOML policies, including local extensions. It prints suppressed and introduced findings
+  and matching locations. It returns `None` when the comparison completes.
+  The default baseline is the repository's
+  `.gitleaks.toml` or the native default rules.
 - `scan_osv(settings, lockfiles, *, output="target/security", configuration=None)`:
   explicit relative `uv.lock`/`Cargo.lock` paths from the shared inventory. Each
   produces a numbered native JSON/SARIF pair with verified source coverage.
 - `scan_secrets(settings, *, output="target/security", configuration=None, exclude=())`:
   full reachable history plus current files; rejects shallow history and selected
   links/submodules. Native patch/binary/archive limitations remain applicable.
-- `security_inventory(root, *, include=(), exclude=())`: sorted tracked/nonignored
+- `security_inventory(root, *, include=(), exclude=(), env=None)`: sorted tracked/nonignored
   regular files, excluding standard generated/environment directories. Inclusion
   patterns are Git pathspecs and exclusions are case-sensitive POSIX globs.
+  An explicit `env` replaces the Git subprocess environment.
+- `show_secret_findings(settings, *, reports="target/security")` validates and
+  summarizes both redacted native JSON reports without invoking the scanner.
+  A completed summary returns `None` even when the reports contain findings.
 
-Scans require declared, already installed exact managed binaries. They return
-zero only for complete scans without findings, otherwise the first native
-nonzero status, 1 for invalid successful reports/findings, or 124 on timeout.
+Scans require declared, already installed exact managed binaries. A complete
+Gitleaks scan returns 0 when clean or 1 when it finds secrets. The first failed
+scan takes precedence over findings. Gitleaks returns 2 for invalid reports or
+native status 1, and preserves other failure statuses, including 124 for a
+process timeout. OSV returns its first nonzero status, 1 for invalid reports or
+findings with a successful native exit, and 124 for a process timeout.
 Invalid arguments/preconditions raise `ValueError`; I/O and Git errors propagate.
 Old OSV reports at the selected output names are removed before scanning. OSV
 also removes all prior numbered JSON/SARIF reports in its output directory,
-including symlinks, so smaller inventories leave no stale reports. OSV and
-Semgrep reject output directories with symlinks or Windows
+including symlinks, so smaller inventories leave no stale reports. Gitleaks
+removes its previous history and working reports before scanner preflight and
+publishes a report only when the native exit status confirms a complete scan.
+OSV, Gitleaks, and Semgrep reject output directories with symlinks or Windows
 junctions in any path component before creating directories or removing reports.
-OSV preserves unrelated files and symlink targets. Semgrep owns and replaces
-its complete output directory through `files.publish_directory`. Native
+OSV and Gitleaks preserve unrelated files and symlink targets. Semgrep owns and
+replaces its complete output directory through `files.publish_directory`. Native
 schemas and locations are retained, with Gitleaks source excerpts/commit messages
 redacted in addition to native detected-secret redaction. Report directories are
 caller-owned outputs. These commands are not an assurance that unknown secrets,

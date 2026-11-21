@@ -50,7 +50,9 @@ class TestImports(unittest.TestCase):
             "p=c.parser(); a=p.parse_args(['performance','measure','plan.toml','--allow-git-mutations','--payload','a','--manifest','b']); "
             "print(json.dumps(dict(group=a.group,action=a.action)))"
         )
-        self.assertEqual(self.child(code, frozen="on"), self.child(code, frozen="off"))
+        for mode in ("on", "off"):
+            with self.subTest(frozen=mode):
+                self.assertEqual(self.child(code, frozen=mode), {"group": "performance", "action": "measure"})
 
     def test_handler_optional_dependency_failure_keeps_normal_cli_diagnostic(self) -> None:
         result = self.child(

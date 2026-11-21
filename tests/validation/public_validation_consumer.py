@@ -1,6 +1,7 @@
 """Installed CLI checks with native validators and small consumer fixtures."""
 
 import contextlib
+import errno
 import io
 import json
 import os
@@ -14,7 +15,7 @@ from pathlib import Path
 from typing import Any, cast, override
 from unittest.mock import patch
 
-from research_repo_tools.cli import main
+from research_repo_tools.cli import entrypoint, main
 
 _SUPPORT = Path(__file__).resolve().with_name("fixture_environment.py")
 if not _SUPPORT.is_file():
@@ -30,8 +31,89 @@ def template(name: str) -> str:
 
 
 class TestCommandStreams(unittest.TestCase):
+    def test_closed_output_pipe_exits_without_an_interpreter_traceback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            reader, writer = os.pipe()
+            os.close(reader)
+            with os.fdopen(writer, "wb") as pipe:
+                result = subprocess.run(
+                    [sys.executable, "-I", "-B", "-m", "research_repo_tools", "--root", directory, "templates", "justfile"],
+                    stdout=pipe,
+                    stderr=subprocess.PIPE,
+                    timeout=30,
+                    check=False,
+                )
+            self.assertEqual(result.returncode, 1, result.stderr)
+            self.assertNotIn(b"Traceback", result.stderr)
+            self.assertNotIn(b"Exception ignored", result.stderr)
+
+    def test_failed_stdout_flush_cannot_override_the_process_exit_status(self):
+        # Model the Windows runtime's EINVAL without changing the process stdout descriptor.
+        with (
+            tempfile.TemporaryFile() as original,
+            os.fdopen(os.dup(original.fileno()), "wb") as writer,
+            patch.object(sys, "stdout", wraps=writer) as output,
+            contextlib.redirect_stderr(io.StringIO()) as error,
+            patch("research_repo_tools.cli.main", return_value=0),
+        ):
+            output.flush.side_effect = OSError(errno.EINVAL, "output pipe closed")
+            self.assertEqual(entrypoint(), 1)
+            self.assertIn("output pipe closed", error.getvalue())
+            writer.write(b"pending output")
+            writer.flush()
+            self.assertEqual(os.fstat(original.fileno()).st_size, 0)
+
+    def test_malformed_default_configuration_identifies_its_path_before_export(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            manifest = root / "pyproject.toml"
+            manifest.mkdir()
+            for shape in ("directory", "invalid TOML"):
+                if shape == "invalid TOML":
+                    manifest.rmdir()
+                    manifest.write_bytes(b"[broken")
+                with self.subTest(shape=shape), contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+                    self.assertEqual(main(["--root", directory, "templates", "justfile", "--output", "justfile"]), 1)
+                    self.assertEqual(out.getvalue(), "")
+                    self.assertIn(str(manifest), err.getvalue())
+                    self.assertFalse((root / "justfile").exists())
+
+    def test_shortened_approval_flags_fail_before_dispatch(self):
+        for args in (
+            ["release", "publish", "v1.0.0", "--app"],
+            ["notebooks", "reset", "--ap"],
+            ["toolchain", "clean", "--ap"],
+        ):
+            with (
+                self.subTest(args=args),
+                patch("research_repo_tools.cli.run") as dispatch,
+                contextlib.redirect_stdout(io.StringIO()) as output,
+                contextlib.redirect_stderr(io.StringIO()) as error,
+                self.assertRaises(SystemExit) as raised,
+            ):
+                main(args)
+            self.assertEqual(raised.exception.code, 2)
+            self.assertIn("usage:", error.getvalue())
+            self.assertEqual(output.getvalue(), "")
+            dispatch.assert_not_called()
+
+    def test_json_stdout_uses_utf8_and_lf_independently_of_console_settings(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "test.ipynb").write_bytes(b'{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[]}')
+            with (
+                io.TextIOWrapper(io.BytesIO(), encoding="utf-16", newline="\r\n") as stream,
+                contextlib.redirect_stdout(stream),
+            ):
+                self.assertEqual(main(["--root", directory, "notebooks", "inspect", "test.ipynb", "--json"]), 0)
+                stream.flush()
+                raw = stream.buffer.getvalue()
+            self.assertEqual(json.loads(raw.decode("utf-8"))["notebooks"][0]["cells"], [])
+            self.assertTrue(raw.endswith(b"\n"))
+            self.assertNotIn(b"\r", raw)
+
     def test_main_restores_stream_policies_after_help_parse_errors_and_handlers(self):
-        for arguments in (["--help"], ["--unknown"], ["templates", "justfile"], ["templates", "missing-template"]):
+        for arguments in (("--help",), ["--unknown"], ["templates", "justfile"], ["templates", "missing-template"]):
             with (
                 self.subTest(arguments=arguments),
                 io.TextIOWrapper(io.BytesIO(), encoding="ascii", errors="strict", newline="\n") as output,
@@ -72,6 +154,17 @@ class TestCommandStreams(unittest.TestCase):
 
 
 class TestCoverage(unittest.TestCase):
+    def test_unknown_xml_encoding_reports_the_filename_without_a_traceback(self):
+        with tempfile.TemporaryDirectory() as directory:
+            report = Path(directory) / "broken.xml"
+            report.write_bytes(b'<?xml version="1.0" encoding="unknown-codec"?><coverage/>')
+            with contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as error:
+                self.assertEqual(main(["--root", directory, "coverage", "report", "--report", report.name]), 1)
+            self.assertEqual(output.getvalue(), "")
+            self.assertIn(report.name, error.getvalue())
+            self.assertIn("unknown-codec", error.getvalue())
+            self.assertNotIn("Traceback", error.getvalue())
+
     def test_prefix_starting_with_dash_survives_cli_forwarding(self):
         with tempfile.TemporaryDirectory() as directory:
             root = Path(directory)
@@ -267,6 +360,27 @@ class TestGitDiscovery(unittest.TestCase):
 
 
 class TestSelectionPreflight(unittest.TestCase):
+    def test_empty_selection_cannot_hide_an_invalid_batch_timeout(self):
+        with tempfile.TemporaryDirectory() as directory, patch("research_repo_tools.selection.select_files", return_value=()) as select:
+            with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:
+                self.assertEqual(main(["--root", directory, "files", "run", "--timeout", "nan", "--", "lint"]), 1)
+            self.assertIn("timeout", err.getvalue())
+            self.assertEqual(out.getvalue(), "")
+            select.assert_not_called()
+
+    def test_one_shot_include_and_exclude_patterns_reach_selection(self) -> None:
+        from research_repo_tools.selection import select_files
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            for name in ("keep.py", "skip.py"):
+                (root / name).write_bytes(b"")
+            result = subprocess.CompletedProcess([], 0, b"keep.py\0skip.py\0", b"")
+            with patch("research_repo_tools.selection.run_git_bytes", return_value=result) as git:
+                selected = select_files(root, include=iter(["*.py"]), exclude=iter(["skip.py"]))
+            self.assertEqual(git.call_args.args[0][-2:], ["--", "*.py"])
+            self.assertEqual(selected, ("keep.py",))
+
     def test_batching_rejects_scalar_filenames_and_preserves_iterable_names(self) -> None:
         from research_repo_tools.selection import argument_batches
 
@@ -274,7 +388,7 @@ class TestSelectionPreflight(unittest.TestCase):
             with self.subTest(value=value), self.assertRaisesRegex(ValueError, "file arguments"):
                 argument_batches(["lint"], cast(Any, value))
         self.assertEqual(
-            argument_batches(["lint"], iter(("café file.py", "-option.py")), batch_size=1),
+            argument_batches(iter(["lint"]), iter(("café file.py", "-option.py")), batch_size=1),
             (("lint", "./café file.py"), ("lint", "./-option.py")),
         )
 

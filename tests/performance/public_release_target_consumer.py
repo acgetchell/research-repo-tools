@@ -989,7 +989,8 @@ class TestReleaseTargetConsumer(unittest.TestCase):
             root=self.root,
         )
         with (
-            patch("research_repo_tools.release_publishing.check_reviewed_release", return_value=draft),
+            patch("research_repo_tools.release_publishing._check_release_source", return_value=SHA),
+            patch("research_repo_tools.release_publishing.lookup_release", return_value=draft),
             patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, SHA, "")),
         ):
             publish_reviewed_release(settings, TAG)

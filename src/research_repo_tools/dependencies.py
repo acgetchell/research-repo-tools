@@ -16,6 +16,7 @@ from packaging.specifiers import SpecifierSet
 from packaging.version import InvalidVersion, Version
 
 from research_repo_tools import config, python_locks, python_resolution
+from research_repo_tools._diagnostics import workflow_diagnostic
 from research_repo_tools.files import preserve_files
 from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics, run_safe_command
 
@@ -104,6 +105,12 @@ def _group_requirements(
     groups: dict[str, object], name: str, ancestors: tuple[str, ...] = (), *, python_constraints: Mapping[str, str] | None = None
 ) -> list[str]:
     """Expand PEP 735 includes without granting ownership of their version pins."""
+    normalized = canonicalize_name(name)
+    matches = [group for group in groups if canonicalize_name(group) == normalized]
+    if len(matches) > 1:
+        raise ValueError(f"duplicate normalized dependency group: {name}")
+    if matches:
+        name = matches[0]
     if name in ancestors:
         raise ValueError(f"dependency group cycle: {' -> '.join((*ancestors, name))}")
     entries = groups.get(name)
@@ -118,18 +125,18 @@ def _group_requirements(
             result.extend(_group_requirements(groups, entry["include-group"], (*ancestors, name), python_constraints=python_constraints))
         else:
             raise TypeError(f"dependency-groups.{name} entries must be requirements or include-group tables")
-    constraint = (python_constraints or {}).get(name, "")
+    constraint = (python_constraints or {}).get(normalized, "")
     return [python_resolution.constrain_group(raw, constraint) for raw in result]
 
 
-def parse_project(text: str, *, toolchain: config.ToolchainSettings | None = None) -> tuple[SpecifierSet, list[DevPin]]:
+def parse_project(text: str, *, toolchain: config.ToolchainSettings | None = None, preserve: frozenset[str] = frozenset()) -> tuple[SpecifierSet, list[DevPin]]:
     """Parse Python constraints and exact direct development-tool pins."""
     data = tomllib.loads(text)
     from research_repo_tools import python_baseline, python_tools
 
     project = _required_table(data, "project")
     pins = _dev_pins(_required_table(data, "dependency-groups"))
-    fixed_sources = python_resolution.fixed_source_names(text)
+    fixed_sources = python_resolution.fixed_source_names(text) | {canonicalize_name(name) for name in preserve}
     pins = [pin for pin in pins if canonicalize_name(pin.name) not in fixed_sources]
     if toolchain is None:
         tool = config._table(data.get("tool", {}), "tool")
@@ -352,10 +359,12 @@ def _masked_manifest(text: str, managed_names: frozenset[str]) -> dict[str, obje
     return cast("dict[str, object]", data)
 
 
-def _require_applied_pins(pyproject: Path, expected: list[DevPin], original: bytes, *, toolchain: config.ToolchainSettings | None = None) -> None:
+def _require_applied_pins(
+    pyproject: Path, expected: list[DevPin], original: bytes, *, toolchain: config.ToolchainSettings | None = None, preserve: frozenset[str] = frozenset()
+) -> None:
     """Require uv to have changed only the exact requested manifest pins."""
     updated_text = pyproject.read_text(encoding="utf-8")
-    _requires_python, actual = parse_project(updated_text, toolchain=toolchain)
+    _requires_python, actual = parse_project(updated_text, toolchain=toolchain, preserve=preserve)
     expected_versions = {canonicalize_name(pin.name): pin.version for pin in expected}
     actual_versions = {canonicalize_name(pin.name): pin.version for pin in actual}
     if actual_versions != expected_versions:
@@ -369,7 +378,12 @@ def _require_applied_pins(pyproject: Path, expected: list[DevPin], original: byt
 
 
 def update_dev_pins(
-    pyproject: Path, *, uv: str = "uv", toolchain: config.ToolchainSettings | None = None, env: Mapping[str, str] | None = None
+    pyproject: Path,
+    *,
+    uv: str = "uv",
+    toolchain: config.ToolchainSettings | None = None,
+    env: Mapping[str, str] | None = None,
+    preserve: frozenset[str] = frozenset(),
 ) -> dict[str, tuple[str, str]]:
     """Resolve and apply all changed exact direct pins in one uv transaction."""
     manifest = _conventional_manifest(pyproject)
@@ -377,7 +391,7 @@ def update_dev_pins(
     if uv_lock.is_symlink():
         msg = f"uv.lock must not be a symbolic link: {uv_lock}"
         raise ValueError(msg)
-    requires_python, current = parse_project(manifest.read_text(encoding="utf-8"), toolchain=toolchain)
+    requires_python, current = parse_project(manifest.read_text(encoding="utf-8"), toolchain=toolchain, preserve=preserve)
     python_resolution.policy(manifest.read_text(encoding="utf-8"), manifest.parent)
     python_locks.versions(uv_lock.read_bytes() if uv_lock.exists() else None)
     if not current:
@@ -407,7 +421,7 @@ def update_dev_pins(
             env=env,
             timeout=UV_ADD_TIMEOUT_SECONDS,
         )
-        _require_applied_pins(manifest, latest, snapshots[manifest] or b"", toolchain=toolchain)
+        _require_applied_pins(manifest, latest, snapshots[manifest] or b"", toolchain=toolchain, preserve=preserve)
         python_locks.require_no_downgrades(snapshots[uv_lock], uv_lock)
     return changes
 
@@ -446,15 +460,15 @@ def main(argv: list[str] | None = None, *, toolchain: config.ToolchainSettings |
     except ExceptionGroup as error:
         expected, unexpected = error.split((ExecutableNotFoundError, OSError, RuntimeError, subprocess.SubprocessError, TypeError, ValueError))
         if expected is not None:
-            print(f"failed to update Python development-tool pins: {format_exception_diagnostics(expected)}", file=sys.stderr)
+            print(f"failed to update Python development-tool pins: {workflow_diagnostic(format_exception_diagnostics(expected))}", file=sys.stderr)
         if unexpected is not None:
             raise unexpected from None
         return 1
     except subprocess.CalledProcessError as error:
-        print(f"failed to update Python development-tool pins: {_subprocess_detail(error)}", file=sys.stderr)
+        print(f"failed to update Python development-tool pins: {workflow_diagnostic(_subprocess_detail(error), single_line=True)}", file=sys.stderr)
         return 1
     except (ExecutableNotFoundError, OSError, RuntimeError, subprocess.TimeoutExpired, TypeError, ValueError, tomllib.TOMLDecodeError) as error:
-        print(f"failed to update Python development-tool pins: {error}", file=sys.stderr)
+        print(f"failed to update Python development-tool pins: {workflow_diagnostic(format_exception_diagnostics(error), single_line=True)}", file=sys.stderr)
         return 1
 
     if not changes:

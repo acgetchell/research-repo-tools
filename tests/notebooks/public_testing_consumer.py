@@ -65,11 +65,12 @@ class TestNotebookProject(unittest.TestCase):
 
     def test_real_kernel_borrows_interpreter_preserves_sources_and_returns_artifacts(self):
         original = self.write_notebook(
-            "import json, os, sys\nfrom pathlib import Path\n"
+            "import json, os, sys\nfrom pathlib import Path\nfrom ipykernel.connect import get_connection_info\n"
+            "connection = get_connection_info(unpack=True)\n"
             "assert 'prior_run' not in globals()\nprior_run = True\n"
             "assert 'RRT_TEST_REMOVE' not in os.environ\n"
             "print(json.dumps({'python': sys.executable, 'cwd': str(Path.cwd()), 'input': Path('input.bin').read_bytes().hex(), "
-            "'pid': os.getpid(), "
+            "'pid': os.getpid(), 'transport': connection['transport'], 'address': connection['ip'], "
             "'value': os.environ['RRT_TEST_VALUE'], 'backend': os.environ['MPLBACKEND'], "
             "'history': str(get_ipython().history_manager.hist_file), "
             "'history_files': [p.name for p in Path(os.environ['IPYTHONDIR']).rglob('history.sqlite*')]}))\n"
@@ -85,6 +86,7 @@ class TestNotebookProject(unittest.TestCase):
                 self.assertFalse((project.root / ".venv").exists())
                 for name, content in self.metadata.items():
                     self.assertEqual((project.root / name).read_bytes(), content)
+                socket_directories = set()
                 for _ in range(2):
                     removed = "rrt_test_remove" if os.name == "nt" else "RRT_TEST_REMOVE"
                     result = project.execute(self.relative, cwd=Path("work"), env={removed: None, "RRT_TEST_VALUE": "分析 value"})
@@ -95,6 +97,12 @@ class TestNotebookProject(unittest.TestCase):
                     self.assertTrue(result.notebook_path.is_relative_to(project.artifacts))
                     output = json.loads(result.notebook_path.read_bytes())["cells"][0]["outputs"][0]["text"]
                     observed = json.loads(output)
+                    if os.name == "posix":
+                        self.assertEqual(observed["transport"], "ipc")
+                        socket_dir = Path(observed["address"]).parent
+                        self.assertNotIn(socket_dir, socket_directories)
+                        self.assertFalse(socket_dir.exists(), "kernel socket directory survived execution")
+                        socket_directories.add(socket_dir)
                     self.assertEqual(Path(observed["python"]), Path(sys.executable))
                     self.assertEqual(Path(observed["cwd"]), project.root / "work")
                     self.assertEqual(observed["input"], inputs.read_bytes().hex())

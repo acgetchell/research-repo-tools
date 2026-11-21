@@ -5,6 +5,8 @@ import tomllib
 from collections.abc import Iterator
 from io import StringIO
 
+import tomli_w
+
 KEY_PATTERN = r"""(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*')(?:\s*\.\s*(?:[A-Za-z0-9_-]+|"(?:[^"\\]|\\.)*"|'[^']*'))*"""
 _KEY = re.compile(rf"(?P<key>{KEY_PATTERN})\s*=")
 _STRING = re.compile(
@@ -13,6 +15,19 @@ _STRING = re.compile(
     r'''|"(?:[^"\\]|\\[^\r\n])*"'''
     r"|'[^'\r\n]*'"
 )
+_INVALID_LITERAL = re.compile(r"['\x00-\x08\x0a-\x1f\x7f]")
+
+
+def inherits_workspace(value: object) -> bool:
+    """Recognize the exact TOML table `{ workspace = true }` used by Cargo and uv."""
+    return isinstance(value, dict) and value.keys() == {"workspace"} and value["workspace"] is True
+
+
+def string_literal(value: str, *, prefer_literal: bool = False) -> str:
+    """Encode one TOML string, keeping single quotes when they can represent it."""
+    if prefer_literal and _INVALID_LITERAL.search(value) is None:
+        return f"'{value}'"
+    return tomli_w.dumps({"value": value}).removeprefix("value = ").removesuffix("\n")
 
 
 def _statements(text: str) -> Iterator[tuple[int, str]]:
@@ -98,8 +113,6 @@ def replace_string(text: str, table: str, key: str, value: str) -> str:
     Dotted and quoted keys work through key_line. Inline-table declarations are
     rejected rather than reserializing unrelated configuration and comments.
     """
-    import json
-
     line = key_line(text, table, key)
     lines = StringIO(text, newline="\n").readlines()
     offset = sum(map(len, lines[: line - 1]))
@@ -113,7 +126,7 @@ def replace_string(text: str, table: str, key: str, value: str) -> str:
     if match is None:
         raise ValueError(f"[{table}].{key} must be a string")
     # Retain ordinary quote style; multiline values become canonical scalars.
-    quoted = f"'{value}'" if text[start] == "'" and "'" not in value else json.dumps(value)
+    quoted = string_literal(value, prefer_literal=text[start] == "'")
     result = text[:start] + quoted + text[match.end() :]
     tomllib.loads(result)
     return result
@@ -121,10 +134,8 @@ def replace_string(text: str, table: str, key: str, value: str) -> str:
 
 def set_value(text: str, table: str, key: str, value: str) -> str:
     """Set a TOML literal, retaining unrelated bytes and rejecting inline owners."""
-    import json
-
     tomllib.loads("value = " + value)
-    encoded_key = key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else json.dumps(key)
+    encoded_key = key if re.fullmatch(r"[A-Za-z0-9_-]+", key) else string_literal(key)
     newline = "\r\n" if "\r\n" in text else "\n"
     lines = StringIO(text, newline="\n").readlines()
     try:
@@ -180,8 +191,6 @@ def set_value(text: str, table: str, key: str, value: str) -> str:
 
 def replace_array_strings(text: str, table: str, key: str, replacements: dict[str, str]) -> str:
     """Replace exact string array entries without changing comments or includes."""
-    import json
-
     line = key_line(text, table, key)
     lines = StringIO(text, newline="\n").readlines()
     offset = sum(map(len, lines[: line - 1]))
@@ -207,8 +216,7 @@ def replace_array_strings(text: str, table: str, key: str, replacements: dict[st
                 raise ValueError("unsupported TOML string")
             value = tomllib.loads("value = " + literal.group())["value"]
             if depth == 1 and value in replacements:
-                replacement = replacements[value]
-                quoted = f"'{replacement}'" if char == "'" and "'" not in replacement else json.dumps(replacement)
+                quoted = string_literal(replacements[value], prefer_literal=char == "'")
                 edits.append((position, literal.end(), quoted))
             position = literal.end()
             continue

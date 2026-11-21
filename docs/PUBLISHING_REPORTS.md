@@ -202,6 +202,7 @@ Use the same directory primitive for a complete scientific figure set:
 
 ```python
 from pathlib import Path
+
 from research_repo_tools.files import publish_directory
 
 with publish_directory(Path("figures/validation")) as candidate:

@@ -12,12 +12,14 @@ import unittest
 import zipfile
 from contextlib import contextmanager, nullcontext
 from dataclasses import FrozenInstanceError
+from importlib.metadata import PathDistribution
 from pathlib import Path
+from types import SimpleNamespace
 from typing import override
 from unittest.mock import Mock, patch
 
-from research_repo_tools import dependency_build_receipts, dependency_builds, dependency_graphs, dependency_provenance
-from research_repo_tools._dependency_probe import distribution_inventory, inspect_distribution, inspect_installation
+from research_repo_tools import _dependency_probe, dependency_build_receipts, dependency_builds, dependency_graphs, dependency_provenance
+from research_repo_tools._dependency_probe import DistributionSnapshot, distribution_inventory, inspect_distribution, inspect_installation
 from research_repo_tools.dependency_artifacts import verify_python_environment
 from research_repo_tools.dependency_build_policy import parse_build_policy
 from research_repo_tools.dependency_build_receipts import verify_build_receipt
@@ -40,6 +42,7 @@ def wheel_bytes() -> bytes:
         archive.writestr("sample_pkg-1.2.3.data/purelib/sample_pkg.py", b"VALUE = 42\n")
         archive.writestr("_vendor/other-1.0.dist-info/METADATA", b"Name: other\nVersion: 1.0\n")
         archive.writestr("_vendor/other-1.0.dist-info/RECORD", b"vendored record is payload\n")
+        archive.writestr("_vendor/assets.data/model.data", PAYLOAD)
         archive.writestr("sample_pkg-1.2.3.data/scripts/native-tool.exe", PAYLOAD)
         archive.writestr("sample_pkg-1.2.3.data/data/share/sample/kernel.json", b'{"argv":["python"]}\n')
     return stream.getvalue()
@@ -177,6 +180,12 @@ class TestSourceBuilds(unittest.TestCase):
             verify_python_environment(self.graph)
         data.write_bytes(b'{"argv":["python"]}\n')
         site = self.root / ".venv/Lib/site-packages" if os.name == "nt" else next((self.root / ".venv/lib").glob("python*/site-packages"))
+        resource = site / "_vendor/assets.data/model.data"
+        self.assertEqual(resource.read_bytes(), PAYLOAD)
+        resource.write_bytes(PAYLOAD[::-1])
+        with self.assertRaisesRegex(ValueError, "bytes differ"):
+            verify_python_environment(self.graph)
+        resource.write_bytes(PAYLOAD)
         vendored = site / "_vendor/other-1.0.dist-info/RECORD"
         vendored.write_bytes(b"changed vendored payload\n")
         with self.assertRaisesRegex(ValueError, "bytes differ"):
@@ -209,8 +218,10 @@ class TestSourceBuilds(unittest.TestCase):
             verify_python_environment(self.graph)
 
     def test_runtime_bundle_exports_verified_native_wheel_without_signing_key(self) -> None:
-        from research_repo_tools import runtime_policy_build
-        from research_repo_tools.runtime_policy import verify_runtime
+        from contextlib import redirect_stderr
+
+        from research_repo_tools import cli, runtime_policy_build
+        from research_repo_tools.runtime_policy import runtime_requirements, verify_runtime
         from research_repo_tools.runtime_policy_build import record_runtime_policy
 
         self.build()
@@ -220,6 +231,28 @@ class TestSourceBuilds(unittest.TestCase):
         self.assertEqual(verify_runtime(policy, environment=self.root / ".venv", artifacts=destination), ("sample-pkg",))
         self.assertNotIn("key", {path.name for path in destination.iterdir()})
         self.assertNotIn(str(self.store).encode(), policy.payload)
+        args = [
+            "--root",
+            str(self.root),
+            "release",
+            "runtime",
+            "requirements",
+            "--policy",
+            str(destination / "runtime.json"),
+            "--sha256",
+            policy.digest,
+            "--output",
+        ]
+        retained = {path: path.read_bytes() for path in destination.iterdir()}
+        for suffix in ("*.receipt.json", "*.log"):
+            (target,) = destination.glob(suffix)
+            with self.subTest(target=target.name), redirect_stderr(io.StringIO()) as error:
+                self.assertEqual(cli.main([*args, str(target)]), 1)
+                self.assertIn("duplicate target paths", error.getvalue())
+                self.assertEqual({path: path.read_bytes() for path in destination.iterdir()}, retained)
+        output = destination / "exported.txt"
+        self.assertEqual(cli.main([*args, str(output)]), 0)
+        self.assertEqual(output.read_bytes(), runtime_requirements(policy))
         receipt = next(self.store.glob("*.json"))
         receipt.unlink()
         # The already approved portable bundle needs no machine-local key, but
@@ -280,6 +313,85 @@ class TestSourceBuilds(unittest.TestCase):
 
 
 class TestBuildPolicy(unittest.TestCase):
+    def test_windows_record_separators_preserve_installed_hashes(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            site = Path(temporary)
+            info = site / "sample-1.0.dist-info"
+            info.mkdir()
+            (info / "METADATA").write_bytes(b"Name: sample\nVersion: 1.0\n")
+            package = site / "sample"
+            package.mkdir()
+            (package / "resource.bin").write_bytes(PAYLOAD)
+            (info / "RECORD").write_bytes(b"sample\\resource.bin,,\nsample-1.0.dist-info/METADATA,,\n")
+            dist = PathDistribution(info)
+            # Model native path lookup for importlib.metadata on POSIX. Windows
+            # uses the actual distribution and filesystem without substitutions.
+            lookup = nullcontext() if os.name == "nt" else patch.object(dist, "locate_file", side_effect=lambda path: site / str(path).replace("\\", "/"))
+            with lookup, patch.object(_dependency_probe, "os", SimpleNamespace(sep="\\")):
+                snapshot = DistributionSnapshot(dist)
+            self.assertEqual(tuple(map(str, snapshot.records)), ("sample/resource.bin", "sample-1.0.dist-info/METADATA"))
+            observed = inspect_distribution(snapshot)["files"]
+            assert isinstance(observed, dict)
+            self.assertEqual(observed["sample/resource.bin"], hashlib.sha256(PAYLOAD).hexdigest())
+
+    def test_inventory_fails_when_it_cannot_read_a_whole_package(self) -> None:
+        with tempfile.TemporaryDirectory() as temporary:
+            site = Path(temporary)
+            info = site / "sample-1.0.dist-info"
+            info.mkdir()
+            (info / "METADATA").write_bytes(b"Name: sample\nVersion: 1.0\n")
+            (info / "RECORD").write_bytes(b"sample/recorded.py,,\n")
+            package = site / "sample"
+            package.mkdir()
+            (package / "recorded.py").write_bytes(PAYLOAD)
+            nested = package / "nested"
+            nested.mkdir()
+            snapshot = distribution_inventory((site,))["sample"]
+            with patch.object(Path, "is_junction", lambda path: path == nested), self.assertRaisesRegex(ValueError, "package directories"):
+                inspect_distribution(snapshot)
+            scandir = os.scandir
+
+            def deny_nested(path):
+                if path == nested or path == str(nested):
+                    raise PermissionError("unreadable nested package directory")
+                return scandir(path)
+
+            with patch.object(os, "scandir", deny_nested), self.assertRaisesRegex(PermissionError, "unreadable nested"):
+                inspect_distribution(snapshot)
+
+            # Model a dangling file link even on Windows hosts without symlink privileges.
+            dangling = package / "unrecorded"
+            dangling.touch()
+            original_stat, original_is_link = Path.stat, Path.is_symlink
+
+            def dangling_stat(path, **kwargs):
+                if path == dangling and kwargs.get("follow_symlinks", True):
+                    raise FileNotFoundError(path)
+                return original_stat(path, **kwargs)
+
+            with (
+                patch.object(Path, "stat", dangling_stat),
+                patch.object(Path, "is_symlink", lambda path: path == dangling or original_is_link(path)),
+                self.assertRaisesRegex(ValueError, "requires a regular file: sample/unrecorded"),
+            ):
+                inspect_distribution(snapshot)
+
+    def test_wheel_checks_original_member_names_before_zipfile_normalizes_them(self) -> None:
+        for spelling in ("sample/resource\x00suffix", "sample\\resource"):
+            with self.subTest(spelling=spelling):
+                buffer = io.BytesIO()
+                with zipfile.ZipFile(buffer, "w") as archive:
+                    for name in ("METADATA", "WHEEL", "RECORD"):
+                        archive.writestr("sample-1.dist-info/" + name, b"metadata")
+                    member = zipfile.ZipInfo()
+                    member.filename = spelling
+                    archive.writestr(member, PAYLOAD)
+                with zipfile.ZipFile(buffer) as archive:
+                    self.assertEqual(archive.infolist()[-1].orig_filename, spelling)
+                    files = {member.filename: hashlib.sha256(archive.read(member)).hexdigest() for member in archive.infolist()}
+                with self.assertRaisesRegex(ValueError, "archive path"):
+                    verify_wheel_payload("sample", buffer.getvalue(), {"files": files})
+
     def test_environment_inventory_is_linear_and_rechecks_live_identities(self) -> None:
         for damage in (None, "duplicate", "added", "removed", "changed"):
             with self.subTest(damage=damage), tempfile.TemporaryDirectory() as temporary:

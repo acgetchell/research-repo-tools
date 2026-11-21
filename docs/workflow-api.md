@@ -289,7 +289,8 @@ on a provenance pin additionally checks its recorded revision.
 
 `selection.select_files(root, *, include=(), exclude=())` returns sorted regular
 tracked/nonignored untracked paths, omitting deleted files. Includes are Git
-pathspecs; excludes are POSIX glob patterns. Git discovery is read-only and
+pathspecs; excludes are POSIX glob patterns. Both accept iterators, which are
+consumed once before file selection. Git discovery is read-only and
 NUL-delimited. Links, traversal and portable aliases fail. `argument_batches`
 validates complete filename input before making bounded argument tuples; paths
 receive `./` to prevent option interpretation. Pass an iterable of filenames;

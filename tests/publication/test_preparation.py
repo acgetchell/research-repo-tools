@@ -9,7 +9,7 @@ import pytest
 from research_repo_tools import publication
 from research_repo_tools.evidence import Evidence, fingerprint_files, load_evidence, publish_evidence
 from research_repo_tools.publication_config import load_publication
-from tests.publication.public_publication_consumer import DOCUMENT, make_fixture
+from tests.fixtures.publication import DOCUMENT, make_fixture
 
 
 def prepare(root: Path) -> None:

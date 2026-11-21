@@ -134,6 +134,7 @@ def parse_reuse_policy(payload: bytes) -> ReusePolicy:
 
 
 def _eligible(evidence: Evidence, policy: ReusePolicy) -> SuiteRun:
+    """Return the retained run only when its tagged sources, observed provenance, and requested comparisons satisfy the reuse policy."""
     if evidence.payload_schema != RUN_SCHEMA_V4:
         raise ValueError("benchmark reuse requires complete-run v4 with original collection sessions")
     run = validate_run_policy(evidence, policy.measurement)

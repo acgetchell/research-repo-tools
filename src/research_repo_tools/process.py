@@ -7,7 +7,6 @@ to the package's CLI implementation.
 """
 
 import codecs
-import math
 import os
 import platform
 import shutil
@@ -18,7 +17,7 @@ import time
 from collections.abc import Mapping, Sequence
 from contextlib import ExitStack
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast, overload
 
 from research_repo_tools._diagnostics import format_exception_diagnostics
 from research_repo_tools._stdout_forwarder import open_spool, publish_endpoint
@@ -111,6 +110,13 @@ def resolve_executable(command: str | Path, *, cwd: Path | None = None, env: Map
     return Path(selected).absolute()
 
 
+def _positive_timeout(value: object, field: str) -> float:
+    """Parse finite positive timeout seconds without coercing flags or text."""
+    if isinstance(value, bool) or not isinstance(value, int | float) or not 0 < value <= sys.float_info.max:
+        raise ValueError(f"{field} must be positive and finite")
+    return float(value)
+
+
 def run_command_bytes(
     command: str | Path,
     args: Sequence[str] = (),
@@ -133,8 +139,8 @@ def run_command_bytes(
         raise TypeError("args must be a sequence of strings without NUL")
     if input is not None and not isinstance(input, bytes):
         raise TypeError("input must be bytes or None")
-    if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
-        raise ValueError("timeout must be positive and finite, or None")
+    if timeout is not None:
+        timeout = _positive_timeout(timeout, "timeout")
     path = resolve_executable(command, cwd=cwd, env=env)
     return subprocess.run([str(path), *args], cwd=cwd, env=env, input=input, capture_output=True, check=check, timeout=timeout)
 
@@ -193,8 +199,8 @@ def run_command_live(
     """
     if not isinstance(args, Sequence) or isinstance(args, (str, bytes)) or any(not isinstance(arg, str) or "\x00" in arg for arg in args):  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
         raise TypeError("args must be a sequence of strings without NUL")
-    if timeout is not None and (not math.isfinite(timeout) or timeout <= 0):
-        raise ValueError("timeout must be positive and finite, or None")
+    if timeout is not None:
+        timeout = _positive_timeout(timeout, "timeout")
     for name, markers in (("stdout_markers", stdout_markers), ("stderr_markers", stderr_markers)):
         if (
             not isinstance(markers, Sequence) or isinstance(markers, (str, bytes)) or any(not isinstance(marker, bytes) or not marker for marker in markers)  # ty: ignore[redundant-condition-strict]  Runtime boundary also protects untyped callers.
@@ -212,6 +218,7 @@ def run_command_live(
 def _run_with_markers(
     argv: list[str], *, cwd: Path | None, env: Mapping[str, str] | None, timeout: float | None, check: bool, streams: Mapping[str, Sequence[bytes]]
 ) -> subprocess.CompletedProcess[None]:
+    """Forward the child's output and check successful runs for every requested marker within one deadline."""
     # Forward in a disposable process, not the deadline-owning thread: a caller
     # that stops reading stdout must not prevent timeout cleanup. The spool also
     # avoids pipe readers waiting forever for inherited descendant handles.
@@ -286,6 +293,7 @@ def _run_with_markers(
                         tail = data[-overlap:] if overlap else b""
                     if remaining:
                         missing.append(f"command is missing expected {name} markers: {sorted(remaining)!r}")
+                budget()
                 if missing:
                     raise ValueError("\n".join(missing))
         except subprocess.TimeoutExpired as error:
@@ -337,7 +345,7 @@ def _build_run_kwargs(function_name: str, **kwargs: Any) -> RunKwargs:
     if "executable" in kwargs:
         msg = f"Overriding 'executable' is not allowed in {function_name}"
         raise ValueError(msg)
-    # Enforce text mode for stable typing (CompletedProcess[str])
+    # Captured streams always contain text.
     kwargs.pop("text", None)
     run_kwargs = {
         "capture_output": True,
@@ -351,11 +359,30 @@ def _build_run_kwargs(function_name: str, **kwargs: Any) -> RunKwargs:
     return run_kwargs
 
 
+def _text_command_args(executable: str, args: Sequence[str]) -> list[str]:
+    """Build the child argument vector without splitting a scalar into characters."""
+    if isinstance(args, (str, bytes)):
+        raise TypeError("args must be a sequence of individual arguments")
+    return [executable, *args]
+
+
+@overload
 def run_git_command(
-    args: list[str],
+    args: Sequence[str], cwd: Path | None = None, *, capture_output: Literal[True] = True, **kwargs: Any
+) -> subprocess.CompletedProcess[str]: ...
+
+
+@overload
+def run_git_command(
+    args: Sequence[str], cwd: Path | None = None, *, capture_output: bool, **kwargs: Any
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[str | None]: ...
+
+
+def run_git_command(
+    args: Sequence[str],
     cwd: Path | None = None,
     **kwargs: Any,
-) -> subprocess.CompletedProcess[str]:
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[str | None]:
     """Run a git command securely using full executable path.
 
     Args:
@@ -364,7 +391,7 @@ def run_git_command(
         **kwargs: Additional arguments passed to subprocess.run
 
     Returns:
-        CompletedProcess result
+        A CompletedProcess with text for each captured stream and None for each uncaptured stream.
 
     Raises:
         ExecutableNotFoundError: If git is not found
@@ -374,20 +401,32 @@ def run_git_command(
     git_path = get_safe_executable("git")
     run_kwargs = _build_run_kwargs("run_git_command", **kwargs)
     return cast(
-        "subprocess.CompletedProcess[str]",
+        "subprocess.CompletedProcess[str | None]",
         subprocess.run(  # noqa: S603,PLW1510
-            [git_path, *args],
+            _text_command_args(git_path, args),
             cwd=cwd,
             **run_kwargs,
         ),
     )
 
 
+@overload
 def run_cargo_command(
-    args: list[str],
+    args: Sequence[str], cwd: Path | None = None, *, capture_output: Literal[True] = True, **kwargs: Any
+) -> subprocess.CompletedProcess[str]: ...
+
+
+@overload
+def run_cargo_command(
+    args: Sequence[str], cwd: Path | None = None, *, capture_output: bool, **kwargs: Any
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[str | None]: ...
+
+
+def run_cargo_command(
+    args: Sequence[str],
     cwd: Path | None = None,
     **kwargs: Any,
-) -> subprocess.CompletedProcess[str]:
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[str | None]:
     """Run a cargo command securely using full executable path.
 
     Args:
@@ -396,7 +435,7 @@ def run_cargo_command(
         **kwargs: Additional arguments passed to subprocess.run
 
     Returns:
-        CompletedProcess result
+        A CompletedProcess with text for each captured stream and None for each uncaptured stream.
 
     Raises:
         ExecutableNotFoundError: If cargo is not found
@@ -406,21 +445,33 @@ def run_cargo_command(
     cargo_path = get_safe_executable("cargo")
     run_kwargs = _build_run_kwargs("run_cargo_command", **kwargs)
     return cast(
-        "subprocess.CompletedProcess[str]",
+        "subprocess.CompletedProcess[str | None]",
         subprocess.run(  # noqa: S603,PLW1510
-            [cargo_path, *args],
+            _text_command_args(cargo_path, args),
             cwd=cwd,
             **run_kwargs,
         ),
     )
 
 
+@overload
+def run_safe_command(
+    command: str, args: Sequence[str], cwd: Path | None = None, *, capture_output: Literal[True] = True, **kwargs: Any
+) -> subprocess.CompletedProcess[str]: ...
+
+
+@overload
+def run_safe_command(
+    command: str, args: Sequence[str], cwd: Path | None = None, *, capture_output: bool, **kwargs: Any
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[str | None]: ...
+
+
 def run_safe_command(
     command: str,
-    args: list[str],
+    args: Sequence[str],
     cwd: Path | None = None,
     **kwargs: Any,
-) -> subprocess.CompletedProcess[str]:
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[str | None]:
     """Run any command securely using full executable path.
 
     Args:
@@ -430,7 +481,7 @@ def run_safe_command(
         **kwargs: Additional arguments passed to subprocess.run
 
     Returns:
-        CompletedProcess result
+        A CompletedProcess with text for each captured stream and None for each uncaptured stream.
 
     Raises:
         ExecutableNotFoundError: If command is not found
@@ -440,9 +491,9 @@ def run_safe_command(
     command_path = get_safe_executable(command)
     run_kwargs = _build_run_kwargs(f"run_safe_command for {command}", **kwargs)
     return cast(
-        "subprocess.CompletedProcess[str]",
+        "subprocess.CompletedProcess[str | None]",
         subprocess.run(  # noqa: S603,PLW1510
-            [command_path, *args],
+            _text_command_args(command_path, args),
             cwd=cwd,
             **run_kwargs,
         ),
@@ -534,12 +585,24 @@ def check_git_history() -> bool:
         return True
 
 
+@overload
 def run_git_command_with_input(
-    args: list[str],
+    args: Sequence[str], input_data: str | bytes, cwd: Path | None = None, *, capture_output: Literal[True] = True, **kwargs: Any
+) -> subprocess.CompletedProcess[str]: ...
+
+
+@overload
+def run_git_command_with_input(
+    args: Sequence[str], input_data: str | bytes, cwd: Path | None = None, *, capture_output: bool, **kwargs: Any
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[str | None]: ...
+
+
+def run_git_command_with_input(
+    args: Sequence[str],
     input_data: str | bytes,
     cwd: Path | None = None,
     **kwargs: Any,
-) -> subprocess.CompletedProcess[str]:
+) -> subprocess.CompletedProcess[str] | subprocess.CompletedProcess[str | None]:
     """Run a git command securely with stdin input using full executable path.
 
     Args:
@@ -549,7 +612,7 @@ def run_git_command_with_input(
         **kwargs: Additional arguments passed to subprocess.run
 
     Returns:
-        CompletedProcess result
+        A CompletedProcess with text for each captured stream and None for each uncaptured stream.
 
     Raises:
         ExecutableNotFoundError: If git is not found
@@ -569,7 +632,7 @@ def run_git_command_with_input(
     run_kwargs.pop("text")
     run_kwargs.pop("universal_newlines", None)
     payload = input_data if isinstance(input_data, bytes) else input_data.encode(encoding, errors)
-    result = subprocess.run([git_path, *args], cwd=cwd, input=payload, text=False, check=False, **run_kwargs)
+    result = subprocess.run(_text_command_args(git_path, args), cwd=cwd, input=payload, text=False, check=False, **run_kwargs)
 
     def decode(value: bytes | None) -> str | None:
         return None if value is None else value.decode(encoding, errors).replace("\r\n", "\n").replace("\r", "\n")

@@ -69,6 +69,7 @@ def _stored_runs(root: Path) -> set[str]:
 
 
 def _history(root: Path, archive: str) -> tuple[dict[str, dict[str, str]], dict[str, _ReportRenderer], dict[str, bytes], dict[str, str] | None]:
+    """Verify the index, latest pointer, and retained run directories together, accepting an empty history on first use."""
     _publication_name(archive)
     inputs: dict[str, bytes] = {}
     entries = {}

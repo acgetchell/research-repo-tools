@@ -17,8 +17,13 @@ from contextlib import ExitStack, chdir, contextmanager
 from dataclasses import replace
 from pathlib import Path, PureWindowsPath
 from threading import Event
-from typing import Any, get_type_hints, override
+from typing import Any, cast, get_type_hints, override
 from unittest.mock import patch
+
+import tomli_w
+
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
 from research_repo_tools.archives import ArchiveLimits, extract_archive
 from research_repo_tools.benchmark_reuse import ReusePolicy, parse_reuse_policy, plan_reuse_archive, serialize_reuse_policy, verify_reuse_archive
@@ -33,10 +38,9 @@ from research_repo_tools.candidate_reuse import (
     verify_candidate_release,
 )
 from research_repo_tools.cli import main, parser
-from research_repo_tools.common_measurement import DiscoveredSeries, DiscoveryPolicy, _validate_phase_identity, parse_plan, validate_run_policy
+from research_repo_tools.common_measurement import DiscoveredSeries, DiscoveryPolicy, _validate_phase_identity, validate_run_policy
 from research_repo_tools.complete_runs import render_run, run_identity, validate_run_evidence
 from research_repo_tools.evidence import deterministic_json, parse_evidence, serialize_evidence
-from research_repo_tools.host_metadata import HostMetadata
 from research_repo_tools.measurement import load_measurement, measure_pair
 from research_repo_tools.measurement_checkpoints import Checkpoint, open_checkpoint
 from research_repo_tools.performance_acquisition import measure_and_retain
@@ -52,37 +56,11 @@ from research_repo_tools.run_presentation import RunLayout, RunRow, RunTableStyl
 from research_repo_tools.run_reports import load_run_report_plan
 from research_repo_tools.scheduled_runs import ScheduledRun, parse_scheduled_run, select_trial
 from research_repo_tools.source_exports import export_source
-from research_repo_tools.suite_measurement import AcquisitionSuite, SuiteMeasurementPlan, parse_suite_plan
+from research_repo_tools.suite_measurement import SuiteMeasurementPlan, parse_suite_plan
 from research_repo_tools.suite_runs import SuiteRun, comparison_incompatibilities, parse_suite_run
 from research_repo_tools.trial_recovery import capture_failed_output, replay_trial
 from research_repo_tools.trial_schedule import AlternatingOrder, RandomizedOrder, SequentialOrder, TrialSchedule, parse_schedule
-
-PROGRAM = """import json, subprocess, sys
-from pathlib import Path
-suite, action, log = sys.argv[1:4]
-supported = json.loads(Path('apis.json').read_bytes())
-assert suite in supported, 'unsupported API was compiled/invoked'
-with Path(log).open('ab') as output:
-    output.write((suite + ' ' + action + ' ' + Path('revision').read_text() + '\\n').encode())
-case = suite + '/case'
-if action == 'compile' and Path('doc.rs').exists():
-    subprocess.run(['rustc', '--crate-type=lib', '--emit=dep-info=inputs.d', 'doc.rs'], check=True)
-    dependencies = Path('inputs.d').read_text()
-    assert ('README.md' in dependencies) == (Path('revision').read_bytes() == b'old')
-elif action == 'list':
-    print(case + ': benchmark')
-elif action == 'measure':
-    target = Path('target/criterion') / suite / 'new'
-    target.mkdir(parents=True)
-    data = {
-        'benchmark.json': {'full_id': case},
-        'sample.json': {'iters': [1, 1], 'times': [5, 5]},
-        'estimates.json': {s: {'point_estimate': 5, 'confidence_interval': {'confidence_level': .95, 'lower_bound': 4, 'upper_bound': 6}} for s in ('mean', 'median')},
-        'tukey.json': [1, 2, 3, 4],
-    }
-    for name, value in data.items():
-        (target / name).write_bytes((json.dumps(value) + '\\r\\n').encode())
-"""
+from tests.fixtures.suite_acquisition import HOST, PAIR, git_model, plan, sources
 
 NATIVE_PROGRAM = r"""
 use std::{env, fs, io::Write, path::PathBuf};
@@ -110,91 +88,6 @@ fn main() {
     }
 }
 """
-
-HOST = HostMetadata("fixture-os", "fixture-arch", "fixture-cpu", 4, 8, 1024, (("python", "fixture-python"),))
-PAIR = ReleasePair("v1.1.0", "v1.0.0")
-
-
-def _toml(value):
-    if isinstance(value, dict):
-        return "{" + ", ".join(json.dumps(key) + "=" + _toml(item) for key, item in value.items()) + "}"
-    if isinstance(value, (tuple, list)):
-        return "[" + ", ".join(_toml(item) for item in value) + "]"
-    return json.dumps(value)
-
-
-def sources(apis: tuple[str, ...], revision: str) -> dict[str, bytes]:
-    return {
-        "bench.py": PROGRAM.encode(),
-        "apis.json": json.dumps(apis).encode(),
-        "revision": revision.encode(),
-        "Cargo.toml": b'[package]\nname="fixture"\nversion="1.1.0"\n',
-        **{f"input-{name}.json": b"[1, 2]\r\n" for name in ("shared", "new", "removed", "later")},
-    }
-
-
-def plan(log: Path, names: tuple[str, ...] = ("shared", "new", "removed"), *, mode: str = "common") -> SuiteMeasurementPlan:
-    suites = []
-    for name in names:
-        command = [sys.executable, "bench.py", name]
-        phases = {
-            phase: {
-                "command": [*command, "measure", str(log)],
-                "gate": [*command, "gate", str(log)],
-                "discovery": {"required": [f"{name}/case"], "suites": [{"name": name, "command": [*command, "list", str(log)]}]},
-            }
-            for phase in ("baseline", "current")
-        }
-        measured = parse_plan(
-            {
-                "schema": 4,
-                "harness-mode": mode,
-                "backend": "export",
-                "sources": ["revision", "apis.json"],
-                "harness": ["bench.py", f"input-{name}.json"],
-                "workloads": [f"input-{name}.json"],
-                "sample-count": 2,
-                "probes": {"python": [sys.executable, "--version"]},
-                "phases": phases,
-                "series": [{"name": phase, "phase": phase, "select": {"include": ["*"]}} for phase in phases],
-            }
-        )
-        suites.append(
-            AcquisitionSuite(
-                name,
-                name + "-v1",
-                measured,
-                since="v1.1.0" if name == "new" else None,
-                before="v1.1.0" if name == "removed" else None,
-                compilation=tuple((phase, (*command, "compile", str(log))) for phase in phases),
-            )
-        )
-    return SuiteMeasurementPlan(tuple(suites))
-
-
-def git_model(revisions: dict[str, dict[str, bytes]]):
-    def oid(data: bytes) -> bytes:
-        return hashlib.sha1(b"blob " + str(len(data)).encode() + b"\0" + data).hexdigest().encode()
-
-    keys = {tag: chr(ord("a") + index) * 40 for index, tag in enumerate(revisions)}
-    blobs = {oid(data): data for files in revisions.values() for data in files.values()}
-
-    def git(directory: Path, *args: str, input: bytes | None = None) -> bytes:
-        if args == ("rev-parse", "--show-prefix"):
-            return b""
-        if args[0] == "rev-parse":
-            tag = args[-1].removeprefix("refs/tags/").removesuffix("^{commit}")
-            if tag == "HEAD":
-                tag = next(reversed(keys))
-            return ((tag if tag in keys.values() else keys[tag]) + "\n").encode()
-        if args[0] == "ls-tree":
-            files = next(files for tag, files in revisions.items() if keys[tag] == args[-1])
-            return b"".join(b"100644 blob " + oid(data) + b"\t" + name.encode() + b"\0" for name, data in sorted(files.items()))
-        if args != ("cat-file", "--batch") or input is None:
-            raise AssertionError(f"unexpected Git operation: {args}")
-        return b"".join(key + b" blob " + str(len(blobs[key])).encode() + b"\n" + blobs[key] + b"\n" for key in input.splitlines())
-
-    return git
 
 
 class TestSuiteAcquisition(unittest.TestCase):
@@ -840,9 +733,13 @@ class TestSuiteAcquisition(unittest.TestCase):
             with export_source(capture, destination) as directory:
                 yield directory
 
+        class ConsumerReporter(ProgressReporter):
+            def __bool__(self) -> bool:
+                return False
+
         events = []
         with patch("research_repo_tools.suite_measurement.export_source", side_effect=tracked_export), self.assertRaisesRegex(ValueError, "gate failed"):
-            measure_pair(self.root, selected, PAIR, progress=ProgressReporter(mode="none", observer=events.append))
+            measure_pair(self.root, selected, PAIR, progress=ConsumerReporter(mode="none", observer=events.append))
         rejected = [event for event in events if event["suite"] == "later" and event["phase"] == "current" and event["state"] == "gate"]
         self.assertEqual([event["event"] for event in rejected], ["started", "failed"])
         self.assertEqual(events[-1], rejected[-1])
@@ -893,7 +790,9 @@ class TestSuiteAcquisition(unittest.TestCase):
 from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, sys.argv[1])
-from public_suite_acquisition_consumer import HOST, PAIR, git_model, main, plan, sources
+from research_repo_tools.cli import main
+import tomli_w
+from tests.fixtures.suite_acquisition import HOST, PAIR, git_model, plan, sources
 
 root, kind, phase = Path(sys.argv[2]), sys.argv[3], sys.argv[4]
 revisions = {PAIR.baseline: sources(('shared',), 'old'), PAIR.current: sources(('shared',), 'new')}
@@ -906,13 +805,7 @@ measurement['phases'][phase]['gate'] = [sys.executable, '-c',
     "sys.stderr.buffer.write(b'gate stderr\\r\\n\\xfe\\n'); sys.stderr.buffer.flush(); raise SystemExit(7)"]
 if kind == 'pair':
     document = measurement
-def toml(value):
-    if isinstance(value, dict):
-        return '{' + ', '.join(json.dumps(key) + '=' + toml(item) for key, item in value.items()) + '}'
-    if isinstance(value, (list, tuple)):
-        return '[' + ', '.join(toml(item) for item in value) + ']'
-    return json.dumps(value)
-(root / 'measurement.toml').write_text(''.join(key + '=' + toml(value) + '\n' for key, value in document.items()), encoding='utf-8', newline='\n')
+(root / 'measurement.toml').write_bytes(tomli_w.dumps(document).encode('utf-8'))
 with patch('research_repo_tools.source_exports._git', side_effect=git_model(revisions)), patch('research_repo_tools.measurement.capture_host', return_value=HOST):
     status = main(['--root', str(root), 'performance', 'measure', 'measurement.toml', PAIR.current, PAIR.baseline,
                    '--payload', 'run.json', '--manifest', 'evidence.json', '--report', 'report.md', '--progress', 'json'])
@@ -926,7 +819,7 @@ sys.exit(status)
                     for name, data in original.items():
                         (root / name).write_bytes(data)
                     result = subprocess.run(
-                        [sys.executable, "-I", "-X", "utf8", "-c", program, str(Path(__file__).resolve().parent), str(root), kind, phase],
+                        [sys.executable, "-I", "-X", "utf8", "-c", program, str(Path(__file__).resolve().parents[2]), str(root), kind, phase],
                         capture_output=True,
                         check=False,
                         timeout=60,
@@ -1347,7 +1240,7 @@ sys.exit(status)
         declaration["suites"][0]["measurement"]["context"] = {"repository": "example/library", "acquisition-owner": "local"}
         inventory = {
             **self.revisions["v1.1.0"],
-            "measurement.toml": ("schema=5\nsuites=" + _toml(declaration["suites"]) + "\n").encode(),
+            "measurement.toml": tomli_w.dumps(declaration).encode(),
             "report.toml": b'schema=2\ncurrent="docs/first.md"\narchive="docs/runs"\ntitle="First release timings"\n',
         }
         for name, data in inventory.items():
@@ -1394,7 +1287,7 @@ sys.exit(status)
             baseline_only = json.loads(json.dumps(declaration))
             for suite in baseline_only["suites"]:
                 suite["measurement"]["series"] = [series for series in suite["measurement"]["series"] if series["phase"] == "baseline"]
-            (self.root / "measurement.toml").write_bytes(("schema=5\nsuites=" + _toml(baseline_only["suites"]) + "\n").encode())
+            (self.root / "measurement.toml").write_bytes(tomli_w.dumps(baseline_only).encode())
             with (
                 patch("research_repo_tools.performance_acquisition.measure_and_retain", side_effect=AssertionError("invalid plan must not acquire")) as acquire,
                 patch("sys.stderr", new_callable=io.StringIO) as errors,
@@ -1576,16 +1469,17 @@ sys.exit(status)
             self.assertEqual((owner / "attachment.json").read_bytes(), receipt)
 
     def _cli_checkpoint_offline_promotion_and_readme_retry(self, *, scheduled=False) -> None:
+        self.log = self.root / "calls-🧪.log"
         selected = self.dependency_plan(names=("shared", "new", "removed"), mode="common")
         if scheduled:
             selected = replace(selected, schedule=TrialSchedule())
         for name, data in self.revisions["v1.1.0"].items():
             (self.root / name).write_bytes(data)
         (self.root / "target").mkdir()
-        configuration = f"schema={selected.schema}\nsuites=" + _toml(selected.document()["suites"]) + "\n"
+        configuration = {"schema": selected.schema, "suites": selected.document()["suites"]}
         if scheduled:
-            configuration += 'schedule={order="alternating",trials=2}\n'
-        (self.root / "measurement.toml").write_text(configuration, encoding="utf-8", newline="\n")
+            configuration["schedule"] = {"order": "alternating", "trials": 2}
+        (self.root / "measurement.toml").write_bytes(tomli_w.dumps(configuration).encode())
         self.assertEqual(load_measurement(self.root, "measurement.toml"), selected)
         args = ["--root", str(self.root), "performance"]
         acquisition = [
@@ -1940,9 +1834,9 @@ sys.exit(status)
     def test_versioned_schedule_vectors_and_counterbalance(self):
         # Fixed version-1 rank vectors, independently checked using OpenSSL's
         # SHA-256 command over the ASCII schedule records (no ambient RNG).
-        for seed, expected in ((0, "CBCCBB"), (42, "BBCCCB"), (2**64 - 1, "CBBCCB")):
-            with self.subTest(seed=seed):
-                schedule = TrialSchedule(6, RandomizedOrder(seed))
+        for seed, expected in ((0, "CBCCBB"), (42, "BBCC"), (42, "BBCCCB"), (2**64 - 1, "CBBCCB")):
+            with self.subTest(seed=seed, trials=len(expected)):
+                schedule = TrialSchedule(len(expected), RandomizedOrder(seed))
                 phases = tuple(("current", "baseline") if first == "C" else ("baseline", "current") for first in expected)
                 self.assertEqual(schedule.phases, phases)
                 self.assertEqual(parse_schedule(schedule.document()).phases, phases)
@@ -2001,7 +1895,6 @@ sys.exit(status)
                 self.assertIn(b"Within-phase samples are not independent trials", report)
                 self.assertIn(b"Trial 1", report)
                 self.assertIn(b"Trial &lt;script&gt; &amp; notes", report)
-        self.assertEqual(TrialSchedule(4, RandomizedOrder(42)).phases, TrialSchedule(4, RandomizedOrder(42)).phases)
         self.assertEqual(sum(order[0] == "current" for order in TrialSchedule(10, RandomizedOrder(9)).phases), 5)
         for args in ((3, AlternatingOrder()), (True, SequentialOrder())):
             with self.assertRaises(ValueError):
@@ -2058,6 +1951,16 @@ sys.exit(status)
                 parse_scheduled_run(replace(evidence, payload=deterministic_json(raw)))
         raw = json.loads(evidence.payload)
         events = raw["trials"][0]["lifecycle"]["events"]
+        first_phase = next(index for index, event in enumerate(events) if event["kind"] == "phase-complete")
+        prefix = [dict(event) for event in events[: first_phase + 1]]
+        for index, event in enumerate(prefix[:-1], start=1):
+            event["at_ns"] = index
+        self.assertEqual(prefix[-2]["kind"], "phase-start")
+        prefix[-1].update(started_ns=prefix[-2]["at_ns"], finished_ns=first_phase + 1)
+        replay_trial(prefix, selected, 1)
+        prefix[-1]["started_ns"] = float(prefix[-2]["at_ns"])
+        with self.assertRaisesRegex(ValueError, "phase start must be an integer"):
+            replay_trial(prefix, selected, 1)
         last_phase = max(index for index, event in enumerate(events) if event["kind"] == "phase-complete")
         complete = events[last_phase]
         events.insert(
@@ -2094,6 +1997,15 @@ sys.exit(status)
         checkpoint = self.root / "scheduled"
         selected, evidence = self.scheduled_fixture(checkpoint=checkpoint)
         original = {path.name: path.read_bytes() for path in checkpoint.glob("*.json")}
+        marker = checkpoint / "unit-started-trial-1.json"
+        record = json.loads(original[marker.name])
+        self.assertEqual(record["unit"]["trial"], 1)
+        record["unit"]["trial"] = True
+        record["sha256"] = hashlib.sha256(deterministic_json(record["unit"])).hexdigest()
+        marker.write_bytes(deterministic_json(record))
+        with self.assertRaisesRegex(ValueError, "started/completed prefix"):
+            measure_pair(self.root, selected, PAIR, checkpoint=checkpoint, resume=True, progress=self.quiet)
+        marker.write_bytes(original[marker.name])
 
         def no_measure(command, args=(), **kwargs):
             if "measure" in args:
@@ -3562,6 +3474,36 @@ sys.exit(status)
 
 
 class TestProgress(unittest.TestCase):
+    def test_invalid_inventory_or_duration_preserves_the_previous_budget(self):
+        events = []
+        reporter = ProgressReporter(mode="none", observer=events.append)
+        reporter.budget({"build": 2})
+        reporter.accept("build", 1, 0)
+        invalid_budgets = (({1: 1}, None, None), ({"build": 1}, {"xy": 1}, None), ({"build": 1}, None, False))
+        for counts, inventory, duration in invalid_budgets:
+            with self.subTest(counts=counts, inventory=inventory, duration=duration), self.assertRaises(ValueError):
+                reporter.budget(cast(Any, counts), duration, inventory=cast(Any, inventory))
+        with self.assertRaises(ValueError):
+            reporter.accept("build", 1, True)
+        self.assertEqual((reporter.total, reporter.completed, len(events)), (2, 1, 2))
+        reporter.accept("build", 1, 0)
+        self.assertEqual(events[-1]["remaining"], 0)
+
+    def test_observer_owns_its_event_without_changing_streamed_json(self) -> None:
+        observed = []
+
+        def consume(event: dict[str, object]) -> None:
+            observed.append(event.copy())
+            event.clear()
+
+        stream = io.StringIO()
+        reporter = ProgressReporter(mode="json", stream=stream, observer=consume)
+        reporter.budget({"build": 1}, inventory={("core", "current"): 1})
+        event = json.loads(stream.getvalue())
+        self.assertEqual(observed, [event])
+        self.assertEqual(event["event"], "budget")
+        self.assertEqual(event["inventory"], [{"suite": "core", "phase": "current", "total": 1, "completed": 0, "remaining": 1}])
+
     def test_failed_output_name_validation_scales_with_file_count(self):
         work = []
         normalize = unicodedata.normalize
@@ -3790,6 +3732,19 @@ class TestProgress(unittest.TestCase):
         last = json.loads(output.getvalue().splitlines()[-1])
         self.assertEqual((last["event"], last["state"], last["remaining"]), ("interrupted", "acquisition", 2))
 
+    def test_unrepresentable_eta_keeps_validated_work_and_emits_json(self) -> None:
+        output = io.StringIO()
+        reporter = ProgressReporter(mode="json", stream=output)
+        reporter.budget({"shared": 3})
+        reporter.accept("shared", 1, sys.float_info.max)
+        event = json.loads(output.getvalue().splitlines()[-1])
+        self.assertEqual(event["completed"], 1)
+        self.assertIsNone(event["eta_seconds"])
+        self.assertIsNone(event["compatible_eta_seconds"])
+        self.assertEqual(event["eta_reason"], "estimate exceeds finite range")
+        reporter.accept("shared", 2, 1)
+        self.assertEqual(json.loads(output.getvalue().splitlines()[-1])["eta_seconds"], 0)
+
     def test_native_failure_partial_files_never_advance_completion(self) -> None:
         events = []
         reporter = ProgressReporter(mode="none", observer=events.append)
@@ -3810,6 +3765,25 @@ class TestProgress(unittest.TestCase):
                 with patch("research_repo_tools.files._replace_path", side_effect=OSError("interrupted commit")), self.assertRaises(OSError):
                     journal.accept("shared", {"fixture": True})
                 self.assertEqual(journal.read(), {})
+
+    def test_checkpoint_resumes_after_long_unit_staging_is_interrupted(self) -> None:
+        from research_repo_tools.files import _open_sibling_temporary
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve() / "checkpoint"
+            units = ("abcdefghijklmno", "abcdefghijklmnop", "abcdefghijklmnopqrstuv")
+            with open_checkpoint(root, {}, units, resume=False) as journal:
+                journal.accept(units[0], {"retained": True})
+                for name in units:
+                    for suffix in (".tmp", ".bak"):
+                        fd, staged = _open_sibling_temporary(root / f"unit-{name}.json", suffix)
+                        os.close(fd)
+                        staged.write_bytes(b"incomplete")
+            with open_checkpoint(root, {}, units, resume=True) as journal:
+                self.assertEqual(journal.read(), {units[0]: {"retained": True}})
+                (root / (".unrelated." + "a" * 24 + ".tmp")).touch()
+                with self.assertRaisesRegex(ValueError, "unexpected checkpoint entry"):
+                    journal.read()
 
 
 if __name__ == "__main__":

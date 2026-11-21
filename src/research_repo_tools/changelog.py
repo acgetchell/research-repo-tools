@@ -1,13 +1,16 @@
 """Configured changelog generation, resources, release notes, and local tags."""
 
 import re
+import shlex
+import subprocess
 import tempfile
 import tomllib
+from dataclasses import replace
 from datetime import UTC, date, datetime
 from importlib.resources import files
 from pathlib import Path
 
-from research_repo_tools.process import run_git_command, run_git_command_with_input, run_safe_command
+from research_repo_tools.process import format_exception_diagnostics, run_command_bytes, run_git_command, run_git_command_with_input, run_safe_command
 from research_repo_tools.release_tags import _GITHUB_TAG_ANNOTATION_LIMIT, SEMVER_PATTERN, _heading_to_anchor, validate_semver
 lazy from research_repo_tools import archive_changelog as archive
 lazy from research_repo_tools import changelog_notes
@@ -253,16 +256,19 @@ def check(config: Config) -> None:
             seen[version] = source
 
 
-def tag(config: Config, version: str, *, force: bool = False, dry_run: bool = False) -> str:
+def tag(config: Config, version: str, *, commit: str | None = None, force: bool = False, dry_run: bool = False) -> str:
     """Create an annotated local tag after validating metadata, date, and notes.
 
     Never pushes or publishes a release. --force uses Git's ref replacement;
     the previous tag is not deleted before the replacement object exists.
     """
     validate_semver(version)
-    from research_repo_tools.dependency_workflows import check_dependency_policy
+    from research_repo_tools._git_checkout import READ_ONLY_OPTIONS, git_context
+    from research_repo_tools.dependency_provenance import check_release_dependencies
+    from research_repo_tools.release_assets import require_release_checkout
 
-    check_dependency_policy(config.root)
+    if commit is not None:
+        require_release_checkout(config.root, commit)
     check(config)
     policy = config.release
     from research_repo_tools.release_metadata import read_package_info
@@ -296,14 +302,77 @@ def tag(config: Config, version: str, *, force: bool = False, dry_run: bool = Fa
         url = _github_repo_url(f"{owner}/{repository}")
         relative = source.resolve().relative_to(config.root).as_posix()
         body = f"Version {package.version}\n\nSee full changelog:\n<{url}/blob/{version}/{relative}#{_heading_to_anchor(heading)}>\n"
-    exists = run_git_command(["show-ref", "--verify", "--quiet", f"refs/tags/{version}"], cwd=config.root, check=False)
-    if exists.returncode not in (0, 1):
+    ref_args = ["show-ref", "--verify", "--quiet", f"refs/tags/{version}"]
+    if commit is None:
+        exists = run_git_command(ref_args, cwd=config.root, check=False).returncode
+    else:
+        git, environment = git_context(config.root)
+        exists = run_command_bytes(git, [*READ_ONLY_OPTIONS, *ref_args], cwd=config.root, env=environment, check=False).returncode
+    if exists not in (0, 1):
         raise ValueError("Git could not check the existing tag reference")
-    if exists.returncode == 0 and not force:
+    if exists == 0 and not force:
         raise ValueError(f"tag {version} already exists; use --force to replace it")
+    check_release_dependencies(config.root, packages=config.release.published_dependencies)
     if not dry_run:
+        if commit is not None:
+            require_release_checkout(config.root, commit)
         args = ["tag", "-a", version, "-F", "-", "--cleanup=verbatim"]
         if force:
             args.insert(1, "-f")
-        run_git_command_with_input(args, input_data=body, cwd=config.root)
+        if commit is None:
+            run_git_command_with_input(args, input_data=body, cwd=config.root)
+        else:
+            git, environment = git_context(config.root)
+            run_command_bytes(git, [*READ_ONLY_OPTIONS, *args, commit], input=body.encode("utf-8"), cwd=config.root, env=environment)
     return body
+
+
+def tag_with_preflight(
+    config: Config,
+    version: str,
+    *,
+    commit: str | None = None,
+    force: bool = False,
+    dry_run: bool = False,
+    explicit_root: bool = False,
+    config_file: Path | None = None,
+) -> tuple[str, str]:
+    """Check final metadata and create or preview a tag, returning its reviewed commit and annotation.
+
+    Recovery commands retain the caller's project, configuration, and preview or force options.
+    A metadata correction requires a newly reviewed commit. A tag operation failure can retry the original one.
+    """
+    from research_repo_tools.release_metadata import check as check_metadata
+
+    if commit is None:
+        commit = run_git_command(["rev-parse", "HEAD"], cwd=config.root).stdout.strip()
+
+    def retry_command(revision: str) -> str:
+        """Render a POSIX-shell retry against the same configuration and revision."""
+        tag_args = [version, "--commit", revision]
+        if explicit_root or config_file is not None:
+            command = ["research-repo-tools", "--root", str(config.root)]
+            if config_file is not None:
+                command.extend(("--config", str(config_file.absolute())))
+            command.extend(("changelog", "tag", *tag_args))
+            if dry_run:
+                command.append("--dry-run")
+        else:
+            command = ["just", "tag-preview" if dry_run else "tag", *tag_args]
+        if force:
+            command.append("--force")
+        return shlex.join(command)
+
+    if check_metadata(config.root, policy=replace(config.release, final_changelog=True), quiet=dry_run):
+        raise ValueError(
+            f"tagging preflight failed for {version} at {commit}. Correct the reported metadata. "
+            "If tracked files change, commit and review the correction. Replace REVIEWED_COMMIT with the reviewed SHA. "
+            f"Retry in a POSIX shell with\n{retry_command('REVIEWED_COMMIT')}"
+        )
+    try:
+        body = tag(config, version, commit=commit, force=force, dry_run=dry_run)
+    except (ValueError, OSError, subprocess.SubprocessError) as error:
+        raise ValueError(
+            f"{version} at {commit}: {format_exception_diagnostics(error)}\nTag preflight must pass before creation. Resume in a POSIX shell with\n{retry_command(commit)}"
+        ) from error
+    return commit, body

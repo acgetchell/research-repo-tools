@@ -13,6 +13,7 @@ from __future__ import annotations
 import argparse
 import http.client
 import json
+import math
 import os
 import re
 import subprocess
@@ -143,10 +144,18 @@ def _json(data: bytes) -> dict[str, Any]:
             result[key] = value
         return result
 
-    def invalid(_value):
-        raise ValueError("source metadata contains a non-finite number")
+    def finite(value):
+        number = float(value)
+        if not math.isfinite(number):
+            raise ValueError("source metadata contains a non-finite number")
+        return number
 
-    value = json.loads(data.decode("utf-8"), object_pairs_hook=pairs, parse_constant=invalid)
+    if len(data) > _LIMIT:
+        raise ValueError("source metadata exceeds the byte limit")
+    try:
+        value = json.loads(data.decode("utf-8"), object_pairs_hook=pairs, parse_constant=finite, parse_float=finite)
+    except RecursionError as error:
+        raise ValueError("source metadata is too deeply nested") from error
     if not isinstance(value, dict):
         raise ValueError("source metadata must be an object")
     return value
@@ -169,8 +178,14 @@ class _ResolvedSource:
 
 
 def _resolve(source: Source, *, metadata_file: Path | None = None) -> _ResolvedSource:
+    """Verify the pinned release or GitHub commit and read its Python requirement before selecting a tooling runtime."""
     if isinstance(source, ReleasePin):
-        data = _json(metadata_file.read_bytes() if metadata_file else _read(f"https://pypi.org/pypi/{PACKAGE}/{source.version}/json"))
+        if metadata_file is None:
+            payload = _read(f"https://pypi.org/pypi/{PACKAGE}/{source.version}/json")
+        else:
+            with metadata_file.open("rb") as stream:
+                payload = stream.read(_LIMIT + 1)
+        data = _json(payload)
         info = data.get("info")
         if not isinstance(info, dict) or info.get("name") != PACKAGE or info.get("version") != source.version:
             raise ValueError("release metadata must identify the exact requested research-repo-tools version")
@@ -240,7 +255,34 @@ def run_tooling(source: Source, arguments: tuple[str, ...], *, root: Path, relea
     return _execute(resolved, arguments, root=root, extras=extras)
 
 
+def _tooling_command(arguments: tuple[str, ...]) -> list[str]:
+    """Select interpreter flags from release group options, preserving forwarded arguments."""
+    tokens = iter(arguments)
+    for token in tokens:
+        if token in {"--config", "--root"}:
+            next(tokens, None)
+        elif not token.startswith(("--config=", "--root=")):
+            if token != "release":
+                return [PACKAGE]
+            break
+    isolated = pinned = False
+    for token in tokens:
+        name, separator, _ = token.partition("=")
+        if token == "--isolated-runtime":
+            isolated = True
+        elif name in {"--runtime-policy", "--runtime-policy-sha256"}:
+            pinned = pinned or name == "--runtime-policy"
+            if not separator:
+                next(tokens, None)
+        else:
+            break
+    if isolated:
+        return ["python", "-I", *(["-B"] if pinned else []), "-m", "research_repo_tools"]
+    return [PACKAGE]
+
+
 def _execute(resolved: _ResolvedSource, arguments: tuple[str, ...], *, root: Path, local_artifact: bool = False, extras: tuple[str, ...] = ()) -> int:
+    """Pass the consumer root to the selected tooling through uv and return the child process exit status."""
     # uv configuration must not redirect a verified PyPI release to a local or
     # private source with the same version. Legacy offline adoption is explicit.
     environment = (
@@ -254,7 +296,6 @@ def _execute(resolved: _ResolvedSource, arguments: tuple[str, ...], *, root: Pat
     requirement = resolved.requirement
     if extras:
         requirement = PACKAGE + "[" + ",".join(sorted(extras)) + "]" + requirement[len(PACKAGE) :]
-    command = ["python", "-I", "-m", "research_repo_tools"] if arguments[:2] == ("release", "--isolated-runtime") else [PACKAGE]
     return subprocess.run(
         [
             "uvx",
@@ -267,7 +308,7 @@ def _execute(resolved: _ResolvedSource, arguments: tuple[str, ...], *, root: Pat
             "https://pypi.org/simple",
             "--from",
             requirement,
-            *command,
+            *_tooling_command(arguments),
             "--root",
             str(root.resolve()),
             *arguments,
@@ -279,7 +320,8 @@ def _execute(resolved: _ResolvedSource, arguments: tuple[str, ...], *, root: Pat
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
+    """Select the tooling source, then run the requested command in its resolved runtime."""
+    parser = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
     parser.add_argument("version", nargs="?", help="exact release for legacy Python adoption")
     parser.add_argument("--version", dest="release", help="exact published research-repo-tools version")
     parser.add_argument("--github", help="public GitHub owner/repository")
@@ -325,7 +367,10 @@ def main(argv=None):
                 raise ValueError("saved metadata does not prove publication for release intent")
             return _execute(_resolve(source, metadata_file=args.metadata_file), arguments, root=args.root, local_artifact=True)
         return run_tooling(source, arguments, root=args.root, release_intent=args.release_intent, extras=tuple(args.extras.split(",")) if args.extras else ())
-    except (OSError, ValueError, TypeError, subprocess.TimeoutExpired) as error:
+    except subprocess.TimeoutExpired as error:
+        print(f"Python adoption bootstrap: tooling timed out after {error.timeout} seconds", file=sys.stderr)
+        return 1
+    except (OSError, ValueError, TypeError) as error:
         print("Python adoption bootstrap: " + str(error), file=sys.stderr)
         return 1
 

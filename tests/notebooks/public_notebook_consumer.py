@@ -4,6 +4,7 @@ import ast
 import contextlib
 import io
 import json
+import sys
 import tempfile
 import unittest
 import warnings
@@ -12,11 +13,11 @@ from pathlib import Path
 from typing import Any, override
 from unittest.mock import patch
 
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from research_repo_tools.cli import main
-
-
-def code(source="value = 1\n", cell_id="calculate-value"):
-    return {"cell_type": "code", "id": cell_id, "metadata": {}, "source": source, "outputs": [], "execution_count": None}
+from tests.fixtures.notebooks import code
 
 
 class Consumer(unittest.TestCase):
@@ -74,6 +75,28 @@ class TestExecutionPreflight(Consumer):
         publish.assert_not_called()
         self.assertEqual(set(self.root.rglob("*")), entries)
         self.assertEqual({path: path.read_bytes() for path in originals}, originals)
+
+    def test_clear_preserves_a_notebook_edited_before_publication(self):
+        from research_repo_tools import files
+
+        before = code("value = 'original'\n")
+        self.write([{**before, "execution_count": 1}])
+        original_publish = files.replace_many
+        edit = {**before, "source": "value = 'concurrent edit'\n", "execution_count": 2}
+        concurrent_payload = None
+
+        def publish(updates, **kwargs):
+            nonlocal concurrent_payload
+            concurrent_payload = self.write([edit])
+            return original_publish(updates, **kwargs)
+
+        errors = io.StringIO()
+        with patch.object(files, "replace_many", side_effect=publish), contextlib.redirect_stderr(errors):
+            status = main(["--root", str(self.root), "notebooks", "clear", str(self.path)])
+        self.assertEqual(status, 1, errors.getvalue())
+        self.assertIn("changed before publication", errors.getvalue())
+        self.assertIsNotNone(concurrent_payload)
+        self.assertEqual(self.path.read_bytes(), concurrent_payload)
 
     def test_output_root_and_all_ancestors_are_checked_before_any_kernel(self):
         second = self.path.parent / "blocked" / "second.ipynb"
@@ -140,6 +163,17 @@ class TestExecutionPreflight(Consumer):
 
 
 class TestInspection(Consumer):
+    def test_one_shot_selection_is_inspected_and_empty_selection_is_rejected(self):
+        from research_repo_tools.notebook_inspect import inspect
+
+        self.write([code()])
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            inspect(iter([self.path]), as_json=True)
+        self.assertEqual([item["path"] for item in json.loads(out.getvalue())["notebooks"]], [str(self.path)])
+        with self.assertRaisesRegex(ValueError, "at least one"):
+            inspect(iter(()), as_json=True)
+
     def test_invalid_output_policy_fails_before_notebook_inspection(self):
         from research_repo_tools import notebooks
 

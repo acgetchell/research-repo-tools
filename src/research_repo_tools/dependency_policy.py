@@ -22,23 +22,26 @@ MAX_SNAPSHOT_BYTES = 128 * 1024 * 1024
 
 @dataclass(frozen=True, slots=True)
 class DependencyProject:
+    """A project boundary within the checkout and the package directories that it owns."""
+
     ecosystem: Ecosystem
     directory: str = "."
     owned: tuple[str, ...] = (".",)
     cargo_owner: DependencyProject | None = None
 
     def __post_init__(self) -> None:
-        if self.ecosystem not in {"python", "cargo"}:
+        if self.ecosystem not in ("python", "cargo"):
             raise ValueError("dependency project ecosystem must be python or cargo")
         relative_directory(self.directory)
-        object.__setattr__(self, "owned", tuple(self.owned))
+        if isinstance(self.owned, (str, bytes)):
+            raise ValueError("release-owned must be a sequence of workspace directories")
+        object.__setattr__(self, "owned", tuple(relative_directory(value) for value in self.owned))
         if not self.owned or len(set(self.owned)) != len(self.owned):
             raise ValueError("release-owned must contain distinct workspace directories")
-        for value in self.owned:
-            relative_directory(value)
         owner = self.cargo_owner
         if owner is not None and (
-            self.ecosystem != "cargo"
+            not isinstance(owner, DependencyProject)
+            or self.ecosystem != "cargo"
             or owner.ecosystem != "cargo"
             or self.owned != (".",)
             or owner.owned != (".",)
@@ -51,6 +54,8 @@ class DependencyProject:
 
 @dataclass(frozen=True, slots=True)
 class SourceSelection:
+    """A named choice of package source for one declared dependency project."""
+
     name: str
     project: DependencyProject
     source: Source
@@ -58,12 +63,15 @@ class SourceSelection:
 
 @dataclass(frozen=True, slots=True)
 class DependencyPolicy:
+    """The checkout's declared projects, dependency source selections, and source-build rules."""
+
     projects: tuple[DependencyProject, ...]
     selections: tuple[SourceSelection, ...]
     source_builds: SourceBuildPolicy | None = None
 
 
 def parse_policy(value: object) -> DependencyPolicy:
+    """Validate project ownership, source selections, and source-build policy as one declaration."""
     data = table(value, "dependency policy")
     if set(data) - {"schema", "projects", "sources", "source-builds"} or type(data.get("schema")) is not int or data["schema"] != 1:
         raise ValueError("dependency policy requires schema = 1 and only projects/sources/source-builds")
@@ -110,15 +118,20 @@ def parse_policy(value: object) -> DependencyPolicy:
 
 
 def load_policy(root: Path) -> DependencyPolicy | None:
+    """Read and validate the checkout's dependency policy, or return None when absent."""
+    return observe_policy(root)[0]
+
+
+def observe_policy(root: Path) -> tuple[DependencyPolicy | None, InputSnapshot]:
+    """Parse only the bounded bytes captured for a subsequent input check."""
     path = root / POLICY_FILE
-    if not path.exists():
-        return None
-    if path.is_symlink() or not path.is_file():
-        raise ValueError("dependency policy must be a regular source file")
-    return parse_policy(tomllib.loads(path.read_text(encoding="utf-8")))
+    payload = _read_input(path, min(MAX_SNAPSHOT_FILE_BYTES, MAX_SNAPSHOT_BYTES))
+    snapshot = InputSnapshot(((path, payload),), _environment())
+    return (None if payload is None else parse_policy(tomllib.loads(payload.decode("utf-8")))), snapshot
 
 
 def inside(root: Path, relative: str) -> Path:
+    """Join a portable policy path to the checkout and reject resolved paths outside it."""
     path = root / relative_directory(relative)
     if not path.resolve().is_relative_to(root.resolve()):
         raise ValueError("dependency paths must stay within the observed checkout")
@@ -140,27 +153,44 @@ def project_manifests(root: Path, ecosystem: Ecosystem) -> tuple[Path, ...]:
     members, excludes = workspace.get("members", []), workspace.get("exclude", [])
     if not isinstance(members, list) or not isinstance(excludes, list) or any(not isinstance(item, str) for item in (*members, *excludes)):
         raise ValueError("workspace members/exclude must be path patterns")
-    paths = {manifest.resolve()}
+    paths: set[Path] = set()
     omitted: set[Path] = set()
     for patterns, destination in ((excludes, omitted), (members, paths)):
         for pattern in patterns:
-            relative_directory(pattern)
+            relative_directory(pattern, patterns=True)
             for match in root.glob(pattern):
                 candidate = match / name
                 if not candidate.resolve().is_relative_to(root.resolve()):
                     raise ValueError("workspace members must stay inside the project")
                 if candidate.is_file():
                     destination.add(candidate.resolve())
-    return tuple(sorted(paths - omitted, key=str))
+    return tuple(sorted({manifest.resolve()} | (paths - omitted), key=str))
 
 
 def configuration_paths(root: Path, ecosystem: Ecosystem) -> tuple[Path, ...]:
+    """List candidate resolver configuration paths whose presence or contents can affect verification."""
     if ecosystem == "python":
         return tuple(parent / "uv.toml" for parent in (root, *root.parents))
     paths = [parent / ".cargo" / name for parent in (root, *root.parents) for name in ("config", "config.toml")]
     home = Path(os.environ.get("CARGO_HOME", str(Path.home() / ".cargo")))
     paths.extend(home / name for name in ("config", "config.toml"))
     return tuple(dict.fromkeys(paths))
+
+
+def _read_input(path: Path, limit: int) -> bytes | None:
+    try:
+        metadata = path.lstat()
+    except FileNotFoundError, NotADirectoryError:
+        return None
+    if not stat.S_ISREG(metadata.st_mode):
+        raise ValueError(f"dependency input must be a regular file, not a symlink: {path}")
+    if metadata.st_size > limit:
+        raise ValueError(f"dependency snapshot exceeds the per-file or aggregate byte limit: {path}")
+    with path.open("rb") as stream:
+        content = stream.read(limit + 1)
+    if len(content) > limit:
+        raise ValueError(f"dependency snapshot exceeds the per-file or aggregate byte limit: {path}")
+    return content
 
 
 @dataclass(frozen=True, slots=True)
@@ -172,6 +202,7 @@ class InputSnapshot:
 
     @classmethod
     def capture(cls, paths: tuple[Path, ...]) -> InputSnapshot:
+        """Capture bounded input bytes, absent paths, and the resolver environment."""
         files = []
         seen = set()
         remaining = MAX_SNAPSHOT_BYTES
@@ -181,26 +212,15 @@ class InputSnapshot:
             if len(seen) >= MAX_SNAPSHOT_FILES:
                 raise ValueError("dependency snapshot exceeds the file-count limit")
             seen.add(path)
-            try:
-                metadata = path.lstat()
-            except FileNotFoundError, NotADirectoryError:
-                files.append((path, None))
-                continue
-            if not stat.S_ISREG(metadata.st_mode):
-                raise ValueError(f"dependency input must be a regular file, not a symlink: {path}")
-            limit = min(MAX_SNAPSHOT_FILE_BYTES, remaining)
-            if metadata.st_size > limit:
-                raise ValueError(f"dependency snapshot exceeds the per-file or aggregate byte limit: {path}")
-            with path.open("rb") as stream:
-                content = stream.read(limit + 1)
-            if len(content) > limit:
-                raise ValueError(f"dependency snapshot exceeds the per-file or aggregate byte limit: {path}")
-            remaining -= len(content)
+            content = _read_input(path, min(MAX_SNAPSHOT_FILE_BYTES, remaining))
+            if content is not None:
+                remaining -= len(content)
             files.append((path, content))
         return cls(tuple(files), _environment())
 
     @property
     def digest(self) -> str:
+        """Hash path identities, file contents or absence, and the captured environment."""
         digest = hashlib.sha256()
         for path, payload in self.files:
             for value in (str(path).encode("utf-8"), b"absent" if payload is None else b"present" + payload):
@@ -210,6 +230,7 @@ class InputSnapshot:
         return digest.hexdigest()
 
     def verify(self) -> None:
+        """Reject changes to the captured paths, their presence, or the resolver environment."""
         if InputSnapshot.capture(tuple(path for path, _ in self.files)) != self:
             raise ValueError("dependency inputs changed; revalidate source, locks and downstream evidence")
 

@@ -6,6 +6,7 @@ Criterion samples or fabricates a receipt for a historical acquisition.
 
 import base64
 import binascii
+import re
 import time
 import uuid
 from collections.abc import Callable
@@ -42,10 +43,12 @@ class ScheduledRun:
 
     @property
     def harness_mode(self) -> str:
+        """Return the harness mode declared for the scheduled acquisition."""
         return self.plan.harness_mode
 
     @property
     def schema(self) -> str:
+        """Return the evidence schema used for scheduled trial runs."""
         return SCHEDULED_RUN_SCHEMA
 
 
@@ -59,10 +62,12 @@ def _decode(value: object) -> bytes:
 
 
 def parse_scheduled_run(evidence: Evidence) -> ScheduledRun:
+    """Validate the retained trial plan, measurements, and source identities."""
     return _parse_scheduled_run(evidence)
 
 
 def _parse_scheduled_run(evidence: Evidence, *, partial: bool = False) -> ScheduledRun:
+    """Validate trial identities and receipts in schedule order, accepting a nonempty prefix when partial."""
     raw = _object(_load_json(evidence.payload, "scheduled run"), "scheduled run", {"schema", "declaration", "trials"})
     if evidence.payload_schema != SCHEDULED_RUN_SCHEMA or raw["schema"] != SCHEDULED_RUN_SCHEMA:
         raise ValueError("requires complete-run v5 evidence")
@@ -88,8 +93,6 @@ def _parse_scheduled_run(evidence: Evidence, *, partial: bool = False) -> Schedu
         )
         if type(record["trial"]) is not int or record["trial"] != index + 1 or record["order"] != list(plan.schedule.phases[index]):
             raise ValueError("trial identity/order differs from schedule")
-        import re
-
         if not isinstance(record["session"], str) or re.fullmatch(r"[0-9a-f]{32}", record["session"]) is None or record["session"] in sessions:
             raise ValueError("trial sessions must be unique collection identities")
         sessions.add(record["session"])
@@ -161,6 +164,7 @@ def select_trial(evidence: Evidence, trial: int) -> Evidence:
 
 
 def validate_scheduled_policy(evidence: Evidence, plan: SuiteMeasurementPlan, *, release: bool = False) -> ScheduledRun:
+    """Require the retained schedule and each trial to satisfy the selected measurement policy."""
     run = parse_scheduled_run(evidence)
     if deterministic_json(run.plan.document()) != deterministic_json(plan.document()):
         raise ValueError("scheduled acquisition declaration changed")
@@ -181,6 +185,10 @@ def measure_schedule(
     progress: ProgressReporter,
     verify: Callable[[], None] | None,
 ) -> Evidence:
+    """Collect each declared trial and retain its evidence independently.
+
+    Resuming requires an explicit checkpoint whose plan, sources, environment, and trial order still match.
+    """
     assert plan.schedule is not None
     base = replace(plan, schedule=None, outputs=())
     if resume and checkpoint is None:
@@ -218,13 +226,15 @@ def measure_schedule(
         if event_trials != sorted(_integer(trial, "recovery trial") for trial in event_trials):
             raise ValueError("checkpoint recovery trial events are reordered or unknown")
         prefix = []
-        for name in names:
+        for index, name in enumerate(names):
+            marker = retained.get(f"started-{name}")
+            expected_marker = {"trial": index + 1, **({"lifecycle": LIFECYCLE_SCHEMA} if lifecycle_enabled else {})}
             if name in retained:
-                if len(prefix) != names.index(name) or f"started-{name}" not in retained:
+                if len(prefix) != index or deterministic_json(marker) != deterministic_json(expected_marker):
                     raise ValueError("checkpoint trials must form a contiguous started/completed prefix")
                 prefix.append(retained[name])
-            elif f"started-{name}" in retained:
-                if names.index(name) != len(prefix) or retained[f"started-{name}"] != {"trial": len(prefix) + 1, "lifecycle": LIFECYCLE_SCHEMA}:
+            elif marker is not None:
+                if not lifecycle_enabled or index != len(prefix) or deterministic_json(marker) != deterministic_json(expected_marker):
                     raise ValueError("interrupted trial may contain unretained timings; preserve it and start a new acquisition")
         for index, name in enumerate(names):
             trial_events = [event for event in events if event["trial"] == index + 1]
@@ -232,7 +242,7 @@ def measure_schedule(
                 raise ValueError("recovery events lack a started trial marker")
             if index < len(prefix):
                 expected_events = _object(prefix[index].get("lifecycle", {}), "trial lifecycle").get("events", [])
-                if trial_events != expected_events:
+                if deterministic_json(trial_events) != deterministic_json(expected_events):
                     raise ValueError("completed trial differs from checkpoint recovery journal")
             elif trial_events:
                 if index != len(prefix):
@@ -391,6 +401,7 @@ def measure_schedule(
 
 
 def render_scheduled_run(evidence: Evidence, *, title: str, links: str, identity: str) -> bytes:
+    """Render trial results separately as UTF-8 Markdown without pooling within-phase samples."""
     from research_repo_tools.suite_runs import render_suite_run
 
     run = parse_scheduled_run(evidence)

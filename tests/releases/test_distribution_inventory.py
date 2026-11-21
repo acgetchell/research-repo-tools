@@ -1,6 +1,7 @@
 """Reject stale or incomplete publication inputs before installation begins."""
 
 import importlib.util
+import io
 import os
 import subprocess
 import sys
@@ -9,6 +10,7 @@ import tomllib
 import unittest
 import zipfile
 from collections import Counter
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 from threading import Barrier, Event
 from types import SimpleNamespace
@@ -44,6 +46,45 @@ def test_optional_consumer_selections_cover_each_class_once(install_checker, sui
     extra = getattr(install_checker, f"{prefix}_EXTRA_TESTS")
     assert base == base_classes, "base-install contracts must run before optional dependencies are installed"
     assert Counter((*base, *extra)) == Counter(classes)
+
+
+@pytest.mark.parametrize(
+    ("entry", "effect", "diagnostic"),
+    [
+        ("__init__", "pass", None),
+        ("__init__", "from pathlib import Path; Path('generated').touch()", "imports changed consumer files"),
+        ("handler", "from pathlib import Path; Path('README.md').write_bytes(b'replaced')", "imports changed consumer files"),
+        (
+            "__init__",
+            "import socket\ntry: socket.getaddrinfo('127.0.0.1', 0, flags=socket.AI_NUMERICHOST)\nexcept AssertionError: pass",
+            "imports attempted network access: ['socket.getaddrinfo']",
+        ),
+    ],
+)
+def test_install_import_probe_detects_side_effects_in_a_real_child(tmp_path: Path, install_checker, entry, effect, diagnostic) -> None:
+    """Exercise the smoke test itself with inert package imports and no external network."""
+    site = tmp_path / "candidate site"
+    package = site / "research_repo_tools"
+    package.mkdir(parents=True)
+    (package / "__init__.py").touch()
+    (package / f"{entry}.py").write_text(effect, encoding="utf-8", newline="\n")
+    consumer = tmp_path / "consumer"
+    consumer.mkdir()
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", "-X", "utf8", "-c", "import sys; sys.path.insert(0, sys.argv[1])\n" + install_checker.IMPORT_SMOKE, str(site)],
+        cwd=consumer,
+        capture_output=True,
+        encoding="utf-8",
+        timeout=30,
+        check=False,
+    )
+    assert result.stdout == ""
+    if diagnostic is None:
+        assert result.returncode == 0, result.stderr
+        assert result.stderr == ""
+    else:
+        assert result.returncode == 1
+        assert f"AssertionError: {diagnostic}" in result.stderr
 
 
 @pytest.mark.parametrize("utf8_setting", ["0", "1"])
@@ -175,7 +216,24 @@ def test_install_failure_preserves_partial_output_and_original_error(
     assert output.err == expected_stderr
 
 
-@pytest.mark.parametrize("inventory", ["empty", "wheel-only", "sdist-only", "stale-wheel", "stale-sdist"])
+def test_install_failure_survives_strict_console_encoding(install_checker, monkeypatch):
+    failure = subprocess.CalledProcessError(23, ["installer"], output="résultat\n", stderr="分析\n".encode())
+
+    def fail(*args, **kwargs):
+        raise failure
+
+    monkeypatch.setattr(install_checker, "check", fail)
+    monkeypatch.setattr(sys, "argv", ["check_install.py"])
+    out, err = io.BytesIO(), io.BytesIO()
+    with io.TextIOWrapper(out, encoding="ascii", newline="\n") as stdout, io.TextIOWrapper(err, encoding="cp1252", newline="\n") as stderr:
+        with redirect_stdout(stdout), redirect_stderr(stderr), pytest.raises(subprocess.CalledProcessError) as raised:
+            install_checker.main()
+        assert raised.value is failure
+        assert out.getvalue() == b"r\\xe9sultat\n"
+        assert err.getvalue() == b"\\u5206\\u6790\n"
+
+
+@pytest.mark.parametrize("inventory", ["empty", "wheel-only", "sdist-only", "stale-wheel", "stale-sdist", "wrong-case", "uppercase-extra"])
 def test_install_check_rejects_unexpected_distribution_set(tmp_path: Path, inventory: str) -> None:
     version = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))["project"]["version"]
     wheel = f"research_repo_tools-{version}-py3-none-any.whl"
@@ -186,6 +244,8 @@ def test_install_check_rejects_unexpected_distribution_set(tmp_path: Path, inven
         "sdist-only": [sdist],
         "stale-wheel": [wheel, sdist, "research_repo_tools-0.0.0-py3-none-any.whl"],
         "stale-sdist": [wheel, sdist, "research_repo_tools-0.0.0.tar.gz"],
+        "wrong-case": [wheel.upper(), sdist],
+        "uppercase-extra": [wheel, sdist, "stale.WHL"],
     }[inventory]
     for name in names:
         (tmp_path / name).touch()
@@ -200,6 +260,21 @@ def test_install_check_rejects_unexpected_distribution_set(tmp_path: Path, inven
     assert f"Expected only {wheel} and {sdist}" in result.stderr
     assert "BadZipFile" not in result.stderr
     assert "PASS:" not in result.stdout
+
+
+@pytest.mark.parametrize("checker", ["check_install.py", "check_setup.py"])
+def test_optimized_python_cannot_silently_skip_validation(tmp_path, checker):
+    """Reject an optimized interpreter before opening artifacts or installing tools."""
+    result = subprocess.run(
+        [sys.executable, "-I", "-B", "-O", str(ROOT / "scripts" / checker)],
+        cwd=tmp_path,
+        capture_output=True,
+        timeout=30,
+        check=False,
+    )
+    assert result.returncode != 0
+    assert b"require enabled Python assertions" in result.stderr
+    assert b"RUN ARTIFACT" not in result.stdout and b"Running:" not in result.stdout
 
 
 @pytest.fixture
@@ -221,7 +296,7 @@ def test_changelog_only_requires_external_generator_before_installing(distributi
 
 
 def test_changelog_only_runs_one_installed_generation_contract_per_artifact(
-    distribution_inventory: Path, monkeypatch: pytest.MonkeyPatch, install_checker
+    distribution_inventory: Path, monkeypatch: pytest.MonkeyPatch, install_checker, capsys
 ) -> None:
     monkeypatch.setattr(install_checker.shutil, "which", lambda program: program)
     monkeypatch.setattr(install_checker, "run", lambda *args, **kwargs: "")
@@ -233,6 +308,9 @@ def test_changelog_only_runs_one_installed_generation_contract_per_artifact(
     for _, args in calls:
         assert Path(args[0]).name == "public_publishing_consumer.py"
         assert args[1:] == ["TestPublishingConsumer.test_installed_cli_generation_with_real_external_generator"]
+    output = capsys.readouterr().out.splitlines()
+    for artifact in ("wheel", "sdist"):
+        assert f"PASS: installed {artifact} changelog CLI with real git-cliff" in output
 
 
 def test_artifact_checks_overlap_with_separate_empty_caches_and_environments(
@@ -328,6 +406,11 @@ def test_install_check_does_not_forward_external_project_locations(distribution_
     sentinel = external / "uv.lock"
     sentinel.write_bytes(b"do not modify\n")
     selectors = (
+        "CONDA_PREFIX",
+        "UV_CONFIG_FILE",
+        "UV_NO_CONFIG",
+        "UV_PYTHON",
+        "UV_SYSTEM_PYTHON",
         "UV_PROJECT",
         "UV_PROJECT_ENVIRONMENT",
         "UV_WORKING_DIR",
@@ -341,6 +424,8 @@ def test_install_check_does_not_forward_external_project_locations(distribution_
     for name in selectors:
         monkeypatch.setenv(name, str(external))
     monkeypatch.setenv("UV_HTTP_TIMEOUT", "123")
+    monkeypatch.setenv("PYTHONIOENCODING", "ascii")
+    monkeypatch.setenv("PYTHONUTF8", "0")
     monkeypatch.setenv("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS", "1")
     monkeypatch.setattr(module.shutil, "which", lambda _: "uv")
 
@@ -357,6 +442,8 @@ def test_install_check_does_not_forward_external_project_locations(distribution_
         assert env["GIT_CONFIG_KEY_0"] == "core.hooksPath"
         assert env["GIT_CONFIG_VALUE_0"] == os.devnull
         assert env["UV_HTTP_TIMEOUT"] == "123"
+        assert env["PYTHONIOENCODING"] == "utf-8"
+        assert env["PYTHONUTF8"] == "1"
         assert env["RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS"] == "1"
         raise CheckedEnvironment
 

@@ -11,15 +11,19 @@ from research_repo_tools.process import run_safe_command
 from research_repo_tools.release_validation import parse_release_json
 
 TAG = re.compile(r"v?(?P<major>0|[1-9][0-9]*)\.(?P<minor>0|[1-9][0-9]*)\.(?P<patch>0|[1-9][0-9]*)")
+_RELEASE_LIST_LIMIT = 1000
 
 
 @dataclass(frozen=True)
 class PublishedRelease:
+    """A stable release's tag and timezone-aware publication time."""
+
     tag: str
     published_at: datetime
 
 
 def normalize_tag(tag: str) -> str:
+    """Validate the stable release tag and return its canonical v-prefixed spelling."""
     match = TAG.fullmatch(tag)
     if match is None:
         raise ValueError(f"release tag must use stable vX.Y.Z form: {tag!r}")
@@ -31,6 +35,7 @@ def _tag_version(tag: str) -> tuple[int, ...]:
 
 
 def stable_published_releases(document: object) -> tuple[PublishedRelease, ...]:
+    """Filter out drafts and prereleases and sort stable published releases newest by version."""
     if not isinstance(document, list):
         raise ValueError("GitHub releases must be an array")
     releases: list[PublishedRelease] = []
@@ -91,13 +96,16 @@ def require_first_release_history(read: Callable[[str], object]) -> None:
 
 
 def _published_releases(root: Path, *, repository: str | None = None) -> tuple[PublishedRelease, ...]:
-    arguments = ["release", "list", "--limit", "1000", "--json", "tagName,isDraft,isPrerelease,publishedAt"]
+    arguments = ["release", "list", "--limit", str(_RELEASE_LIST_LIMIT), "--json", "tagName,isDraft,isPrerelease,publishedAt"]
     if repository is not None:
         from research_repo_tools.release_assets import _repository
 
         arguments.extend(["--repo", _repository(repository)])
     result = run_safe_command("gh", arguments, cwd=root)
-    return stable_published_releases(parse_release_json(result.stdout))
+    document = parse_release_json(result.stdout)
+    if isinstance(document, list) and len(document) >= _RELEASE_LIST_LIMIT:
+        raise ValueError(f"GitHub release listing reached its {_RELEASE_LIST_LIMIT}-release limit; independently select the applicable release history")
+    return stable_published_releases(document)
 
 
 def _publish_texts(updates: tuple[tuple[Path, str], ...]) -> None:

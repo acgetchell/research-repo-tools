@@ -166,6 +166,12 @@ class TestPdf(unittest.TestCase):
         self.assertEqual(normalize_pdf(self.pdf, tex=self.tex, identity="example/reviewer").page_count, 1)
         self.assertEqual(self.pdf.read_bytes(), normalized)
 
+    def test_relative_input_and_absolute_output_refresh_the_same_pdf(self) -> None:
+        with contextlib.chdir(self.root):
+            result = normalize_pdf(Path(self.pdf.name), tex=self.tex, identity="stable", output=self.pdf, reference=self.pdf)
+        self.assertEqual(result.page_count, 1)
+        self.assertEqual(self.pdf.read_bytes(), normalize_pdf_bytes(self.original, date=read_source_date(self.tex), identity="stable"))
+
     def test_output_refresh_and_policy_failures_preserve_all_artifacts(self) -> None:
         destination = self.root / "reviewer.pdf"
         destination.write_bytes(b"prior artifact")
@@ -182,6 +188,11 @@ class TestPdf(unittest.TestCase):
         self.assertEqual(check_pdf(self.root / "new.pdf").page_count, 1)
 
     def test_output_aliases_preserve_tex_source_and_input_pdf(self) -> None:
+        reference = self.root / "reference.pdf"
+        reference.write_bytes(self.original)
+        with self.assertRaisesRegex(ValueError, "reference PDF"):
+            normalize_pdf(self.pdf, tex=self.tex, identity="stable", output=reference, reference=reference)
+        self.assertEqual(reference.read_bytes(), self.original)
         unicode_tex = self.root / "caf\u00e9.tex"
         unicode_tex.write_bytes(self.tex.read_bytes())
         for source, destination in ((self.tex, self.root / "SOURCE.TEX"), (unicode_tex, self.root / "cafe\u0301.tex")):
@@ -192,6 +203,18 @@ class TestPdf(unittest.TestCase):
                 with self.assertRaisesRegex(ValueError, "TeX source"):
                     normalize_pdf(self.pdf, tex=source, identity="stable", output=destination)
                 self.assertEqual({path.name: path.read_bytes() for path in self.root.iterdir()}, before)
+
+    def test_cli_explicit_output_cannot_fall_back_to_in_place(self) -> None:
+        args = ["--root", str(self.root), "papers", "normalize", self.pdf.name, "--tex", self.tex.name, "--identity", "stable", "--output"]
+        with contextlib.redirect_stderr(io.StringIO()) as error, contextlib.redirect_stdout(io.StringIO()) as out:
+            self.assertEqual(main([*args, ""]), 1)
+            self.assertIn("--output", error.getvalue())
+            self.assertEqual(out.getvalue(), "")
+            self.assertEqual(self.pdf.read_bytes(), self.original)
+            self.assertEqual(main([*args, "published.pdf"]), 0)
+            self.assertEqual(out.getvalue(), f"OK {(self.root / 'published.pdf').resolve(strict=True)}: 1 page(s)\n")
+            self.assertEqual(self.pdf.read_bytes(), self.original)
+            self.assertEqual(check_pdf(self.root / "published.pdf").page_count, 1)
 
     def test_atomic_failure_and_invalid_source_preserve_input(self) -> None:
         with patch.object(files, "_replace_path", side_effect=OSError("publication failed")):

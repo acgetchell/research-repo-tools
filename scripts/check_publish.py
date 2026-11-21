@@ -17,15 +17,19 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def check(root: Path) -> int:
+    """Verify distribution metadata and the expected wheel and sdist before publication."""
     metadata = tomllib.loads((root / "pyproject.toml").read_text(encoding="utf-8"))
     dist = root / "dist"
     if not dist.is_dir():
         raise ValueError("dist/ is missing; run just build before just publish-check")
-    version = metadata["project"]["version"]
+    project = metadata.get("project")
+    if not isinstance(project, dict) or project.get("name") != "research-repo-tools" or not isinstance(project.get("version"), str):
+        raise ValueError("pyproject.toml must declare the research-repo-tools project and its version")
+    version = project["version"]
     distributions = distribution_names(f"v{version}")
     # uv adds .gitignore to dist/. Only distribution files are publication inputs.
-    artifacts = set(dist.glob("*.whl")) | set(dist.glob("*.tar.gz"))
-    if {path.name for path in artifacts} != set(distributions):
+    artifacts = {path.name for path in dist.iterdir() if path.name.lower().endswith((".whl", ".tar.gz"))}
+    if artifacts != set(distributions):
         raise ValueError(f"expected only {', '.join(distributions)}; run just build to refresh dist/")
     for name in distributions:
         path = dist / name

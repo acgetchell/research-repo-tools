@@ -32,6 +32,7 @@ COMMANDS = {
 
 
 def add_command(commands, name: str) -> None:
+    """Register arguments for the requested performance workflow."""
     help_text = {
         "assets": "compare authenticated published release assets without measuring",
         "baseline": "measure a checked-out tag and package a shared release baseline",
@@ -180,6 +181,7 @@ def _asset_pair(args: argparse.Namespace, settings: Config) -> evidence.Evidence
 
 
 def run(args: argparse.Namespace, settings: Config) -> int:
+    """Execute the selected acquisition, reporting, or release-publication workflow."""
     root = settings.root
     if getattr(args, "release_intent", False) and not (args.action == "release" and args.owner is not None):
         from research_repo_tools.dependency_provenance import check_release_dependencies
@@ -353,6 +355,7 @@ def run(args: argparse.Namespace, settings: Config) -> int:
 
 
 def _first_release(args: argparse.Namespace, settings: Config) -> None:
+    """Acquire or reuse the first release's measurements and publish the report after capturing its handoff records."""
     from functools import partial
 
     from research_repo_tools.candidate_handoff import capture_first_release_handoff

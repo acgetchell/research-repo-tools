@@ -1,11 +1,13 @@
 """Verify the native install harness cannot run against an ordinary user account."""
 
 import importlib.util
+import io
 import os
 import stat
 import subprocess
 import sys
 import tomllib
+from contextlib import redirect_stderr, redirect_stdout
 from pathlib import Path
 
 import pytest
@@ -46,6 +48,35 @@ def test_timeout_preserves_both_streams_and_redacts_credentials(harness, tmp_pat
     assert "install progress" in output.err
     assert "blocked [REDACTED]\ufffd" in output.err
     assert "fixture-secret" not in output.out + output.err
+
+
+def test_native_probe_preserves_unicode_results_with_an_ascii_console(harness, tmp_path):
+    """Both command and result can contain characters outside the runner console's encoding."""
+    env = {**os.environ, "PYTHONIOENCODING": "utf-8"}
+    command = [sys.executable, "-c", "import sys; print('résultat'); print('分析', file=sys.stderr)"]
+    log = io.BytesIO()
+    with io.TextIOWrapper(log, encoding="ascii", newline="\n") as stream, redirect_stdout(stream), redirect_stderr(stream):
+        assert harness.run(command, cwd=tmp_path, env=env) == "résultat\n"
+        assert log.getvalue().endswith(b"r\\xe9sultat\n\\u5206\\u6790\n")
+
+
+@pytest.mark.parametrize("status", [0, 7])
+def test_completed_native_probe_redacts_both_streams_and_preserves_result(harness, tmp_path, monkeypatch, capsys, status):
+    """The parser receives the original probe output while CI logs mask both credentials."""
+    monkeypatch.setenv("GITHUB_TOKEN", "fixture-parent-token")
+    output = "parsed fixture-child-token\n"
+    monkeypatch.setattr(harness.subprocess, "run", lambda args, **kwargs: subprocess.CompletedProcess(args, status, output, "fixture-parent-token\n"))
+    command = ["fixture-tool", "fixture-child-token"]
+    env = {"GH_TOKEN": "fixture-child-token"}
+    if status:
+        with pytest.raises(RuntimeError, match="Expected exit 0, got 7") as caught:
+            harness.run(command, cwd=tmp_path, env=env)
+        assert "fixture-child-token" not in str(caught.value)
+    else:
+        assert harness.run(command, cwd=tmp_path, env=env) == output
+    captured = capsys.readouterr()
+    assert "fixture-child-token" not in captured.out and "parsed [REDACTED]\n" in captured.out
+    assert captured.err == "[REDACTED]\n"
 
 
 @pytest.mark.parametrize("actions,runner", [(None, None), ("true", None), ("true", "self-hosted"), ("false", "github-hosted")])

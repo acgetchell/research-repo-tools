@@ -297,13 +297,17 @@ def test_workflow_template_keeps_authentication_and_native_upload_in_approved_jo
     assert data["concurrency"]["cancel-in-progress"] is False
     verify, publish = data["jobs"]["verify"], data["jobs"]["publish"]
     assert "id-token" not in verify["permissions"]
+    assert any('release gate "$RELEASE_TAG" --require-crate-asset' in step.get("run", "") for step in verify["steps"])
     assert publish["environment"] == "crates-io" and publish["permissions"]["id-token"] == "write"
     steps = publish["steps"]
     auth = next(index for index, step in enumerate(steps) if step.get("id") == "auth")
     assert "--expect absent" in steps[auth - 1]["run"]
+    assert 'release gate "$RELEASE_TAG" --require-crate-asset' in steps[auth - 1]["run"]
     assert steps[auth + 1]["env"]["CARGO_REGISTRY_TOKEN"] == "${{ steps.auth.outputs.token }}"
     assert "cargo publish --locked --registry crates-io" in steps[auth + 1]["run"]
     assert "!cancelled()" in steps[auth + 2]["if"]
+    assert "steps.auth.outcome == 'success'" in steps[auth + 2]["if"]
+    assert 'release verify "$RELEASE_TAG" --attempts 7 --interval 10 --require-crate-asset --publication-only' in steps[auth + 2]["run"]
     assert "continue-on-error" not in steps[auth + 1]
     for job in (verify, publish):
         for step in job["steps"]:
@@ -339,8 +343,6 @@ def test_common_release_recipes_and_guides_share_argument_contracts(tmp_path):
         for path in [root / "justfile", justfile]:
             result = publishing.run_safe_command("just", ["--justfile", str(path), "--dry-run", recipe, *arguments], cwd=tmp_path)
             assert expected in result.stderr
-            if recipe in {"tag", "tag-preview"}:
-                assert result.stderr.index("release check --final-release") < result.stderr.index("changelog tag")
         assert maintained.recipes[recipe]["parameters"] == packaged.recipes[recipe]["parameters"]
 
     for inspected in [maintained, packaged]:
