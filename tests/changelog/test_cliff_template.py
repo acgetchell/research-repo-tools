@@ -44,7 +44,7 @@ def render(tmp_path: Path, message: str, *, dependency_bodies: str = "concise", 
         context.write_text(json.dumps(releases), encoding="utf-8", newline="\n")
         raw = run_safe_command("git-cliff", ["--offline", "--no-exec", "--config", str(configuration), "--from-context", str(context)], cwd=root).stdout
         cleaned = changelog_issues.strip_linked_directives(raw, notes, "example/consumer")
-        return changelog_issues.add_closing_notes(postprocess_text(cleaned), notes, "example/consumer")
+        return postprocess_text(changelog_issues.add_closing_notes(cleaned, notes, "example/consumer"))
     return postprocess_text(run_safe_command("git-cliff", arguments, cwd=root).stdout)
 
 

@@ -22,15 +22,14 @@ import logging
 import os
 import re
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import date
-from functools import cache
 from pathlib import Path
 
 from research_repo_tools.files import _write_text_atomic, _write_texts_transactionally
 from research_repo_tools.markdown import relocate_links
-from research_repo_tools.postprocess_changelog import _closes_code_fence, _opening_code_fence, normalize_entry_headings_text, postprocess_text
+from research_repo_tools.postprocess_changelog import _changelog_prose, normalize_entry_headings_text, postprocess_text
 from research_repo_tools.process import format_exception_diagnostics
 from research_repo_tools.release_tags import SEMVER_PATTERN
 
@@ -208,16 +207,8 @@ def parse_changelog(text: str) -> ParsedChangelog:
 
     # Locate all ``## [`` headings.
     headings: list[int] = []
-    active_fence = None
     archives_start: int | None = None
-    for i, line in enumerate(lines):
-        if active_fence is not None:
-            if _closes_code_fence(line, active_fence):
-                active_fence = None
-            continue
-        active_fence = _opening_code_fence(line)
-        if active_fence is not None:
-            continue
+    for i, line in _changelog_prose(lines, require_closed=True):
         if line == "## Archives":
             archives_start = i if archives_start is None else archives_start
         if _VERSION_HEADING_CANDIDATE_RE.match(line):
@@ -225,8 +216,6 @@ def parse_changelog(text: str) -> ParsedChangelog:
                 raise ValueError(f"Release heading after Archives section at line {i + 1}")
             headings.append(i)
 
-    if active_fence is not None:
-        raise ValueError("unclosed changelog fence makes release boundaries ambiguous")
     if archives_start is not None:
         lines = lines[:archives_start]
 
@@ -422,7 +411,7 @@ def _merge_archive(
     blocks: list[tuple[str, str]],
     definitions: dict[str, str],
     formatter: Callable[[str, Path], str] | None = None,
-    previous_archive: Callable[[str, str], str] | None = None,
+    retained_archives: Callable[[str, str, str], Iterator[str]] | None = None,
 ) -> str:
     """Retain earlier patches and reject conflicting already-retained content."""
     if path.is_symlink():
@@ -447,19 +436,22 @@ def _merge_archive(
     existing, existing_definitions = _extract_link_defs(existing)
     incoming_blocks = dict(parse_changelog(incoming).version_blocks)
     existing_blocks = dict(parse_changelog(existing).version_blocks)
-    previous_blocks: dict[str, str] = {}
+    changed = {v for v in incoming_blocks if v in existing_blocks and existing_blocks[v].strip() != incoming_blocks[v].strip()}
+    unmatched = changed.copy()
+    if unmatched and retained_archives is not None:
+        for previous in retained_archives(minor, retained.preamble, existing):
+            if formatter is not None:
+                previous = formatter(previous, path)
+            prior_blocks = parse_changelog(_extract_link_defs(previous)[0]).version_blocks
+            unmatched.difference_update(v for v, b in prior_blocks if v in unmatched and b.strip() == existing_blocks[v].strip())
+            if not unmatched:
+                break
+    if unmatched:
+        raise ValueError(f"conflicting retained release {next(v for v in incoming_blocks if v in unmatched)} in {path}")
     merged = dict(retained.version_blocks)
     for version, block in blocks:
-        if version in merged and existing_blocks[version].strip() != incoming_blocks[version].strip():
-            if previous_archive is not None and not previous_blocks:
-                previous = previous_archive(minor, retained.preamble)
-                if formatter is not None:
-                    previous = formatter(previous, path)
-                previous_blocks = dict(parse_changelog(_extract_link_defs(previous)[0]).version_blocks)
-            if previous_blocks.get(version, "").strip() != existing_blocks[version].strip():
-                raise ValueError(f"conflicting retained release {version} in {path}")
+        if version in changed or version not in merged:
             merged[version] = block
-        merged.setdefault(version, block)
     used = _referenced_labels("\n".join(block for _, block in blocks))
     for label in used & definitions.keys():
         if label in existing_definitions and existing_definitions[label] != incoming_definitions.get(label):
@@ -552,7 +544,7 @@ def plan_archives(
     archive_dir: Path | None = None,
     *,
     formatter: Callable[[str, Path], str] | None = None,
-    previous_history: Callable[[], str] | None = None,
+    retained_histories: Callable[[str], Iterator[str]] | None = None,
 ) -> list[tuple[Path, str]]:
     """Plan root and archive replacements from a candidate without writing files.
 
@@ -582,26 +574,23 @@ def plan_archives(
     planned_writes: list[tuple[Path, str]] = []
     relocation = _archive_dir_link_prefix(changelog_path.parent, archive_dir, warn_outside=False)
 
-    @cache
-    def previous_groups() -> tuple[dict[str, list[tuple[str, str]]], dict[str, str]]:
-        assert previous_history is not None
-        history, links = _extract_link_defs(previous_history())
-        return group_by_minor(parse_changelog(history).version_blocks), links
-
     def relocate(blocks: list[tuple[str, str]], links: dict[str, str]) -> tuple[list[tuple[str, str]], dict[str, str]]:
         return [(version, relocate_links(block, relocation)) for version, block in blocks], {
             label: relocate_links(line, relocation) for label, line in links.items()
         }
 
-    def previous_archive(minor: str, preamble: str) -> str:
-        grouped, links = previous_groups()
-        old_blocks, old_links = relocate(grouped.get(minor, []), links)
-        return _render_archive(minor, old_blocks, old_links, preamble=preamble)
+    def retained_archives(minor: str, preamble: str, existing: str) -> Iterator[str]:
+        assert retained_histories is not None
+        for history in retained_histories(existing):
+            old_text, links = _extract_link_defs(history)
+            grouped = group_by_minor(parse_changelog(old_text).version_blocks)
+            old_blocks, old_links = relocate(grouped.get(minor, []), links)
+            yield _render_archive(minor, old_blocks, old_links, preamble=preamble)
 
     for minor in minor_keys[1:]:
         archive_path = archive_dir / f"{minor}.md"
         blocks, definitions = relocate(groups[minor], link_defs)
-        candidate = _merge_archive(archive_path, minor, blocks, definitions, formatter, previous_archive if previous_history is not None else None)
+        candidate = _merge_archive(archive_path, minor, blocks, definitions, formatter, retained_archives if retained_histories is not None else None)
         planned_writes.append((archive_path, candidate))
         archived_minors.append(minor)
 

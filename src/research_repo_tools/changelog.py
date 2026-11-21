@@ -5,8 +5,10 @@ import shlex
 import subprocess
 import tempfile
 import tomllib
+from collections.abc import Iterator
 from dataclasses import replace
 from datetime import UTC, date, datetime
+from functools import cache
 from importlib.resources import files
 from pathlib import Path
 
@@ -205,12 +207,19 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
     if not generated.strip():
         raise ValueError("git-cliff returned empty changelog output")
 
-    def prepare(raw: str) -> str:
+    repository = f"{section.owner}/{section.repository}"
+    closing_notes = changelog_issues.read_closing_notes(generated, config.root, repository) if shared else {}
+    cleaned = changelog_issues.strip_linked_directives(generated, closing_notes, repository) if closing_notes else generated
+
+    def prepare(raw: str, notes: dict[str, str]) -> str:
+        if notes:
+            raw = changelog_issues.add_closing_notes(raw, notes, repository)
         if tag:
             assert released is not None
             raw = archive.replace_release_date(raw, tag.removeprefix("v"), released, required=True)
         return postprocess_text(_preserve_declared_dates(raw, dates))
 
+    @cache
     def previous_history() -> str:
         # The old template emitted only git-cliff's parsed commit.body. Fall
         # back to this exact representation only for a retained release mismatch.
@@ -218,19 +227,23 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
         previous = _template("cliff.toml", section.owner, section.repository, section.dependency_bodies, body="commit.body")
         # Retained archives could also contain standalone directives in the
         # parsed body. Compare their original text before adopting today's links.
-        return prepare(_run_cliff(config.root, previous, [], context=context))
+        return _run_cliff(config.root, previous, [], context=context)
 
-    repository = f"{section.owner}/{section.repository}"
-    closing_notes = changelog_issues.read_closing_notes(generated, config.root, repository) if shared else {}
-    result = prepare(changelog_issues.strip_linked_directives(generated, closing_notes, repository) if closing_notes else generated)
+    def retained_histories(existing: str) -> Iterator[str]:
+        # Reproduce only the notes already present. The archive comparison
+        # still checks every word, link destination, and note placement.
+        carried = changelog_issues.retained_notes(existing, closing_notes, repository)
+        if closing_notes:
+            yield prepare(cleaned, carried)
+        yield prepare(previous_history(), carried)
+
+    result = prepare(cleaned, closing_notes)
     parsed = archive.parse_changelog(archive._extract_link_defs(result)[0])
     if parsed.unreleased is None and not parsed.version_blocks:
         raise ValueError("git-cliff must generate at least one release or Unreleased section")
 
     def format_candidate(candidate: str, target: Path) -> str:
         expected = archive.parse_changelog(archive._extract_link_defs(candidate)[0])
-        if closing_notes:
-            candidate = changelog_issues.add_closing_notes(candidate, closing_notes, repository)
         if formatter is not None:
             candidate = fix_markdown(candidate, target, formatter)
         parsed = archive.parse_changelog(archive._extract_link_defs(candidate)[0])
@@ -244,8 +257,8 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
             path,
             result,
             archives,
-            formatter=format_candidate if formatter is not None or closing_notes else None,
-            previous_history=previous_history if context is not None else None,
+            formatter=format_candidate if formatter is not None else None,
+            retained_histories=retained_histories if context is not None else None,
         )
     )
     candidates.setdefault(path, result)

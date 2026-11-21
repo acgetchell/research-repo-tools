@@ -3,7 +3,7 @@
 import re
 
 from research_repo_tools import archive_changelog as archive
-from research_repo_tools.postprocess_changelog import _backtick_span_end, _balanced_delimiter_end, _closes_code_fence, _opening_code_fence
+from research_repo_tools.postprocess_changelog import _backtick_span_end, _balanced_delimiter_end, _changelog_prose
 
 _BOUNDARY = re.compile(r"^ {0,3}#{1,2}(?:[ \t]+|$)")
 _REFERENCE = re.compile(r"^ {0,3}\[([^\]\n]+)\]:[ \t]+\S+.*$")
@@ -15,15 +15,7 @@ def _scan(text: str) -> tuple[list[str], list[int], dict[str, list[str]], set[in
     boundaries: list[int] = []
     definitions: dict[str, list[str]] = {}
     definition_lines: set[int] = set()
-    fence = None
-    for index, line in enumerate(lines):
-        if fence is not None:
-            if _closes_code_fence(line, fence):
-                fence = None
-            continue
-        fence = _opening_code_fence(line)
-        if fence is not None:
-            continue
+    for index, line in _changelog_prose(lines, require_closed=True):
         if _BOUNDARY.match(line):
             boundaries.append(index)
         elif re.match(r"^ {0,3}##\[", line):
@@ -32,8 +24,6 @@ def _scan(text: str) -> tuple[list[str], list[int], dict[str, list[str]], set[in
             label = " ".join(match.group(1).split()).casefold()
             definitions.setdefault(label, []).append(line.strip())
             definition_lines.add(index)
-    if fence is not None:
-        raise ValueError("unclosed changelog fence makes release boundaries ambiguous")
     return lines, boundaries, definitions, definition_lines
 
 
@@ -54,17 +44,7 @@ def reference_definitions(text: str, required: set[str] | None = None) -> dict[s
 
 def _required_references(body: str) -> set[str]:
     """Collect reference labels while keeping literal code and inline links opaque."""
-    prose: list[str] = []
-    fence = None
-    for line in body.splitlines():
-        if fence is not None:
-            if _closes_code_fence(line, fence):
-                fence = None
-            continue
-        fence = _opening_code_fence(line)
-        if fence is None:
-            prose.append(line)
-    text = "\n".join(prose)
+    text = "\n".join(line for _, line in _changelog_prose(body.splitlines()))
     labels: set[str] = set()
     index = 0
     while index < len(text):

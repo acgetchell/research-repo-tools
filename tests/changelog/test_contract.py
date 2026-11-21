@@ -299,18 +299,24 @@ def test_backfill_links_original_commits_in_retained_and_current_releases(git_co
         "Fixes EXAMPLE/research#11, resolves other/tool#14.\n"
         "Closed: https://github.com/other/tool/issues/14\n"
         "Refs #15\n> Fixes #16\n    Fixes #17\n\n~~~~text\nCloses #18\n~~~~\n\n"
-        "Example ``first\nResolves #20\nlast``.\n\nAn unmatched ` delimiter.\n\nFixes #21"
+        "Example ``first\nResolves #20\nlast``.\n\nAn unmatched ` delimiter.\n\nFixes #21\n\n    ~~~text\n\nFixes #22"
     )
     run_git_command(["commit", "--allow-empty", "-qm", "Ship\u2028reporting (#42)", "-m", body], cwd=git_consumer)
+    oid = run_git_command(["rev-parse", "HEAD"], cwd=git_consumer).stdout.strip()
+    reference = f"See the original [`{oid[:7]}`](https://github.com/example/research/commit/{oid})"
+    run_git_command(["commit", "--allow-empty", "-qm", "Add a usage reference (#45)", "-m", f"* docs: related work\n\n- {reference}"], cwd=git_consumer)
     run_git_command(["tag", "v1.0.0"], cwd=git_consumer)
     run_git_command(["commit", "--allow-empty", "-qm", "fix: keep reports readable (#43)", "-m", "Fixed #19"], cwd=git_consumer)
     current = changelog.generate(cfg, tag="v1.1.0", released="2026-09-07")
     assert current.count("[#19](https://github.com/example/research/issues/19)") == 1
+    changelog.check(cfg)
+    assert "      ~~~text" in changelog.notes(cfg, "v1.0.0")[0]
     archive = git_consumer / "docs/archives/changelog/1.0.md"
     original = archive.read_bytes()
+    assert b"- See the original" in original
     note = re.search(rb"^  Closes \[.*?\)\.$", original, flags=re.MULTILINE | re.DOTALL)
     assert note is not None
-    for number in (11, 12, 13, 21):
+    for number in (11, 12, 13, 21, 22):
         assert original.count(f"[#{number}](https://github.com/example/research/issues/{number})".encode()) == 1
     assert original.count(b"[other/tool#14](https://github.com/other/tool/issues/14)") == 1
     assert b"Fixes EXAMPLE/research#11" not in original and b"Closed: https://github.com/other/tool/issues/14" not in original
@@ -394,6 +400,13 @@ def test_path_qualified_heading_navigation_survives_regeneration(link: str) -> N
     result = postprocess_changelog.postprocess_text(source)
     assert "#### Verify (1)\n\nSecond." in result
     assert link in result
+    assert postprocess_changelog.postprocess_text(result) == result
+
+
+def test_reference_heading_reserves_the_rendered_fragment() -> None:
+    source = "# Changelog\n\n## [Unreleased]\n\n### Added\n\n[Second](#verify-2)\n\n#### Verify-1\n\n#### [Verify][v]\n\nFirst.\n\n#### [Verify][v]\n\nSecond.\n\n[v]: https://example.com\n"
+    result = postprocess_changelog.postprocess_text(source)
+    assert "#### [Verify][v] (2)\n\nSecond." in result
     assert postprocess_changelog.postprocess_text(result) == result
 
 

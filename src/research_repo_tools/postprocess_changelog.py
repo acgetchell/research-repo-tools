@@ -21,7 +21,7 @@ import re
 import subprocess
 import sys
 import tempfile
-from collections.abc import Mapping
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from pathlib import Path
 from typing import cast
@@ -805,26 +805,15 @@ def _code_span_wildcard_identifiers(line: str) -> str:
 
 def normalize_entry_headings_text(text: str) -> str:
     """Demote entry-local headings without applying broader changelog cleanup."""
-    result: list[str] = []
+    lines = text.split("\n")
     current_entry_summary: str | None = None
-    active_fence: _CodeFence | None = None
-
-    for line in text.split("\n"):
-        if active_fence is not None:
-            if _closes_code_fence(line, active_fence):
-                active_fence = None
-            result.append(line)
-            continue
-        active_fence = _opening_code_fence(line)
-        if active_fence is not None:
-            result.append(line)
-            continue
+    for index, line in _changelog_prose(lines):
         current_entry_summary = _update_entry_summary(line, current_entry_summary)
         line = _normalize_entry_heading(line, current_entry_summary)
         line = _code_span_wildcard_identifiers(line)
-        result.append(line)
+        lines[index] = line
 
-    return "\n".join(result)
+    return "\n".join(lines)
 
 
 def _normalize_horizontal_rule(line: str, result: list[str]) -> str:
@@ -986,7 +975,38 @@ def _strip_dependabot_metadata(text: str) -> str:
     return "\n".join(result)
 
 
-def _protect_fenced_blocks(text: str) -> tuple[str, dict[str, str]]:
+def _indented_fence_examples(text: str) -> dict[int, int]:
+    """Locate indented code blocks containing apparent fence delimiters."""
+    if not re.search(r"(?m)^(?: {4}|[ \t]*\t)[ \t]*(?:`{3}|~{3})", text):
+        return {}
+    from markdown_it import MarkdownIt
+
+    return {
+        token.map[0]: token.map[1]
+        for token in MarkdownIt("commonmark").parse(text)
+        if token.type == "code_block" and token.map is not None and re.search(r"(?m)^[ \t]*(?:`{3}|~{3})", token.content)
+    }
+
+
+def _changelog_prose(lines: list[str], *, require_closed: bool = False) -> Iterator[tuple[int, str]]:
+    """Yield prose locations outside fences and literal fence examples."""
+    fence = None
+    examples = {i for start, end in _indented_fence_examples("\n".join(lines)).items() for i in range(start, end)}
+    for index, line in enumerate(lines):
+        if index in examples:
+            continue
+        if fence is not None:
+            if _closes_code_fence(line, fence):
+                fence = None
+            continue
+        fence = _opening_code_fence(line)
+        if fence is None:
+            yield index, line
+    if require_closed and fence is not None:
+        raise ValueError("unclosed changelog fence makes release boundaries ambiguous")
+
+
+def _protect_fenced_blocks(text: str) -> tuple[str, dict[str, tuple[str, bool]]]:
     """Keep code opaque to document-wide prose transforms, including examples of releases.
 
     Tokens are collision-free within this input. Restoring them after all prose
@@ -997,9 +1017,17 @@ def _protect_fenced_blocks(text: str) -> tuple[str, dict[str, str]]:
         prefix += "X"
     lines = text.split("\n")
     result: list[str] = []
-    blocks: dict[str, str] = {}
+    blocks: dict[str, tuple[str, bool]] = {}
+    examples = _indented_fence_examples(text)
     index = 0
     while index < len(lines):
+        if index in examples:
+            end = examples[index]
+            marker = f"{prefix}{len(blocks)}END"
+            blocks[marker] = ("\n".join(lines[index:end]), False)
+            result.append(marker)
+            index = end
+            continue
         opener = _opening_code_fence(lines[index])
         if opener is None:
             result.append(lines[index])
@@ -1019,7 +1047,7 @@ def _protect_fenced_blocks(text: str) -> tuple[str, dict[str, str]]:
         if not info.strip():
             block[0] = f"{indent}{delimiter}text"
         marker = f"{prefix}{len(blocks)}END"
-        blocks[marker] = "\n".join(block)
+        blocks[marker] = ("\n".join(block), True)
         if result and result[-1].strip():
             result.append("")
         result.append(indent + marker)
@@ -1180,13 +1208,15 @@ def _number_navigable_headings(lines: list[str], repeated: set[int]) -> None:
     from markdown_it import MarkdownIt
 
     markdown = MarkdownIt("commonmark")
+    environment = {}
+    markdown.parse("\n".join(lines), environment)
     used: set[str] = set()
     siblings: set[str] = set()
     for index, line in enumerate(lines):
         if (heading := _ATX_HEADING_RE.match(line)) is None:
             continue
         title = heading["title"].strip()
-        inline = markdown.parseInline(title)[0].children or []
+        inline = markdown.parseInline(title, environment)[0].children or []
         label = "".join(token.content for token in inline if token.type in {"text", "code_inline"})
         base = re.sub(r"[^\w -]", "", label.lower()).replace(" ", "-")
         anchor = base
@@ -1386,7 +1416,11 @@ def postprocess_text(text: str) -> str:
     for index, line in enumerate(lines):
         marker = line.lstrip()
         if marker in fenced_blocks:
-            block = fenced_blocks.pop(marker).split("\n")
+            original, movable = fenced_blocks.pop(marker)
+            if not movable:
+                lines[index] = original
+                continue
+            block = original.split("\n")
             # Moving a fence with its list must preserve indentation *inside* it.
             old_indent = len(block[0]) - len(block[0].lstrip())
             shift = old_indent - (len(line) - len(marker))

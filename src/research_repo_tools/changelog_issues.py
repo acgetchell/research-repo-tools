@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import cast
 
 from research_repo_tools._git_checkout import READ_ONLY_OPTIONS
-from research_repo_tools.postprocess_changelog import _closes_code_fence, _opening_code_fence, _reflow_line
+from research_repo_tools.postprocess_changelog import _changelog_prose, _reflow_line
 from research_repo_tools.process import run_git_bytes
 
 _KEYWORD = r"(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)"
@@ -20,7 +20,7 @@ _COMMIT = re.compile(rf"\[`(?P<short>[a-f0-9]{{7}})`\]\(https://github\.com/(?P<
 
 def _literal_directive_lines(lines: list[str], directives: set[int]) -> set[int]:
     """Identify candidate lines which CommonMark renders as literal code."""
-    if not directives or not any("`" in line for line in lines):
+    if not directives:
         return set()
     from markdown_it import MarkdownIt
 
@@ -42,18 +42,6 @@ def _literal_directive_lines(lines: list[str], directives: set[int]) -> set[int]
     return literal
 
 
-def _prose(lines: list[str]) -> Iterator[tuple[int, str]]:
-    fence = None
-    for index, line in enumerate(lines):
-        if fence is not None:
-            if _closes_code_fence(line, fence):
-                fence = None
-            continue
-        fence = _opening_code_fence(line)
-        if fence is None:
-            yield index, line
-
-
 def _entry_oid(line: str, repository: str) -> str | None:
     match = _COMMIT.search(line)
     if match is None or match["slug"].casefold() != repository.casefold():
@@ -65,8 +53,8 @@ def _entry_oid(line: str, repository: str) -> str | None:
 def _commit_lines(lines: list[str], repository: str) -> Iterator[tuple[int, str]]:
     """Locate a packaged entry's terminal hash link, including wrapped titles."""
     in_title = False
-    for index, line in _prose(lines):
-        if line.startswith("- "):
+    for index, line in _changelog_prose(lines):
+        if line.startswith(("- ", "* ", "+ ")):
             in_title = True
         elif not line.startswith("  ") or not index or not lines[index - 1].strip():
             in_title = False
@@ -84,7 +72,7 @@ def _closing_links(message: str, repository: str) -> list[str]:
     """Read standalone directives, preserving authored order across repositories."""
     links: dict[tuple[str, str], str] = {}
     lines = message.replace("\r\n", "\n").split("\n")
-    directives = {index: line for index, line in _prose(lines) if _CLOSING_LINE.fullmatch(line)}
+    directives = {index: line for index, line in enumerate(lines) if _CLOSING_LINE.fullmatch(line)}
     example_lines = _literal_directive_lines(lines, set(directives))
     for index, line in directives.items():
         if index in example_lines:
@@ -105,7 +93,7 @@ def strip_linked_directives(text: str, notes: dict[str, str], repository: str) -
 
 def _strip_release_directives(release: str, notes: dict[str, str], repository: str) -> str:
     lines = release.split("\n")
-    prose = list(_prose(lines))
+    prose = list(_changelog_prose(lines))
     entries = {i: notes[oid].casefold() for i, line in prose if line.startswith("- ") and (oid := _entry_oid(line, repository)) and oid in notes}
     if not entries:
         return release
@@ -133,7 +121,7 @@ def read_closing_notes(text: str, root: Path, repository: str) -> dict[str, str]
     # At this point git-cliff emits the title and hash on a single line.
     # Every body line is indented, including any example commit links.
     commits = dict.fromkeys(
-        oid for _, line in _prose(text.replace("\r\n", "\n").split("\n")) if line.startswith("- ") and (oid := _entry_oid(line, repository))
+        oid for _, line in _changelog_prose(text.replace("\r\n", "\n").split("\n")) if line.startswith("- ") and (oid := _entry_oid(line, repository))
     )
     if not commits:
         return {}
@@ -162,25 +150,35 @@ def read_closing_notes(text: str, root: Path, repository: str) -> dict[str, str]
     return notes
 
 
+def _following_note(lines: list[str], index: int) -> str | None:
+    start = index + 1
+    while start < len(lines) and not lines[start].strip():
+        start += 1
+    if not _CLOSING_NOTE.match(" ".join(line.strip() for line in lines[start : start + 2])):
+        return None
+    parts = []
+    for line in lines[start:]:
+        parts.append(line.strip())
+        if not line.strip() or line.endswith("."):
+            break
+    return " ".join(parts)
+
+
+def retained_notes(text: str, notes: dict[str, str], repository: str) -> dict[str, str]:
+    """Select existing notes for reconstructing a retained release from Git."""
+    lines = text.split("\n")
+    return {oid: notes[oid] for index, oid in _commit_lines(lines, repository) if oid in notes and _following_note(lines, index) is not None}
+
+
 def add_closing_notes(text: str, notes: dict[str, str], repository: str) -> str:
-    """Enrich unannotated entries; archived and freshly rendered notes use the same rule."""
+    """Attach notes before normalization lifts subsection bullets out of a commit body."""
     lines = text.split("\n")
     for index, oid in reversed(list(_commit_lines(lines, repository))):
         if oid not in notes:
             continue
         note = notes[oid]
-        start = index + 1
-        while start < len(lines) and not lines[start].strip():
-            start += 1
-        prefix = " ".join(line.strip() for line in lines[start : start + 2])
-        if _CLOSING_NOTE.match(prefix):
-            # A formatter may wrap the same links at a different column.
-            parts = []
-            for line in lines[start:]:
-                parts.append(line.strip())
-                if not line.strip() or line.endswith("."):
-                    break
-            if " ".join(parts) != " ".join(note.split()):
+        if (existing := _following_note(lines, index)) is not None:
+            if existing != " ".join(note.split()):
                 raise ValueError(f"conflicting closed issue links for commit {oid}")
         else:
             lines[index + 1 : index + 1] = note.split("\n")
