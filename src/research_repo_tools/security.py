@@ -27,6 +27,7 @@ __all__ = ["check_secret_exceptions", "scan_osv", "scan_secrets", "security_inve
 GENERATED = tuple(f"**/{name}/**" for name in (".venv", "venv", ".tox", ".nox", "__pycache__", "target", "dist", "build", "node_modules"))
 REPORT_LIMIT = 128 * 1024 * 1024
 GITLEAKS_FINDINGS_EXIT = 3
+GITLEAKS_TIMEOUT = 300
 # The pinned Gitleaks follows at most two local extensions.
 GITLEAKS_EXTEND_DEPTH = 2
 
@@ -146,6 +147,7 @@ def _report_run(
     validate,
     present=None,
     findings_exit: int | None = None,
+    timeout: int = 600,
 ) -> int:
     if destination.is_symlink():
         raise ValueError("report destination must not be a symlink")
@@ -156,7 +158,7 @@ def _report_run(
         report = Path(directory) / destination.name
         arguments = [str(report) if value == "{report}" else value for value in args]
         try:
-            result = run_command_bytes(binary, arguments, cwd=root, env=env, input=b"", timeout=600, check=False)
+            result = run_command_bytes(binary, arguments, cwd=root, env=env, input=b"", timeout=timeout, check=False)
         except subprocess.TimeoutExpired:
             # Scanner output may contain raw metadata. Never echo captured logs.
             print(f"{binary.name}: scan timed out; no report published", file=sys.stderr)
@@ -365,7 +367,6 @@ def _gitleaks_args(mode: str, source: Path, stage: Path, selected: Path, format_
         "--ignore-gitleaks-allow",
         "--gitleaks-ignore-path",
         str(stage / "empty-ignore"),
-        "--timeout=300",
         f"--exit-code={GITLEAKS_FINDINGS_EXIT}",
         "--report-format",
         format_name,
@@ -409,6 +410,7 @@ def scan_secrets(settings: config.Config, *, output: str = "target/security", co
                     validate=partial(_gitleaks_report, scope=label),
                     present=present,
                     findings_exit=GITLEAKS_FINDINGS_EXIT,
+                    timeout=GITLEAKS_TIMEOUT,
                 )
                 _require_no_gitleaks_ignore(source)
                 if status == GITLEAKS_FINDINGS_EXIT:
@@ -494,6 +496,14 @@ def show_secret_findings(settings: config.Config, *, reports: str = "target/secu
         _print_secret_findings(scope.capitalize(), records)
 
 
+def _history_tips(root: Path) -> frozenset[bytes]:
+    # Like git log --all, this includes detached HEADs in linked worktrees.
+    tips = frozenset(run_git_bytes(["--no-pager", "rev-list", "--no-walk=unsorted", "--all"], cwd=root).stdout.splitlines())
+    if not tips or any(not re.fullmatch(rb"(?:[0-9a-f]{40}|[0-9a-f]{64})", tip) for tip in tips):
+        raise ValueError("Git returned invalid or empty history tips for Gitleaks policy comparison")
+    return tips
+
+
 def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline: str | None = None, exclude: tuple[str, ...] = ()) -> None:
     """Compare two Gitleaks policies against the same captured files and history."""
     with tempfile.TemporaryDirectory(prefix="research-secret-compare-") as directory:
@@ -510,6 +520,7 @@ def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline
             return run_git_bytes(["--no-pager", "show-ref", "--head"], cwd=root).stdout
 
         refs = history_refs(settings.root)
+        tips = _history_tips(settings.root)
         history = stage / "history.git"
         # Retain the selected refs privately and reuse the source object store.
         run_git_bytes(
@@ -517,6 +528,16 @@ def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline
         )
         if history_refs(history) != refs:
             raise ValueError("Git refs changed while capturing history for Gitleaks policy comparison")
+        mirror_tips = _history_tips(history)
+        if mirror_tips - tips:
+            raise ValueError("Git history tips changed while capturing history for Gitleaks policy comparison")
+        # Bare mirrors omit other worktrees' detached HEADs. Keep their tips
+        # reachable in the private mirror without copying the source objects.
+        if missing := tips - mirror_tips:
+            commands = b"".join(b"create refs/rrt-history/" + tip + b" " + tip + b"\n" for tip in sorted(missing))
+            run_git_bytes(["--no-pager", "update-ref", "--stdin"], cwd=history, input=commands)
+            if _history_tips(history) != tips:
+                raise ValueError("Git history tips changed while capturing history for Gitleaks policy comparison")
         results: list[Counter[_SecretFinding]] = []
         for policy in retained:
             findings: Counter[_SecretFinding] = Counter()
@@ -533,14 +554,18 @@ def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline
                     env=env,
                     validate=partial(_gitleaks_report, scope=scope),
                     findings_exit=GITLEAKS_FINDINGS_EXIT,
+                    timeout=GITLEAKS_TIMEOUT,
                 )
                 _require_no_gitleaks_ignore(source)
                 if status not in (0, GITLEAKS_FINDINGS_EXIT) or not report.is_file():
                     raise ValueError(f"Gitleaks {scope} scan failed during policy comparison (exit {status})")
                 findings.update(_secret_findings(report, scope, source))
             _require_no_gitleaks_ignore(settings.root)
-            if history_refs(settings.root) != refs:
+            if history_refs(settings.root) != refs or _history_tips(settings.root) != tips:
                 raise ValueError("Git refs changed during Gitleaks policy comparison")
+            default_path = settings.root / ".gitleaks.toml"
+            if baseline is None and original == stage / "default.toml" and default_path.exists(follow_symlinks=False):
+                raise ValueError(f"Gitleaks configuration changed during policy comparison: {default_path}")
             policy_snapshots.verify()
             results.append(findings)
     before, after = results

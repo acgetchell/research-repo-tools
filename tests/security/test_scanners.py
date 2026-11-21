@@ -157,12 +157,13 @@ def test_pinned_gitleaks_matches_anchored_working_paths_with_relative_extensions
     if version.stdout.strip() != b"8.30.1":
         pytest.skip("requires Gitleaks 8.30.1")
 
-    root = tmp_path.resolve()
+    root = tmp_path.resolve() / "repository"
+    root.mkdir()
     env = {key: value for key, value in os.environ.items() if not key.upper().startswith("GIT_")}
     env.update(GIT_CONFIG_GLOBAL=os.devnull, GIT_CONFIG_NOSYSTEM="1")
 
-    def git(*args: str) -> str:
-        return run_git_command(list(args), cwd=root, env=env).stdout.strip()
+    def git(*args: str, cwd: Path = root) -> str:
+        return run_git_command(list(args), cwd=cwd, env=env).stdout.strip()
 
     git("init", "--quiet", "--template=")
     git("config", "user.name", "Fixture")
@@ -189,6 +190,12 @@ regex = 'synthetic-scanner-match'
     git("commit", "-qm", "transient fixture")
     transient_commit = git("rev-parse", "HEAD")
     git("reset", "--hard", captured_commit)
+    linked = root.parent / "linked worktree"
+    git("worktree", "add", "--quiet", "--detach", str(linked), captured_commit)
+    (linked / "src" / "linked.txt").write_bytes(b"synthetic-scanner-match\n")
+    git("add", "src/linked.txt", cwd=linked)
+    git("commit", "-qm", "linked worktree fixture", cwd=linked)
+    linked_commit = git("rev-parse", "HEAD", cwd=linked)
     settings = config.Config(root=root)
 
     native = security.run_command_bytes
@@ -211,8 +218,9 @@ regex = 'synthetic-scanner-match'
         output = capsys.readouterr().out
         assert "Suppressed: 0 finding(s)" in output
         assert "Introduced: 0 finding(s)" in output
-        assert "Matching locations: 2 finding(s)" in output
+        assert "Matching locations: 3 finding(s)" in output
         assert f"at commit {captured_commit}" in output
+        assert "linked.txt" in output and f"at commit {linked_commit}" in output
         assert 'working "src/new.txt"' in output
         assert "late.txt" not in output
         assert len(history_scans) == 2 and history_scans[0] == history_scans[1] != root

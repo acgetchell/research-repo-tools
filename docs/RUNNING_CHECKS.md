@@ -216,8 +216,9 @@ commit. It requires both reports and can succeed when those reports have
 findings. A managed scan clears previous Gitleaks reports before preflight and
 saves reports only for completed native scans.
 
-Confirm the flagged value is nonsecret using the source at the reported
-location. For a confirmed false positive, copy the existing policy to a
+For a history finding, inspect the reported path and line at the reported
+commit. For a working-tree finding, inspect the current file at that location.
+After confirming the value is nonsecret, copy the existing policy to a
 candidate file. Keep the default rules enabled and scope the exception to the
 specific rule, file, and known nonsecret value. In this example, the flagged
 value is a base64-encoded array of four numeric benchmark statistics. The
@@ -233,7 +234,7 @@ id = "generic-api-key"
 [[rules.allowlists]]
 description = "Reviewed numeric benchmark statistics in retained run data"
 condition = "AND"
-paths = ['(^|[/\\])docs[/\\]performance-runs[/\\]example[/\\]run\.json$']
+paths = ['^docs[/\\]performance-runs[/\\]example[/\\]run\.json$']
 regexTarget = "secret"
 regexes = ['^WzE0MTgxLjY4Nzg2MDk5ODYsMTIuODcyLDczLjMwLDU3Ljhd$']
 ```

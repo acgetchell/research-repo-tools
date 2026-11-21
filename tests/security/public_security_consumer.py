@@ -107,6 +107,9 @@ class TestSharedCapabilities(unittest.TestCase):
                 elif "show-ref" in args:
                     self.assertIn(cwd, (root, history))
                     output = refs if cwd == root else captured_refs
+                elif "rev-list" in args:
+                    self.assertIn(cwd, (root, history))
+                    output = b"a" * 40 + b"\n"
                 elif "clone" in args:
                     self.assertEqual(cwd, root)
                     self.assertIn("--mirror", args)
@@ -125,15 +128,22 @@ class TestSharedCapabilities(unittest.TestCase):
                 policy = Path(args[args.index("--config") + 1])
                 document = tomllib.loads(policy.read_text(encoding="utf-8"))
                 is_candidate = document.get("title") == "proposed"
-                parent_path = document["Extend"]["Path"] if is_candidate else document["extend"]["path"]
-                parent = Path(parent_path)
-                retained_leaf = Path(tomllib.loads(parent.read_text(encoding="utf-8"))["extend"]["path"])
-                self.assertTrue(parent.is_absolute() and retained_leaf.is_absolute())
-                self.assertNotEqual(retained_leaf, leaf)
-                self.assertEqual(retained_leaf.read_bytes(), leaf_bytes)
+                extension = document["Extend"] if is_candidate else document["extend"]
+                retained_leaf = None
+                if extension.get("useDefault"):
+                    self.assertTrue(create_baseline)
+                    baseline.write_bytes(b"[extend]\nuseDefault = true\n")
+                else:
+                    parent = Path(extension["Path"] if is_candidate else extension["path"])
+                    retained_leaf = Path(tomllib.loads(parent.read_text(encoding="utf-8"))["extend"]["path"])
+                    self.assertTrue(parent.is_absolute() and retained_leaf.is_absolute())
+                    self.assertNotEqual(retained_leaf, leaf)
+                    self.assertEqual(retained_leaf.read_bytes(), leaf_bytes)
                 calls.append((mode, target, is_candidate, retained_leaf))
                 self.assertIn("--exit-code=3", args)
                 self.assertIn("--redact=100", args)
+                self.assertNotIn("--timeout=300", args)
+                self.assertEqual(kwargs["timeout"], 300)
                 self.assertEqual(kwargs["env"], {"FIXTURE": "1"})
                 if mode == "dir":
                     self.assertEqual(args[1], ".")
@@ -171,6 +181,7 @@ class TestSharedCapabilities(unittest.TestCase):
                 exit_code = 3
                 move_ref = False
                 change_extension = False
+                create_baseline = False
                 with redirect_stdout(io.StringIO()) as stdout:
                     self.assertEqual(main(arguments), 0)
                 output = stdout.getvalue()
@@ -234,6 +245,15 @@ class TestSharedCapabilities(unittest.TestCase):
                     self.assertEqual(main(arguments), 1)
                 self.assertIn(baseline.name, errors.getvalue())
                 self.assertIn("regular file", errors.getvalue())
+                baseline.rmdir()
+                change_extension = False
+                create_baseline = True
+                source.write_bytes(b"retained fixture\r\n")
+                with redirect_stdout(io.StringIO()) as failed, redirect_stderr(io.StringIO()) as errors:
+                    self.assertEqual(main(arguments), 1)
+                self.assertEqual(failed.getvalue(), "")
+                self.assertIn("Gitleaks configuration changed during policy comparison", errors.getvalue())
+                self.assertIn(baseline.name, errors.getvalue())
 
     def test_gitleaks_preflight_failure_and_partial_scan_invalidate_old_reports(self):
         with tempfile.TemporaryDirectory() as directory:
@@ -297,7 +317,9 @@ class TestSharedCapabilities(unittest.TestCase):
                 history = args[0] == "git"
                 fmt = args[args.index("--report-format") + 1]
                 if history and fmt == "sarif":
-                    raise subprocess.TimeoutExpired(binary, 600)
+                    self.assertEqual(kwargs["timeout"], 300)
+                    self.assertNotIn("--timeout=300", args)
+                    raise subprocess.TimeoutExpired(binary, kwargs["timeout"])
                 result = [self.secret_finding("a" * 40, "source.txt", 1)] if history else []
                 if fmt == "sarif":
                     result = {"version": "2.1.0", "runs": [{"tool": {}, "results": []}]}
