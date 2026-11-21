@@ -33,15 +33,9 @@ class TestSharedCapabilities(unittest.TestCase):
             history = reports / "gitleaks-history.json"
             working = reports / "gitleaks-working.json"
             finding = self.secret_finding("a" * 40, "logs/run café.json", 5)
+            current = self.secret_finding("", "/tmp/research-secret-scan-fixture/working/logs/current.json", 3)
             history.write_bytes(json.dumps([finding]).encode())
-            working.write_bytes(
-                json.dumps(
-                    [
-                        self.secret_finding("", "/tmp/research-secret-scan-fixture/working/logs/current.json", 3),
-                        self.secret_finding("", r"C:\Temp\research-secret-scan-fixture\working\logs\windows.json", 4),
-                    ]
-                ).encode()
-            )
+            working.write_bytes(json.dumps([current, self.secret_finding("", r"C:\Temp\research-secret-scan-fixture\working\logs\windows.json", 4)]).encode())
             arguments = ["--root", str(root), "security", "findings", "--reports", reports.name]
             settings = config.parse({}, root=root)
             with (
@@ -55,13 +49,16 @@ class TestSharedCapabilities(unittest.TestCase):
                 self.assertIn('working "logs/windows.json":9:4-9:7 "fixture-rule"', stdout.getvalue())
                 self.assertNotIn("research-secret-scan-", stdout.getvalue())
                 self.assertNotIn("_SECRET", stdout.getvalue())
-                working.write_bytes(json.dumps([{**finding, "Secret": "UNREDACTED_SECRET"}]).encode())
+                working.write_bytes(json.dumps([{**current, "Secret": "UNREDACTED_SECRET"}]).encode())
                 with redirect_stdout(io.StringIO()) as failed, redirect_stderr(io.StringIO()) as errors:
                     self.assertEqual(main(arguments), 1)
                 self.assertEqual(failed.getvalue(), "")
                 self.assertIn("unredacted secret", errors.getvalue())
                 self.assertNotIn("_SECRET", errors.getvalue())
-                working.write_bytes(b'{"MATCH_SECRET": 1, "MATCH_SECRET": 2}')
+                valid = json.dumps([{**current, "MATCH_SECRET": 1}]).encode()
+                working.write_bytes(valid)
+                self.assertEqual(main(arguments), 0)
+                working.write_bytes(valid.replace(b'"MATCH_SECRET": 1', b'"MATCH_SECRET": 2, "MATCH_SECRET": 1'))
                 with redirect_stdout(io.StringIO()) as failed, redirect_stderr(io.StringIO()) as errors:
                     self.assertEqual(main(arguments), 1)
                 self.assertEqual(failed.getvalue(), "")
