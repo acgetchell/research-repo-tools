@@ -22,14 +22,15 @@ import logging
 import os
 import re
 import sys
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterator, Sequence
 from dataclasses import dataclass
 from datetime import date
+from functools import partial
 from pathlib import Path
 
 from research_repo_tools.files import _write_text_atomic, _write_texts_transactionally
 from research_repo_tools.markdown import relocate_links
-from research_repo_tools.postprocess_changelog import _closes_code_fence, _opening_code_fence, normalize_entry_headings_text, postprocess_text
+from research_repo_tools.postprocess_changelog import _changelog_prose, _has_local_fragment_link, normalize_entry_headings_text, postprocess_text
 from research_repo_tools.process import format_exception_diagnostics
 from research_repo_tools.release_tags import SEMVER_PATTERN
 
@@ -207,16 +208,8 @@ def parse_changelog(text: str) -> ParsedChangelog:
 
     # Locate all ``## [`` headings.
     headings: list[int] = []
-    active_fence = None
     archives_start: int | None = None
-    for i, line in enumerate(lines):
-        if active_fence is not None:
-            if _closes_code_fence(line, active_fence):
-                active_fence = None
-            continue
-        active_fence = _opening_code_fence(line)
-        if active_fence is not None:
-            continue
+    for i, line in _changelog_prose(lines, require_closed=True):
         if line == "## Archives":
             archives_start = i if archives_start is None else archives_start
         if _VERSION_HEADING_CANDIDATE_RE.match(line):
@@ -224,8 +217,6 @@ def parse_changelog(text: str) -> ParsedChangelog:
                 raise ValueError(f"Release heading after Archives section at line {i + 1}")
             headings.append(i)
 
-    if active_fence is not None:
-        raise ValueError("unclosed changelog fence makes release boundaries ambiguous")
     if archives_start is not None:
         lines = lines[:archives_start]
 
@@ -344,6 +335,7 @@ def _render_archive(
     link_defs: dict[str, str] | None = None,
     *,
     preamble: str | None = None,
+    keep_heading_targets: bool = False,
 ) -> str:
     """Render a single minor-series archive without publishing it."""
     parts = [f"# Changelog - {minor}.x\n" if preamble is None else preamble]
@@ -361,7 +353,7 @@ def _render_archive(
 
     # Normalize archive output too; archived blocks can preserve historical
     # commit-body indentation that no longer appears in the trimmed root file.
-    return postprocess_text(text)
+    return postprocess_text(text, keep_heading_targets=keep_heading_targets)
 
 
 def _referenced_labels(text: str) -> set[str]:
@@ -421,12 +413,16 @@ def _merge_archive(
     blocks: list[tuple[str, str]],
     definitions: dict[str, str],
     formatter: Callable[[str, Path], str] | None = None,
+    retained_archives: Callable[[str, str, str], Iterator[str]] | None = None,
+    *,
+    keep_heading_targets: bool = False,
 ) -> str:
     """Retain earlier patches and reject conflicting already-retained content."""
+    render = partial(_render_archive, minor, keep_heading_targets=keep_heading_targets)
     if path.is_symlink():
         raise ValueError(f"Changelog output must not be a symlink: {path}")
     if not path.exists():
-        return _render_archive(minor, blocks, definitions)
+        return render(blocks, definitions)
     if not path.is_file():
         raise IsADirectoryError(f"output path exists but is not a file: {path}")
     original, retained_definitions = _extract_link_defs(path.read_text(encoding="utf-8"))
@@ -436,8 +432,8 @@ def _merge_archive(
     # Compare complete documents through the same formatter, with the same
     # introduction and output path. Formatting isolated blocks loses context
     # (reference links, heading levels, and list layout).
-    incoming = _render_archive(minor, blocks, definitions, preamble=retained.preamble)
-    existing = _render_archive(minor, retained.version_blocks, retained_definitions, preamble=retained.preamble)
+    incoming = render(blocks, definitions, preamble=retained.preamble)
+    existing = render(retained.version_blocks, retained_definitions, preamble=retained.preamble)
     if formatter is not None:
         incoming = formatter(incoming, path)
         existing = formatter(existing, path)
@@ -445,18 +441,29 @@ def _merge_archive(
     existing, existing_definitions = _extract_link_defs(existing)
     incoming_blocks = dict(parse_changelog(incoming).version_blocks)
     existing_blocks = dict(parse_changelog(existing).version_blocks)
+    changed = {v for v in incoming_blocks if v in existing_blocks and existing_blocks[v].strip() != incoming_blocks[v].strip()}
+    unmatched = changed.copy()
+    if unmatched and retained_archives is not None:
+        for previous in retained_archives(minor, retained.preamble, existing):
+            if formatter is not None:
+                previous = formatter(previous, path)
+            prior_blocks = parse_changelog(_extract_link_defs(previous)[0]).version_blocks
+            unmatched.difference_update(v for v, b in prior_blocks if v in unmatched and b.strip() == existing_blocks[v].strip())
+            if not unmatched:
+                break
+    if unmatched:
+        raise ValueError(f"conflicting retained release {next(v for v in incoming_blocks if v in unmatched)} in {path}")
     merged = dict(retained.version_blocks)
     for version, block in blocks:
-        if version in merged and existing_blocks[version].strip() != incoming_blocks[version].strip():
-            raise ValueError(f"conflicting retained release {version} in {path}")
-        merged.setdefault(version, block)
+        if version in changed or version not in merged:
+            merged[version] = block
     used = _referenced_labels("\n".join(block for _, block in blocks))
     for label in used & definitions.keys():
         if label in existing_definitions and existing_definitions[label] != incoming_definitions.get(label):
             raise ValueError(f"conflicting retained reference {label!r} in {path}")
         retained_definitions[label] = definitions[label]
     ordered = sorted(merged.items(), key=lambda item: _version_sort_key(item[0]), reverse=True)
-    return _render_archive(minor, ordered, retained_definitions, preamble=retained.preamble)
+    return render(ordered, retained_definitions, preamble=retained.preamble)
 
 
 def build_root(
@@ -465,6 +472,9 @@ def build_root(
     active_blocks: list[tuple[str, str]],
     archived_minors: list[str],
     archive_dir_rel: str,
+    *,
+    link_defs: dict[str, str] | None = None,
+    keep_heading_targets: bool = False,
 ) -> str:
     """Assemble the trimmed root CHANGELOG.md content.
 
@@ -474,6 +484,8 @@ def build_root(
         active_blocks: Version blocks for the active minor series.
         archived_minors: Sorted list of archived ``X.Y`` minor keys.
         archive_dir_rel: Relative path to the archive directory from the changelog file.
+        link_defs: Reference definitions to retain when the root document uses them.
+        keep_heading_targets: Preserve headings that another generated file may link to.
 
     Returns:
         The full text for the trimmed CHANGELOG.md.
@@ -494,7 +506,10 @@ def build_root(
         archive_lines.append("")
         parts.append("\n".join(archive_lines))
 
-    return postprocess_text("\n".join(parts))
+    text = "\n".join(parts)
+    if link_defs and (definitions := _format_link_defs(link_defs, _referenced_labels(text))):
+        text = text.rstrip("\n") + "\n\n" + definitions + "\n"
+    return postprocess_text(text, keep_heading_targets=keep_heading_targets)
 
 
 def _archive_dir_link_prefix(archive_dir: Path, changelog_parent: Path, *, warn_outside: bool = True) -> str:
@@ -542,6 +557,7 @@ def plan_archives(
     archive_dir: Path | None = None,
     *,
     formatter: Callable[[str, Path], str] | None = None,
+    retained_histories: Callable[[str], Iterator[str]] | None = None,
 ) -> list[tuple[Path, str]]:
     """Plan root and archive replacements from a candidate without writing files.
 
@@ -551,6 +567,9 @@ def plan_archives(
     if archive_dir is None:
         archive_dir = changelog_path.parent / _DEFAULT_ARCHIVE_DIR
 
+    # Links from one generated file can address headings in another. Preserve
+    # those targets, but allocate heading slugs within each physical document.
+    keep_heading_targets = _has_local_fragment_link(text.split("\n"))
     # Separate trailing reference-style link definitions before parsing
     # so they can be distributed to the correct output files.
     text, link_defs = _extract_link_defs(text)
@@ -570,11 +589,33 @@ def plan_archives(
     archived_minors = [path.stem for path in archive_dir.glob("*.md") if re.fullmatch(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)", path.stem)]
     planned_writes: list[tuple[Path, str]] = []
     relocation = _archive_dir_link_prefix(changelog_path.parent, archive_dir, warn_outside=False)
+
+    def relocate(blocks: list[tuple[str, str]], links: dict[str, str]) -> tuple[list[tuple[str, str]], dict[str, str]]:
+        return [(version, relocate_links(block, relocation)) for version, block in blocks], {
+            label: relocate_links(line, relocation) for label, line in links.items()
+        }
+
+    def retained_archives(minor: str, preamble: str, existing: str) -> Iterator[str]:
+        assert retained_histories is not None
+        for history in retained_histories(existing):
+            old_text, links = _extract_link_defs(history)
+            grouped = group_by_minor(parse_changelog(old_text).version_blocks)
+            old_blocks, old_links = relocate(grouped.get(minor, []), links)
+            yield _render_archive(minor, old_blocks, old_links, preamble=preamble, keep_heading_targets=keep_heading_targets)
+
     for minor in minor_keys[1:]:
         archive_path = archive_dir / f"{minor}.md"
-        blocks = [(version, relocate_links(block, relocation)) for version, block in groups[minor]]
-        definitions = {label: relocate_links(line, relocation) for label, line in link_defs.items()}
-        planned_writes.append((archive_path, _merge_archive(archive_path, minor, blocks, definitions, formatter)))
+        blocks, definitions = relocate(groups[minor], link_defs)
+        candidate = _merge_archive(
+            archive_path,
+            minor,
+            blocks,
+            definitions,
+            formatter,
+            retained_archives if retained_histories is not None else None,
+            keep_heading_targets=keep_heading_targets,
+        )
+        planned_writes.append((archive_path, candidate))
         archived_minors.append(minor)
 
     if not archived_minors:
@@ -588,16 +629,9 @@ def plan_archives(
         groups[active_minor],
         sorted(set(archived_minors), key=_version_sort_key, reverse=True),
         archive_dir_rel,
+        link_defs=link_defs,
+        keep_heading_targets=keep_heading_targets,
     )
-
-    # Append reference-style link definitions for active versions.
-    if link_defs:
-        labels = _referenced_labels(root_text)
-        if parsed.unreleased is not None:
-            labels.add("unreleased")
-        defs_text = _format_link_defs(link_defs, labels)
-        if defs_text:
-            root_text = root_text.rstrip("\n") + "\n\n" + defs_text + "\n"
 
     planned_writes.append((changelog_path, root_text))
     planned_targets = {path for path, _text in planned_writes}

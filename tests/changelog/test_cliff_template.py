@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 
+from research_repo_tools import changelog_issues
 from research_repo_tools.changelog import template
 from research_repo_tools.postprocess_changelog import postprocess_text
 from research_repo_tools.process import run_git_command, run_safe_command
@@ -13,7 +14,7 @@ from research_repo_tools.process import run_git_command, run_safe_command
 pytestmark = pytest.mark.skipif(shutil.which("git-cliff") is None, reason="external git-cliff is required for template rendering")
 
 
-def render(tmp_path: Path, message: str, *, dependency_bodies: str = "concise") -> str:
+def render(tmp_path: Path, message: str, *, dependency_bodies: str = "concise", with_issue_links: bool = False) -> str:
     # An empty range reads the existing checkout; --with-commit only adds
     # messages to git-cliff's input and never creates Git objects or refs.
     root = Path(__file__).resolve().parents[2]
@@ -27,9 +28,24 @@ def render(tmp_path: Path, message: str, *, dependency_bodies: str = "concise") 
     )
     arguments = ["--offline", "--no-exec", "--config", str(configuration)]
     arguments += ["--with-commit", message, "--with-commit", "fix: retain linked entry (#987)", "HEAD..HEAD"]
-    result = run_safe_command("git-cliff", arguments, cwd=root, check=False)
-    assert result.returncode == 0, result.stderr
-    return postprocess_text(result.stdout)
+    if with_issue_links:
+        # --with-commit has no Git objects. Supply identities for the real
+        # parser's records so enrichment can match each body to its own note.
+        releases = json.loads(run_safe_command("git-cliff", [*arguments, "--context"], cwd=root).stdout)
+        notes = {}
+        for index, commit in enumerate(releases[0]["commits"], start=1):
+            commit["id"] = f"{index:040x}"
+            # git-cliff stores preprocessed text in raw_message. The generator
+            # obtains the unmodified message separately from the Git object.
+            links = changelog_issues._closing_links(message, "example/consumer") if not commit["conventional"] else []
+            if links:
+                notes[commit["id"]] = "  Closes " + ", ".join(links) + "."
+        context = tmp_path / "context.json"
+        context.write_text(json.dumps(releases), encoding="utf-8", newline="\n")
+        raw = run_safe_command("git-cliff", ["--offline", "--no-exec", "--config", str(configuration), "--from-context", str(context)], cwd=root).stdout
+        cleaned = changelog_issues.strip_linked_directives(raw, notes, "example/consumer")
+        return postprocess_text(changelog_issues.add_closing_notes(cleaned, notes, "example/consumer"))
+    return postprocess_text(run_safe_command("git-cliff", arguments, cwd=root).stdout)
 
 
 @pytest.mark.parametrize(
@@ -92,6 +108,51 @@ def test_ordinary_commit_does_not_create_a_breaking_summary(tmp_path: Path) -> N
     result = render(tmp_path, "fix: preserve result storage")
     assert "### ⚠️ Breaking Changes" not in result
     assert "### Merged Pull Requests" in result
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_plain_squash_title_keeps_feature_details_under_its_entry(tmp_path: Path, newline: str) -> None:
+    message = (
+        "Ship the reporting workflow (#42)\n\n"
+        "* feat(export): add a CSV report\n\n"
+        "- Write one row per observation.\n\n"
+        "Closes #31\nCloses #32\n\n"
+        "* fix(import): retain Unicode labels\n\n"
+        "Keep labels such as café in `Result<T>`.\n\n"
+        "A literal ``first\nCloses #77\nlast`` continues here.\n\n"
+        "```text\nExample commit text:\n\nCloses #99\n\nCloses~23\nCloses~~24\n* fix: literal example\n```"
+    )
+    result = render(tmp_path, message.replace("\n", newline), with_issue_links=True)
+    summary, entry = result.split("### Changed\n\n", 1)
+    title = "Ship the reporting workflow [#42](https://github.com/example/consumer/pull/42)"
+    assert title in summary and entry.startswith(f"- {title}")
+    assert "\n\n#### feat(export): add a CSV report\n\n- Write one row per observation.\n\n#### fix(import):" in entry
+    for detail in (
+        "#### feat(export): add a CSV report",
+        "- Write one row per observation.",
+        "#### fix(import): retain Unicode labels",
+        "Keep labels such as café in `Result<T>`.",
+    ):
+        assert detail in entry and result.count(detail) == 1
+    assert "Closes #31" not in result and "Closes #32" not in result
+    assert "A literal ``first\n  Closes #77\n  last`` continues here." in entry
+    assert "  Closes #99\n\n  Closes~23\n  Closes~~24\n  * fix: literal example" in entry
+    assert postprocess_text(result) == result
+
+
+@pytest.mark.parametrize("subject", ["Closes~123", "Closes~~123", "Closes #123", "closes~123"])
+def test_plain_subject_preserves_marker_spellings(tmp_path: Path, subject: str) -> None:
+    result = render(tmp_path, subject + "\n\nOrdinary body.")
+    assert f"- {subject[0].upper() + subject[1:]} [`" in result
+    assert "Ordinary body." in result
+
+
+def test_plain_dependency_bump_respects_body_policy(tmp_path: Path) -> None:
+    message = "Bump toolkit from 1 to 2\n\nSee the [migration guide](https://example.com/migration)."
+    concise = render(tmp_path, message)
+    assert "### Dependencies\n\n- Bump toolkit from 1 to 2" in concise
+    assert "migration guide" not in concise
+    assert "See the [migration guide](https://example.com/migration)." in render(tmp_path, message, dependency_bodies="preserve")
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])

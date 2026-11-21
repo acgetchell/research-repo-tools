@@ -602,6 +602,41 @@ class TestPublishingConsumer(unittest.TestCase):
         self.assertEqual(cli.main(args), 0)
         self.assertEqual(path.read_bytes(), expected)
 
+    def test_installed_normalizer_preserves_a_linked_detail_and_its_code(self):
+        from markdown_it import MarkdownIt
+
+        path = self.root / "CHANGELOG.md"
+        url = "https://github.com/example/project"
+        commit = f"[`abcdef0`]({url}/commit/abcdef0)"
+        source = (
+            f"# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n- First {commit}\n\n  #### Example\n\n"
+            f"  - See [#2]({url}/pull/2) and {commit}\n\n        ```text\n          literal\n        ```\n\n- Next {commit}\n"
+        )
+        path.write_bytes(source.replace("\n", "\r\n").encode())
+        args = ["--root", str(self.root), "changelog", "normalize"]
+        self.assertEqual(cli.main(args), 0)
+        result = path.read_bytes()
+        text = result.decode()
+        self.assertNotIn("### Merged Pull Requests", text)
+        self.assertIn(f"\n---\n\n- Next {commit}", text)
+        self.assertEqual(text.count("\n---\n"), 1)
+        blocks = MarkdownIt("commonmark").parse(text)
+        self.assertEqual([block.content for block in blocks if block.type == "code_block"], ["```text\n  literal\n```\n"])
+        self.assertEqual(cli.main(args), 0)
+        self.assertEqual(path.read_bytes(), result)
+
+    def test_generated_archive_has_its_own_heading_targets(self):
+        history = (
+            "# Changelog\n\n## [2.0.0]\n\n### Added\n\n#### Verify\n\nSee [the second check](docs/archives/changelog/1.0.md#verify-1).\n\n"
+            "## [1.0.0]\n\n### Added\n\n#### Verify\n\nFirst.\n\n#### Verify\n\nSecond.\n"
+        )
+        settings = config.parse({"changelog": {"owner": "example", "repository": "project"}}, root=self.root)
+        archive = self.root / "docs/archives/changelog/1.0.md"
+        with patch.object(changelog, "_run_cliff", return_value=history):
+            root = changelog.generate(settings)
+            self.assertIn("docs/archives/changelog/1.0.md#verify-1", root)
+            self.assertIn(b"#### Verify\n\nFirst.\n\n#### Verify (1)\n\nSecond.", archive.read_bytes())
+
     def test_python_and_rust_final_metadata_and_cli_contract(self):
         for registry_name in ["pypi", "crates-io"]:
             with self.subTest(registry=registry_name):
@@ -874,7 +909,7 @@ class TestPublishingConsumer(unittest.TestCase):
             rendered = changelog.template(name, owner="example", repository="project")
             self.assertNotIn("__OWNER__", rendered)
             self.assertTrue(rendered.strip())
-        for policy, condition in [("concise", 'commit.body and group != "Dependencies"'), ("preserve", "commit.body")]:
+        for policy, condition in [("concise", 'entry_body and group != "Dependencies"'), ("preserve", "entry_body")]:
             rendered = changelog.template("cliff.toml", dependency_bodies=policy)
             self.assertIn("{%", tomllib.loads(rendered)["changelog"]["body"])
             self.assertIn(f"if {condition}", rendered)
@@ -1126,6 +1161,24 @@ class TestPublishingConsumer(unittest.TestCase):
                 ],
             }
         )
+        squash = (
+            "Ship reporting tools\n\n* feat(export): add CSV output\n\n- Write one row per observation.\n  Keep its label.\n\n"
+            "* fix: validate rows\n\n- Reject missing labels.\n\n* fix: validate rows\n\n- Reject missing values."
+        )
+        commits.append(
+            {
+                **commits[0],
+                "id": "c" * 40,
+                "group": "Changed",
+                "conventional": False,
+                "scope": None,
+                "message": squash,
+                "raw_message": squash,
+                "body": None,
+                "breaking": False,
+                "breaking_description": None,
+            }
+        )
         source = self.root / "context.json"
         source.write_text(json.dumps(context), encoding="utf-8", newline="\n")
         (self.root / "research.toml").write_text(
@@ -1134,8 +1187,11 @@ class TestPublishingConsumer(unittest.TestCase):
 
         def generate(program, args, **kwargs):
             # Use the real rendered configuration but a fixture history producer.
+            if "--context" in args:
+                return subprocess.CompletedProcess(args, 0, source.read_text(encoding="utf-8"), "")
+            context_path = args[args.index("--from-context") + 1] if "--from-context" in args else str(source)
             return subprocess.run(
-                [program, "--config", args[1], "--offline", "--no-exec", "--from-context", str(source)],
+                [program, "--config", args[1], "--offline", "--no-exec", "--from-context", context_path],
                 cwd=self.root,
                 capture_output=True,
                 encoding="utf-8",
@@ -1143,13 +1199,29 @@ class TestPublishingConsumer(unittest.TestCase):
                 timeout=30,
             )
 
+        def history(_args, *, input, cwd):
+            # Match the immutable Git messages to the same synthetic commit identities.
+            history_commits = [commit for release in context for commit in release["commits"]]
+            self.assertEqual(set(input.decode("ascii").splitlines()), {commit["id"] for commit in history_commits})
+            self.assertTrue(cwd.samefile(self.root))
+            fields = [field for commit in history_commits for field in (commit["id"], commit["raw_message"])]
+            return subprocess.CompletedProcess([], 0, ("\0".join(fields) + "\0").encode(), b"")
+
+        commits[-1]["raw_message"] += "\n\nCloses #17\nFixes example/other#19"
         args = ["--config", str(self.root / "research.toml"), "changelog", "generate", "--tag", "v1.2.3", "--date", "2026-09-01"]
-        with patch("research_repo_tools.changelog.run_safe_command", generate):
+        with patch("research_repo_tools.changelog_issues.run_git_bytes", history), patch("research_repo_tools.changelog.run_safe_command", generate):
             self.assertEqual(cli.main(args), 0)
             before = (self.root / "CHANGELOG.md").read_bytes()
             self.assertEqual(cli.main(args), 0)
         result = before.decode("utf-8")
         self.assertIn("## [1.2.3] - 2026-09-01", result)
+        changed = result.split("### Changed\n\n", 1)[1].split("\n### ", 1)[0]
+        self.assertTrue(changed.startswith("- Ship reporting tools"))
+        self.assertIn("Closes [#17](https://github.com/example/project/issues/17), [example/other#19](https://github.com/example/other/issues/19).", changed)
+        self.assertIn("\n\n#### feat(export): add CSV output\n\n- Write one row per observation.\n  Keep its label.", changed)
+        self.assertEqual(changed.count("- **fix: validate rows**"), 2)
+        self.assertIn("- **fix: validate rows**\n\n  - Reject missing labels.", changed)
+        self.assertIn("- **fix: validate rows**\n\n  - Reject missing values.", changed)
         self.assertIn("### Dependencies", result)
         self.assertIn("Ruff [notes]", result)
         self.assertIn("Ty [comparison]", result)
@@ -1168,11 +1240,47 @@ class TestPublishingConsumer(unittest.TestCase):
         citation = self.root / "CITATION.cff"
         citation.write_bytes(b"version: 1.2.3\r\ndate-released: '2026-09-01'\r\n")
         snapshot = {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
-        with patch("research_repo_tools.changelog.run_safe_command", generate), contextlib.redirect_stdout(io.StringIO()):
+        with (
+            patch("research_repo_tools.changelog_issues.run_git_bytes", history),
+            patch("research_repo_tools.changelog.run_safe_command", generate),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
             self.assertEqual(cli.main(args[:-2]), 0)
             self.assertEqual(cli.main(args[:-2]), 0)
             self.assertEqual(cli.main([*args[:-2], "--dry-run"]), 0)
         self.assertEqual({path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}, snapshot)
+
+        # Ordinary package installations also render navigable repeat headings.
+        for field in ("message", "raw_message"):
+            commits[-1][field] += "\n\n[Second validation](CHANGELOG.md#fix-validate-rows-1)\n\nLiteral ``first\nCloses #88\nlast``."
+        source.write_text(json.dumps(context), encoding="utf-8", newline="\n")
+        with (
+            patch("research_repo_tools.changelog_issues.run_git_bytes", history),
+            patch("research_repo_tools.changelog.run_safe_command", generate),
+            contextlib.redirect_stdout(io.StringIO()) as preview,
+        ):
+            self.assertEqual(cli.main([*args, "--dry-run"]), 0)
+        self.assertIn("#### fix: validate rows (1)", preview.getvalue())
+        self.assertIn("[Second validation](CHANGELOG.md#fix-validate-rows-1)", preview.getvalue())
+        self.assertIn("Closes #88", preview.getvalue())
+        self.assertNotIn("/issues/88)", preview.getvalue())
+
+        # Upgrade a retained archive written when plain squash titles had no body.
+        title = "Introduce samples (#98)"
+        archived = {**commits[-1], "id": "d" * 40, "message": title, "raw_message": title + "\n\nPreserve sample weights."}
+        context.append({**context[0], "version": "v1.1.0", "commits": [archived]})
+        source.write_text(json.dumps(context), encoding="utf-8", newline="\n")
+        archive_path = self.root / "docs/archives/changelog/1.1.md"
+        with patch("research_repo_tools.changelog_issues.run_git_bytes", history), patch("research_repo_tools.changelog.run_safe_command", generate):
+            self.assertEqual(cli.main(args), 0)
+            self.assertNotIn("Preserve sample weights.", archive_path.read_text(encoding="utf-8"))
+            archived["message"] = archived["raw_message"]
+            source.write_text(json.dumps(context), encoding="utf-8", newline="\n")
+            self.assertEqual(cli.main(args), 0)
+            migrated = archive_path.read_bytes()
+            self.assertIn(b"Preserve sample weights.", migrated)
+            self.assertEqual(cli.main(args), 0)
+            self.assertEqual(archive_path.read_bytes(), migrated)
 
     def test_managed_cargo_home_preserves_oidc_token_and_failed_publish_status(self):
         plan = toolchain_config.Toolchain(self.root, "0.12.23", "3.14", toolchain_config.RustToolchain("1.98.0", (), (), "minimal"), ())

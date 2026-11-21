@@ -68,6 +68,38 @@ def test_generation_rotates_minor_series_and_preview_matches_publication(consume
     assert snapshot(consumer.root) == once
 
 
+@pytest.mark.parametrize("cross_file", [False, True])
+def test_heading_fragments_are_numbered_in_their_output_file(consumer, monkeypatch, cross_file):
+    archive_link = "[Second archived check](docs/archives/changelog/1.0.md#verify-1)."
+    local_link = "[First](#verify), [second](#verify-1)."
+    history = (
+        "# Changelog\n\n## [2.0.0]\n\n### Added\n\n#### Verify\n\nCurrent check.\n\n"
+        f"{archive_link if cross_file else ''}\n\n## [1.0.0]\n\n### Added\n\n{'' if cross_file else local_link}\n\n"
+        "#### Verify\n\nFirst archived check.\n\n#### Verify\n\nSecond archived check.\n"
+    )
+    monkeypatch.setattr(changelog, "_run_cliff", lambda *args, **kwargs: history)
+    root = changelog.generate(consumer)
+    assert "#### Verify\n\nCurrent check." in root
+    archive_path = consumer.root / "docs/archives/changelog/1.0.md"
+    archive = archive_path.read_text(encoding="utf-8")
+    assert "#### Verify\n\nFirst archived check." in archive
+    assert "#### Verify (1)\n\nSecond archived check." in archive
+    assert (archive_link in root) if cross_file else (local_link in archive)
+    once = snapshot(consumer.root)
+    assert changelog.generate(consumer) == root
+    assert snapshot(consumer.root) == once
+
+
+def test_custom_template_retains_closing_directives_in_root_and_archive(consumer, monkeypatch):
+    history = HISTORY.replace("Upcoming work.", "Upcoming work.\n\n  Closes #12\n").replace("Earlier correction.", "Earlier correction.\n\n  Closes #13\n")
+    (consumer.root / "cliff.toml").write_bytes(b'[changelog]\nbody = "custom"\n')
+    consumer = replace(consumer, changelog=replace(consumer.changelog, cliff_config="cliff.toml"))
+    monkeypatch.setattr(changelog, "run_safe_command", lambda *args, **kwargs: subprocess.CompletedProcess([], 0, history, ""))
+    for _ in range(2):
+        assert "Closes #12" in changelog.generate(consumer)
+        assert "Closes #13" in (consumer.root / "docs/archives/changelog/0.8.md").read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("dry_run", [False, True])
 def test_generation_rejects_archive_conflicts_without_changes(consumer: config.Config, dry_run: bool) -> None:
     archive = consumer.root / "docs/archives/changelog/0.9.md"
@@ -110,15 +142,18 @@ def test_generation_formats_every_output_before_publication(consumer: config.Con
             raise ValueError("archive formatting failed")
         return text
 
-    monkeypatch.setattr(changelog, "format_markdown", format_candidate)
+    monkeypatch.setattr(changelog, "fix_markdown", format_candidate)
     before = snapshot(consumer.root)
     with pytest.raises(ValueError, match="archive formatting failed"):
         changelog.generate(consumer)
     assert Path("docs/archives/changelog/0.8.md") in formatted
     assert snapshot(consumer.root) == before
     formatted.clear()
-    monkeypatch.setattr(changelog, "format_markdown", lambda text, path, rules: (formatted.add(path.relative_to(consumer.root)), text)[1])
+    checked = {}
+    monkeypatch.setattr(changelog, "check_markdown", lambda text, path, rules, candidates: checked.update(candidates))
+    monkeypatch.setattr(changelog, "fix_markdown", lambda text, path, rules: (formatted.add(path.relative_to(consumer.root)), text)[1])
     changelog.generate(consumer)
+    assert {path.relative_to(consumer.root) for path in checked} == formatted
     assert formatted == {Path("CHANGELOG.md"), Path("docs/archives/changelog/0.9.md"), Path("docs/archives/changelog/0.8.md")}
 
 
@@ -177,7 +212,7 @@ def test_formatter_cannot_remove_or_change_release_identity(consumer, monkeypatc
             return text.replace("2026-09-", "2025-09-")
         return text.replace("[1.0.0]", "[9.0.0]").replace("[0.9.2]", "[0.9.3]")
 
-    monkeypatch.setattr(changelog, "format_markdown", format_candidate)
+    monkeypatch.setattr(changelog, "fix_markdown", format_candidate)
     with pytest.raises(ValueError, match="release headings"):
         changelog.generate(consumer)
     assert snapshot(consumer.root) == before
@@ -280,15 +315,31 @@ def test_generation_retains_date_after_prospective_release_is_tagged(consumer):
 def test_formatted_regeneration_and_next_release_are_stable(consumer, monkeypatch, formatted):
     # List-marker conversion and prose wrapping reproduce the comparison across
     # raw generated blocks and formatter-produced retained archives.
-    history = HISTORY.replace("Earlier correction.", " ".join(["Long historical explanation."] * 12))
+    history = HISTORY.replace("docs/guide.md", r"docs/guide\(notes\)%23v1.md\#guide").replace(
+        "Earlier correction.", " ".join(["Long historical explanation."] * 12)
+    )
+    history = history.replace(
+        "- Read the [guide]",
+        "- Outer\n  - Inner\n    - Use [data](docs/first&amp;last.csv).\n      Continue with the [data](docs/first&#38;last.csv).\n\n- Read the [guide]",
+    )
     monkeypatch.setattr(changelog, "run_safe_command", lambda *args, **kwargs: subprocess.CompletedProcess([], 0, history, ""))
     if formatted:
         consumer = replace(consumer, changelog=replace(consumer.changelog, formatter="rumdl.toml"))
-        (consumer.root / "rumdl.toml").write_text(
-            changelog.template("rumdl.toml").replace('"MD053"', '"MD053", "MD057"') + '\n[MD004]\nstyle = "asterisk"\n', newline="\n"
-        )
+        (consumer.root / "docs").mkdir()
+        (consumer.root / "docs/guide(notes)#v1.md").write_bytes(b"# Guide\n")
+        (consumer.root / "docs/first&last.csv").write_bytes(b"x,y\n")
+        (consumer.root / "rumdl.toml").write_text(changelog.template("rumdl.toml") + '\n[MD004]\nstyle = "asterisk"\n', newline="\n")
     if formatted == "stub":
-        monkeypatch.setattr(changelog, "format_markdown", lambda text, path, rules: text.replace("\n- ", "\n* "))
+        monkeypatch.setattr(changelog, "check_markdown", lambda *args: None)
+        monkeypatch.setattr(changelog, "fix_markdown", lambda text, path, rules: text.replace("\n- ", "\n* "))
+    if formatted == "rumdl":
+        guide = consumer.root / "docs/guide(notes)#v1.md"
+        guide.unlink()
+        without_guide = snapshot(consumer.root)
+        with pytest.raises(RuntimeError, match="MD057"):
+            changelog.generate(consumer)
+        assert snapshot(consumer.root) == without_guide
+        guide.write_bytes(b"# Guide\n")
     changelog.generate(consumer)
     before = snapshot(consumer.root)
     changelog.generate(consumer)

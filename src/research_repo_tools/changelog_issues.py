@@ -1,0 +1,214 @@
+"""Recover explicit issue closures from the original commits in a generated history."""
+
+import re
+from collections.abc import Iterator
+from html.parser import HTMLParser
+from pathlib import Path
+from typing import cast, override
+
+from research_repo_tools._git_checkout import READ_ONLY_OPTIONS
+from research_repo_tools.postprocess_changelog import _changelog_prose, _reflow_line
+from research_repo_tools.process import run_git_bytes
+
+_KEYWORD = r"(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)"
+_OWNER = r"[A-Za-z0-9][A-Za-z0-9_.-]*"
+_REPOSITORY = r"(?!\.{1,2}(?=[#/]))[A-Za-z0-9_.-]+"
+_SLUG = rf"{_OWNER}/{_REPOSITORY}"
+_TARGET = rf"(?:(?:{_SLUG})?#[1-9][0-9]*|https://github\.com/{_SLUG}/issues/[1-9][0-9]*)"
+_CLOSING_LINE = re.compile(rf"{_KEYWORD}:?[ \t]+{_TARGET}(?:,[ \t]+(?:{_KEYWORD}:?[ \t]+)?{_TARGET})*\.?[ \t]*", re.IGNORECASE | re.ASCII)
+_REFERENCE = re.compile(rf"(?:https://github\.com/(?P<url>{_SLUG})/issues/|(?P<slug>{_SLUG})?#)(?P<number>[1-9][0-9]*)", re.IGNORECASE | re.ASCII)
+_CLOSING_NOTE = re.compile(rf"^Closes \[(?:{_SLUG})?#[1-9][0-9]*\]\(")
+_COMMIT = re.compile(rf"\[`(?P<short>[a-f0-9]{{7}})`\]\(https://github\.com/(?P<slug>{_SLUG})/commit/(?P<oid>[a-f0-9]{{40}}(?:[a-f0-9]{{24}})?)\)$")
+
+
+class _CodeExamples(HTMLParser):
+    """Collect text inside rendered code spans, fenced blocks, and HTML examples."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.open_tags: list[str] = []
+        self.text: list[str] = []
+
+    @override
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"pre", "code"}:
+            self.open_tags.append(tag)
+
+    @override
+    def handle_endtag(self, tag: str) -> None:
+        if self.open_tags and self.open_tags[-1] == tag:
+            self.open_tags.pop()
+
+    @override
+    def handle_data(self, data: str) -> None:
+        if self.open_tags:
+            self.text.append(data)
+
+
+def _literal_directive_lines(lines: list[str], directives: set[int]) -> set[int]:
+    """Identify candidate lines which CommonMark renders as literal code."""
+    if not directives:
+        return set()
+    from markdown_it import MarkdownIt
+
+    # Inline code tokens normalize newlines and have no source line numbers.
+    # Mark only complete standalone directives in the parser's private copy.
+    prefix = "RRTDIRECTIVE"
+    while any(prefix in line for line in lines):
+        prefix += "X"
+    marked = "\n".join(line + f"{prefix}{i}END" if i in directives else line for i, line in enumerate(lines))
+    marker = re.compile(rf"{prefix}(\d+)END")
+    examples = _CodeExamples()
+    examples.feed(MarkdownIt("commonmark").render(marked))
+    examples.close()
+    return {int(number) for data in examples.text for number in marker.findall(data)}
+
+
+def _entry_oid(line: str, repository: str) -> str | None:
+    match = _COMMIT.search(line)
+    if match is None or match["slug"].casefold() != repository.casefold():
+        return None
+    oid = cast("str", match["oid"])
+    return oid if oid.startswith(match["short"]) else None
+
+
+def _commit_lines(lines: list[str], repository: str) -> Iterator[tuple[int, str]]:
+    """Locate a packaged entry's terminal hash link, including wrapped titles."""
+    in_title = False
+    for index, line in _changelog_prose(lines):
+        if line.startswith(("- ", "* ", "+ ")):
+            in_title = True
+        elif not line.startswith("  ") or not index or not lines[index - 1].strip():
+            in_title = False
+        if in_title and (oid := _entry_oid(line, repository)):
+            yield index, oid
+            in_title = False
+
+
+def _targets(line: str, repository: str) -> Iterator[tuple[str, str]]:
+    for match in _REFERENCE.finditer(line):
+        yield cast("str", match["url"] or match["slug"] or repository), cast("str", match["number"])
+
+
+def _closing_links(message: str, repository: str) -> list[str]:
+    """Read standalone directives, preserving authored order across repositories."""
+    links: dict[tuple[str, str], str] = {}
+    lines = message.replace("\r\n", "\n").split("\n")
+    directives = {index: line for index, line in enumerate(lines) if _CLOSING_LINE.fullmatch(line)}
+    example_lines = _literal_directive_lines(lines, set(directives))
+    for index, line in directives.items():
+        if index in example_lines:
+            continue
+        for slug, number in _targets(line, repository):
+            local = slug.casefold() == repository.casefold()
+            label = f"#{number}" if local else f"{slug}#{number}"
+            links.setdefault((slug.casefold(), number), f"[{label}](https://github.com/{repository if local else slug}/issues/{number})")
+    return list(links.values())
+
+
+def strip_linked_directives(text: str, notes: dict[str, str], repository: str) -> str:
+    """Remove trailers with replacement links in the packaged release."""
+    # Git-cliff indents every body line. Only template-owned release headings
+    # can begin at column zero here, before Markdown normalization.
+    return "".join(_strip_release_directives(release, notes, repository) for release in re.split(r"(?m)(?=^## )", text.replace("\r\n", "\n")))
+
+
+def _strip_release_directives(release: str, notes: dict[str, str], repository: str) -> str:
+    lines = release.split("\n")
+    prose = list(_changelog_prose(lines))
+    entries = {i: notes[oid].casefold() for i, line in prose if line.startswith("- ") and (oid := _entry_oid(line, repository)) and oid in notes}
+    if not entries:
+        return release
+    # Breaking descriptions precede the categorized entries that carry their
+    # hashes. A duplicate directive there must have a replacement in this release.
+    summary_notes = " ".join(entries.values())
+    breaking_summary = False
+    directives: set[int] = set()
+    note = ""
+    for index, line in prose:
+        if line.startswith("### "):
+            breaking_summary = line == "### ⚠️ Breaking Changes"
+        if line and not line[0].isspace():
+            note = summary_notes if breaking_summary else entries.get(index, "")
+        elif note and line.startswith("  ") and _CLOSING_LINE.fullmatch(line[2:]):
+            if all(f"(https://github.com/{slug}/issues/{number})".casefold() in note for slug, number in _targets(line, repository)):
+                directives.add(index)
+    directives -= _literal_directive_lines(lines, directives)
+    kept: list[str] = []
+    for index, line in enumerate(lines):
+        if index in directives:
+            continue
+        if index - 1 in directives and index < len(lines) - 1 and not line.strip() and kept and not kept[-1].strip():
+            continue
+        kept.append(line)
+    return "\n".join(kept)
+
+
+def read_closing_notes(text: str, root: Path, repository: str) -> dict[str, str]:
+    """Read exactly the rendered commit objects in one offline, read-only Git call."""
+    # At this point git-cliff emits the title and hash on a single line.
+    # Every body line is indented, including any example commit links.
+    commits = dict.fromkeys(
+        oid for _, line in _changelog_prose(text.replace("\r\n", "\n").split("\n")) if line.startswith("- ") and (oid := _entry_oid(line, repository))
+    )
+    if not commits:
+        return {}
+    result = run_git_bytes(
+        [
+            *READ_ONLY_OPTIONS,
+            "log",
+            "--no-walk=unsorted",
+            "--no-decorate",
+            "--no-notes",
+            "--no-color",
+            "--no-show-signature",
+            "--encoding=UTF-8",
+            "--format=%H%x00%B",
+            "-z",
+            "--stdin",
+        ],
+        cwd=root,
+        input="".join(f"{oid}\n" for oid in commits).encode("ascii"),
+    )
+    fields = result.stdout.removesuffix(b"\0").split(b"\0")
+    notes = {}
+    for raw_oid, body in zip(fields[::2], fields[1::2], strict=True):
+        if links := _closing_links(body.decode("utf-8", errors="replace"), repository):
+            notes[raw_oid.decode("ascii")] = _reflow_line("  Closes " + ", ".join(links) + ".")
+    return notes
+
+
+def _following_note(lines: list[str], index: int) -> str | None:
+    start = index + 1
+    while start < len(lines) and not lines[start].strip():
+        start += 1
+    if not _CLOSING_NOTE.match(" ".join(line.strip() for line in lines[start : start + 2])):
+        return None
+    parts = []
+    for line in lines[start:]:
+        parts.append(line.strip())
+        if not line.strip() or line.endswith("."):
+            break
+    return " ".join(parts)
+
+
+def retained_notes(text: str, notes: dict[str, str], repository: str) -> dict[str, str]:
+    """Select existing notes for reconstructing a retained release from Git."""
+    lines = text.split("\n")
+    return {
+        oid: notes[oid] for index, oid in _commit_lines(lines, repository) if oid in notes and _following_note(lines, index) == " ".join(notes[oid].split())
+    }
+
+
+def add_closing_notes(text: str, notes: dict[str, str], repository: str) -> str:
+    """Attach notes before normalization lifts subsection bullets out of a commit body."""
+    lines = text.split("\n")
+    for index, oid in reversed(list(_commit_lines(lines, repository))):
+        if oid not in notes:
+            continue
+        note = notes[oid]
+        # The source is a commit body. Preserve a distinct authored linked
+        # paragraph. Changed notes in stored archives fail the release comparison.
+        if _following_note(lines, index) != " ".join(note.split()):
+            lines[index + 1 : index + 1] = note.split("\n")
+    return "\n".join(lines)

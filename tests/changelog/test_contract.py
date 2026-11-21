@@ -9,9 +9,9 @@ from pathlib import Path
 
 import pytest
 
-from research_repo_tools import archive_changelog, changelog, cli, config, postprocess_changelog, update_release
+from research_repo_tools import archive_changelog, changelog, changelog_issues, cli, config, postprocess_changelog, update_release
 from research_repo_tools.markdown import relocate_links
-from research_repo_tools.process import run_git_command
+from research_repo_tools.process import run_git_command, run_safe_command
 
 
 def settings(root: Path, **changes: object) -> config.Config:
@@ -73,6 +73,18 @@ def test_templates_are_common_valid_package_resources(tmp_path: Path) -> None:
     with pytest.raises(FileExistsError):
         changelog.write_template(target, changelog.template("justfile"))
     assert target.read_bytes() == b"existing:\r\n    custom-command\r\n"
+
+
+@pytest.mark.skipif(shutil.which("rumdl") is None, reason="external rumdl required")
+def test_packaged_policy_detects_duplicate_headings_and_unused_references(tmp_path: Path) -> None:
+    rules = tmp_path / "rumdl.toml"
+    rules.write_text(changelog.template("rumdl.toml"), encoding="utf-8", newline="\n")
+    source = "# Changelog\n\n## Release\n\n### Duplicate\n\nBody.\n\n### Duplicate\n\n[unused]: https://example.com\n"
+    result = run_safe_command(
+        "rumdl", ["check", "--config", str(rules), "--no-cache", "--stdin", "--stdin-filename", "CHANGELOG.md"], input=source, check=False
+    )
+    assert result.returncode == 1
+    assert "[MD024]" in result.stdout and "[MD053]" in result.stdout
 
 
 @pytest.mark.parametrize("component", ['x"\n[malicious]', "../x", "x/y", "..", "https://example.com"])
@@ -148,7 +160,7 @@ def test_normalization_preserves_all_fenced_prose_and_is_idempotent() -> None:
     once = postprocess_changelog.postprocess_text(original)
     assert code in once
     assert postprocess_changelog.postprocess_text(once) == once
-    assert "\n  - Detail.\n" in once
+    assert "#### fixed: generated body\n\n- Detail.\n" in once
 
 
 def test_incremental_archives_retain_older_patches_links_and_introduction(tmp_path: Path) -> None:
@@ -277,6 +289,176 @@ def test_generate_real_git_history_with_packaged_template(git_consumer: Path) ->
     assert "https://github.com/example/research/pull/7" in candidate
     assert changelog.generate(cfg, tag="v1.2.0", released="2026-09-07") == candidate
     assert (git_consumer / "CHANGELOG.md").read_text() == candidate
+
+
+@pytest.mark.skipif(shutil.which("git-cliff") is None, reason="external git-cliff is required for the native generation integration test")
+def test_backfill_links_original_commits_in_retained_and_current_releases(git_consumer: Path) -> None:
+    cfg = settings(git_consumer)
+    body = (
+        "Closes #11\nCloses #12\nCloses #13\n\n"
+        "Fixes EXAMPLE/research#11, resolves other/tool#14.\nCloses acme/.github#31\n"
+        "Closed: https://github.com/other/tool/issues/14\n"
+        "Refs #15\n> Fixes #16\n    Fixes #17\n\n~~~~text\nCloses #18\n~~~~\n\n"
+        "Example ``first\nResolves #20\nlast``.\n\nAn unmatched ` delimiter.\n\nFixes #21\n\n    ~~~text\n\nFixes #22\n\n"
+        "<pre>\nCloses #23\n</pre>\n\nCloses #24"
+    )
+    run_git_command(["commit", "--allow-empty", "-qm", "Ship\u2028reporting (#42)", "-m", body], cwd=git_consumer)
+    oid = run_git_command(["rev-parse", "HEAD"], cwd=git_consumer).stdout.strip()
+    reference = f"See the original [`{oid[:7]}`](https://github.com/example/research/commit/{oid})"
+    run_git_command(["commit", "--allow-empty", "-qm", "Add a usage reference (#45)", "-m", f"* docs: related work\n\n- {reference}"], cwd=git_consumer)
+    run_git_command(["tag", "v1.0.0"], cwd=git_consumer)
+    run_git_command(["commit", "--allow-empty", "-qm", "fix: keep reports readable (#43)", "-m", "Fixed #19"], cwd=git_consumer)
+    current = changelog.generate(cfg, tag="v1.1.0", released="2026-09-07")
+    assert current.count("[#19](https://github.com/example/research/issues/19)") == 1
+    changelog.check(cfg)
+    assert "      ~~~text" in changelog.notes(cfg, "v1.0.0")[0]
+    archive = git_consumer / "docs/archives/changelog/1.0.md"
+    original = archive.read_bytes()
+    assert b"- See the original" in original
+    note = re.search(rb"^  Closes \[.*?\)\.$", original, flags=re.MULTILINE | re.DOTALL)
+    assert note is not None
+    for number in (11, 12, 13, 21, 22, 24):
+        assert original.count(f"[#{number}](https://github.com/example/research/issues/{number})".encode()) == 1
+    assert original.count(b"[other/tool#14](https://github.com/other/tool/issues/14)") == 1
+    assert original.count(b"[acme/.github#31](https://github.com/acme/.github/issues/31)") == 1
+    assert b"Fixes EXAMPLE/research#11" not in original and b"Closed: https://github.com/other/tool/issues/14" not in original
+    for number in (15, 16, 17, 18, 19, 20, 23):
+        assert f"/issues/{number})".encode() not in original
+    archive.write_bytes(original[: note.start()] + original[note.end() + 1 :])
+    assert changelog.generate(cfg, tag="v1.1.0", released="2026-09-07") == current
+    assert archive.read_bytes() == original
+    damaged = original.replace(b"/issues/13)", b"/issues/123)")
+    archive.write_bytes(damaged)
+    with pytest.raises(ValueError, match="conflicting"):
+        changelog.generate(cfg, tag="v1.1.0", released="2026-09-07")
+    assert archive.read_bytes() == damaged
+
+
+@pytest.mark.skipif(shutil.which("git-cliff") is None, reason="external git-cliff required")
+def test_generation_recovers_title_only_archive_from_the_same_history(git_consumer: Path) -> None:
+    cfg = settings(git_consumer)
+    run_git_command(["commit", "--allow-empty", "-qm", "Ship reporting (#42)", "-m", "Record café observations."], cwd=git_consumer)
+    authored = "Closes [#8](https://github.com/example/research/issues/8)."
+    run_git_command(
+        ["commit", "--allow-empty", "-qm", "fix: read reports", "-m", authored + "\n\nRead samples.\nCloses #31\nPreserve metadata."], cwd=git_consumer
+    )
+    run_git_command(["tag", "v1.0.0"], cwd=git_consumer)
+    run_git_command(["commit", "--allow-empty", "-qm", "fix: next release"], cwd=git_consumer)
+    changelog.generate(cfg, tag="v1.1.0", released="2026-09-07")
+    archive = git_consumer / "docs/archives/changelog/1.0.md"
+    current = archive.read_text(encoding="utf-8").replace("# Changelog - 1.0.x\n", "# Changelog - 1.0.x\n\nRetained introduction.\n")
+    assert current.count("Record café observations.") == current.count("Preserve metadata.") == 1
+    link = "  Closes [#31](https://github.com/example/research/issues/31).\n"
+    assert current.count(link) == current.count(authored) == 1 and "  Closes #31\n" not in current
+    title_only = current.replace("\n  Record café observations.\n", "").replace(link, "").replace("  Read samples.\n", "  Read samples.\n  Closes #31\n")
+    assert "Record café observations." not in title_only and "  Closes #31\n" in title_only
+    archive.write_text(title_only, encoding="utf-8", newline="\n")
+    changelog.generate(cfg, tag="v1.1.0", released="2026-09-07", dry_run=True)
+    assert archive.read_text(encoding="utf-8") == title_only
+    for _ in range(2):
+        changelog.generate(cfg, tag="v1.1.0", released="2026-09-07")
+        assert archive.read_text(encoding="utf-8") == current
+    for changed in (
+        current.replace("Record café observations.", "Hand-edited."),
+        title_only.replace("Preserve metadata.", "Hand-edited."),
+        title_only.replace("Closes #31", "Closes #99"),
+    ):
+        archive.write_text(changed, encoding="utf-8", newline="\n")
+        with pytest.raises(ValueError, match="conflicting retained release"):
+            changelog.generate(cfg, tag="v1.1.0", released="2026-09-07")
+        assert archive.read_text(encoding="utf-8") == changed
+
+
+@pytest.mark.parametrize("separator", ["", "\n", "\n\n"])
+def test_wrapped_issue_link_is_idempotent_and_preserves_authored_paragraph(separator: str) -> None:
+    oid = "a" * 40
+    remote = "example/" + "long-name-" * 9 + "tools"
+    note = f"  Closes\n  [{remote}#7](https://github.com/{remote}/issues/7)."
+    notes = {oid: note}
+    entry = f"- Report [`{oid[:7]}`](https://github.com/example/research/commit/{oid})\n"
+    annotated = changelog_issues.add_closing_notes(entry, notes, "example/research")
+    assert annotated == entry + note + "\n"
+    annotated = entry + separator + note + "\n"
+    assert changelog_issues.add_closing_notes(annotated, notes, "example/research") == annotated
+    authored = annotated.replace("/issues/7)", "/issues/8)")
+    enriched = changelog_issues.add_closing_notes(authored, notes, "example/research")
+    assert enriched == entry + note + "\n" + authored.removeprefix(entry)
+    assert changelog_issues.add_closing_notes(enriched, notes, "example/research") == enriched
+
+
+def test_strip_only_directives_with_replacement_links_for_that_entry() -> None:
+    first, second = "a" * 40, "b" * 40
+    notes = {first: "  Closes [#7](https://github.com/example/research/issues/7)."}
+    text = (
+        f"- First [`{first[:7]}`](https://github.com/example/research/commit/{first})\n\n"
+        "  Fixes #7\n  Closes #7, #8\n  Closes #9\n\n"
+        f"- Second [`{second[:7]}`](https://github.com/example/research/commit/{second})\n\n  Closes #7\n"
+    )
+    assert changelog_issues.strip_linked_directives(text, notes, "example/research") == text.replace("  Fixes #7\n", "")
+    summary = "### ⚠️ Breaking Changes\n\n- Changed API.\n  Fixes #7\n\n### Changed\n\n"
+    history = "## [Unreleased]\n\n" + summary + text + "\n## [1.0.0]\n\n" + summary + "- Historical detail.\n"
+    before, after = changelog_issues.strip_linked_directives(history, notes, "example/research").split("## [1.0.0]")
+    assert "  Fixes #7\n" not in before and "  Fixes #7\n" in after
+    paragraphs = text.split("\n\n", 1)[0] + "\n\n  First paragraph.\n  Closes #7\n\n  Second paragraph.\n"
+    assert changelog_issues.strip_linked_directives(paragraphs, notes, "example/research") == paragraphs.replace("  Closes #7\n", "")
+    assert "example/.github" in changelog.template("cliff.toml", owner="example", repository=".github")
+
+
+@pytest.mark.parametrize("link", ["[Second](CHANGELOG.md#verify-1)", "[Second][again]\n\n[again]: ./CHANGELOG.md#verify-1"])
+def test_path_qualified_heading_navigation_survives_regeneration(link: str) -> None:
+    source = f"# Changelog\n\n## [Unreleased]\n\n### Added\n\n{link}\n\n#### Verify\n\nFirst.\n\n#### Verify\n\nSecond.\n"
+    result = postprocess_changelog.postprocess_text(source)
+    assert "#### Verify (1)\n\nSecond." in result
+    assert link in result
+    assert postprocess_changelog.postprocess_text(result) == result
+
+
+@pytest.mark.parametrize("reserved", ["#### Verify-1", "Verify\n=====", "Verify\n-----"])
+def test_reference_heading_reserves_the_rendered_fragment(reserved: str) -> None:
+    source = f"# Changelog\n\n## [Unreleased]\n\n### Added\n\n[Second](#verify-2)\n\n{reserved}\n\n#### [Verify][v]\n\nFirst.\n\n#### [Verify][v]\n\nSecond.\n\n[v]: https://example.com\n"
+    result = postprocess_changelog.postprocess_text(source)
+    assert "#### [Verify][v] (2)\n\nSecond." in result
+    assert postprocess_changelog.postprocess_text(result) == result
+
+
+@pytest.mark.parametrize("literal", ["```text\nsample\n```\n", "if ready:\n    publish()\n"])
+def test_repeated_subsections_keep_indented_code_literal(literal: str) -> None:
+    from markdown_it import MarkdownIt
+
+    code = "".join("    " + line for line in literal.splitlines(keepends=True))
+    source = "# Changelog\n\n## [Unreleased]\n\n### Changed\n\n" + f"#### Example\n\n{code}\n" * 2
+    result = postprocess_changelog.postprocess_text(source)
+    tokens = MarkdownIt("commonmark").parse(result)
+    assert [token.content for token in tokens if token.type == "code_block"] == [literal] * 2
+    assert not any(token.type == "fence" for token in tokens)
+    assert postprocess_changelog.postprocess_text(result) == result
+
+
+@pytest.mark.skipif(shutil.which("rumdl") is None, reason="external rumdl validates the generated heading targets")
+def test_repeated_headings_preserve_local_navigation(tmp_path: Path) -> None:
+    source = (
+        "# Changelog\n\n## [Unreleased]\n\n### Added\n\n[First](#verify), [second][again], [reserved](#verify-1), and [later](#verify-2-1).\n\n"
+        "#### Verify-1\n\nReserved.\n\n#### Verify\n\nFirst details.\n\n#### Verify\n\nSecond details.\n\n#### Verify (2)\n\nLater details.\n\n[again]: #verify-2\n"
+    )
+    result = postprocess_changelog.postprocess_text(source)
+    assert "#### Verify\n\nFirst details." in result
+    assert "#### Verify (2)\n\nSecond details." in result
+    assert postprocess_changelog.postprocess_text(result) == result
+    rules = tmp_path / "rules.toml"
+    rules.write_text(changelog.template("rumdl.toml"), encoding="utf-8", newline="\n")
+    postprocess_changelog.check_markdown(result, tmp_path / "CHANGELOG.md", rules)
+
+
+def test_formatted_heading_collisions_use_rendered_text() -> None:
+    source = (
+        "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n[Third](#verify-2) and [identifier](#raw_name).\n\n"
+        "#### Verify\n\nFirst.\n\n#### _Verify_\n\nSecond.\n\n#### _Verify_\n\nThird.\n\n#### `raw_name`\n\nLiteral underscore.\n"
+    )
+    result = postprocess_changelog.postprocess_text(source)
+    assert "#### _Verify_ (1)\n\nSecond." in result
+    assert "#### _Verify_ (2)\n\nThird." in result
+    assert "#### `raw_name`\n" in result
+    assert postprocess_changelog.postprocess_text(result) == result
 
 
 def test_tag_preserves_utf8_notes_and_force_replaces_atomically(git_consumer: Path) -> None:
