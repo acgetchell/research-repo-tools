@@ -347,6 +347,13 @@ source="tag"
 
 
 class TestCompleteConsumer(unittest.TestCase):
+    def test_measurement_commands_preserve_the_interpreter_path(self):
+        python = r"C:\build tools\🧪\python.exe"
+        with tempfile.TemporaryDirectory() as directory, patch.object(sys, "executable", python):
+            plan = fixture(Path(directory))
+        for phase in (plan.baseline, plan.current):
+            self.assertEqual((phase.command[0], phase.gate[0]), (python, python))
+
     def test_complete_plan_checks_nested_types_before_reading_fields(self):
         with tempfile.TemporaryDirectory() as directory:
             plan = fixture(Path(directory))

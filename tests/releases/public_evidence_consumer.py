@@ -2444,16 +2444,11 @@ class TestAuthenticatedDraftWorkflow(unittest.TestCase):
             ("tag_run", {"head_repository": {"full_name": "fork/package", "id": 8}}),
             ("tag_workflow", {"state": "disabled_manually"}),
         ):
-            with self.subTest(field=field, changes=changes):
-                original = copy.deepcopy(getattr(self.draft.provider, field))
-                getattr(self.draft.provider, field).update(changes)
-                try:
-                    with self.assertRaises(ValueError):
-                        self.draft.prepare()
-                    self.assertEqual(self.draft.provider.posts, [])
-                    self.assertFalse(self.draft.state.exists())
-                finally:
-                    setattr(self.draft.provider, field, original)
+            with self.subTest(field=field, changes=changes), patch.dict(getattr(self.draft.provider, field), changes):
+                with self.assertRaises(ValueError):
+                    self.draft.prepare()
+                self.assertEqual(self.draft.provider.posts, [])
+                self.assertFalse(self.draft.state.exists())
 
     def test_authenticated_payload_rejects_wrong_source_and_unknown_fields(self):
         from research_repo_tools.draft_workflow import DraftHandoffArtifact

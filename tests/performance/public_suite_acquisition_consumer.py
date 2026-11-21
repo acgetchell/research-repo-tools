@@ -20,6 +20,8 @@ from threading import Event
 from typing import Any, cast, get_type_hints, override
 from unittest.mock import patch
 
+import tomli_w
+
 if not __package__:
     sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
 
@@ -58,7 +60,7 @@ from research_repo_tools.suite_measurement import SuiteMeasurementPlan, parse_su
 from research_repo_tools.suite_runs import SuiteRun, comparison_incompatibilities, parse_suite_run
 from research_repo_tools.trial_recovery import capture_failed_output, replay_trial
 from research_repo_tools.trial_schedule import AlternatingOrder, RandomizedOrder, SequentialOrder, TrialSchedule, parse_schedule
-from tests.fixtures.suite_acquisition import HOST, PAIR, git_model, plan, sources, toml
+from tests.fixtures.suite_acquisition import HOST, PAIR, git_model, plan, sources
 
 NATIVE_PROGRAM = r"""
 use std::{env, fs, io::Write, path::PathBuf};
@@ -789,7 +791,8 @@ from pathlib import Path
 from unittest.mock import patch
 sys.path.insert(0, sys.argv[1])
 from research_repo_tools.cli import main
-from tests.fixtures.suite_acquisition import HOST, PAIR, git_model, plan, sources, toml
+import tomli_w
+from tests.fixtures.suite_acquisition import HOST, PAIR, git_model, plan, sources
 
 root, kind, phase = Path(sys.argv[2]), sys.argv[3], sys.argv[4]
 revisions = {PAIR.baseline: sources(('shared',), 'old'), PAIR.current: sources(('shared',), 'new')}
@@ -802,7 +805,7 @@ measurement['phases'][phase]['gate'] = [sys.executable, '-c',
     "sys.stderr.buffer.write(b'gate stderr\\r\\n\\xfe\\n'); sys.stderr.buffer.flush(); raise SystemExit(7)"]
 if kind == 'pair':
     document = measurement
-(root / 'measurement.toml').write_text(''.join(key + '=' + toml(value) + '\n' for key, value in document.items()), encoding='utf-8', newline='\n')
+(root / 'measurement.toml').write_bytes(tomli_w.dumps(document).encode('utf-8'))
 with patch('research_repo_tools.source_exports._git', side_effect=git_model(revisions)), patch('research_repo_tools.measurement.capture_host', return_value=HOST):
     status = main(['--root', str(root), 'performance', 'measure', 'measurement.toml', PAIR.current, PAIR.baseline,
                    '--payload', 'run.json', '--manifest', 'evidence.json', '--report', 'report.md', '--progress', 'json'])
@@ -1237,7 +1240,7 @@ sys.exit(status)
         declaration["suites"][0]["measurement"]["context"] = {"repository": "example/library", "acquisition-owner": "local"}
         inventory = {
             **self.revisions["v1.1.0"],
-            "measurement.toml": ("schema=5\nsuites=" + toml(declaration["suites"]) + "\n").encode(),
+            "measurement.toml": tomli_w.dumps(declaration).encode(),
             "report.toml": b'schema=2\ncurrent="docs/first.md"\narchive="docs/runs"\ntitle="First release timings"\n',
         }
         for name, data in inventory.items():
@@ -1284,7 +1287,7 @@ sys.exit(status)
             baseline_only = json.loads(json.dumps(declaration))
             for suite in baseline_only["suites"]:
                 suite["measurement"]["series"] = [series for series in suite["measurement"]["series"] if series["phase"] == "baseline"]
-            (self.root / "measurement.toml").write_bytes(("schema=5\nsuites=" + toml(baseline_only["suites"]) + "\n").encode())
+            (self.root / "measurement.toml").write_bytes(tomli_w.dumps(baseline_only).encode())
             with (
                 patch("research_repo_tools.performance_acquisition.measure_and_retain", side_effect=AssertionError("invalid plan must not acquire")) as acquire,
                 patch("sys.stderr", new_callable=io.StringIO) as errors,
@@ -1466,16 +1469,17 @@ sys.exit(status)
             self.assertEqual((owner / "attachment.json").read_bytes(), receipt)
 
     def _cli_checkpoint_offline_promotion_and_readme_retry(self, *, scheduled=False) -> None:
+        self.log = self.root / "calls-🧪.log"
         selected = self.dependency_plan(names=("shared", "new", "removed"), mode="common")
         if scheduled:
             selected = replace(selected, schedule=TrialSchedule())
         for name, data in self.revisions["v1.1.0"].items():
             (self.root / name).write_bytes(data)
         (self.root / "target").mkdir()
-        configuration = f"schema={selected.schema}\nsuites=" + toml(selected.document()["suites"]) + "\n"
+        configuration = {"schema": selected.schema, "suites": selected.document()["suites"]}
         if scheduled:
-            configuration += 'schedule={order="alternating",trials=2}\n'
-        (self.root / "measurement.toml").write_text(configuration, encoding="utf-8", newline="\n")
+            configuration["schedule"] = {"order": "alternating", "trials": 2}
+        (self.root / "measurement.toml").write_bytes(tomli_w.dumps(configuration).encode())
         self.assertEqual(load_measurement(self.root, "measurement.toml"), selected)
         args = ["--root", str(self.root), "performance"]
         acquisition = [
@@ -3486,13 +3490,17 @@ class TestProgress(unittest.TestCase):
         self.assertEqual(events[-1]["remaining"], 0)
 
     def test_observer_owns_its_event_without_changing_streamed_json(self) -> None:
+        observed = []
+
         def consume(event: dict[str, object]) -> None:
+            observed.append(event.copy())
             event.clear()
 
         stream = io.StringIO()
         reporter = ProgressReporter(mode="json", stream=stream, observer=consume)
         reporter.budget({"build": 1}, inventory={("core", "current"): 1})
         event = json.loads(stream.getvalue())
+        self.assertEqual(observed, [event])
         self.assertEqual(event["event"], "budget")
         self.assertEqual(event["inventory"], [{"suite": "core", "phase": "current", "total": 1, "completed": 0, "remaining": 1}])
 

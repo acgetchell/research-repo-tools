@@ -44,15 +44,6 @@ HOST = HostMetadata("fixture-os", "fixture-arch", "fixture-cpu", 4, 8, 1024, (("
 PAIR = ReleasePair("v1.1.0", "v1.0.0")
 
 
-def toml(value):
-    """Serialize the scalar, list, and inline-table subset used in measurement plans."""
-    if isinstance(value, dict):
-        return "{" + ", ".join(json.dumps(key) + "=" + toml(item) for key, item in value.items()) + "}"
-    if isinstance(value, (tuple, list)):
-        return "[" + ", ".join(toml(item) for item in value) + "]"
-    return json.dumps(value)
-
-
 def sources(apis: tuple[str, ...], revision: str) -> dict[str, bytes]:
     """Return the tracked benchmark inputs for a synthetic revision."""
     return {

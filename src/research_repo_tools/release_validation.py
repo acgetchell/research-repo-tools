@@ -308,9 +308,9 @@ POLICY = ValidationPolicy(
 )
 
 
-def gh(*args: str) -> str:
+def gh(*args: str, cwd: Path | None = None) -> str:
     """Run the selected GitHub CLI executable and capture UTF-8 stdout within two minutes."""
-    return subprocess.run([_GH_EXECUTABLE.get(), *args], check=True, capture_output=True, text=True, encoding="utf-8", timeout=120).stdout
+    return subprocess.run([_GH_EXECUTABLE.get(), *args], cwd=cwd, check=True, capture_output=True, text=True, encoding="utf-8", timeout=120).stdout
 
 
 def api(endpoint: str, *, repository: str = REPOSITORY) -> Any:
@@ -1128,7 +1128,8 @@ def _stage_snapshot(tag: str, dist: Path, bundle: Path, document: dict[str, Any]
     try:
         if not matches:
             gh("release", "create", tag, "--draft", "--verify-tag", "--title", tag, "--notes-from-tag")
-        gh("release", "upload", tag, "--repo", REPOSITORY, *(str(dist / name) for name in distribution_names(tag)), str(upload))
+        # gh interprets '#' in an asset argument as the start of its display label.
+        gh("release", "upload", tag, "--repo", REPOSITORY, *(f"{dist.name}/{name}" for name in distribution_names(tag)), upload.name, cwd=upload.parent)
     except BaseException as error:
         error.add_note(f"Inspect {attachment} and the GitHub release for {tag}, including any uploaded assets, before retrying.")
         raise

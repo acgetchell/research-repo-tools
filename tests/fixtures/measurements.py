@@ -1,6 +1,5 @@
 """Prepared benchmark trees and measurements for complete performance runs."""
 
-import json
 import shutil
 import sys
 from pathlib import Path
@@ -10,6 +9,7 @@ from research_repo_tools.common_measurement import CommonHarnessPlan, measure_pr
 from research_repo_tools.evidence import Evidence
 from research_repo_tools.measurement import load_measurement
 from research_repo_tools.release_pairs import ReleasePair
+from research_repo_tools.toml_source import string_literal
 
 BENCHMARK = """import json, os
 from pathlib import Path
@@ -44,7 +44,7 @@ def fixture(root: Path) -> CommonHarnessPlan:
     (root / "rust-toolchain.toml").write_bytes(b'[toolchain]\nchannel="1.90.0"\n')
     (root / "bench.py").write_text(BENCHMARK, encoding="utf-8", newline="\n")
     (root / "gate.py").write_text(GATE, encoding="utf-8", newline="\n")
-    python = json.dumps(sys.executable)
+    python = string_literal(sys.executable)
     config = f"""schema=2
 sources=["src/*.txt", "Cargo.toml"]
 harness=["bench.py", "gate.py", "Cargo.lock", "Cargo.toml", "rust-toolchain.toml"]

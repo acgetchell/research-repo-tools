@@ -177,7 +177,7 @@ class Runtime:
             return Status(tool.name, tool.version, release_credentials.diagnostics(error, single_line=True), str(path), False)
 
     def environment(self) -> dict[str, str]:
-        """Build a command environment from the verified toolchain for the current operation."""
+        """Build PATH from managed tool locations and any successfully probed Python and uv executables."""
         with self._operation():
             python = None if self._selected else self.python_status(self.uv_status())
             return self._environment(python)
@@ -250,7 +250,7 @@ class Runtime:
         )
 
     def python_status(self, uv: Status) -> Status:
-        """Check the interpreter and isolation settings in the project environment selected by uv."""
+        """Check the project interpreter's version, falling back to uv's managed interpreter."""
         environment = Path(os.environ.get("UV_PROJECT_ENVIRONMENT") or ".venv")
         if not environment.is_absolute():
             environment = self.plan.root / environment

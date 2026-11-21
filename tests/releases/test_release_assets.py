@@ -154,7 +154,7 @@ def mock_remote(monkeypatch, *, commit=COMMIT):
             return copy.deepcopy(state["release"])
         pytest.fail(f"unexpected API endpoint {endpoint}")
 
-    def gh(*args):
+    def gh(*args, cwd=None):
         state["calls"].append(args)
         if args[:2] == ("attestation", "verify"):
             # Preserve verification as an explicit trust boundary: verify CLI
@@ -191,11 +191,12 @@ def mock_remote(monkeypatch, *, commit=COMMIT):
         if args == ("repo", "view", "--json", "url", "--jq", ".url"):
             return f"https://github.com/{release.REPOSITORY}\n"
         if args[:2] == ("release", "create"):
-            assert "--draft" in args and "--verify-tag" in args and "--repo" not in args
+            assert cwd is None and "--draft" in args and "--verify-tag" in args and "--repo" not in args
             return ""
         if args[:2] == ("release", "upload"):
             assert "--clobber" not in args
-            state["uploaded"] = {Path(name).name: Path(name).read_bytes() for name in args[-3:]}
+            assert cwd is not None and all(not Path(name).is_absolute() and "#" not in name for name in args[-3:])
+            state["uploaded"] = {Path(name).name: (cwd / name).read_bytes() for name in args[-3:]}
             return ""
         pytest.fail(f"unexpected gh args {args}")
 
@@ -465,11 +466,17 @@ def test_draft_upload_uses_verified_snapshot_after_checkout_inputs_change(remote
     dist = tmp_path / "dist"
     gh = release.gh
 
-    def change_inputs(*args):
+    temporary = tmp_path / "build#1"
+    temporary.mkdir()
+    monkeypatch.setattr(release.tempfile, "tempdir", str(temporary))
+
+    def change_inputs(*args, cwd=None):
         if args[:2] == ("release", "create"):
             for path in (*dist.iterdir(), bundle, tmp_path / release.BUNDLE):
                 path.write_bytes(b"concurrent edit")
-        return gh(*args)
+        if args[:2] == ("release", "upload"):
+            assert cwd is not None and cwd.is_relative_to(temporary)
+        return gh(*args, cwd=cwd)
 
     monkeypatch.setattr(release, "gh", change_inputs)
     release.stage(TAG, dist, bundle, tmp_path / "promotion.json")
@@ -615,7 +622,7 @@ def test_failed_draft_upload_preserves_concurrent_attachment_change(remote, tmp_
     gh = release.gh
     failure = subprocess.CalledProcessError(1, ["gh", "release", "upload"])
 
-    def fail(*arguments):
+    def fail(*arguments, cwd=None):
         if arguments[:2] == ("release", "upload"):
             if replacement == "truncated":
                 attachment.write_bytes(b"")
@@ -626,7 +633,7 @@ def test_failed_draft_upload_preserves_concurrent_attachment_change(remote, tmp_
             else:
                 attachment.unlink()
             raise failure
-        return gh(*arguments)
+        return gh(*arguments, cwd=cwd)
 
     monkeypatch.setattr(release, "gh", fail)
     with pytest.raises(subprocess.CalledProcessError) as caught:
@@ -647,10 +654,10 @@ def test_remote_staging_failure_retains_evidence_until_operator_inspection(remot
     gh = release.gh
     failure = subprocess.CalledProcessError(1, ["gh", "release", operation], stderr="fixture transport failed")
 
-    def fail(*arguments):
+    def fail(*arguments, cwd=None):
         if arguments[:2] == ("release", operation):
             raise failure
-        return gh(*arguments)
+        return gh(*arguments, cwd=cwd)
 
     monkeypatch.setattr(release, "gh", fail)
     with pytest.raises(subprocess.CalledProcessError) as caught:
