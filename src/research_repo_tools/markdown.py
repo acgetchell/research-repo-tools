@@ -1,7 +1,9 @@
 """Generated Markdown links and portable relocation between directories."""
 
+import os
 import posixpath
 import re
+import string
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import unquote
@@ -123,7 +125,8 @@ def existing_archive_link_targets(text: str, source: Path) -> set[str]:
 
     def record(value: str) -> str:
         if value.startswith("../"):
-            relative = unquote(re.split(r"[?#]", value, maxsplit=1)[0])
+            path_part = re.split(r"[?#]", value, maxsplit=1)[0]
+            relative = unquote(re.sub(rf"\\([{re.escape(string.punctuation)}])", r"\1", path_part))
             parent = source.parent
             while relative.startswith("../") and not parent.is_dir():
                 parent = parent.parent
@@ -132,9 +135,9 @@ def existing_archive_link_targets(text: str, source: Path) -> set[str]:
                 return value
             path = parent / relative
             if path.is_file():
-                targets.add(str(path.resolve()))
+                targets.add(os.path.abspath(path))
             elif path.is_dir():
-                targets.add(path.resolve().as_posix().rstrip("/") + "/")
+                targets.add(Path(os.path.abspath(path)).as_posix().rstrip("/") + "/")
         return value
 
     _map_link_destinations(text, record)

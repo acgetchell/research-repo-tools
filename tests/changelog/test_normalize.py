@@ -798,6 +798,17 @@ class TestSquashHeadingNormalization:
         assert "#### fix: close the 4D bulk repair retry collapse" in result
         assert "\n\n- Thread cavity-touched cells through insertion.\n" in result
 
+    def test_repeated_subsections_keep_child_content_and_stop_at_wrapped_commits(self) -> None:
+        wrapped = f"- Long release title\n  continued here\n  with final words {_commit()}"
+        source = (
+            "# Changelog\n\n## [Unreleased]\n\n### Added\n\n#### Verify\n\n##### Linux\n\nCheck the wheel.\n\n"
+            "###### Source\n\n- Check the sdist.\n\n#### Verify\n\n- Then publish.\n\n" + wrapped + "\n"
+        )
+        result = postprocess_text(source)
+        assert "- **Verify**\n\n  - **Linux**\n\n    Check the wheel.\n\n    - **Source**\n\n      - Check the sdist." in result
+        assert f"- **Verify**\n\n  - Then publish.\n\n{wrapped}\n" in result
+        assert postprocess_text(result) == result
+
     def test_full_pipeline_resets_parent_summary_at_version_heading(self, tmp_path: Path) -> None:
         """Version headings reset duplicate-squash tracking between releases."""
         f = tmp_path / "CHANGELOG.md"

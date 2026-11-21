@@ -388,8 +388,15 @@ def _append_unique(entries: list[str], entry: str) -> None:
 
 def _has_entry_commit(lines: list[str], index: int) -> bool:
     """A generated entry carries a commit link, sometimes on a continuation line."""
-    next_line = lines[index + 1] if index + 1 < len(lines) else ""
-    return bool(_COMMIT_LINK_RE.search(lines[index]) or _COMMIT_LINK_RE.fullmatch(next_line))
+    while True:
+        if _COMMIT_LINK_RE.search(lines[index]):
+            return True
+        index += 1
+        if index == len(lines) or not lines[index].startswith("  "):
+            return False
+        continuation = lines[index].lstrip()
+        if not continuation or continuation.startswith(("- ", "* ", "#", ">", "```", "~~~")):
+            return False
 
 
 def _extract_section_summaries(
@@ -1147,6 +1154,23 @@ class _BulletList:
     loose: bool = False
 
 
+def _nest_subsection_body(body: list[str]) -> list[str]:
+    """Place details and deeper subsections inside the converted heading's list item."""
+    prefix = "  " if any(line.strip() and not line.startswith("  ") for line in body) else ""
+    levels: list[int] = []
+    nested = []
+    for line in body:
+        if heading := _ATX_HEADING_RE.match(line):
+            level = len(heading["level"])
+            while levels and levels[-1] >= level:
+                levels.pop()
+            levels.append(level)
+            nested.append("  " * len(levels) + f"- **{heading['title'].strip()}**")
+        else:
+            nested.append(prefix + "  " * len(levels) + line if line.strip() else "")
+    return nested
+
+
 def _list_repeated_headings(lines: list[str]) -> None:
     """Keep duplicate sibling titles and their bodies together as list items."""
     occurrences: dict[tuple[int, str], list[int]] = {}
@@ -1165,13 +1189,15 @@ def _list_repeated_headings(lines: list[str]) -> None:
     gaps: set[int] = set()
     for index, title in repeated:
         end = index + 1
-        while end < len(lines) and not (_ATX_HEADING_RE.match(lines[end]) or _REFERENCE_DEFINITION_RE.match(lines[end])):
+        while end < len(lines):
+            heading = _ATX_HEADING_RE.match(lines[end])
+            if (heading and len(heading["level"]) <= 4) or _REFERENCE_DEFINITION_RE.match(lines[end]):
+                break
             if _is_top_level_list_item(lines[end]) and _has_entry_commit(lines, end):
                 break
             end += 1
         body = lines[index + 1 : end]
-        if any(line.strip() and not line.startswith("  ") for line in body):
-            lines[index + 1 : end] = ["  " + line if line.strip() else "" for line in body]
+        lines[index + 1 : end] = _nest_subsection_body(body)
         lines[index] = f"- **{title}**"
         if index and lines[index - 1].strip():
             gaps.add(index)
