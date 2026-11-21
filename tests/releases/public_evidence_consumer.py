@@ -937,6 +937,7 @@ class TestEvidenceInterfaces(unittest.TestCase):
             "commit": COMMIT,
             "run": {"head_sha": COMMIT, "id": 123, "run_attempt": 2, "path": ".github/workflows/ci.yml"},
             "artifact": {"id": 42, "digest": "sha256:" + "a" * 64},
+            "files": {"sample.whl": "b" * 64, "sample.tar.gz": "c" * 64},
         }
         summary = render_distribution_summary(result)
         for expected in (
@@ -947,6 +948,8 @@ class TestEvidenceInterfaces(unittest.TestCase):
             "Signature: passed",
             "Benchmark evidence: not configured",
             "immutable artifact 42",
+            "SHA-256 " + "b" * 64 + "  sample.whl",
+            "SHA-256 " + "c" * 64 + "  sample.tar.gz",
         ):
             self.assertIn(expected, summary)
 

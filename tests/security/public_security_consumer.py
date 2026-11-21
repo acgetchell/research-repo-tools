@@ -21,6 +21,8 @@ from research_repo_tools.toolchain_config import load
 class TestSharedCapabilities(unittest.TestCase):
     @staticmethod
     def _fixture_history(args, **kwargs):
+        if "config" in args:
+            return subprocess.CompletedProcess(args, 1, b"", b"")
         if "rev-list" in args:
             return subprocess.CompletedProcess(args, 0, b"a" * 40 + b"\n", b"")
         return subprocess.CompletedProcess(args, 0, b"false\n", b"")
@@ -102,10 +104,13 @@ class TestSharedCapabilities(unittest.TestCase):
             candidate.write_bytes(candidate_bytes)
             calls = []
 
-            def git(args, *, cwd, env):
+            def git(args, *, cwd, env, check=True):
                 nonlocal history, captured_refs
                 self.assertNotIn("GIT_DIR", env)
                 self.assertNotIn("GIT_WORK_TREE", env)
+                if "config" in args:
+                    self.assertFalse(check)
+                    return subprocess.CompletedProcess(args, 1, b"", b"")
                 if "--is-shallow-repository" in args:
                     self.assertEqual(cwd, root)
                     output = b"false\n"

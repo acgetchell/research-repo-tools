@@ -6,7 +6,9 @@ import os
 import shutil
 import subprocess
 import sys
+from contextlib import contextmanager
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any, assert_type
 from unittest.mock import MagicMock, patch
 
@@ -32,6 +34,35 @@ from research_repo_tools.process import (
     run_safe_command,
 )
 from tests.fixture_environment import git_environment
+
+
+@pytest.mark.parametrize("elapsed", [1.0, 11.0])
+def test_live_deadline_includes_the_final_marker_chunk(monkeypatch, elapsed):
+    """An otherwise successful search must finish before the original deadline."""
+    now = 0.0
+    open_spool = subprocess_utils.open_spool
+
+    @contextmanager
+    def delayed_read(path):
+        with open_spool(path) as reader:
+
+            def read(size):
+                nonlocal now
+                data = reader.read(size)
+                now = elapsed
+                return data
+
+            yield SimpleNamespace(read=read)
+
+    monkeypatch.setattr(subprocess_utils, "time", SimpleNamespace(monotonic=lambda: now))
+    monkeypatch.setattr(subprocess_utils, "open_spool", delayed_read)
+    arguments = (sys.executable, ["-I", "-c", "print('marker')"])
+    if elapsed > 10:
+        with pytest.raises(subprocess.TimeoutExpired) as caught:
+            subprocess_utils.run_command_live(*arguments, timeout=10, stdout_markers=(b"marker",))
+        assert caught.value.timeout == 10
+    else:
+        assert subprocess_utils.run_command_live(*arguments, timeout=10, stdout_markers=(b"marker",)).returncode == 0
 
 
 @pytest.fixture(autouse=True)

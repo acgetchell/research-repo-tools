@@ -533,6 +533,27 @@ def _history_tips(root: Path, env: Mapping[str, str]) -> frozenset[bytes]:
     return tips
 
 
+def _require_local_history(root: Path, env: Mapping[str, str]) -> None:
+    """Require the reachable objects of a partial clone to be available to the private mirror."""
+    partial = run_git_bytes(
+        ["--no-pager", "config", "--name-only", "--get-regexp", r"^(extensions\.partialclone|remote\..*\.(promisor|partialclonefilter))$"],
+        cwd=root,
+        env=env,
+        check=False,
+    )
+    if partial.returncode == 1 and not partial.stderr:
+        return  # No partial-clone configuration. Avoid walking a full checkout twice.
+    partial.check_returncode()
+    missing = run_git_bytes(
+        ["--no-pager", "rev-list", "--objects", "--all", "--quiet", "--missing=print"],
+        cwd=root,
+        env={**env, "GIT_NO_LAZY_FETCH": "1"},
+    ).stdout
+    if missing:
+        oid = missing.split(b"\n", 1)[0].removeprefix(b"?").decode("ascii")
+        raise ValueError(f"partial clone at {root} lacks historical Git object {oid}; fetch the missing objects or scan a full clone")
+
+
 def _capture_gitleaks_history(root: Path, stage: Path, env: Mapping[str, str]) -> tuple[Path, Callable[[], None]]:
     """Mirror the scan's Git refs into private storage, including other worktrees' detached tips.
 
@@ -548,6 +569,7 @@ def _capture_gitleaks_history(root: Path, stage: Path, env: Mapping[str, str]) -
                 return b""
             raise
 
+    _require_local_history(root, env)
     refs, tips = history_refs(root), _history_tips(root, env)
     history = stage / "history.git"
     # Retain selected refs privately while reusing the source object store.

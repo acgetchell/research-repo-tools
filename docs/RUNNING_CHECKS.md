@@ -181,7 +181,9 @@ or missing reports, and findings all block the gate.
 
 Gitleaks checks a private snapshot of all reachable Git history and of current
 tracked/nonignored files, including uncommitted new files. Full history is
-required (`fetch-depth: 0` in Actions). Environment/build directories are excluded
+required (`fetch-depth: 0` in Actions). A partial clone must have all reachable
+Git objects locally. If the scan reports a missing object ID, fetch the missing
+history or run the check in a full clone. Environment/build directories are excluded
 from the working snapshot. Selected symlinks and submodules fail explicitly.
 Scan submodules as separate repositories. History patches treat renamed files as
 additions at the new path so rules scoped to that path can detect them. Native

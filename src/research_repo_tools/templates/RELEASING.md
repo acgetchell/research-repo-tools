@@ -94,7 +94,7 @@ roots can pass `--manifest-path PATH` to fetch each declared lock.
 ### 3. Push the tag
 
 ```bash
-git push origin "$TAG"
+git push origin "refs/tags/$TAG"
 ```
 
 ### 4. Verify the release commit

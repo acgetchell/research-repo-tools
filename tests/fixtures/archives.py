@@ -1,10 +1,11 @@
-"""Byte-exact archive fixtures for performance assets."""
+"""Byte-exact ZIP fixtures for retained artifacts."""
 
+import io
 import zipfile
 from pathlib import Path
 
 
-def zip_asset(path: Path, entries: list[tuple[str, bytes]]) -> None:
+def zip_asset(path: Path | io.BytesIO, entries: list[tuple[str, bytes]]) -> None:
     """Write a ZIP fixture and verify its original member names survived."""
     with zipfile.ZipFile(path, "w") as archive:
         for name, payload in entries:

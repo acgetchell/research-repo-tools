@@ -293,6 +293,7 @@ def _run_with_markers(
                         tail = data[-overlap:] if overlap else b""
                     if remaining:
                         missing.append(f"command is missing expected {name} markers: {sorted(remaining)!r}")
+                budget()
                 if missing:
                     raise ValueError("\n".join(missing))
         except subprocess.TimeoutExpired as error:

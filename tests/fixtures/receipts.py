@@ -6,12 +6,12 @@ import hashlib
 import io
 import json
 import subprocess
-import zipfile
 from pathlib import Path
 from typing import Any
 
 from research_repo_tools.release_assets import ReleaseTarget, serialize_release_target
 from research_repo_tools.release_receipts import TagPushPolicy, TagSource
+from tests.fixtures.archives import zip_asset
 
 COMMIT = "a" * 40
 
@@ -93,13 +93,8 @@ class Provider:
         """Rebuild the immutable artifact bytes and their advertised digest from the selected files."""
         files = files if files is not None else {"target.json": serialize_release_target(self.target), "draft-receipt.json": json.dumps(self.receipt).encode()}
         stream = io.BytesIO()
-        with zipfile.ZipFile(stream, "w") as archive:
-            for name, payload in files.items():
-                archive.writestr(name, payload)
+        zip_asset(stream, list(files.items()))
         self.zip = stream.getvalue()
-        # Stored paths, not writer arguments, establish unsafe-archive fixtures.
-        with zipfile.ZipFile(io.BytesIO(self.zip)) as archive:
-            assert [member.orig_filename for member in archive.infolist()] == list(files)
         self.artifact.update(digest="sha256:" + hashlib.sha256(self.zip).hexdigest(), size_in_bytes=len(self.zip))
 
     def read(self, endpoint):

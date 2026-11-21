@@ -153,7 +153,7 @@ def project_manifests(root: Path, ecosystem: Ecosystem) -> tuple[Path, ...]:
     members, excludes = workspace.get("members", []), workspace.get("exclude", [])
     if not isinstance(members, list) or not isinstance(excludes, list) or any(not isinstance(item, str) for item in (*members, *excludes)):
         raise ValueError("workspace members/exclude must be path patterns")
-    paths = {manifest.resolve()}
+    paths: set[Path] = set()
     omitted: set[Path] = set()
     for patterns, destination in ((excludes, omitted), (members, paths)):
         for pattern in patterns:
@@ -164,7 +164,7 @@ def project_manifests(root: Path, ecosystem: Ecosystem) -> tuple[Path, ...]:
                     raise ValueError("workspace members must stay inside the project")
                 if candidate.is_file():
                     destination.add(candidate.resolve())
-    return tuple(sorted(paths - omitted, key=str))
+    return tuple(sorted({manifest.resolve()} | (paths - omitted), key=str))
 
 
 def configuration_paths(root: Path, ecosystem: Ecosystem) -> tuple[Path, ...]:

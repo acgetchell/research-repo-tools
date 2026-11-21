@@ -66,7 +66,7 @@ def render_release_summary(
 
 def render_distribution_summary(result: Mapping[str, Any]) -> str:
     """Adapt the maintainer distribution verifier's unchanged inspection result."""
-    return render_release_summary(
+    summary = render_release_summary(
         {
             "package": {"name": "research-repo-tools", "version": result["tag"].removeprefix("v")},
             "policy": {
@@ -80,3 +80,4 @@ def render_distribution_summary(result: Mapping[str, Any]) -> str:
             "artifact": result["artifact"],
         }
     )
+    return summary + "".join(f"SHA-256 {digest}  {name}\n" for name, digest in sorted(result.get("files", {}).items()))

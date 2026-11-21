@@ -1434,26 +1434,16 @@ class TestSourceWorkflows(unittest.TestCase):
     def test_supplier_plan_accounts_for_each_captured_workspace_manifest(self) -> None:
         name = "research-repo-tools"
         root_manifest = self.root / "pyproject.toml"
-        root_manifest.write_bytes(
+        grouped = (
             b'[project]\nrequires-python = ">=3.15"\n[dependency-groups]\n"Tools_With.Alias" = ["research-repo-tools==1.2.3"]\n'
             b'[tool.uv.dependency-groups.tools-with-alias]\nrequires-python = ">=3.16"\n'
         )
         member = self.root / "member" / "pyproject.toml"
         member.parent.mkdir()
-        member.write_bytes(b'[project]\nrequires-python = ">=3.15.1"\ndependencies = ["research-repo-tools==1.2.3"]\n')
         project = DependencyProject("python", ".")
         pin = RegistryRelease("python", name, "1.2.3")
         selection = dependency_policy.SourceSelection("tooling", project, pin)
         manifests = (root_manifest, member)
-        graph = dependency_graphs.DependencyGraph(
-            project,
-            self.root,
-            dependency_graphs.InputSnapshot.capture(manifests),
-            manifests,
-            (dependency_graphs.LockedDependency(pin, "1.2.3"),),
-            (),
-            self.root,
-        )
         self.provider.put(
             f"https://pypi.org/pypi/{name}/json",
             {
@@ -1464,16 +1454,46 @@ class TestSourceWorkflows(unittest.TestCase):
                 },
             },
         )
-        with (
-            patch.object(python_promotion, "_selection", return_value=(selection, b"policy", graph)),
-            patch.object(python_promotion.platform, "python_version", return_value="3.16.1"),
-            patch.object(python_promotion, "_compatible_release") as verify,
-            patch.object(python_promotion, "_plan_release") as plan,
+        root_dependency = b'[project]\nrequires-python = ">=3.15"\ndependencies = ["research-repo-tools==1.2.3"]\n'
+        for root_bytes, member_bytes, expected in (
+            (grouped, b'[project]\nrequires-python = ">=3.15.1"\ndependencies = ["research-repo-tools==1.2.3"]\n', "1.2.4"),
+            (root_dependency, b'[project]\nrequires-python = ">=3.16"\n', "1.2.5"),
         ):
-            self.assertIs(python_promotion.plan_supplier(self.root, "tooling", project=self.root, provider=self.provider), plan.return_value)
-        verify.assert_called_once()
-        self.assertEqual(verify.call_args.args[:2], (RegistryRelease("python", name, "1.2.4"), self.provider))
-        self.assertTrue(verify.call_args.args[2])
+            root_manifest.write_bytes(root_bytes)
+            member.write_bytes(member_bytes)
+            graph = dependency_graphs.DependencyGraph(
+                project,
+                self.root,
+                dependency_graphs.InputSnapshot.capture(manifests),
+                manifests,
+                (dependency_graphs.LockedDependency(pin, "1.2.3"),),
+                (),
+                self.root,
+            )
+            with (
+                self.subTest(expected=expected),
+                patch.object(python_promotion, "_selection", return_value=(selection, b"policy", graph)),
+                patch.object(python_promotion.platform, "python_version", return_value="3.16.1"),
+                patch.object(python_promotion, "_compatible_release") as verify,
+                patch.object(python_promotion, "_plan_release") as plan,
+            ):
+                self.assertIs(python_promotion.plan_supplier(self.root, "tooling", project=self.root, provider=self.provider), plan.return_value)
+                verify.assert_called_once()
+                self.assertEqual(verify.call_args.args[:2], (RegistryRelease("python", name, expected), self.provider))
+                self.assertTrue(verify.call_args.args[2])
+
+    def test_workspace_exclusion_keeps_the_root_in_the_snapshot(self) -> None:
+        manifest = self.root / "pyproject.toml"
+        manifest.write_bytes(b'[tool.uv.workspace]\nmembers=["members/*"]\nexclude=["**"]\n')
+        member = self.root / "members" / "example"
+        member.mkdir(parents=True)
+        (member / "pyproject.toml").write_bytes(b'[project]\nname="excluded-member"\n')
+        paths = dependency_policy.project_manifests(self.root, "python")
+        self.assertEqual(paths, (manifest.resolve(),))
+        snapshot = dependency_graphs.InputSnapshot.capture(paths)
+        manifest.write_bytes(b"[tool.uv.workspace]\nmembers=[]\n")
+        with self.assertRaisesRegex(ValueError, "changed"):
+            snapshot.verify()
 
     def test_promotion_selects_release_covering_the_marked_python_range(self) -> None:
         self.provider.put(

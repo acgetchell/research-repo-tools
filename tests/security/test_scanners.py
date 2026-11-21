@@ -12,6 +12,7 @@ import pytest
 
 from research_repo_tools import config, security
 from research_repo_tools.process import run_git_command
+from tests.fixture_environment import git_environment
 
 
 @pytest.fixture
@@ -123,6 +124,8 @@ def test_uncommitted_files_and_redacted_reports(consumer):
         return subprocess.CompletedProcess([], 3, b"raw secret that must not be logged", b"")
 
     def git(args, **kwargs):
+        if "config" in args:
+            return subprocess.CompletedProcess(args, 1, b"", b"")
         return subprocess.CompletedProcess(args, 0, b"a" * 40 + b"\n" if "rev-list" in args else b"false\n", b"")
 
     with (
@@ -186,6 +189,33 @@ def test_policy_rejects_ambiguous_default_without_extension_path(tmp_path):
     with pytest.raises(ValueError, match="ambiguous usedefault keys"):
         security._GitleaksPolicySnapshot(tmp_path, stage).retain(policy)
     assert not list(stage.iterdir())
+
+
+def test_partial_clone_identifies_missing_history_before_scanning(tmp_path):
+    env = git_environment()
+    source = tmp_path / "source"
+    source.mkdir()
+    stage = tmp_path / "stage"
+    stage.mkdir()
+
+    def git(*args, cwd=source):
+        return run_git_command(list(args), cwd=cwd, env=env).stdout.strip()
+
+    git("init", "--quiet", "--template=")
+    (source / "fixture.txt").write_bytes(b"original blob\n")
+    git("add", "fixture.txt")
+    git("-c", "user.name=Fixture", "-c", "user.email=fixture@example.invalid", "-c", "commit.gpgsign=false", "commit", "-qm", "fixture")
+    oid = git("rev-parse", "HEAD:fixture.txt")
+    git("config", "uploadpack.allowFilter", "true")
+    partial = tmp_path / "partial"
+    git("clone", "--no-checkout", "--filter=blob:none", source.as_uri(), str(partial))
+    with pytest.raises(ValueError, match=f"partial clone .* lacks historical Git object {oid}"):
+        security._capture_gitleaks_history(partial, stage, env)
+    assert not (stage / "history.git").exists()
+    assert git("cat-file", "blob", oid, cwd=partial) == "original blob"
+    mirror, verify = security._capture_gitleaks_history(partial, stage, env)
+    assert git("cat-file", "blob", oid, cwd=mirror) == "original blob"
+    verify()
 
 
 def test_pinned_gitleaks_matches_anchored_working_paths_with_relative_extensions(tmp_path, capsys):

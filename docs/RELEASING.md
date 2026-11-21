@@ -81,7 +81,7 @@ published dependency evidence before creating the tag. Use
 ### 3. Push the tag
 
 ```bash
-git push origin "$TAG"
+git push origin "refs/tags/$TAG"
 ```
 
 The push starts `Prepare GitHub release` for this tag and commit.
@@ -120,6 +120,12 @@ Record the draft ID. Require the expected stable tag and title, the three
 complete uploaded assets, and the generated notes or their canonical changelog
 link. Inspect the release in GitHub or use `just release-notes "$TAG"` to
 review the notes separately.
+
+Before publishing the draft, compare each attached wheel and sdist filename
+and SHA-256 digest with the signed distribution records from
+`just release-evidence`. Confirm that the attached `release-attestation.json`
+identifies the same validation run and attempt. A missing or differing digest
+must be reconciled while the release is still editable.
 
 ### 7. Publish the reviewed GitHub Release
 
@@ -225,9 +231,13 @@ the inspected attachment aside first. Staging refuses to overwrite it.
 The distributions and signed validation artifacts are retained for 30 days.
 Within GitHub's rerun window, rerun **all** jobs of the original exact main-push
 run with `gh run rerun "$MAIN_RUN_ID"` to recover missing evidence. Wait for
-`release-evidence` and review the replacement attempt's artifact identities
-before retrying preparation. When the original main run is no longer eligible,
-prepare a new reviewed candidate and use the unpublished replacement procedure.
+`release-evidence` and record the replacement attempt and its artifact
+identities. If the draft is absent or empty, retry preparation for that evidence.
+For a nonempty draft, compare the retained assets and signed attestation with
+the replacement attempt before publishing. Follow the [recovery guide](RECOVERING_RELEASES.md)
+to reconcile stale attachments. For an immutable release, use the published
+correction procedure. When the original main run is no longer eligible, prepare
+a new reviewed candidate and use the unpublished replacement procedure.
 
 ## Reusable CI evidence
 
