@@ -218,8 +218,10 @@ class TestSourceBuilds(unittest.TestCase):
             verify_python_environment(self.graph)
 
     def test_runtime_bundle_exports_verified_native_wheel_without_signing_key(self) -> None:
-        from research_repo_tools import runtime_policy_build
-        from research_repo_tools.runtime_policy import verify_runtime
+        from contextlib import redirect_stderr
+
+        from research_repo_tools import cli, runtime_policy_build
+        from research_repo_tools.runtime_policy import runtime_requirements, verify_runtime
         from research_repo_tools.runtime_policy_build import record_runtime_policy
 
         self.build()
@@ -229,6 +231,28 @@ class TestSourceBuilds(unittest.TestCase):
         self.assertEqual(verify_runtime(policy, environment=self.root / ".venv", artifacts=destination), ("sample-pkg",))
         self.assertNotIn("key", {path.name for path in destination.iterdir()})
         self.assertNotIn(str(self.store).encode(), policy.payload)
+        args = [
+            "--root",
+            str(self.root),
+            "release",
+            "runtime",
+            "requirements",
+            "--policy",
+            str(destination / "runtime.json"),
+            "--sha256",
+            policy.digest,
+            "--output",
+        ]
+        retained = {path: path.read_bytes() for path in destination.iterdir()}
+        for suffix in ("*.receipt.json", "*.log"):
+            (target,) = destination.glob(suffix)
+            with self.subTest(target=target.name), redirect_stderr(io.StringIO()) as error:
+                self.assertEqual(cli.main([*args, str(target)]), 1)
+                self.assertIn("duplicate target paths", error.getvalue())
+                self.assertEqual({path: path.read_bytes() for path in destination.iterdir()}, retained)
+        output = destination / "exported.txt"
+        self.assertEqual(cli.main([*args, str(output)]), 0)
+        self.assertEqual(output.read_bytes(), runtime_requirements(policy))
         receipt = next(self.store.glob("*.json"))
         receipt.unlink()
         # The already approved portable bundle needs no machine-local key, but
@@ -333,6 +357,23 @@ class TestBuildPolicy(unittest.TestCase):
                 return scandir(path)
 
             with patch.object(os, "scandir", deny_nested), self.assertRaisesRegex(PermissionError, "unreadable nested"):
+                inspect_distribution(snapshot)
+
+            # Model a dangling file link even on Windows hosts without symlink privileges.
+            dangling = package / "unrecorded"
+            dangling.touch()
+            original_stat, original_is_link = Path.stat, Path.is_symlink
+
+            def dangling_stat(path, **kwargs):
+                if path == dangling and kwargs.get("follow_symlinks", True):
+                    raise FileNotFoundError(path)
+                return original_stat(path, **kwargs)
+
+            with (
+                patch.object(Path, "stat", dangling_stat),
+                patch.object(Path, "is_symlink", lambda path: path == dangling or original_is_link(path)),
+                self.assertRaisesRegex(ValueError, "requires a regular file: sample/unrecorded"),
+            ):
                 inspect_distribution(snapshot)
 
     def test_wheel_checks_original_member_names_before_zipfile_normalizes_them(self) -> None:

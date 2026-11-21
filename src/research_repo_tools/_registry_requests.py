@@ -233,8 +233,11 @@ class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
     """Reject redirects before any request is made to a second endpoint."""
 
     @override
-    def redirect_request(self, req, fp, code, msg, headers, newurl) -> None:
-        return None
+    def http_error_302(self, req, fp, code, msg, headers) -> None:
+        """Hand the original response to the caller's HTTP error cleanup before parsing Location."""
+        raise urllib.error.HTTPError(req.full_url, code, msg, headers, fp)
+
+    http_error_301 = http_error_303 = http_error_307 = http_error_308 = http_error_302
 
 
 _OPENER = urllib.request.build_opener(RegistryHTTPSHandler(), _NoRedirectHandler())

@@ -110,7 +110,13 @@ def _hashes(dist: DistributionSnapshot, *, limit: int = MAX_INSTALLED_BYTES, sha
     for name in sorted(names):
         digest = hashlib.sha256()
         target = base / name
-        if not stat.S_ISREG(target.stat().st_mode):
+        try:
+            mode = target.stat().st_mode
+        except FileNotFoundError as error:
+            if target.is_symlink():
+                raise ValueError(f"installed package requires a regular file: {name}") from error
+            raise
+        if not stat.S_ISREG(mode):
             raise ValueError(f"installed package requires a regular file: {name}")
         with target.open("rb") as stream:
             # read(n) can reserve n bytes even for a tiny file. Keep the buffer

@@ -545,6 +545,19 @@ def _capture_gitleaks_history(root: Path, stage: Path, env: Mapping[str, str]) -
     history = stage / "history.git"
     # Retain selected refs privately while reusing the source object store.
     run_git_bytes(["--no-pager", "clone", "--mirror", "--shared", "--reject-shallow", "--template=", "--", str(root), str(history)], cwd=root, env=env)
+    # The shared object store includes objects behind refs hidden by upload-pack.
+    # Restore omitted refs from the local inventory. Detach HEAD independently
+    # so a transaction never updates both a symbolic HEAD and its referent.
+    copied_refs = set(run_git_bytes(["--no-pager", "for-each-ref", "--format=%(objectname) %(refname)"], cwd=history, env=env).stdout.splitlines())
+    updates = bytearray()
+    for line in refs.splitlines():
+        oid, ref = line.split(b" ", 1)
+        if ref == b"HEAD":
+            run_git_bytes(["--no-pager", "update-ref", "--no-deref", "HEAD", oid.decode("ascii")], cwd=history, env=env)
+        elif line not in copied_refs:
+            updates.extend(b"update " + ref + b" " + oid + b"\n")
+    if updates:
+        run_git_bytes(["--no-pager", "update-ref", "--no-deref", "--stdin"], cwd=history, env=env, input=bytes(updates))
     if history_refs(history) != refs:
         raise ValueError("Git refs changed while capturing history for Gitleaks")
     mirror_tips = _history_tips(history, env)

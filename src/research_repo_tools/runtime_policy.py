@@ -283,12 +283,18 @@ def _wheel_metadata(payload: bytes, name: str, version: str) -> Any:
     return metadata
 
 
+def _build_evidence_names(provenance: dict[str, Any]) -> tuple[str, str]:
+    """Return the receipt and log filenames bound to source-build provenance."""
+    return f"{provenance['receipt_sha256']}.receipt.json", f"{provenance['build_log_sha256']}.log"
+
+
 def _native_evidence(item: dict[str, Any], artifacts: Path, inputs: dict[str, str]) -> None:
     provenance = item["provenance"]
     if provenance["kind"] != "source-build":
         return
-    receipt = read_regular(artifacts / (provenance["receipt_sha256"] + ".receipt.json"), MAX_POLICY_BYTES)
-    log = read_regular(artifacts / (provenance["build_log_sha256"] + ".log"), MAX_POLICY_BYTES)
+    receipt_name, log_name = _build_evidence_names(provenance)
+    receipt = read_regular(artifacts / receipt_name, MAX_POLICY_BYTES)
+    log = read_regular(artifacts / log_name, MAX_POLICY_BYTES)
     verify_sha256(receipt, provenance["receipt_sha256"])
     verify_sha256(log, provenance["build_log_sha256"])
     envelope = _fields(_load_json(receipt, "runtime build receipt"), {"payload", "mac"}, "build receipt")

@@ -213,6 +213,10 @@ regex = 'synthetic-scanner-match'
     git("mv", "outside.txt", "src/renamed.txt")
     git("commit", "-qm", "rename fixture")
     renamed_commit = git("rev-parse", "HEAD")
+    git("branch", "private-fixture", renamed_commit)
+    hidden_ref = "refs/heads/private-fixture"
+    git("config", "uploadpack.hideRefs", hidden_ref)
+    assert git("ls-remote", str(root), hidden_ref) == ""
     git("rm", "src/renamed.txt")
     git("commit", "-qm", "remove rename fixture from the working tree")
     captured_commit = git("rev-parse", "HEAD")
@@ -235,6 +239,7 @@ regex = 'synthetic-scanner-match'
     def scan(binary, args, **kwargs):
         if args[0] == "git":
             history_scans.append(kwargs["cwd"])
+            assert git("rev-parse", "--verify", hidden_ref, cwd=kwargs["cwd"]) == renamed_commit
             if len(history_scans) == 2:
                 git("update-ref", "refs/heads/transient", transient_commit)
                 try:

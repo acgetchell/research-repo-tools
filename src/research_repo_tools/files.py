@@ -57,11 +57,16 @@ class _StagedWrite:
     backup: Path | None
 
 
+def _sibling_temporary_stem(filename: str) -> str:
+    """Bound the target portion of a transaction filename, leaving room for its random suffix."""
+    return filename[:24]
+
+
 def _open_sibling_temporary(path: Path, suffix: str) -> tuple[int, Path]:
     """Create an owner-only collision-resistant temporary file beside *path*."""
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
     for _attempt in range(100):
-        candidate = path.with_name(f".{path.name[:24]}.{secrets.token_hex(12)}{suffix}")
+        candidate = path.with_name(f".{_sibling_temporary_stem(path.name)}.{secrets.token_hex(12)}{suffix}")
         try:
             return os.open(candidate, flags, 0o600), candidate
         except FileExistsError:

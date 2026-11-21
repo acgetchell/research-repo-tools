@@ -28,6 +28,7 @@ from research_repo_tools.runtime_policy import (
     MAX_NATIVE_BYTES,
     SCHEMA,
     RuntimePolicy,
+    _build_evidence_names,
     _closure,
     _context,
     _inventory,
@@ -197,11 +198,12 @@ def record_runtime_policy(root: Path, destination: Path, *, provider: SourceProv
                 "inputs": inputs,
             }
             payload, filename = receipt.payload, receipt.wheel.name
-            updates[destination / (sha256(receipt_bytes) + ".receipt.json")] = receipt_bytes
+            receipt_name, log_name = _build_evidence_names(provenance)
+            updates[destination / receipt_name] = receipt_bytes
             log_hash = envelope["payload"]["build_log_sha256"]
-            log = read_regular(build_store(root, build_directory) / (log_hash + ".log"), 4 * 1024 * 1024)
+            log = read_regular(build_store(root, build_directory) / log_name, 4 * 1024 * 1024)
             verify_sha256(log, log_hash)
-            updates[destination / (log_hash + ".log")] = log
+            updates[destination / log_name] = log
             native.append((name, build_version, sdist, sha256(payload), receipt_path, receipt_bytes))
         else:
             tags = {tag for raw in Parser().parsestr(inventory[name].wheel or "").get_all("Tag", []) for tag in parse_tag(raw)}

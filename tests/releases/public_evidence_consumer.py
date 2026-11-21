@@ -489,10 +489,16 @@ class TestEvidenceConsumer(unittest.TestCase):
             read_pages(lambda endpoint: {"jobs": [{}] * 100}, "jobs", "jobs")
 
     def test_transport_diagnostics_redact_signed_urls_and_credentials(self):
+        from research_repo_tools._diagnostics import workflow_diagnostic
+
         message = redact_release_diagnostic(b"failed https://user:secret@example.org/artifact?sig=sensitive#fragment ghp_inert github_pat_inert")
         self.assertIn("https://example.org/artifact?<redacted>", message)
         for secret in ("user", "secret", "sensitive", "fragment", "ghp_inert", "github_pat_inert"):
             self.assertNotIn(secret, message)
+        for single_line in (False, True):
+            with self.subTest(single_line=single_line):
+                styled = "failed gh\x1b[31mp_inert\x1b[0m and git\x1b]0;title\x07hub_pat_inert"
+                self.assertEqual(workflow_diagnostic(styled, single_line=single_line), "failed <redacted-token> and <redacted-token>")
 
     def test_clean_checkout_assertion_is_observed_and_read_only(self):
         commands = []
@@ -1847,7 +1853,7 @@ class TestPythonDistributionEvidence(unittest.TestCase):
 
         for operation in ("pypi", "crates-io", "download"):
             for code in (301, 302, 303, 307, 308):
-                for destination in ("http://127.0.0.1/private", "https://other.invalid/private", "/redirected"):
+                for destination in ("http://127.0.0.1/private", "https://other.invalid/private", "/redirected", "https://[invalid"):
                     with self.subTest(operation=operation, code=code, destination=destination):
                         requests = []
                         body = io.BytesIO(b"redirect body must not be consumed")

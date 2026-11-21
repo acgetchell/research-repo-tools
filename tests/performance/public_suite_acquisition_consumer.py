@@ -3758,6 +3758,25 @@ class TestProgress(unittest.TestCase):
                     journal.accept("shared", {"fixture": True})
                 self.assertEqual(journal.read(), {})
 
+    def test_checkpoint_resumes_after_long_unit_staging_is_interrupted(self) -> None:
+        from research_repo_tools.files import _open_sibling_temporary
+
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve() / "checkpoint"
+            units = ("abcdefghijklmno", "abcdefghijklmnop", "abcdefghijklmnopqrstuv")
+            with open_checkpoint(root, {}, units, resume=False) as journal:
+                journal.accept(units[0], {"retained": True})
+                for name in units:
+                    for suffix in (".tmp", ".bak"):
+                        fd, staged = _open_sibling_temporary(root / f"unit-{name}.json", suffix)
+                        os.close(fd)
+                        staged.write_bytes(b"incomplete")
+            with open_checkpoint(root, {}, units, resume=True) as journal:
+                self.assertEqual(journal.read(), {units[0]: {"retained": True}})
+                (root / (".unrelated." + "a" * 24 + ".tmp")).touch()
+                with self.assertRaisesRegex(ValueError, "unexpected checkpoint entry"):
+                    journal.read()
+
 
 if __name__ == "__main__":
     unittest.main()

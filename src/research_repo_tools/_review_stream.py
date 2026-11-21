@@ -31,7 +31,8 @@ def stream_review(
 ) -> CompletedReview | ConsentRequired | FailedReview:
     """Run CodeRabbit and forward bounded output while collecting the review or consent result.
 
-    Return a failed result on timeout or interruption after stopping the child process.
+    The loop stops the child on timeout or interruption. The output callback runs
+    synchronously and must return promptly for the loop to enforce its deadline.
     """
     events = AgentEvents()
     # Separate file offsets avoid pipe deadlocks and preserve Windows bytes.

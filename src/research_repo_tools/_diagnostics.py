@@ -25,13 +25,17 @@ def format_exception_diagnostics(error: BaseException, *, single_line: bool = Fa
     """Render nested diagnostics, optionally bounded for a terse CLI operation."""
     result = _format_exception_diagnostics(error)
     result += "".join(f"\n{note}" for note in getattr(error, "__notes__", ()))
-    return _single_line(result) if single_line else result
+    return _single_line(_strip_terminal_escapes(result)) if single_line else result
+
+
+def _strip_terminal_escapes(text: str) -> str:
+    """Remove terminal control strings before interpreting the visible diagnostic."""
+    text = re.sub(r"(?:\x1b\]|\x9d)[^\x07\x1b\x9c]*(?:\x07|\x1b\\|\x9c)", "", text)
+    return re.sub(r"(?:\x1b\[|\x9b)[0-?]*[ -/]*[@-~]", "", text)
 
 
 def _single_line(result: str) -> str:
-    """Bound a diagnostic after removing terminal escapes and folding control characters."""
-    result = re.sub(r"\x1b\][^\x07\x1b]*(?:\x07|\x1b\\)", "", result)
-    result = re.sub(r"\x1b\[[0-?]*[ -/]*[@-~]", "", result)
+    """Fold control characters and bound the length of a plain-text diagnostic."""
     result = re.sub(r"[\x00-\x1f\x7f-\x9f]+", " ", result)
     result = " ".join(result.split())
     return result if len(result) <= 400 else result[:399] + "…"
@@ -45,6 +49,7 @@ def redact_credentials(value: str | bytes) -> str:
     """
     if isinstance(value, bytes):
         value = value.decode("utf-8", errors="replace")
+    value = _strip_terminal_escapes(value)
 
     def url(match: re.Match[str]) -> str:
         try:
