@@ -68,6 +68,16 @@ def test_generation_rotates_minor_series_and_preview_matches_publication(consume
     assert snapshot(consumer.root) == once
 
 
+def test_custom_template_retains_closing_directives_in_root_and_archive(consumer, monkeypatch):
+    history = HISTORY.replace("Upcoming work.", "Upcoming work.\n\n  Closes #12\n").replace("Earlier correction.", "Earlier correction.\n\n  Closes #13\n")
+    (consumer.root / "cliff.toml").write_bytes(b'[changelog]\nbody = "custom"\n')
+    consumer = replace(consumer, changelog=replace(consumer.changelog, cliff_config="cliff.toml"))
+    monkeypatch.setattr(changelog, "run_safe_command", lambda *args, **kwargs: subprocess.CompletedProcess([], 0, history, ""))
+    for _ in range(2):
+        assert "Closes #12" in changelog.generate(consumer)
+        assert "Closes #13" in (consumer.root / "docs/archives/changelog/0.8.md").read_text(encoding="utf-8")
+
+
 @pytest.mark.parametrize("dry_run", [False, True])
 def test_generation_rejects_archive_conflicts_without_changes(consumer: config.Config, dry_run: bool) -> None:
     archive = consumer.root / "docs/archives/changelog/0.9.md"

@@ -25,6 +25,7 @@ import sys
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass
 from datetime import date
+from functools import cache
 from pathlib import Path
 
 from research_repo_tools.files import _write_text_atomic, _write_texts_transactionally
@@ -421,6 +422,7 @@ def _merge_archive(
     blocks: list[tuple[str, str]],
     definitions: dict[str, str],
     formatter: Callable[[str, Path], str] | None = None,
+    previous_archive: Callable[[str, str], str] | None = None,
 ) -> str:
     """Retain earlier patches and reject conflicting already-retained content."""
     if path.is_symlink():
@@ -445,10 +447,18 @@ def _merge_archive(
     existing, existing_definitions = _extract_link_defs(existing)
     incoming_blocks = dict(parse_changelog(incoming).version_blocks)
     existing_blocks = dict(parse_changelog(existing).version_blocks)
+    previous_blocks: dict[str, str] = {}
     merged = dict(retained.version_blocks)
     for version, block in blocks:
         if version in merged and existing_blocks[version].strip() != incoming_blocks[version].strip():
-            raise ValueError(f"conflicting retained release {version} in {path}")
+            if previous_archive is not None and not previous_blocks:
+                previous = previous_archive(minor, retained.preamble)
+                if formatter is not None:
+                    previous = formatter(previous, path)
+                previous_blocks = dict(parse_changelog(_extract_link_defs(previous)[0]).version_blocks)
+            if previous_blocks.get(version, "").strip() != existing_blocks[version].strip():
+                raise ValueError(f"conflicting retained release {version} in {path}")
+            merged[version] = block
         merged.setdefault(version, block)
     used = _referenced_labels("\n".join(block for _, block in blocks))
     for label in used & definitions.keys():
@@ -542,6 +552,7 @@ def plan_archives(
     archive_dir: Path | None = None,
     *,
     formatter: Callable[[str, Path], str] | None = None,
+    previous_history: Callable[[], str] | None = None,
 ) -> list[tuple[Path, str]]:
     """Plan root and archive replacements from a candidate without writing files.
 
@@ -570,11 +581,28 @@ def plan_archives(
     archived_minors = [path.stem for path in archive_dir.glob("*.md") if re.fullmatch(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)", path.stem)]
     planned_writes: list[tuple[Path, str]] = []
     relocation = _archive_dir_link_prefix(changelog_path.parent, archive_dir, warn_outside=False)
+
+    @cache
+    def previous_groups() -> tuple[dict[str, list[tuple[str, str]]], dict[str, str]]:
+        assert previous_history is not None
+        history, links = _extract_link_defs(previous_history())
+        return group_by_minor(parse_changelog(history).version_blocks), links
+
+    def relocate(blocks: list[tuple[str, str]], links: dict[str, str]) -> tuple[list[tuple[str, str]], dict[str, str]]:
+        return [(version, relocate_links(block, relocation)) for version, block in blocks], {
+            label: relocate_links(line, relocation) for label, line in links.items()
+        }
+
+    def previous_archive(minor: str, preamble: str) -> str:
+        grouped, links = previous_groups()
+        old_blocks, old_links = relocate(grouped.get(minor, []), links)
+        return _render_archive(minor, old_blocks, old_links, preamble=preamble)
+
     for minor in minor_keys[1:]:
         archive_path = archive_dir / f"{minor}.md"
-        blocks = [(version, relocate_links(block, relocation)) for version, block in groups[minor]]
-        definitions = {label: relocate_links(line, relocation) for label, line in link_defs.items()}
-        planned_writes.append((archive_path, _merge_archive(archive_path, minor, blocks, definitions, formatter)))
+        blocks, definitions = relocate(groups[minor], link_defs)
+        candidate = _merge_archive(archive_path, minor, blocks, definitions, formatter, previous_archive if previous_history is not None else None)
+        planned_writes.append((archive_path, candidate))
         archived_minors.append(minor)
 
     if not archived_minors:

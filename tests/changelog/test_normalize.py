@@ -210,7 +210,7 @@ class TestRumdlCompatibility:
         result = postprocess_text(content)
         assert result.count("#### Verify") == 1
         assert result.count("- **Verify**") == result.count("- **Publish**") == 2
-        assert "- **Publish**\n\n  First upload.\n\n- Two" in result
+        assert "- **Publish**\n\n  First upload.\n\n---\n\n- Two" in result
         assert "- **Verify**\n\n  - Second check.\n\n- **Publish**\n\n  Second upload." in result
         assert "### Fixed\n\n#### Verify\n\nIndependent check.\n\n[1.0.0]:" in result
         assert postprocess_text(result) == result
@@ -806,7 +806,7 @@ class TestSquashHeadingNormalization:
         )
         result = postprocess_text(source)
         assert "- **Verify**\n\n  - **Linux**\n\n    Check the wheel.\n\n    - **Source**\n\n      - Check the sdist." in result
-        assert f"- **Verify**\n\n  - Then publish.\n\n{wrapped}\n" in result
+        assert f"- **Verify**\n\n  - Then publish.\n\n---\n\n{wrapped}\n" in result
         assert postprocess_text(result) == result
 
     def test_repeated_subsection_keeps_prose_after_local_definitions_and_preserves_footer(self) -> None:

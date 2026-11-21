@@ -29,7 +29,7 @@ def render(tmp_path: Path, message: str, *, dependency_bodies: str = "concise") 
     arguments += ["--with-commit", message, "--with-commit", "fix: retain linked entry (#987)", "HEAD..HEAD"]
     result = run_safe_command("git-cliff", arguments, cwd=root, check=False)
     assert result.returncode == 0, result.stderr
-    return postprocess_text(result.stdout)
+    return postprocess_text(result.stdout, strip_closing_directives=True)
 
 
 @pytest.mark.parametrize(

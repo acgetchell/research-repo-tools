@@ -1152,8 +1152,11 @@ class TestPublishingConsumer(unittest.TestCase):
 
         def generate(program, args, **kwargs):
             # Use the real rendered configuration but a fixture history producer.
+            if "--context" in args:
+                return subprocess.CompletedProcess(args, 0, source.read_text(encoding="utf-8"), "")
+            context_path = args[args.index("--from-context") + 1] if "--from-context" in args else str(source)
             return subprocess.run(
-                [program, "--config", args[1], "--offline", "--no-exec", "--from-context", str(source)],
+                [program, "--config", args[1], "--offline", "--no-exec", "--from-context", context_path],
                 cwd=self.root,
                 capture_output=True,
                 encoding="utf-8",
@@ -1163,9 +1166,10 @@ class TestPublishingConsumer(unittest.TestCase):
 
         def history(_args, *, input, cwd):
             # Match the immutable Git messages to the same synthetic commit identities.
-            self.assertEqual(set(input.decode("ascii").splitlines()), {commit["id"] for commit in commits})
+            history_commits = [commit for release in context for commit in release["commits"]]
+            self.assertEqual(set(input.decode("ascii").splitlines()), {commit["id"] for commit in history_commits})
             self.assertTrue(cwd.samefile(self.root))
-            fields = [field for commit in commits for field in (commit["id"], commit["raw_message"])]
+            fields = [field for commit in history_commits for field in (commit["id"], commit["raw_message"])]
             return subprocess.CompletedProcess([], 0, ("\0".join(fields) + "\0").encode(), b"")
 
         commits[-1]["raw_message"] += "\n\nCloses #17\nFixes example/other#19"
@@ -1223,6 +1227,23 @@ class TestPublishingConsumer(unittest.TestCase):
             self.assertEqual(cli.main([*args, "--dry-run"]), 0)
         self.assertIn("#### fix: validate rows (1)", preview.getvalue())
         self.assertIn("[Second validation](#fix-validate-rows-1)", preview.getvalue())
+
+        # Upgrade a retained archive written when plain squash titles had no body.
+        title = "Introduce samples (#98)"
+        archived = {**commits[-1], "id": "d" * 40, "message": title, "raw_message": title + "\n\nPreserve sample weights."}
+        context.append({**context[0], "version": "v1.1.0", "commits": [archived]})
+        source.write_text(json.dumps(context), encoding="utf-8", newline="\n")
+        archive_path = self.root / "docs/archives/changelog/1.1.md"
+        with patch("research_repo_tools.changelog_issues.run_git_bytes", history), patch("research_repo_tools.changelog.run_safe_command", generate):
+            self.assertEqual(cli.main(args), 0)
+            self.assertNotIn("Preserve sample weights.", archive_path.read_text(encoding="utf-8"))
+            archived["message"] = archived["raw_message"]
+            source.write_text(json.dumps(context), encoding="utf-8", newline="\n")
+            self.assertEqual(cli.main(args), 0)
+            migrated = archive_path.read_bytes()
+            self.assertIn(b"Preserve sample weights.", migrated)
+            self.assertEqual(cli.main(args), 0)
+            self.assertEqual(archive_path.read_bytes(), migrated)
 
     def test_managed_cargo_home_preserves_oidc_token_and_failed_publish_status(self):
         plan = toolchain_config.Toolchain(self.root, "0.12.23", "3.14", toolchain_config.RustToolchain("1.98.0", (), (), "minimal"), ())

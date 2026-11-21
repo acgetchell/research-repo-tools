@@ -1291,13 +1291,34 @@ def _block_spacing(lines: list[str]) -> str:
     return "\n".join(result)
 
 
-def postprocess_text(text: str) -> str:
+def _separate_entry_details(lines: list[str]) -> list[str]:
+    """End a commit's detail subsection before the next commit starts."""
+    result: list[str] = []
+    in_details = False
+    for index, line in enumerate(lines):
+        heading = _ATX_HEADING_RE.match(line)
+        if (heading and len(heading["level"]) <= 4) or line == "---":
+            in_details = line.startswith("#### ")
+        elif _is_top_level_list_item(line) and _has_entry_commit(lines, index):
+            if in_details:
+                if result and result[-1].strip():
+                    result.append("")
+                result.extend(("---", ""))
+            in_details = False
+        elif line.startswith("- **") and line.endswith("**"):
+            in_details = True
+        result.append(line)
+    return result
+
+
+def postprocess_text(text: str, *, strip_closing_directives: bool = False) -> str:
     """Apply one common Markdown policy, preserving fenced code and reference links."""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text, fenced_blocks = _protect_fenced_blocks(text)
     # Actual issue links come from their original Git messages. Remove raw
     # trailer lines from entry bodies only after protecting literal examples.
-    text = re.sub(r"(?m)^  Closes #[0-9]+[ \t]*\n(?:[ \t]*\n)?", "", text)
+    if strip_closing_directives:
+        text = re.sub(r"(?m)^  Closes #[0-9]+[ \t]*\n(?:[ \t]*\n)?", "", text)
     text = _strip_dependabot_metadata(text)
     text = _normalize_inline_prose(text)
 
@@ -1346,7 +1367,7 @@ def postprocess_text(text: str) -> str:
     lines = "\n".join(result).split("\n")
     _normalize_entry_lists(lines)
     _list_repeated_headings(lines)
-    text = _block_spacing(lines)
+    text = _block_spacing(_separate_entry_details(lines))
     text = text.rstrip() + "\n"
     if any(text.count(marker) != 1 for marker in fenced_blocks):
         raise ValueError("Changelog normalization would lose a fenced code block")

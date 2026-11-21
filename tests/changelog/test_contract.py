@@ -324,6 +324,32 @@ def test_backfill_links_original_commits_in_retained_and_current_releases(git_co
     assert archive.read_bytes() == damaged
 
 
+@pytest.mark.skipif(shutil.which("git-cliff") is None, reason="external git-cliff required")
+def test_generation_recovers_title_only_archive_from_the_same_history(git_consumer: Path) -> None:
+    cfg = settings(git_consumer)
+    run_git_command(["commit", "--allow-empty", "-qm", "Ship reporting (#42)", "-m", "Record café observations."], cwd=git_consumer)
+    run_git_command(["commit", "--allow-empty", "-qm", "fix: read reports", "-m", "Preserve metadata."], cwd=git_consumer)
+    run_git_command(["tag", "v1.0.0"], cwd=git_consumer)
+    run_git_command(["commit", "--allow-empty", "-qm", "fix: next release"], cwd=git_consumer)
+    changelog.generate(cfg, tag="v1.1.0", released="2026-09-07")
+    archive = git_consumer / "docs/archives/changelog/1.0.md"
+    current = archive.read_text(encoding="utf-8").replace("# Changelog - 1.0.x\n", "# Changelog - 1.0.x\n\nRetained introduction.\n")
+    assert current.count("Record café observations.") == current.count("Preserve metadata.") == 1
+    title_only = current.replace("\n  Record café observations.\n", "")
+    assert "Record café observations." not in title_only
+    archive.write_text(title_only, encoding="utf-8", newline="\n")
+    changelog.generate(cfg, tag="v1.1.0", released="2026-09-07", dry_run=True)
+    assert archive.read_text(encoding="utf-8") == title_only
+    for _ in range(2):
+        changelog.generate(cfg, tag="v1.1.0", released="2026-09-07")
+        assert archive.read_text(encoding="utf-8") == current
+    for changed in (current.replace("Record café observations.", "Hand-edited."), title_only.replace("Preserve metadata.", "Hand-edited.")):
+        archive.write_text(changed, encoding="utf-8", newline="\n")
+        with pytest.raises(ValueError, match="conflicting retained release"):
+            changelog.generate(cfg, tag="v1.1.0", released="2026-09-07")
+        assert archive.read_text(encoding="utf-8") == changed
+
+
 @pytest.mark.parametrize("separator", ["", "\n", "\n\n"])
 def test_wrapped_first_issue_link_is_idempotent_and_rejects_drift(separator: str) -> None:
     oid = "a" * 40

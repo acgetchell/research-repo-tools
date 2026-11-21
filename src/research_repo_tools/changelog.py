@@ -56,6 +56,10 @@ _COMPONENT = re.compile(r"[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 
 def template(name: str, *, owner: str | None = None, repository: str | None = None, dependency_bodies: str = "concise") -> str:
     """Read a packaged template; resolve remote parameters without code interpolation."""
+    return _template(name, owner, repository, dependency_bodies, body="entry_body")
+
+
+def _template(name: str, owner: str | None, repository: str | None, dependency_bodies: str, *, body: str) -> str:
     if name not in TEMPLATES:
         raise ValueError(f"unknown template {name!r}; choose {', '.join(TEMPLATES)}")
     if dependency_bodies not in {"concise", "preserve"}:
@@ -69,7 +73,7 @@ def template(name: str, *, owner: str | None = None, repository: str | None = No
         if not _COMPONENT.fullmatch(value) or value in {".", ".."}:
             raise ValueError("GitHub owner and repository must be single URL path components")
         text = text.replace(placeholder, value)
-    condition = 'entry_body and group != "Dependencies"' if dependency_bodies == "concise" else "entry_body"
+    condition = f'{body} and group != "Dependencies"' if dependency_bodies == "concise" else body
     return text.replace("__SEMVER_PATTERN__", SEMVER_PATTERN).replace("__DEPENDENCY_BODY_CONDITION__", condition)
 
 
@@ -155,6 +159,18 @@ def resolve_date(config: Config, *, tag: str | None = None, released: str | None
     return released
 
 
+def _run_cliff(root: Path, rendered: str, args: list[str], *, context: str | None = None) -> str:
+    """Render offline, optionally using an already captured release history."""
+    with tempfile.TemporaryDirectory(prefix="research-repo-tools-cliff-") as directory:
+        cliff = Path(directory) / "cliff.toml"
+        cliff.write_text(rendered, encoding="utf-8", newline="\n")
+        if context is not None:
+            source = Path(directory) / "context.json"
+            source.write_text(context, encoding="utf-8", newline="\n")
+            args = [*args, "--from-context", str(source)]
+        return run_safe_command("git-cliff", ["--config", str(cliff), "--offline", "--no-exec", *args], cwd=root).stdout
+
+
 def generate(config: Config, *, tag: str | None = None, released: str | None = None, dry_run: bool = False) -> str:
     """Generate, normalize, and rotate history, then publish with recoverable rollback.
 
@@ -181,20 +197,28 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
             raise ValueError("changelog generation requires owner and repository, or cliff-config")
         rendered = template("cliff.toml", owner=section.owner, repository=section.repository, dependency_bodies=section.dependency_bodies)
     tomllib.loads(rendered)
-    with tempfile.TemporaryDirectory(prefix="research-repo-tools-cliff-") as directory:
-        cliff = Path(directory) / "cliff.toml"
-        cliff.write_text(rendered, encoding="utf-8", newline="\n")
-        args = ["--config", str(cliff), "--offline", "--no-exec"]
-        if tag:
-            args += ["--tag", tag]
-        generated = run_safe_command("git-cliff", args, cwd=config.root).stdout
+    args = ["--tag", tag] if tag is not None else []
+    # Both historic representations must describe the same commits and tags.
+    shared = section.cliff_config is None
+    context = _run_cliff(config.root, rendered, [*args, "--context"]) if shared and any(archives.glob("*.md")) else None
+    generated = _run_cliff(config.root, rendered, args if context is None else [], context=context)
     if not generated.strip():
         raise ValueError("git-cliff returned empty changelog output")
-    if tag:
-        assert released is not None
-        generated = archive.replace_release_date(generated, tag.removeprefix("v"), released, required=True)
-    generated = _preserve_declared_dates(generated, dates)
-    result = postprocess_text(generated)
+
+    def prepare(raw: str) -> str:
+        if tag:
+            assert released is not None
+            raw = archive.replace_release_date(raw, tag.removeprefix("v"), released, required=True)
+        return postprocess_text(_preserve_declared_dates(raw, dates), strip_closing_directives=shared)
+
+    def previous_history() -> str:
+        # The old template emitted only git-cliff's parsed commit.body. Fall
+        # back to this exact representation only for a retained release mismatch.
+        assert context is not None
+        previous = _template("cliff.toml", section.owner, section.repository, section.dependency_bodies, body="commit.body")
+        return prepare(_run_cliff(config.root, previous, [], context=context))
+
+    result = prepare(generated)
     parsed = archive.parse_changelog(archive._extract_link_defs(result)[0])
     if parsed.unreleased is None and not parsed.version_blocks:
         raise ValueError("git-cliff must generate at least one release or Unreleased section")
@@ -214,7 +238,15 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
             raise ValueError("formatted changelog must contain at least one release or Unreleased section")
         return candidate
 
-    candidates = dict(archive.plan_archives(path, result, archives, formatter=format_candidate if formatter is not None or closing_notes else None))
+    candidates = dict(
+        archive.plan_archives(
+            path,
+            result,
+            archives,
+            formatter=format_candidate if formatter is not None or closing_notes else None,
+            previous_history=previous_history if context is not None else None,
+        )
+    )
     candidates.setdefault(path, result)
     candidates = {target: format_candidate(candidate, target) for target, candidate in candidates.items()}
     outputs = {target: candidate.encode("utf-8") for target, candidate in candidates.items()}
