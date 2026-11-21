@@ -10,7 +10,9 @@ from research_repo_tools.postprocess_changelog import _changelog_prose, _reflow_
 from research_repo_tools.process import run_git_bytes
 
 _KEYWORD = r"(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)"
-_SLUG = r"[A-Za-z0-9][A-Za-z0-9_.-]*/[A-Za-z0-9][A-Za-z0-9_.-]*"
+_OWNER = r"[A-Za-z0-9][A-Za-z0-9_.-]*"
+_REPOSITORY = r"(?!\.{1,2}(?=[#/]))[A-Za-z0-9_.-]+"
+_SLUG = rf"{_OWNER}/{_REPOSITORY}"
 _TARGET = rf"(?:(?:{_SLUG})?#[1-9][0-9]*|https://github\.com/{_SLUG}/issues/[1-9][0-9]*)"
 _CLOSING_LINE = re.compile(rf"{_KEYWORD}:?[ \t]+{_TARGET}(?:,[ \t]+(?:{_KEYWORD}:?[ \t]+)?{_TARGET})*\.?[ \t]*", re.IGNORECASE | re.ASCII)
 _REFERENCE = re.compile(rf"(?:https://github\.com/(?P<url>{_SLUG})/issues/|(?P<slug>{_SLUG})?#)(?P<number>[1-9][0-9]*)", re.IGNORECASE | re.ASCII)
@@ -112,8 +114,14 @@ def _strip_release_directives(release: str, notes: dict[str, str], repository: s
             if all(f"(https://github.com/{slug}/issues/{number})".casefold() in note for slug, number in _targets(line, repository)):
                 directives.add(index)
     directives -= _literal_directive_lines(lines, directives)
-    omit = directives | {i + 1 for i in directives if i + 1 < len(lines) - 1 and not lines[i + 1].strip()}
-    return "\n".join(line for index, line in enumerate(lines) if index not in omit)
+    kept: list[str] = []
+    for index, line in enumerate(lines):
+        if index in directives:
+            continue
+        if index - 1 in directives and index < len(lines) - 1 and not line.strip() and kept and not kept[-1].strip():
+            continue
+        kept.append(line)
+    return "\n".join(kept)
 
 
 def read_closing_notes(text: str, root: Path, repository: str) -> dict[str, str]:

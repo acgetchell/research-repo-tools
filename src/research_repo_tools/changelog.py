@@ -13,7 +13,7 @@ from importlib.resources import files
 from pathlib import Path
 
 from research_repo_tools.process import format_exception_diagnostics, run_command_bytes, run_git_command, run_git_command_with_input, run_safe_command
-from research_repo_tools.release_tags import _GITHUB_TAG_ANNOTATION_LIMIT, SEMVER_PATTERN, _heading_to_anchor, validate_semver
+from research_repo_tools.release_tags import _GITHUB_REPO_COMPONENT_RE, _GITHUB_TAG_ANNOTATION_LIMIT, SEMVER_PATTERN, _heading_to_anchor, validate_semver
 lazy from research_repo_tools import archive_changelog as archive
 lazy from research_repo_tools import changelog_issues, changelog_notes
 lazy from research_repo_tools.config import Config
@@ -72,7 +72,8 @@ def _template(name: str, owner: str | None, repository: str | None, dependency_b
     for placeholder, value in (("__OWNER__", owner), ("__REPOSITORY__", repository)):
         if placeholder not in text or value is None:
             continue
-        if not _COMPONENT.fullmatch(value) or value in {".", ".."}:
+        component = _GITHUB_REPO_COMPONENT_RE if placeholder == "__REPOSITORY__" else _COMPONENT
+        if not component.fullmatch(value) or value in {".", ".."}:
             raise ValueError("GitHub owner and repository must be single URL path components")
         text = text.replace(placeholder, value)
     condition = f'{body} and group != "Dependencies"' if dependency_bodies == "concise" else body

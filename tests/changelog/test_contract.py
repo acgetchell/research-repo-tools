@@ -296,7 +296,7 @@ def test_backfill_links_original_commits_in_retained_and_current_releases(git_co
     cfg = settings(git_consumer)
     body = (
         "Closes #11\nCloses #12\nCloses #13\n\n"
-        "Fixes EXAMPLE/research#11, resolves other/tool#14.\n"
+        "Fixes EXAMPLE/research#11, resolves other/tool#14.\nCloses acme/.github#31\n"
         "Closed: https://github.com/other/tool/issues/14\n"
         "Refs #15\n> Fixes #16\n    Fixes #17\n\n~~~~text\nCloses #18\n~~~~\n\n"
         "Example ``first\nResolves #20\nlast``.\n\nAn unmatched ` delimiter.\n\nFixes #21\n\n    ~~~text\n\nFixes #22"
@@ -319,6 +319,7 @@ def test_backfill_links_original_commits_in_retained_and_current_releases(git_co
     for number in (11, 12, 13, 21, 22):
         assert original.count(f"[#{number}](https://github.com/example/research/issues/{number})".encode()) == 1
     assert original.count(b"[other/tool#14](https://github.com/other/tool/issues/14)") == 1
+    assert original.count(b"[acme/.github#31](https://github.com/acme/.github/issues/31)") == 1
     assert b"Fixes EXAMPLE/research#11" not in original and b"Closed: https://github.com/other/tool/issues/14" not in original
     for number in (15, 16, 17, 18, 19, 20):
         assert f"/issues/{number})".encode() not in original
@@ -397,6 +398,9 @@ def test_strip_only_directives_with_replacement_links_for_that_entry() -> None:
     history = "## [Unreleased]\n\n" + summary + text + "\n## [1.0.0]\n\n" + summary + "- Historical detail.\n"
     before, after = changelog_issues.strip_linked_directives(history, notes, "example/research").split("## [1.0.0]")
     assert "  Fixes #7\n" not in before and "  Fixes #7\n" in after
+    paragraphs = text.split("\n\n", 1)[0] + "\n\n  First paragraph.\n  Closes #7\n\n  Second paragraph.\n"
+    assert changelog_issues.strip_linked_directives(paragraphs, notes, "example/research") == paragraphs.replace("  Closes #7\n", "")
+    assert "example/.github" in changelog.template("cliff.toml", owner="example", repository=".github")
 
 
 @pytest.mark.parametrize("link", ["[Second](CHANGELOG.md#verify-1)", "[Second][again]\n\n[again]: ./CHANGELOG.md#verify-1"])
