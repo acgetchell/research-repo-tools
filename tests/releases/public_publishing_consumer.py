@@ -1217,7 +1217,7 @@ class TestPublishingConsumer(unittest.TestCase):
 
         # Ordinary package installations also render navigable repeat headings.
         for field in ("message", "raw_message"):
-            commits[-1][field] += "\n\n[Second validation](#fix-validate-rows-1)"
+            commits[-1][field] += "\n\n[Second validation](CHANGELOG.md#fix-validate-rows-1)\n\nLiteral ``first\nCloses #88\nlast``."
         source.write_text(json.dumps(context), encoding="utf-8", newline="\n")
         with (
             patch("research_repo_tools.changelog_issues.run_git_bytes", history),
@@ -1226,7 +1226,9 @@ class TestPublishingConsumer(unittest.TestCase):
         ):
             self.assertEqual(cli.main([*args, "--dry-run"]), 0)
         self.assertIn("#### fix: validate rows (1)", preview.getvalue())
-        self.assertIn("[Second validation](#fix-validate-rows-1)", preview.getvalue())
+        self.assertIn("[Second validation](CHANGELOG.md#fix-validate-rows-1)", preview.getvalue())
+        self.assertIn("Closes #88", preview.getvalue())
+        self.assertNotIn("/issues/88)", preview.getvalue())
 
         # Upgrade a retained archive written when plain squash titles had no body.
         title = "Introduce samples (#98)"

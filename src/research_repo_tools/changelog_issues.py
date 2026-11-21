@@ -6,7 +6,7 @@ from pathlib import Path
 from typing import cast
 
 from research_repo_tools._git_checkout import READ_ONLY_OPTIONS
-from research_repo_tools.postprocess_changelog import _closes_code_fence, _opening_code_fence, _reflow_line
+from research_repo_tools.postprocess_changelog import _closes_code_fence, _literal_directive_lines, _opening_code_fence, _reflow_line
 from research_repo_tools.process import run_git_bytes
 
 _KEYWORD = r"(?:close[sd]?|fix(?:es|ed)?|resolve[sd]?)"
@@ -54,8 +54,11 @@ def _commit_lines(lines: list[str], repository: str) -> Iterator[tuple[int, str]
 def _closing_links(message: str, repository: str) -> list[str]:
     """Read standalone directives, preserving authored order across repositories."""
     links: dict[tuple[str, str], str] = {}
-    for _, line in _prose(message.replace("\r\n", "\n").split("\n")):
-        if not _CLOSING_LINE.fullmatch(line):
+    lines = message.replace("\r\n", "\n").split("\n")
+    directives = {index: line for index, line in _prose(lines) if _CLOSING_LINE.fullmatch(line)}
+    example_lines = _literal_directive_lines(lines, set(directives))
+    for index, line in directives.items():
+        if index in example_lines:
             continue
         for match in _REFERENCE.finditer(line):
             slug = match["url"] or match["slug"] or repository

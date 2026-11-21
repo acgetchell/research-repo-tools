@@ -298,7 +298,8 @@ def test_backfill_links_original_commits_in_retained_and_current_releases(git_co
         "Closes #11\nCloses #12\nCloses #13\n\n"
         "Fixes EXAMPLE/research#11, resolves other/tool#14.\n"
         "Closed: https://github.com/other/tool/issues/14\n"
-        "Refs #15\n> Fixes #16\n    Fixes #17\n\n~~~~text\nCloses #18\n~~~~"
+        "Refs #15\n> Fixes #16\n    Fixes #17\n\n~~~~text\nCloses #18\n~~~~\n\n"
+        "Example ``first\nResolves #20\nlast``.\n\nAn unmatched ` delimiter.\n\nFixes #21"
     )
     run_git_command(["commit", "--allow-empty", "-qm", "Ship\u2028reporting (#42)", "-m", body], cwd=git_consumer)
     run_git_command(["tag", "v1.0.0"], cwd=git_consumer)
@@ -309,10 +310,10 @@ def test_backfill_links_original_commits_in_retained_and_current_releases(git_co
     original = archive.read_bytes()
     note = re.search(rb"^  Closes \[.*?\)\.$", original, flags=re.MULTILINE | re.DOTALL)
     assert note is not None
-    for number in (11, 12, 13):
+    for number in (11, 12, 13, 21):
         assert original.count(f"[#{number}](https://github.com/example/research/issues/{number})".encode()) == 1
     assert original.count(b"[other/tool#14](https://github.com/other/tool/issues/14)") == 1
-    for number in (15, 16, 17, 18, 19):
+    for number in (15, 16, 17, 18, 19, 20):
         assert f"/issues/{number})".encode() not in original
     archive.write_bytes(original[: note.start()] + original[note.end() + 1 :])
     assert changelog.generate(cfg, tag="v1.1.0", released="2026-09-07") == current
@@ -363,6 +364,15 @@ def test_wrapped_first_issue_link_is_idempotent_and_rejects_drift(separator: str
     assert changelog_issues.add_closing_notes(annotated, notes, "example/research") == annotated
     with pytest.raises(ValueError, match="conflicting closed issue links"):
         changelog_issues.add_closing_notes(annotated.replace("/issues/7)", "/issues/8)"), notes, "example/research")
+
+
+@pytest.mark.parametrize("link", ["[Second](CHANGELOG.md#verify-1)", "[Second][again]\n\n[again]: ./CHANGELOG.md#verify-1"])
+def test_path_qualified_heading_navigation_survives_regeneration(link: str) -> None:
+    source = f"# Changelog\n\n## [Unreleased]\n\n### Added\n\n{link}\n\n#### Verify\n\nFirst.\n\n#### Verify\n\nSecond.\n"
+    result = postprocess_changelog.postprocess_text(source)
+    assert "#### Verify (1)\n\nSecond." in result
+    assert link in result
+    assert postprocess_changelog.postprocess_text(result) == result
 
 
 @pytest.mark.skipif(shutil.which("rumdl") is None, reason="external rumdl validates the generated heading targets")

@@ -125,7 +125,7 @@ The shared generator links explicitly closed issues beside the entry's commit
 hash in every release, including archived releases. It reads standalone
 `Closes #123`, `Fixes owner/repo#456` and `Resolves` directives from local Git
 history, including comma-separated targets and GitHub issue URLs. Each target
-appears once per entry. Fenced examples and ordinary mentions are ignored.
+appears once per entry. Code examples, including multiline code spans, and ordinary mentions are ignored.
 Custom `cliff-config` templates control their own issue rendering.
 
 Embedded conventional titles such as `fix:` and `feat:` retain their original
@@ -133,7 +133,7 @@ prefix, wording and order under their authored parent entry. A title that occurs
 once in a release category uses a level-four heading. If a title repeats in the
 same category, each occurrence becomes a list item with its own details.
 A horizontal rule separates the last detail subsection from the next commit in the same category.
-When the document links to its own headings, repeated titles keep their headings
+When the document links to headings by fragment or local path and fragment, repeated titles keep their headings
 and receive numbered suffixes so each occurrence remains reachable.
 The same title in another release or category can keep its heading.
 All dependency bumps, including CI and development tools, stay in the separate

@@ -171,6 +171,41 @@ def _backtick_span_end(text: str, start: int) -> int | None:
     return None
 
 
+def _literal_directive_lines(lines: list[str], directives: set[int]) -> set[int]:
+    """Identify candidate lines which CommonMark renders as literal code."""
+    if not directives or not any("`" in line for line in lines):
+        return set()
+    from markdown_it import MarkdownIt
+
+    # Inline code tokens normalize newlines and have no source line numbers.
+    # Mark only complete standalone directives in the parser's private copy.
+    prefix = "RRTDIRECTIVE"
+    while any(prefix in line for line in lines):
+        prefix += "X"
+    marked = "\n".join(line + f"{prefix}{i}END" if i in directives else line for i, line in enumerate(lines))
+    marker = re.compile(rf"{prefix}(\d+)END")
+    tokens = MarkdownIt("commonmark").parse(marked)
+    literal: set[int] = set()
+    while tokens:
+        token = tokens.pop()
+        if token.type in {"code_inline", "code_block", "fence"}:
+            literal.update(int(number) for number in marker.findall(token.content))
+        if token.children:
+            tokens.extend(token.children)
+    return literal
+
+
+def _strip_closing_directives(text: str) -> str:
+    """Remove packaged issue trailers while keeping directive examples literal."""
+    lines = text.split("\n")
+    directives = {index for index, line in enumerate(lines) if re.fullmatch(r"  Closes #[0-9]+[ \t]*", line)}
+    if not directives:
+        return text
+    directives -= _literal_directive_lines(lines, directives)
+    omit = directives | {i + 1 for i in directives if i + 1 < len(lines) and not lines[i + 1].strip()}
+    return "\n".join(line for index, line in enumerate(lines) if index not in omit)
+
+
 def _delimiter_run_end(text: str, start: int, delimiter: str) -> int:
     """Return the exclusive end of one repeated Markdown delimiter run."""
     end = start + 1
@@ -1205,6 +1240,21 @@ def _number_navigable_headings(lines: list[str], repeated: set[int]) -> None:
             siblings.add(title)
 
 
+def _has_local_fragment_link(lines: list[str]) -> bool:
+    """Keep heading targets reachable by fragment-only and path-qualified links."""
+    from markdown_it import MarkdownIt
+
+    # A full history is normalized before it is split into its output files.
+    # A relative destination can therefore address the root or a minor archive.
+    for block in MarkdownIt("commonmark").parse("\n".join(lines)):
+        for token in block.children or ():
+            if token.type == "link_open":
+                href = str(token.attrGet("href") or "")
+                if href.partition("#")[2] and not re.match(r"(?:[a-z][a-z0-9+.-]*:|//)", href, re.IGNORECASE):
+                    return True
+    return False
+
+
 def _list_repeated_headings(lines: list[str]) -> None:
     """Keep duplicate sibling titles and their bodies together as list items."""
     occurrences: dict[tuple[int, str], list[int]] = {}
@@ -1220,7 +1270,7 @@ def _list_repeated_headings(lines: list[str]) -> None:
             occurrences.setdefault((parent, heading["title"].strip()), []).append(index)
 
     repeated = sorted((index, title) for (_, title), indices in occurrences.items() if len(indices) > 1 for index in indices)
-    if repeated and any(re.search(r"(?:\]\(\s*|^ {0,3}\[[^\]]+\]:\s*)<?#\S", line) for line in lines):
+    if repeated and _has_local_fragment_link(lines):
         _number_navigable_headings(lines, {index for index, _ in repeated})
         return
     # Footer definitions belong to the whole document. A definition followed
@@ -1318,7 +1368,7 @@ def postprocess_text(text: str, *, strip_closing_directives: bool = False) -> st
     # Actual issue links come from their original Git messages. Remove raw
     # trailer lines from entry bodies only after protecting literal examples.
     if strip_closing_directives:
-        text = re.sub(r"(?m)^  Closes #[0-9]+[ \t]*\n(?:[ \t]*\n)?", "", text)
+        text = _strip_closing_directives(text)
     text = _strip_dependabot_metadata(text)
     text = _normalize_inline_prose(text)
 
