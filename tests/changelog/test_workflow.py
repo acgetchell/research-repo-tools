@@ -287,14 +287,15 @@ def test_formatted_regeneration_and_next_release_are_stable(consumer, monkeypatc
         "Earlier correction.", " ".join(["Long historical explanation."] * 12)
     )
     history = history.replace(
-        "- Read the [guide]", "- Outer\n  - Inner\n    - Use [data](docs/data.csv).\n      Continue with the [data](docs/data.csv).\n\n- Read the [guide]"
+        "- Read the [guide]",
+        "- Outer\n  - Inner\n    - Use [data](docs/first&amp;last.csv).\n      Continue with the [data](docs/first&#38;last.csv).\n\n- Read the [guide]",
     )
     monkeypatch.setattr(changelog, "run_safe_command", lambda *args, **kwargs: subprocess.CompletedProcess([], 0, history, ""))
     if formatted:
         consumer = replace(consumer, changelog=replace(consumer.changelog, formatter="rumdl.toml"))
         (consumer.root / "docs").mkdir()
         (consumer.root / "docs/guide(notes)#v1.md").write_bytes(b"# Guide\n")
-        (consumer.root / "docs/data.csv").write_bytes(b"x,y\n")
+        (consumer.root / "docs/first&last.csv").write_bytes(b"x,y\n")
         (consumer.root / "rumdl.toml").write_text(changelog.template("rumdl.toml") + '\n[MD004]\nstyle = "asterisk"\n', newline="\n")
     if formatted == "stub":
         monkeypatch.setattr(changelog, "check_markdown", lambda *args: None)

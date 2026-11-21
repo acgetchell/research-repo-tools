@@ -3,7 +3,6 @@
 import os
 import posixpath
 import re
-import string
 from collections.abc import Callable
 from pathlib import Path
 from urllib.parse import unquote
@@ -119,11 +118,13 @@ def relocate_links(text: str, prefix: str) -> str:
 
 def existing_archive_link_targets(text: str, source: Path) -> set[str]:
     """Identify real targets reached through a not-yet-created archive directory."""
+    from markdown_it.common.utils import unescapeAll
+
     targets: set[str] = set()
 
     def record(value: str) -> str:
         if value.startswith("../"):
-            destination = re.sub(rf"\\([{re.escape(string.punctuation)}])", r"\1", value)
+            destination = unescapeAll(value)
             relative = unquote(re.split(r"[?#]", destination, maxsplit=1)[0])
             parent = source.parent
             while relative.startswith("../") and not parent.is_dir():
