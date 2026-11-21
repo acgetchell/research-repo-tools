@@ -2,8 +2,9 @@
 
 import re
 from collections.abc import Iterator
+from html.parser import HTMLParser
 from pathlib import Path
-from typing import cast
+from typing import cast, override
 
 from research_repo_tools._git_checkout import READ_ONLY_OPTIONS
 from research_repo_tools.postprocess_changelog import _changelog_prose, _reflow_line
@@ -20,6 +21,30 @@ _CLOSING_NOTE = re.compile(rf"^Closes \[(?:{_SLUG})?#[1-9][0-9]*\]\(")
 _COMMIT = re.compile(rf"\[`(?P<short>[a-f0-9]{{7}})`\]\(https://github\.com/(?P<slug>{_SLUG})/commit/(?P<oid>[a-f0-9]{{40}}(?:[a-f0-9]{{24}})?)\)$")
 
 
+class _CodeExamples(HTMLParser):
+    """Collect text inside rendered code spans, fenced blocks, and HTML examples."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.open_tags: list[str] = []
+        self.text: list[str] = []
+
+    @override
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        if tag in {"pre", "code"}:
+            self.open_tags.append(tag)
+
+    @override
+    def handle_endtag(self, tag: str) -> None:
+        if self.open_tags and self.open_tags[-1] == tag:
+            self.open_tags.pop()
+
+    @override
+    def handle_data(self, data: str) -> None:
+        if self.open_tags:
+            self.text.append(data)
+
+
 def _literal_directive_lines(lines: list[str], directives: set[int]) -> set[int]:
     """Identify candidate lines which CommonMark renders as literal code."""
     if not directives:
@@ -33,15 +58,10 @@ def _literal_directive_lines(lines: list[str], directives: set[int]) -> set[int]
         prefix += "X"
     marked = "\n".join(line + f"{prefix}{i}END" if i in directives else line for i, line in enumerate(lines))
     marker = re.compile(rf"{prefix}(\d+)END")
-    tokens = MarkdownIt("commonmark").parse(marked)
-    literal: set[int] = set()
-    while tokens:
-        token = tokens.pop()
-        if token.type in {"code_inline", "code_block", "fence"}:
-            literal.update(int(number) for number in marker.findall(token.content))
-        if token.children:
-            tokens.extend(token.children)
-    return literal
+    examples = _CodeExamples()
+    examples.feed(MarkdownIt("commonmark").render(marked))
+    examples.close()
+    return {int(number) for data in examples.text for number in marker.findall(data)}
 
 
 def _entry_oid(line: str, repository: str) -> str | None:

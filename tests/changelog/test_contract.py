@@ -299,7 +299,8 @@ def test_backfill_links_original_commits_in_retained_and_current_releases(git_co
         "Fixes EXAMPLE/research#11, resolves other/tool#14.\nCloses acme/.github#31\n"
         "Closed: https://github.com/other/tool/issues/14\n"
         "Refs #15\n> Fixes #16\n    Fixes #17\n\n~~~~text\nCloses #18\n~~~~\n\n"
-        "Example ``first\nResolves #20\nlast``.\n\nAn unmatched ` delimiter.\n\nFixes #21\n\n    ~~~text\n\nFixes #22"
+        "Example ``first\nResolves #20\nlast``.\n\nAn unmatched ` delimiter.\n\nFixes #21\n\n    ~~~text\n\nFixes #22\n\n"
+        "<pre>\nCloses #23\n</pre>\n\nCloses #24"
     )
     run_git_command(["commit", "--allow-empty", "-qm", "Ship\u2028reporting (#42)", "-m", body], cwd=git_consumer)
     oid = run_git_command(["rev-parse", "HEAD"], cwd=git_consumer).stdout.strip()
@@ -316,12 +317,12 @@ def test_backfill_links_original_commits_in_retained_and_current_releases(git_co
     assert b"- See the original" in original
     note = re.search(rb"^  Closes \[.*?\)\.$", original, flags=re.MULTILINE | re.DOTALL)
     assert note is not None
-    for number in (11, 12, 13, 21, 22):
+    for number in (11, 12, 13, 21, 22, 24):
         assert original.count(f"[#{number}](https://github.com/example/research/issues/{number})".encode()) == 1
     assert original.count(b"[other/tool#14](https://github.com/other/tool/issues/14)") == 1
     assert original.count(b"[acme/.github#31](https://github.com/acme/.github/issues/31)") == 1
     assert b"Fixes EXAMPLE/research#11" not in original and b"Closed: https://github.com/other/tool/issues/14" not in original
-    for number in (15, 16, 17, 18, 19, 20):
+    for number in (15, 16, 17, 18, 19, 20, 23):
         assert f"/issues/{number})".encode() not in original
     archive.write_bytes(original[: note.start()] + original[note.end() + 1 :])
     assert changelog.generate(cfg, tag="v1.1.0", released="2026-09-07") == current
