@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 # git-cliff can mistake column-zero namespace paths for trailers. Recover only
 # adjacent fragments whose exact token:value spelling occurs in the raw message;
 # a real trailer (including Token: :value) ends the continuation.
+# For plain commit titles git-cliff keeps the body in the preprocessed message.
 body = """
 {% if version -%}
     ## [{{ version | trim_start_matches(pat="v") }}] - {{ timestamp | date(format="%Y-%m-%d") }}
@@ -55,6 +56,11 @@ body = """
 {% for group, commits in commits | group_by(attribute="group") %}
     ### {{ group | upper_first }}
     {% for commit in commits %}
+        {% set entry_body = commit.body | default(value="") -%}
+        {% if not entry_body and not commit.conventional -%}
+            {% set lines = commit.message | replace_regex(from="\\r\\n", to="\n") | split(pat="\n") -%}
+            {% set entry_body = lines | slice(start=1) | join(sep="\n") | trim_start_matches(pat="\n") -%}
+        {% endif -%}
         - {% if commit.breaking %}[**breaking**] {% endif %}\
             {{ commit.message | split(pat="\n") | first | upper_first | trim }} \
             [`{{ commit.id | truncate(length=7, end="") }}`]\
@@ -62,7 +68,7 @@ body = """
             /commit/{{ commit.id }})
         {%- if __DEPENDENCY_BODY_CONDITION__ %}
 
-        {{ commit.body | indent(prefix="  ", first=true) }}
+        {{ entry_body | indent(prefix="  ", first=true) }}
         {%- endif %}
     {%- endfor %}
 {% endfor %}\n
@@ -117,6 +123,8 @@ sort_commits = "oldest"
 # NOTE: The repo path is hardcoded here because commit_preprocessors run before
 # Tera template rendering, so {{ remote.github.owner }} variables are not
 # available. The body/footer templates above do use the remote.github variables.
+# Keep standalone closures out of the parsed body. The generator reads issue
+# links from original Git messages before it compares and archives entries.
 commit_preprocessors = [
     { pattern = '(?m)^Closes #\d+\n\n', replace = "" },
     { pattern = '\(#(\d+)\)', replace = '[#${1}](https://github.com/__OWNER__/__REPOSITORY__/pull/${1})' },

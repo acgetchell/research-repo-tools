@@ -11,7 +11,7 @@ import pytest
 
 from research_repo_tools import archive_changelog, changelog, cli, config, postprocess_changelog, update_release
 from research_repo_tools.markdown import relocate_links
-from research_repo_tools.process import run_git_command
+from research_repo_tools.process import run_git_command, run_safe_command
 
 
 def settings(root: Path, **changes: object) -> config.Config:
@@ -73,6 +73,18 @@ def test_templates_are_common_valid_package_resources(tmp_path: Path) -> None:
     with pytest.raises(FileExistsError):
         changelog.write_template(target, changelog.template("justfile"))
     assert target.read_bytes() == b"existing:\r\n    custom-command\r\n"
+
+
+@pytest.mark.skipif(shutil.which("rumdl") is None, reason="external rumdl required")
+def test_packaged_policy_detects_duplicate_headings_and_unused_references(tmp_path: Path) -> None:
+    rules = tmp_path / "rumdl.toml"
+    rules.write_text(changelog.template("rumdl.toml"), encoding="utf-8", newline="\n")
+    source = "# Changelog\n\n## Release\n\n### Duplicate\n\nBody.\n\n### Duplicate\n\n[unused]: https://example.com\n"
+    result = run_safe_command(
+        "rumdl", ["check", "--config", str(rules), "--no-cache", "--stdin", "--stdin-filename", "CHANGELOG.md"], input=source, check=False
+    )
+    assert result.returncode == 1
+    assert "[MD024]" in result.stdout and "[MD053]" in result.stdout
 
 
 @pytest.mark.parametrize("component", ['x"\n[malicious]', "../x", "x/y", "..", "https://example.com"])
@@ -148,7 +160,7 @@ def test_normalization_preserves_all_fenced_prose_and_is_idempotent() -> None:
     once = postprocess_changelog.postprocess_text(original)
     assert code in once
     assert postprocess_changelog.postprocess_text(once) == once
-    assert "\n  - Detail.\n" in once
+    assert "#### fixed: generated body\n\n- Detail.\n" in once
 
 
 def test_incremental_archives_retain_older_patches_links_and_introduction(tmp_path: Path) -> None:
@@ -277,6 +289,39 @@ def test_generate_real_git_history_with_packaged_template(git_consumer: Path) ->
     assert "https://github.com/example/research/pull/7" in candidate
     assert changelog.generate(cfg, tag="v1.2.0", released="2026-09-07") == candidate
     assert (git_consumer / "CHANGELOG.md").read_text() == candidate
+
+
+@pytest.mark.skipif(shutil.which("git-cliff") is None, reason="external git-cliff is required for the native generation integration test")
+def test_backfill_links_original_commits_in_retained_and_current_releases(git_consumer: Path) -> None:
+    cfg = settings(git_consumer)
+    body = (
+        "Closes #11\nCloses #12\nCloses #13\n\n"
+        "Fixes EXAMPLE/research#11, resolves other/tool#14.\n"
+        "Closed: https://github.com/other/tool/issues/14\n"
+        "Refs #15\n> Fixes #16\n    Fixes #17\n\n~~~~text\nCloses #18\n~~~~"
+    )
+    run_git_command(["commit", "--allow-empty", "-qm", "Ship reporting (#42)", "-m", body], cwd=git_consumer)
+    run_git_command(["tag", "v1.0.0"], cwd=git_consumer)
+    run_git_command(["commit", "--allow-empty", "-qm", "fix: keep reports readable (#43)", "-m", "Fixed #19"], cwd=git_consumer)
+    current = changelog.generate(cfg, tag="v1.1.0", released="2026-09-07")
+    assert current.count("[#19](https://github.com/example/research/issues/19)") == 1
+    archive = git_consumer / "docs/archives/changelog/1.0.md"
+    original = archive.read_bytes()
+    note = re.search(rb"^  Closes \[.*?\)\.$", original, flags=re.MULTILINE | re.DOTALL)
+    assert note is not None
+    for number in (11, 12, 13):
+        assert original.count(f"[#{number}](https://github.com/example/research/issues/{number})".encode()) == 1
+    assert original.count(b"[other/tool#14](https://github.com/other/tool/issues/14)") == 1
+    for number in (15, 16, 17, 18, 19):
+        assert f"/issues/{number})".encode() not in original
+    archive.write_bytes(original[: note.start()] + original[note.end() + 1 :])
+    assert changelog.generate(cfg, tag="v1.1.0", released="2026-09-07") == current
+    assert archive.read_bytes() == original
+    damaged = original.replace(b"/issues/13)", b"/issues/123)")
+    archive.write_bytes(damaged)
+    with pytest.raises(ValueError, match="conflicting"):
+        changelog.generate(cfg, tag="v1.1.0", released="2026-09-07")
+    assert archive.read_bytes() == damaged
 
 
 def test_tag_preserves_utf8_notes_and_force_replaces_atomically(git_consumer: Path) -> None:

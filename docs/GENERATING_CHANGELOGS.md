@@ -107,28 +107,41 @@ checks; the shared suite owns generic generation regressions.
 
 Normalization uses UTF-8 and LF, one final newline, consistent list markers,
 160-column prose reflow, intact Markdown links/code spans, and level-four
-entry headings beneath release categories. Breaking-change and pull-request
-summaries retain their links. Fenced code is opaque to prose transformations;
+entry headings beneath release categories. Each heading starts a new block.
+Lists below a heading start at the left margin and retain their nested items.
+Lists with multiple paragraphs in an item use blank lines between peers.
+Breaking-change and pull-request summaries retain their links.
+Fenced code is opaque to prose transformations;
 backtick and tilde delimiters, delimiter lengths, and fence-contained examples
 of releases are preserved. A missing code language becomes `text`.
 Markdown pipe tables retain their rows and cells, including rows longer than
 the prose width limit.
 Feature names and consumer-specific wording are preserved rather than migrated.
 
-Embedded conventional headings such as `fix:` and `feat:` remain under their
-authored parent entry, with their original prefix, wording, and context. They
-do not become extra categorized release entries. Similarly worded entries and
-repeated headings remain intact, even when they share a commit link. Normalization
-does not infer semantic equivalence, remove contextual excerpts, or rename titles
-with invented follow-up suffixes. This supersedes the earlier promotion and
-contextual deduplication policy. Entry-local titles still use level-four Markdown
-headings, and clearly labeled PR/breaking summaries remain supported.
+The shared template includes the body of a squash commit even when its PR
+title has no Conventional Commits prefix. The Merged Pull Requests summary
+lists the title and link, and the categorized entry carries the authored details.
+The shared generator links explicitly closed issues beside the entry's commit
+hash in every release, including archived releases. It reads standalone
+`Closes #123`, `Fixes owner/repo#456` and `Resolves` directives from local Git
+history, including comma-separated targets and GitHub issue URLs. Each target
+appears once per entry. Fenced examples and ordinary mentions are ignored.
+Custom `cliff-config` templates control their own issue rendering.
+
+Embedded conventional titles such as `fix:` and `feat:` retain their original
+prefix, wording and order under their authored parent entry. A title that occurs
+once in a release category uses a level-four heading. If a title repeats in the
+same category, each occurrence becomes a list item with its own details. These
+list items have no heading anchors. The same title in another release or
+category can keep its heading.
 All dependency bumps, including CI and development tools, stay in the separate
 Dependencies category. The selected body policy controls their detail.
 
 `changelog.formatter` optionally names the consumer's rumdl configuration.
-Every generated root and archive candidate must pass both the fixing invocation
-and a final check before any replacement. Formatter failure or unexpectedly empty
+The packaged rumdl policy checks for duplicate sibling headings (MD024)
+and unused reference definitions (MD053).
+Generation formats the root and each archive, then checks their links together
+before writing any files. Formatter failure or unexpectedly empty
 output preserves the originals. The base package does not require rumdl for pure
 normalization.
 

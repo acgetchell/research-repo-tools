@@ -95,6 +95,42 @@ def test_ordinary_commit_does_not_create_a_breaking_summary(tmp_path: Path) -> N
 
 
 @pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
+def test_plain_squash_title_keeps_feature_details_under_its_entry(tmp_path: Path, newline: str) -> None:
+    message = (
+        "Ship the reporting workflow (#42)\n\n"
+        "* feat(export): add a CSV report\n\n"
+        "- Write one row per observation.\n\n"
+        "Closes #31\nCloses #32\n\n"
+        "* fix(import): retain Unicode labels\n\n"
+        "Keep labels such as café in `Result<T>`.\n\n"
+        "```text\nExample commit text:\n\nCloses #99\n* fix: literal example\n```"
+    )
+    result = render(tmp_path, message.replace("\n", newline))
+    summary, entry = result.split("### Changed\n\n", 1)
+    title = "Ship the reporting workflow [#42](https://github.com/example/consumer/pull/42)"
+    assert title in summary and entry.startswith(f"- {title}")
+    assert "\n\n#### feat(export): add a CSV report\n\n- Write one row per observation.\n\n#### fix(import):" in entry
+    for detail in (
+        "#### feat(export): add a CSV report",
+        "- Write one row per observation.",
+        "#### fix(import): retain Unicode labels",
+        "Keep labels such as café in `Result<T>`.",
+    ):
+        assert detail in entry and result.count(detail) == 1
+    assert "Closes #31" not in result and "Closes #32" not in result
+    assert "  Closes #99\n  * fix: literal example" in entry
+    assert postprocess_text(result) == result
+
+
+def test_plain_dependency_bump_respects_body_policy(tmp_path: Path) -> None:
+    message = "Bump toolkit from 1 to 2\n\nSee the [migration guide](https://example.com/migration)."
+    concise = render(tmp_path, message)
+    assert "### Dependencies\n\n- Bump toolkit from 1 to 2" in concise
+    assert "migration guide" not in concise
+    assert "See the [migration guide](https://example.com/migration)." in render(tmp_path, message, dependency_bodies="preserve")
+
+
+@pytest.mark.parametrize("newline", ["\n", "\r\n"], ids=["lf", "crlf"])
 @pytest.mark.parametrize("marker", ["BREAKING CHANGE", "BREAKING-CHANGE"])
 def test_namespace_paths_continue_breaking_footer_but_real_trailers_do_not(tmp_path: Path, newline: str, marker: str) -> None:
     description = (

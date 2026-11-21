@@ -2,6 +2,9 @@
 
 import posixpath
 import re
+from collections.abc import Callable
+from pathlib import Path
+from urllib.parse import unquote
 
 from research_repo_tools.postprocess_changelog import (
     MAX_LINE_WIDTH,
@@ -111,6 +114,34 @@ def relocate_links(text: str, prefix: str) -> str:
         path, *suffix = re.split(r"(?=[?#])", value, maxsplit=1)
         return posixpath.normpath(posixpath.join(prefix, path)) + "".join(suffix)
 
+    return _map_link_destinations(text, destination)
+
+
+def existing_archive_link_targets(text: str, source: Path) -> set[str]:
+    """Identify real targets reached through a not-yet-created archive directory."""
+    targets: set[str] = set()
+
+    def record(value: str) -> str:
+        if value.startswith("../"):
+            relative = unquote(re.split(r"[?#]", value, maxsplit=1)[0])
+            parent = source.parent
+            while relative.startswith("../") and not parent.is_dir():
+                parent = parent.parent
+                relative = relative[3:]
+            if Path(relative).anchor:
+                return value
+            path = parent / relative
+            if path.is_file():
+                targets.add(str(path.resolve()))
+            elif path.is_dir():
+                targets.add(path.resolve().as_posix().rstrip("/") + "/")
+        return value
+
+    _map_link_destinations(text, record)
+    return targets
+
+
+def _map_link_destinations(text: str, destination: Callable[[str], str]) -> str:
     def target(value: str) -> str:
         if value.startswith("<"):
             end = value.find(">")
