@@ -324,7 +324,8 @@ def test_backfill_links_original_commits_in_retained_and_current_releases(git_co
     assert archive.read_bytes() == damaged
 
 
-def test_wrapped_first_issue_link_is_idempotent_and_rejects_drift() -> None:
+@pytest.mark.parametrize("separator", ["", "\n", "\n\n"])
+def test_wrapped_first_issue_link_is_idempotent_and_rejects_drift(separator: str) -> None:
     oid = "a" * 40
     remote = "example/" + "long-name-" * 9 + "tools"
     note = f"  Closes\n  [{remote}#7](https://github.com/{remote}/issues/7)."
@@ -332,6 +333,7 @@ def test_wrapped_first_issue_link_is_idempotent_and_rejects_drift() -> None:
     entry = f"- Report [`{oid[:7]}`](https://github.com/example/research/commit/{oid})\n"
     annotated = changelog_issues.add_closing_notes(entry, notes, "example/research")
     assert annotated == entry + note + "\n"
+    annotated = entry + separator + note + "\n"
     assert changelog_issues.add_closing_notes(annotated, notes, "example/research") == annotated
     with pytest.raises(ValueError, match="conflicting closed issue links"):
         changelog_issues.add_closing_notes(annotated.replace("/issues/7)", "/issues/8)"), notes, "example/research")
@@ -350,6 +352,18 @@ def test_repeated_headings_preserve_local_navigation(tmp_path: Path) -> None:
     rules = tmp_path / "rules.toml"
     rules.write_text(changelog.template("rumdl.toml"), encoding="utf-8", newline="\n")
     postprocess_changelog.check_markdown(result, tmp_path / "CHANGELOG.md", rules)
+
+
+def test_formatted_heading_collisions_use_rendered_text() -> None:
+    source = (
+        "# Changelog\n\n## [Unreleased]\n\n### Fixed\n\n[Third](#verify-2) and [identifier](#raw_name).\n\n"
+        "#### Verify\n\nFirst.\n\n#### _Verify_\n\nSecond.\n\n#### _Verify_\n\nThird.\n\n#### `raw_name`\n\nLiteral underscore.\n"
+    )
+    result = postprocess_changelog.postprocess_text(source)
+    assert "#### _Verify_ (1)\n\nSecond." in result
+    assert "#### _Verify_ (2)\n\nThird." in result
+    assert "#### `raw_name`\n" in result
+    assert postprocess_changelog.postprocess_text(result) == result
 
 
 def test_tag_preserves_utf8_notes_and_force_replaces_atomically(git_consumer: Path) -> None:

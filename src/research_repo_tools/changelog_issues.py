@@ -105,11 +105,14 @@ def add_closing_notes(text: str, notes: dict[str, str], repository: str) -> str:
         if oid not in notes:
             continue
         note = notes[oid]
-        prefix = " ".join(line.strip() for line in lines[index + 1 : index + 3])
+        start = index + 1
+        while start < len(lines) and not lines[start].strip():
+            start += 1
+        prefix = " ".join(line.strip() for line in lines[start : start + 2])
         if _CLOSING_NOTE.match(prefix):
             # A formatter may wrap the same links at a different column.
             parts = []
-            for line in lines[index + 1 :]:
+            for line in lines[start:]:
                 parts.append(line.strip())
                 if not line.strip() or line.endswith("."):
                     break

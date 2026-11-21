@@ -103,7 +103,7 @@ def test_plain_squash_title_keeps_feature_details_under_its_entry(tmp_path: Path
         "Closes #31\nCloses #32\n\n"
         "* fix(import): retain Unicode labels\n\n"
         "Keep labels such as café in `Result<T>`.\n\n"
-        "```text\nExample commit text:\n\nCloses #99\n* fix: literal example\n```"
+        "```text\nExample commit text:\n\nCloses #99\n\nCloses~23\nCloses~~24\n* fix: literal example\n```"
     )
     result = render(tmp_path, message.replace("\n", newline))
     summary, entry = result.split("### Changed\n\n", 1)
@@ -118,7 +118,7 @@ def test_plain_squash_title_keeps_feature_details_under_its_entry(tmp_path: Path
     ):
         assert detail in entry and result.count(detail) == 1
     assert "Closes #31" not in result and "Closes #32" not in result
-    assert "  Closes #99\n  * fix: literal example" in entry
+    assert "  Closes #99\n\n  Closes~23\n  Closes~~24\n  * fix: literal example" in entry
     assert postprocess_text(result) == result
 
 

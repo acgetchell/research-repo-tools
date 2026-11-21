@@ -1177,14 +1177,17 @@ def _number_navigable_headings(lines: list[str], repeated: set[int]) -> None:
     Use the original document order for suffixes, including headings outside
     the repeated category and collisions with pre-existing numbered titles.
     """
+    from markdown_it import MarkdownIt
+
+    markdown = MarkdownIt("commonmark")
     used: set[str] = set()
     siblings: set[str] = set()
     for index, line in enumerate(lines):
         if (heading := _ATX_HEADING_RE.match(line)) is None:
             continue
         title = heading["title"].strip()
-        # Formatting punctuation disappears when GitHub derives a fragment.
-        label = re.sub(r"\[([^]\n]+)\]\([^)]+\)", r"\1", title)
+        inline = markdown.parseInline(title)[0].children or []
+        label = "".join(token.content for token in inline if token.type in {"text", "code_inline"})
         base = re.sub(r"[^\w -]", "", label.lower()).replace(" ", "-")
         anchor = base
         suffix = 0
@@ -1292,9 +1295,9 @@ def postprocess_text(text: str) -> str:
     """Apply one common Markdown policy, preserving fenced code and reference links."""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text, fenced_blocks = _protect_fenced_blocks(text)
-    # git-cliff can leave earlier issue trailers directly against the next
-    # squash bullet after removing the final trailer and its blank line.
-    text = re.sub(r"(?m)(?<=\n\n)(?:  Closes #[0-9]+\n)+\n?(?=  [*-] )", "", text)
+    # Actual issue links come from their original Git messages. Remove raw
+    # trailer lines from entry bodies only after protecting literal examples.
+    text = re.sub(r"(?m)^  Closes #[0-9]+[ \t]*\n(?:[ \t]*\n)?", "", text)
     text = _strip_dependabot_metadata(text)
     text = _normalize_inline_prose(text)
 

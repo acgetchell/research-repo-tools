@@ -1211,6 +1211,19 @@ class TestPublishingConsumer(unittest.TestCase):
             self.assertEqual(cli.main([*args[:-2], "--dry-run"]), 0)
         self.assertEqual({path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}, snapshot)
 
+        # Ordinary package installations also render navigable repeat headings.
+        for field in ("message", "raw_message"):
+            commits[-1][field] += "\n\n[Second validation](#fix-validate-rows-1)"
+        source.write_text(json.dumps(context), encoding="utf-8", newline="\n")
+        with (
+            patch("research_repo_tools.changelog_issues.run_git_bytes", history),
+            patch("research_repo_tools.changelog.run_safe_command", generate),
+            contextlib.redirect_stdout(io.StringIO()) as preview,
+        ):
+            self.assertEqual(cli.main([*args, "--dry-run"]), 0)
+        self.assertIn("#### fix: validate rows (1)", preview.getvalue())
+        self.assertIn("[Second validation](#fix-validate-rows-1)", preview.getvalue())
+
     def test_managed_cargo_home_preserves_oidc_token_and_failed_publish_status(self):
         plan = toolchain_config.Toolchain(self.root, "0.12.23", "3.14", toolchain_config.RustToolchain("1.98.0", (), (), "minimal"), ())
         runtime = toolchain.Runtime(plan)
