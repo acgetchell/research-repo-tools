@@ -1,14 +1,16 @@
 """Generated Markdown links and portable relocation between directories."""
 
+import os
 import posixpath
 import re
+from collections.abc import Callable
+from pathlib import Path
+from urllib.parse import unquote
 
 from research_repo_tools.postprocess_changelog import (
     MAX_LINE_WIDTH,
     _backtick_span_end,
     _balanced_delimiter_end,
-    _closes_code_fence,
-    _opening_code_fence,
     _reflow_line,
 )
 
@@ -111,6 +113,37 @@ def relocate_links(text: str, prefix: str) -> str:
         path, *suffix = re.split(r"(?=[?#])", value, maxsplit=1)
         return posixpath.normpath(posixpath.join(prefix, path)) + "".join(suffix)
 
+    return _map_link_destinations(text, destination)
+
+
+def existing_archive_link_targets(text: str, source: Path) -> set[str]:
+    """Identify real targets reached through a not-yet-created archive directory."""
+    from markdown_it.common.utils import unescapeAll
+
+    targets: set[str] = set()
+
+    def record(value: str) -> str:
+        if value.startswith("../"):
+            destination = unescapeAll(value)
+            relative = unquote(re.split(r"[?#]", destination, maxsplit=1)[0])
+            parent = source.parent
+            while relative.startswith("../") and not parent.is_dir():
+                parent = parent.parent
+                relative = relative[3:]
+            if Path(relative).anchor:
+                return value
+            path = parent / relative
+            if path.is_file():
+                targets.add(os.path.abspath(path))
+            elif path.is_dir():
+                targets.add(Path(os.path.abspath(path)).as_posix().rstrip("/") + "/")
+        return value
+
+    _map_link_destinations(text, record)
+    return targets
+
+
+def _map_link_destinations(text: str, destination: Callable[[str], str]) -> str:
     def target(value: str) -> str:
         if value.startswith("<"):
             end = value.find(">")
@@ -120,16 +153,19 @@ def relocate_links(text: str, prefix: str) -> str:
         match = re.match(r"(?:\\.|[^\s])+", value)
         return destination(match[0]) + value[match.end() :] if match else value
 
+    from markdown_it import MarkdownIt
+
+    # CommonMark block parsing distinguishes nested/continued list content
+    # from indented code. Its line maps count physical CR, LF and CRLF only.
+    code_lines = {
+        index
+        for token in MarkdownIt("commonmark").parse(text)
+        if token.type in {"fence", "code_block"} and token.map is not None
+        for index in range(*token.map)
+    }
     output = []
-    fence = None
-    for line in text.splitlines(keepends=True):
-        if fence is not None:
-            output.append(line)
-            if _closes_code_fence(line.rstrip("\r\n"), fence):
-                fence = None
-            continue
-        fence = _opening_code_fence(line.rstrip("\r\n"))
-        if fence is not None or line.startswith(("    ", "\t")):
+    for index, line in enumerate(re.split(r"(?<=\n)|(?<=\r)(?!\n)", text)):
+        if index in code_lines:
             output.append(line)
             continue
         definition = re.match(r"( {0,3}\[[^\]\n]+\]:[ \t]*)(.*)", line)

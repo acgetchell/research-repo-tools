@@ -199,29 +199,56 @@ class TestDependabotMetadata:
 
 
 class TestRumdlCompatibility:
+    def test_interleaved_sibling_titles_keep_their_own_details_and_references(self) -> None:
+        content = (
+            f"# Changelog\n\n## [1.0.0]\n\n### Added\n\n- One {_commit()}\n\n"
+            "#### Verify\n\n- First check.\n\n#### Publish\n\nFirst upload.\n\n"
+            f"- Two {_commit('def1234', 'def1234deadbeef')}\n\n"
+            "#### Verify ####\n\n- Second check.\n\n#### Publish\n\nSecond upload.\n\n"
+            "### Fixed\n\n#### Verify\n\nIndependent check.\n\n[1.0.0]: https://example.com/releases/1\n"
+        )
+        result = postprocess_text(content)
+        assert result.count("#### Verify") == 1
+        assert result.count("- **Verify**") == result.count("- **Publish**") == 2
+        assert "- **Publish**\n\n  First upload.\n\n- Two" in result
+        assert "- **Verify**\n\n  - Second check.\n\n- **Publish**\n\n  Second upload." in result
+        assert "### Fixed\n\n#### Verify\n\nIndependent check.\n\n[1.0.0]:" in result
+        assert postprocess_text(result) == result
+
+    def test_subsection_list_preserves_literals_and_does_not_add_a_pr_summary(self) -> None:
+        content = (
+            f"# Changelog\n\n## [1.0.0]\n\n### Changed\n\n- Ship tools {_commit()}\n\n"
+            f"  * feat: support exports\n\n  - See {_pr(24)} for  context.\n"
+            "    Keep `a  b`.\n\n    ```text\n      indented  literal\n    ```\n"
+            f"  - Second detail.\n\n- Follow up {_commit('def1234', 'def1234deadbeef')}\n"
+        )
+        result = postprocess_text(content)
+        assert f"#### feat: support exports\n\n- See {_pr(24)} for context.\n  Keep `a  b`." in result
+        assert "\n\n  ```text\n    indented  literal\n  ```\n\n- Second detail." in result
+        assert "### Merged Pull Requests" not in result
+        assert postprocess_text(result) == result
+
     def test_removes_blank_between_peer_list_items(self) -> None:
         content = "# Changelog\n\n## [1.0.0] - 2026-01-01\n\n### Added\n\n- First item\n  [`1111111`](https://github.com/example/consumer/commit/1111111111111111111111111111111111111111)\n\n- Second item\n"
         result = postprocess_text(content)
         assert "\n\n- Second item\n" not in result
         assert "\n- Second item\n" in result
 
-    def test_removes_blank_after_nested_body_before_top_level_peer(self) -> None:
+    def test_preserves_blank_after_nested_body_before_top_level_peer(self) -> None:
         content = "# Changelog\n\n## [1.0.0] - 2026-01-01\n\n### Added\n\n- First item\n\n  - Body point\n  - Body point\n\n- Second item\n"
         result = postprocess_text(content)
-        assert "\n\n- Second item\n" not in result
-        assert "\n- Second item\n" in result
+        assert "\n\n- Second item\n" in result
 
     def test_preserves_blank_before_first_nested_item_after_parent_item(self) -> None:
         content = "# Changelog\n\n## [1.0.0] - 2026-01-01\n\n### Added\n\n- Parent item\n\n  - First nested detail\n"
         result = postprocess_text(content)
         assert "- Parent item\n\n  - First nested detail\n" in result
 
-    def test_does_not_add_blank_before_peer_item_with_body(self) -> None:
+    def test_spaces_all_peers_when_a_later_item_has_a_body(self) -> None:
         content = "# Changelog\n\n## [1.0.0] - 2026-01-01\n\n### Added\n\n- Simple item [`1111111`](https://github.com/example/consumer/commit/1111111111111111111111111111111111111111)\n- Item with body [`2222222`](https://github.com/example/consumer/commit/2222222222222222222222222222222222222222)\n\n  Body paragraph.\n"
         result = postprocess_text(content)
         assert "\n- Simple item" in result
-        assert "\n- Item with body" in result
-        assert "\n\n- Item with body" not in result
+        assert "\n\n- Item with body" in result
 
     def test_normalizes_git_cliff_escaped_email_autolink(self) -> None:
         source = "Co-Authored-By: Oz &lt;oz-agent@warp.dev&gt;\n"
@@ -257,11 +284,10 @@ class TestRumdlCompatibility:
         assert postprocess_text(source) == expected
         assert postprocess_text(expected) == expected
 
-    def test_removes_blank_after_mixed_body_before_top_level_peer(self) -> None:
+    def test_preserves_blank_after_mixed_body_before_top_level_peer(self) -> None:
         content = "# Changelog\n\n## [1.0.0] - 2026-01-01\n\n### Changed\n\n- First item\n\n  Body paragraph.\n\n  - Body point\n  - Body point\n\n  More body prose.\n\n- Second item\n"
         result = postprocess_text(content)
-        assert "\n\n- Second item\n" not in result
-        assert "\n- Second item\n" in result
+        assert "\n\n- Second item\n" in result
 
     def test_preserves_blank_before_list_item_body(self) -> None:
         content = "# Changelog\n\n## [1.0.0] - 2026-01-01\n\n### Added\n\n- First item\n\n  Body paragraph.\n"
@@ -571,11 +597,11 @@ class TestBlankLineBeforeList:
         postprocess(f)
         assert f.read_text(encoding="utf-8") == "- one\n- two\n"
 
-    def test_no_blank_after_heading(self, tmp_path: Path) -> None:
+    def test_heading_is_separated_from_its_list(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
         f.write_text("### Added\n- item\n", encoding="utf-8", newline="\n")
         postprocess(f)
-        assert "\n\n- item" not in f.read_text(encoding="utf-8")
+        assert f.read_text(encoding="utf-8") == "### Added\n\n- item\n"
 
 
 class TestIndentedHeadingNormalization:
@@ -688,8 +714,9 @@ class TestIndentedHeadingNormalization:
         postprocess(f)
         result = f.read_text(encoding="utf-8")
         assert "  **Performance Optimization**" not in result
-        assert "#### Performance Optimization\n" in result
-        assert result.count("#### Performance Optimization") == 2
+        assert result.count("- **Performance Optimization**") == 2
+        assert "- **Performance Optimization**\n\n  - First set of changes" in result
+        assert "- **Performance Optimization**\n\n  - Additional changes" in result
 
     def test_column_zero_entry_heading_becomes_level_four_without_parent(self) -> None:
         assert _normalize_entry_heading("## Duplicate Item Handling") == "#### Duplicate Item Handling"
@@ -769,7 +796,29 @@ class TestSquashHeadingNormalization:
         result = f.read_text(encoding="utf-8")
         assert "#### feat: instrument large-scale 4D debugging" in result
         assert "#### fix: close the 4D bulk repair retry collapse" in result
-        assert "  - Thread cavity-touched cells through insertion." in result
+        assert "\n\n- Thread cavity-touched cells through insertion.\n" in result
+
+    def test_repeated_subsections_keep_child_content_and_stop_at_wrapped_commits(self) -> None:
+        wrapped = f"- Long release title\n  continued here\n  with final words {_commit()}"
+        source = (
+            "# Changelog\n\n## [Unreleased]\n\n### Added\n\n#### Verify\n\n##### Linux\n\nCheck the wheel.\n\n"
+            "###### Source\n\n- Check the sdist.\n\n#### Verify\n\n- Then publish.\n\n" + wrapped + "\n"
+        )
+        result = postprocess_text(source)
+        assert "- **Verify**\n\n  - **Linux**\n\n    Check the wheel.\n\n    - **Source**\n\n      - Check the sdist." in result
+        assert f"- **Verify**\n\n  - Then publish.\n\n{wrapped}\n" in result
+        assert postprocess_text(result) == result
+
+    def test_repeated_subsection_keeps_prose_after_local_definitions_and_preserves_footer(self) -> None:
+        source = (
+            "# Changelog\n\n## [Unreleased]\n\n### Added\n\n#### Verify\n\nSee the [guide].\n\n"
+            "[guide]: https://example.org/guide\n\nRead it before installing.\n\n"
+            "#### Verify\n\nUse the [reference].\n\n[reference]: https://example.org/reference\n"
+        )
+        result = postprocess_text(source)
+        assert "  See the [guide].\n\n  [guide]: https://example.org/guide\n\n  Read it before installing." in result
+        assert result.endswith("- **Verify**\n\n  Use the [reference].\n\n[reference]: https://example.org/reference\n")
+        assert postprocess_text(result) == result
 
     def test_full_pipeline_resets_parent_summary_at_version_heading(self, tmp_path: Path) -> None:
         """Version headings reset duplicate-squash tracking between releases."""
@@ -782,7 +831,7 @@ class TestSquashHeadingNormalization:
         postprocess(f)
         result = f.read_text(encoding="utf-8")
         assert "#### fixed: repeatable summary" in result
-        assert "  - Preserve this historical squash-body heading." in result
+        assert "\n\n- Preserve this historical squash-body heading.\n" in result
 
     def test_full_pipeline_preserves_non_isolated_conventional_bullets(self, tmp_path: Path) -> None:
         f = tmp_path / "CHANGELOG.md"
@@ -801,14 +850,14 @@ class TestSquashHeadingNormalization:
         content = f"# Changelog\n\n## [1.0.0]\n\n### Added\n\n- Identity-based item sorting {_pr(272)} {_commit('a125d98', 'a125d98deadbeef')}\n\n  - feat: Canonical item ordering details {_pr(266)}\n\n    - Add canonical_items module with sorted_items helpers\n"
         result = postprocess_text(content)
         assert f"#### feat: Canonical item ordering details {_pr(266)}" in result
-        assert "\n  - Add canonical_items module with sorted_items helpers\n" in result
+        assert "\n\n- Add canonical_items module with sorted_items helpers\n" in result
         assert "\n    - Add canonical_items module" not in result
 
     def test_full_pipeline_keeps_squash_body_in_parent_section(self) -> None:
         content = f"# Changelog\n\n## [1.0.0]\n\n### Maintenance\n\n- Replace Node markdown tooling with rumdl {_pr(394)} {_commit('5654d14', '5654d14deadbeef')}\n\n  * fix(tooling): align markdown lint policy\n\n    - Scope Codacy markdownlint to active Markdown docs.\n\n  * docs: refresh release guidance\n\n    - Document the changelog workflow.\n"
         result = postprocess_text(content)
         assert f"- Align markdown lint policy {_commit('5654d14', '5654d14deadbeef')}" not in result
-        assert "  - Scope Codacy markdownlint to active Markdown docs." in result
+        assert "\n\n- Scope Codacy markdownlint to active Markdown docs.\n" in result
         assert f"- Refresh release guidance {_commit('5654d14', '5654d14deadbeef')}" not in result
         assert "- Replace Node markdown tooling with rumdl" in result
         assert "#### fix(tooling): align markdown lint policy" in result
@@ -819,7 +868,7 @@ class TestSquashHeadingNormalization:
         result = postprocess_text(content)
         assert f"- Add rollback on cell creation failure {_commit('a6ec3fa', 'a6ec3fadeadbeef')}" not in result
         assert "#### fix: add rollback on cell creation failure" in result
-        assert "  - Keep failed insertions atomic." in result
+        assert "\n\n- Keep failed insertions atomic.\n" in result
 
     def test_full_pipeline_stops_squash_children_at_star_top_level_entries(self) -> None:
         content = f"# Changelog\n\n## [1.0.0]\n\n### Maintenance\n\n- Refresh tooling {_commit('1111111', '1111111deadbeef')}\n\n  * fix: align markdown lint policy\n\n    - Scope linting to active docs.\n\n* Bump helper tools {_commit('2222222', '2222222deadbeef')}\n\n  - Keep dependency updates as a separate generated entry.\n"
@@ -846,7 +895,7 @@ class TestSquashHeadingNormalization:
         result = postprocess_text(content)
         assert result.count("- Instrument large-scale debugging") == 1
         assert "#### feat: instrument large-scale debugging" in result
-        assert "  - Keep this detail under the parent entry." in result
+        assert "\n\n- Keep this detail under the parent entry.\n" in result
 
     def test_full_pipeline_preserves_consumer_feature_names(self) -> None:
         content = f"# Changelog\n\n## [1.0.0]\n\n### Fixed\n\n- Gate diagnostics behind test-debug {_commit('5d8a9ff', '5d8a9ffdeadbeef')}\n\n  - Replace profile-based public diagnostic exports with the documented test-debug feature.\n"
@@ -1078,7 +1127,7 @@ class TestIntegration:
     def test_full_pipeline_is_idempotent(self) -> None:
         content = "# Changelog\n\n## [1.0.0] - 2026-01-01\n\n### Fixed\n\n- fixed: preserve the generated body\n\n  - Historical detail.\n"
         once = postprocess_text(content)
-        assert "\n  - Historical detail.\n" in once
+        assert "\n\n- Historical detail.\n" in once
         assert postprocess_text(once) == once
 
 
@@ -1180,7 +1229,9 @@ def test_authored_squash_structure_survives_without_inferred_release_entries() -
     assert "### Fixed" not in result and "### Added" not in result
     assert result.count("#### fix: temporary workaround") == 1
     assert result.count("#### feat: alternate approach") == 1
-    assert result.count("#### Repeated title") == 2
+    assert result.count("- **Repeated title**") == 2
+    assert "- **Repeated title**\n\n  - First context." in result
+    assert "- **Repeated title**\n\n  - Second context." in result
     assert "  * fix: literal example" in result
     assert "Abandoned in the final implementation." in result
     assert "Replaced after review; retain this historical context." in result

@@ -386,6 +386,19 @@ def _append_unique(entries: list[str], entry: str) -> None:
         entries.append(entry)
 
 
+def _has_entry_commit(lines: list[str], index: int) -> bool:
+    """A generated entry carries a commit link, sometimes on a continuation line."""
+    while True:
+        if _COMMIT_LINK_RE.search(lines[index]):
+            return True
+        index += 1
+        if index == len(lines) or not lines[index].startswith("  "):
+            return False
+        continuation = lines[index].lstrip()
+        if not continuation or continuation.startswith(("- ", "* ", "#", ">", "```", "~~~")):
+            return False
+
+
 def _extract_section_summaries(
     section: list[str],
 ) -> tuple[list[str], list[str]]:
@@ -407,13 +420,24 @@ def _extract_section_summaries(
     pr_entries: list[str] = []
     breaking_entries: list[str] = []
     in_summary = False
+    in_subsection = False
 
-    for sline in section:
+    for index, sline in enumerate(section):
         if sline.startswith("### "):
             in_summary = sline in {"### Merged Pull Requests", "### ⚠️ Breaking Changes"}
+            in_subsection = False
+        elif sline.startswith("#### ") or (sline.startswith("- **") and sline.endswith("**") and not _has_entry_commit(section, index)):
+            in_subsection = True
+            continue
         # Only top-level list items (no leading whitespace).
         if in_summary or not sline.startswith(("- ", "* ")):
             continue
+        if in_subsection:
+            # After an entry heading its body bullets also start at column zero.
+            # A real generated entry carries its commit link, possibly wrapped.
+            if not _has_entry_commit(section, index):
+                continue
+            in_subsection = False
 
         is_breaking = bool(_BREAKING_MARKER_RE.search(sline))
         has_pr = bool(_PR_LINK_RE.search(sline))
@@ -656,27 +680,6 @@ def _has_previous_peer_list_item(lines: list[str], idx: int, peer_indent: int) -
         return False
 
     return False
-
-
-def _next_list_item_indent(lines: list[str], idx: int) -> int | None:
-    """Return the next nonblank line's list-item indentation, if it is a list item."""
-    for next_line in lines[idx + 1 :]:
-        if not next_line.strip():
-            continue
-        return _list_item_indent(next_line)
-    return None
-
-
-def _is_blank_between_peer_list_items(lines: list[str], idx: int) -> bool:
-    """Return true when a blank line separates adjacent items in the same list."""
-    if lines[idx].strip():
-        return False
-
-    next_indent = _next_list_item_indent(lines, idx)
-    if next_indent is None:
-        return False
-
-    return _has_previous_peer_list_item(lines, idx, next_indent)
 
 
 def _needs_blank_before(line: str, result: list[str]) -> bool:
@@ -1016,7 +1019,7 @@ def _protect_fenced_blocks(text: str) -> tuple[str, dict[str, str]]:
         if not info.strip():
             block[0] = f"{indent}{delimiter}text"
         marker = f"{prefix}{len(blocks)}END"
-        blocks[marker] = "\n".join(block)[len(indent) :]
+        blocks[marker] = "\n".join(block)
         if result and result[-1].strip():
             result.append("")
         result.append(indent + marker)
@@ -1075,8 +1078,8 @@ def _table_line_indices(lines: list[str]) -> set[int]:
     return preserved
 
 
-def _normalize_prose_angles(text: str) -> str:
-    """Escape prose angles and restore escaped email autolinks outside code.
+def _normalize_inline_prose(text: str) -> str:
+    """Normalize prose angles, email autolinks and word spacing in list items.
 
     Fenced blocks have already been protected. Scanning the complete text also
     keeps multiline code spans opaque. Tables retain their email entities.
@@ -1084,7 +1087,10 @@ def _normalize_prose_angles(text: str) -> str:
     result: list[str] = []
     position = 0
     line_index = 0
-    table_lines = _table_line_indices(text.split("\n"))
+    lines = text.split("\n")
+    table_lines = _table_line_indices(lines)
+    list_lines = {index for index, line in enumerate(lines) if _list_item_indent(line) is not None} - table_lines
+    word_gap = re.compile(r"(?<=\w) {2,}(?=\w)")
     while position < len(text):
         end: int | None = None
         if position == 0 or text[position - 1] == "\n":
@@ -1111,6 +1117,9 @@ def _normalize_prose_angles(text: str) -> str:
         elif text[position] == "&" and line_index not in table_lines and (email := _ESCAPED_EMAIL_RE.match(text, position)):
             result.append(f"<{email.group('email')}>")
             position = email.end()
+        elif text[position] == " " and line_index in list_lines and (gap := word_gap.match(text, position)):
+            result.append(" ")
+            position = gap.end()
         else:
             result.append({"<": "&lt;", ">": "&gt;"}.get(text[position], text[position]))
             line_index += text[position] == "\n"
@@ -1118,12 +1127,179 @@ def _normalize_prose_angles(text: str) -> str:
     return "".join(result)
 
 
+def _normalize_entry_lists(lines: list[str]) -> None:
+    """A level-four heading ends the commit's list item and starts its own list."""
+    in_subsection = False
+    base = 0
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+        indent = len(line) - len(line.lstrip(" "))
+        if not indent:
+            in_subsection = line.startswith("#### ")
+            base = 0
+        elif in_subsection:
+            if _list_item_indent(line) is not None:
+                base = min(base or indent, indent)
+            elif indent <= base:
+                base = 0
+            if base:
+                lines[index] = line[base:]
+
+
+@dataclass
+class _BulletList:
+    indent: int
+    items: list[int]
+    loose: bool = False
+
+
+def _nest_subsection_body(body: list[str]) -> list[str]:
+    """Place details and deeper subsections inside the converted heading's list item."""
+    prefix = "  " if any(line.strip() and not line.startswith("  ") for line in body) else ""
+    levels: list[int] = []
+    nested = []
+    for line in body:
+        if heading := _ATX_HEADING_RE.match(line):
+            level = len(heading["level"])
+            while levels and levels[-1] >= level:
+                levels.pop()
+            levels.append(level)
+            nested.append("  " * len(levels) + f"- **{heading['title'].strip()}**")
+        else:
+            nested.append(prefix + "  " * len(levels) + line if line.strip() else "")
+    return nested
+
+
+def _number_navigable_headings(lines: list[str], repeated: set[int]) -> None:
+    """Keep real heading targets in documents with local fragment navigation.
+
+    Use the original document order for suffixes, including headings outside
+    the repeated category and collisions with pre-existing numbered titles.
+    """
+    from markdown_it import MarkdownIt
+
+    markdown = MarkdownIt("commonmark")
+    used: set[str] = set()
+    siblings: set[str] = set()
+    for index, line in enumerate(lines):
+        if (heading := _ATX_HEADING_RE.match(line)) is None:
+            continue
+        title = heading["title"].strip()
+        inline = markdown.parseInline(title)[0].children or []
+        label = "".join(token.content for token in inline if token.type in {"text", "code_inline"})
+        base = re.sub(r"[^\w -]", "", label.lower()).replace(" ", "-")
+        anchor = base
+        suffix = 0
+        while anchor in used:
+            suffix += 1
+            anchor = f"{base}-{suffix}"
+        used.add(anchor)
+        level = len(heading["level"])
+        if level < 4:
+            siblings.clear()
+        elif level == 4:
+            if suffix and (index in repeated or title in siblings):
+                title = f"{title} ({suffix})"
+                lines[index] = f"#### {title}"
+            siblings.add(title)
+
+
+def _list_repeated_headings(lines: list[str]) -> None:
+    """Keep duplicate sibling titles and their bodies together as list items."""
+    occurrences: dict[tuple[int, str], list[int]] = {}
+    parent = 0
+    for index, line in enumerate(lines):
+        heading = _ATX_HEADING_RE.match(line)
+        if heading is None:
+            continue
+        level = len(heading["level"])
+        if level < 4:
+            parent = index
+        elif level == 4:
+            occurrences.setdefault((parent, heading["title"].strip()), []).append(index)
+
+    repeated = sorted((index, title) for (_, title), indices in occurrences.items() if len(indices) > 1 for index in indices)
+    if repeated and any(re.search(r"(?:\]\(\s*|^ {0,3}\[[^\]]+\]:\s*)<?#\S", line) for line in lines):
+        _number_navigable_headings(lines, {index for index, _ in repeated})
+        return
+    # Footer definitions belong to the whole document. A definition followed
+    # by more subsection prose stays in that subsection alongside its uses.
+    body_limit = len(lines)
+    while body_limit and (not lines[body_limit - 1].strip() or _REFERENCE_DEFINITION_RE.fullmatch(lines[body_limit - 1])):
+        body_limit -= 1
+    gaps: set[int] = set()
+    for index, title in repeated:
+        end = index + 1
+        while end < body_limit:
+            heading = _ATX_HEADING_RE.match(lines[end])
+            if heading and len(heading["level"]) <= 4:
+                break
+            if _is_top_level_list_item(lines[end]) and _has_entry_commit(lines, end):
+                break
+            end += 1
+        body = lines[index + 1 : end]
+        lines[index + 1 : end] = _nest_subsection_body(body)
+        lines[index] = f"- **{title}**"
+        if index and lines[index - 1].strip():
+            gaps.add(index)
+        if body and body[0].strip():
+            gaps.add(index + 1)
+    for index in sorted(gaps, reverse=True):
+        lines.insert(index, "")
+
+
+def _block_spacing(lines: list[str]) -> str:
+    """Separate headings and give every peer in a multi-paragraph list a blank line."""
+    separate: set[int] = set()
+    lists: list[_BulletList] = []
+    active: list[_BulletList] = []
+    for index, line in enumerate(lines):
+        if not line.strip():
+            continue
+        if _ATX_HEADING_RE.match(line):
+            separate.update((index, index + 1))
+        indent = len(line) - len(line.lstrip())
+        bullet = _list_item_indent(line) is not None
+        while active and (indent < active[-1].indent or (indent == active[-1].indent and not bullet)):
+            active.pop()
+        if active and indent > active[-1].indent and not lines[index - 1].strip():
+            active[-1].loose = True
+        if bullet:
+            if not active or indent > active[-1].indent:
+                active.append(_BulletList(indent, []))
+                lists.append(active[-1])
+            active[-1].items.append(index)
+
+    omit: set[int] = set()
+    for group in lists:
+        if group.loose:
+            separate.update(group.items[1:])
+        else:
+            for item in group.items[1:]:
+                previous = item - 1
+                while previous >= 0 and not lines[previous].strip():
+                    omit.add(previous)
+                    previous -= 1
+    result = []
+    for index, line in enumerate(lines):
+        if index in omit:
+            continue
+        if index in separate and result and result[-1].strip() and line.strip():
+            result.append("")
+        result.append(line)
+    return "\n".join(result)
+
+
 def postprocess_text(text: str) -> str:
     """Apply one common Markdown policy, preserving fenced code and reference links."""
     text = text.replace("\r\n", "\n").replace("\r", "\n")
     text, fenced_blocks = _protect_fenced_blocks(text)
+    # Actual issue links come from their original Git messages. Remove raw
+    # trailer lines from entry bodies only after protecting literal examples.
+    text = re.sub(r"(?m)^  Closes #[0-9]+[ \t]*\n(?:[ \t]*\n)?", "", text)
     text = _strip_dependabot_metadata(text)
-    text = _normalize_prose_angles(text)
+    text = _normalize_inline_prose(text)
 
     # Inject PR / breaking-change summary sections before reflow.
     text = _inject_summary_sections(text)
@@ -1149,9 +1325,6 @@ def postprocess_text(text: str) -> str:
             result.append(line)
             continue
 
-        if _is_blank_between_peer_list_items(lines, idx):
-            continue
-
         # --- MD004: normalise historical and ``* `` list markers to ``- `` ---
         line = _BULLET_SYMBOL_RE.sub(r"\1- ", line)
         line = _STAR_LIST_RE.sub(r"\1- ", line)
@@ -1170,13 +1343,29 @@ def postprocess_text(text: str) -> str:
             result.append("")
 
     # 1. Reassemble and strip trailing blank lines.
-    text = "\n".join(result)
+    lines = "\n".join(result).split("\n")
+    _normalize_entry_lists(lines)
+    _list_repeated_headings(lines)
+    text = _block_spacing(lines)
     text = text.rstrip() + "\n"
-    for marker, block in fenced_blocks.items():
-        if text.count(marker) != 1:
-            raise ValueError("Changelog normalization would lose a fenced code block")
-        text = text.replace(marker, block)
-    return text.rstrip("\n") + "\n"
+    if any(text.count(marker) != 1 for marker in fenced_blocks):
+        raise ValueError("Changelog normalization would lose a fenced code block")
+    lines = text.rstrip("\n").split("\n")
+    for index, line in enumerate(lines):
+        marker = line.lstrip()
+        if marker in fenced_blocks:
+            block = fenced_blocks.pop(marker).split("\n")
+            # Moving a fence with its list must preserve indentation *inside* it.
+            old_indent = len(block[0]) - len(block[0].lstrip())
+            shift = old_indent - (len(line) - len(marker))
+            if shift > 0:
+                block = [row[min(shift, len(row) - len(row.lstrip(" "))) :] for row in block]
+            elif shift < 0:
+                block = [" " * -shift + row if row else "" for row in block]
+            lines[index] = "\n".join(block)
+    if fenced_blocks:
+        raise ValueError("Changelog normalization would lose a fenced code block")
+    return "\n".join(lines) + "\n"
 
 
 class MarkdownFormatError(RuntimeError):
@@ -1189,14 +1378,19 @@ def _check_markdown_candidates(text: str, path: Path, config: Path, candidates: 
     # contents preserves fragment checks even when an existing file is replaced.
     markdown_extensions = {".md", ".markdown", ".mdx", ".mkd", ".mkdn", ".mdown", ".mdwn", ".qmd", ".rmd"}
     documents = {path: text}
-    targets = []
+    from research_repo_tools.markdown import existing_archive_link_targets
+
+    targets: set[str] = set()
     for candidate, data in candidates.items():
         if candidate == path:
             continue
         if candidate.suffix.lower() in markdown_extensions:
             documents[candidate] = data.decode("utf-8")
         else:
-            targets.append(str(candidate))
+            targets.add(str(candidate))
+    for document, content in documents.items():
+        if not document.parent.is_dir():
+            targets.update(existing_archive_link_targets(content, document))
     records = [part for name, content in documents.items() for part in (str(name), content)]
     if any("\0" in part for part in (*records, *targets)):
         raise MarkdownFormatError("Markdown candidates and paths cannot contain NUL characters")
@@ -1204,7 +1398,7 @@ def _check_markdown_candidates(text: str, path: Path, config: Path, candidates: 
     # rumdl opens it, including on Windows. Binary writes retain exact framing.
     with tempfile.TemporaryDirectory(prefix="rrt-markdown-") as temporary:
         inventory = Path(temporary) / "targets"
-        inventory.write_bytes("".join(target + "\0" for target in targets).encode("utf-8"))
+        inventory.write_bytes("".join(target + "\0" for target in sorted(targets)).encode("utf-8"))
         run_safe_command(
             "rumdl",
             ["check", "--stdin-batch", "--stdin-batch-targets", str(inventory), "--no-cache", "--config", str(config)],
@@ -1213,14 +1407,14 @@ def _check_markdown_candidates(text: str, path: Path, config: Path, candidates: 
         )
 
 
-def format_markdown(text: str, path: Path, config: Path, *, candidates: Mapping[Path, bytes] | None = None) -> str:
-    """Run rumdl with the consumer's explicit policy before publishing anything."""
+def fix_markdown(text: str, path: Path, config: Path, *, batch: bool = True) -> str:
+    """Format a candidate, deferring link checks when validating a batch."""
     if not config.is_file():
         raise MarkdownFormatError(f"Markdown formatter configuration not found: {config}")
     try:
         # Single-document fixing cannot see planned link targets. Defer link
         # checks to the full-policy batch check below; never disable them there.
-        deferred_checks = ["--extend-disable", "MD051,MD057"] if candidates else []
+        deferred_checks = ["--extend-disable", "MD051,MD057"] if batch else []
         result = run_safe_command(
             "rumdl",
             ["check", "--fix", "--stdin", "--stdin-filename", str(path), "--no-cache", "--config", str(config), *deferred_checks],
@@ -1232,22 +1426,32 @@ def format_markdown(text: str, path: Path, config: Path, *, candidates: Mapping[
         raise MarkdownFormatError(f"rumdl could not format {path.name}: {diagnostics}") from error
     if text.strip() and not result.stdout.strip():
         raise MarkdownFormatError(f"rumdl returned empty output for nonempty {path.name}")
-    output = result.stdout.replace("\r\n", "\n").replace("\r", "\n")
+    return result.stdout.replace("\r\n", "\n").replace("\r", "\n").rstrip("\n") + "\n"
+
+
+def check_markdown(text: str, path: Path, config: Path, candidates: Mapping[Path, bytes] | None = None) -> None:
+    """Check the exact formatted content against the full policy before publication."""
     # Some fixers return success after making only fixable corrections. Check the
     # completed candidate without --fix before replacing the existing artifact.
     try:
         if candidates:
-            _check_markdown_candidates(output, path, config, candidates)
+            _check_markdown_candidates(text, path, config, candidates)
         else:
             run_safe_command(
                 "rumdl",
                 ["check", "--stdin", "--stdin-filename", str(path), "--no-cache", "--config", str(config)],
-                input=output,
+                input=text,
                 timeout=30,
             )
     except subprocess.CalledProcessError as error:
         raise MarkdownFormatError(f"rumdl rejected formatted {path.name}: {error.stderr or error.stdout}") from error
-    return output.rstrip("\n") + "\n"
+
+
+def format_markdown(text: str, path: Path, config: Path, *, candidates: Mapping[Path, bytes] | None = None) -> str:
+    """Format and check a document with its consumer's explicit policy."""
+    output = fix_markdown(text, path, config, batch=bool(candidates))
+    check_markdown(output, path, config, candidates)
+    return output
 
 
 def postprocess(path: Path, *, formatter: Path | None = None) -> None:

@@ -874,7 +874,7 @@ class TestPublishingConsumer(unittest.TestCase):
             rendered = changelog.template(name, owner="example", repository="project")
             self.assertNotIn("__OWNER__", rendered)
             self.assertTrue(rendered.strip())
-        for policy, condition in [("concise", 'commit.body and group != "Dependencies"'), ("preserve", "commit.body")]:
+        for policy, condition in [("concise", 'entry_body and group != "Dependencies"'), ("preserve", "entry_body")]:
             rendered = changelog.template("cliff.toml", dependency_bodies=policy)
             self.assertIn("{%", tomllib.loads(rendered)["changelog"]["body"])
             self.assertIn(f"if {condition}", rendered)
@@ -1126,6 +1126,24 @@ class TestPublishingConsumer(unittest.TestCase):
                 ],
             }
         )
+        squash = (
+            "Ship reporting tools\n\n* feat(export): add CSV output\n\n- Write one row per observation.\n  Keep its label.\n\n"
+            "* fix: validate rows\n\n- Reject missing labels.\n\n* fix: validate rows\n\n- Reject missing values."
+        )
+        commits.append(
+            {
+                **commits[0],
+                "id": "c" * 40,
+                "group": "Changed",
+                "conventional": False,
+                "scope": None,
+                "message": squash,
+                "raw_message": squash,
+                "body": None,
+                "breaking": False,
+                "breaking_description": None,
+            }
+        )
         source = self.root / "context.json"
         source.write_text(json.dumps(context), encoding="utf-8", newline="\n")
         (self.root / "research.toml").write_text(
@@ -1143,13 +1161,28 @@ class TestPublishingConsumer(unittest.TestCase):
                 timeout=30,
             )
 
+        def history(_args, *, input, cwd):
+            # Match the immutable Git messages to the same synthetic commit identities.
+            self.assertEqual(set(input.decode("ascii").splitlines()), {commit["id"] for commit in commits})
+            self.assertTrue(cwd.samefile(self.root))
+            fields = [field for commit in commits for field in (commit["id"], commit["raw_message"])]
+            return subprocess.CompletedProcess([], 0, ("\0".join(fields) + "\0").encode(), b"")
+
+        commits[-1]["raw_message"] += "\n\nCloses #17\nFixes example/other#19"
         args = ["--config", str(self.root / "research.toml"), "changelog", "generate", "--tag", "v1.2.3", "--date", "2026-09-01"]
-        with patch("research_repo_tools.changelog.run_safe_command", generate):
+        with patch("research_repo_tools.changelog_issues.run_git_bytes", history), patch("research_repo_tools.changelog.run_safe_command", generate):
             self.assertEqual(cli.main(args), 0)
             before = (self.root / "CHANGELOG.md").read_bytes()
             self.assertEqual(cli.main(args), 0)
         result = before.decode("utf-8")
         self.assertIn("## [1.2.3] - 2026-09-01", result)
+        changed = result.split("### Changed\n\n", 1)[1].split("\n### ", 1)[0]
+        self.assertTrue(changed.startswith("- Ship reporting tools"))
+        self.assertIn("Closes [#17](https://github.com/example/project/issues/17), [example/other#19](https://github.com/example/other/issues/19).", changed)
+        self.assertIn("\n\n#### feat(export): add CSV output\n\n- Write one row per observation.\n  Keep its label.", changed)
+        self.assertEqual(changed.count("- **fix: validate rows**"), 2)
+        self.assertIn("- **fix: validate rows**\n\n  - Reject missing labels.", changed)
+        self.assertIn("- **fix: validate rows**\n\n  - Reject missing values.", changed)
         self.assertIn("### Dependencies", result)
         self.assertIn("Ruff [notes]", result)
         self.assertIn("Ty [comparison]", result)
@@ -1168,11 +1201,28 @@ class TestPublishingConsumer(unittest.TestCase):
         citation = self.root / "CITATION.cff"
         citation.write_bytes(b"version: 1.2.3\r\ndate-released: '2026-09-01'\r\n")
         snapshot = {path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}
-        with patch("research_repo_tools.changelog.run_safe_command", generate), contextlib.redirect_stdout(io.StringIO()):
+        with (
+            patch("research_repo_tools.changelog_issues.run_git_bytes", history),
+            patch("research_repo_tools.changelog.run_safe_command", generate),
+            contextlib.redirect_stdout(io.StringIO()),
+        ):
             self.assertEqual(cli.main(args[:-2]), 0)
             self.assertEqual(cli.main(args[:-2]), 0)
             self.assertEqual(cli.main([*args[:-2], "--dry-run"]), 0)
         self.assertEqual({path: path.read_bytes() for path in self.root.rglob("*") if path.is_file()}, snapshot)
+
+        # Ordinary package installations also render navigable repeat headings.
+        for field in ("message", "raw_message"):
+            commits[-1][field] += "\n\n[Second validation](#fix-validate-rows-1)"
+        source.write_text(json.dumps(context), encoding="utf-8", newline="\n")
+        with (
+            patch("research_repo_tools.changelog_issues.run_git_bytes", history),
+            patch("research_repo_tools.changelog.run_safe_command", generate),
+            contextlib.redirect_stdout(io.StringIO()) as preview,
+        ):
+            self.assertEqual(cli.main([*args, "--dry-run"]), 0)
+        self.assertIn("#### fix: validate rows (1)", preview.getvalue())
+        self.assertIn("[Second validation](#fix-validate-rows-1)", preview.getvalue())
 
     def test_managed_cargo_home_preserves_oidc_token_and_failed_publish_status(self):
         plan = toolchain_config.Toolchain(self.root, "0.12.23", "3.14", toolchain_config.RustToolchain("1.98.0", (), (), "minimal"), ())

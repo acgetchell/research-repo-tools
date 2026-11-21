@@ -110,15 +110,18 @@ def test_generation_formats_every_output_before_publication(consumer: config.Con
             raise ValueError("archive formatting failed")
         return text
 
-    monkeypatch.setattr(changelog, "format_markdown", format_candidate)
+    monkeypatch.setattr(changelog, "fix_markdown", format_candidate)
     before = snapshot(consumer.root)
     with pytest.raises(ValueError, match="archive formatting failed"):
         changelog.generate(consumer)
     assert Path("docs/archives/changelog/0.8.md") in formatted
     assert snapshot(consumer.root) == before
     formatted.clear()
-    monkeypatch.setattr(changelog, "format_markdown", lambda text, path, rules: (formatted.add(path.relative_to(consumer.root)), text)[1])
+    checked = {}
+    monkeypatch.setattr(changelog, "check_markdown", lambda text, path, rules, candidates: checked.update(candidates))
+    monkeypatch.setattr(changelog, "fix_markdown", lambda text, path, rules: (formatted.add(path.relative_to(consumer.root)), text)[1])
     changelog.generate(consumer)
+    assert {path.relative_to(consumer.root) for path in checked} == formatted
     assert formatted == {Path("CHANGELOG.md"), Path("docs/archives/changelog/0.9.md"), Path("docs/archives/changelog/0.8.md")}
 
 
@@ -177,7 +180,7 @@ def test_formatter_cannot_remove_or_change_release_identity(consumer, monkeypatc
             return text.replace("2026-09-", "2025-09-")
         return text.replace("[1.0.0]", "[9.0.0]").replace("[0.9.2]", "[0.9.3]")
 
-    monkeypatch.setattr(changelog, "format_markdown", format_candidate)
+    monkeypatch.setattr(changelog, "fix_markdown", format_candidate)
     with pytest.raises(ValueError, match="release headings"):
         changelog.generate(consumer)
     assert snapshot(consumer.root) == before
@@ -280,15 +283,31 @@ def test_generation_retains_date_after_prospective_release_is_tagged(consumer):
 def test_formatted_regeneration_and_next_release_are_stable(consumer, monkeypatch, formatted):
     # List-marker conversion and prose wrapping reproduce the comparison across
     # raw generated blocks and formatter-produced retained archives.
-    history = HISTORY.replace("Earlier correction.", " ".join(["Long historical explanation."] * 12))
+    history = HISTORY.replace("docs/guide.md", r"docs/guide\(notes\)%23v1.md\#guide").replace(
+        "Earlier correction.", " ".join(["Long historical explanation."] * 12)
+    )
+    history = history.replace(
+        "- Read the [guide]",
+        "- Outer\n  - Inner\n    - Use [data](docs/first&amp;last.csv).\n      Continue with the [data](docs/first&#38;last.csv).\n\n- Read the [guide]",
+    )
     monkeypatch.setattr(changelog, "run_safe_command", lambda *args, **kwargs: subprocess.CompletedProcess([], 0, history, ""))
     if formatted:
         consumer = replace(consumer, changelog=replace(consumer.changelog, formatter="rumdl.toml"))
-        (consumer.root / "rumdl.toml").write_text(
-            changelog.template("rumdl.toml").replace('"MD053"', '"MD053", "MD057"') + '\n[MD004]\nstyle = "asterisk"\n', newline="\n"
-        )
+        (consumer.root / "docs").mkdir()
+        (consumer.root / "docs/guide(notes)#v1.md").write_bytes(b"# Guide\n")
+        (consumer.root / "docs/first&last.csv").write_bytes(b"x,y\n")
+        (consumer.root / "rumdl.toml").write_text(changelog.template("rumdl.toml") + '\n[MD004]\nstyle = "asterisk"\n', newline="\n")
     if formatted == "stub":
-        monkeypatch.setattr(changelog, "format_markdown", lambda text, path, rules: text.replace("\n- ", "\n* "))
+        monkeypatch.setattr(changelog, "check_markdown", lambda *args: None)
+        monkeypatch.setattr(changelog, "fix_markdown", lambda text, path, rules: text.replace("\n- ", "\n* "))
+    if formatted == "rumdl":
+        guide = consumer.root / "docs/guide(notes)#v1.md"
+        guide.unlink()
+        without_guide = snapshot(consumer.root)
+        with pytest.raises(RuntimeError, match="MD057"):
+            changelog.generate(consumer)
+        assert snapshot(consumer.root) == without_guide
+        guide.write_bytes(b"# Guide\n")
     changelog.generate(consumer)
     before = snapshot(consumer.root)
     changelog.generate(consumer)

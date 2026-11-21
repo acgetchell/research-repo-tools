@@ -13,10 +13,10 @@ from pathlib import Path
 from research_repo_tools.process import format_exception_diagnostics, run_command_bytes, run_git_command, run_git_command_with_input, run_safe_command
 from research_repo_tools.release_tags import _GITHUB_TAG_ANNOTATION_LIMIT, SEMVER_PATTERN, _heading_to_anchor, validate_semver
 lazy from research_repo_tools import archive_changelog as archive
-lazy from research_repo_tools import changelog_notes
+lazy from research_repo_tools import changelog_issues, changelog_notes
 lazy from research_repo_tools.config import Config
 lazy from research_repo_tools.files import replace_many
-lazy from research_repo_tools.postprocess_changelog import format_markdown, postprocess_text
+lazy from research_repo_tools.postprocess_changelog import check_markdown, fix_markdown, postprocess_text
 
 TEMPLATES = (
     "CHANGELOG.md",
@@ -69,7 +69,7 @@ def template(name: str, *, owner: str | None = None, repository: str | None = No
         if not _COMPONENT.fullmatch(value) or value in {".", ".."}:
             raise ValueError("GitHub owner and repository must be single URL path components")
         text = text.replace(placeholder, value)
-    condition = 'commit.body and group != "Dependencies"' if dependency_bodies == "concise" else "commit.body"
+    condition = 'entry_body and group != "Dependencies"' if dependency_bodies == "concise" else "entry_body"
     return text.replace("__SEMVER_PATTERN__", SEMVER_PATTERN).replace("__DEPENDENCY_BODY_CONDITION__", condition)
 
 
@@ -199,21 +199,29 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
     if parsed.unreleased is None and not parsed.version_blocks:
         raise ValueError("git-cliff must generate at least one release or Unreleased section")
 
+    repository = f"{section.owner}/{section.repository}"
+    closing_notes = changelog_issues.read_closing_notes(generated, config.root, repository) if section.cliff_config is None else {}
+
     def format_candidate(candidate: str, target: Path) -> str:
         expected = archive.parse_changelog(archive._extract_link_defs(candidate)[0])
+        if closing_notes:
+            candidate = changelog_issues.add_closing_notes(candidate, closing_notes, repository)
         if formatter is not None:
-            candidate = format_markdown(candidate, target, formatter)
+            candidate = fix_markdown(candidate, target, formatter)
         parsed = archive.parse_changelog(archive._extract_link_defs(candidate)[0])
         archive.require_preserved_releases(expected, parsed)
         if target == path and parsed.unreleased is None and not parsed.version_blocks:
             raise ValueError("formatted changelog must contain at least one release or Unreleased section")
         return candidate
 
-    candidates = dict(archive.plan_archives(path, result, archives, formatter=format_candidate if formatter is not None else None))
+    candidates = dict(archive.plan_archives(path, result, archives, formatter=format_candidate if formatter is not None or closing_notes else None))
     candidates.setdefault(path, result)
     candidates = {target: format_candidate(candidate, target) for target, candidate in candidates.items()}
+    outputs = {target: candidate.encode("utf-8") for target, candidate in candidates.items()}
+    if formatter is not None:
+        check_markdown(candidates[path], path, formatter, outputs)
     if not dry_run:
-        replace_many({target: candidate.encode("utf-8") for target, candidate in candidates.items()})
+        replace_many(outputs)
     return candidates[path]
 
 
