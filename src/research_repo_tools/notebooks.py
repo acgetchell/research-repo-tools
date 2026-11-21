@@ -10,8 +10,9 @@ import re
 import sys
 import tempfile
 import tomllib
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from concurrent.futures import ThreadPoolExecutor
+from contextlib import contextmanager, nullcontext
 from dataclasses import dataclass
 from importlib import import_module
 from importlib.metadata import version
@@ -254,6 +255,29 @@ def sync(settings: Config) -> None:
     )
 
 
+@contextmanager
+def _kernel_socket_directory() -> Iterator[str]:
+    """Choose a private directory whose five Jupyter channel names fit a Unix socket address."""
+    limit = dependency("zmq").IPC_PATH_MAX_LEN
+    parents = dict.fromkeys((tempfile.gettempdir(), "/tmp"))
+    for parent in parents:
+        try:
+            sockets = tempfile.TemporaryDirectory(prefix="rrt-", dir=parent)
+        except OSError:
+            continue
+        with sockets as directory:
+            # Jupyter numbers the five channels from 1 in a fresh directory.
+            # PyZMQ encodes the endpoint as UTF-8 before handing it to libzmq.
+            try:
+                endpoint = (Path(directory) / "kernel-5").as_posix().encode("utf-8")
+            except UnicodeEncodeError:
+                continue
+            if len(endpoint) <= limit:
+                yield directory
+                return
+    raise OSError(f"Cannot create a kernel socket under {', '.join(map(repr, parents))}. Set TMPDIR to a short writable path (socket limit {limit} bytes).")
+
+
 def _execute(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str], progress: list[int]) -> None:
     """Run the notebook on a worker-owned event loop and wait for worker cleanup if the caller is interrupted."""
     # Own a loop without reading/replacing the process-wide asyncio policy or
@@ -268,9 +292,12 @@ def _execute(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str]
     def run():
         try:
             # Acquire the loop only after submission succeeds, on its owner thread.
-            with asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
+            # Jupyter releases its probed TCP ports before the child binds them.
+            # Private Unix sockets avoid collisions between concurrent kernels.
+            sockets = _kernel_socket_directory() if os.name == "posix" else nullcontext(None)
+            with sockets as socket_dir, asyncio.Runner(loop_factory=asyncio.SelectorEventLoop) as runner:
                 loop = runner.get_loop()
-                task = loop.create_task(_execute_async(node, cwd=cwd, timeout=timeout, env=env, progress=progress))
+                task = loop.create_task(_execute_async(node, cwd=cwd, timeout=timeout, env=env, progress=progress, socket_dir=socket_dir))
                 active.append((loop, task))
                 # Publishing the handles before checking closes the startup race:
                 # the caller either schedules cancellation or this check sees it.
@@ -304,7 +331,7 @@ def _execute(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str]
         raise
 
 
-async def _execute_async(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str], progress: list[int]) -> None:
+async def _execute_async(node: NotebookNode, *, cwd: Path, timeout: int, env: dict[str, str], progress: list[int], socket_dir: str | None) -> None:
     """Execute cells in the project kernel, track the current cell index, and shut down the kernel on exit."""
     nbclient = dependency("nbclient")
     kernelspec = dependency("jupyter_client.kernelspec")
@@ -328,6 +355,7 @@ async def _execute_async(node: NotebookNode, *, cwd: Path, timeout: int, env: di
         kernel_name=KERNEL,
         kernel_spec_manager=ProjectKernel(),
         connection_file=str(Path(env["JUPYTER_RUNTIME_DIR"]) / "kernel.json"),
+        **({"transport": "ipc", "ip": str(Path(socket_dir) / "kernel")} if socket_dir is not None else {}),
     )
     skip_tag = "research-repo-tools-never-skip"
     while any(skip_tag in cell.metadata.get("tags", []) for cell in node.cells):
