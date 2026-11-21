@@ -19,7 +19,7 @@ from pathlib import Path
 from packaging.specifiers import SpecifierSet
 
 from research_repo_tools import release_credentials
-from research_repo_tools._console import console_text
+from research_repo_tools._console import console_text, write_json_stdout
 from research_repo_tools.process import ExecutableNotFoundError, resolve_executable, run_safe_command
 from research_repo_tools.tool_pins import SEMVER
 from research_repo_tools.toolchain_config import RUSTUP_VERSION, BinaryTool, CargoTool, Toolchain, executable, home, host_target
@@ -30,6 +30,8 @@ FAILURES = (ExecutableNotFoundError, OSError, ValueError, subprocess.SubprocessE
 
 @dataclass(frozen=True)
 class Status:
+    """A tool probe's required and observed versions, executable path, and pass status."""
+
     name: str
     required: str
     actual: str
@@ -155,13 +157,16 @@ class Runtime:
         return status
 
     def cargo_root(self, tool: CargoTool) -> Path:
+        """Locate the managed Cargo installation for the requested tool, version, and host."""
         assert self.plan.rust is not None
         return self.base / "cargo" / self.host / self.plan.rust.channel / tool.package / tool.version
 
     def binary_path(self, tool: BinaryTool) -> Path:
+        """Locate the expected executable for a pinned prebuilt tool."""
         return executable(self.base / "binaries" / self.host / tool.name / tool.version / "bin", tool.name)
 
     def binary_status(self, tool: BinaryTool) -> Status:
+        """Inspect the managed binary and report a version mismatch or probe failure as status."""
         from research_repo_tools.prebuilt_tools import version_at
 
         path = self.binary_path(tool)
@@ -172,6 +177,7 @@ class Runtime:
             return Status(tool.name, tool.version, release_credentials.diagnostics(error, single_line=True), str(path), False)
 
     def environment(self) -> dict[str, str]:
+        """Build a command environment from the verified toolchain for the current operation."""
         with self._operation():
             python = None if self._selected else self.python_status(self.uv_status())
             return self._environment(python)
@@ -236,6 +242,7 @@ class Runtime:
         return env
 
     def uv_status(self) -> Status:
+        """Inspect the uv executable selected by PATH and compare its version with the plan."""
         # uv is an external prerequisite, never installed or replaced by setup.
         selected = shutil.which("uv", path=os.environ.get("PATH", ""))
         return self._cached_probe(
@@ -243,6 +250,7 @@ class Runtime:
         )
 
     def python_status(self, uv: Status) -> Status:
+        """Check the interpreter and isolation settings in the project environment selected by uv."""
         environment = Path(os.environ.get("UV_PROJECT_ENVIRONMENT") or ".venv")
         if not environment.is_absolute():
             environment = self.plan.root / environment
@@ -282,6 +290,7 @@ class Runtime:
         return Status("Python", required, status.actual, status.path, status.ok and status.actual in SpecifierSet(required))
 
     def rust_statuses(self) -> list[Status]:
+        """Inspect the pinned Rust manager and toolchain, or return no statuses for a Python-only plan."""
         rust = self.plan.rust
         if rust is None:
             return []
@@ -314,6 +323,7 @@ class Runtime:
         return statuses
 
     def cargo_status(self, tool: CargoTool) -> Status:
+        """Probe the managed Cargo tool using its declared version command."""
         env = self.setup_environment()
         # cargo-machete changes argument parsing when CARGO is set. Probes invoke
         # executables directly, so never inherit Cargo's subcommand dispatch marker.
@@ -340,6 +350,7 @@ class Runtime:
         return Status("sh", "POSIX shell", "available", selected, True)
 
     def inspect(self) -> list[Status]:
+        """Inspect configured tools using a shared cache for the duration of this operation."""
         with self._operation():
             return self._inspect()
 
@@ -365,10 +376,9 @@ class Runtime:
             *(self.binary_status(tool) for tool in self.plan.binaries),
         ]
 
-    def _rustup(self, args: list[str], *, install: bool = False) -> subprocess.CompletedProcess[str]:
-        return run_safe_command(
-            str(self.rustup), args, cwd=self.plan.root, env=self.setup_environment(), timeout=INSTALL_TIMEOUT if install else 30, capture_output=not install
-        )
+    def _rustup(self, args: Sequence[str]) -> subprocess.CompletedProcess[str]:
+        """Capture rustup output for toolchain discovery."""
+        return run_safe_command(str(self.rustup), args, cwd=self.plan.root, env=self.setup_environment(), timeout=30)
 
     def sync(self) -> None:
         """Converge on declared versions, then verify every selected executable."""
@@ -496,10 +506,15 @@ class Runtime:
 
 
 def report(statuses: list[Status], *, json_output: bool = False, stream=None) -> bool:
+    """Write toolchain status and return whether all checked tools meet the plan."""
     if stream is None:
         stream = sys.stdout
     if json_output:
-        print(json.dumps([asdict(status) for status in statuses], indent=2), file=stream)
+        rows = [asdict(status) for status in statuses]
+        if stream is sys.stdout:
+            write_json_stdout(rows, indent=2)
+        else:
+            print(json.dumps(rows, indent=2), file=stream)
     else:
         for status in statuses:
             print(

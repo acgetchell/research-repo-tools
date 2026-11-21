@@ -107,8 +107,9 @@ To preview a prospective release, run
 
 ## CLI families
 
-The CLI groups below also cover capabilities used from custom recipes. Place
-global root/configuration options before the group; consult
+The CLI groups below also cover capabilities used from custom recipes. Spell
+long options in full, including `--apply` and `--approve`. Place global
+root/configuration options before the group. See
 [configuration and exit status](configuration-api.md) for the shared contract.
 
 | Capability | Commands | Contract |

@@ -90,6 +90,7 @@ def test_uncommitted_files_and_redacted_reports(consumer):
         "Secret": "REDACTED",
         "Match": "adjacent secret",
         "Message": "commit message secret",
+        "Fragment": "surrounding source",
         "StartLine": 1,
         "StartColumn": 1,
         "EndLine": 1,
@@ -100,6 +101,12 @@ def test_uncommitted_files_and_redacted_reports(consumer):
         "locations": [{"physicalLocation": {"region": {"snippet": {"text": "REDACTED"}}}}],
         "partialFingerprints": {"commitMessage": "commit message secret"},
     }
+    # Summaries and exception comparisons only read finding identities.
+    original = finding.copy()
+    with patch.object(security, "_load_report", return_value=[finding]):
+        identities = security._secret_findings(Path("report.json"), "working", consumer.root)
+    assert [item.rule for item in identities] == ["synthetic"]
+    assert finding == original
 
     def run(binary, args, **kwargs):
         seen.append(args)
@@ -128,14 +135,19 @@ def test_uncommitted_files_and_redacted_reports(consumer):
     assert len(seen) == 4
     reports = list((consumer.root / "target/security").iterdir())
     assert len(reports) == 4
-    for path in reports:
-        assert b"adjacent secret" not in path.read_bytes()
-        assert b"commit message secret" not in path.read_bytes()
+    for scope in ("working", "history"):
+        expected = finding | {"Match": "REDACTED", "Message": "REDACTED", "Fragment": None}
+        if scope == "history":
+            expected["Commit"] = "a" * 40
+        assert json.loads((consumer.root / f"target/security/gitleaks-{scope}.json").read_bytes()) == [expected]
+        assert json.loads((consumer.root / f"target/security/gitleaks-{scope}.sarif").read_bytes()) == sarif(
+            [sarif_finding | {"partialFingerprints": {"commitMessage": "REDACTED"}}]
+        )
 
 
 def test_unredacted_json_rejected():
     with pytest.raises(ValueError, match="unredacted"):
-        security._gitleaks_report([{"RuleID": "synthetic", "File": "file", "Secret": "not-redacted"}], "json", scope="working")
+        security._redact_gitleaks_report([{"RuleID": "synthetic", "File": "file", "Secret": "not-redacted"}], "json", scope="working")
 
 
 def test_scanner_does_not_publish_after_serialization_exceeds_read_limit(tmp_path):
@@ -148,7 +160,10 @@ def test_scanner_does_not_publish_after_serialization_exceeds_read_limit(tmp_pat
         return subprocess.CompletedProcess(args, 0, b"", b"")
 
     with patch.object(security, "REPORT_LIMIT", len(payload)), patch.object(security, "run_command_bytes", side_effect=native):
-        assert security._report_run(Path("scanner"), ["{report}"], destination, "json", root=tmp_path, env={}, validate=lambda *_: False) == 1
+        assert (
+            security._report_run(Path("scanner"), ["{report}"], destination, "json", root=tmp_path, env={}, prepare_report=lambda value, fmt: (value, False))
+            == 1
+        )
     assert not destination.exists()
 
 

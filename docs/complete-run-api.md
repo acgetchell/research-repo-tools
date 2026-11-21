@@ -119,8 +119,9 @@ Current document-input checks derive from each suite's recorded declarations.
 
 `performance_progress.ProgressReporter(*, mode="human", cadence=300, stream=None,
 observer=None, clock=time.monotonic)` exposes the documented event contract.
-The default stream is stderr. An observer receives event dictionaries; heartbeats
-invoke it on a background thread. Keep custom observers fast and nonblocking.
+The default stream is stderr. Each observer call receives its own event
+dictionary. Editing its fields does not change the streamed event. Heartbeats
+invoke the observer on a background thread. Keep custom observers fast and nonblocking.
 Heartbeat errors propagate when the stage ends, after its worker stops. If
 acquisition and reporting both fail, an exception group preserves both errors.
 Checkpoint cleanup failures likewise preserve the acquisition error and identify

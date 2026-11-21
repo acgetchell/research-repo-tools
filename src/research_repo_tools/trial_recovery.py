@@ -2,6 +2,7 @@
 
 import base64
 import binascii
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -78,6 +79,8 @@ def _validate_failed_output(value: object) -> None:
 
 @dataclass
 class TrialRecovery:
+    """Trial state reconstructed by replaying checkpoint events in order."""
+
     units: list[dict[str, Any]] = field(default_factory=list)
     receipts: list[dict[str, Any]] = field(default_factory=list)
     prepared: dict[str, dict[str, Any]] | None = None
@@ -105,9 +108,8 @@ def _event_timestamp(event: dict[str, Any], previous: int = 0) -> int:
 
 def replay_trial(events: list[Any], plan: SuiteMeasurementPlan, trial: int, *, complete: bool = False) -> TrialRecovery:
     """Derive a fixed completed prefix, never choose retained results by value."""
-    import re
-
-    assert plan.schedule is not None
+    if plan.schedule is None or type(trial) is not int or not 1 <= trial <= plan.schedule.trials:
+        raise ValueError("recovery requires a trial in the declared schedule")
     order = plan.schedule.phases[trial - 1]
     state = TrialRecovery()
     pending = None
@@ -142,6 +144,8 @@ def replay_trial(events: list[Any], plan: SuiteMeasurementPlan, trial: int, *, c
         _object(event, "trial lifecycle event", {"trial", "kind", *fields[kind]})
         if type(event["trial"]) is not int or event["trial"] != trial or ended:
             raise ValueError("recovery trial inventory/order differs")
+        if "started_ns" in event:
+            _integer(event["started_ns"], "recovery phase start")
         at = _event_timestamp(event, previous)
         previous = at
         if kind == "segment":
@@ -218,7 +222,8 @@ def replay_trial(events: list[Any], plan: SuiteMeasurementPlan, trial: int, *, c
                 pending is None
                 or phase_start is not None
                 or failed
-                or (unit.get("name"), unit.get("session"), unit.get("started_ns")) != (pending["suite"], pending["session"], pending["at_ns"])
+                or (unit.get("name"), unit.get("session"), _integer(unit.get("started_ns"), "suite start"))
+                != (pending["suite"], pending["session"], pending["at_ns"])
             ):
                 raise ValueError("committed recovery suite differs from its attempt")
             assert state.prepared is not None

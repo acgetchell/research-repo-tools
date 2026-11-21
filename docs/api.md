@@ -110,8 +110,10 @@ syntax; `verify_source` alone creates `VerifiedSource` availability evidence.
 Python versions follow public PEP 440 rules; Cargo versions follow SemVer.
 Supported release registries are exclusively PyPI and crates.io. Development
 repositories are GitHub repositories pinned to full commit SHAs. A provider's
-`read(url) -> bytes` is a transport seam for deterministic tests, not a mechanism
-for importing saved proof or adding unsupported registries.
+`read(url) -> bytes` supplies the response bytes for each lookup. Passing a
+provider selects that transport even when it represents an empty cache. Omitting
+it or passing `None` selects HTTP. Registry and artifact verification also
+apply to injected responses.
 
 ```python
 from research_repo_tools.dependency_sources import GitCommit, verify_source
@@ -125,6 +127,7 @@ verified = verify_source(source)
 
 ```python
 from pathlib import Path
+
 from research_repo_tools.dependency_workflows import (
     apply_source,
     check_dependency_policy,
@@ -134,9 +137,9 @@ from research_repo_tools.dependency_workflows import (
 root = Path("/path/to/consumer")
 plan = plan_source(root, "upstream")  # verifies and resolves in a temporary copy
 print(plan.diff())
-apply_source(plan)                   # reverifies; recoverable multi-file publication
+apply_source(plan)  # reverifies; recoverable multi-file publication
 # After transitioning to a published source and rerunning downstream checks:
-check_dependency_policy(root)        # read-only, all configured projects
+check_dependency_policy(root)  # read-only, all configured projects
 ```
 
 `plan_source` may populate native resolution caches but leaves consumer inputs,

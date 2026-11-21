@@ -113,6 +113,8 @@ def load_evidence_policy(path: Path) -> EvidencePolicy:
 
 @dataclass(frozen=True, slots=True)
 class AssetPolicy:
+    """The consumer repository and optional release title required by release-asset commands."""
+
     repository: str
     expected_title: str | None = None
 
@@ -294,6 +296,7 @@ def add_commands(release) -> None:
 
 
 def add_evidence_commands(release) -> None:
+    """Register release evidence capture, verification, and approval commands."""
     commands = release.add_parser("evidence", help="create or verify exact-commit release evidence and file-based approval handoffs").add_subparsers(
         dest="operation", required=True
     )
@@ -397,6 +400,7 @@ def add_evidence_commands(release) -> None:
 
 
 def run_evidence(args: argparse.Namespace, settings: Config) -> None:
+    """Execute the selected release evidence operation using consumer policy."""
     from research_repo_tools._dependency_observation import DependencyOperation
 
     if args.operation == "wait":
@@ -549,6 +553,7 @@ def _add_python_approval_command(commands, operation: str) -> None:
 
 
 def _run_python_approval(args: argparse.Namespace, settings: Config) -> None:
+    """Retain the approval only after rechecking its original evidence, registry authority, and distribution bytes."""
     from research_repo_tools.python_publication import approve_python_publication, load_registry_authority, verify_python_publication
 
     configuration = _path(settings.root, args.configuration)
@@ -622,6 +627,7 @@ def _read_candidate_input(path: Path) -> bytes:
 
 
 def _receive_candidate_acquisition(args: argparse.Namespace, settings: Config) -> None:
+    """Retrieve the selected producer's acquisition records and reject conflicts with an existing handoff."""
     from research_repo_tools.candidate_hosted import AcquisitionProducer, retrieve_candidate_handoff, serialize_acquisition_producer
     from research_repo_tools.evidence import deterministic_json
     from research_repo_tools.files import _directory_target
@@ -712,6 +718,7 @@ def _inspect_candidate_archive(args: argparse.Namespace) -> None:
 
 
 def _run_candidate_attachment(args: argparse.Namespace, settings: Config) -> None:
+    """Attach the accepted archive to the selected draft or revalidate the existing attachment receipt."""
     from research_repo_tools.candidate_attachment import attach_candidate_archive, verify_candidate_attachment
     from research_repo_tools.candidate_reuse import parse_candidate_policy, verify_candidate_archive
 
@@ -752,6 +759,7 @@ def _run_candidate_attachment(args: argparse.Namespace, settings: Config) -> Non
 
 
 def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
+    """Retain or revalidate a candidate release against its original handoff and independently selected final commit."""
     from dataclasses import replace
 
     from research_repo_tools._dependency_observation import DependencyOperation
@@ -833,6 +841,7 @@ def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
 
 
 def _retrieve_receipt(args: argparse.Namespace, settings: Config) -> None:
+    """Retrieve authenticated draft receipts outside the checkout, preserving the original selection on retries."""
     from research_repo_tools.release_receipts import DiscoverOriginal, FrozenReceipt, OriginalRun, TagSource, retrieve_draft_receipt
 
     configuration = _path(settings.root, args.configuration)
@@ -887,6 +896,7 @@ def _retrieve_receipt(args: argparse.Namespace, settings: Config) -> None:
 
 
 def run_assets(args: argparse.Namespace, settings: Config) -> None:
+    """Plan, acquire, verify, or publish candidate assets according to the selected operation."""
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
     if args.operation in ("plan", "prepare-authenticated"):
@@ -1049,6 +1059,7 @@ def run_assets(args: argparse.Namespace, settings: Config) -> None:
 
 
 def run(args: argparse.Namespace, settings: Config) -> int:
+    """Dispatch the requested release operation with sanitized diagnostics on failure."""
     try:
         # Every Path-valued option in these commands names a consumer file or
         # checkout. Keep the parser namespace reusable and apply --root once.

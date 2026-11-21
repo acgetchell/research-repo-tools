@@ -141,6 +141,7 @@ from pathlib import Path
 
 from research_repo_tools.notebook_testing import isolated_project
 
+
 def test_analysis(tmp_path):
     with isolated_project(
         Path(__file__).resolve().parents[2],

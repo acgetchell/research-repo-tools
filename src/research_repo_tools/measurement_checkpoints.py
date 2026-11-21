@@ -29,6 +29,7 @@ class Checkpoint:
             raise ValueError("checkpoint handle is closed; use open_checkpoint for exclusive ownership")
 
     def read(self) -> dict[str, dict[str, object]]:
+        """Read accepted checkpoint units after verifying writer ownership and the on-disk layout."""
         self._require_owner()
         accepted = {}
         allowed = {"header.json", ".writer", *(f"unit-{name}.json" for name in self.units)}

@@ -5,15 +5,25 @@ import os
 import shlex
 import subprocess
 import sys
+from collections.abc import Sequence
 from contextlib import ExitStack
 from dataclasses import replace
 from io import TextIOWrapper
 from pathlib import Path
 
 from research_repo_tools import __version__
+from research_repo_tools._console import write_json_stdout
+from research_repo_tools._console import write_stdout as _write_stdout
+from research_repo_tools._diagnostics import workflow_diagnostic
 from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics
 lazy import research_repo_tools.config as config
-lazy from research_repo_tools.performance import _write_stdout
+
+
+class _CommandParser(argparse.ArgumentParser):
+    """Require exact long options on the root parser and every subcommand."""
+
+    def __init__(self, *args, allow_abbrev: bool = False, **kwargs) -> None:
+        super().__init__(*args, allow_abbrev=allow_abbrev, **kwargs)
 
 
 def _clean_mode(command: argparse.ArgumentParser) -> None:
@@ -23,7 +33,8 @@ def _clean_mode(command: argparse.ArgumentParser) -> None:
 
 
 def parser() -> argparse.ArgumentParser:
-    result = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    """Build the shared CLI and its command-specific options."""
+    result = _CommandParser(description=__doc__)
     result.add_argument("--version", action="version", version=__version__)
     result.add_argument("--config", type=Path, help="TOML config; defaults to [tool.research-repo-tools] in pyproject.toml")
     result.add_argument("--root", type=Path, help="consumer root; defaults to the configuration directory")
@@ -360,6 +371,7 @@ def parser() -> argparse.ArgumentParser:
 
 
 def run(args: argparse.Namespace, settings: config.Config) -> int:
+    """Dispatch a parsed command with the resolved consumer configuration and return its exit status."""
     if args.group == "clean":
         from research_repo_tools import coverage_clean, toolchain_clean
 
@@ -401,7 +413,6 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         from research_repo_tools.validation import check_cargo_metadata, require_executables, run_checks
 
         if args.action == "cargo-docs":
-            import json
             from dataclasses import asdict
 
             from research_repo_tools.cargo_docs import check_documentation
@@ -415,7 +426,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
                 cfg=tuple(args.cfg),
                 target=args.target,
             )
-            print(json.dumps(asdict(evidence), sort_keys=True))
+            write_json_stdout(asdict(evidence), sort_keys=True)
         elif args.action == "cargo-examples":
             from research_repo_tools.cargo_examples import run_examples
 
@@ -469,8 +480,8 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         from research_repo_tools.paper_dates import read_source_date
         from research_repo_tools.paper_pdf import PdfPolicy, check_pdf, normalize_pdf
 
-        document = settings.papers.get(args.paper) if args.paper else None
-        if args.paper and document is None:
+        document = settings.papers.get(args.paper) if args.paper is not None else None
+        if args.paper is not None and document is None:
             raise ValueError(f"unknown papers.documents declaration: {args.paper}")
         if args.action == "source-date":
             path = document.tex if document is not None else args.path
@@ -492,14 +503,14 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             identity = args.identity if args.identity is not None else document.identity if document is not None else None
             if tex is None or identity is None:
                 raise ValueError("papers normalize requires --tex and --identity, or a named --paper declaration")
-            inspection = normalize_pdf(
-                path, tex=settings.path(tex), identity=identity, output=settings.path(args.output) if args.output else None, policy=policy, reference=reference
-            )
+            if args.output == "":
+                raise ValueError("--output must be a nonempty path")
+            destination = settings.path(args.output) if args.output is not None else path
+            inspection = normalize_pdf(path, tex=settings.path(tex), identity=identity, output=destination, policy=policy, reference=reference)
+            path = destination
         print(f"OK {path}: {inspection.page_count} page(s)")
         return 0
     if args.group == "tectonic":
-        import json
-
         from research_repo_tools.tectonic import discover_environment
 
         environment = discover_environment(pkg_config=settings.executable(args.pkg_config), prefixes=tuple(settings.path(path) for path in args.prefix))
@@ -511,7 +522,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
                 raise ValueError("tectonic export requires --file or GITHUB_ENV")
             export_environment(Path(destination), sorted(environment), environment=environment)
         elif args.format == "json":
-            print(json.dumps(environment, ensure_ascii=True, sort_keys=True))
+            write_json_stdout(environment, sort_keys=True)
         else:
             _write_stdout("".join(f"export {name}={shlex.quote(value)}\n" for name, value in sorted(environment.items())).encode("utf-8"))
         return 0
@@ -874,15 +885,19 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             if len(reuse_payload) > 1024 * 1024:
                 raise ValueError("CI reuse approval exceeds the byte limit")
         if args.action == "reuse":
+            from research_repo_tools._git_checkout import _in_checkout
+            from research_repo_tools.files import _publish_new_file
             from research_repo_tools.release_reuse import verify_ci_reuse
 
             publishing = release_publishing._settings(settings)
             if publishing.reuse is None:
                 raise ValueError("configure publishing.reuse before selecting CI evidence")
-            output, root = settings.path(str(args.output)).resolve(), settings.root.resolve()
-            # Filesystem identity also covers case aliases on macOS volumes.
-            if output.is_relative_to(root) or any(parent.exists() and parent.samefile(root) for parent in output.parents):
+            output = settings.path(str(args.output))
+            if _in_checkout(output, settings.root.resolve()):
                 raise ValueError("save CI reuse approval outside the reviewed checkout; publication requires a clean checkout")
+            output = output.parent.resolve(strict=True) / output.name
+            if os.path.lexists(output):
+                raise FileExistsError(f"CI reuse approval output already exists: {output}")
             payload = verify_ci_reuse(
                 publishing.reuse,
                 args.commit,
@@ -891,8 +906,7 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
                 run_id=args.run_id,
                 attempt=args.attempt,
             )
-            with output.open("xb") as stream:
-                stream.write(payload)
+            _publish_new_file(output, payload)
             print("Saved verified CI reuse selection; revalidate it with --reuse-evidence at the release gate.")
             return 0
         target = None
@@ -1003,36 +1017,15 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             notes, _source, _heading = changelog.notes(settings, args.tag)
             _write_stdout(notes.encode("utf-8"))
             return 0
-        from research_repo_tools.process import run_git_command
-        from research_repo_tools.release_metadata import check
-
-        commit = args.commit if args.commit is not None else run_git_command(["rev-parse", "HEAD"], cwd=settings.root).stdout.strip()
-        tag_args = [args.tag, "--commit", commit]
-        if args.root is not None or args.config is not None:
-            retry_args = ["research-repo-tools", "--root", str(settings.root)]
-            if args.config is not None:
-                retry_args.extend(("--config", str(args.config.absolute())))
-            retry_args.extend(("changelog", "tag", *tag_args))
-            if args.dry_run:
-                retry_args.append("--dry-run")
-        else:
-            retry_args = ["just", "tag-preview" if args.dry_run else "tag", *tag_args]
-        if args.force:
-            retry_args.append("--force")
-        retry = shlex.join(retry_args)
-        if check(settings.root, policy=replace(settings.release, final_changelog=True)):
-            retry_args[retry_args.index("--commit") + 1] = "REVIEWED_COMMIT"
-            raise ValueError(
-                f"tagging preflight failed for {args.tag} at {commit}. Correct the reported metadata. "
-                "If tracked files change, commit and review the correction. Replace REVIEWED_COMMIT with the reviewed SHA. "
-                f"Retry in a POSIX shell with\n{shlex.join(retry_args)}"
-            )
-        try:
-            body = changelog.tag(settings, args.tag, commit=commit, force=args.force, dry_run=args.dry_run)
-        except (ValueError, OSError, subprocess.SubprocessError) as error:
-            raise ValueError(
-                f"{args.tag} at {commit}: {format_exception_diagnostics(error)}\nTag preflight must pass before creation. Resume in a POSIX shell with\n{retry}"
-            ) from error
+        commit, body = changelog.tag_with_preflight(
+            settings,
+            args.tag,
+            commit=args.commit,
+            force=args.force,
+            dry_run=args.dry_run,
+            explicit_root=args.root is not None,
+            config_file=args.config,
+        )
         if args.dry_run:
             _write_stdout(body.encode("utf-8"))
         else:
@@ -1042,7 +1035,8 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
     raise ValueError(f"unknown command group: {args.group}")
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: Sequence[str] | None = None) -> int:
+    """Run the command line and report expected command failures as nonzero exit statuses."""
     # Reporting a completed mutation must not fail on an unencodable path.
     # Preserve the encoding and restore caller-owned stream policies on exit.
     with ExitStack() as streams:
@@ -1083,14 +1077,36 @@ def main(argv: list[str] | None = None) -> int:
         except ExceptionGroup as error:
             expected, unexpected = error.split(expected_errors)
             if expected is not None:
-                print(f"research-repo-tools: {format_exception_diagnostics(expected)}", file=sys.stderr)
+                detail = format_exception_diagnostics(expected)
+                if args.group in {"deps", "release"}:
+                    detail = workflow_diagnostic(detail)
+                print(f"research-repo-tools: {detail}", file=sys.stderr)
             if unexpected is not None:
                 raise unexpected from None
             return 1
         except expected_errors as error:
-            print(f"research-repo-tools: {format_exception_diagnostics(error, single_line=args.group == 'deps')}", file=sys.stderr)
+            detail = format_exception_diagnostics(error)
+            if args.group in {"deps", "release"}:
+                detail = workflow_diagnostic(detail, single_line=args.group == "deps")
+            print(f"research-repo-tools: {detail}", file=sys.stderr)
             return 1
 
 
+def entrypoint() -> int:
+    """Handle process interruption and early pipeline closure at the executable boundary."""
+    try:
+        status = main()
+        sys.stdout.flush()
+        return status
+    except BrokenPipeError:
+        # Prevent interpreter shutdown from flushing the same closed pipe again.
+        with open(os.devnull, "wb") as sink:
+            os.dup2(sink.fileno(), sys.stdout.fileno())
+        return 1
+    except KeyboardInterrupt:
+        print("research-repo-tools: interrupted", file=sys.stderr)
+        return 130
+
+
 if __name__ == "__main__":
-    raise SystemExit(main())
+    raise SystemExit(entrypoint())

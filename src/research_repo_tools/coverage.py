@@ -17,6 +17,8 @@ DEFAULT_REPORT = Path("coverage/cobertura.xml")
 
 @dataclass(frozen=True)
 class CoverageEntry:
+    """Covered and coverable line counts for a file, with coverage expressed as a percentage."""
+
     coverage: float
     coverable: int
     covered: int
@@ -28,6 +30,7 @@ class CoverageEntry:
         return f"{self.coverage:6.2f}%  {display_path.as_posix()}"
 
     def relative_path(self, relative_to: Path | None) -> Path:
+        """Return a path relative to the requested directory when it contains the entry."""
         if relative_to is None:
             return self.path
         try:
@@ -88,7 +91,7 @@ def load_report(report_path: Path) -> ET.Element:
 
     try:
         root = ET.parse(report_path).getroot()  # noqa: S314 - local cargo-llvm-cov report.
-    except ET.ParseError as exc:
+    except (ET.ParseError, LookupError, ValueError) as exc:
         raise ValueError(f"Coverage report must be valid XML: {report_path}: {exc}") from exc
     if root.tag != "coverage":
         raise ValueError(f"Coverage report must have a Cobertura coverage root: {report_path}")

@@ -17,6 +17,7 @@ _HEADER = re.compile(rb"\A<!-- research-repo-tools/performance-report/v1 current
 
 
 def evidence_pair(evidence: Evidence) -> ReleasePair:
+    """Extract the baseline and current release labels from shared comparison evidence."""
     if evidence.payload_schema != COMPARISON_SCHEMA:
         raise ValueError("report requires shared comparison evidence")
     sources = dict(evidence.sources)
@@ -29,6 +30,7 @@ def evidence_pair(evidence: Evidence) -> ReleasePair:
 
 
 def parse_report_pair(report: bytes) -> ReleasePair:
+    """Read the release pair from a shared report header and reject legacy reports without that identity."""
     match = _HEADER.match(report)
     if match is None:
         raise ValueError("current report requires a shared report identity; preserve legacy reports at their original paths")
@@ -36,6 +38,7 @@ def parse_report_pair(report: bytes) -> ReleasePair:
 
 
 def retained_paths(archive: str, pair: ReleasePair) -> tuple[str, str, str]:
+    """Construct the archived comparison, evidence, and CSV paths for a release pair."""
     _publication_name(archive)
     stem = f"{archive}/{pair.stem}"
     return stem + ".comparison.json", stem + ".evidence.json", stem + ".csv"

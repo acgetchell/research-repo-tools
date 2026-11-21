@@ -13,12 +13,14 @@ from research_repo_tools.dependency_sources import string, table
 
 
 def native_platform() -> str:
+    """Return the platform and canonical machine name used in build evidence."""
     machine = platform.machine().lower()
     machine = {"aarch64": "arm64", "amd64": "x86_64"}.get(machine, machine)
     return f"{sys.platform}-{machine}"
 
 
 def member_name(value: object) -> str:
+    """Require an archive member name in canonical relative POSIX form."""
     value = string(value, "archive member")
     path = _member_path(value, directory=False)
     if path.as_posix() != value:
@@ -28,6 +30,8 @@ def member_name(value: object) -> str:
 
 @dataclass(frozen=True, slots=True)
 class ExternalBuildInput:
+    """A platform-specific archive pinned by SHA-256 and the member expected in the built wheel."""
+
     package: str
     platform: str
     url: str
@@ -57,6 +61,8 @@ class ExternalBuildInput:
 
 @dataclass(frozen=True, slots=True)
 class SourceBuildPolicy:
+    """Packages approved for source builds, their build dependency group, and external inputs."""
+
     packages: tuple[str, ...]
     group: str
     external: tuple[ExternalBuildInput, ...] = ()
@@ -74,6 +80,7 @@ class SourceBuildPolicy:
 
 
 def parse_build_policy(raw: object) -> SourceBuildPolicy | None:
+    """Validate source-build packages and external inputs, or return None for absent policy."""
     if raw is None:
         return None
     data = table(raw, "source-builds")

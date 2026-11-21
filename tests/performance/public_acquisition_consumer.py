@@ -24,7 +24,8 @@ from research_repo_tools.complete_runs import parse_run, ratio_incompatibilities
 from research_repo_tools.evidence import parse_evidence, serialize_evidence
 from research_repo_tools.files import _stage_writes
 from research_repo_tools.host_metadata import HostMetadata
-from research_repo_tools.measurement import load_measurement
+from research_repo_tools.measurement import load_measurement, measure_pair
+from research_repo_tools.performance_acquisition import measure_and_retain
 from research_repo_tools.release_discovery import PublishedRelease
 from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.run_reports import load_latest_run
@@ -110,6 +111,18 @@ def declaration(root: Path, *, disjoint: bool = False, harness_mode: str = "inde
 
 
 class TestAcquisitionConsumer(unittest.TestCase):
+    def test_explicit_empty_backend_fails_before_acquisition(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            plan = declaration(root)
+            pair = ReleasePair("v1.1.0", "v1.0.0")
+            with self.assertRaisesRegex(ValueError, "backend"):
+                measure_pair(root, plan, pair, backend="")
+            with self.assertRaisesRegex(ValueError, "backend"):
+                measure_and_retain(root, "measurement.toml", pair, payload="out.json", manifest="manifest.json", backend="")
+            self.assertFalse((root / "out.json").exists())
+            self.assertFalse((root / "manifest.json").exists())
+
     def test_plan_rejects_unsupported_schema_options_before_acquisition(self) -> None:
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

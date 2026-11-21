@@ -16,11 +16,15 @@ from contextlib import contextmanager
 from pathlib import Path
 
 from research_repo_tools import release_credentials
+from research_repo_tools._console import console_text
 
 ROOT = Path(__file__).resolve().parents[1]
 
 
 def require_hosted_runner() -> None:
+    """Require a GitHub-hosted Actions runner before exercising native setup."""
+    if not __debug__:
+        raise RuntimeError("setup checks require enabled Python assertions; remove -O or PYTHONOPTIMIZE")
     if os.environ.get("GITHUB_ACTIONS") != "true" or os.environ.get("RUNNER_ENVIRONMENT") != "github-hosted":
         raise RuntimeError("check-setup requires a disposable GitHub-hosted runner; it installs tools and updates the runner user's PATH")
 
@@ -35,6 +39,7 @@ def _remove_readonly(function: Callable[..., object], path: str, error: BaseExce
 
 @contextmanager
 def native_workspace() -> Iterator[Path]:
+    """Provide the runner-local setup workspace and remove it when the check completes."""
     require_hosted_runner()
     directory = Path(os.environ["RUNNER_TEMP"]).resolve() / "rrt-setup"
     # Fresh installation homes must have stable paths for Cargo fingerprints.
@@ -71,6 +76,7 @@ def check_uv_tool_owner(consumer: Path, uv: str, cli: str, python: Path, version
 
 
 def isolated_environment(directory: Path) -> dict[str, str]:
+    """Build an environment that directs managed tools and caches into the disposable workspace."""
     # Preserve native compiler/SDK and network configuration, but never inherit
     # another project's interpreter, managed tools, or uv directory overrides.
     env = {
@@ -104,24 +110,28 @@ def release_environment(env: dict[str, str]) -> dict[str, str]:
 
 
 def run(command: list[str], *, cwd: Path, env: dict[str, str], expected: int = 0, input: str | None = None) -> str:
-    print(f"Running: {command}", flush=True)
+    """Print the probe's captured stdout and stderr, check its exit status, and return stdout."""
+    label = release_credentials.redact(str(command), env)
+    print(console_text(f"Running: {label}", sys.stdout), flush=True)
     try:
         result = subprocess.run(command, cwd=cwd, env=env, input=input, capture_output=True, encoding="utf-8", errors="replace", timeout=3600)
     except subprocess.TimeoutExpired as error:
-        print(release_credentials.diagnostics(error), file=sys.stderr, flush=True)
+        print(console_text(release_credentials.redact(release_credentials.diagnostics(error), env), sys.stderr), file=sys.stderr, flush=True)
         raise
-    print(result.stdout, end="", flush=True)
-    print(result.stderr, end="", file=sys.stderr, flush=True)
+    print(console_text(release_credentials.redact(result.stdout, env), sys.stdout), end="", flush=True)
+    print(console_text(release_credentials.redact(result.stderr, env), sys.stderr), end="", file=sys.stderr, flush=True)
     if result.returncode != expected:
-        raise RuntimeError(f"Expected exit {expected}, got {result.returncode}: {command}")
+        raise RuntimeError(f"Expected exit {expected}, got {result.returncode}: {label}")
     return result.stdout
 
 
 def binary(directory: Path, name: str) -> Path:
+    """Construct the host's executable name under the selected directory."""
     return directory / (f"{name}.exe" if os.name == "nt" else name)
 
 
 def shell_state() -> dict[str, bytes | str | None]:
+    """Snapshot the persistent shell configuration that setup must preserve."""
     if os.name == "nt":
         import winreg
 
@@ -133,6 +143,7 @@ def shell_state() -> dict[str, bytes | str | None]:
 
 
 def verify_shell(consumer: Path, env: dict[str, str], expected_just: str) -> dict[str, str]:
+    """Verify Just in a fresh shell and return an environment that selects the same executable."""
     user_bin = Path(env["UV_TOOL_BIN_DIR"])
     if os.name == "nt":
         # Child processes inherit stale PATH. Model a new terminal by refreshing
@@ -155,6 +166,7 @@ def verify_shell(consumer: Path, env: dict[str, str], expected_just: str) -> dic
 
 
 def check_cargo_update(consumer: Path, cli: str, just: str, env: dict[str, str]) -> None:
+    """Exercise Cargo update recipes against a temporary native consumer."""
     manifest = consumer / "Cargo.toml"
     manifest.write_text(
         '[package]\nname="native-update-consumer"\nversion="0.1.0"\nedition="2021"\n[lib]\npath="cargo_smoke.rs"\n[dependencies]\nitoa="0.4.8"\n',
@@ -286,6 +298,7 @@ def check_security_binaries(consumer: Path, cli: str, env: dict[str, str]) -> No
 
 
 def check(dist: Path) -> None:
+    """Verify installed setup, command discovery, and consumer recipes on the hosted platform."""
     require_hosted_runner()
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     version = metadata["project"]["version"]
@@ -439,4 +452,8 @@ def check(dist: Path) -> None:
 
 
 if __name__ == "__main__":
-    check(ROOT / "dist")
+    try:
+        check(ROOT / "dist")
+    except subprocess.TimeoutExpired:
+        # run() already reported the captured streams with credentials removed.
+        raise SystemExit(1) from None

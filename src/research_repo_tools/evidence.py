@@ -8,7 +8,7 @@ import hashlib
 import json
 import math
 import re
-from collections.abc import Callable, Collection, Mapping, Sequence
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
 
@@ -37,7 +37,8 @@ def _string(value: object, context: str) -> str:
     if not isinstance(value, str) or not value or value != value.strip() or any(ord(char) < 32 or ord(char) == 127 for char in value):
         raise ValueError(f"{context} must be a nonempty string without surrounding whitespace or controls")
     try:
-        value.encode("utf-8")
+        if not value.isascii():
+            value.encode("utf-8")
     except UnicodeError as error:
         raise ValueError(f"{context} must be valid UTF-8 text") from error
     return value
@@ -64,7 +65,10 @@ def verify_sha256(payload: bytes, expected: str) -> None:
 
 
 def _json_value(value: object) -> None:
-    if value is None or isinstance(value, str | bool | int):
+    if isinstance(value, str):
+        value.encode("utf-8")
+        return
+    if value is None or isinstance(value, bool | int):
         return
     if isinstance(value, float) and math.isfinite(value):
         return
@@ -73,7 +77,9 @@ def _json_value(value: object) -> None:
             _json_value(item)
         return
     if isinstance(value, dict) and all(isinstance(key, str) for key in value):
-        for item in value.values():
+        for key, item in value.items():
+            if not key.isascii():
+                key.encode("utf-8")
             _json_value(item)
         return
     raise ValueError("evidence JSON requires finite JSON values and string object keys")
@@ -141,7 +147,12 @@ class Provenance:
             value = getattr(self, name)
             if value is not None:
                 _digest(value, name)
-        context = tuple((_string(key, "context key"), _string(value, f"context {key}")) for key, value in self.context)
+        context = []
+        for pair in self.context:
+            if not isinstance(pair, (tuple, list)) or len(pair) != 2:
+                raise ValueError("provenance context entries must be key/value pairs")
+            key, value = pair
+            context.append((_string(key, "context key"), _string(value, f"context {key}")))
         if len(dict(context)) != len(context):
             raise ValueError("provenance context keys must be unique")
         object.__setattr__(self, "context", tuple(sorted(context)))
@@ -165,10 +176,11 @@ class Compatibility:
 
     @property
     def compatible(self) -> bool:
+        """Return true when all selected provenance fields agree."""
         return not self.differences
 
 
-def compare_provenance(baseline: Provenance, current: Provenance, *, fields: Sequence[str]) -> Compatibility:
+def compare_provenance(baseline: Provenance, current: Provenance, *, fields: Iterable[str]) -> Compatibility:
     """Compare explicit required fields; reject an empty or duplicate selection.
 
     Select revision/source_sha256/harness_sha256 or context.KEY. Select recorded
@@ -176,10 +188,13 @@ def compare_provenance(baseline: Provenance, current: Provenance, *, fields: Seq
     environment/harness fields to assess measurement compatibility. Two unknown
     values are a difference, not evidence of compatibility.
     """
-    if isinstance(fields, str) or not fields or len(set(fields)) != len(fields):
+    if isinstance(fields, (str, bytes)):
+        raise ValueError("compatibility requires a nonempty sequence of unique fields")
+    names = tuple(sorted(_string(name, "provenance field") for name in fields))
+    if not names or len(set(names)) != len(names):
         raise ValueError("compatibility requires a nonempty sequence of unique fields")
     differences = []
-    for name in sorted(fields):
+    for name in names:
         if name in {"revision", "source_sha256", "harness_sha256"}:
             left, right = getattr(baseline, name), getattr(current, name)
         elif name.startswith("context.") and name.removeprefix("context."):
@@ -189,7 +204,7 @@ def compare_provenance(baseline: Provenance, current: Provenance, *, fields: Seq
             raise ValueError(f"unknown provenance field: {name}")
         if left is None or right is None or left != right:
             differences.append(Difference(name, left, right))
-    return Compatibility(tuple(sorted(fields)), tuple(differences))
+    return Compatibility(names, tuple(differences))
 
 
 @dataclass(frozen=True, slots=True)
@@ -275,7 +290,7 @@ def publish_evidence(
     manifest_path: Path,
     *,
     reports: Mapping[Path, bytes] | None = None,
-    immutable: Collection[Path] = (),
+    immutable: Iterable[Path] = (),
     verify: Callable[[], None] | None = None,
 ) -> None:
     """Publish verified evidence and pre-rendered reports in one transaction.
@@ -287,17 +302,20 @@ def publish_evidence(
     """
     payload, manifest = serialize_evidence(evidence)
     parse_evidence(payload, manifest)
-    writes = [(payload_path, payload), (manifest_path, manifest), *(reports or {}).items()]
+    writes = [(payload_path, payload), (manifest_path, manifest)]
+    if reports is not None:
+        writes.extend(reports.items())
+    protected_paths = tuple(immutable)
     paths = _validate_distinct_paths(tuple(path for path, _ in writes))
-    if any(not any(_paths_alias(path, target) for target in paths) for path in immutable):
+    if any(not any(_paths_alias(path, target) for target in paths) for path in protected_paths):
         raise ValueError("immutable paths must be publication targets")
     for (path, data), resolved in zip(writes, paths, strict=True):
-        if any(_paths_alias(resolved, protected) for protected in immutable) and path.exists() and path.read_bytes() != data:
+        if any(_paths_alias(resolved, protected) for protected in protected_paths) and path.exists() and path.read_bytes() != data:
             raise ValueError(f"immutable evidence already exists with different bytes: {path}")
     replace_many(dict(writes), **({"verify": verify} if verify is not None else {}))
 
 
-def fingerprint_files(root: Path, paths: Sequence[Path]) -> str:
+def fingerprint_files(root: Path, paths: Iterable[Path]) -> str:
     """Hash an explicit inventory of relative regular files, including names.
 
     Framing is versioned and length-prefixed; order does not matter. Reject

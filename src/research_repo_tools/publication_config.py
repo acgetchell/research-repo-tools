@@ -1,5 +1,6 @@
 """Strict TOML adapter for publishing shared comparison or complete-run evidence."""
 
+import json
 import posixpath
 import tomllib
 from collections.abc import Mapping
@@ -48,6 +49,7 @@ def _array(value: object, context: str) -> list[object]:
 
 
 def _run_layout(raw: dict[str, object], retained: Evidence):
+    """Resolve the report's series, version labels, rows, and comparison pairs against retained run evidence."""
     from research_repo_tools.complete_runs import CompleteRun, validate_run_evidence
     from research_repo_tools.criterion import _statistic
     from research_repo_tools.run_presentation import RunLayout, RunRow, SeriesSelection
@@ -113,6 +115,7 @@ def _run_layout(raw: dict[str, object], retained: Evidence):
 
 
 def _run_table_style(value: object):
+    """Apply table defaults and validate interval placement, comparison columns, and their headings."""
     from research_repo_tools.run_presentation import RunTableStyle
 
     raw = _table(
@@ -350,8 +353,6 @@ def load_publication(
         if field in raw:
             patterns = tuple(_string(item, field) for item in _array(raw[field], field))
             inventory = _inventory(root, patterns)
-            import json
-
             recorded_key = "source-inventory" if field == "current-sources" else "harness-inventory"
             if schema == 2 and sorted(json.loads(dict(sources["current"].context)[recorded_key])) != list(inventory):
                 raise ValueError(f"{field} membership differs from the measured source")

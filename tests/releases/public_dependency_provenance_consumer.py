@@ -20,7 +20,18 @@ from pathlib import Path
 from typing import Any, override
 from unittest.mock import patch
 
-from research_repo_tools import _dependency_probe, cli, config, dependency_provenance, dependency_sources, process, python_baseline, python_tools, registry
+from research_repo_tools import (
+    _dependency_probe,
+    _registry_requests,
+    cli,
+    config,
+    dependency_provenance,
+    dependency_sources,
+    process,
+    python_baseline,
+    python_tools,
+    registry,
+)
 from research_repo_tools.dependency_provenance import check_development_dependency, check_release_dependencies
 
 PACKAGE = "research-repo-tools"
@@ -105,7 +116,7 @@ class TestDependencyProvenance(unittest.TestCase):
         # A separate regression overrides this location to exercise source shadowing.
         self.enterContext(patch.object(dependency_provenance, "__file__", str(self.installed / "research_repo_tools/dependency_provenance.py")))
         self.network = self.enterContext(patch.object(registry, "_json", return_value=self.inventory))
-        self.enterContext(patch.object(registry._OPENER, "open", side_effect=lambda *_args, **_kwargs: Response(self.wheel)))
+        self.enterContext(patch.object(_registry_requests._OPENER, "open", side_effect=lambda *_args, **_kwargs: Response(self.wheel)))
         self.command = self.enterContext(patch.object(process, "run_command", return_value=subprocess.CompletedProcess([], 0, "", "")))
         self.source_lookup = self.enterContext(
             patch.object(dependency_sources.HttpSourceProvider, "read", side_effect=lambda _url: json.dumps(self.inventory).encode())
@@ -257,7 +268,10 @@ class TestDependencyProvenance(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "yanked"):
             check_release_dependencies(self.root)
         self.inventory["urls"][0]["yanked"] = False
-        with patch.object(registry._OPENER, "open", return_value=Response(b"different bytes")), self.assertRaisesRegex(ValueError, "wheel bytes differ"):
+        with (
+            patch.object(_registry_requests._OPENER, "open", return_value=Response(b"different bytes")),
+            self.assertRaisesRegex(ValueError, "wheel bytes differ"),
+        ):
             check_release_dependencies(self.root)
 
     def test_stale_lock_check_precedes_registry_and_has_recovery_guidance(self):
@@ -278,6 +292,8 @@ class TestDependencyProvenance(unittest.TestCase):
                 with contextlib.redirect_stderr(io.StringIO()) as errors:
                     self.assertEqual(cli.main(["--root", str(self.root), "release", "dependencies"]), 1)
                 self.assertIn("resolve and sync uv.lock", errors.getvalue())
+                if stage == "wheel":
+                    self.assertIn("research-repo-tools: published dependency wheel download was truncated", errors.getvalue())
                 self.assertNotIn("Traceback", errors.getvalue())
         self.assertEqual(self.snapshot(), before)
 
@@ -285,12 +301,12 @@ class TestDependencyProvenance(unittest.TestCase):
         failure = urllib.error.URLError(socket.gaierror(socket.EAI_AGAIN, "private resolver detail"))
         before = self.snapshot()
         with patch("research_repo_tools._registry_requests.time.sleep") as wait:
-            with patch.object(registry._OPENER, "open", side_effect=[failure, Response(self.wheel)]) as download:
+            with patch.object(_registry_requests._OPENER, "open", side_effect=[failure, Response(self.wheel)]) as download:
                 self.assertEqual(check_release_dependencies(self.root)[0].version, VERSION)
             self.assertEqual(download.call_count, 2)
             wait.assert_called_once_with(1)
 
-            with patch.object(registry._OPENER, "open", side_effect=failure) as download:
+            with patch.object(_registry_requests._OPENER, "open", side_effect=failure) as download:
                 with self.assertRaisesRegex(registry.TransientRegistryError, "temporary DNS lookup failure") as rejected:
                     check_release_dependencies(self.root)
                 self.assertIn("same checkout and pins", str(rejected.exception))
@@ -301,7 +317,7 @@ class TestDependencyProvenance(unittest.TestCase):
             stdout, stderr = io.StringIO(), io.StringIO()
             output, github_output = self.root / "evidence.json", self.root / "github-output.txt"
             with (
-                patch.object(registry._OPENER, "open", side_effect=failure) as download,
+                patch.object(_registry_requests._OPENER, "open", side_effect=failure) as download,
                 patch("research_repo_tools.release_interfaces.create_evidence_manifest") as manifest,
                 contextlib.redirect_stdout(stdout),
                 contextlib.redirect_stderr(stderr),
@@ -342,7 +358,7 @@ class TestDependencyProvenance(unittest.TestCase):
             (self.root / "pyproject.toml").write_bytes(self.manifest.replace("==0.2.6", "==0.2.7").encode())
             return Response(self.wheel)
 
-        with patch.object(registry._OPENER, "open", side_effect=download), self.assertRaisesRegex(ValueError, "changed during verification"):
+        with patch.object(_registry_requests._OPENER, "open", side_effect=download), self.assertRaisesRegex(ValueError, "changed during verification"):
             check_release_dependencies(self.root)
 
     def test_policy_is_selected_upstream_only_and_cannot_be_disabled_by_empty_override(self):
@@ -594,7 +610,7 @@ class TestDependencyProvenance(unittest.TestCase):
 
     def test_each_verification_path_reuses_wheel_bytes_but_a_later_check_reacquires(self):
         self.normal_environment(self.root / ".venv")
-        with patch.object(registry._OPENER, "open", side_effect=lambda *_args, **_kwargs: Response(self.wheel)) as download:
+        with patch.object(_registry_requests._OPENER, "open", side_effect=lambda *_args, **_kwargs: Response(self.wheel)) as download:
             check_release_dependencies(self.root)
             # Legacy selection and the full policy graph both verify the wheel;
             # the legacy normal/isolated pair still shares one download.

@@ -74,6 +74,28 @@ def test_scans_source_with_a_python_encoding_declaration(checker, tmp_path, monk
     assert f"{path}:{source.count(b'\n')}:1: implicit-newline:" in capsys.readouterr().err
 
 
+def test_partial_inventory_reports_unreadable_directory_and_checks_stubs(checker, tmp_path, monkeypatch, capsys):
+    """A failed directory scan must remain visible alongside other source violations."""
+    import os
+
+    blocked = tmp_path / "blocked"
+    blocked.mkdir()
+    stub = tmp_path / "sample.pyi"
+    stub.write_bytes(CASES[CASES.index("builtin write") + 1].encode())
+    scandir = os.scandir
+
+    def scan(directory):
+        if directory == blocked or directory == str(blocked):
+            raise PermissionError(f"blocked source directory {blocked}")
+        return scandir(directory)
+
+    monkeypatch.setattr(os, "scandir", scan)
+    monkeypatch.setattr(sys, "argv", [str(CHECKER), str(tmp_path)])
+    assert checker.main() == 1
+    errors = capsys.readouterr().err
+    assert str(blocked) in errors and f"{stub}:1:1: implicit-newline" in errors
+
+
 @pytest.mark.parametrize("newline", ["\n", ""])
 def test_explicit_policy_preserves_mixed_bytes_on_native_path_and_windows_model(tmp_path, newline):
     text = "first\nsecond\r\n分析\n"

@@ -32,13 +32,14 @@ PAPER_EXTRA_TESTS = ("TestPdf",)
 
 
 def run(command: list[str], *, cwd: Path, env: dict[str, str], timeout: int = TIMEOUT, capture_output: bool = True) -> str:
+    """Run a checked command with a timeout and decode captured output as UTF-8."""
     result = subprocess.run(command, cwd=cwd, env=env, check=True, capture_output=capture_output, encoding="utf-8", timeout=timeout)
     return result.stdout or ""
 
 
 def run_isolated(python: Path, arguments: list[str], *, cwd: Path, env: dict[str, str], timeout: int = TIMEOUT, capture_output: bool = True) -> str:
-    # -I ignores Python environment settings; retain UTF-8 transport and the
-    # no-bytecode policy used by the import side-effect checks.
+    """Run the installed Python with isolated imports, UTF-8 streams, and bytecode writes disabled."""
+    # -I ignores Python environment settings, so select these policies at startup.
     return run([str(python), "-I", "-B", "-X", "utf8", *arguments], cwd=cwd, env=env, timeout=timeout, capture_output=capture_output)
 
 
@@ -90,25 +91,38 @@ def command_failures(error: Exception) -> Iterator[subprocess.CalledProcessError
         yield error
 
 
-BASE_SMOKE = r"""
-import importlib, importlib.metadata, importlib.util, pathlib, pkgutil, socket, sys
+IMPORT_SMOKE = r"""
+import importlib, pathlib, pkgutil, sys
+requests = []
+def offline(event, args):
+    if event in {"socket.connect", "socket.getaddrinfo", "socket.gethostbyaddr", "socket.gethostbyname", "socket.getnameinfo", "socket.sendto", "socket.sendmsg"}:
+        requests.append(event)
+        raise AssertionError(f"imports attempted network access: {event}")
+sys.addaudithook(offline)
+sentinel = pathlib.Path("README.md")
+original = b"# Consumer\r\n\xff\n"
+sentinel.write_bytes(original)
 import research_repo_tools
-assert research_repo_tools.__version__ == importlib.metadata.version("research-repo-tools")
-root = pathlib.Path(sys.argv[1]).resolve()
-assert not pathlib.Path(research_repo_tools.__file__).is_relative_to(root)
-def no_network(*args, **kwargs):
-    raise AssertionError("imports attempted network access")
-socket.create_connection = no_network
-before = sorted(pathlib.Path.cwd().rglob("*"))
 for module in pkgutil.walk_packages(research_repo_tools.__path__, research_repo_tools.__name__ + "."):
     importlib.import_module(module.name)
-assert sorted(pathlib.Path.cwd().rglob("*")) == before
-for optional in ("nbformat", "nbclient", "pypdf", "matplotlib", "numpy", "pandas", "polars", "torch", "pytest", "ruff", "ty"):
+assert not requests, f"imports attempted network access: {requests}"
+assert set(pathlib.Path(".").iterdir()) == {sentinel} and sentinel.is_file() and not sentinel.is_symlink() and sentinel.read_bytes() == original, "imports changed consumer files"
+"""
+
+BASE_SMOKE = (
+    IMPORT_SMOKE
+    + r"""
+import importlib.metadata, importlib.util
+assert research_repo_tools.__version__ == importlib.metadata.version("research-repo-tools")
+root = pathlib.Path(sys.argv[1]).resolve()
+assert not pathlib.Path(research_repo_tools.__file__).resolve().is_relative_to(root)
+for optional in ("nbformat", "nbclient", "pypdf", "matplotlib", "numpy", "pandas", "polars", "torch", "pytest", "ruff", "semgrep", "ty"):
     assert importlib.util.find_spec(optional) is None, optional
 from research_repo_tools.changelog import TEMPLATES, template
 for name in TEMPLATES:
     assert template(name).strip()
-assert len(importlib.metadata.distribution("research-repo-tools").entry_points) == 1
+entry, = importlib.metadata.distribution("research-repo-tools").entry_points
+assert (entry.group, entry.name, entry.value) == ("console_scripts", "research-repo-tools", "research_repo_tools.cli:entrypoint")
 from research_repo_tools.cli import main
 consumer = pathlib.Path.cwd() / "minimal consumer"
 consumer.mkdir()
@@ -122,6 +136,7 @@ notebook.write_text('{"nbformat":4,"nbformat_minor":5,"metadata":{},"cells":[]}'
 assert main(["--root", str(consumer), "notebooks", "group"]) == 0
 assert main(["--root", str(consumer), "notebooks", "check", str(notebook)]) == 1
 """
+)
 
 
 def check_python_update(consumer: Path, artifact: Path, registry_wheel: Path, version: str, uv: str, just: Path, env: dict[str, str]) -> None:
@@ -328,15 +343,21 @@ def check_update_bootstrap(consumer: Path, uv: str, just: Path, env: dict[str, s
 
 
 def check(dist: Path, *, changelog_only: bool = False) -> None:
+    """Install wheel and sdist into separate environments and verify the installed consumer commands."""
+    if not __debug__:
+        raise RuntimeError("installation checks require enabled Python assertions; remove -O or PYTHONOPTIMIZE")
     metadata = tomllib.loads((ROOT / "pyproject.toml").read_text(encoding="utf-8"))
     version = metadata["project"]["version"]
     expected_just = next(item.removeprefix("rust-just==") for item in metadata["project"]["dependencies"] if item.startswith("rust-just=="))
     validation_checkers = [next(item for item in metadata["dependency-groups"]["dev"] if isinstance(item, str) and item.startswith("zizmor=="))]
     wheel = dist / f"research_repo_tools-{version}-py3-none-any.whl"
     sdist = dist / f"research_repo_tools-{version}.tar.gz"
-    artifacts = set(dist.glob("*.whl")) | set(dist.glob("*.tar.gz"))
-    if artifacts != {wheel, sdist}:
-        raise ValueError(f"Expected only {wheel.name} and {sdist.name}; found {sorted(path.name for path in artifacts)}")
+    artifacts = {path.name for path in dist.iterdir() if path.name.lower().endswith((".whl", ".tar.gz"))}
+    if artifacts != {wheel.name, sdist.name}:
+        raise ValueError(f"Expected only {wheel.name} and {sdist.name}; found {sorted(artifacts)}")
+    for path in (wheel, sdist):
+        if path.is_symlink() or not path.is_file():
+            raise ValueError(f"distribution must be a regular file: {path.name}")
     with zipfile.ZipFile(wheel) as archive:
         names = archive.namelist()
         assert "research_repo_tools/templates/cliff.toml" in names
@@ -356,18 +377,24 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
     # Keep network settings, but never let the caller redirect these
     # temporary consumers into another project, environment, or working directory.
     external_locations = {
+        "CONDA_PREFIX",
         "PYTHONPATH",
         "PYTHONHOME",
+        "PYTHONOPTIMIZE",
         "VIRTUAL_ENV",
+        "UV_CONFIG_FILE",
         "UV_ENV_FILE",
+        "UV_NO_CONFIG",
         "UV_PROJECT",
         "UV_PROJECT_ENVIRONMENT",
+        "UV_PYTHON",
+        "UV_SYSTEM_PYTHON",
         "UV_WORKING_DIR",
         "UV_WORKING_DIRECTORY",
     }
     fixture_environment = runpy.run_path(str(ROOT / "tests/fixture_environment.py"))
     env = {key: value for key, value in fixture_environment["git_environment"]().items() if key not in external_locations}
-    env["PYTHONDONTWRITEBYTECODE"] = "1"
+    env.update(PYTHONDONTWRITEBYTECODE="1", PYTHONUTF8="1", PYTHONIOENCODING="utf-8", PYTHONNOUSERSITE="1")
     env["RUSTUP_TOOLCHAIN"] = fixture_environment["rust_channel"]()
     if env.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1":
         print("Git-mutating consumer tests are skipped by RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS=1 (wheel and sdist).")
@@ -380,8 +407,13 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             name = "wheel" if artifact == wheel else "sdist"
             consumer = temporary / name
             consumer.mkdir()
-            shutil.copyfile(ROOT / "tests/fixture_environment.py", consumer / "fixture_environment.py")
-            shutil.copyfile(ROOT / "rust-toolchain.toml", consumer / "rust-toolchain.toml")
+            # Only the copied test tree is available to standalone fixture imports.
+            tests = consumer / "consumer suites" / "tests"
+            tests.mkdir(parents=True)
+            for support_file in ("__init__.py", "fixture_environment.py"):
+                shutil.copyfile(ROOT / "tests" / support_file, tests / support_file)
+            shutil.copytree(ROOT / "tests/fixtures", tests / "fixtures", ignore=shutil.ignore_patterns("__pycache__"))
+            shutil.copyfile(ROOT / "rust-toolchain.toml", tests.parent / "rust-toolchain.toml")
             environment = consumer / "environment"
             run([uv, "venv", "--python", "3.15", str(environment)], cwd=consumer, env=env)
             scripts = environment / ("Scripts" if os.name == "nt" else "bin")
@@ -391,7 +423,8 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
 
             def copy_suite(relative: str) -> Path:
                 source = ROOT / "tests" / relative
-                target = consumer / source.name
+                target = tests / relative
+                target.parent.mkdir(parents=True, exist_ok=True)
                 target.write_bytes(source.read_bytes())
                 return target
 
@@ -405,7 +438,9 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
                 )
                 print(f"PASS: installed {name} changelog CLI with real git-cliff")
                 return
-            run_isolated(python, ["-c", BASE_SMOKE, str(ROOT)], cwd=consumer, env=local_env)
+            smoke = consumer / "import smoke"
+            smoke.mkdir()
+            run_isolated(python, ["-c", BASE_SMOKE, str(ROOT)], cwd=smoke, env=local_env)
             import_suite = copy_suite("validation/public_import_consumer.py")
             run_consumer_suite(python, [str(import_suite)], cwd=consumer, env=local_env)
             notebook_suite = copy_suite("notebooks/public_notebook_consumer.py")
@@ -429,13 +464,12 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
                 "releases/public_release_consumer.py",
             ):
                 run_consumer_suite(python, [str(copy_suite(suite))], cwd=consumer, env=local_env)
-            validation_release_suite = consumer / "public_validation_release_consumer.py"
-            validation_release_suite.write_bytes((ROOT / "tests/releases/public_validation_consumer.py").read_bytes())
+            validation_release_suite = copy_suite("releases/public_validation_consumer.py")
             run_consumer_suite(python, [str(validation_release_suite)], cwd=consumer, env=local_env)
             dependency_suite = copy_suite("releases/public_dependency_provenance_consumer.py")
             run_consumer_suite(python, [str(dependency_suite)], cwd=consumer, env=local_env)
             source_suite = copy_suite("dependencies/public_sources_consumer.py")
-            shutil.copytree(ROOT / "tests/dependencies/fixtures", consumer / "fixtures")
+            shutil.copytree(ROOT / "tests/dependencies/fixtures", source_suite.parent / "fixtures")
             run_consumer_suite(python, [str(source_suite)], cwd=consumer, env=local_env)
             for suite in (
                 "dependencies/public_builds_consumer.py",
@@ -445,7 +479,7 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             ):
                 run_consumer_suite(python, [str(copy_suite(suite))], cwd=consumer, env=local_env)
             evidence_suite = copy_suite("releases/public_evidence_consumer.py")
-            (consumer / "PREPARING_DRAFTS.md").write_bytes((ROOT / "docs/PREPARING_DRAFTS.md").read_bytes())
+            (evidence_suite.parent / "PREPARING_DRAFTS.md").write_bytes((ROOT / "docs/PREPARING_DRAFTS.md").read_bytes())
             receipts_suite = copy_suite("releases/public_receipts_consumer.py")
             run_consumer_suite(python, [str(receipts_suite)], cwd=consumer, env=local_env)
             run_consumer_suite(python, [str(evidence_suite)], cwd=consumer, env=local_env)
@@ -474,10 +508,13 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
             ):
                 run_consumer_suite(python, [str(copy_suite(suite))], cwd=consumer, env=local_env)
             # Exercise a real locked update using the installed wheel or sdist.
-            with zipfile.ZipFile(wheel) as archive:
-                scanner_constraints = archive.read("research_repo_tools/templates/semgrep-constraints.txt").decode("utf-8")
-            overrides = [line for line in scanner_constraints.splitlines() if line and not line.startswith("#")]
-            check_semgrep_update(consumer / "scanner consumer", artifact, version, uv, env, overrides)
+            installed_constraints = run_isolated(
+                python,
+                ["-c", "import json; from research_repo_tools.semgrep_tool import constraints; print(json.dumps(constraints()))"],
+                cwd=consumer,
+                env=local_env,
+            )
+            check_semgrep_update(consumer / "scanner consumer", artifact, version, uv, env, json.loads(installed_constraints))
             for suite in (
                 "toolchain/public_toolchain_consumer.py",
                 "toolchain/public_selected_tools_consumer.py",
@@ -644,6 +681,7 @@ def check(dist: Path, *, changelog_only: bool = False) -> None:
 
 
 def main() -> int:
+    """Run the requested full or changelog-only distribution installation check."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--dist", type=Path, default=ROOT / "dist")
     parser.add_argument("--changelog-only", action="store_true", help="require git-cliff and run only installed CLI generation against both distributions")
@@ -651,10 +689,13 @@ def main() -> int:
     try:
         check(args.dist.resolve(), changelog_only=args.changelog_only)
     except (subprocess.CalledProcessError, subprocess.TimeoutExpired, ExceptionGroup) as error:
+        # This checker can run before the project itself has been installed.
+        console_text = runpy.run_path(str(ROOT / "src/research_repo_tools/_console.py"))["console_text"]
         for failure in command_failures(error):
             for output, stream in ((failure.stdout, sys.stdout), (failure.stderr, sys.stderr)):
                 if output:
-                    stream.write(output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output)
+                    message = output.decode("utf-8", errors="replace") if isinstance(output, bytes) else output
+                    stream.write(console_text(message, stream))
                     stream.flush()
         raise
     return 0

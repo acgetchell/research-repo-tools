@@ -2,6 +2,7 @@
 
 import json
 import tomllib
+from collections.abc import Mapping
 from pathlib import Path
 from typing import cast
 from urllib.parse import urlsplit
@@ -15,6 +16,7 @@ from packaging.utils import canonicalize_name
 from packaging.version import Version
 
 from research_repo_tools.config import _table
+from research_repo_tools.toml_source import string_literal
 
 # Other uv resolver/build/authentication settings are read from the selected
 # project's configuration by --directory/--project. These project metadata
@@ -37,7 +39,7 @@ PROJECT_POLICY = frozenset(
 def _literal(value: object) -> str:
     """Encode the bounded TOML values used by uv metadata, never executable text."""
     if isinstance(value, str):
-        return json.dumps(value, ensure_ascii=False)
+        return string_literal(value)
     if isinstance(value, bool):
         return "true" if value else "false"
     if isinstance(value, int):
@@ -45,7 +47,7 @@ def _literal(value: object) -> str:
     if isinstance(value, list):
         return "[" + ", ".join(_literal(item) for item in value) + "]"
     if isinstance(value, dict) and all(isinstance(key, str) for key in value):
-        return "{" + ", ".join(f"{json.dumps(key)} = {_literal(item)}" for key, item in value.items()) + "}"
+        return "{" + ", ".join(f"{string_literal(key)} = {_literal(item)}" for key, item in value.items()) + "}"
     raise ValueError("unsupported uv resolution metadata value")
 
 
@@ -121,23 +123,31 @@ def fixed_source_names(text: str) -> set[str]:
     }
 
 
+def group_names(groups: Mapping[str, object]) -> dict[str, str]:
+    """Index original uv group names by normalized name and reject duplicates."""
+    result: dict[str, str] = {}
+    for name in groups:
+        normalized = canonicalize_name(name)
+        if normalized in result:
+            raise ValueError(f"duplicate normalized uv dependency group: {name}")
+        result[normalized] = name
+    return result
+
+
 def group_constraints(text: str) -> dict[str, str]:
     """Retain per-group Python support when flattening the dev include closure."""
     data = tomllib.loads(text)
     uv = _table(_table(data.get("tool", {}), "tool").get("uv", {}), "tool.uv")
     groups = _table(uv.get("dependency-groups", {}), "tool.uv.dependency-groups")
     result = {}
-    for name, value in groups.items():
-        entry = _table(value, f"tool.uv.dependency-groups.{name}")
+    for group, name in group_names(groups).items():
+        entry = _table(groups[name], f"tool.uv.dependency-groups.{name}")
         requirement = entry.get("requires-python")
         if set(entry) != {"requires-python"} or not isinstance(requirement, str):
             raise ValueError(f"unsupported tool.uv.dependency-groups.{name}: expected requires-python")
         specifiers = SpecifierSet(requirement)
         if specifiers.is_unsatisfiable():
             raise ValueError(f"tool.uv.dependency-groups.{name}.requires-python has no matching versions")
-        group = canonicalize_name(name)
-        if group in result:
-            raise ValueError(f"duplicate normalized uv dependency group: {name}")
         result[group] = str(specifiers)
     return result
 
@@ -228,6 +238,7 @@ def marker_python_support(marker: Marker | None) -> VersionRange:
 
 
 def constrain_group(raw: str, python: str) -> str:
+    """Intersect a requirement's existing marker with the group's Python version conditions."""
     if not python:
         return raw
     requirement = Requirement(raw)
@@ -240,17 +251,19 @@ def constrain_group(raw: str, python: str) -> str:
 
 
 def require_registry_requirement(raw: str) -> None:
+    """Reject a requirement with a direct reference before attempting registry pin resolution."""
     if Requirement(raw).url is not None:
         raise ValueError("Python pin updates do not support direct URL/path/Git requirements; use a named package index")
 
 
 def script_metadata(text: str, root: Path, requires_python: str, requirements: list[str]) -> str:
+    """Render PEP 723 script metadata with the project's uv resolution options."""
     for raw in requirements:
         require_registry_requirement(raw)
     metadata: dict[str, object] = {"requires-python": requires_python, "dependencies": requirements}
     options = policy(text, root)
     if options:
         metadata["tool"] = {"uv": options}
-    document = "\n".join(f"{json.dumps(key)} = {_literal(value)}" for key, value in metadata.items())
+    document = "\n".join(f"{string_literal(key)} = {_literal(value)}" for key, value in metadata.items())
     tomllib.loads(document)
-    return "# /// script\n" + "\n".join("# " + line for line in document.splitlines()) + "\n# ///\n"
+    return "# /// script\n" + "\n".join("# " + line for line in document.split("\n")) + "\n# ///\n"

@@ -25,6 +25,7 @@ def _external(path: Path, checkout: Path) -> bool:
 
 
 def _prepare(settings: Config, checkout: Path) -> tuple[dict[str, str], Path]:
+    """Select external release tools and return the subprocess environment and verified GitHub CLI path."""
     if not sys.flags.isolated:
         raise ValueError("start the release runtime with Python -I in an external installed environment")
     python = Path(sys.executable)

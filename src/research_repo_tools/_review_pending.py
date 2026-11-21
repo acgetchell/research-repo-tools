@@ -22,6 +22,8 @@ _MAX_RECORD_BYTES = 2 * 1024 * 1024
 
 @dataclass(frozen=True, slots=True)
 class PendingReview:
+    """A saved quote tied to its original location, checkout, and content digest."""
+
     path: Path
     identity: str
     root: Path
@@ -38,6 +40,7 @@ def _contained(parent: Path, worktree: Path) -> bool:
 
 
 def temporary_parent(worktree: Path) -> Path:
+    """Select system temporary storage outside the reviewed worktree."""
     parent = Path(tempfile.gettempdir()).resolve(strict=True)
     if _contained(parent, worktree):
         raise ValueError("review temporary storage must be outside the Git worktree; select an outside system temporary directory")
@@ -45,6 +48,7 @@ def temporary_parent(worktree: Path) -> Path:
 
 
 def destination(path: Path | None, worktree: Path) -> Path:
+    """Resolve a pending review destination outside the worktree and reject link targets."""
     if path is None:
         parent = temporary_parent(worktree)
         path = Path(tempfile.mkdtemp(prefix="rrt-pending-review-", dir=parent)) / "pending.json"
@@ -66,6 +70,7 @@ def _create(path: Path, payload: bytes) -> None:
 
 
 def save(path: Path, *, root: Path, base: str | None, observed: ReviewIdentity, quote: ReviewQuote) -> ConsentRequired:
+    """Create a bounded, single-use pending record bound to the quote and observed review inputs."""
     # ASCII escapes preserve POSIX surrogateescape paths in portable JSON bytes.
     payload = (
         json.dumps(
@@ -94,6 +99,7 @@ def save(path: Path, *, root: Path, base: str | None, observed: ReviewIdentity, 
 
 
 def load(path: Path) -> PendingReview:
+    """Read a pending review from its original location and recover its content identity."""
     if path.is_symlink() or path.is_junction():
         raise ValueError("pending review must not be a link")
     path = path.parent.resolve(strict=True) / path.name
@@ -121,6 +127,7 @@ def load(path: Path) -> PendingReview:
 
 
 def consume(pending: PendingReview, approval: ReviewApproval | None) -> None:
+    """Atomically mark a pending quote used or denied before any paid attempt can proceed."""
     if approval is not None and approval.pending_identity != pending.identity:
         raise ValueError("approval does not match this pending review")
     payload = deterministic_json(

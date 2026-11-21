@@ -159,9 +159,11 @@ class CapturedSource:
 
     @property
     def identity(self) -> str:
+        """Hash the canonical manifest of the captured source files."""
         return hashlib.sha256(_manifest(self.files).encode("ascii")).hexdigest()
 
     def provenance(self) -> str:
+        """Describe the measured revision and captured files in deterministic JSON."""
         return json.dumps(
             {
                 "schema": "research-repo-tools/source-export/v1",
@@ -175,6 +177,7 @@ class CapturedSource:
         )
 
     def verify(self) -> None:
+        """Reject changes to the revision or files represented by the original source capture."""
         for _ in range(2):
             if _resolve(self.repository, self.reference) != self.revision:
                 raise ValueError("original source changed after capture")

@@ -12,6 +12,8 @@ __all__ = ["LineCheck", "LineViolation", "check_lines", "inspect_lines"]
 
 @dataclass(frozen=True, slots=True)
 class LineViolation:
+    """A physical line whose Unicode code point count exceeds the configured limit."""
+
     path: str
     line: int
     length: int
@@ -24,6 +26,8 @@ class LineViolation:
 
 @dataclass(frozen=True, slots=True)
 class LineCheck:
+    """The number of inspected files and the individual lines that exceeded the limit."""
+
     files: int
     violations: tuple[LineViolation, ...]
 

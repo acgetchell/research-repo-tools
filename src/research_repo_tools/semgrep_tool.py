@@ -43,6 +43,8 @@ print(json.dumps({"path": str(binary), "version": version("semgrep"), "markers":
 
 @dataclass(frozen=True, slots=True)
 class VerifiedScanner:
+    """The Semgrep executable path and version established by scanner verification."""
+
     path: Path
     version: str
 

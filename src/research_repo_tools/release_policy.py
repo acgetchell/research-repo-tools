@@ -59,6 +59,8 @@ class FixedValue:
 
 
 class ReleaseSource(StrEnum):
+    """The release context field used to supply a metadata rule's replacement value."""
+
     VERSION = "version"
     TAG = "tag"
     PREVIOUS_TAG = "previous-tag"
@@ -116,6 +118,7 @@ class ReleaseRule:
             raise ValueError(f"invalid release rule pattern: {error}") from error
 
     def matches(self, text: str) -> tuple[re.Match[str], ...]:
+        """Find eligible matches and require the configured count and a nonempty captured value for each."""
         matches = tuple(
             match for match in re.finditer(self.pattern, text, re.MULTILINE) if self.exclude is None or re.search(self.exclude, match.group(0)) is None
         )
@@ -128,6 +131,8 @@ class ReleaseRule:
 
 @dataclass(frozen=True, slots=True)
 class ReleasePolicy:
+    """Consumer rules for release tags, dates, file updates, changelogs, and upstream dependencies."""
+
     date_policy: Literal["today", "declared"] = "today"
     final_changelog: bool = False
     required_files: tuple[str, ...] = ()
@@ -140,10 +145,13 @@ class ReleasePolicy:
         object.__setattr__(self, "published_dependencies", dependency_names(self.published_dependencies))
         if not isinstance(self.tag_policy, str) or self.tag_policy not in {"normalized-stable", "canonical-stable"}:
             raise ValueError("tag policy must be normalized-stable or canonical-stable")
-        if self.date_policy not in {"today", "declared"} or type(self.final_changelog) is not bool:
+        if self.date_policy not in ("today", "declared") or type(self.final_changelog) is not bool:
             raise ValueError("invalid release date or final-changelog policy")
         for name in ("required_files", "exclude", "rules"):
-            object.__setattr__(self, name, tuple(getattr(self, name)))
+            values = getattr(self, name)
+            if isinstance(values, (str, bytes)):
+                raise ValueError(f"release {name} must be a sequence of entries")
+            object.__setattr__(self, name, tuple(values))
         for path in self.required_files:
             relative_path(path)
         for pattern in self.exclude:

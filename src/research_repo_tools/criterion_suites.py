@@ -12,7 +12,7 @@ from research_repo_tools.complete_runs import CompleteSample, _integer, serializ
 from research_repo_tools.criterion_baselines import SavedSamplePlan, _load_saved_sample, _scope_plan, validate_saved_sample
 from research_repo_tools.criterion_inventory import CriterionInventory, _directory, serialize_inventory
 from research_repo_tools.evidence import Provenance, _digest, _load_json, _object, _string, deterministic_json, sha256, verify_sha256
-from research_repo_tools.files import replace_many
+from research_repo_tools.files import _publish_new_file
 from research_repo_tools.host_metadata import HostMetadata, parse_host, serialize_host
 from research_repo_tools.publication import _path
 
@@ -176,7 +176,7 @@ def pack_saved_suite(
     files["suite.json"] = deterministic_json(manifest)
     payload, result = _checked_archive(files, selected, limits)
     _output(root, output)
-    replace_many({destination: payload})
+    _publish_new_file(destination, payload)
     return result
 
 
@@ -253,5 +253,5 @@ def assemble_saved_suites(
             raise ValueError("suite archive inventory differs")
         payload, result = _checked_archive(files, plan, limits)
     _output(root, output)
-    replace_many({destination: payload})
+    _publish_new_file(destination, payload)
     return result

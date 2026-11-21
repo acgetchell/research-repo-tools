@@ -5,7 +5,7 @@ from pathlib import Path
 
 from research_repo_tools.evidence import publish_evidence
 from research_repo_tools.files import _validate_distinct_paths
-from research_repo_tools.measurement import MeasurementConfig, load_measurement, measure_pair
+from research_repo_tools.measurement import MeasurementConfig, _measurement_backend, load_measurement, measure_pair
 from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.performance_reports import render_report
 from research_repo_tools.publication import _inventory, _path
@@ -35,9 +35,10 @@ def measure_and_retain(
 ) -> None:
     """Acquire with controller/ref freshness checks and atomically retain outputs."""
     root = root.resolve(strict=True)
-    reporter = progress or ProgressReporter()
+    reporter = ProgressReporter() if progress is None else progress
     configuration_bytes = _path(root, configuration_path).read_bytes()
     configuration = load_measurement(root, configuration_path)
+    selected_backend = _measurement_backend(configuration, backend)
     if isinstance(pair, FirstRelease):
         if read_release is None or not isinstance(configuration, SuiteMeasurementPlan) or configuration.schedule is not None or not working_tree:
             raise ValueError("first release requires a release history reader and an unscheduled working-tree suite declaration")
@@ -46,11 +47,8 @@ def measure_and_retain(
         raise ValueError("first-release history reader is only used for a first release")
     if isinstance(configuration, SuiteMeasurementPlan) and configuration_path in configuration.outputs:
         raise ValueError("measurement declaration cannot be an output exception")
-    selected_backend = backend or (configuration.backend if not isinstance(configuration, MeasurementConfig) else "worktree")
     if selected_backend == "worktree" and not allow_git_mutations:
         raise ValueError("measure requires --allow-git-mutations for the worktree backend")
-    if not isinstance(configuration, MeasurementConfig) and selected_backend != configuration.backend:
-        raise ValueError("backend must match the acquisition declaration")
     from research_repo_tools.source_exports import _files, capture_source
 
     settings_config = configuration if isinstance(configuration, MeasurementConfig) else configuration.measurement

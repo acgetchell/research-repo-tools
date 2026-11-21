@@ -25,6 +25,7 @@ def _version(version: str, tool: str, *, stable: bool = False) -> str:
 
 
 def parse_installed_packages(output: str) -> dict[str, str]:
+    """Parse package names and versions from Cargo's installed package inventory."""
     packages: dict[str, str] = {}
     for line in output.splitlines():
         if not line or line[0].isspace():
@@ -40,6 +41,7 @@ def parse_installed_packages(output: str) -> dict[str, str]:
 
 
 def parse_tool_version(output: str, tool: str) -> str:
+    """Extract exactly one stable version from the named tool's version output."""
     if re.match(rf"^{re.escape(tool)}[ \t]+{STABLE.pattern}(?=\s|$)", output.strip()) is None:
         raise ValueError(f"expected {tool} version output starting with '{tool} X.Y.Z'")
     versions = [match["version"] for match in TOOL_VERSION.finditer(output)]
@@ -68,6 +70,7 @@ def _homebrew_version(output: str, tool: str) -> str:
 
 
 def update_text(text: str, installed: Mapping[str, str], mapping: Mapping[str, str]) -> tuple[str, dict[str, tuple[str, str]]]:
+    """Update mapped Just pins in memory and return the old and new versions for edits."""
     changes: dict[str, tuple[str, str]] = {}
     for pin, tool in mapping.items():
         if re.fullmatch(r"[A-Za-z_][A-Za-z0-9_-]*", pin) is None or re.fullmatch(r"[A-Za-z0-9_-]+", tool) is None:
@@ -99,6 +102,7 @@ def reconcile(path: Path, installed: Mapping[str, str], mapping: Mapping[str, st
 def update(
     path: Path, mapping: Mapping[str, str], *, uv: str = "uv", owners: Mapping[str, str] | None = None, dry_run: bool = False
 ) -> dict[str, tuple[str, str]]:
+    """Resolve versions from their declared tool owners and update the mapped Just pins unless previewing."""
     if not mapping:
         raise ValueError("deps.tools must explicitly map Just variable names to Cargo package names or uv")
     installed: dict[str, str] = {}

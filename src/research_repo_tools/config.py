@@ -59,22 +59,42 @@ FIELDS = {
 
 @dataclass(frozen=True, slots=True)
 class TextSettings:
+    """File-selection patterns and an optional line-length limit for consumer text checks."""
+
     line_limit: int | None = None
     include: tuple[str, ...] = ()
     exclude: tuple[str, ...] = ()
 
+    def __post_init__(self) -> None:
+        if self.line_limit is not None:
+            _positive_integer(self.line_limit, "text.line-limit")
+        for name in ("include", "exclude"):
+            object.__setattr__(self, name, _path_entries(getattr(self, name), f"text.{name}"))
+
 
 @dataclass(frozen=True, slots=True)
 class PaperDocument:
+    """A TeX source paired with its PDF, expected identity, and inspection policy."""
+
     tex: str
     pdf: str
     identity: str
     policy: PdfPolicy = field(default_factory=PdfPolicy)
     reference: str | None = None
 
+    def __post_init__(self) -> None:
+        for name in ("tex", "pdf", "identity"):
+            _string(getattr(self, name), f"paper {name}")
+        if self.reference is not None:
+            _string(self.reference, "paper reference")
+        if not isinstance(self.policy, PdfPolicy):
+            raise TypeError("paper policy must be a PdfPolicy")
+
 
 @dataclass(frozen=True, slots=True)
 class NotebookAdvice:
+    """Consumer settings for advisory notebook checks and their severity."""
+
     descriptive_ids: bool = True
     ruff_rules: tuple[str, ...] = ()
     strict: bool = False
@@ -88,6 +108,8 @@ class NotebookAdvice:
 
 @dataclass(frozen=True, slots=True)
 class NotebookLab:
+    """Browser and scratch-directory settings for launching JupyterLab."""
+
     browser: bool = False
     scratch_dir: str = "target/jupyter"
 
@@ -98,6 +120,8 @@ class NotebookLab:
 
 @dataclass(frozen=True, slots=True)
 class NotebookReset:
+    """Selections for source notebooks, scratch files, and checkpoints during reset."""
+
     sources: tuple[str, ...] = ()
     scratch: tuple[str, ...] = ()
     checkpoints: tuple[str, ...] = ()
@@ -129,6 +153,8 @@ def notebook_output_policy(value: object) -> Literal["clear", "preserve"]:
 
 @dataclass(frozen=True, slots=True)
 class NotebookSettings:
+    """Consumer defaults for the notebook environment, execution, output handling, and analysis."""
+
     group: str = "notebook"
     cwd: str = "."
     output_dir: str = "target/notebooks"
@@ -155,18 +181,25 @@ class NotebookSettings:
 
 @dataclass(frozen=True, slots=True)
 class ToolchainSettings:
+    """Managed tool declarations and the Python settings inherited from the shared package."""
+
     cargo: Mapping[str, str] = field(default_factory=dict)
     inherit_python: bool = False
     binaries: Mapping[str, str] = field(default_factory=dict)
     inherit_python_tools: bool = False
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "cargo", MappingProxyType(dict(self.cargo)))
-        object.__setattr__(self, "binaries", MappingProxyType(dict(self.binaries)))
+        _boolean(self.inherit_python, "toolchain.inherit-python")
+        _boolean(self.inherit_python_tools, "toolchain.inherit-python-tools")
+        for name in ("cargo", "binaries"):
+            pins = _strings(dict(getattr(self, name)), f"toolchain.{name}")
+            object.__setattr__(self, name, MappingProxyType(pins))
 
 
 @dataclass(frozen=True, slots=True)
 class DependencySettings:
+    """Consumer manifests, Just pins, and tool owners used by the dependency update commands."""
+
     pyproject: str = "pyproject.toml"
     justfile: str = "justfile"
     tools: Mapping[str, str] = field(default_factory=dict)
@@ -175,9 +208,11 @@ class DependencySettings:
     python_projects: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
-        object.__setattr__(self, "tools", MappingProxyType(dict(self.tools)))
-        object.__setattr__(self, "tool_owners", MappingProxyType(dict(self.tool_owners)))
-        object.__setattr__(self, "python_projects", tuple(self.python_projects))
+        for name in ("pyproject", "justfile", "uv"):
+            _string(getattr(self, name), f"deps.{name}")
+        object.__setattr__(self, "tools", MappingProxyType(_strings(dict(self.tools), "deps.tools")))
+        object.__setattr__(self, "tool_owners", MappingProxyType(_strings(dict(self.tool_owners), "deps.tool-owners")))
+        object.__setattr__(self, "python_projects", _path_entries(self.python_projects, "deps.python-projects"))
         if any(owner not in {"cargo", "homebrew"} for owner in self.tool_owners.values()):
             raise ValueError("deps.tool-owners supports cargo and homebrew; migrate prebuilt tools to toolchain.binaries")
         if self.tool_owners.keys() - set(self.tools.values()) or "uv" in self.tool_owners:
@@ -188,6 +223,8 @@ class DependencySettings:
 
 @dataclass(frozen=True, slots=True)
 class SemgrepSettings:
+    """Scanner inputs, fixture expectations, execution limits, and report settings for a consumer."""
+
     config: str | None = None
     fixtures: str | None = None
     namespace: str = ""
@@ -227,6 +264,8 @@ class SemgrepSettings:
 
 @dataclass(frozen=True, slots=True)
 class ChangelogSettings:
+    """Sources and formatting policy for generating the consumer's changelog."""
+
     formatter: str | None = None
     cliff_config: str | None = None
     owner: str | None = None
@@ -249,12 +288,21 @@ class ChangelogSettings:
 
 @dataclass(frozen=True, slots=True)
 class ZizmorSettings:
+    """Scanner persona and time budget in seconds for workflow audits."""
+
     persona: Literal["regular", "pedantic", "auditor"] | None = None
     timeout: int = 300
+
+    def __post_init__(self) -> None:
+        if self.persona is not None and self.persona not in ("regular", "pedantic", "auditor"):
+            raise ValueError("zizmor.persona must be regular, pedantic, or auditor")
+        _positive_integer(self.timeout, "zizmor.timeout")
 
 
 @dataclass(frozen=True, slots=True)
 class Config:
+    """Parsed consumer settings with a root for interpreting relative paths."""
+
     root: Path
     toolchain: ToolchainSettings = field(default_factory=ToolchainSettings)
     deps: DependencySettings = field(default_factory=DependencySettings)
@@ -272,6 +320,7 @@ class Config:
         object.__setattr__(self, "papers", MappingProxyType(dict(self.papers)))
 
     def path(self, value: str) -> Path:
+        """Interpret relative paths under the consumer root and preserve absolute paths."""
         path = Path(value)
         return path if path.is_absolute() else self.root / path
 
@@ -376,6 +425,13 @@ def _counts(value: object, root: Path) -> dict[Path, Mapping[str, int]]:
 def _release_paths(value: object, context: str) -> tuple[str, ...]:
     if not isinstance(value, list):
         raise ValueError(f"{context} must be an array of paths")
+    return _path_entries(value, context)
+
+
+def _path_entries(value: object, context: str) -> tuple[str, ...]:
+    """Capture individual configuration paths from a TOML array or a settings constructor."""
+    if not isinstance(value, (list, tuple)):
+        raise ValueError(f"{context} must be a sequence of paths")
     return tuple(_string(item, context) for item in value)
 
 
@@ -609,11 +665,24 @@ def parse(value: object, *, root: Path) -> Config:
 
 
 def load(path: Path | None = None, root: Path | None = None) -> Config:
+    """Load settings from an explicit file or the consumer pyproject.toml.
+
+    An absent default file yields default settings. An explicitly requested file must exist.
+    """
     filename = path or (root or Path.cwd()) / "pyproject.toml"
-    data: object = {}
-    if filename.is_file():
+    from stat import S_ISREG
+
+    try:
+        mode = filename.stat().st_mode
+    except FileNotFoundError:
+        if path is not None or filename.is_symlink():
+            raise ValueError(f"configuration not found: {filename}") from None
+        return parse({}, root=root or filename.parent)
+    if not S_ISREG(mode):
+        raise ValueError(f"configuration must be a regular file: {filename}")
+    try:
         document = tomllib.loads(filename.read_text(encoding="utf-8"))
-        data = _table(document.get("tool", {}), f"{filename}: tool").get("research-repo-tools", {}) if filename.name == "pyproject.toml" else document
-    elif path is not None:
-        raise ValueError(f"configuration not found: {path}")
+    except (tomllib.TOMLDecodeError, UnicodeError) as error:
+        raise ValueError(f"invalid TOML configuration {filename}: {error}") from error
+    data = _table(document.get("tool", {}), f"{filename}: tool").get("research-repo-tools", {}) if filename.name == "pyproject.toml" else document
     return parse(data, root=root or filename.parent)

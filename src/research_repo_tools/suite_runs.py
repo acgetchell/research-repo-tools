@@ -32,6 +32,7 @@ SUITE_RUN_SCHEMA = "research-repo-tools/complete-run/v4"
 
 
 def sample_document(sample: CompleteSample) -> dict[str, object]:
+    """Produce the JSON-compatible document retained for a complete benchmark sample."""
     return _object(_load_json(deterministic_json(_sample_document(sample)), "complete sample"), "complete sample")
 
 
@@ -108,12 +109,16 @@ class PhasePolicyView:
 
 @dataclass(frozen=True, slots=True)
 class PhaseView:
+    """The cases and reporting policy visible for one phase of a suite run."""
+
     policy: PhasePolicyView
     cases: tuple[CompleteCase, ...]
 
 
 @dataclass(frozen=True, slots=True)
 class SeriesView:
+    """A named phase-specific mapping of report rows to workloads."""
+
     name: str
     phase: str
     rows: tuple[tuple[str, str], ...]
@@ -130,14 +135,17 @@ class SuiteRun:
 
     @property
     def schema(self) -> str:
+        """Return the retained evidence schema for the run's release mode."""
         return FIRST_RELEASE_RUN_SCHEMA if self.first_release else SUITE_RUN_SCHEMA
 
     @property
     def harness_mode(self) -> str:
+        """Return the harness mode declared in the retained acquisition plan."""
         return self.plan.harness_mode
 
     @property
     def phases(self) -> tuple[tuple[str, PhaseView], ...]:
+        """Build report phase views for paired or first-release observations."""
         settings = self.plan.suites[0].measurement.baseline.policy
         result = []
         for phase in ("current",) if self.first_release else ("baseline", "current"):
@@ -161,6 +169,7 @@ class SuiteRun:
 
     @property
     def series(self) -> tuple[SeriesView, ...]:
+        """Build series views in suite order from the available phase samples."""
         samples = {(suite, phase): sample for suite, phase, sample, _ in self.observations}
         result = []
         for suite in self.plan.suites:
@@ -173,6 +182,7 @@ class SuiteRun:
         return tuple(result)
 
     def observation(self, phase: str, full_id: str) -> tuple[str, CompleteSample, Provenance]:
+        """Find the unique retained observation for a phase and workload or reject ambiguity or absence."""
         found = [(suite, sample, source) for suite, side, sample, source in self.observations if side == phase and full_id in sample.policy.expected]
         if len(found) != 1:
             raise ValueError(f"observation is unavailable or ambiguous: {phase}/{full_id}")
@@ -180,6 +190,7 @@ class SuiteRun:
 
 
 def parse_suite_run(evidence: Evidence) -> SuiteRun:
+    """Validate suite-run evidence against the declared units and release mode."""
     first = evidence.payload_schema == FIRST_RELEASE_RUN_SCHEMA
     if evidence.payload_schema not in {SUITE_RUN_SCHEMA, FIRST_RELEASE_RUN_SCHEMA}:
         raise ValueError("requires suite-run evidence")
@@ -247,6 +258,10 @@ def comparison_incompatibilities(evidence: Evidence, numerator: tuple[str, str],
 
 
 def comparison_for_run(run: SuiteRun, numerator: tuple[str, str], denominator: tuple[str, str]) -> tuple[str, ...]:
+    """Return the reasons two observations cannot support a paired comparison.
+
+    An empty result means the observations satisfy the comparison policy.
+    """
     a, left, first = run.observation(*numerator)
     b, right, second = run.observation(*denominator)
     reasons = []
@@ -273,6 +288,7 @@ def comparison_for_run(run: SuiteRun, numerator: tuple[str, str], denominator: t
 
 
 def validate_suite_policy(evidence: Evidence, plan: SuiteMeasurementPlan, *, release: bool = False) -> SuiteRun:
+    """Require the same declared suite plan and enforce workload eligibility for release comparisons."""
     run = parse_suite_run(evidence)
     if deterministic_json(run.plan.document()) != deterministic_json(plan.document()):
         raise ValueError("suite acquisition declaration changed")
@@ -298,6 +314,7 @@ def validate_suite_policy(evidence: Evidence, plan: SuiteMeasurementPlan, *, rel
 
 
 def render_suite_run(evidence: Evidence, *, title: str, links: str, identity: str) -> bytes:
+    """Render accepted suite evidence as Markdown, with ratios only for eligible pairs."""
     run = parse_suite_run(evidence)
     phases = ("current",) if run.first_release else ("baseline", "current")
     lines = [

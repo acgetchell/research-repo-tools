@@ -79,6 +79,7 @@ def _observe(
     read: Callable[[str], object],
     limit: int,
 ) -> tuple[dict[str, Any], int, int]:
+    """Check that the artifact ID and digest belong to the trusted producer's successful workflow attempt."""
     workflow = _object(read(f"actions/workflows/{PurePosixPath(producer.workflow).name}"), "acquisition workflow")
     workflow_id = _integer(workflow.get("id"), "acquisition workflow ID")
     if workflow.get("path") != producer.workflow:

@@ -13,6 +13,8 @@ from research_repo_tools.process import run_git_bytes
 
 @dataclass(frozen=True, slots=True)
 class ReviewIdentity:
+    """The reviewed worktree, revisions, and digest of the selected content."""
+
     worktree: Path
     digest: str
     head: str

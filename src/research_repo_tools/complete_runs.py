@@ -212,18 +212,23 @@ class CompleteCase:
 
     @property
     def full_id(self) -> str:
+        """Read the retained workload ID from the Criterion benchmark metadata."""
         return _string(_object(_load_json(self.benchmark, "Criterion benchmark"), "Criterion benchmark").get("full_id"), "Criterion full_id")
 
     @property
     def sample_count(self) -> int:
+        """Count the retained Criterion iteration observations."""
         return len(_array(_object(_load_json(self.sample, "Criterion sample"), "Criterion sample")["iters"], "iters"))
 
     def estimate(self, statistic: Statistic) -> Estimate:
+        """Read the retained point estimate and interval for the selected statistic."""
         return parse_estimate(self.estimates, statistic=statistic)
 
 
 @dataclass(frozen=True, slots=True)
 class CompleteSample:
+    """Retained Criterion cases for one phase under a single workload policy."""
+
     policy: CompletePolicy
     cases: tuple[CompleteCase, ...]
 
@@ -304,6 +309,8 @@ class RunSeries:
 
 @dataclass(frozen=True, slots=True)
 class CompleteRun:
+    """Baseline and current samples with the series and compatibility fields used to compare them."""
+
     phases: tuple[tuple[str, CompleteSample], ...]
     series: tuple[RunSeries, ...]
     compatible: tuple[str, ...] = ("harness_sha256",)
@@ -360,6 +367,7 @@ def _sample_document(sample: CompleteSample, schema: str = RUN_SCHEMA_V3) -> dic
 
 
 def serialize_run(run: CompleteRun) -> bytes:
+    """Encode a complete benchmark run with its schema, phases, and series in deterministic JSON."""
     return deterministic_json(
         {
             "schema": run.schema,
@@ -393,6 +401,7 @@ def _parse_complete_sample(value: object, schema: str = RUN_SCHEMA_V3) -> Comple
 
 
 def parse_run(payload: bytes) -> CompleteRun:
+    """Validate retained benchmark phases and series against a supported complete-run schema."""
     document = _object(_load_json(payload, "complete run"), "complete run")
     modern = document.get("schema") == RUN_SCHEMA_V3
     raw = _object(document, "complete run", {"schema", "compatible", "series", "phases"} | ({"harness_mode"} if modern else set()))
@@ -645,6 +654,7 @@ def _recorded_command(value: str, secrets: tuple[str, ...]) -> str:
 
 
 def _provenance_summary(evidence: Evidence) -> list[str]:
+    """Render Markdown rows from recorded provenance, limiting displayed context to the supported fields."""
     from research_repo_tools.host_metadata import parse_host
 
     # Only standard recorded fields are presented. Never dump arbitrary consumer

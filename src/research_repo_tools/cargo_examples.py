@@ -145,6 +145,7 @@ def _policy(value: object, timeout: int) -> _Policy:
 
 
 def _build(root: Path, examples: tuple[CargoExample, ...], profile: str, timeout: int, override: _Policy | None = None) -> dict[str, Path]:
+    """Build the selected examples and return the executable paths reported by Cargo for that build."""
     first = examples[0]
     args = ["build", "--locked", "--package", first.package_id, "--profile", profile, "--message-format=json-render-diagnostics"]
     if override is None:

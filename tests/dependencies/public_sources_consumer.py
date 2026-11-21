@@ -3,6 +3,7 @@
 import contextlib
 import contextvars
 import hashlib
+import http.client
 import io
 import json
 import os
@@ -63,6 +64,8 @@ REGISTRY_ADDRESS = (socket.AF_INET, socket.SOCK_STREAM, socket.IPPROTO_TCP, "", 
 
 
 class Provider:
+    """Serve registered registry and GitHub responses offline, recording each requested URL in order."""
+
     def __init__(self) -> None:
         self.responses: dict[str, bytes] = {}
         self.calls: list[str] = []
@@ -354,7 +357,7 @@ class TestSources(unittest.TestCase):
         def read(url: str) -> bytes:
             return _registry_requests.read_registry(url, limit=16, clock=lambda: now[0], sleep=lambda delay: now.__setitem__(0, now[0] + delay))
 
-        with patch("research_repo_tools.registry._OPENER.open", return_value=Response(PYTHON_URL)) as opener:
+        with patch("research_repo_tools._registry_requests._OPENER.open", return_value=Response(PYTHON_URL)) as opener:
             with patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "90"}):
                 self.assertEqual(read(PYTHON_URL), b"wheel")
             self.assertEqual(now[0], 65.0)
@@ -362,7 +365,7 @@ class TestSources(unittest.TestCase):
 
         now[0] = 0.0
         with (
-            patch("research_repo_tools.registry._OPENER.open", return_value=Response(PYTHON_URL)) as opener,
+            patch("research_repo_tools._registry_requests._OPENER.open", return_value=Response(PYTHON_URL)) as opener,
             patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "60"}),
             self.assertRaisesRegex(ValueError, r"files.pythonhosted.org sample_pkg.*total download budget exhausted"),
         ):
@@ -371,7 +374,7 @@ class TestSources(unittest.TestCase):
 
         now[0] = 0.0
         with (
-            patch("research_repo_tools.registry._OPENER.open", side_effect=lambda *_args, **_kwargs: Response(PYTHON_API, stall=True)) as opener,
+            patch("research_repo_tools._registry_requests._OPENER.open", side_effect=lambda *_args, **_kwargs: Response(PYTHON_API, stall=True)) as opener,
             patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "120"}),
             self.assertRaisesRegex(ValueError, r"pypi.org sample-pkg/1.2.3.*stalled body read") as failure,
         ):
@@ -411,9 +414,11 @@ class TestSources(unittest.TestCase):
 
                 stream = Network()
                 sock.makefile.return_value = io.BufferedReader(stream)
-                opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _registry_requests.RegistryHTTPSHandler(), registry._NoRedirectHandler())
+                opener = urllib.request.build_opener(
+                    urllib.request.ProxyHandler({}), _registry_requests.RegistryHTTPSHandler(), _registry_requests._NoRedirectHandler()
+                )
                 with (
-                    patch.object(registry, "_OPENER", opener),
+                    patch.object(_registry_requests, "_OPENER", opener),
                     patch.object(socket, "getaddrinfo", return_value=[REGISTRY_ADDRESS]),
                     patch.object(socket, "socket", return_value=sock),
                     patch.object(ssl.SSLContext, "wrap_socket", return_value=sock),
@@ -430,7 +435,9 @@ class TestSources(unittest.TestCase):
         now = [0.0]
         first, second = MagicMock(), MagicMock()
         other_address = (*REGISTRY_ADDRESS[:-1], ("192.0.2.2", 443))
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _registry_requests.RegistryHTTPSHandler(), registry._NoRedirectHandler())
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _registry_requests.RegistryHTTPSHandler(), _registry_requests._NoRedirectHandler()
+        )
 
         def lookup(*_args):
             now[0] += 1
@@ -447,7 +454,7 @@ class TestSources(unittest.TestCase):
         first.connect.side_effect = refuse
         second.connect.side_effect = timeout
         with (
-            patch.object(registry, "_OPENER", opener),
+            patch.object(_registry_requests, "_OPENER", opener),
             patch.object(socket, "getaddrinfo", side_effect=lookup),
             patch.object(socket, "socket", side_effect=[first, second]) as create_socket,
             patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "5"}),
@@ -462,7 +469,9 @@ class TestSources(unittest.TestCase):
 
     def test_registry_deadline_returns_while_native_dns_is_blocked(self) -> None:
         started, release, finished = threading.Event(), threading.Event(), threading.Event()
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _registry_requests.RegistryHTTPSHandler(), registry._NoRedirectHandler())
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _registry_requests.RegistryHTTPSHandler(), _registry_requests._NoRedirectHandler()
+        )
 
         def lookup(*_args):
             started.set()
@@ -472,7 +481,7 @@ class TestSources(unittest.TestCase):
 
         try:
             with (
-                patch.object(registry, "_OPENER", opener),
+                patch.object(_registry_requests, "_OPENER", opener),
                 patch.object(socket, "getaddrinfo", side_effect=lookup),
                 patch.object(socket, "socket") as connect,
                 patch.dict(os.environ, {"RRT_REGISTRY_TIMEOUT_SECONDS": "1"}),
@@ -484,7 +493,8 @@ class TestSources(unittest.TestCase):
             connect.assert_not_called()
         finally:
             release.set()
-            self.assertTrue(finished.wait(5))
+            if started.is_set():
+                self.assertTrue(finished.wait(5))
 
     def test_registry_resolver_releases_its_slot_once_after_interrupted_start(self) -> None:
         for worker_first in (False, True):
@@ -523,7 +533,7 @@ class TestSources(unittest.TestCase):
         opener = urllib.request.build_opener(
             urllib.request.ProxyHandler({"https": "http://proxy.example.invalid:8080"}),
             _registry_requests.RegistryHTTPSHandler(),
-            registry._NoRedirectHandler(),
+            _registry_requests._NoRedirectHandler(),
         )
 
         class ProxyResponse(io.RawIOBase):
@@ -547,7 +557,7 @@ class TestSources(unittest.TestCase):
             raise TimeoutError
 
         with (
-            patch.object(registry, "_OPENER", opener),
+            patch.object(_registry_requests, "_OPENER", opener),
             patch.object(urllib.request, "proxy_bypass", return_value=False),
             patch.object(socket, "getaddrinfo", return_value=[REGISTRY_ADDRESS]) as lookup,
             patch.object(socket, "socket", return_value=sock),
@@ -566,7 +576,9 @@ class TestSources(unittest.TestCase):
         now = [0.0]
         write_timeouts = []
         sock = MagicMock()
-        opener = urllib.request.build_opener(urllib.request.ProxyHandler({}), _registry_requests.RegistryHTTPSHandler(), registry._NoRedirectHandler())
+        opener = urllib.request.build_opener(
+            urllib.request.ProxyHandler({}), _registry_requests.RegistryHTTPSHandler(), _registry_requests._NoRedirectHandler()
+        )
 
         def handshake(_socket, *, server_hostname):
             self.assertEqual(server_hostname, "files.pythonhosted.org")
@@ -581,7 +593,7 @@ class TestSources(unittest.TestCase):
 
         sock.sendall.side_effect = send
         with (
-            patch.object(registry, "_OPENER", opener),
+            patch.object(_registry_requests, "_OPENER", opener),
             patch.object(socket, "getaddrinfo", return_value=[REGISTRY_ADDRESS]),
             patch.object(socket, "socket", return_value=sock),
             patch.object(ssl.SSLContext, "wrap_socket", side_effect=handshake),
@@ -631,11 +643,26 @@ class TestSources(unittest.TestCase):
         with self.assertRaisesRegex(TypeError, "verify_source"):
             VerifiedSource()
 
+    def test_explicit_provider_is_selected_even_when_falsey(self) -> None:
+        class OfflineProvider(Provider):
+            def __bool__(self) -> bool:
+                return False
+
+        provider = OfflineProvider()
+        provider.python()
+        with patch.object(dependency_sources.HttpSourceProvider, "read", side_effect=AssertionError("unexpected HTTP lookup")):
+            verified = verify_source(RegistryRelease("python", "sample-pkg", "1.2.3"), provider=provider)
+        self.assertEqual(verified.artifacts[0].sha256, DIGEST)
+        self.assertEqual(provider.calls, [PYTHON_API])
+
     def test_floating_competing_and_unsupported_selectors_fail_before_lookup(self) -> None:
         baseline = {"ecosystem": "cargo", "package": "sample-crate", "github": "example/upstream", "commit": COMMIT}
         for changes in (
             {"commit": "main"},
             {"commit": COMMIT[:12]},
+            {"directory": "work/NUL.txt"},
+            {"directory": ".git/refs"},
+            {"directory": "aux."},
             {"version": "1.2.3"},
             {"branch": "main"},
             {"github": "https://github.com/example/upstream"},
@@ -692,7 +719,7 @@ class TestSources(unittest.TestCase):
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 verify_source(python, provider=self.provider)
         self.provider.python()
-        for changes in ({"yanked": True}, {"crate": "another"}, {"num": "1.2.4"}, {"checksum": "invalid"}, {"crate_size": 0}):
+        for changes in ({"yanked": True}, {"crate": "another"}, {"num": "1.2.4"}, {"checksum": "invalid"}, {"crate_size": 0}, {"description": "\ud800"}):
             self.provider.cargo(**changes)
             with self.subTest(changes=changes), self.assertRaises(ValueError):
                 verify_source(cargo, provider=self.provider)
@@ -1146,6 +1173,13 @@ class TestSourceWorkflows(unittest.TestCase):
         before = self.snapshot()
         self.assertEqual(check_release_dependencies(self.root), ())
         self.assertEqual(self.snapshot(), before)
+        manifest = self.root / "Cargo.toml"
+        valid = manifest.read_bytes()
+        for value in (b"1", b"1.0"):
+            manifest.write_bytes(valid.replace(b"version.workspace=true", b"version.workspace=" + value))
+            with self.subTest(value=value), self.assertRaises(ValueError):
+                check_release_dependencies(self.root)
+        manifest.write_bytes(valid)
         lock.write_bytes(b'version=4\n[[package]]\nname="consumer"\nversion="1.2.4"\n')
         with self.assertRaisesRegex(ValueError, "requires dependency-sources.toml"):
             check_release_dependencies(self.root)
@@ -1466,6 +1500,20 @@ class TestSourceWorkflows(unittest.TestCase):
                     python_promotion._candidates(self.provider, "sample-pkg", Version("1.2.3"), SpecifierSet(), False, newer=True, python_support=(support,)),
                     expected,
                 )
+
+    def test_promotion_requires_typed_python_constraints_on_candidate_uploads(self) -> None:
+        url = "https://pypi.org/pypi/sample-pkg/json"
+        for raw in (False, 0, [], {}):
+            self.provider.put(url, {"info": {"name": "sample-pkg"}, "releases": {"1.2.4": [{"yanked": False, "requires_python": raw}]}})
+            with self.subTest(raw=raw), self.assertRaisesRegex(ValueError, "requires_python"):
+                python_promotion._candidates(self.provider, "sample-pkg", Version("1.2.3"), SpecifierSet(), False)
+        for upload in ({"yanked": False}, {"yanked": False, "requires_python": None}, {"yanked": False, "requires_python": ""}):
+            self.provider.put(url, {"info": {"name": "sample-pkg"}, "releases": {"1.2.4": [upload]}})
+            self.assertEqual(python_promotion._candidates(self.provider, "sample-pkg", Version("1.2.3"), SpecifierSet(), False), (Version("1.2.4"),))
+        for uploads in ({}, [False], [{}], [{"yanked": 0}]):
+            self.provider.put(url, {"info": {"name": "sample-pkg"}, "releases": {"1.2.4": [{"yanked": False}], "1.2.5": uploads}})
+            with self.subTest(uploads=uploads), self.assertRaises(ValueError):
+                python_promotion._candidates(self.provider, "sample-pkg", Version("1.2.3"), SpecifierSet(), False)
 
     def test_promotion_binds_artifacts_to_pin_and_rolls_back_failed_sync(self) -> None:
         self.python(git=True)
@@ -2163,8 +2211,16 @@ class TestSourceWorkflows(unittest.TestCase):
             url = PYTHON_URL
 
         with (
+            patch.object(registry, "_json", return_value=json.loads(self.provider.responses[PYTHON_API])),
+            patch.object(_registry_requests._OPENER, "open", side_effect=http.client.IncompleteRead(payload[:-1], 1)) as opener,
+            self.assertRaisesRegex(ValueError, "sample-pkg: published dependency wheel download was truncated"),
+        ):
+            dependency_artifacts.verify_python_environment(graph)
+        opener.assert_called_once()
+
+        with (
             patch.object(registry, "_json", return_value=json.loads(self.provider.responses[PYTHON_API])) as metadata,
-            patch.object(registry._OPENER, "open", side_effect=lambda *_args, **_kwargs: Response(payload)) as opener,
+            patch.object(_registry_requests._OPENER, "open", side_effect=lambda *_args, **_kwargs: Response(payload)) as opener,
         ):
             before = self.snapshot()
             dependency_artifacts.verify_python_environment(graph)

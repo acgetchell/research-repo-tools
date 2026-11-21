@@ -240,6 +240,7 @@ def test_configured_uv_uses_consumer_root_from_any_working_directory(tmp_path, m
         (subprocess.CalledProcessError(23, ["uv"], stderr="\x1b[31mregistry unavailable\x1b[0m\nretry later"), "exit status 23"),
         (subprocess.TimeoutExpired(["uv"], 30, stderr=b"request\ntimed out"), "timed out after 30 seconds"),
         (ValueError("x" * 800), "…"),
+        (ValueError("registry denied HTTPS://user:fixture-password@example.org:8443/path?secret=fixture-query ghp_fixturetoken"), "example.org:8443/path"),
     ],
 )
 def test_cli_diagnostics_preserve_failures_without_controls_or_tracebacks(tmp_path, monkeypatch, capsys, error, detail):
@@ -255,3 +256,4 @@ def test_cli_diagnostics_preserve_failures_without_controls_or_tracebacks(tmp_pa
     assert captured.err.count("\n") == 1
     assert "\x1b" not in captured.err and "Traceback" not in captured.err
     assert len(captured.err) <= 425
+    assert all(value not in captured.err for value in ("fixture-password", "fixture-query", "ghp_fixturetoken"))

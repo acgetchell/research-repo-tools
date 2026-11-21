@@ -161,7 +161,8 @@ def record_runtime_policy(root: Path, destination: Path, *, provider: SourceProv
     graph = inspect_project(root, policy.projects[0])
     entry.verify()
     _check_lock(root)
-    sources = verify_graph(graph, provider=provider or HttpSourceProvider())
+    source_provider = HttpSourceProvider() if provider is None else provider
+    sources = verify_graph(graph, provider=source_provider)
     configuration = read_regular(environment / "pyvenv.cfg", 65536)
     inventory, observations = _inventory(environment)
     inputs = {name: sha256(read_regular(root / name, 4 * 1024 * 1024)) for name in ("pyproject.toml", "uv.lock", "dependency-sources.toml")}

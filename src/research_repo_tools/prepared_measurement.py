@@ -11,6 +11,7 @@ from research_repo_tools.publication import _path, _publication_name
 
 
 def private_environment(root: Path, environment: Mapping[str, str], criterion: str) -> dict[str, str]:
+    """Keep build and benchmark output paths inside the phase export and separate from each other."""
     inherited = {key.casefold(): value for key, value in environment.items()}
     settings = (
         ("CARGO_TARGET_DIR", inherited.get("cargo_target_dir", "target/build")),
@@ -24,6 +25,7 @@ def private_environment(root: Path, environment: Mapping[str, str], criterion: s
 
 
 def is_export_executable(name: str) -> bool:
+    """Check whether a command name has the form of an export-relative executable path."""
     if "/" not in name:
         return False
     try:
@@ -34,11 +36,13 @@ def is_export_executable(name: str) -> bool:
 
 
 def executable_digest(path: Path) -> str:
+    """Hash the compiled executable from its raw bytes."""
     with path.open("rb") as stream:
         return hashlib.file_digest(stream, "sha256").hexdigest()
 
 
 def executable_identity(root: Path, name: str, environment: Mapping[str, str]) -> tuple[Path, str]:
+    """Require the named compiled executable inside the export and return its path and SHA-256."""
     path = _path(root, name)
     resolved = resolve_executable(path, cwd=root, env=environment)
     if not path.is_file() or resolved != path:
@@ -47,7 +51,7 @@ def executable_identity(root: Path, name: str, environment: Mapping[str, str]) -
 
 
 def retained_size(root: Path, budget: int) -> int | None:
-    """Count logical bytes in one private export, stopping at the retention bound."""
+    """Sum file sizes, returning None for links, special files, or a total above the byte budget."""
     if root.is_symlink() or root.is_junction():
         return None
     size = 0

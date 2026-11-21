@@ -131,19 +131,20 @@ The same supported Python API can run in a trusted job containing only inert fil
 
 ```python
 from pathlib import Path
+
 from research_repo_tools.release_assets import (
-    parse_release_target, preflight_release_target, publish_release_asset,
+    parse_release_target,
+    preflight_release_target,
+    publish_release_asset,
     serialize_release_target,
 )
 
 root = Path("/trusted/job")  # Choose the native job directory on each platform.
-target = preflight_release_target(root, "example/project", "v1.2.3",
-                                 "a" * 40, expected_title="v1.2.3")
+target = preflight_release_target(root, "example/project", "v1.2.3", "a" * 40, expected_title="v1.2.3")
 (root / "release-target.json").write_bytes(serialize_release_target(target))
 # After the consumer's trusted handoff and benchmark gates:
 captured = parse_release_target((root / "release-target.json").read_bytes())
-publish_release_asset(root, captured.repository, captured.tag,
-                      root / "baseline.tar.gz", target=captured, publish=True)
+publish_release_asset(root, captured.repository, captured.tag, root / "baseline.tar.gz", target=captured, publish=True)
 ```
 
 An invalid or unavailable publication response reports an unknown outcome.

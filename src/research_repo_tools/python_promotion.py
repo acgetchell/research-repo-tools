@@ -12,7 +12,7 @@ from pathlib import Path
 
 from packaging.ranges import VersionRange
 from packaging.requirements import Requirement
-from packaging.specifiers import SpecifierSet
+from packaging.specifiers import InvalidSpecifier, SpecifierSet
 from packaging.utils import canonicalize_name
 from packaging.version import InvalidVersion, Version
 
@@ -55,6 +55,18 @@ def _missing(error: ValueError) -> bool:
     return isinstance(error.__cause__, urllib.error.HTTPError) and error.__cause__.code == 404
 
 
+def _upload_python(value: object) -> SpecifierSet:
+    """Parse one upload's Requires-Python field, including an undeclared requirement."""
+    if value is None:
+        return SpecifierSet()
+    if not isinstance(value, str):
+        raise ValueError("PyPI requires_python must be a specifier string or null")
+    try:
+        return SpecifierSet(value)
+    except InvalidSpecifier as error:
+        raise ValueError("PyPI requires_python must be a valid version specifier") from error
+
+
 def _candidates(
     provider: SourceProvider,
     package: str,
@@ -65,6 +77,7 @@ def _candidates(
     newer: bool = False,
     python_support: tuple[VersionRange, ...] = (),
 ) -> tuple[Version, ...]:
+    """Return eligible PyPI versions in descending order within the requested version and Python constraints."""
     data = _lookup(provider, f"https://pypi.org/pypi/{package}/json")
     info = table(data.get("info"), "PyPI project")
     if not isinstance(info.get("name"), str) or canonicalize_name(str(info["name"])) != package:
@@ -83,12 +96,16 @@ def _candidates(
             or not versions.contains(version, prereleases=prereleases)
         ):
             continue
-        if not isinstance(uploads, list) or not uploads:
+        if not isinstance(uploads, list):
+            raise ValueError("PyPI release uploads must be an array")
+        if not uploads:
             continue
         records = tuple(table(upload, "PyPI upload") for upload in uploads)
-        if any(upload.get("yanked") is not False for upload in records):
+        if any(type(upload.get("yanked")) is not bool for upload in records):
+            raise ValueError("PyPI upload yanked status must be a boolean")
+        if any(upload["yanked"] is True for upload in records):
             continue
-        requirements = tuple(SpecifierSet(str(upload.get("requires_python") or "")) for upload in records)
+        requirements = tuple(_upload_python(upload.get("requires_python")) for upload in records)
         if not any(python in requirement for requirement in requirements):
             continue
         if python_support:
@@ -106,6 +123,7 @@ def _candidates(
 def _release_commit(
     checkout: Path, pin: GitCommit, version: Version, provider: SourceProvider, *, repository_id: int
 ) -> tuple[str, bytes, dict[str, object]] | None:
+    """Return the commit, bundle, and provenance document, or None if the release or bundle is absent."""
     tag = f"v{version}"
     repository = pin.repository
     try:
@@ -158,7 +176,7 @@ def _release_commit(
     if not isinstance(manifest, str):
         raise ValueError("promotion evidence requires the retained validation manifest")
     origin = table(_load_json(manifest.encode(), "retained validation manifest"), "retained validation manifest")
-    if origin.get("repository") != repository or origin.get("repository_id") != repository_id:
+    if origin.get("repository") != repository or release_validation._integer(origin.get("repository_id"), "signed repository ID") != repository_id:
         raise ValueError("promotion evidence identifies a different GitHub repository")
     GitCommit("python", pin.package, repository, commit, pin.directory)
     return commit, bundle.encode(), document
@@ -329,7 +347,8 @@ def plan_supplier(checkout: Path, name: str, *, project: Path, provider: SourceP
     if _source(document, PACKAGE) is not None:
         raise ValueError("a supplier registry pin cannot have a source override")
     python_support = _workspace_python_support(graph, document, manifest, PACKAGE)
-    provider = provider or HttpSourceProvider()
+    if provider is None:
+        provider = HttpSourceProvider()
     candidates = _candidates(provider, PACKAGE, Version(pin.version), SpecifierSet(), False, newer=True, python_support=python_support)
     for candidate in candidates:
         released = RegistryRelease("python", PACKAGE, str(candidate))
@@ -359,6 +378,7 @@ def _plan_promotion(
     prereleases: bool,
     provider: SourceProvider | None,
 ) -> SourcePlan:
+    """Select the newest qualifying attested release containing the locked Git pin and plan the switch to PyPI."""
     pin = selection.source
     if not isinstance(pin, GitCommit):
         raise ValueError("promotion requires a named exact Python Git selection in dependency-sources.toml")
@@ -374,7 +394,8 @@ def _plan_promotion(
     if override != expected and override != (expected | {"git": pin.url.removesuffix(".git")}):
         raise ValueError("promotion requires the exact development source in the project manifest, lock and policy")
     python_support = _workspace_python_support(graph, document, manifest, pin.package)
-    provider = provider or HttpSourceProvider()
+    if provider is None:
+        provider = HttpSourceProvider()
     repository = _lookup(provider, f"https://api.github.com/repos/{pin.repository}")
     repository_id = repository.get("id")
     if repository.get("full_name") != pin.repository or type(repository_id) is not int or repository_id <= 0:

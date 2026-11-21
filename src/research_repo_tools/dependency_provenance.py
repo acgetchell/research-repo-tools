@@ -57,6 +57,14 @@ class DependencyIdentity:
     revision: str | None = None
 
 
+class _TruncatedWheel(ValueError):
+    """Identify the affected wheel while retaining the original transport error."""
+
+    def __init__(self, name: str, transport_error: http.client.IncompleteRead) -> None:
+        super().__init__(f"{name}: published dependency wheel download was truncated ({transport_error})")
+        self.transport_error = transport_error
+
+
 def _table(value: object, context: str) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{context} must be a table")
@@ -203,6 +211,7 @@ def _check_installation(observed: dict[str, Any], name: str, version: str) -> No
 
 
 def _check_lock(root: Path) -> None:
+    """Check uv lock freshness offline using an external executable and a separate project environment."""
     from research_repo_tools.process import ExecutableNotFoundError, resolve_executable, run_command
 
     if os.environ.get("UV_CONFIG_FILE") or os.environ.get("UV_NO_CONFIG", "").lower() not in {"", "0", "false"}:
@@ -322,6 +331,7 @@ def _published_wheel(
     scripts: Path | None = None,
     verified: VerifiedSource | None = None,
 ) -> None:
+    """Match installed files to a locked and verified PyPI wheel for the package."""
     from research_repo_tools import registry
 
     artifacts = _artifacts(locked, require_sdist=require_sdist)
@@ -358,7 +368,10 @@ def _published_wheel(
         if url not in payloads:
             from research_repo_tools._registry_requests import read_registry
 
-            payloads[url] = read_registry(url, limit=limit)
+            try:
+                payloads[url] = read_registry(url, limit=limit)
+            except http.client.IncompleteRead as error:
+                raise _TruncatedWheel(name, error) from error
         payload = payloads[url]
         if len(payload) != artifact["size"] or hashlib.sha256(payload).hexdigest() != artifact["hash"][7:]:
             raise ValueError("published dependency wheel bytes differ from the lock")
@@ -374,26 +387,30 @@ def verify_wheel_payload(name: str, payload: bytes, observed: dict[str, Any], *,
         members = archive.infolist()
         if len(members) > 10000 or sum(member.file_size for member in members) > limit:
             raise ValueError("published dependency wheel exceeds content limits")
-        names = [member.filename for member in members]
+        names = [member.orig_filename for member in members]
         if len(set(names)) != len(names):
             raise ValueError("published dependency wheel has duplicate members")
         metadata = [item for item in names if len(PurePosixPath(item).parts) == 2 and item.endswith(".dist-info/METADATA")]
-        if len(metadata) != 1 or metadata[0].replace("METADATA", "WHEEL") not in names or metadata[0].replace("METADATA", "RECORD") not in names:
+        if len(metadata) != 1:
             raise ValueError("published dependency wheel metadata is missing or ambiguous")
-        installer_files = {str(PurePosixPath(metadata[0]).parent / name) for name in ("INSTALLER", "REQUESTED", "uv_cache.json")}
-        generated_records = {str(PurePosixPath(metadata[0]).parent / name) for name in ("RECORD", "RECORD.jws", "RECORD.p7s")}
+        info = PurePosixPath(metadata[0]).parent
+        if not {str(info / "WHEEL"), str(info / "RECORD")}.issubset(names):
+            raise ValueError("published dependency wheel metadata is missing or ambiguous")
+        data_prefix = info.name.removesuffix(".dist-info") + ".data"
+        installer_files = {str(info / leaf) for leaf in ("INSTALLER", "REQUESTED", "uv_cache.json")}
+        generated_records = {str(info / leaf) for leaf in ("RECORD", "RECORD.jws", "RECORD.p7s")}
         paths, installed_paths = ArchivePaths(), ArchivePaths()
         expected = set()
         for member in members:
-            path = paths.add(member.filename, directory=member.is_dir())
+            directory = member.orig_filename.endswith("/")
+            path = paths.add(member.orig_filename, directory=directory)
             if (member.external_attr >> 16) & 0o170000 == 0o120000:
                 raise ValueError("dependency wheels cannot contain symlinks")
-            if member.is_dir():
+            if directory:
                 continue
             relative = path.as_posix()
-            if any(part.endswith(".data") for part in path.parts):
-                data_prefix = PurePosixPath(metadata[0]).parent.name.removesuffix(".dist-info") + ".data"
-                if scripts is None or len(path.parts) < 3 or path.parts[0] != data_prefix:
+            if path.parts[0] == data_prefix:
+                if scripts is None or len(path.parts) < 3:
                     raise ValueError(f"{name}: dependency proof requires supported .data relocation")
                 scheme = path.parts[1]
                 relative = PurePosixPath(*path.parts[2:]).as_posix()
@@ -445,6 +462,7 @@ def check_release_dependencies(
 
 
 def _check_release_dependencies(root: Path, *, packages: tuple[str, ...] | None) -> tuple[DependencyIdentity, ...]:
+    """Verify selected upstream dependencies against the effective lock, installed bytes, and published artifacts."""
     from research_repo_tools.registry import TransientRegistryError
 
     try:
@@ -510,4 +528,5 @@ def _check_release_dependencies(root: Path, *, packages: tuple[str, ...] | None)
             "For CI evidence, retain the independently selected commit, run and attempt."
         ) from error
     except (ValueError, OSError, TypeError, subprocess.SubprocessError, zipfile.BadZipFile, http.client.HTTPException) as error:
-        raise ValueError(f"release dependency provenance: {error}. {RECOVERY}") from error
+        cause = error.transport_error if isinstance(error, _TruncatedWheel) else error
+        raise ValueError(f"release dependency provenance: {error}. {RECOVERY}") from cause

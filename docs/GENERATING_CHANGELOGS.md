@@ -179,7 +179,8 @@ publication retain strict validation; `changelog tag` performs the full changelo
 check as well as checking package version and release date before any tag mutation. By default
 the date must be today's UTC date; `release.date-policy = "declared"` explicitly
 permits historical release dates. Oversized annotations link to the complete
-notes. `--dry-run` previews notes. `--force` uses Git's ref replacement and never
+notes. A successful `--dry-run` writes only the annotation to stdout, so it can
+be redirected to a file. `--force` uses Git's ref replacement and never
 deletes the old tag before creating its replacement. Tagging is local only.
 
 Regression tests live under `tests/changelog/`, including real Git and git-cliff

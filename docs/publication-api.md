@@ -18,9 +18,9 @@ Import from `research_repo_tools.publication`:
 | `PublicationPlan` | Planner result with `root`, immutable `outputs` and `originals` path/byte tuples, `git_checks`, `glob_checks`, `run_checks`, and absolute `changed_paths` |
 | `RunSelectionCheck(archive, identity)` | Validated complete history and its selected content-derived run ID, rechecked before publication; outputs cannot enter that archive |
 | `TableLayout(rows, baseline_label, current_label, unit)` | Nonempty ordered `(benchmark, display_label)` pairs with unique benchmark IDs and an explicit recorded timing unit |
-| `plan_outputs(root, outputs, *, inputs, immutable=())` | Snapshot generic root-relative byte outputs and inputs, reject conflicting immutable files, reuse the same publication/recovery path |
+| `plan_outputs(root, outputs, *, inputs, immutable=())` | Snapshot root-relative byte outputs and inputs. The iterable of immutable output names is consumed once, and existing protected files must match the proposed bytes. |
 | `plan_publication(root, document, markers, content, *, inputs, figures=None, references=(), git_checks=(), glob_checks=(), run_checks=(), formatter=None)` | Validate exact retained inputs, document markers, optionally formatted candidates, reference captures, Git identities, glob inventories and retained run selections without writing |
-| `preview_publication(plan)` | Unified diffs for UTF-8 candidates; SHA-256 summaries for other bytes; does not publish or revalidate a saved plan |
+| `preview_publication(plan)` | Show text diffs, including new empty files, and SHA-256 summaries for other bytes. Reads only the saved plan. |
 | `publish_publication(plan)` | Recheck snapshots and Git identities, transactionally publish changed outputs, return their absolute paths |
 | `render_svg(comparison, layout)` | Deterministic UTF-8 SVG bytes with XML-escaped labels, point-ratio bars and a reference at one; standard library only |
 | `render_table(comparison, layout)` | Deterministic Markdown string with selected paired estimates, recorded confidence bounds, point ratios, reductions, and full coverage counts |

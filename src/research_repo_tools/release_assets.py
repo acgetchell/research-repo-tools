@@ -182,6 +182,8 @@ def _resolve_tag_commit(tag: str, read: Callable[[str], object]) -> str:
 
 @dataclass(frozen=True, slots=True)
 class GitHubRelease:
+    """Observed GitHub release identity, publication state, and attached asset metadata."""
+
     repository: str
     tag: str
     identifier: int
@@ -222,6 +224,7 @@ def _require_response_identity(data: dict[str, object], repository: str, tag: st
 
 
 def _parse_release(data: dict[str, object], repository: str, tag: str, expected_identifier: int) -> GitHubRelease:
+    """Validate GitHub's release and asset records, rejecting ambiguous asset names or IDs."""
     _require_response_identity(data, repository, tag, expected_identifier)
     if "name" not in data or (data["name"] is not None and not isinstance(data["name"], str)):
         raise ValueError("GitHub release title must be a string or null")
@@ -562,6 +565,7 @@ def _publish_release_asset(
     dependencies: tuple[str, ...],
     expected_sha256: str | None = None,
 ) -> tuple[str, int, int, str | None]:
+    """Read the original asset bytes and bind the upload to the selected release target."""
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
     check_release_dependencies(checkout if checkout is not None else root, packages=dependencies)
@@ -607,6 +611,7 @@ def _upload_asset(
     publish: bool,
     observe: Callable[[], GitHubRelease],
 ) -> tuple[str, int, int, str | None]:
+    """Verify the attached bytes by downloading them, then recheck the asset ID before optional publication."""
     with tempfile.TemporaryDirectory(prefix="research-release-upload-") as directory:
         staged = Path(directory) / name
         staged.write_bytes(original)

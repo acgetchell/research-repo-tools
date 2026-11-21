@@ -28,6 +28,7 @@ from research_repo_tools.process import (
     run_command_bytes,
     run_command_live,
     run_git_bytes,
+    run_safe_command,
 )
 from research_repo_tools.selection import run_selected
 
@@ -169,6 +170,23 @@ class TestCoverageCleanup(ConsumerCase):
 
 
 class TestProcess(ConsumerCase):
+    def test_text_command_reports_only_the_streams_it_captured(self) -> None:
+        args = ("-I", "-c", "import sys; print('captured'); print('discarded', file=sys.stderr)")
+        captured = run_safe_command(sys.executable, args, cwd=self.root)
+        assert_type(captured.stdout, str)
+        self.assertEqual(captured.stdout.splitlines(), ["captured"])
+        self.assertEqual(captured.stderr.splitlines(), ["discarded"])
+
+        redirected = run_safe_command(sys.executable, args, cwd=self.root, capture_output=False, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        assert_type(redirected.stdout, str | None)
+        assert_type(redirected.stderr, str | None)
+        self.assertEqual(redirected.stdout, captured.stdout)
+        self.assertIsNone(redirected.stderr)
+
+        with patch("subprocess.run") as child, self.assertRaisesRegex(TypeError, "individual arguments"):
+            run_safe_command(sys.executable, "--version", cwd=self.root)
+        child.assert_not_called()
+
     def test_public_signatures_are_inspectable_without_loading_optional_dependencies(self) -> None:
         script = """import importlib, inspect, sys
 names = {
@@ -341,9 +359,10 @@ print(count)
     def test_invalid_options_do_not_launch(self) -> None:
         marker = self.root / "launched"
         args = ["-c", "import pathlib,sys; pathlib.Path(sys.argv[1]).touch()", str(marker)]
-        for timeout in (0, -1, float("inf"), float("nan")):
-            with self.assertRaises(ValueError):
-                run_command_bytes(sys.executable, args, timeout=timeout)
+        for timeout in (True, 0, -1, 10**400, float("inf"), float("nan")):
+            for runner in (run_command_bytes, run_command_live):
+                with self.subTest(timeout=timeout, runner=runner.__name__), self.assertRaises(ValueError):
+                    runner(sys.executable, args, timeout=timeout)
         with self.assertRaises(LookupError):
             run_command(sys.executable, args, encoding="missing-codec")
         with self.assertRaises(LookupError):
@@ -392,6 +411,55 @@ print(count)
 
 
 class TestPublication(ConsumerCase):
+    def test_existing_long_file_and_directory_names_leave_room_for_staging(self) -> None:
+        target = self.root / ("x" * 250)
+        target.write_bytes(b"old")
+        replace_many({target: b"replacement"})
+        self.assertEqual(target.read_bytes(), b"replacement")
+        directory = self.root / ("y" * 250)
+        directory.mkdir()
+        with publish_directory(directory) as staging:
+            (staging / "report").write_bytes(b"result")
+        self.assertEqual((directory / "report").read_bytes(), b"result")
+        self.assertEqual(set(self.root.iterdir()), {target, directory})
+
+    def test_unavailable_filesystem_root_fails_before_staging(self) -> None:
+        target = self.root / "missing" / "report"
+        visited_anchor = False
+
+        def unavailable(path: Path) -> bool:
+            """Model an unavailable drive and bound the regression if the walk repeats."""
+            nonlocal visited_anchor
+            if path == path.parent:
+                self.assertFalse(visited_anchor, "filesystem root was visited twice")
+                visited_anchor = True
+            return False
+
+        with patch.object(Path, "exists", unavailable), self.assertRaises(FileNotFoundError):
+            replace_many({target: b"report"})
+        self.assertTrue(visited_anchor)
+        self.assertEqual(list(self.root.iterdir()), [])
+
+    def test_concurrently_created_parent_is_usable_and_preserved_on_failure(self) -> None:
+        parent = self.root / "new"
+        target = parent / "report"
+        mkdir = Path.mkdir
+
+        def competing_mkdir(path: Path) -> None:
+            """Let a competing writer create the parent immediately before this one."""
+            self.assertEqual(path, parent)
+            mkdir(path)
+            mkdir(path)
+
+        with (
+            patch.object(Path, "mkdir", competing_mkdir),
+            patch("os.fsync", side_effect=OSError("cannot sync")),
+            self.assertRaisesRegex(OSError, "cannot sync"),
+        ):
+            replace_many({target: b"report"})
+        self.assertTrue(parent.is_dir())
+        self.assertEqual(list(parent.iterdir()), [])
+
     def test_expected_snapshots_guard_replacements_and_unchanged_inputs(self) -> None:
         first, context = self.root / "first", self.root / "context"
         first.write_bytes(b"original\r\n")

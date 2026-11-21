@@ -2,7 +2,6 @@
 
 import io
 import logging
-import math
 import os
 import shutil
 import stat
@@ -20,6 +19,7 @@ from research_repo_tools._archive_paths import ArchivePaths
 from research_repo_tools._http import closing_http_errors
 from research_repo_tools.evidence import _digest, verify_sha256
 from research_repo_tools.files import replace_many
+from research_repo_tools.process import _positive_timeout
 
 __all__ = ["ArchiveLimits", "download_asset", "extract_archive"]
 LOGGER = logging.getLogger(__name__)
@@ -78,8 +78,7 @@ def download_asset(url: str, destination: Path, *, expected_sha256: str, limits:
     """
     _https(url)
     _digest(expected_sha256, "expected digest")
-    if isinstance(timeout, bool) or not isinstance(timeout, int | float) or not math.isfinite(timeout) or timeout <= 0:
-        raise ValueError("asset timeout must be finite and positive")
+    timeout = _positive_timeout(timeout, "asset timeout")
     opener = urllib.request.build_opener(_HTTPSRedirect())
     with closing_http_errors(), opener.open(url, timeout=timeout) as response:
         _https(response.geturl())
@@ -106,6 +105,7 @@ def _copy_member(source: IO[bytes], target: Path, size: int) -> None:
 
 
 def _extract(archive: tarfile.TarFile | zipfile.ZipFile, stage: Path, limits: ArchiveLimits) -> None:
+    """Validate member names, types, and declared sizes before extracting into the staging directory."""
     entries: list[tuple[PurePosixPath, tarfile.TarInfo | zipfile.ZipInfo, bool, int]] = []
     paths = ArchivePaths()
     total = 0
@@ -173,7 +173,7 @@ def _extract_archive(archive_path: Path, destination: Path, *, limits: ArchiveLi
         raise ValueError("archive exceeds the archive byte limit")
     if expected_sha256 is not None:
         verify_sha256(payload, expected_sha256)
-    stage = Path(tempfile.mkdtemp(prefix=f".{destination.name}-", dir=destination.parent))
+    stage = Path(tempfile.mkdtemp(prefix=".rrt-extract-", dir=destination.parent))
     try:
         data = io.BytesIO(payload)
         try:

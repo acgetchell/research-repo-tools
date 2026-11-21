@@ -203,6 +203,14 @@ raise `ValueError` after exit 0, including with `check=False`; nonzero exits and
 timeouts retain precedence and their original process contract. No output is
 retained in the result or exception. See the Cargo contract for detailed limits.
 
+The text-mode helpers `run_safe_command(command, args, ...)`,
+`run_git_command(args, ...)`, `run_git_command_with_input(args, input_data, ...)`,
+and `run_cargo_command(args, ...)` also accept subprocess redirection options.
+They capture both streams as text by default. With `capture_output=False`,
+each stream set to `subprocess.PIPE` still returns text. An inherited stream,
+a stream sent to a file or `subprocess.DEVNULL`, or stderr merged into stdout
+has `None` in its corresponding result field.
+
 ## Calling from Python
 
 A consumer that needs a Python wrapper can invoke the same CLI contract without
@@ -237,12 +245,15 @@ try:
     # Git receives the original bytes and applies its own configured filters.
     digest = run_git_bytes(
         ["--no-pager", "hash-object", "--path=results.json", "--stdin"],
-        cwd=root, input=payload,
+        cwd=root,
+        input=payload,
     ).stdout.strip()
-    replace_many({
-        root / "reports/results.json": payload,
-        root / "reports/results.hash": digest + b"\n",
-    })
+    replace_many(
+        {
+            root / "reports/results.json": payload,
+            root / "reports/results.hash": digest + b"\n",
+        }
+    )
 except (OSError, subprocess.SubprocessError, ExceptionGroup) as error:
     raise SystemExit(format_exception_diagnostics(error)) from error
 ```

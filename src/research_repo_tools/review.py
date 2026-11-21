@@ -1,7 +1,7 @@
 """Opt-in CodeRabbit review with a verified default base and consumer instructions."""
 
+import codecs
 import json
-import math
 import os
 import re
 import subprocess
@@ -13,11 +13,12 @@ from pathlib import Path
 from packaging.version import Version
 
 from research_repo_tools import _review_pending
+from research_repo_tools._console import write_json_stdout
 from research_repo_tools._review_identity import ReviewIdentity, capture
 from research_repo_tools._review_stream import stream_review
 from research_repo_tools.evidence import deterministic_json, sha256
 from research_repo_tools.path_identity import fingerprint_paths, observe_paths
-from research_repo_tools.process import ExecutableNotFoundError, get_safe_executable, run_git_command, run_safe_command
+from research_repo_tools.process import ExecutableNotFoundError, _positive_timeout, get_safe_executable, run_git_command, run_safe_command
 from research_repo_tools.review_protocol import CompletedReview, ConsentRequired, FailedReview, ReviewApproval, ReviewDenied, ReviewResult, UncertainReview
 
 __all__ = ["DEFAULT_BASE", "deny", "resume", "run", "start"]
@@ -104,11 +105,6 @@ def _environment() -> dict[str, str]:
     return {**os.environ, "GIT_OPTIONAL_LOCKS": "0", "GIT_NO_REPLACE_OBJECTS": "1"}
 
 
-def _timeout(value: float | None) -> None:
-    if value is not None and (isinstance(value, bool) or not math.isfinite(value) or value <= 0):
-        raise ValueError("review timeout must be positive and finite, or None")
-
-
 def _arguments(root: Path, base: str | None) -> list[str]:
     return ["review", "--agent", "--include-untracked", *([f"--base={base}"] if base is not None else ["--uncommitted"]), "--config", *_instructions(root)]
 
@@ -120,6 +116,16 @@ def _observe(root: Path, base: str | None, provider: _Provider, env: dict[str, s
 def _invoke(provider: _Provider, root: Path, args: list[str], output: Callable[[bytes], None], timeout: float | None, env: dict[str, str]) -> ReviewResult:
     terminated = True
     output_failed = False
+    if output is _stdout and not hasattr(sys.stdout, "buffer"):
+        decoder = codecs.getincrementaldecoder("utf-8")(errors="backslashreplace")
+        stream = sys.stdout
+
+        def write_text(chunk: bytes) -> None:
+            """Preserve UTF-8 characters split across provider chunks in text-only captures."""
+            stream.write(decoder.decode(chunk))
+            stream.flush()
+
+        output = write_text
 
     def forward(chunk: bytes) -> None:
         nonlocal terminated, output_failed
@@ -158,7 +164,8 @@ def start(
     reads Git; CodeRabbit can persist its own Git preferences and review cache.
     Keep the provider's usage-based continuation mode On demand.
     """
-    _timeout(timeout)
+    if timeout is not None:
+        timeout = _positive_timeout(timeout, "review timeout")
     root = root.resolve(strict=True)
     args = _arguments(root, base)
     provider = _provider()
@@ -187,7 +194,8 @@ def resume(pending_path: Path, approval: ReviewApproval, *, output: Callable[[by
     Unknown outcomes remain consumed and require external billing reconciliation.
     The trusted caller obtains human consent and verifies missing currency/kind.
     """
-    _timeout(timeout)
+    if timeout is not None:
+        timeout = _positive_timeout(timeout, "review timeout")
     if not isinstance(approval, ReviewApproval):
         raise TypeError("resume requires a scoped ReviewApproval")
     pending = _review_pending.load(pending_path)
@@ -279,7 +287,7 @@ def report(result: ReviewResult) -> int:
             data.update(status="uncertain", reason=result.reason)
             print(result.reason, file=sys.stderr)
             status = 5
-    print(json.dumps(data, sort_keys=True, ensure_ascii=True, allow_nan=False))
+    write_json_stdout(data, sort_keys=True)
     return status
 
 

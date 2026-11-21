@@ -4,12 +4,29 @@ import json
 import math
 import sys
 import time
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from contextlib import contextmanager
 from threading import Event, Thread
 from typing import TextIO
 
 __all__ = ["ProgressReporter"]
+
+
+def _seconds(value: object, field: str) -> float:
+    """Parse a nonnegative finite duration before accepting progress."""
+    if isinstance(value, bool) or not isinstance(value, int | float) or not 0 <= value <= sys.float_info.max:
+        raise ValueError(f"{field} must be finite and nonnegative")
+    return float(value)
+
+
+def _work_name(value: object) -> bool:
+    """Return whether a budget key names a work class, suite, or phase."""
+    return isinstance(value, str) and bool(value)
+
+
+def _phase_key(value: object) -> bool:
+    """Require the suite and phase names used to group progress events."""
+    return isinstance(value, tuple) and len(value) == 2 and all(_work_name(item) for item in value)
 
 
 class ProgressReporter:
@@ -29,9 +46,10 @@ class ProgressReporter:
         observer: Callable[[dict[str, object]], None] | None = None,
         clock: Callable[[], float] = time.monotonic,
     ) -> None:
-        if mode not in {"human", "json", "none"}:
+        if mode not in ("human", "json", "none"):
             raise ValueError("progress mode must be human, json, or none")
-        if isinstance(cadence, bool) or not math.isfinite(cadence) or cadence < 1:
+        cadence = _seconds(cadence, "progress cadence")
+        if cadence < 1:
             raise ValueError("progress cadence must be finite and at least one second")
         self.mode = mode
         self.cadence = cadence
@@ -52,31 +70,37 @@ class ProgressReporter:
         self._inventory: dict[tuple[str, str], int] = {}
         self._accepted: dict[tuple[str, str], int] = {}
 
-    def budget(self, counts: dict[str, int], nominal_seconds: float | None = None, *, inventory: dict[tuple[str, str], int] | None = None) -> None:
-        """Set discovered counts, keyed by independently compatible work classes."""
-        if any(type(count) is not int or count < 0 for count in counts.values()):
+    def budget(self, counts: Mapping[str, int], nominal_seconds: float | None = None, *, inventory: Mapping[tuple[str, str], int] | None = None) -> None:
+        """Snapshot discovered work counts and an optional partition by suite and phase."""
+        remaining = dict(counts)
+        phase_counts = {} if inventory is None else dict(inventory)
+        if not all(_work_name(name) for name in remaining):
+            raise ValueError("progress work classes must be nonempty strings")
+        if any(type(count) is not int or count < 0 for count in remaining.values()):
             raise ValueError("progress counts must be nonnegative integers")
-        if nominal_seconds is not None and (not math.isfinite(nominal_seconds) or nominal_seconds < 0):
-            raise ValueError("nominal timing budget must be finite and nonnegative")
-        if inventory is not None and (
-            any(type(count) is not int or count < 0 for count in inventory.values()) or sum(inventory.values()) != sum(counts.values())
-        ):
+        total = sum(remaining.values())
+        if nominal_seconds is not None:
+            nominal_seconds = _seconds(nominal_seconds, "nominal timing budget")
+        if not all(_phase_key(scope) for scope in phase_counts):
+            raise ValueError("phase inventory keys must be (suite, phase) pairs of nonempty strings")
+        if inventory is not None and (any(type(count) is not int or count < 0 for count in phase_counts.values()) or sum(phase_counts.values()) != total):
             raise ValueError("phase inventory must partition the discovered budget")
-        self._inventory = dict(inventory or {})
+        self._inventory = phase_counts
         self._accepted = dict.fromkeys(self._inventory, 0)
-        self._remaining = dict(counts)
+        self._remaining = remaining
         self.completed = 0
         self._rates.clear()
-        self.total = sum(counts.values())
+        self.total = total
         self.nominal = nominal_seconds
         self.emit("budget", force=True)
 
     def accept(self, work_class: str, count: int, elapsed: float, *, retained: bool = False) -> None:
         """Advance only after validation; retained work supplies no new timing rate."""
-        if type(count) is not int or count < 0 or work_class not in self._remaining or count > self._remaining[work_class]:
+        if type(count) is not int or count < 0 or not _work_name(work_class) or work_class not in self._remaining or count > self._remaining[work_class]:
             raise ValueError("accepted progress exceeds its discovered inventory")
-        if not math.isfinite(elapsed) or elapsed < 0:
-            raise ValueError("accepted elapsed time must be finite and nonnegative")
+        elapsed = _seconds(elapsed, "accepted elapsed time")
+        if type(retained) is not bool:
+            raise ValueError("retained progress must be a boolean")
         if self._inventory:
             if self.suite is None or self.phase is None:
                 raise ValueError("accepted progress requires its suite and phase")
@@ -87,8 +111,19 @@ class ProgressReporter:
         self._remaining[work_class] -= count
         self.completed += count
         if count and not retained:
-            self._rates[work_class] = elapsed / count
+            numerator, denominator = elapsed.as_integer_ratio()
+            self._rates[work_class] = numerator / (denominator * count)
         self.emit("retained" if retained else "validated", force=True)
+
+    def _compatible_eta(self) -> float | None:
+        """Return the representable estimate for classes with measured rates."""
+        if not self._rates:
+            return None
+        try:
+            estimate = sum(self._remaining[key] * rate for key, rate in self._rates.items())
+        except OverflowError:
+            return None
+        return estimate if math.isfinite(estimate) else None
 
     def emit(self, event: str, *, force: bool = False) -> None:
         """Publish one snapshot; ordinary heartbeats obey the configured cadence."""
@@ -98,8 +133,16 @@ class ProgressReporter:
         self._last = now
         self.last_event = event
         unseen = sorted(key for key, count in self._remaining.items() if count and key not in self._rates)
-        eta = None if self.total is None or unseen else sum(count * self._rates.get(key, 0) for key, count in self._remaining.items())
-        compatible_eta = sum(count * self._rates[key] for key, count in self._remaining.items() if key in self._rates) if self._rates else None
+        compatible_eta = self._compatible_eta()
+        eta = None if self.total is None or unseen else 0.0 if self.total == self.completed else compatible_eta
+        if unseen:
+            reason = "unseen work classes"
+        elif self.total is None:
+            reason = "inventory unknown"
+        elif eta is None:
+            reason = "estimate exceeds finite range"
+        else:
+            reason = "observed compatible work; not an upper bound"
         inventory = [
             {"suite": suite, "phase": phase, "total": count, "completed": self._accepted[(suite, phase)], "remaining": count - self._accepted[(suite, phase)]}
             for (suite, phase), count in sorted(self._inventory.items())
@@ -118,15 +161,13 @@ class ProgressReporter:
             "eta_seconds": eta,
             "compatible_eta_seconds": compatible_eta,
             "unknown_cases": sum(self._remaining[key] for key in unseen),
-            "eta_reason": "unseen work classes" if unseen else "inventory unknown" if self.total is None else "observed compatible work; not an upper bound",
+            "eta_reason": reason,
             "unseen_work_classes": unseen,
             "inventory": inventory,
         }
-        if self.observer is not None:
-            self.observer(data)
         if self.mode == "none":
-            return
-        if self.mode == "json":
+            message = None
+        elif self.mode == "json":
             message = json.dumps(data, ensure_ascii=True, allow_nan=False, sort_keys=True)
         else:
             remaining = "unknown" if data["remaining"] is None else str(data["remaining"])
@@ -144,8 +185,11 @@ class ProgressReporter:
                 for scope in selected:
                     if scope[1] == self.phase:
                         message += f"; phase {self._accepted[scope]}/{self._inventory[scope]}"
-        encoding = self.stream.encoding or "utf-8"
-        print(message.encode(encoding, errors="backslashreplace").decode(encoding), file=self.stream, flush=True)
+        if self.observer is not None:
+            self.observer(data)
+        if message is not None:
+            encoding = self.stream.encoding or "utf-8"
+            print(message.encode(encoding, errors="backslashreplace").decode(encoding), file=self.stream, flush=True)
 
     @contextmanager
     def stage(self, state: str, *, suite: str | None = None, phase: str | None = None) -> Iterator[None]:

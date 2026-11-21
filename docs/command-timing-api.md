@@ -117,12 +117,11 @@ freshness window or scientific promotion.
 requires it to be distinct from selected inputs, including portable aliases.
 It never reuses a previous result as a new run. The output remains absent on
 failed acquisition. Inputs, glob inventories, declaration bytes and executable
-identities are checked again after measurement and immediately before file
-replacement, including after staging. A new competing output is preserved.
-Exclusive writer control is required: these checks detect ordinary races and
-do not provide an atomic filesystem snapshot or protection against adversarial
-change-and-restore. The shared staged-file transaction handles publication
-failures and reports incomplete rollback. Use a new output path for every run.
+identities are checked again after measurement and after staging the completed
+report. Publication creates the final directory entry exclusively. If another
+writer creates it first, that writer's bytes survive and publication fails.
+Keep measured inputs stable throughout acquisition. Use a new output path for
+every run. On POSIX the output filesystem must support hard links.
 
 ## Public Python API
 

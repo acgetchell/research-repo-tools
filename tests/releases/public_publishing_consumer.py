@@ -20,7 +20,7 @@ from pathlib import Path
 from typing import Any, cast, override
 from unittest.mock import patch
 
-from research_repo_tools import changelog, cli, config, registry, release_metadata, toolchain, toolchain_config, update_release
+from research_repo_tools import _registry_requests, changelog, cli, config, registry, release_metadata, toolchain, toolchain_config, update_release
 from research_repo_tools.just_inspect import dry_run, inspect_justfile
 from research_repo_tools.process import run_git_command
 from research_repo_tools.release_assets import GitHubRelease, ReleaseTarget, serialize_release_target
@@ -124,9 +124,13 @@ class TestPublishingConsumer(unittest.TestCase):
             self.assertIn("malformed JSON", errors.getvalue())
 
     def test_captured_draft_id_is_preserved_through_publication_and_event_gate(self):
+        class CapturedTarget(ReleaseTarget):
+            def __bool__(self) -> bool:
+                return False
+
         settings = self.settings("pypi", **{"expected-title": "tag", "generated-notes": True, "require-immutable": True})
         sha = "a" * 40
-        target = ReleaseTarget("example/project", "v1.2.3", 9, sha, "v1.2.3")
+        target = CapturedTarget("example/project", "v1.2.3", 9, sha, "v1.2.3")
         draft = GitHubRelease("example/project", "v1.2.3", 9, True, False, False, (), title="v1.2.3", body="notes\n")
         with (
             patch("research_repo_tools.release_publishing._check_release_source", return_value=sha),
@@ -657,7 +661,7 @@ class TestPublishingConsumer(unittest.TestCase):
                     self.assertEqual(request.full_url, Response.url)
                     return Response(b"{" + extra + version + b"}")
 
-                with patch("research_repo_tools.registry._OPENER.open", response):
+                with patch("research_repo_tools._registry_requests._OPENER.open", response):
                     with self.assertRaises(registry.RegistryLookupError):
                         registry.lookup_version("crates-io", "sample", "1.2.3")
 
@@ -728,13 +732,13 @@ class TestPublishingConsumer(unittest.TestCase):
         def absent(request, **kwargs):
             raise urllib.error.HTTPError(request.full_url, 404, "missing", Message(), None)
 
-        with patch("research_repo_tools.registry._OPENER.open", absent):
+        with patch("research_repo_tools._registry_requests._OPENER.open", absent):
             self.assertFalse(registry.lookup_version("crates-io", "sample", "1.2.3").present)
 
         def unavailable(request, **kwargs):
             raise urllib.error.HTTPError(request.full_url, 429, "rate limited", Message(), None)
 
-        with patch("research_repo_tools.registry._OPENER.open", unavailable):
+        with patch("research_repo_tools._registry_requests._OPENER.open", unavailable):
             with self.assertRaises(registry.RegistryLookupError):
                 registry.lookup_version("crates-io", "sample", "1.2.3")
         release = GitHubRelease("example/project", "v1.2.3", 9, False, False, False, ())
@@ -825,7 +829,7 @@ class TestPublishingConsumer(unittest.TestCase):
                 def failed(*args, **kwargs):
                     raise error
 
-                with patch("research_repo_tools.registry._OPENER.open", failed):
+                with patch("research_repo_tools._registry_requests._OPENER.open", failed):
                     if code == 404:
                         self.assertFalse(registry.lookup_version("crates-io", "sample", "1.2.3").present)
                     else:
@@ -839,7 +843,7 @@ class TestPublishingConsumer(unittest.TestCase):
                 error = urllib.error.HTTPError("https://crates.io/api/v1/crates/sample/1.2.3", code, "unavailable", Message(), body)
                 cleanup = OSError("close failed")
                 with (
-                    patch("research_repo_tools.registry._OPENER.open", side_effect=error) as transport,
+                    patch("research_repo_tools._registry_requests._OPENER.open", side_effect=error) as transport,
                     patch.object(error, "close", side_effect=cleanup) as close,
                     self.assertRaisesRegex(ExceptionGroup, "HTTP request and response cleanup failed") as caught,
                 ):
@@ -856,7 +860,7 @@ class TestPublishingConsumer(unittest.TestCase):
         response = Response(b"partial")
         failure = http.client.IncompleteRead(b"partial", 100)
         with (
-            patch.object(registry._OPENER, "open", return_value=response) as opener,
+            patch.object(_registry_requests._OPENER, "open", return_value=response) as opener,
             patch.object(response, "read1", side_effect=failure),
             self.assertRaisesRegex(registry.RegistryLookupError, r"pypi.org sample/1.2.3") as caught,
         ):
@@ -906,6 +910,18 @@ class TestPublishingConsumer(unittest.TestCase):
             with self.subTest(arguments=arguments):
                 self.assertIn('release update "$@"', dry_run(self.root, "update-version", arguments).stderr)
         self.assertIn('release verify --attempts 7 --interval 10 "$@"', dry_run(self.root, "release-verify", ["v1.2.3"]).stderr)
+
+    def test_tag_preview_stdout_contains_only_the_annotation(self):
+        notes = "Release notes for café.\n"
+        with (
+            patch("research_repo_tools.releases.check_release") as preflight,
+            patch.object(changelog, "tag", return_value=notes),
+            contextlib.redirect_stdout(io.StringIO()) as output,
+            contextlib.redirect_stderr(io.StringIO()) as errors,
+        ):
+            preflight.return_value.problems = ()
+            status = cli.main(["--root", str(self.root), "changelog", "tag", "v1.2.3", "--commit", "a" * 40, "--dry-run"])
+        self.assertEqual((status, output.getvalue(), errors.getvalue()), (0, notes, ""))
 
     def test_tag_metadata_failure_preserves_preview_and_force_in_recovery_command(self):
         policy = self.root / "reviewer's policy.toml"

@@ -7,6 +7,7 @@ from research_repo_tools.workflow_uses import SHA, Use, references, version_comm
 
 
 def check(root: Path, policy: Path, inputs: list[str]) -> int:
+    """Check that policy-selected GitHub Actions use consistent pins across the given workflow paths."""
     declaration = load_policy(policy)
     if not declaration.consistency:
         raise ValueError(f"{policy}: actions check requires a nonempty consistency.actions list")

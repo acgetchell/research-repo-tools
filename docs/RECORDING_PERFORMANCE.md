@@ -314,16 +314,22 @@ from pathlib import Path
 from research_repo_tools.criterion import COMPARISON_SCHEMA, parse_comparison, render_comparison
 from research_repo_tools.evidence import Evidence, Provenance, compare_provenance, publish_evidence
 
+
 def retain_comparison(payload: bytes, baseline: Provenance, current: Provenance) -> None:
+    """Publish the comparison, manifest, and report when the selected measurement contexts agree."""
     comparison = parse_comparison(payload)
     compatibility = compare_provenance(
-        baseline, current, fields=("harness_sha256", "context.cpu", "context.rustc"),
+        baseline,
+        current,
+        fields=("harness_sha256", "context.cpu", "context.rustc"),
     )
     if not compatibility.compatible:
         raise ValueError(f"Measurement context differs or is unknown: {compatibility.differences}")
     retained = Evidence(payload, COMPARISON_SCHEMA, (("baseline", baseline), ("current", current)))
     publish_evidence(
-        retained, Path("evidence/comparison.json"), Path("evidence/manifest.json"),
+        retained,
+        Path("evidence/comparison.json"),
+        Path("evidence/manifest.json"),
         reports={Path("PERFORMANCE.md"): render_comparison(comparison).encode("utf-8")},
         immutable=(Path("evidence/comparison.json"), Path("evidence/manifest.json")),
     )

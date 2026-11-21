@@ -425,12 +425,26 @@ class TestReviewConsumer(unittest.TestCase):
             )
             self.assertFalse((caller.parent / "resume.json").exists())
 
+    def test_text_only_cli_capture_preserves_split_multibyte_provider_records(self) -> None:
+        message = '{"type":"status","message":"café"}\n'.encode()
+
+        def stream(*args, output, **kwargs):
+            for value in message:
+                output(bytes([value]))
+            return CompletedReview(findings=0, reviewed_files=())
+
+        with patch.object(review, "stream_review", side_effect=stream), contextlib.redirect_stdout(io.StringIO()) as output:
+            self.assertEqual(cli.main(["--root", str(self.root), "review", "uncommitted"]), 0)
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual(records[0]["message"], "café")
+        self.assertEqual(records[1]["status"], "completed")
+
     def test_unterminated_provider_records_remain_separate_during_resume(self) -> None:
         selected = self.start()
         self.final_newline = False
         self.results = [QUOTE, COMPLETE]
         buffer = io.BytesIO()
-        with contextlib.redirect_stdout(io.TextIOWrapper(buffer, encoding="utf-8", newline="\n")) as output:
+        with contextlib.redirect_stdout(io.TextIOWrapper(buffer, encoding="utf-16", newline="\r\n")) as output:
             result = review.resume(self.pending, self.approval(selected))
             self.assertEqual(review.report(result), 0)
             output.flush()

@@ -115,7 +115,8 @@ def _osv_report(value: object, lockfiles: set[Path]) -> bool:
     return found
 
 
-def _gitleaks_report(value: object, format_name: str, *, scope: str) -> bool:
+def _redact_gitleaks_report(value: object, format_name: str, *, scope: str) -> tuple[object, bool]:
+    """Validate the private scan result, redact its metadata in place, and return the report and whether it has findings."""
     if format_name == "sarif":
         results = _sarif(value)
         for finding in results:
@@ -137,8 +138,13 @@ def _gitleaks_report(value: object, format_name: str, *, scope: str) -> bool:
                 raise ValueError("invalid Gitleaks SARIF fingerprints")
             if fingerprints.get("commitMessage"):
                 fingerprints["commitMessage"] = "REDACTED"
-        return bool(results)
-    return sum(1 for _ in _gitleaks_identities(value, scope)) > 0
+        return value, bool(results)
+    for record, _ in _gitleaks_records(value, scope):
+        # Native redaction covers the matched secret. Adjacent text can contain others.
+        for key in ("Match", "Message", "Fragment"):
+            if record.get(key):
+                record[key] = None if key == "Fragment" else "REDACTED"
+    return value, bool(value)
 
 
 def _load_report(path: Path) -> object:
@@ -162,11 +168,12 @@ def _report_run(
     *,
     root: Path,
     env: dict[str, str],
-    validate,
+    prepare_report: Callable[[object, str], tuple[object, bool]],
     present=None,
     findings_exit: int | None = None,
     timeout: int = 600,
 ) -> int:
+    """Remove stale output, then publish the prepared report after checking the scanner exit status."""
     if destination.is_symlink():
         raise ValueError("report destination must not be a symlink")
     destination.parent.mkdir(parents=True, exist_ok=True)
@@ -186,8 +193,7 @@ def _report_run(
             print(f"{binary.name}: scan did not complete (exit {code}); no report published", file=sys.stderr)
             return 2 if code == 1 else code
         try:
-            value = _load_report(report)
-            findings = validate(value, format_name)
+            value, findings = prepare_report(_load_report(report), format_name)
             if findings_exit is not None and code != (findings_exit if findings else 0):
                 raise ValueError("scanner exit status does not match report findings")
             payload = (json.dumps(value, ensure_ascii=False, indent=2) + "\n").encode("utf-8")
@@ -196,8 +202,6 @@ def _report_run(
         except OSError, ValueError, TypeError, KeyError:
             print(f"{binary.name}: missing, malformed, incomplete, or unredacted {format_name} report (exit {code}); no report published", file=sys.stderr)
             return 2 if findings_exit is not None else code or 1
-        # Keep the native schema and diagnostics; Gitleaks metadata redactions
-        # above are the only changes to finding content.
         files.replace_many({destination: payload})
         status = code or int(findings)
         if present is not None:
@@ -261,7 +265,7 @@ def scan_osv(settings: config.Config, lockfiles: tuple[str, ...], *, output: str
                 format_name,
                 root=settings.root,
                 env=env,
-                validate=lambda value, fmt: _osv_report(value, {path}) if fmt == "json" else bool(_sarif(value)),
+                prepare_report=lambda value, fmt: (value, _osv_report(value, {path}) if fmt == "json" else bool(_sarif(value))),
                 present=present,
             )
             code = code or status
@@ -280,6 +284,7 @@ def _gitleaks_environment(env: Mapping[str, str]) -> dict[str, str]:
 
 
 def _prepare_gitleaks_scan(settings: config.Config, stage: Path, exclude: tuple[str, ...]) -> tuple[Path, dict[str, str]]:
+    """Stage the working files and explicit scanner defaults, requiring accessible full Git history."""
     _require_no_gitleaks_ignore(settings.root)
     git_env = _gitleaks_environment(os.environ)
     shallow = run_git_bytes(["--no-pager", "rev-parse", "--is-shallow-repository"], cwd=settings.root, env=git_env).stdout.strip()
@@ -322,6 +327,7 @@ class _GitleaksPolicySnapshot:
     retained: dict[tuple[Path, int], Path] = field(default_factory=dict)
 
     def retain(self, path: Path, depth: int = 0) -> Path:
+        """Copy a scanner policy and its supported local extensions into private storage."""
         key = (path, depth)
         if key in self.retained:
             return self.retained[key]
@@ -358,6 +364,7 @@ class _GitleaksPolicySnapshot:
         return output
 
     def verify(self) -> None:
+        """Check that the original policy files still match their captured bytes."""
         for path, payload in self.observed.items():
             try:
                 unchanged = path.is_file() and path.read_bytes() == payload
@@ -431,7 +438,7 @@ def scan_secrets(settings: config.Config, *, output: str = "target/security", co
                     format_name,
                     root=source,
                     env=env,
-                    validate=partial(_gitleaks_report, scope=label),
+                    prepare_report=partial(_redact_gitleaks_report, scope=label),
                     present=present,
                     findings_exit=GITLEAKS_FINDINGS_EXIT,
                     timeout=GITLEAKS_TIMEOUT,
@@ -468,7 +475,8 @@ def _secret_path(path: str, scope: str, source: Path) -> str:
     return native.as_posix()
 
 
-def _gitleaks_identities(value: object, scope: str) -> Iterator[_SecretFinding]:
+def _gitleaks_records(value: object, scope: str) -> Iterator[tuple[dict[str, Any], _SecretFinding]]:
+    """Yield each original JSON record and its validated finding identity."""
     if not isinstance(value, list):
         raise ValueError("invalid Gitleaks JSON report")
     for item in value:
@@ -489,17 +497,13 @@ def _gitleaks_identities(value: object, scope: str) -> Iterator[_SecretFinding]:
             or any(type(part) is not int or part < 0 for part in position)
         ):
             raise ValueError(f"invalid Gitleaks {scope} finding identity")
-        # Adjacent source text can contain other secrets, so omit it wholesale.
-        for key in ("Match", "Message", "Fragment"):
-            if item.get(key):
-                item[key] = None if key == "Fragment" else "REDACTED"
-        yield _SecretFinding(scope, path, cast(tuple[int, int, int, int], position), rule, commit)
+        yield item, _SecretFinding(scope, path, cast(tuple[int, int, int, int], position), rule, commit)
 
 
 def _secret_findings(report: Path, scope: str, source: Path) -> Counter[_SecretFinding]:
     return Counter(
         _SecretFinding(item.scope, _secret_path(item.path, scope, source), item.position, item.rule, item.commit)
-        for item in _gitleaks_identities(_load_report(report), scope)
+        for _, item in _gitleaks_records(_load_report(report), scope)
     )
 
 
@@ -529,6 +533,11 @@ def _history_tips(root: Path, env: Mapping[str, str]) -> frozenset[bytes]:
 
 
 def _capture_gitleaks_history(root: Path, stage: Path, env: Mapping[str, str]) -> tuple[Path, Callable[[], None]]:
+    """Mirror the scan's Git refs into private storage, including other worktrees' detached tips.
+
+    Return a guard that rejects changes to the source refs or tips during the scan.
+    """
+
     def history_refs(repository: Path) -> bytes:
         return run_git_bytes(["--no-pager", "show-ref", "--head"], cwd=repository, env=env).stdout
 
@@ -583,7 +592,7 @@ def check_secret_exceptions(settings: config.Config, candidate: str, *, baseline
                     "json",
                     root=source,
                     env=env,
-                    validate=partial(_gitleaks_report, scope=scope),
+                    prepare_report=partial(_redact_gitleaks_report, scope=scope),
                     findings_exit=GITLEAKS_FINDINGS_EXIT,
                     timeout=GITLEAKS_TIMEOUT,
                 )

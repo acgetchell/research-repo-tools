@@ -45,10 +45,10 @@ only when PDF operations execute:
   compressed objects; build with `SOURCE_DATE_EPOCH`. Other profiles fail closed.
 - `normalize_pdf(path, *, tex: Path, identity: str, output=None,
   policy=PdfPolicy(), reference=None) -> PdfInspection` reads all inputs, parses
-  the date, validates normalization/structure/policy, then publishes through
-  `files.replace_many`. Default output is in-place; separate outputs preserve
-  source bytes. Existing outputs use snapshot guards after staging; new outputs
-  require caller serialization. Exclude concurrent writers in either case.
+  the date and validates normalization, structure and policy. The default
+  output is in-place. A separate output preserves the source and any reference
+  PDF. Existing outputs use snapshot guards after staging. For a new output,
+  publication checks the inputs again and fails if the destination has appeared.
 
 Malformed/encrypted PDFs, unsupported metadata, invalid policy and missing extras
 raise `ValueError`; file/publication failures may raise `OSError`. Incomplete

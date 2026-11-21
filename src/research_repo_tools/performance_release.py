@@ -38,6 +38,8 @@ PREPARATION_SCHEMA = "research-repo-tools/performance-preparation/v1"
 
 @dataclass(frozen=True, slots=True)
 class PerformanceRelease:
+    """Consumer configuration for choosing releases, collecting measurements, and publishing their report."""
+
     repository: str
     measurement: str
     report: str
@@ -132,6 +134,8 @@ def select_measurement_pair(
 
 @dataclass(frozen=True, slots=True)
 class Preparation:
+    """A release pair and its source revisions bound to the selected measurement declaration."""
+
     repository: str
     measurement: str
     measurement_sha256: str
@@ -167,6 +171,7 @@ class Preparation:
 
     @property
     def identities(self) -> dict[str, tuple[str, str]]:
+        """Return the asserted release tag and revision for each phase."""
         return {"current": (self.pair.current, self.current_revision), "baseline": (self.pair.baseline, self.baseline_revision)}
 
     def verify(self, root: Path) -> None:
@@ -186,6 +191,7 @@ class Preparation:
 
 
 def serialize_preparation(record: Preparation) -> bytes:
+    """Encode a release pair, measurement identity, and preparation options as deterministic JSON."""
     return deterministic_json(
         {
             "schema": PREPARATION_SCHEMA,
@@ -202,6 +208,7 @@ def serialize_preparation(record: Preparation) -> bytes:
 
 
 def parse_preparation(payload: bytes) -> Preparation:
+    """Read the independently prepared release identities and retained measurement checksum."""
     raw = _object(
         _load_json(payload, "performance preparation"),
         "preparation",
@@ -386,7 +393,7 @@ def measure_release(
 
         check_release_dependencies(root, packages=dependencies)
     record = load_preparation(root, settings)
-    reporter = progress or ProgressReporter()
+    reporter = ProgressReporter() if progress is None else progress
     measure_and_retain(
         root,
         settings.measurement,

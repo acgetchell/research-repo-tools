@@ -45,7 +45,7 @@ def _external(input: ExternalBuildInput) -> tuple[dict[str, object], bytes]:
         raise ValueError("external build input differs from its pinned SHA-256")
     if input.url.endswith(".zip"):
         with zipfile.ZipFile(io.BytesIO(payload)) as archive:
-            matches = [entry for entry in archive.infolist() if entry.filename == input.member]
+            matches = [entry for entry in archive.infolist() if entry.orig_filename == input.member]
             if len(matches) != 1 or matches[0].is_dir() or matches[0].file_size > MAX_WHEEL_BYTES:
                 raise ValueError("external build payload is missing, ambiguous, or oversized")
             data = archive.read(matches[0])
@@ -63,6 +63,7 @@ def _external(input: ExternalBuildInput) -> tuple[dict[str, object], bytes]:
 
 
 def locked_sdist(graph: DependencyGraph, package: str) -> tuple[str, dict[str, object]]:
+    """Select the sole locked PyPI version and its source archive identity for a package."""
     lock = tomllib.loads((graph.root / "uv.lock").read_text(encoding="utf-8"))
     matches = [item for item in lock["package"] if item["name"] == package]
     if len(matches) != 1:
@@ -78,6 +79,7 @@ def locked_sdist(graph: DependencyGraph, package: str) -> tuple[str, dict[str, o
 
 
 def _build_environment(root: Path, temporary: Path, policy: SourceBuildPolicy, uv: Path) -> tuple[Path, dict[str, str], dict[str, object]]:
+    """Create a temporary build environment and return its interpreter, subprocess environment, and tool provenance."""
     environment = {
         key: value
         for key, value in os.environ.items()
@@ -184,7 +186,7 @@ def prepare_dependency_builds(root: Path, *, directory: Path | None = None, prov
     print("Verifying locked dependency graph", file=sys.stderr, flush=True)
     verify_graph(graph, provider=provider)
     print(f"Verified locked dependency graph in {time.perf_counter() - started:.2f}s", file=sys.stderr, flush=True)
-    source_provider = provider or HttpSourceProvider()
+    source_provider = HttpSourceProvider() if provider is None else provider
     completed: list[tuple[str, str, dict[str, object], Path, bytes]] = []
     with tempfile.TemporaryDirectory(prefix="verified-dependency-build-") as temporary_name:
         temporary = Path(temporary_name)
@@ -241,7 +243,8 @@ def prepare_dependency_builds(root: Path, *, directory: Path | None = None, prov
             wheel = wheels[0]
             with zipfile.ZipFile(wheel) as archive:
                 for item, (_, data) in zip(inputs, external, strict=True):
-                    if archive.namelist().count(item.wheel_member) != 1 or archive.read(item.wheel_member) != data:
+                    matches = [entry for entry in archive.infolist() if entry.orig_filename == item.wheel_member]
+                    if len(matches) != 1 or matches[0].file_size != len(data) or archive.read(matches[0]) != data:
                         raise ValueError(f"{package}: built external payload differs from the verified release asset")
             build_log = canonical({"stdout": result.stdout, "stderr": result.stderr})
             record: dict[str, object] = {

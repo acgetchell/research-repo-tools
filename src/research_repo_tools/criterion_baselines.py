@@ -40,6 +40,8 @@ def _raw_files(values: tuple[str, ...]) -> tuple[str, ...]:
 
 @dataclass(frozen=True, slots=True)
 class SavedSamplePlan:
+    """Locations, required raw files, and workload policy for checking a saved Criterion baseline."""
+
     criterion_dir: str
     saved_sample: str
     policy: CompletePolicy
@@ -82,6 +84,7 @@ def _scope_plan(plan: SavedSamplePlan, inventory: CriterionInventory, suite: str
 def _load_saved_sample(
     root: Path, configuration: str, *, saved_sample: str | None = None, criterion_dir: str | None = None
 ) -> tuple[SavedSamplePlan, CriterionInventory | None]:
+    """Load the baseline policy and its workload inventory when the declaration selects an inventory file."""
     raw = _table(
         tomllib.loads(_path(root.resolve(), configuration).read_bytes().decode("utf-8")),
         "saved sample",

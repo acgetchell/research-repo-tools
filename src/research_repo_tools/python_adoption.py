@@ -14,18 +14,22 @@ from io import StringIO
 from pathlib import Path
 
 from packaging.specifiers import SpecifierSet
+from packaging.utils import canonicalize_name
 
 from research_repo_tools import config, files, python_baseline, python_tools, toolchain, toolchain_config
 from research_repo_tools.config import _table
 from research_repo_tools.dependency_workflows import _pin_python_requirements
 from research_repo_tools.process import get_safe_executable, run_safe_command
+from research_repo_tools.python_resolution import group_names
 from research_repo_tools.release_policy import relative_path
 from research_repo_tools.selection import select_files
-from research_repo_tools.toml_source import key_line, set_value
+from research_repo_tools.toml_source import key_line, set_value, string_literal
 
 
 @dataclass(frozen=True, slots=True)
 class PythonAdoptionPlan:
+    """Proposed consumer manifest and environment changes bound to the inputs used to plan them."""
+
     root: Path
     baseline: python_baseline.PythonBaseline
     originals: tuple[tuple[str, bytes | None], ...]
@@ -75,6 +79,7 @@ class PythonAdoptionPlan:
 
     @property
     def changed_paths(self) -> tuple[str, ...]:
+        """List relative paths whose proposed bytes differ from the captured consumer files."""
         before = dict(self.originals)
         return tuple(name for name, value in self.replacements if before.get(name) != value)
 
@@ -110,6 +115,7 @@ def _sync(uv: str, root: Path, request: str, groups: tuple[str, ...], *, check: 
 
 
 def _manifest(text: str, authority: python_baseline.PythonBaseline, old_selector: str, *, inherit_python: bool = True, inherit_tools: bool = False) -> str:
+    """Render adopted pins and constraints while preserving local group policy."""
     from research_repo_tools import semgrep_tool
 
     text = semgrep_tool.adopt_manifest(text)
@@ -125,8 +131,10 @@ def _manifest(text: str, authority: python_baseline.PythonBaseline, old_selector
     text, _ = _pin_python_requirements(text, document, python_baseline.PACKAGE, authority.package_version)
     uv = _table(_table(document.get("tool", {}), "tool").get("uv", {}), "tool.uv")
     group_constraints = _table(uv.get("dependency-groups", {}), "tool.uv.dependency-groups")
-    text = set_value(text, "project", "requires-python", json.dumps(requirement))
-    for group in groups:
+    names = group_names(group_constraints)
+    text = set_value(text, "project", "requires-python", string_literal(requirement))
+    for declared in groups:
+        group = names.get(canonicalize_name(declared), declared)
         existing = group_constraints.get(group, {})
         if not isinstance(existing, dict) or set(existing) - {"requires-python"}:
             raise ValueError(f"unsupported uv dependency-group constraints for {group}")
@@ -137,13 +145,14 @@ def _manifest(text: str, authority: python_baseline.PythonBaseline, old_selector
         selector = _selector_requirement(selected)
         if (constraint & SpecifierSet(requirement) & SpecifierSet(selector)).is_unsatisfiable():
             raise ValueError(f"tool.uv.dependency-groups.{group}.requires-python conflicts with shared Python; review compatibility before adoption")
+        encoded_constraint = string_literal(str(constraint))
         if group in group_constraints:
             try:
                 key_line(text, "tool.uv.dependency-groups", group)
             except ValueError:
-                text = set_value(text, f"tool.uv.dependency-groups.{group}", "requires-python", json.dumps(str(constraint)))
+                text = set_value(text, f"tool.uv.dependency-groups.{string_literal(group)}", "requires-python", encoded_constraint)
                 continue
-        text = set_value(text, "tool.uv.dependency-groups", group, "{ requires-python = " + json.dumps(str(constraint)) + " }")
+        text = set_value(text, "tool.uv.dependency-groups", group, f"{{ requires-python = {encoded_constraint} }}")
     if not inherit_python and selected == old_selector:
         return text
     # Retire redundant target mirrors while preserving intentional lower targets

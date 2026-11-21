@@ -16,6 +16,7 @@ from packaging.specifiers import SpecifierSet
 from packaging.version import InvalidVersion, Version
 
 from research_repo_tools import config, python_locks, python_resolution
+from research_repo_tools._diagnostics import workflow_diagnostic
 from research_repo_tools.files import preserve_files
 from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics, run_safe_command
 
@@ -459,15 +460,15 @@ def main(argv: list[str] | None = None, *, toolchain: config.ToolchainSettings |
     except ExceptionGroup as error:
         expected, unexpected = error.split((ExecutableNotFoundError, OSError, RuntimeError, subprocess.SubprocessError, TypeError, ValueError))
         if expected is not None:
-            print(f"failed to update Python development-tool pins: {format_exception_diagnostics(expected)}", file=sys.stderr)
+            print(f"failed to update Python development-tool pins: {workflow_diagnostic(format_exception_diagnostics(expected))}", file=sys.stderr)
         if unexpected is not None:
             raise unexpected from None
         return 1
     except subprocess.CalledProcessError as error:
-        print(f"failed to update Python development-tool pins: {_subprocess_detail(error)}", file=sys.stderr)
+        print(f"failed to update Python development-tool pins: {workflow_diagnostic(_subprocess_detail(error), single_line=True)}", file=sys.stderr)
         return 1
     except (ExecutableNotFoundError, OSError, RuntimeError, subprocess.TimeoutExpired, TypeError, ValueError, tomllib.TOMLDecodeError) as error:
-        print(f"failed to update Python development-tool pins: {error}", file=sys.stderr)
+        print(f"failed to update Python development-tool pins: {workflow_diagnostic(format_exception_diagnostics(error), single_line=True)}", file=sys.stderr)
         return 1
 
     if not changes:

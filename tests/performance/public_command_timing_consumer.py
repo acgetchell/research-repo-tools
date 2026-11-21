@@ -245,6 +245,21 @@ class TestCommandTiming(unittest.TestCase):
                         publish_command_timing(self.root, "timing.toml", "result.json")
                 self.assertFalse((self.root / "result.json").exists())
 
+    def test_competing_report_at_final_publication_survives(self) -> None:
+        target = self.root / "result.json"
+        before = set(self.root.iterdir())
+
+        def competing_writer() -> None:
+            target.write_bytes(b"other complete run\r\n")
+
+        with (
+            patch("research_repo_tools.command_timing._acquire", return_value=(b"this run", competing_writer)),
+            self.assertRaises(FileExistsError),
+        ):
+            publish_command_timing(self.root, "timing.toml", "result.json")
+        self.assertEqual(target.read_bytes(), b"other complete run\r\n")
+        self.assertEqual(set(self.root.iterdir()), before | {target})
+
     def test_packaged_declarations_and_thin_recipe(self) -> None:
         import tomllib
         from importlib.resources import files
@@ -308,8 +323,8 @@ class TestCommandTiming(unittest.TestCase):
                         path.write_bytes(path.read_bytes() + b"\n# concurrent edit\n")
                     return result
 
-                def stage(path, payload):
-                    candidate = stage_bytes(path, payload)
+                def stage(path, payload, **options):
+                    candidate = stage_bytes(path, payload, **options)
                     if changed == "staging":
                         self.script.write_bytes(self.script.read_bytes() + b"\n# concurrent staging edit\n")
                     elif changed == "output":

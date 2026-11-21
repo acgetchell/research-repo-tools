@@ -132,8 +132,9 @@ Find and record the `publish.yml` run for the exact tag and commit.
 
 ### 8. Approve the PyPI deployment
 
-The workflow downloads the wheel and sdist attached to the GitHub Release and
-checks their hashes and signed provenance. Once verification passes, approve
+The workflow confirms that GitHub marks the published release immutable, then
+downloads its attached wheel and sdist and checks their hashes and signed
+provenance. Once verification passes, approve
 the protected `pypi` deployment. The uploader sends those exact files to PyPI.
 Wait for the upload job to finish.
 

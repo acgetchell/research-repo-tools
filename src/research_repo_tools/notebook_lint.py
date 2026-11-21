@@ -5,6 +5,7 @@ import os
 import re
 import subprocess
 import sys
+from collections.abc import Iterable
 from dataclasses import dataclass
 from enum import Enum
 from importlib.metadata import PackageNotFoundError, version
@@ -26,12 +27,15 @@ TY_LOCATION = re.compile(r"^.+:cell (?P<cell>\d+):(?P<line>\d+):(?P<column>\d+):
 
 
 class DiagnosticKind(Enum):
+    """Classification used to distinguish checker failures, findings, and informational advice."""
+
     FINDING = "finding"
     INFORMATIONAL = "informational"
     OPERATIONAL = "operational"
 
     @property
     def advice_label(self) -> str:
+        """Return the severity label displayed in notebook advice."""
         match self:
             case DiagnosticKind.FINDING:
                 return "WARNING"
@@ -44,6 +48,8 @@ class DiagnosticKind(Enum):
 
 @dataclass(frozen=True)
 class Diagnostic:
+    """A notebook checker's message with its severity and any available source coordinates."""
+
     message: str
     cell: int | None = None
     line: int | None = None
@@ -55,6 +61,7 @@ class Diagnostic:
             raise ValueError("diagnostic kind must be a DiagnosticKind")
 
     def render(self, notebook: Notebook) -> str:
+        """Format the notebook location, available cell and line coordinates, and diagnostic message."""
         location = str(notebook.path)
         if self.cell is not None:
             location += f": cell {self.cell} ({notebook.node.cells[self.cell - 1].id})"
@@ -64,6 +71,7 @@ class Diagnostic:
 
 
 def require_checkers(packages: tuple[str, ...] = ("ruff", "ty"), *, command: str = "notebooks lint") -> None:
+    """Require supported checker versions in the active locked project environment."""
     for package in packages:
         minimum = MINIMUM_VERSIONS[package]
         try:
@@ -87,6 +95,7 @@ def _positive(value: object) -> int:
 
 
 def ruff_diagnostics(output: str, notebook: Notebook, label: str) -> list[Diagnostic]:
+    """Parse Ruff's JSON diagnostics and map their positions to the original notebook."""
     raw = json.loads(output)
     if not isinstance(raw, list):
         raise ValueError("Ruff did not return a JSON diagnostic array")
@@ -111,6 +120,7 @@ def ruff_diagnostics(output: str, notebook: Notebook, label: str) -> list[Diagno
 
 
 def ty_diagnostics(output: str, notebook: Notebook) -> list[Diagnostic]:
+    """Extract ty diagnostics and map their concise locations to notebook code."""
     result = []
     for line in output.splitlines():
         if not line.strip() or line == "All checks passed!" or re.fullmatch(r"Found \d+ diagnostics?", line):
@@ -153,7 +163,8 @@ def _run(notebook: Notebook, settings: Config, module: str, args: list[str], lab
     return diagnostics
 
 
-def python_notebooks(paths: list[Path]) -> list[Notebook]:
+def python_notebooks(paths: Iterable[Path]) -> list[Notebook]:
+    """Load the selected notebooks and reject languages unsupported by Python analysis."""
     notebooks = selected(paths)
     for notebook in notebooks:
         for section, key in (("language_info", "name"), ("kernelspec", "language")):
@@ -163,7 +174,8 @@ def python_notebooks(paths: list[Path]) -> list[Notebook]:
     return notebooks
 
 
-def lint(settings: Config, paths: list[Path], *, timeout: int = 30, id_pattern: str | None = None) -> int:
+def lint(settings: Config, paths: Iterable[Path], *, timeout: int = 30, id_pattern: str | None = None) -> int:
+    """Run configured notebook lint, formatting, and type checks without modifying selected files."""
     if type(timeout) is not int or timeout <= 0:
         raise ValueError("notebook lint timeout must be a positive integer")
     pattern = notebook_id_pattern(settings.notebooks.id_pattern if id_pattern is None else id_pattern)

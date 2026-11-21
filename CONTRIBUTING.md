@@ -133,7 +133,11 @@ its raw data and a JUnit failure report at `coverage/failed-*/pytest.xml`, then
 prints the retained directory after the coverage summary. The command still
 fails even when coverage aggregation succeeds. An explicit pytest `--junitxml`
 argument overrides the default report path. Successful runs remove their
-temporary diagnostics.
+temporary diagnostics. Interrupting the coverage runner during collection
+returns status 130, retains raw worker data, and preserves the previous
+coverage database and report.
+Collection, usage, and internal pytest errors also preserve the previous report
+and retain the failed run directory.
 Use `just clean-coverage` to preview old root `.coverage.*` files and retained
 `coverage/failed-*` or `coverage/.run-*` directories. Stop coverage writers before
 running `just clean-coverage --apply`. The shared implementation preserves the
@@ -227,7 +231,8 @@ audits. These component recipes can also be run independently. `just ci`
 coalesces the lock check shared by `check` and `build` within that invocation.
 The repository's `.gitattributes` keeps Justfiles at LF on every platform so
 the formatter sees the same recipe bytes on Windows checkouts.
-`just audit` performs the separate network-backed Python dependency audit.
+`just audit` audits locked third-party requirements across dependency groups
+and optional extras using the network-backed Python advisory service.
 
 The Python gate selects one complete inventory, resolves each validator once, and
 preflights all argument batches before execution. It stops at the first failure;
@@ -253,8 +258,9 @@ alternating pair order, source hashes, interpreter/tool versions, JIT availabili
 LibYAML availability, validator invocations, and untimed resolution-call counts.
 It verifies source and harness identities around every worker, records native
 validator paths, versions and hashes, and checks the complete fixture selection.
-Invalid source directories, import-origin mismatches, input drift and failed
-workers reject the run before JSON publication; child diagnostics remain visible.
+Invalid source directories, import-origin mismatches, input drift, and
+incomplete or nonfinite worker measurements stop JSON publication. The output
+path must be separate from the measured sources, harness, and executables.
 Selection/validation timing excludes installation and imports; help/version timing
 includes process startup. Write JSON to a review-evidence location, not to a current
 guidance document. Historical 3.14 measurements use the pre-migration source only.

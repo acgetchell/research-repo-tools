@@ -1,5 +1,7 @@
 """Shared staged publication and recoverable rollback for files."""
 
+import difflib
+import io
 import logging
 import os
 import secrets
@@ -7,7 +9,7 @@ import shutil
 import stat
 import tempfile
 import unicodedata
-from collections.abc import Callable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
@@ -16,6 +18,18 @@ from typing import Never
 LOGGER = logging.getLogger(__name__)
 
 __all__ = ["RecoveryError", "publish_directory", "replace_many"]
+
+
+def _text_diff(before: bytes | None, after: bytes, *, fromfile: str, tofile: str) -> str:
+    """Preview a UTF-8 file change, including an empty creation or a missing final LF."""
+    if before == after:
+        return ""
+    if before is None and not after:
+        return f"--- /dev/null\n+++ {tofile}\n"
+    old = io.StringIO(before.decode("utf-8") if before is not None else "").readlines()
+    new = io.StringIO(after.decode("utf-8")).readlines()
+    lines = difflib.unified_diff(old, new, fromfile=fromfile, tofile=tofile)
+    return "".join(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n" for line in lines)
 
 
 class RecoveryError(OSError):
@@ -47,7 +61,7 @@ def _open_sibling_temporary(path: Path, suffix: str) -> tuple[int, Path]:
     """Create an owner-only collision-resistant temporary file beside *path*."""
     flags = os.O_CREAT | os.O_EXCL | os.O_WRONLY | getattr(os, "O_BINARY", 0)
     for _attempt in range(100):
-        candidate = path.with_name(f".{path.name}.{secrets.token_hex(12)}{suffix}")
+        candidate = path.with_name(f".{path.name[:24]}.{secrets.token_hex(12)}{suffix}")
         try:
             return os.open(candidate, flags, 0o600), candidate
         except FileExistsError:
@@ -57,9 +71,9 @@ def _open_sibling_temporary(path: Path, suffix: str) -> tuple[int, Path]:
     raise FileExistsError(msg)
 
 
-def _stage_bytes(path: Path, payload: bytes) -> Path:
+def _stage_bytes(path: Path, payload: bytes, *, preserve_mode: bool = True) -> Path:
     """Write and sync *payload* to an unpublished sibling of *path*."""
-    existing_mode = stat.S_IMODE(path.stat().st_mode) if path.exists() else None
+    existing_mode = stat.S_IMODE(path.stat().st_mode) if preserve_mode and path.exists() else None
     descriptor, staged_path = _open_sibling_temporary(path, ".tmp")
     try:
         with os.fdopen(descriptor, "wb") as handle:
@@ -119,15 +133,22 @@ def _remove_created_directories(directories: Sequence[Path]) -> None:
 def _ensure_parent_directory(path: Path) -> list[Path]:
     """Create *path* and return the directories created by this call."""
     missing: list[Path] = []
-    candidate = path
-    while not candidate.exists():
+    for candidate in (path, *path.parents):
+        if candidate.exists():
+            break
         missing.append(candidate)
-        candidate = candidate.parent
+    else:
+        raise FileNotFoundError(f"no accessible parent directory for {path}")
     created: list[Path] = []
     try:
         for directory in reversed(missing):
-            directory.mkdir()
-            created.append(directory)
+            try:
+                directory.mkdir()
+            except FileExistsError:
+                if not directory.is_dir():
+                    raise
+            else:
+                created.append(directory)
     except BaseException:
         _remove_created_directories(created)
         raise
@@ -137,6 +158,27 @@ def _ensure_parent_directory(path: Path) -> list[Path]:
 def _transaction_temporary_paths(staged_writes: Sequence[_StagedWrite]) -> list[Path]:
     """Return every temporary path owned by *staged_writes*."""
     return [path for item in staged_writes for path in (item.staged, item.backup) if path is not None]
+
+
+def _publish_new_file(path: Path, payload: bytes, *, verify: Callable[[], None] | None = None) -> None:
+    """Publish complete bytes at an absent path, preserving a competing directory entry."""
+    if os.path.lexists(path):
+        raise FileExistsError(f"output already exists: {path}")
+    created = _ensure_parent_directory(path.parent)
+    try:
+        staged = _stage_bytes(path, payload, preserve_mode=False)
+        try:
+            if verify is not None:
+                verify()
+            if os.name == "nt":
+                os.rename(staged, path)  # Windows rename fails if the destination exists.
+            else:
+                os.link(staged, path)
+        finally:
+            _cleanup_temporary_paths((staged,))
+    except BaseException:
+        _remove_created_directories(created)
+        raise
 
 
 def _stage_writes(writes: Sequence[tuple[Path, bytes]]) -> tuple[list[_StagedWrite], list[Path]]:
@@ -295,13 +337,14 @@ def _validate_targets(targets: Sequence[Path]) -> tuple[Path, ...]:
 
 
 @contextmanager
-def preserve_files(paths: Sequence[Path]) -> Iterator[Mapping[Path, bytes | None]]:
+def preserve_files(paths: Iterable[Path]) -> Iterator[Mapping[Path, bytes | None]]:
     """Back up files before external mutation and restore them on caught failures.
 
     Yield the original bytes (None for absent files). Backups are fully written
     before the caller can mutate files. Incomplete rollback retains and reports
     the original recovery files; successful updates or rollback remove backups.
     """
+    paths = tuple(paths)
     _validate_targets(paths)
     backups: list[tuple[Path, Path | None]] = []
     try:
@@ -467,7 +510,7 @@ def publish_directory(destination: Path) -> Iterator[Path]:
     target = _directory_target(destination)
     created = _ensure_parent_directory(target.parent)
     try:
-        transaction = Path(tempfile.mkdtemp(prefix=f".{target.name}.", suffix=".tmp", dir=target.parent))
+        transaction = Path(tempfile.mkdtemp(prefix=f".{target.name[:24]}.", suffix=".tmp", dir=target.parent))
     except BaseException:
         _remove_created_directories(created)
         raise

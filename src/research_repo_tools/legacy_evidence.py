@@ -23,7 +23,7 @@ from research_repo_tools.criterion import (
     compare_samples,
     serialize_comparison,
 )
-from research_repo_tools.evidence import Evidence, Provenance, _load_json, _object, _string, sha256, verify_sha256
+from research_repo_tools.evidence import Evidence, Provenance, _load_json, _object, _string, deterministic_json, sha256, verify_sha256
 from research_repo_tools.measurement import _strings
 from research_repo_tools.publication import _path
 from research_repo_tools.publication_config import _table
@@ -47,11 +47,12 @@ def _field(document: object, path: str) -> object:
 def _validate(document: object, config: dict[str, object]) -> None:
     schema = _field(document, _string(config["schema-field"], "schema-field"))
     schemas = config["schemas"]
-    if not isinstance(schemas, list) or not schemas or not any(type(schema) is type(expected) and schema == expected for expected in schemas):
+    encoded_schema = deterministic_json(schema)
+    if not isinstance(schemas, list) or not any(encoded_schema == deterministic_json(expected) for expected in schemas):
         raise ValueError(f"unsupported legacy metadata schema: {schema!r}")
     for selector, expected in _object(config.get("assertions", {}), "legacy assertions").items():
         actual = _field(document, selector)
-        if type(actual) is not type(expected) or actual != expected:
+        if deterministic_json(actual) != deterministic_json(expected):
             raise ValueError(f"legacy assertion failed: {selector}")
     equal = config.get("equal", [])
     if not isinstance(equal, list):
@@ -61,7 +62,7 @@ def _validate(document: object, config: dict[str, object]) -> None:
         if len(selectors) != 2:
             raise ValueError("legacy equal requires pairs of selectors")
         left, right = (_field(document, selector) for selector in selectors)
-        if type(left) is not type(right) or left != right:
+        if deterministic_json(left) != deterministic_json(right):
             raise ValueError(f"legacy identity selectors differ: {selectors}")
 
 
@@ -107,8 +108,12 @@ def convert_csv(payload: bytes, manifest: bytes, configuration: bytes) -> Eviden
                 raise ValueError(f"legacy timing column is not in the header: {name}")
     constants = _object(config.get("constants", {}), "CSV constants")
     coverage = _table(config["coverage"], "coverage", {"column", "common", "added", "missing"}) if "coverage" in config else None
-    if coverage is not None and coverage["column"] not in header:
-        raise ValueError("legacy coverage column must belong to the header")
+    if coverage is not None:
+        if coverage["column"] not in header:
+            raise ValueError("legacy coverage column must belong to the header")
+        labels = [coverage[key] for key in ("common", "added", "missing")]
+        if not all(isinstance(value, str) for value in labels) or len(set(labels)) != len(labels):
+            raise ValueError("legacy coverage labels must be distinct CSV strings")
     if benchmark not in header or constants.keys() - set(header):
         raise ValueError("legacy benchmark/constant columns must belong to the header")
     try:

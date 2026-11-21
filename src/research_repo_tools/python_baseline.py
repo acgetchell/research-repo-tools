@@ -13,6 +13,7 @@ from packaging.utils import canonicalize_name
 from packaging.version import Version
 
 from research_repo_tools.config import _table
+from research_repo_tools.python_resolution import group_names
 
 DEVELOPMENT_PYTHON = "3.15"
 PACKAGE = "research-repo-tools"
@@ -68,6 +69,7 @@ def reconcile_requirement(requirement: object, authority: PythonBaseline) -> str
 
 
 def minimum_problems(document: dict[str, Any], authority: PythonBaseline) -> tuple[str, ...]:
+    """Describe missing or weaker consumer Python support constraints against the installed authority."""
     project = _table(document.get("project", {}), "project")
     requirement = project.get("requires-python")
     try:
@@ -129,6 +131,7 @@ def baseline() -> PythonBaseline:
 
 
 def package_groups(document: dict[str, Any]) -> dict[str, list[Requirement]]:
+    """Find groups that pin the shared package and validate its declared source."""
     result = {}
     groups = _table(document.get("dependency-groups", {}), "dependency-groups")
     for group, requirements in groups.items():
@@ -168,13 +171,15 @@ def drift(root: Path, document: dict[str, Any] | None = None) -> tuple[str, ...]
     problems.extend(target_problems(document, authority.selected))
     if uv.get("package") is not False:
         constraints = _table(uv.get("dependency-groups", {}), "tool.uv.dependency-groups")
+        names = group_names(constraints)
         for group in groups:
-            field = f"tool.uv.dependency-groups.{group}"
-            requirement = _table(constraints.get(group, {}), field).get("requires-python")
+            name = names.get(canonicalize_name(group), group)
+            field = f"tool.uv.dependency-groups.{name}"
+            requirement = _table(constraints.get(name, {}), field).get("requires-python")
             if requirement is not None and not isinstance(requirement, str):
                 raise ValueError(f"{field}.requires-python must be a version specifier string")
             if requirement is None or reconcile_requirement(requirement, authority) != requirement:
-                problems.append(f"tool.uv.dependency-groups.{group}.requires-python must enforce {authority.minimum_requirement}")
+                problems.append(f"{field}.requires-python must enforce {authority.minimum_requirement}")
     return tuple(problems)
 
 
@@ -196,6 +201,7 @@ def target_problems(document: dict[str, Any], selected: str) -> tuple[str, ...]:
 
 
 def check(root: Path, document: dict[str, Any] | None = None) -> None:
+    """Verify the pinned development dependency and reject drift from its installed Python baseline."""
     from research_repo_tools.dependency_provenance import check_development_dependency
 
     check_development_dependency(root, document=document)

@@ -7,7 +7,7 @@ import shutil
 import subprocess
 import sys
 from pathlib import Path
-from typing import Any
+from typing import Any, assert_type
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -666,6 +666,7 @@ class TestRunGitCommandWithInput:
 
         monkeypatch.setattr(subprocess_utils.subprocess, "run", run)
         result = run_git_command_with_input([], "content", capture_output=False)
+        assert_type(result.stdout, str | None)
         assert result.returncode == 0
         assert result.stdout is None
         assert result.stderr is None

@@ -49,6 +49,8 @@ __all__ = [
 
 @dataclass(frozen=True, slots=True)
 class RequiredCheck:
+    """A required GitHub check identified by both its name and reporting app ID."""
+
     name: str
     app_id: int
 
@@ -61,6 +63,8 @@ class RequiredCheck:
 
 @dataclass(frozen=True, slots=True)
 class PublishingSettings:
+    """Consumer requirements for the release repository, registry destination, checks, and assets."""
+
     registry: Literal["pypi", "crates-io"]
     package: str
     repository: str
@@ -152,6 +156,8 @@ def _tag(tag: str) -> str:
 
 @dataclass(frozen=True, slots=True)
 class ReviewedRelease:
+    """The release ID, tag, and commit selected for publication review."""
+
     tag: str
     commit: str
     release_id: int
@@ -388,7 +394,9 @@ def _check_reviewed_target(
     release = lookup_release(config.root, settings.repository, tag)
     if release.prerelease or release.draft != draft or (event is not None and release.identifier != event.release_id):
         raise ValueError("GitHub release lifecycle or identity differs from the reviewed release")
-    _require_identity(release, target or ReleaseTarget(settings.repository, tag, event.release_id if event is not None else release.identifier, head))
+    if target is None:
+        target = ReleaseTarget(settings.repository, tag, event.release_id if event is not None else release.identifier, head)
+    _require_identity(release, target)
     _release_assertions(config, release, tag, draft=draft)
     if require_crate_asset:
         _retained_crate_sha256(release, settings.registry, settings.package, _tag(tag))
@@ -411,7 +419,8 @@ def publish_reviewed_release(config: "Config", tag: str, *, reuse_evidence: byte
     require_draft(current)
     if current.identifier != release.identifier:
         raise ValueError("draft release identity changed before publication")
-    target = target or ReleaseTarget(release.repository, tag, release.identifier, head)
+    if target is None:
+        target = ReleaseTarget(release.repository, tag, release.identifier, head)
     final = revalidate_release_target(config.root, target, dependencies=config.release.published_dependencies)
     _release_assertions(config, final, tag, draft=True)
     published = _publish_release(config.root, target)
@@ -494,6 +503,7 @@ def _verify_publication(
     target: ReleaseTarget | None,
     require_crate_asset: bool = False,
 ) -> RegistryVersion:
+    """Poll for the exact registry version and recheck the release, comparing crates.io's SHA-256 with the retained archive."""
     _repository(repository)
     version = _tag(tag)
     identity(registry, package, version)

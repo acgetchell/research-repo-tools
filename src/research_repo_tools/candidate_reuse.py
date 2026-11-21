@@ -125,6 +125,7 @@ def _provenance(source: Provenance) -> dict[str, Any]:
 
 
 def serialize_candidate_policy(policy: CandidatePolicy) -> bytes:
+    """Encode the candidate and its retained observations as deterministic, schema-versioned JSON."""
     schema = POLICY_SCHEMA if policy.report is None else "research-repo-tools/candidate-policy/v2"
     if policy.first_release:
         schema = "research-repo-tools/candidate-policy/v3"
@@ -148,6 +149,7 @@ def serialize_candidate_policy(policy: CandidatePolicy) -> bytes:
 
 
 def parse_candidate_policy(payload: bytes) -> CandidatePolicy:
+    """Parse candidate reuse evidence, including the release or first-release identity and the measurement plan."""
     raw = _object(
         _load_json(payload, "candidate policy"),
         "candidate policy",
@@ -234,6 +236,7 @@ def _eligible(evidence: Evidence, policy: CandidatePolicy) -> ScheduledRun | Sui
 
 
 def _binding(policy: CandidatePolicy, final: str, publication: _PublicationReceipt | None = None) -> dict[str, Any]:
+    """Compare the acquisition and final trees, allowing only the report changes authorized by the policy and receipt."""
     validate_source_record(final, _final_commit(policy))
     original = json.loads(dict(policy.candidate.context)["source-export"])
     finished = json.loads(final)
@@ -440,6 +443,7 @@ def _retain_candidate_release(
     limits: ArchiveLimits = ArchiveLimits(),
     entry: DependencyOperation | None = None,
 ) -> bytes:
+    """Retain the verified selection and requested companions, refusing to replace an earlier selection with different bytes."""
     paths = (destination, *(() if policy_output is None else (policy_output,)), *(() if native_output is None else (native_output,)))
     _validate_distinct_paths(paths)
 

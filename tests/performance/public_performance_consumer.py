@@ -19,6 +19,9 @@ from pathlib import Path
 from typing import cast
 from unittest.mock import patch
 
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
 from research_repo_tools.archives import ArchiveLimits, download_asset, extract_archive
 from research_repo_tools.criterion import (
     COMPARISON_SCHEMA,
@@ -49,19 +52,7 @@ from research_repo_tools.evidence import (
 )
 from research_repo_tools.measurement import MeasurementConfig, measure_checkout
 from research_repo_tools.publication import plan_outputs
-
-
-def zip_asset(path: Path, entries: list[tuple[str, bytes]]) -> None:
-    """Write a ZIP fixture and verify its original member names survived."""
-    with zipfile.ZipFile(path, "w") as archive:
-        for name, payload in entries:
-            member = zipfile.ZipInfo(name)
-            # ZipInfo normalizes Windows separators. Malformed fixtures need
-            # the original spelling in both ZIP headers on every platform.
-            member.filename = name
-            archive.writestr(member, payload)
-    with zipfile.ZipFile(path) as archive:
-        assert [member.orig_filename for member in archive.infolist()] == [name for name, _ in entries], "ZIP fixture changed its member names"
+from tests.fixtures.archives import zip_asset
 
 
 class TestPerformanceConsumer(unittest.TestCase):
@@ -185,7 +176,7 @@ class TestPerformanceConsumer(unittest.TestCase):
             publish_evidence(retained, data_path, manifest_path, immutable=(data_path, manifest_path))
             with self.assertRaisesRegex(ValueError, "immutable"):
                 publish_evidence(
-                    Evidence(b"changed", retained.payload_schema, retained.sources), data_path, manifest_path, immutable=(data_path, manifest_path)
+                    Evidence(b"changed", retained.payload_schema, retained.sources), data_path, manifest_path, immutable=iter((data_path, manifest_path))
                 )
             self.assertEqual(data_path.read_bytes(), payload)
             self.assertEqual(report.read_bytes(), b"retained report\n")
@@ -198,6 +189,11 @@ class TestPerformanceConsumer(unittest.TestCase):
         missing = compare_provenance(baseline, current, fields=("context.rustc", "source_sha256"))
         self.assertEqual(tuple(row.field for row in missing.differences), ("context.rustc", "source_sha256"))
         self.assertFalse(missing.compatible)
+        selected = compare_provenance(baseline, current, fields=iter(["revision", "context.cpu"]))
+        self.assertEqual(selected.fields, ("context.cpu", "revision"))
+        self.assertEqual(tuple(difference.field for difference in selected.differences), ("revision",))
+        with self.assertRaisesRegex(ValueError, "key/value pairs"):
+            Provenance("a" * 40, context=cast(tuple[tuple[str, str], ...], ("ab",)))
 
     def test_publication_aliases_cannot_replace_immutable_evidence(self) -> None:
         artifact = Evidence(b"retained\r\n\xff", "consumer/v1", (("current", Provenance("a" * 40)),))
@@ -254,7 +250,8 @@ class TestPerformanceConsumer(unittest.TestCase):
                 else:
                     with zipfile.ZipFile(asset, "w") as archive:
                         archive.writestr(name, estimates)
-                output = root / f"extracted-{extension}"
+                # The extraction transaction must also fit beside a long destination.
+                output = root / ("x" * 248 + extension)
                 extract_archive(asset, output, limits=ArchiveLimits(content_bytes=1024), expected_sha256=sha256(asset.read_bytes()))
                 sample = collect_sample(output / "criterion", "new")
                 self.assertEqual(sample.estimates, (("step/2", Estimate(42)),))

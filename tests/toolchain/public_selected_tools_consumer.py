@@ -169,12 +169,13 @@ class TestSelectedTools(unittest.TestCase):
         self.assertFalse((self.root / ".venv").exists())
 
     def test_api_binary_and_multiple_selections_freeze_names_and_export_verified_paths(self):
-        for selected in (["gitleaks"], ["zizmor", "gitleaks"]):
-            with self.subTest(selected=selected):
+        for names, expected in ((("gitleaks",), ["gitleaks"]), (("zizmor", "gitleaks"), ["rustup", "rustc", "cargo", "zizmor", "gitleaks"])):
+            with self.subTest(names=names):
+                selected = list(names)
                 runtime = toolchain.Runtime(self.tools.plan, tools=selected)
                 selected.clear()
                 runtime.sync()
-                self.assertTrue(all(status.ok for status in runtime.inspect()))
+                self.assertCountEqual([(status.name, status.ok) for status in runtime.inspect()], [(name, True) for name in expected])
                 output = self.root / "api export"
                 runtime.export_environment(output)
                 self.assertIn(str(runtime.binary_path(runtime.plan.binaries[0]).parent), runtime.environment()["PATH"].split(os.pathsep))
@@ -200,7 +201,7 @@ class TestSelectedTools(unittest.TestCase):
     def test_api_selection_and_run_preserve_native_environment_exit_and_credentials(self):
         runtime = toolchain.Runtime(self.tools.plan, tools=["cargo"])
         runtime.sync()
-        self.assertTrue(all(status.ok for status in runtime.inspect()))
+        self.assertCountEqual([(status.name, status.ok) for status in runtime.inspect()], [("rustup", True), ("rustc", True), ("cargo", True)])
         self.assertEqual(runtime.plan.rust, toolchain_config.RustToolchain("1.98.0", (), (), "minimal"))
         self.tools.fail = "publish"
         self.assertEqual(toolchain.run_command(runtime, ["cargo", "publish", "--locked", "--registry", "crates-io"]), 101)
@@ -227,7 +228,9 @@ class TestSelectedTools(unittest.TestCase):
                     self.assertEqual(stream.errors, "strict")
                     stream.flush()
                     self.assertIn(str(self.root).encode("ascii", errors="backslashreplace"), buffer.getvalue())
-        self.assertTrue(all(status.ok for status in runtime.inspect()))
+        self.assertCountEqual(
+            [(status.name, status.ok) for status in runtime.inspect()], [(name, True) for name in ("rustup", "rustc", "cargo", "zizmor", "gitleaks")]
+        )
 
     def test_selected_cli_keeps_python_declarations_without_probing_inherited_tools(self):
         manifest = self.root / "pyproject.toml"

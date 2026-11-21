@@ -9,21 +9,27 @@ from research_repo_tools.workflow_uses import SHA, identity, references, workflo
 
 @dataclass(frozen=True, slots=True)
 class ActionRule:
+    """An exact GitHub Action identity paired with a full commit SHA or wildcard ref."""
+
     action: str
     ref: str
 
     @classmethod
     def parse(cls, pattern: str) -> ActionRule:
+        """Parse an exact Action identity with a wildcard or full commit SHA."""
         action, separator, ref = pattern.partition("@")
         if not separator or ref != "*" and SHA.fullmatch(ref) is None:
             raise ValueError(f"expected exact owner/repo[/path]@* or owner/repo[/path]@<40-hex-SHA> entry: {pattern!r}")
         return cls(identity(action), ref.lower())
 
     def allows(self, ref: str) -> bool:
+        """Check whether a ref matches the rule's full SHA or wildcard."""
         return self.ref == "*" or self.ref == ref.lower()
 
 
 def load_policy(path: Path) -> frozenset[ActionRule]:
+    """Load exact allowed Action identities and refs without blanket publisher exceptions."""
+
     def unique(pairs):
         result = {}
         for key, value in pairs:
@@ -50,6 +56,7 @@ def load_policy(path: Path) -> frozenset[ActionRule]:
 
 
 def check(root: Path, policy: Path, inputs: list[str]) -> int:
+    """Check external Action references in the selected workflows against the exact allowlist."""
     allowed = load_policy(policy)
     diagnostics = []
     for path in workflow_paths(root, inputs):

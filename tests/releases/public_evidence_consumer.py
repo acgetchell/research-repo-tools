@@ -1,6 +1,5 @@
 """Installed evidence contracts using inert provider data and real archive bytes."""
 
-import base64
 import contextlib
 import copy
 import gzip
@@ -31,7 +30,10 @@ from unittest.mock import patch
 
 import yaml
 
-from research_repo_tools import cli, config, release_validation
+if not __package__:
+    sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+
+from research_repo_tools import cli, release_validation
 from research_repo_tools.archives import extract_archive
 from research_repo_tools.changelog import template
 from research_repo_tools.evidence import deterministic_json
@@ -58,17 +60,21 @@ from research_repo_tools.release_validation import (
     verify_attestation,
     verify_distributions,
 )
-
-COMMIT = "a" * 40
-TOOLS = {"cargo": "cargo 1.99.0 (fixture)", "rustc": "rustc 1.99.0\nhost: fixture"}
-VALIDATION = ValidationPolicy(
-    "example/package",
-    ".github/workflows/ci.yml",
-    "CI",
-    (("linux", ("Native checks",)), ("macos", ("Native checks",)), ("windows", ("Native checks",)), ("package", ("Default and exact archive checks",))),
-    runner_labels=(("linux", ("ubuntu-latest",)), ("macos", ("macos-latest",)), ("windows", ("windows-latest",))),
+from tests.fixtures import release_evidence
+from tests.fixtures.release_evidence import (
+    COMMIT,
+    SOURCE,
+    VALIDATION,
+    AuthenticatedDraft,
+    DraftProvider,
+    Provider,
+    WorkflowProvider,
+    encode,
+    interface_fixture,
+    interface_policy,
 )
-SOURCE = EvidencePolicy(VALIDATION, "sample", "release-evidence", "signed-source", ("sign", ("Capture", "Sign", "Upload")))
+
+TOOLS = {"cargo": "cargo 1.99.0 (fixture)", "rustc": "rustc 1.99.0\nhost: fixture"}
 CARGO = EvidencePolicy(VALIDATION, "sample", "cargo-package", "cargo-archive")
 PYTHON = EvidencePolicy(
     VALIDATION,
@@ -82,60 +88,6 @@ PYTHON = EvidencePolicy(
         max_age_seconds=86400,
     ),
 )
-
-
-def encode(value):
-    return (json.dumps(value, sort_keys=True) + "\n").encode("utf-8")
-
-
-def interface_policy(root, policy=SOURCE):
-    text = (
-        "\n".join(
-            f"{key} = {json.dumps(value)}"
-            for key, value in {
-                "schema": 1,
-                "repository": policy.validation.repository,
-                "package": policy.package,
-                "workflow": policy.validation.workflow,
-                "workflow-name": policy.validation.workflow_name,
-                "artifact-prefix": policy.artifact_prefix,
-                "guarantee": policy.guarantee,
-                "package-kind": policy.package_kind,
-                "path-in-vcs": policy.path_in_vcs,
-            }.items()
-        )
-        + "\n"
-    )
-    for name, steps in policy.validation.required_steps:
-        text += f"\n[[jobs]]\nname={json.dumps(name)}\nsteps={json.dumps(steps)}\n"
-        labels = dict(policy.validation.runner_labels).get(name)
-        if labels:
-            text += f"runner-labels={json.dumps(labels)}\n"
-    if policy.signing_job:
-        name, steps = policy.signing_job
-        text += f"\n[signing-job]\nname={json.dumps(name)}\nsteps={json.dumps(steps)}\n"
-    if policy.distributions:
-        destination = 'destination="undecided"' if policy.distributions.index_url is None else f"index-url={json.dumps(policy.distributions.index_url)}"
-        text += (
-            f"\n[distributions]\nfiles={json.dumps(policy.distributions.files)}\n"
-            f"{destination}\nmax-age-seconds={policy.distributions.max_age_seconds}\n"
-            f"max-distribution-bytes={policy.distributions.max_distribution_bytes}\n"
-        )
-    path = root / "evidence.toml"
-    path.write_text(text, encoding="utf-8", newline="\n")
-    return path
-
-
-def interface_fixture(root, arguments):
-    """Native child entrypoint: real CLI/Just/files, inert provider and checkout."""
-    provider = Provider(SOURCE)
-    provider.retain(create_evidence_manifest(SOURCE, "1.2.3", COMMIT, 123, 2, provider.read))
-    with (
-        patch("research_repo_tools.release_interfaces.api", side_effect=lambda endpoint, **kwargs: provider.read(endpoint)),
-        patch("research_repo_tools.release_interfaces.require_release_checkout"),
-        patch("research_repo_tools.release_validation.subprocess.run", provider.execute),
-    ):
-        return cli.main(["--root", str(root), *arguments])
 
 
 def crate(*, extra=None, vcs=None, manifest=None, kind=tarfile.REGTYPE):
@@ -158,102 +110,6 @@ def crate(*, extra=None, vcs=None, manifest=None, kind=tarfile.REGTYPE):
     with tarfile.open(fileobj=io.BytesIO(stream.getvalue()), mode="r:") as archive:
         assert archive.getnames() == list(contents)
     return gzip.compress(stream.getvalue(), mtime=0)
-
-
-class Provider:
-    def __init__(self, policy):
-        self.policy = policy
-        self.run: dict[str, Any] = {
-            "id": 123,
-            "run_attempt": 2,
-            "head_sha": COMMIT,
-            "head_branch": "main",
-            "workflow_id": 13,
-            "path": ".github/workflows/ci.yml",
-            "name": "CI",
-            "event": "push",
-            "status": "completed",
-            "conclusion": "success",
-            "repository": {"id": 7, "full_name": "example/package"},
-            "head_repository": {"id": 7, "full_name": "example/package"},
-        }
-        self.workflow: dict[str, object] = {"id": 13, "path": ".github/workflows/ci.yml", "name": "CI", "state": "active"}
-        requirements = (*VALIDATION.required_steps, *((policy.signing_job,) if policy.signing_job is not None else ()))
-        self.jobs = [
-            {
-                "id": index,
-                "name": name,
-                "run_id": 123,
-                "run_attempt": 2,
-                "head_sha": COMMIT,
-                "head_branch": "main",
-                "status": "completed",
-                "conclusion": "success",
-                "labels": list(dict(VALIDATION.runner_labels).get(name, ("ubuntu-latest",))),
-                "steps": [{"name": step, "status": "completed", "conclusion": "success"} for step in steps],
-            }
-            for index, (name, steps) in enumerate(requirements, 10)
-        ]
-        self.artifact = {
-            "id": 42,
-            "name": f"{policy.artifact_prefix}-123-2",
-            "expired": False,
-            "workflow_run": {"id": 123, "head_sha": COMMIT, "head_branch": "main", "repository_id": 7, "head_repository_id": 7},
-        }
-        self.certificate = {"runInvocationURI": "https://github.com/example/package/actions/runs/123/attempts/2", "buildTrigger": "push"}
-        self.requests = []
-        self.commands = []
-        self.files = {}
-        self.payload = b""
-        self.duplicates = False
-
-    def retain(self, manifest, archive=None):
-        self.files = {"validation.json": manifest}
-        if self.policy.signing_job is not None:
-            self.files["validation.sigstore.json"] = b"inert bundle checked by modeled gh"
-        if archive is not None:
-            self.files["sample-1.2.3.crate"] = archive
-        self.repack()
-
-    def repack(self):
-        stream = io.BytesIO()
-        with zipfile.ZipFile(stream, "w") as archive:
-            for name, payload in self.files.items():
-                # These model one immutable artifact across child processes.
-                # ZIP wall-clock timestamps would change its digest between
-                # normal/quiet runs, especially with coverage instrumentation.
-                archive.writestr(zipfile.ZipInfo(name, date_time=(2000, 1, 1, 0, 0, 0)), payload)
-        self.payload = stream.getvalue()
-        self.artifact.update(digest="sha256:" + hashlib.sha256(self.payload).hexdigest(), size_in_bytes=len(self.payload))
-
-    def read(self, endpoint):
-        self.requests.append(endpoint)
-        if endpoint == "actions/workflows/ci.yml":
-            result = self.workflow
-        elif endpoint == "actions/runs/123":
-            result = self.run
-        elif endpoint.startswith("actions/workflows/13/runs?"):
-            result = {"workflow_runs": [self.run], "total_count": 1}
-        elif endpoint.startswith(f"actions/runs/123/attempts/{self.run['run_attempt']}/jobs?"):
-            result = {"jobs": self.jobs, "total_count": len(self.jobs)}
-        elif endpoint.startswith("actions/runs/123/artifacts?"):
-            artifacts = [self.artifact, {**self.artifact, "id": 43}] if self.duplicates else [self.artifact]
-            result = {"artifacts": artifacts, "total_count": len(artifacts)}
-        elif endpoint == f"actions/artifacts/{self.artifact['id']}":
-            result = self.artifact
-        else:
-            raise AssertionError(f"unexpected provider request: {endpoint}")
-        return copy.deepcopy(result)
-
-    def execute(self, args, **kwargs):
-        self.commands.append(args)
-        if args == ["gh", "api", f"repos/example/package/actions/artifacts/{self.artifact['id']}/zip"]:
-            kwargs["stdout"].write(self.payload)
-            return subprocess.CompletedProcess(args, 0)
-        if args[:3] == ["gh", "attestation", "verify"]:
-            result = [{"verificationResult": {"signature": {"certificate": self.certificate}}}]
-            return subprocess.CompletedProcess(args, 0, encode(result).decode("utf-8"))
-        raise AssertionError(f"unexpected command: {args}")
 
 
 class TestEvidenceConsumer(unittest.TestCase):
@@ -475,6 +331,36 @@ class TestEvidenceConsumer(unittest.TestCase):
             with self.assertRaises(subprocess.CalledProcessError):
                 verify_attestation(Path("subject"), Path("bundle"), COMMIT, VALIDATION.workflow, "refs/heads/main", 123, 2, repository=VALIDATION.repository)
 
+    def test_signed_predicate_preserves_nested_json_types(self):
+        certificate = {"runInvocationURI": f"https://github.com/{VALIDATION.repository}/actions/runs/123/attempts/2", "buildTrigger": "push"}
+        expected = {"id": 1, "steps": [{"accepted": True}]}
+        for observed, matches in (
+            ({"steps": [{"accepted": True}], "id": 1}, True),
+            ({**expected, "id": 1.0}, False),
+            ({**expected, "steps": [{"accepted": 1}]}, False),
+        ):
+            result = [{"verificationResult": {"signature": {"certificate": certificate}, "statement": {"predicate": observed}}}]
+            with self.subTest(observed=observed), patch("research_repo_tools.release_validation.gh", return_value=json.dumps(result)):
+
+                def verify():
+                    verify_attestation(
+                        Path("subject"),
+                        Path("bundle"),
+                        COMMIT,
+                        VALIDATION.workflow,
+                        "refs/heads/main",
+                        123,
+                        2,
+                        repository=VALIDATION.repository,
+                        predicate=expected,
+                    )
+
+                if matches:
+                    verify()
+                else:
+                    with self.assertRaisesRegex(ValueError, "signed promotion predicate"):
+                        verify()
+
     def test_provider_changes_during_download_reject(self):
         provider = self.source()
 
@@ -653,7 +539,6 @@ class TestEvidenceConsumer(unittest.TestCase):
                     require_release_checkout(Path("source"), COMMIT)
 
     def test_install_free_checkout_observation_rejects_hidden_index_entries(self):
-        import runpy
 
         observe = runpy.run_path(release_validation.__file__)["_checkout_identity"]
         with tempfile.TemporaryDirectory() as temporary:
@@ -686,7 +571,6 @@ class TestEvidenceConsumer(unittest.TestCase):
                 self.assertEqual([path.name for path in root.iterdir()], ["pyproject.toml"])
 
     def test_checkout_rejects_untrusted_only_path_before_launching_git(self):
-        import runpy
 
         standalone = runpy.run_path(release_validation.__file__)["_checkout_identity"]
         with tempfile.TemporaryDirectory() as temporary:
@@ -1061,7 +945,6 @@ class TestEvidenceInterfaces(unittest.TestCase):
             self.assertIn(expected, summary)
 
     def test_maintainer_output_and_diagnostics_respect_console_boundaries(self):
-        import runpy
 
         result = {
             "tag": "v1.2.3",
@@ -1219,9 +1102,10 @@ class TestEvidenceInterfaces(unittest.TestCase):
         assert just is not None
         driver = self.root / "driver.py"
         driver.write_text(
-            "import runpy, sys\nfrom pathlib import Path\n"
-            f"suite = runpy.run_path({str(Path(__file__).resolve())!r})\n"
-            "raise SystemExit(suite['interface_fixture'](Path.cwd(), sys.argv[1:]))\n",
+            "import sys\nfrom pathlib import Path\n"
+            f"sys.path.insert(0, {str(Path(__file__).resolve().parents[2])!r})\n"
+            "from tests.fixtures.release_evidence import interface_fixture\n"
+            "raise SystemExit(interface_fixture(Path.cwd(), sys.argv[1:]))\n",
             encoding="utf-8",
             newline="\n",
         )
@@ -1285,7 +1169,13 @@ class TestPythonDistributionEvidence(unittest.TestCase):
         authority = PythonRegistryAuthority(
             "https://test.pypi.org", "maintainer", PYTHON.package, "example/package", ".github/workflows/publish.yml", "approval"
         )
-        for options in ({"protocol": "simple"}, {"authentication": "basic"}, {"index_url": "https://user:secret@example.com"}):
+        for options in (
+            {"protocol": "simple"},
+            {"authentication": "basic"},
+            {"index_url": "https://user:secret@example.com"},
+            {"index_url": "https://test.pypi.org:oops"},
+            {"index_url": "https://test.pypi.org:65536"},
+        ):
             with self.subTest(options=options), self.assertRaises(ValueError):
                 replace(authority, **options)
         assert PYTHON.distributions is not None
@@ -1450,6 +1340,9 @@ class TestPythonDistributionEvidence(unittest.TestCase):
     def setUp(self):
         temporary = tempfile.TemporaryDirectory(prefix="python evidence café ")
         self.addCleanup(temporary.cleanup)
+        self.now = datetime(2026, 1, 15, 12, tzinfo=UTC)
+        self.clock = self.enterContext(patch("research_repo_tools.release_evidence.datetime", wraps=datetime))
+        self.clock.now.return_value = self.now
         self.root = Path(temporary.name)
         self.dist = self.root / "dist"
         self.dist.mkdir()
@@ -1463,7 +1356,7 @@ class TestPythonDistributionEvidence(unittest.TestCase):
 
     def provider(self, policy=PYTHON):
         provider = Provider(policy)
-        now = datetime.now(UTC)
+        now = self.now
         provider.run["created_at"] = (now - timedelta(hours=2)).isoformat()
         provider.artifact.update(created_at=(now - timedelta(hours=1)).isoformat(), expires_at=(now + timedelta(days=7)).isoformat())
         manifest = create_evidence_manifest(policy, "1.2.3", COMMIT, 123, 2, provider.read, distributions=self.dist)
@@ -1638,26 +1531,26 @@ class TestPythonDistributionEvidence(unittest.TestCase):
             self.verify(provider, expected=selected, distributions=self.dist)
 
     def test_bad_evidence_never_falls_back_or_downloads(self):
-        for damage in (
-            "pending",
-            "failed",
-            "cancelled",
-            "stale",
-            "expired",
-            "ambiguous",
-            "wrong-source",
-            "artifact-source",
-            "artifact-digest",
-            "fork",
-            "dispatch",
-            "pr",
-            "wrong-ref",
-            "partial-rerun",
-            "step",
-            "job-attempt",
-            "untrusted-runner",
-            "missing-timestamp",
-            "future",
+        for damage, diagnostic in (
+            ("pending", "still pending"),
+            ("failed", "missing or failed main-push validation"),
+            ("cancelled", "missing or failed main-push validation"),
+            ("stale", "stale, expired or has inconsistent timestamps"),
+            ("expired", "stale, expired or has inconsistent timestamps"),
+            ("ambiguous", "ambiguous evidence artifact"),
+            ("wrong-source", "exact commit's trusted main-push"),
+            ("artifact-source", "artifact is associated with another repository, ref, run or commit"),
+            ("artifact-digest", "authoritative SHA-256 digest"),
+            ("fork", "head repository differs"),
+            ("dispatch", "trusted main-push"),
+            ("pr", "trusted main-push"),
+            ("wrong-ref", "trusted main-push"),
+            ("partial-rerun", "missing or ambiguous package"),
+            ("step", "windows did not validate required step Native checks"),
+            ("job-attempt", "windows belongs to another run, attempt"),
+            ("untrusted-runner", "windows did not run on the required hosted platform"),
+            ("missing-timestamp", "requires provider creation and expiration timestamps"),
+            ("future", "stale, expired or has inconsistent timestamps"),
         ):
             with self.subTest(damage=damage):
                 provider = self.provider()
@@ -1666,9 +1559,9 @@ class TestPythonDistributionEvidence(unittest.TestCase):
                 elif damage in ("failed", "cancelled"):
                     provider.run["conclusion"] = "failure" if damage == "failed" else "cancelled"
                 elif damage == "stale":
-                    provider.run["created_at"] = (datetime.now(UTC) - timedelta(days=2)).isoformat()
+                    provider.run["created_at"] = (self.now - timedelta(days=2)).isoformat()
                 elif damage == "expired":
-                    provider.artifact["expires_at"] = (datetime.now(UTC) - timedelta(minutes=1)).isoformat()
+                    provider.artifact["expires_at"] = self.now.isoformat()
                 elif damage == "ambiguous":
                     provider.duplicates = True
                 elif damage == "wrong-source":
@@ -1694,10 +1587,25 @@ class TestPythonDistributionEvidence(unittest.TestCase):
                 elif damage == "missing-timestamp":
                     del provider.artifact["created_at"]
                 else:
-                    provider.artifact["created_at"] = (datetime.now(UTC) + timedelta(hours=1)).isoformat()
-                with self.assertRaises(ValueError):
+                    provider.artifact["created_at"] = (self.now + timedelta(microseconds=1)).isoformat()
+                with self.assertRaisesRegex(ValueError, diagnostic):
                     self.verify(provider)
                 self.assertEqual(provider.commands, [])
+
+    def test_freshness_accepts_exact_maximum_run_age_and_rechecks_saved_approval(self):
+        """A run ages out one microsecond past its limit, even with an unchanged artifact."""
+        provider = self.provider()
+        assert PYTHON.distributions is not None
+        cutoff = self.now - timedelta(seconds=PYTHON.distributions.max_age_seconds)
+        provider.run["created_at"] = cutoff.isoformat()
+        provider.artifact["created_at"] = self.now.isoformat()
+        selection = self.verify(provider)
+        self.assertEqual(json.loads(selection)["freshness"]["run_created_at"], cutoff.isoformat())
+        provider.commands.clear()
+        self.clock.now.return_value = self.now + timedelta(microseconds=1)
+        with self.assertRaisesRegex(ValueError, "stale, expired or has inconsistent timestamps"):
+            self.verify(provider, expected=selection)
+        self.assertEqual(provider.commands, [])
 
     def test_approval_rechecks_policy_attempt_jobs_artifact_retention_and_manifest(self):
         for damage in ("attempt", "jobs", "artifact", "policy", "retention", "manifest", "wheel", "zip", "missing", "extra"):
@@ -1714,7 +1622,7 @@ class TestPythonDistributionEvidence(unittest.TestCase):
                     assert PYTHON.distributions is not None
                     provider.policy = replace(PYTHON, distributions=replace(PYTHON.distributions, index_url="https://pypi.org"))
                 elif damage == "retention":
-                    provider.artifact["expires_at"] = (datetime.now(UTC) + timedelta(days=6)).isoformat()
+                    provider.artifact["expires_at"] = (self.now + timedelta(days=6)).isoformat()
                 elif damage == "zip":
                     provider.payload += b"changed"
                 else:
@@ -1867,13 +1775,16 @@ class TestPythonDistributionEvidence(unittest.TestCase):
         def open_url(request, **kwargs):
             url = request.full_url if hasattr(request, "full_url") else request
             if url == "https://test.pypi.org/pypi/example-app/1.2.3/json":
+                self.assertEqual(kwargs["timeout"], 15)
+                self.assertEqual(request.get_header("Accept"), "application/json")
                 payload = encode(document)
             else:
                 self.assertTrue(url.startswith("https://files.example.org/"), url)
+                self.assertEqual(kwargs["timeout"], 30)
                 payload = (self.files if downloads is None else downloads)[url.rsplit("/", 1)[1]]
             return Response(payload, url)
 
-        return patch("research_repo_tools.registry._OPENER.open", open_url)
+        return patch("research_repo_tools._registry_requests._OPENER.open", open_url)
 
     def test_published_bytes_are_distinct_from_version_presence(self):
         with self.registry_transport(self.registry()):
@@ -1910,7 +1821,7 @@ class TestPythonDistributionEvidence(unittest.TestCase):
         error = urllib.error.HTTPError("https://files.example.org/package.whl", 503, "unavailable", Message(), body)
         with (
             patch("research_repo_tools.registry._json", return_value=self.registry()),
-            patch("research_repo_tools.registry._OPENER.open", side_effect=error),
+            patch("research_repo_tools._registry_requests._OPENER.open", side_effect=error),
             self.assertRaisesRegex(ValueError, "download failed") as caught,
         ):
             verify_published_distributions(PYTHON.package, "1.2.3", self.hashes, index_url="https://test.pypi.org")
@@ -2071,7 +1982,6 @@ class TestReleaseCheckoutConsumer(unittest.TestCase):
         self.observe(self.git("rev-parse", "HEAD").stdout.decode("ascii").strip())
 
     def test_checkout_and_submodule_cannot_supply_git_through_path(self):
-        import runpy
 
         child = self.submodule()
         (self.root / "pyproject.toml").write_bytes(b'[project]\nname="research-repo-tools"\nversion="0.2.5"\n')
@@ -2109,7 +2019,6 @@ class TestReleaseCheckoutConsumer(unittest.TestCase):
                 self.assertFalse((child / "git-hijacked").exists())
 
     def test_git_environment_cannot_redirect_checkout_observation(self):
-        import runpy
 
         project = b'[project]\nname="research-repo-tools"\nversion="0.2.5"\n'
         (self.root / "pyproject.toml").write_bytes(project)
@@ -2190,326 +2099,112 @@ class TestReleaseCheckoutConsumer(unittest.TestCase):
         self.assertEqual((child / "source.txt").read_bytes(), b"hidden submodule\n")
 
 
-class DraftProvider(Provider):
-    """Authenticated provider model; records every attempted remote mutation."""
-
-    def __init__(self):
-        super().__init__(SOURCE)
-        self.retain(create_evidence_manifest(SOURCE, "1.2.3", COMMIT, 123, 2, self.read))
-        self.release = None
-        self.posts = []
-        self.calls = []
-        self.listing = None
-        self.response = None
-        self.annotated = False
-        self.ref = "refs/tags/v1.2.3"
-        self.tag_commit = COMMIT
-        self.on_create = lambda: None
-        self.on_tag = lambda: None
-        self.on_list = lambda: None
-
-    def draft(self, **changes):
-        return {
-            "url": "https://api.github.com/repos/example/package/releases/91",
-            "id": 91,
-            "tag_name": "v1.2.3",
-            "name": "Release 1.2.3",
-            "body": "Generated notes café\r\n\n- Change.\n",
-            "draft": True,
-            "immutable": False,
-            "prerelease": False,
-            "assets": [],
-            **changes,
-        }
-
-    def gh(self, program, args, **kwargs):
-        assert program == "gh"
-        self.calls.append(args)
-        endpoint = "repos/example/package"
-        if "POST" in args:
-            assert args[:5] == ["api", "--method", "POST", f"{endpoint}/releases", "--input"]
-            request = json.loads(Path(args[5]).read_bytes())
-            self.posts.append(request)
-            self.release = self.draft(**request)
-            self.on_create()
-            value = self.release if self.response is None else self.response
-        elif args[-1] == f"{endpoint}/releases?per_page=100":
-            assert args[:3] == ["api", "--paginate", "--slurp"]
-            self.on_list()
-            value = [[self.release] if self.release is not None else []] if self.listing is None else self.listing
-        elif args[-1] == f"{endpoint}/releases/91":
-            if self.release is None:
-                raise subprocess.CalledProcessError(1, args, stderr=b"not found")
-            value = self.release
-        elif args[-1] == f"{endpoint}/releases/91/assets?per_page=100":
-            assert self.release is not None
-            value = [self.release["assets"]]
-        elif args[-1] == f"{endpoint}/git/ref/tags/v1.2.3":
-            self.on_tag()
-            value = {"ref": self.ref, "object": {"type": "tag" if self.annotated else "commit", "sha": "b" * 40 if self.annotated else self.tag_commit}}
-        elif args[-1] == f"{endpoint}/git/tags/" + "b" * 40:
-            value = {"sha": "b" * 40, "object": {"type": "commit", "sha": self.tag_commit}}
-        else:
-            raise AssertionError(f"unexpected draft provider command: {args}")
-        if isinstance(value, Exception):
-            raise value
-        return subprocess.CompletedProcess(args, 0, value if isinstance(value, bytes) else encode(value), b"")
-
-
-class WorkflowProvider(DraftProvider):
-    def __init__(self):
-        super().__init__()
-        self.tag_workflow: dict[str, Any] = {"id": 7, "path": ".github/workflows/prepare.yml", "name": "Prepare draft", "state": "active"}
-        self.workflow_text = b'name: Prepare draft\non:\n  push:\n    tags: ["v*"]\njobs: {}\n'
-        self.tag_run = dict(
-            self.run,
-            id=101,
-            run_attempt=1,
-            workflow_id=7,
-            path=self.tag_workflow["path"],
-            name="Prepare draft",
-            head_branch="v1.2.3",
-            status="in_progress",
-            conclusion=None,
-            pull_requests=[],
-        )
-        self.tag_jobs = [
-            dict(
-                self.jobs[0],
-                id=201,
-                name="verify",
-                run_id=101,
-                run_attempt=1,
-                head_branch="v1.2.3",
-                steps=[{"name": "Verify source", "status": "completed", "conclusion": "success"}],
-            )
-        ]
-        self.history = [self.tag_run]
-        self.recovery_run = {**self.tag_run, "id": 999}
-        self.handoff_artifact: dict[str, Any] = {
-            "id": 301,
-            "name": "draft-handoff-101-1",
-            "expired": False,
-            "workflow_run": {"id": 101, "head_sha": COMMIT, "head_branch": "v1.2.3", "repository_id": 7, "head_repository_id": 7},
-        }
-        self.after_handoff = lambda: None
-        self.check_conclusion = "success"
-
-    def handoff(self, payload):
-        stream = io.BytesIO()
-        with zipfile.ZipFile(stream, "w") as archive:
-            archive.writestr(zipfile.ZipInfo("handoff.json", date_time=(2000, 1, 1, 0, 0, 0)), payload)
-        self.handoff_zip = stream.getvalue()
-        self.handoff_artifact.update(digest="sha256:" + hashlib.sha256(self.handoff_zip).hexdigest(), size_in_bytes=len(self.handoff_zip))
-
-    @override
-    def read(self, endpoint):
-        if not hasattr(self, "tag_workflow"):
-            return super().read(endpoint)
-        self.requests.append(endpoint)
-        if endpoint == "":
-            return {"full_name": "example/package", "default_branch": "main"}
-        if endpoint == "branches/main":
-            return {"name": "main", "protected": True}
-        if endpoint == f"compare/{COMMIT}...main":
-            return {"status": "ahead"}
-        if endpoint == f"commits/{COMMIT}/check-runs?filter=latest&per_page=100":
-            return [
-                {
-                    "total_count": 1,
-                    "check_runs": [
-                        {"id": 501, "name": "native", "app": {"id": 15368}, "head_sha": COMMIT, "status": "completed", "conclusion": self.check_conclusion}
-                    ],
-                }
-            ]
-        if endpoint == f"actions/workflows/{Path(self.tag_workflow['path']).name}":
-            return copy.deepcopy(self.tag_workflow)
-        if endpoint == "actions/runs/101":
-            return copy.deepcopy(self.tag_run)
-        if endpoint == "actions/runs/999":
-            return copy.deepcopy(self.recovery_run)
-        if endpoint.startswith("actions/runs/101/attempts/1/jobs?"):
-            return {"total_count": 1, "jobs": copy.deepcopy(self.tag_jobs)}
-        if endpoint.startswith("actions/workflows/7/runs?"):
-            page = int(endpoint.rsplit("=", 1)[1])
-            return {"total_count": len(self.history), "workflow_runs": copy.deepcopy(self.history[(page - 1) * 100 : page * 100])}
-        if endpoint == "actions/artifacts/301":
-            return copy.deepcopy(self.handoff_artifact)
-        if endpoint == f"contents/{self.tag_workflow['path']}?ref={COMMIT}":
-            return {
-                "type": "file",
-                "path": self.tag_workflow["path"],
-                "encoding": "base64",
-                "size": len(self.workflow_text),
-                "content": base64.b64encode(self.workflow_text).decode(),
-                "sha": hashlib.sha1(b"blob " + str(len(self.workflow_text)).encode() + b"\0" + self.workflow_text).hexdigest(),
-            }
-        return super().read(endpoint)
-
-    @override
-    def execute(self, args, **kwargs):
-        if args == ["gh", "api", "repos/example/package/actions/artifacts/301/zip"]:
-            kwargs["stdout"].write(self.handoff_zip)
-            self.after_handoff()
-            return subprocess.CompletedProcess(args, 0)
-        return super().execute(args, **kwargs)
-
-
 class TestAuthenticatedDraftWorkflow(unittest.TestCase):
     @override
     def setUp(self):
-        from research_repo_tools.draft_workflow import DraftHandoffArtifact, plan_release_draft
-        from research_repo_tools.release_receipts import TagPushPolicy, TagSource
-
-        temporary = tempfile.TemporaryDirectory(prefix="authenticated draft café ")
-        self.addCleanup(temporary.cleanup)
-        self.root = Path(temporary.name).resolve()
-        self.checkout, self.writer = self.root / "observed", self.root / "writer"
-        self.checkout.mkdir()
-        self.writer.mkdir()
-        self.state = self.root / "durable-state"
-        self.provider = WorkflowProvider()
-        self.enterContext(patch.dict(os.environ, {"GITHUB_REPOSITORY": "example/package", "GITHUB_RUN_ID": "101", "GITHUB_RUN_ATTEMPT": "1"}))
-        self.source = TagSource("refs/tags/v1.2.3", COMMIT)
-        self.policy = TagPushPolicy(
-            "example/package", ".github/workflows/prepare.yml", "Prepare draft", (("verify", ("Verify source",)),), artifact_prefix="draft-handoff"
-        )
-        self.enterContext(patch("research_repo_tools.release_validation.subprocess.run", self.provider.execute))
-        self.enterContext(patch("research_repo_tools.release_drafts.api", side_effect=lambda endpoint, **kw: self.provider.read(endpoint)))
-        self.enterContext(patch("research_repo_tools.draft_workflow.api", side_effect=lambda endpoint, **kw: self.provider.read(endpoint)))
-        self.enterContext(patch("research_repo_tools.release_validation.api", side_effect=lambda endpoint, **kw: self.provider.read(endpoint)))
-        self.enterContext(patch("research_repo_tools.release_drafts._api", side_effect=lambda root, repo, endpoint, **kw: self.provider.read(endpoint)))
-        self.enterContext(patch("research_repo_tools.release_assets.run_command_bytes", self.provider.gh))
-        self.enterContext(patch("research_repo_tools.release_publishing._api", side_effect=lambda root, repo, endpoint, **kw: self.provider.read(endpoint)))
-        self.enterContext(patch("research_repo_tools.release_interfaces.require_release_checkout"))
-        self.enterContext(patch("research_repo_tools.release_publishing.require_release_checkout"))
-        self.enterContext(patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, COMMIT, "")))
-        (self.checkout / "pyproject.toml").write_bytes(b'[project]\nname="sample"\nversion="1.2.3"\n')
-        (self.checkout / "CHANGELOG.md").write_bytes(b"# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Verified notes.\n")
-        self.settings = config.parse(
-            {
-                "publishing": {
-                    "registry": "pypi",
-                    "package": "sample",
-                    "repository": "example/package",
-                    "required-checks": [{"name": "native", "app-id": 15368}],
-                }
-            },
-            root=self.checkout,
-        )
-        self.configuration = interface_policy(self.checkout)
-        self.payload = plan_release_draft(self.settings, self.configuration, self.source, event="push")
-        self.provider.handoff(self.payload)
-        self.selected = DraftHandoffArtifact(101, 1, 301, self.provider.handoff_artifact["digest"][7:])
-
-    def prepare(self, **changes):
-        from research_repo_tools.draft_workflow import prepare_authenticated_draft
-
-        options: dict[str, Any] = dict(output=self.state, executing_run_id=101, executing_attempt=1, approve=True)
-        options.update(changes)
-        return prepare_authenticated_draft(self.writer, self.policy, self.source, self.selected, **options)
+        self.draft = AuthenticatedDraft(self.enterContext(contextlib.ExitStack()))
 
     def test_authenticated_creation_and_restored_original_journal_reuse_original_id(self):
         pending = []
-        self.provider.on_create = lambda: pending.append({path.name: path.read_bytes() for path in self.state.iterdir()})
-        target = self.prepare()
+        self.draft.provider.on_create = lambda: pending.append({path.name: path.read_bytes() for path in self.draft.state.iterdir()})
+        target = self.draft.prepare()
         self.assertEqual(set(pending[0]), {"producer.json", "handoff.json", "draft-receipt.json"})
-        self.assertEqual(pending[0]["handoff.json"], self.payload)
+        self.assertEqual(pending[0]["handoff.json"], self.draft.payload)
         self.assertEqual(json.loads(pending[0]["draft-receipt.json"])["state"], "pending")
         self.assertEqual(target.release_id, 91)
-        self.assertEqual(self.provider.posts[0]["name"], "v1.2.3")
-        self.assertEqual(self.provider.posts[0]["body"], json.loads(self.payload)["notes"])
-        before = {p.name: p.read_bytes() for p in self.state.iterdir()}
+        self.assertEqual(self.draft.provider.posts[0]["name"], "v1.2.3")
+        self.assertEqual(self.draft.provider.posts[0]["body"], json.loads(self.draft.payload)["notes"])
+        before = {p.name: p.read_bytes() for p in self.draft.state.iterdir()}
         with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}):
-            self.assertEqual(self.prepare(executing_run_id=999), target)
-        self.assertEqual({p.name: p.read_bytes() for p in self.state.iterdir()}, before)
-        self.assertEqual(len(self.provider.posts), 1)
-        self.provider.release = None
+            self.assertEqual(self.draft.prepare(executing_run_id=999), target)
+        self.assertEqual({p.name: p.read_bytes() for p in self.draft.state.iterdir()}, before)
+        self.assertEqual(len(self.draft.provider.posts), 1)
+        self.draft.provider.release = None
         with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}), self.assertRaises(ValueError):
-            self.prepare(executing_run_id=999)
-        self.assertEqual(len(self.provider.posts), 1)
+            self.draft.prepare(executing_run_id=999)
+        self.assertEqual(len(self.draft.provider.posts), 1)
 
     def test_existing_matching_draft_retains_assets_and_captured_state_without_post(self):
-        self.provider.release = self.provider.draft(assets=[{"id": 17, "name": "transfer.json", "size": 5, "state": "uploaded", "digest": None}])
-        self.provider.release.update(name="v1.2.3", body=json.loads(self.payload)["notes"])
-        original = copy.deepcopy(self.provider.release)
-        target = self.prepare()
+        self.draft.provider.release = self.draft.provider.draft(assets=[{"id": 17, "name": "transfer.json", "size": 5, "state": "uploaded", "digest": None}])
+        self.draft.provider.release.update(name="v1.2.3", body=json.loads(self.draft.payload)["notes"])
+        original = copy.deepcopy(self.draft.provider.release)
+        target = self.draft.prepare()
         self.assertEqual(target.release_id, 91)
-        self.assertEqual(self.provider.release, original)
-        self.assertEqual(self.provider.posts, [])
-        self.assertEqual(json.loads((self.state / "draft-receipt.json").read_bytes())["state"], "captured")
+        self.assertEqual(self.draft.provider.release, original)
+        self.assertEqual(self.draft.provider.posts, [])
+        self.assertEqual(json.loads((self.draft.state / "draft-receipt.json").read_bytes())["state"], "captured")
         with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}):
-            self.assertEqual(self.prepare(executing_run_id=999), target)
-        self.assertEqual(self.provider.posts, [])
+            self.assertEqual(self.draft.prepare(executing_run_id=999), target)
+        self.assertEqual(self.draft.provider.posts, [])
 
     def test_tag_writer_waits_for_captured_id_in_the_listing_with_one_post(self):
         def temporarily_hidden():
-            self.provider.listing = [[]]
+            self.draft.provider.listing = [[]]
 
         def visible(_seconds):
-            receipt = json.loads((self.state / "draft-receipt.json").read_bytes())
+            receipt = json.loads((self.draft.state / "draft-receipt.json").read_bytes())
             self.assertEqual((receipt["state"], receipt["release_id"]), ("captured", 91))
-            self.provider.listing = None
+            self.draft.provider.listing = None
 
-        self.provider.on_create = temporarily_hidden
+        self.draft.provider.on_create = temporarily_hidden
         with patch("research_repo_tools.release_drafts.time.sleep", side_effect=visible) as wait:
-            self.assertEqual(self.prepare().release_id, 91)
+            self.assertEqual(self.draft.prepare().release_id, 91)
         wait.assert_called_once_with(1)
-        self.assertEqual(len(self.provider.posts), 1)
-        self.assertIn(["api", "repos/example/package/releases/91"], self.provider.calls)
-        self.assertEqual((self.state / "handoff.json").read_bytes(), self.payload)
-        self.assertEqual(parse_release_target((self.state / "target.json").read_bytes()).release_id, 91)
+        self.assertEqual(len(self.draft.provider.posts), 1)
+        self.assertIn(["api", "repos/example/package/releases/91"], self.draft.provider.calls)
+        self.assertEqual((self.draft.state / "handoff.json").read_bytes(), self.draft.payload)
+        self.assertEqual(parse_release_target((self.draft.state / "target.json").read_bytes()).release_id, 91)
 
     def test_tag_writer_fails_closed_when_captured_draft_cannot_be_confirmed(self):
-        self.provider.on_create = lambda: setattr(self.provider, "listing", [[]])
+        self.draft.provider.on_create = lambda: setattr(self.draft.provider, "listing", [[]])
         with patch("research_repo_tools.release_drafts.time.sleep") as wait:
             with self.assertRaises(DraftPreparationUnknownError) as failed:
-                self.prepare()
+                self.draft.prepare()
             self.assertIn("draft disappeared", str(failed.exception.__cause__))
             self.assertEqual([call.args for call in wait.call_args_list], [(1,), (2,)])
-            receipt_path = self.state / "draft-receipt.json"
+            receipt_path = self.draft.state / "draft-receipt.json"
             before = receipt_path.read_bytes()
             self.assertEqual(json.loads(before)["release_id"], 91)
-            for listing in ([[]], [[self.provider.draft(id=92)]], [[self.provider.draft(), self.provider.draft(id=92)]], b"{"):
+            for listing in ([[]], [[self.draft.provider.draft(id=92)]], [[self.draft.provider.draft(), self.draft.provider.draft(id=92)]], b"{"):
                 with self.subTest(listing=listing):
-                    self.provider.listing = listing
+                    self.draft.provider.listing = listing
                     with self.assertRaises(ValueError):
-                        self.prepare()
+                        self.draft.prepare()
                     self.assertEqual(receipt_path.read_bytes(), before)
-                    self.assertFalse((self.state / "target.json").exists())
-                    self.assertEqual(len(self.provider.posts), 1)
+                    self.assertFalse((self.draft.state / "target.json").exists())
+                    self.assertEqual(len(self.draft.provider.posts), 1)
 
     def test_missing_journal_new_run_and_ambiguous_creation_never_create_replacement(self):
         with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}), self.assertRaisesRegex(ValueError, "original handoff and journal"):
-            self.prepare(executing_run_id=999)
-        self.assertFalse(self.state.exists())
+            self.draft.prepare(executing_run_id=999)
+        self.assertFalse(self.draft.state.exists())
 
         def timeout():
             raise TimeoutError("POST outcome unknown")
 
-        self.provider.on_create = timeout
+        self.draft.provider.on_create = timeout
         with self.assertRaises(DraftPreparationUnknownError):
-            self.prepare()
-        self.assertEqual(json.loads((self.state / "draft-receipt.json").read_bytes())["state"], "pending")
-        self.provider.on_create = lambda: None
+            self.draft.prepare()
+        self.assertEqual(json.loads((self.draft.state / "draft-receipt.json").read_bytes())["state"], "pending")
+        self.draft.provider.on_create = lambda: None
         with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}), self.assertRaises(DraftPreparationUnknownError):
-            self.prepare(executing_run_id=999)
+            self.draft.prepare(executing_run_id=999)
         with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}):
-            self.assertEqual(self.prepare(executing_run_id=999, recover_release_id=91).release_id, 91)
-        (self.state / "draft-receipt.json").unlink()
+            self.assertEqual(self.draft.prepare(executing_run_id=999, recover_release_id=91).release_id, 91)
+        (self.draft.state / "draft-receipt.json").unlink()
         with self.assertRaisesRegex(ValueError, "journal is missing"):
-            self.prepare()
-        self.assertEqual(len(self.provider.posts), 1)
+            self.draft.prepare()
+        self.assertEqual(len(self.draft.provider.posts), 1)
 
     def test_execution_arguments_cannot_impersonate_original_run_without_journal(self):
         with patch.dict(os.environ, {"GITHUB_RUN_ID": "999"}), self.assertRaisesRegex(ValueError, "executing run.*differs"):
-            self.prepare()
-        self.assertEqual(self.provider.posts, [])
-        self.assertFalse(self.state.exists())
+            self.draft.prepare()
+        self.assertEqual(self.draft.provider.posts, [])
+        self.assertFalse(self.draft.state.exists())
 
     def test_execution_environment_and_live_identity_must_agree_before_effects(self):
-        self.prepare()
-        before = {path.name: path.read_bytes() for path in self.state.iterdir()}
+        self.draft.prepare()
+        before = {path.name: path.read_bytes() for path in self.draft.state.iterdir()}
         for environment, changes in (
             ({"GITHUB_RUN_ID": ""}, {}),
             ({"GITHUB_RUN_ID": "invalid"}, {}),
@@ -2522,93 +2217,95 @@ class TestAuthenticatedDraftWorkflow(unittest.TestCase):
             ({}, {"repository": {"full_name": "other/package", "id": 8}}),
         ):
             with self.subTest(environment=environment, changes=changes):
-                original = copy.deepcopy(self.provider.recovery_run)
-                self.provider.recovery_run.update(changes)
+                original = copy.deepcopy(self.draft.provider.recovery_run)
+                self.draft.provider.recovery_run.update(changes)
                 try:
                     with patch.dict(os.environ, {"GITHUB_RUN_ID": "999", **environment}), self.assertRaises(ValueError):
-                        self.prepare(executing_run_id=999)
-                    self.assertEqual(len(self.provider.posts), 1)
-                    self.assertEqual({path.name: path.read_bytes() for path in self.state.iterdir()}, before)
+                        self.draft.prepare(executing_run_id=999)
+                    self.assertEqual(len(self.draft.provider.posts), 1)
+                    self.assertEqual({path.name: path.read_bytes() for path in self.draft.state.iterdir()}, before)
                 finally:
-                    self.provider.recovery_run = original
+                    self.draft.provider.recovery_run = original
 
     def test_handoff_drift_and_failed_checks_reject_before_mutation(self):
         def change():
-            self.provider.tag_run["run_attempt"] = 2
+            self.draft.provider.tag_run["run_attempt"] = 2
 
-        self.provider.after_handoff = change
+        self.draft.provider.after_handoff = change
         with self.assertRaises(ValueError):
-            self.prepare()
-        self.assertEqual(self.provider.posts, [])
-        self.assertFalse(self.state.exists())
-        self.provider.after_handoff = lambda: None
-        self.provider.tag_run["run_attempt"] = 1
-        self.provider.after_handoff = lambda: self.provider.history.append({**self.provider.tag_run, "id": 100})
+            self.draft.prepare()
+        self.assertEqual(self.draft.provider.posts, [])
+        self.assertFalse(self.draft.state.exists())
+        self.draft.provider.after_handoff = lambda: None
+        self.draft.provider.tag_run["run_attempt"] = 1
+        self.draft.provider.after_handoff = lambda: self.draft.provider.history.append({**self.draft.provider.tag_run, "id": 100})
         with self.assertRaises(ValueError):
-            self.prepare()
-        self.assertEqual(self.provider.posts, [])
-        self.assertFalse(self.state.exists())
-        self.provider.history = [self.provider.tag_run]
-        self.provider.after_handoff = lambda: None
-        self.provider.check_conclusion = "failure"
+            self.draft.prepare()
+        self.assertEqual(self.draft.provider.posts, [])
+        self.assertFalse(self.draft.state.exists())
+        self.draft.provider.history = [self.draft.provider.tag_run]
+        self.draft.provider.after_handoff = lambda: None
+        self.draft.provider.check_conclusion = "failure"
         with self.assertRaisesRegex(ValueError, "Unmet release checks"):
-            self.prepare()
-        self.assertEqual(self.provider.posts, [])
-        self.assertFalse(self.state.exists())
-        self.provider.check_conclusion = "success"
-        self.assertEqual(self.prepare().release_id, 91)
-        self.assertEqual(len(self.provider.posts), 1)
+            self.draft.prepare()
+        self.assertEqual(self.draft.provider.posts, [])
+        self.assertFalse(self.draft.state.exists())
+        self.draft.provider.check_conclusion = "success"
+        self.assertEqual(self.draft.prepare().release_id, 91)
+        self.assertEqual(len(self.draft.provider.posts), 1)
 
     def test_final_target_retention_rejects_release_drift_and_preserves_captured_journal(self):
         from research_repo_tools.files import replace_many
 
         def drift(updates, *, verify):
-            assert self.provider.release is not None
-            self.provider.release["body"] = "changed after preparation"
+            assert self.draft.provider.release is not None
+            self.draft.provider.release["body"] = "changed after preparation"
             return replace_many(updates, verify=verify)
 
         with patch("research_repo_tools.draft_workflow.replace_many", side_effect=drift), self.assertRaisesRegex(ValueError, "body"):
-            self.prepare()
-        self.assertEqual(len(self.provider.posts), 1)
-        self.assertEqual(json.loads((self.state / "draft-receipt.json").read_bytes())["release_id"], 91)
-        self.assertFalse((self.state / "target.json").exists())
+            self.draft.prepare()
+        self.assertEqual(len(self.draft.provider.posts), 1)
+        self.assertEqual(json.loads((self.draft.state / "draft-receipt.json").read_bytes())["release_id"], 91)
+        self.assertFalse((self.draft.state / "target.json").exists())
 
     def test_planner_rejects_notes_exceeding_the_writer_contract(self):
         from research_repo_tools.draft_workflow import plan_release_draft
 
-        (self.checkout / "CHANGELOG.md").write_bytes(b"# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- " + b"x" * (1024 * 1024) + b"\n")
+        (self.draft.checkout / "CHANGELOG.md").write_bytes(b"# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- " + b"x" * (1024 * 1024) + b"\n")
         with self.assertRaisesRegex(ValueError, "notes.*1 MiB"):
-            plan_release_draft(self.settings, self.configuration, self.source, event="push")
-        self.assertEqual(self.provider.posts, [])
-        self.assertFalse(self.state.exists())
+            plan_release_draft(self.draft.settings, self.draft.configuration, self.draft.source, event="push")
+        self.assertEqual(self.draft.provider.posts, [])
+        self.assertFalse(self.draft.state.exists())
 
     def test_replanning_preserves_original_selection_and_rejects_changed_notes(self):
         from research_repo_tools.draft_workflow import plan_release_draft
 
-        self.assertEqual(plan_release_draft(self.settings, self.configuration, self.source, event="push", expected=self.payload), self.payload)
-        (self.checkout / "CHANGELOG.md").write_bytes(b"# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Changed notes.\n")
+        self.assertEqual(
+            plan_release_draft(self.draft.settings, self.draft.configuration, self.draft.source, event="push", expected=self.draft.payload), self.draft.payload
+        )
+        (self.draft.checkout / "CHANGELOG.md").write_bytes(b"# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- Changed notes.\n")
         with self.assertRaisesRegex(ValueError, "handoff changed"):
-            plan_release_draft(self.settings, self.configuration, self.source, event="push", expected=self.payload)
-        self.assertEqual(self.provider.posts, [])
+            plan_release_draft(self.draft.settings, self.draft.configuration, self.draft.source, event="push", expected=self.draft.payload)
+        self.assertEqual(self.draft.provider.posts, [])
 
     def test_cli_plan_rejects_checkout_alias_before_preparing_a_handoff(self):
-        project = self.checkout / "pyproject.toml"
+        project = self.draft.checkout / "pyproject.toml"
         project.write_bytes(
             project.read_bytes() + b'\n[tool.research-repo-tools.publishing]\nregistry="pypi"\npackage="sample"\nrepository="example/package"\n'
             b'required-checks=[{name="native", app-id=15368}]\n'
         )
-        alias = self.root / "OBSERVED"
+        alias = self.draft.root / "OBSERVED"
         native = alias.exists()
         if native:
-            self.assertTrue(alias.samefile(self.checkout))
+            self.assertTrue(alias.samefile(self.draft.checkout))
         else:
             alias.mkdir()
         samefile = Path.samefile
 
         def identity(path, other):
-            return (path == alias and Path(other) == self.checkout) or samefile(path, other)
+            return (path == alias and Path(other) == self.draft.checkout) or samefile(path, other)
 
-        before = {path.name: path.read_bytes() for path in self.checkout.iterdir()}
+        before = {path.name: path.read_bytes() for path in self.draft.checkout.iterdir()}
         output = alias / "handoff.json"
         errors = io.StringIO()
         with (
@@ -2620,11 +2317,11 @@ class TestAuthenticatedDraftWorkflow(unittest.TestCase):
                 cli.main(
                     [
                         "--root",
-                        str(self.checkout),
+                        str(self.draft.checkout),
                         "release",
                         "assets",
                         "plan",
-                        str(self.configuration.relative_to(self.checkout)),
+                        str(self.draft.configuration.relative_to(self.draft.checkout)),
                         "--repository",
                         "example/package",
                         "--tag",
@@ -2641,23 +2338,23 @@ class TestAuthenticatedDraftWorkflow(unittest.TestCase):
             )
         self.assertIn("outside the observed checkout", errors.getvalue())
         self.assertFalse(output.exists())
-        self.assertEqual({path.name: path.read_bytes() for path in self.checkout.iterdir()}, before)
+        self.assertEqual({path.name: path.read_bytes() for path in self.draft.checkout.iterdir()}, before)
 
     def test_installed_cli_plans_and_authenticates_original_handoff(self):
 
-        project = self.checkout / "pyproject.toml"
+        project = self.draft.checkout / "pyproject.toml"
         project.write_bytes(
             project.read_bytes() + b'\n[tool.research-repo-tools.publishing]\nregistry="pypi"\npackage="sample"\nrepository="example/package"\n'
             b'required-checks=[{name="native", app-id=15368}]\n'
         )
-        handoff, command_file = self.root / "handoff.json", self.root / "github-output"
+        handoff, command_file = self.draft.root / "handoff.json", self.draft.root / "github-output"
         command_file.write_bytes(b"")
-        configuration = self.writer / "handoff-policy.toml"
+        configuration = self.draft.writer / "handoff-policy.toml"
         configuration.write_bytes(
             b'schema=1\nrepository="example/package"\nworkflow=".github/workflows/prepare.yml"\nworkflow-name="Prepare draft"\n'
             b'artifact-prefix="draft-handoff"\n[[jobs]]\nname="verify"\nsteps=["Verify source"]\n'
         )
-        self.state = self.root / "state \u03c0"
+        self.draft.state = self.draft.root / "state \u03c0"
         captured = io.BytesIO()
         terminal = io.TextIOWrapper(captured, encoding="ascii", newline="\n", write_through=True)
         self.addCleanup(terminal.close)
@@ -2666,11 +2363,11 @@ class TestAuthenticatedDraftWorkflow(unittest.TestCase):
                 cli.main(
                     [
                         "--root",
-                        str(self.checkout),
+                        str(self.draft.checkout),
                         "release",
                         "assets",
                         "plan",
-                        str(self.configuration.relative_to(self.checkout)),
+                        str(self.draft.configuration.relative_to(self.draft.checkout)),
                         "--repository",
                         "example/package",
                         "--tag",
@@ -2688,13 +2385,13 @@ class TestAuthenticatedDraftWorkflow(unittest.TestCase):
                 0,
                 errors.getvalue(),
             )
-            self.assertEqual(handoff.read_bytes(), self.payload)
+            self.assertEqual(handoff.read_bytes(), self.draft.payload)
             self.assertEqual(command_file.read_bytes(), f"commit={COMMIT}\n".encode())
             self.assertEqual(
                 cli.main(
                     [
                         "--root",
-                        str(self.writer),
+                        str(self.draft.writer),
                         "release",
                         "assets",
                         "prepare-authenticated",
@@ -2712,22 +2409,22 @@ class TestAuthenticatedDraftWorkflow(unittest.TestCase):
                         "--artifact-id",
                         "301",
                         "--artifact-sha256",
-                        self.selected.sha256,
+                        self.draft.selected.sha256,
                         "--executing-run-id",
                         "101",
                         "--executing-attempt",
                         "1",
                         "--output",
-                        str(self.state),
+                        str(self.draft.state),
                         "--approve",
                     ]
                 ),
                 0,
                 errors.getvalue(),
             )
-        self.assertEqual(parse_release_target((self.state / "target.json").read_bytes()).release_id, 91)
-        self.assertEqual(len(self.provider.posts), 1)
-        self.assertEqual(self.provider.posts[0]["body"], json.loads(self.payload)["notes"])
+        self.assertEqual(parse_release_target((self.draft.state / "target.json").read_bytes()).release_id, 91)
+        self.assertEqual(len(self.draft.provider.posts), 1)
+        self.assertEqual(self.draft.provider.posts[0]["body"], json.loads(self.draft.payload)["notes"])
         self.assertIn(b"state \\u03c0", captured.getvalue())
 
     def test_changed_or_expired_producer_and_artifact_reject_without_effect(self):
@@ -2742,29 +2439,29 @@ class TestAuthenticatedDraftWorkflow(unittest.TestCase):
             ("tag_workflow", {"state": "disabled_manually"}),
         ):
             with self.subTest(field=field, changes=changes):
-                original = copy.deepcopy(getattr(self.provider, field))
-                getattr(self.provider, field).update(changes)
+                original = copy.deepcopy(getattr(self.draft.provider, field))
+                getattr(self.draft.provider, field).update(changes)
                 try:
                     with self.assertRaises(ValueError):
-                        self.prepare()
-                    self.assertEqual(self.provider.posts, [])
-                    self.assertFalse(self.state.exists())
+                        self.draft.prepare()
+                    self.assertEqual(self.draft.provider.posts, [])
+                    self.assertFalse(self.draft.state.exists())
                 finally:
-                    setattr(self.provider, field, original)
+                    setattr(self.draft.provider, field, original)
 
     def test_authenticated_payload_rejects_wrong_source_and_unknown_fields(self):
         from research_repo_tools.draft_workflow import DraftHandoffArtifact
 
         for changes in ({"source": {"ref": "refs/tags/v1.2.4", "commit": COMMIT}}, {"event": "workflow_dispatch"}, {"extra": "untrusted"}):
             with self.subTest(changes=changes):
-                record = json.loads(self.payload)
+                record = json.loads(self.draft.payload)
                 record.update(changes)
-                self.provider.handoff(deterministic_json(record))
-                self.selected = DraftHandoffArtifact(101, 1, 301, self.provider.handoff_artifact["digest"][7:])
+                self.draft.provider.handoff(deterministic_json(record))
+                self.draft.selected = DraftHandoffArtifact(101, 1, 301, self.draft.provider.handoff_artifact["digest"][7:])
                 with self.assertRaises(ValueError):
-                    self.prepare()
-                self.assertEqual(self.provider.posts, [])
-                self.assertFalse(self.state.exists())
+                    self.draft.prepare()
+                self.assertEqual(self.draft.provider.posts, [])
+                self.assertFalse(self.draft.state.exists())
 
 
 class TestDraftPreparation(unittest.TestCase):
@@ -3150,64 +2847,6 @@ class TestDraftPreparation(unittest.TestCase):
         self.assertEqual(len(self.provider.posts), 1)
 
 
-def workflow_fixture(arguments):
-    """Execute the installed module, substituting only bootstrap/provider/Git I/O."""
-    expected = [
-        "run",
-        "--no-config",
-        "--no-project",
-        "--isolated",
-        "--no-cache",
-        "--python",
-        "3.15",
-        "--with",
-        "research-repo-tools==0.3.0",
-        "python",
-        "-I",
-        "-m",
-        "research_repo_tools",
-    ]
-    assert arguments[: len(expected)] == expected, arguments
-    root = Path(os.environ["FIXTURE_ROOT"])
-    provider = WorkflowProvider()
-    guide = (root / "guide.yml").read_bytes()
-    provider.workflow_text = guide
-    provider.tag_workflow.update(path=".github/workflows/prepare-draft.yml", name="Prepare consumer draft")
-    provider.tag_run.update(path=provider.tag_workflow["path"], name=provider.tag_workflow["name"])
-    provider.tag_jobs[0]["steps"] = [{"name": "Assert source and verify original signed evidence", "status": "completed", "conclusion": "success"}]
-    provider.tag_jobs[0]["labels"] = ["ubuntu-24.04"]
-    record = root / "provider.json"
-    if record.exists():
-        state = json.loads(record.read_bytes())
-        provider.release, provider.posts = state["release"], state["posts"]
-    handoff = root / "runner temp" / "handoff" / "handoff.json"
-    if handoff.exists():
-        provider.handoff(handoff.read_bytes())
-    if os.environ.get("FIXTURE_DOWNLOAD_DRIFT"):
-        provider.handoff_artifact["digest"] = "sha256:" + "f" * 64
-    provider.recovery_run.update(path=provider.tag_workflow["path"], name=provider.tag_workflow["name"])
-    with (
-        patch("research_repo_tools.release_validation.subprocess.run", provider.execute),
-        patch("research_repo_tools.release_drafts.api", side_effect=lambda endpoint, **kw: provider.read(endpoint)),
-        patch("research_repo_tools.draft_workflow.api", side_effect=lambda endpoint, **kw: provider.read(endpoint)),
-        patch("research_repo_tools.release_validation.api", side_effect=lambda endpoint, **kw: provider.read(endpoint)),
-        patch("research_repo_tools.release_interfaces.api", side_effect=lambda endpoint, **kw: provider.read(endpoint)),
-        patch("research_repo_tools.release_drafts._api", side_effect=lambda root, repo, endpoint, **kw: provider.read(endpoint)),
-        patch("research_repo_tools.release_assets.run_command_bytes", provider.gh),
-        patch("research_repo_tools.release_publishing._api", side_effect=lambda root, repo, endpoint, **kw: provider.read(endpoint)),
-        patch("research_repo_tools.release_interfaces.require_release_checkout"),
-        patch("research_repo_tools.release_publishing.require_release_checkout"),
-        patch("research_repo_tools.release_publishing.run_git_command", return_value=subprocess.CompletedProcess([], 0, COMMIT, "")),
-        patch("research_repo_tools.toolchain.Runtime.sync", side_effect=AssertionError("draft workflow must not install contributor tools")),
-        patch("research_repo_tools.toolchain.Runtime.inspect", side_effect=AssertionError("draft workflow must not probe contributor tools")),
-    ):
-        sys.argv = ["research_repo_tools", *arguments[len(expected) :]]
-        try:
-            runpy.run_module("research_repo_tools", run_name="__main__")
-        finally:
-            record.write_bytes(encode({"release": provider.release, "posts": provider.posts}))
-
-
 class TestDraftWorkflowShell(unittest.TestCase):
     def test_shipped_shell_blocks_preserve_handoff_and_original_recovery(self):
         guide = Path(__file__).with_name("PREPARING_DRAFTS.md")
@@ -3239,7 +2878,7 @@ class TestDraftWorkflowShell(unittest.TestCase):
                 os.environ,
                 FIXTURE_ROOT=str(root),
                 FIXTURE_PYTHON=Path(sys.executable).as_posix(),
-                FIXTURE_SCRIPT=Path(__file__).resolve().as_posix(),
+                FIXTURE_SCRIPT=Path(release_evidence.__file__).resolve().as_posix(),
                 GITHUB_WORKSPACE=str(checkout),
                 RUNNER_TEMP=str(temporary),
                 GITHUB_REPOSITORY="example/package",
@@ -3253,7 +2892,7 @@ class TestDraftWorkflowShell(unittest.TestCase):
                 MSYS2_ARG_CONV_EXCL="*",
             )
             prefix = (
-                """uv() { "$FIXTURE_PYTHON" -I -X utf8 "$FIXTURE_SCRIPT" --workflow-fixture "$@"; }
+                """uv() { "$FIXTURE_PYTHON" -I -X utf8 "$FIXTURE_SCRIPT" "$@"; }
 git() { test "$*" = "--no-pager rev-parse refs/tags/v1.2.3^{commit}" || return 99; printf '%s\\n' """
                 + COMMIT
                 + "; }\n"
@@ -3309,7 +2948,4 @@ git() { test "$*" = "--no-pager rev-parse refs/tags/v1.2.3^{commit}" || return 9
 
 
 if __name__ == "__main__":
-    if sys.argv[1:2] == ["--workflow-fixture"]:
-        workflow_fixture(sys.argv[2:])
-    else:
-        unittest.main()
+    unittest.main()

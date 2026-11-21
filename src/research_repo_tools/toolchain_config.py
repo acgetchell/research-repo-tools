@@ -39,6 +39,8 @@ RUSTUP_VERSION = "1.29.1"
 
 @dataclass(frozen=True)
 class CargoTool:
+    """A versioned Cargo package and the executable and arguments used to verify its installation."""
+
     package: str
     version: str
     binary: str
@@ -46,11 +48,14 @@ class CargoTool:
 
     @property
     def version_label(self) -> str:
+        """Return the tool-specific label used to interpret version output."""
         return {"cargo-edit": "cargo-edit-upgrade", "cargo-machete": "", "tectonic": "Tectonic", "typos-cli": "typos-cli"}.get(self.package, self.binary)
 
 
 @dataclass(frozen=True)
 class RustToolchain:
+    """The selected Rust channel, installation profile, components, and compilation targets."""
+
     channel: str
     components: tuple[str, ...]
     targets: tuple[str, ...]
@@ -59,12 +64,16 @@ class RustToolchain:
 
 @dataclass(frozen=True)
 class BinaryTool:
+    """A prebuilt executable selected by tool name and pinned version."""
+
     name: str
     version: str
 
 
 @dataclass(frozen=True)
 class Toolchain:
+    """The resolved toolchain requirements for a consumer root, including optional Rust and binary tools."""
+
     root: Path
     uv: str
     python: str
@@ -169,6 +178,7 @@ def load(settings: Config) -> Toolchain:
 
 
 def host_target() -> str:
+    """Return the managed tool target for supported host OS, architecture, and libc combinations."""
     machine = platform.machine().lower()
     arch = {"amd64": "x86_64", "x86_64": "x86_64", "arm64": "aarch64", "aarch64": "aarch64"}.get(machine)
     system = platform.system()
@@ -190,4 +200,5 @@ def home() -> Path:
 
 
 def executable(directory: Path, name: str) -> Path:
+    """Construct the platform-specific executable path in the supplied directory."""
     return directory / (name + ".exe" if os.name == "nt" else name)

@@ -5,7 +5,7 @@ import json
 import pytest
 
 from research_repo_tools import cli, config, notebook_advice, notebook_lint
-from tests.notebooks.public_notebook_consumer import code
+from tests.fixtures.notebooks import code
 
 KEBAB = "[a-z0-9]+(?:-[a-z0-9]+)*"
 

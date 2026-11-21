@@ -25,6 +25,8 @@ from research_repo_tools.runtime_policy_build import install_runtime, record_run
 
 
 class Registry:
+    """Serve exact response bytes by URL for offline runtime policy checks."""
+
     def __init__(self) -> None:
         self.responses: dict[str, bytes] = {}
 
@@ -138,6 +140,30 @@ class TestRuntimePolicy(unittest.TestCase):
             (self.project / filename).unlink()
         with patch.object(self.provider, "read", side_effect=AssertionError("unexpected network")):
             self.assertEqual(len(verify_runtime(policy, environment=self.environment, artifacts=self.bundle)), 2)
+
+    def test_requirements_export_preserves_the_wheels_named_by_its_policy(self) -> None:
+        policy = self.record()
+        wheel = next(self.bundle.glob("*.whl"))
+        original = wheel.read_bytes()
+        args = [
+            "--root",
+            str(self.base),
+            "release",
+            "runtime",
+            "requirements",
+            "--policy",
+            str(self.bundle / "runtime.json"),
+            "--sha256",
+            policy.digest,
+            "--output",
+        ]
+        with contextlib.redirect_stderr(io.StringIO()) as error:
+            self.assertEqual(cli.main([*args, str(wheel)]), 1)
+        self.assertIn("duplicate target paths", error.getvalue())
+        self.assertEqual(wheel.read_bytes(), original)
+        output = self.base / "selected.txt"
+        self.assertEqual(cli.main([*args, str(output)]), 0)
+        self.assertEqual(output.read_bytes(), runtime_requirements(policy))
 
     def test_installed_version_bytes_additions_and_missing_dependencies_fail(self) -> None:
         policy = self.record()
@@ -263,6 +289,10 @@ class TestRuntimePolicy(unittest.TestCase):
             "dependency": Parser().parsestr("Name: dependency\nVersion: 2.0\n"),
         }
         runtime_policy._closure(["application[Fast_Mode]==1.0"], metadata)
+        with self.assertRaisesRegex(ValueError, "missing or incompatible dependency: dependency>=2"):
+            runtime_policy._closure(["application[Fast_Mode]==1.0"], {"application": metadata["application"]})
+        with self.assertRaisesRegex(ValueError, "outside the selected requirement closure"):
+            runtime_policy._closure(["application==1.0"], metadata)
 
     def executing_context(self):
         # Model only the executing interpreter boundary; keep the real host's

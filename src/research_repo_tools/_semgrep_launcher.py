@@ -23,10 +23,12 @@ def stack_limits(soft: int, hard: int, infinity: int) -> tuple[int, int]:
 
 
 def command(binary: Path) -> tuple[str, ...]:
+    """Build the Semgrep launcher command for the running Python interpreter."""
     return command_for_python(binary, Path(sys.executable))
 
 
 def command_for_python(binary: Path, interpreter: Path) -> tuple[str, ...]:
+    """Wrap Semgrep only if the current POSIX stack limit needs adjustment."""
     if os.name != "nt":
         import resource
 
@@ -37,6 +39,7 @@ def command_for_python(binary: Path, interpreter: Path) -> tuple[str, ...]:
 
 
 def main() -> None:
+    """Raise the POSIX stack limit as permitted and replace the launcher with Semgrep."""
     if os.name == "nt":
         raise RuntimeError("the Semgrep stack-limit launcher is POSIX-only")
     import resource

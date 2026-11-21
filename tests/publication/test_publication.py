@@ -19,7 +19,7 @@ from research_repo_tools.publication import (
     replace_section,
 )
 from research_repo_tools.publication_config import load_publication
-from tests.publication.public_publication_consumer import DOCUMENT, LAYOUT, MARKERS, comparison, make_fixture
+from tests.fixtures.publication import DOCUMENT, LAYOUT, MARKERS, comparison, make_fixture
 
 
 @pytest.mark.parametrize(

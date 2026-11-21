@@ -50,6 +50,7 @@ class PythonRegistryAuthority:
 
 
 def load_registry_authority(path: Path) -> PythonRegistryAuthority:
+    """Load the checked-in PyPI project and workflow identity used for unauthenticated verification."""
     raw = _object(
         tomllib.loads(path.read_bytes().decode("utf-8")),
         "registry authority",

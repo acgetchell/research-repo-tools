@@ -28,6 +28,7 @@ def check(root: Path, tag: str) -> int:
 
 
 def main() -> int:
+    """Check the requested tag against the repository's release metadata."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("tag")
     parser.add_argument("--root", type=Path, default=ROOT)

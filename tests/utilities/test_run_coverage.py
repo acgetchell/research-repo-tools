@@ -95,6 +95,36 @@ def test_failed_coverage_publication_preserves_previous_pair(tmp_path, monkeypat
     assert list(report.parent.iterdir()) == [report]
 
 
+@pytest.mark.parametrize(
+    ("outcome", "exit_code"), [(KeyboardInterrupt(), 130), (-2, 130), (130, 130), (0xC000013A, 130), (-15, 143), (2, 2), (3, 3), (4, 4), (5, 5)]
+)
+def test_incomplete_coverage_preserves_worker_shards_and_prior_reports(tmp_path, monkeypatch, capsys, outcome, exit_code):
+    """Preserve in-flight worker data and report why the child could not finish."""
+    import runpy
+
+    runner = runpy.run_path(str(RUNNER))["main"]
+    monkeypatch.chdir(tmp_path)
+    report = tmp_path / "coverage/cobertura.xml"
+    report.parent.mkdir()
+    database = tmp_path / ".coverage"
+    report.write_bytes(b"previous report")
+    database.write_bytes(b"previous database")
+
+    def interrupt(args, *, env, **kwargs):
+        Path(env["COVERAGE_FILE"] + ".worker").write_bytes(b"in progress")
+        if isinstance(outcome, KeyboardInterrupt):
+            raise outcome
+        return subprocess.CompletedProcess(args, outcome)
+
+    monkeypatch.setattr(subprocess, "run", interrupt)
+    assert runner([]) == exit_code
+    (retained,) = report.parent.glob("failed-*")
+    assert (retained / ".coverage.worker").read_bytes() == b"in progress"
+    assert str(retained) in capsys.readouterr().err
+    assert report.read_bytes() == b"previous report"
+    assert database.read_bytes() == b"previous database"
+
+
 @pytest.mark.parametrize("test_status", [0, 1])
 def test_coverage_keeps_child_branch_data_and_reports_test_status(tmp_path, test_status):
     (tmp_path / "pyproject.toml").write_bytes(
@@ -109,8 +139,9 @@ def test_coverage_keeps_child_branch_data_and_reports_test_status(tmp_path, test
     )
     env = {key: value for key, value in os.environ.items() if not key.startswith(("COVERAGE_", "PYTEST_"))}
     env["PYTEST_DISABLE_PLUGIN_AUTOLOAD"] = "1"
+    # Nested workers must not rotate other pytest runs in the user's shared temp root.
     result = subprocess.run(
-        [sys.executable, str(RUNNER), "-p", "xdist.plugin", "-n", "2", "--dist", "worksteal"],
+        [sys.executable, str(RUNNER), "-p", "xdist.plugin", "-n", "2", "--dist", "worksteal", "--basetemp", str(tmp_path / "pytest-workers")],
         cwd=tmp_path,
         env=env,
         capture_output=True,

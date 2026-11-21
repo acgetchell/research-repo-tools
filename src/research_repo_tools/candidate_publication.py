@@ -50,6 +50,7 @@ def _acquisition_input_keys(phase: str) -> tuple[str, ...]:
 
 
 def _parse_publication(payload: bytes, policy: CandidatePolicy) -> _PublicationReceipt:
+    """Validate the canonical receipt and its declared outputs against the independently captured acquisition tree."""
     from research_repo_tools.candidate_reuse import acquisition_assertion_digest
 
     if policy.report is None:

@@ -33,12 +33,19 @@ from research_repo_tools.publication import GitCheck, MarkerPair, plan_publicati
 
 
 def plan_validated_report(root, original_inputs, section, svg_path, svg_bytes, tag):
-    # The consumer schema adapter has already checked payload integrity,
-    # release/report consistency, source/harness identity, and eligibility.
+    """Plan report edits from the input bytes the consumer validated for this release.
+
+    The consumer must already have checked payload integrity, release and report
+    consistency, source and harness identity, and eligibility.
+    """
     linked_artifacts = ("docs/PERFORMANCE.md", "evidence/report.csv", "evidence/report.json", svg_path)
     return plan_publication(
-        root, "README.md", MarkerPair("<!-- PERFORMANCE:BEGIN -->", "<!-- PERFORMANCE:END -->"),
-        section, inputs=original_inputs, figures={svg_path: svg_bytes},
+        root,
+        "README.md",
+        MarkerPair("<!-- PERFORMANCE:BEGIN -->", "<!-- PERFORMANCE:END -->"),
+        section,
+        inputs=original_inputs,
+        figures={svg_path: svg_bytes},
         git_checks=(GitCheck(tag, linked_artifacts),),
     )
 ```

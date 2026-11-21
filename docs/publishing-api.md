@@ -265,7 +265,10 @@ from pathlib import Path
 from research_repo_tools.releases import apply_release, plan_release
 
 plan = plan_release(
-    Path.cwd(), "v1.2.4", previous_tag="v1.2.3", release_date="2026-09-20",
+    Path.cwd(),
+    "v1.2.4",
+    previous_tag="v1.2.3",
+    release_date="2026-09-20",
 )
 for edit in plan.edits:
     print(edit.path)  # Inspect edit.before and edit.after for the exact byte diff.

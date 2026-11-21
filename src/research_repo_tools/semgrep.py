@@ -39,6 +39,7 @@ class _RuleLoader(yaml.SafeLoader):
 
 
 def annotations(text: str, namespace: str = "") -> tuple[tuple[str, str], ...]:
+    """Extract fixture expectation kinds and rule IDs matching the selected namespace prefix."""
     return tuple(
         (cast(str, match["kind"]), cast(str, name).strip())
         for match in ANNOTATION.finditer(text)
@@ -48,6 +49,7 @@ def annotations(text: str, namespace: str = "") -> tuple[tuple[str, str], ...]:
 
 
 def fixtures(path: Path) -> list[Path]:
+    """List source fixtures in path order and exclude expected autofix output files."""
     if not path.exists():
         raise ValueError(f"Semgrep fixtures not found: {path}")
     candidates = [path] if path.is_file() else path.rglob("*")
@@ -57,6 +59,7 @@ def fixtures(path: Path) -> list[Path]:
 
 
 def rules(path: Path) -> dict[str, dict[str, Any]]:
+    """Read the Semgrep rule configuration and require distinct nonempty IDs."""
     try:
         parsed = yaml.load(path.read_text(encoding="utf-8"), Loader=_RuleLoader)
     except (yaml.YAMLError, UnicodeError, ValueError) as error:
@@ -75,6 +78,7 @@ def rules(path: Path) -> dict[str, dict[str, Any]]:
 
 
 def fixture_rule_ids(path: Path, source: dict[str, dict[str, Any]], namespace: str = "") -> list[str]:
+    """Return referenced rule IDs in first-occurrence order and reject unknown IDs."""
     annotated = annotations(path.read_text(encoding="utf-8"), namespace)
     names = list(dict.fromkeys(name for _, name in annotated))
     if not names:
@@ -174,6 +178,7 @@ def _documentation_cases(path: Path, source: dict[str, dict[str, Any]], namespac
 
 
 def check(config: Config, *, rust_docs: bool = False) -> int:
+    """Verify configured scanner rules against source annotations or explicit fixture counts."""
     section = config.semgrep
     if rust_docs and section.counts:
         raise ValueError("documentation fixtures use source annotations; keep count-based fixtures in a separate fixture gate")

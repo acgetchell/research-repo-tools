@@ -702,8 +702,11 @@ from research_repo_tools.benchmark_reuse import plan_reuse_archive
 from research_repo_tools.publication import publish_publication
 
 candidate = plan_reuse_archive(
-    Path.cwd(), "target/run.json", "target/evidence.json",
-    "tooling/reuse-policy.json", "target/benchmark-release.tar.gz",
+    Path.cwd(),
+    "target/run.json",
+    "target/evidence.json",
+    "tooling/reuse-policy.json",
+    "target/benchmark-release.tar.gz",
 )
 publish_publication(candidate)
 ```
@@ -750,14 +753,19 @@ human` or `--progress json` for dependency phases and request/retry counts;
 For committed schema-2 publisher histories, retain a publication receipt and
 declare the original report configuration in
 `CandidatePolicy(report="tooling/performance-report.toml", ...)`.
-Before promotion, freeze the shared publisher's exact outputs under acquisition-owner
-control:
+Before promotion, the acquisition owner freezes the publisher's outputs in the
+consumer checkout (`root`) using the original Step 1 policy and its trusted
+acquisition digest:
 
 ```python
 from research_repo_tools.candidate_publication import plan_candidate_publication
+from research_repo_tools.publication import publish_publication
 
 plan, receipt = plan_candidate_publication(
-    root, "target/run.json", "target/evidence.json", step_one_policy,
+    root,
+    "target/run.json",
+    "target/evidence.json",
+    step_one_policy,
     acquisition_sha256=trusted_acquisition_digest,
 )
 # Save receipt and its SHA-256 through the separate trusted handoff.

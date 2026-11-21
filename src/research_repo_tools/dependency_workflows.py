@@ -1,7 +1,5 @@
 """Verified source transitions and published-only dependency release checks."""
 
-import difflib
-import json
 import os
 import sys
 import tempfile
@@ -28,7 +26,7 @@ from research_repo_tools.dependency_policy import (
     project_manifests,
 )
 from research_repo_tools.dependency_sources import GitCommit, RegistryRelease, Source, SourceProvider, VerifiedSource, table, verify_source
-from research_repo_tools.files import replace_many
+from research_repo_tools.files import _text_diff, replace_many
 
 __all__ = ["SourcePlan", "apply_source", "check_dependency_policy", "plan_source"]
 
@@ -47,33 +45,28 @@ class SourcePlan:
         raise TypeError("use plan_source to obtain a SourcePlan")
 
     def diff(self) -> str:
+        """Preview planned text changes against the captured files without reading the live checkout."""
         originals = dict(self.snapshot.files)
-        return "".join(
-            "".join(
-                difflib.unified_diff(
-                    (originals[path] or b"").decode("utf-8").splitlines(keepends=True),
-                    content.decode("utf-8").splitlines(keepends=True),
-                    fromfile=str(path.relative_to(self.root)),
-                    tofile=str(path.relative_to(self.root)),
-                )
-            )
-            for path, content in self.writes
-        )
+        chunks = []
+        for path, content in self.writes:
+            name = path.relative_to(self.root).as_posix()
+            chunks.append(_text_diff(originals[path], content, fromfile=name, tofile=name))
+        return "".join(chunks)
 
 
 def _table_name(parts: tuple[str, ...]) -> str:
-    return ".".join(json.dumps(part) for part in parts)
+    return ".".join(toml_source.string_literal(part) for part in parts)
 
 
 def _literal(value: object) -> str:
     if isinstance(value, str):
-        return json.dumps(value)
+        return toml_source.string_literal(value)
     if type(value) is bool:
         return "true" if value else "false"
     if isinstance(value, list):
         return "[" + ", ".join(_literal(item) for item in value) + "]"
     if isinstance(value, dict):
-        return "{ " + ", ".join(json.dumps(key) + " = " + _literal(item) for key, item in value.items()) + " }"
+        return "{ " + ", ".join(toml_source.string_literal(key) + " = " + _literal(item) for key, item in value.items()) + " }"
     raise ValueError("unsupported dependency declaration value")
 
 
@@ -157,6 +150,7 @@ def _cargo_tables(document: dict[str, object]) -> Iterator[tuple[tuple[str, ...]
 
 
 def _cargo_selection(text: str, verified: VerifiedSource) -> str:
+    """Rewrite Cargo declarations for the verified source while preserving unrelated table entries."""
     source = verified.source
     document = table(tomllib.loads(text), "Cargo manifest")
     patches = table(table(document.get("patch", {}), "patch").get("crates-io", {}), "crates.io patches")
@@ -223,6 +217,7 @@ def _source_files(root: Path, manifests: tuple[Path, ...]) -> tuple[Path, ...]:
 
 
 def _resolve_candidate(root: Path, verified: VerifiedSource, *, checkout: Path, candidate_checkout: Path, allow_python_builds: bool = False) -> None:
+    """Run the external resolver against the candidate checkout to reconcile its lockfile with the selected source."""
     from research_repo_tools.process import resolve_executable, run_command
     from research_repo_tools.release_credentials import environment as without_credentials
 
@@ -314,6 +309,7 @@ def _plan_verified_source(
     observed: InputSnapshot,
     transition_policy: bytes | None = None,
 ) -> SourcePlan:
+    """Resolve and validate a source transition in a disposable copy of the captured checkout."""
     project_root = inside(root, selection.project.directory)
     # Capture all copied source/harness bytes so a plan cannot publish a lock
     # resolved against a different workspace or silently preserve old evidence.
@@ -497,7 +493,7 @@ def _require_dependency_free(root: Path) -> None:
         configured |= bool(members)
         if lock_bytes is not None:
             version = project.get("version")
-            if ecosystem == "cargo" and version == {"workspace": True}:
+            if ecosystem == "cargo" and toml_source.inherits_workspace(version):
                 version = table(workspace.get("package", {}), "workspace.package").get("version")
             packages = table(tomllib.loads(lock_bytes.decode("utf-8")), "lock").get("package")
             if not isinstance(packages, list):

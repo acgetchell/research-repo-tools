@@ -40,6 +40,8 @@ def check_documentation_fixtures(settings: config.Config) -> int:
 
 @dataclass(frozen=True, slots=True)
 class ScanInput:
+    """The scanner path, original source, and logical name for a file or extracted Rust block."""
+
     physical: Path
     source: Path
     logical: str
@@ -47,11 +49,13 @@ class ScanInput:
 
     @property
     def label(self) -> str:
+        """Describe the logical file and, for an extracted block, its location in the original source."""
         if self.block is None:
             return self.logical
         return f"{self.logical} (Rust block {self.block.index + 1}, lines {self.block.start_line}-{self.block.end_line})"
 
     def coverage(self) -> dict[str, object]:
+        """Describe the file or block represented by this entry in a scan's coverage inventory."""
         result: dict[str, object] = {"path": self.logical, "representation": "source" if self.block is None else "rust-block"}
         if self.block is not None:
             result.update(block=self.block.index + 1, start_line=self.block.start_line, end_line=self.block.end_line)
@@ -401,6 +405,7 @@ def _batch_reports(
 
 
 def _validate_pair(data, sarif, targets, root, inline_suppressions, inputs=None):
+    """Require complete target coverage and matching unsuppressed findings in the JSON and SARIF reports."""
     if isinstance(data.get("errors"), list) and data["errors"]:
         kinds = [str(error.get("type", "unknown"))[:100] if isinstance(error, dict) else "malformed error" for error in data["errors"][:8]]
         raise ValueError(f"native Semgrep errors ({len(data['errors'])}): {', '.join(kinds)}; inputs: {_coverage_description(targets, inputs or {})}")
@@ -540,6 +545,7 @@ def scan(
 
 
 def _scan(settings: config.Config, names: tuple[str, ...], destination: Path, policy: config.SemgrepSettings, rust_docs: bool, attempt: dict[str, Any]) -> int:
+    """Scan selected files and extracted Rust blocks, validating each JSON and SARIF pair before publishing the report directory."""
     assert policy.config is not None
     documentation = [name for name in names if Path(name).suffix in {".rs", ".md"}]
     extraction_scope = {

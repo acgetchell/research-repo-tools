@@ -43,6 +43,11 @@ def _legacy_uv_hooks(site: Path) -> InputSnapshot:
 
 
 def verify_cargo_input(path: Path, verified: VerifiedSource, *, provider: SourceProvider | None = None) -> InputSnapshot:
+    """Snapshot the extracted package at path after comparing it with the published .crate.
+
+    Use the cached archive when its size and SHA-256 match the verified artifact.
+    Otherwise fetch that artifact through the provider before checking the extracted files.
+    """
     try:
         return _cargo_input(path, verified, provider=provider)
     except tarfile.TarError as error:
@@ -66,7 +71,9 @@ def _cargo_input(path: Path, verified: VerifiedSource, *, provider: SourceProvid
         except OSError, ValueError:
             pass
     if payload is None or len(payload) != artifact.size or hashlib.sha256(payload).hexdigest() != artifact.sha256:
-        payload = (provider or HttpSourceProvider()).read(artifact.url)
+        if provider is None:
+            provider = HttpSourceProvider()
+        payload = provider.read(artifact.url)
         if len(payload) != artifact.size or hashlib.sha256(payload).hexdigest() != artifact.sha256:
             raise ValueError("Cargo dependency archive bytes differ from crates.io and the lock")
     expected: set[str] = set()

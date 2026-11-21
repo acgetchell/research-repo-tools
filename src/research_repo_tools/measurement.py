@@ -37,6 +37,8 @@ def _strings(value: object, context: str, *, nonempty: bool = True) -> tuple[str
 
 @dataclass(frozen=True, slots=True)
 class MeasurementConfig:
+    """The benchmark command, input patterns, collection settings, and comparison policy for a measurement."""
+
     command: tuple[str, ...]
     sources: tuple[str, ...]
     harness: tuple[str, ...]
@@ -249,6 +251,17 @@ def measure_checkout(root: Path, configuration: MeasurementConfig, tag: str, *, 
     return sample, before
 
 
+def _measurement_backend(configuration: "MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan", backend: str | None) -> str:
+    """Resolve an omitted backend and require explicit selections to agree with the plan."""
+    if backend is None:
+        backend = "worktree" if isinstance(configuration, MeasurementConfig) else configuration.backend
+    if backend not in {"export", "worktree"}:
+        raise ValueError("source backend must be export or worktree")
+    if not isinstance(configuration, MeasurementConfig) and backend != configuration.backend:
+        raise ValueError("backend must match the acquisition declaration")
+    return backend
+
+
 def measure_pair(
     root: Path,
     configuration: "MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan",
@@ -268,11 +281,7 @@ def measure_pair(
     files. Tagged comparisons never fetch absent tags. Failure leaves no
     published evidence; cleanup failures retain recovery checkouts.
     """
-    selected_backend = backend or (configuration.backend if not isinstance(configuration, MeasurementConfig) else "worktree")
-    if selected_backend not in {"export", "worktree"}:
-        raise ValueError("source backend must be export or worktree")
-    if not isinstance(configuration, MeasurementConfig) and selected_backend != configuration.backend:
-        raise ValueError("backend must match the acquisition declaration")
+    selected_backend = _measurement_backend(configuration, backend)
     if selected_backend == "worktree" and not allow_git_mutations:
         raise ValueError("measure requires --allow-git-mutations for isolated worktree lifecycle")
     from research_repo_tools.suite_measurement import SuiteMeasurementPlan, measure_suites

@@ -16,11 +16,14 @@ _RELEASE_LIST_LIMIT = 1000
 
 @dataclass(frozen=True)
 class PublishedRelease:
+    """A stable release's tag and timezone-aware publication time."""
+
     tag: str
     published_at: datetime
 
 
 def normalize_tag(tag: str) -> str:
+    """Validate the stable release tag and return its canonical v-prefixed spelling."""
     match = TAG.fullmatch(tag)
     if match is None:
         raise ValueError(f"release tag must use stable vX.Y.Z form: {tag!r}")
@@ -32,6 +35,7 @@ def _tag_version(tag: str) -> tuple[int, ...]:
 
 
 def stable_published_releases(document: object) -> tuple[PublishedRelease, ...]:
+    """Filter out drafts and prereleases and sort stable published releases newest by version."""
     if not isinstance(document, list):
         raise ValueError("GitHub releases must be an array")
     releases: list[PublishedRelease] = []

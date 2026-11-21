@@ -111,14 +111,17 @@ class Estimate:
 
     @property
     def lower(self) -> float | None:
+        """Return the lower interval bound, or None when the estimate has no interval."""
         return None if self.interval is None else self.interval.lower
 
     @property
     def upper(self) -> float | None:
+        """Return the upper interval bound, or None when the estimate has no interval."""
         return None if self.interval is None else self.interval.upper
 
     @property
     def confidence_level(self) -> float | None:
+        """Return the interval's confidence level, or None when no interval was retained."""
         return None if self.interval is None else self.interval.confidence_level
 
 
@@ -201,15 +204,18 @@ class ComparisonSet:
 
     @property
     def comparisons(self) -> tuple[Comparison, ...]:
+        """Pair workloads present on both sides in workload ID order."""
         baseline, current = dict(self.baseline.estimates), dict(self.current.estimates)
         return tuple(Comparison(name, baseline[name], current[name]) for name in sorted(baseline.keys() & current.keys()))
 
     @property
     def missing_baseline(self) -> tuple[str, ...]:
+        """Return the sorted workload IDs found only in the current run."""
         return tuple(sorted(dict(self.current.estimates).keys() - dict(self.baseline.estimates).keys()))
 
     @property
     def missing_current(self) -> tuple[str, ...]:
+        """Return the sorted workload IDs found only in the baseline run."""
         return tuple(sorted(dict(self.baseline.estimates).keys() - dict(self.current.estimates).keys()))
 
 

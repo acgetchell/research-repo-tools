@@ -26,6 +26,7 @@ HOSTS = {
 
 
 def asset_name(tool: BinaryTool, host: str) -> str:
+    """Select the published asset filename for a supported tool and target."""
     if host not in HOSTS or tool.name not in REPOSITORIES:
         raise ValueError(f"unsupported prebuilt tool/host: {tool.name}, {host}")
     system, arch = HOSTS[host]
@@ -43,6 +44,7 @@ def asset_name(tool: BinaryTool, host: str) -> str:
 
 
 def release_metadata(name: str, tag: str) -> dict[str, Any]:
+    """Fetch bounded GitHub release metadata and require a stable published release matching the request."""
     if name not in REPOSITORIES or not re.fullmatch(r"latest|v[0-9]+\.[0-9]+\.[0-9]+", tag):
         raise ValueError("unsupported binary release")
     requested = tag.removeprefix("v") if name == "dprint" else tag
@@ -74,6 +76,7 @@ def release_metadata(name: str, tag: str) -> dict[str, Any]:
 
 
 def version_at(path: Path, tool: BinaryTool, *, cwd: Path, env: dict[str, str]) -> str:
+    """Run the selected executable and extract its version from the tool's expected output."""
     if not path.is_file() or path.is_symlink():
         raise ValueError("missing managed executable")
     args = ["version"] if tool.name == "gitleaks" else ["--version"]

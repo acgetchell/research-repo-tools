@@ -1,4 +1,4 @@
-"""Bounded retries for exact-URL public registry GETs, never mutations."""
+"""Read exact registry URLs with bounded responses and public-registry retry budgets."""
 
 import http.client
 import io
@@ -17,7 +17,7 @@ from queue import Empty, SimpleQueue
 from typing import cast, override
 from urllib.parse import SplitResult, urlsplit
 
-from research_repo_tools._http import close_http_error
+from research_repo_tools._http import close_http_error, closing_http_errors
 from research_repo_tools.dependency_progress import report
 
 _LOCK = threading.Lock()
@@ -30,6 +30,19 @@ _READ_TIMEOUT = 30.0
 _DNS_SLOTS = threading.BoundedSemaphore(4)
 _CHUNK_SIZE = 64 * 1024
 _remaining: ContextVar[Callable[[], float] | None] = ContextVar("registry_deadline", default=None)
+
+
+class RegistryLookupError(ValueError):
+    """Registry evidence is unavailable or malformed, rather than absent."""
+
+    # Keep the documented exception path in tracebacks and pickles.
+    __module__ = "research_repo_tools.registry"
+
+
+class TransientRegistryError(RegistryLookupError):
+    """A transient registry GET failure exhausted the bounded retry policy."""
+
+    __module__ = "research_repo_tools.registry"
 
 
 def registry_timeout() -> int:
@@ -70,8 +83,10 @@ type _AddressInfo = tuple[socket.AddressFamily, socket.SocketKind, int, str, tup
 
 
 def _resolve_addresses(address: tuple[str, int], cap: float, remaining: Callable[[], float]) -> Sequence[_AddressInfo]:
-    # Native DNS is not cancellable. Bound the number of in-flight lookups so
-    # timed-out callers can leave without accumulating resolver threads.
+    """Resolve addresses within the caller's budget using a bounded DNS worker slot.
+
+    Native DNS can outlive a timed-out caller. The worker releases its slot when it exits.
+    """
     if not _DNS_SLOTS.acquire(timeout=_io_timeout(remaining, cap)):
         _io_timeout(remaining, cap)
         raise TimeoutError("registry DNS resolver slots are busy")
@@ -116,6 +131,10 @@ def _resolve_addresses(address: tuple[str, int], cap: float, remaining: Callable
 
 
 def _connect_tcp(address: tuple[str, int], cap: float, source_address: tuple[str, int] | None, *, remaining: Callable[[], float]) -> socket.socket:
+    """Try resolved TCP addresses in order within the budget and return the connected socket.
+
+    Close failed sockets and give ownership of the connected socket to the caller.
+    """
     last_error: OSError = OSError("registry DNS lookup returned no TCP addresses")
     for family, kind, protocol, _, endpoint in _resolve_addresses(address, cap, remaining):
         timeout = _io_timeout(remaining, cap)
@@ -167,6 +186,7 @@ class RegistryHTTPSHandler(urllib.request.HTTPSHandler):
 
     @override
     def do_open(self, http_class: Callable[..., http.client.HTTPConnection], req: urllib.request.Request, **http_conn_args):
+        """Apply the active registry budget to HTTPS connections and response reads."""
         remaining = _remaining.get()
         if remaining is None:
             return super().do_open(http_class, req, **http_conn_args)
@@ -209,6 +229,36 @@ class RegistryHTTPSHandler(urllib.request.HTTPSHandler):
         return super().do_open(connection, req, **http_conn_args)
 
 
+class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject redirects before any request is made to a second endpoint."""
+
+    @override
+    def redirect_request(self, req, fp, code, msg, headers, newurl) -> None:
+        return None
+
+
+_OPENER = urllib.request.build_opener(RegistryHTTPSHandler(), _NoRedirectHandler())
+
+
+def read_custom_index(url: str, *, limit: int, metadata: bool) -> bytes:
+    """Read up to limit + 1 bytes once from a configured metadata or distribution URL.
+
+    The caller checks the returned size against the metadata limit or the declared
+    artifact size. Preserve HTTP errors so only an exact metadata 404 proves absence.
+    """
+    request: str | urllib.request.Request = url
+    if metadata:
+        request = urllib.request.Request(
+            url, headers={"Accept": "application/json", "User-Agent": "research-repo-tools (https://github.com/acgetchell/research-repo-tools)"}
+        )
+    with closing_http_errors(), _OPENER.open(request, timeout=15 if metadata else 30) as response:
+        payload = cast(http.client.HTTPResponse, response).read(limit + 1)
+        if response.status != 200 or response.url != url:
+            subject = "registry" if metadata else "published distribution"
+            raise RegistryLookupError(f"{subject} returned an unexpected status or redirect")
+        return payload
+
+
 def _retry_after(value: str | None) -> float:
     if value is None:
         return 0.0
@@ -222,12 +272,11 @@ def _retry_after(value: str | None) -> float:
 
 
 def _request(url: str, timeout: float, limit: int, *, remaining: Callable[[], float]) -> bytes:
-    from research_repo_tools import registry
-
+    """Read one bounded registry response and reject redirects, status mismatches, and truncated bodies."""
     request = urllib.request.Request(url, headers={"Accept": "application/json", "User-Agent": "research-repo-tools"})
     token = _remaining.set(remaining)
     try:
-        response = registry._OPENER.open(request, timeout=timeout)
+        response = _OPENER.open(request, timeout=timeout)
     finally:
         _remaining.reset(token)
     with response:
@@ -268,8 +317,6 @@ def read_registry(
     API attempt participates in process-wide one-second pacing. No observation
     survives this call. Integrity/parse errors are never transient failures.
     """
-    from research_repo_tools.registry import TransientRegistryError
-
     clock = clock if clock is not None else time.monotonic
     sleep = sleep if sleep is not None else time.sleep
     parsed = urlsplit(url)

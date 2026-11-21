@@ -136,7 +136,10 @@ replace_many({Path("selection.json"): selection})
 
 # After approval, re-observe the source and use the original saved record.
 verified = verify_release_evidence(
-    policy, version, observed_commit, read,
+    policy,
+    version,
+    observed_commit,
+    read,
     expected=Path("selection.json").read_bytes(),
 )
 ```
@@ -145,7 +148,9 @@ The selection binds schema, complete policy, package/version, repository IDs,
 workflow/event/ref/commit, run/attempt, every required job ID, artifact ID/name/size/
 SHA-256 and manifest SHA-256. Its parser rejects duplicate fields, nonfinite
 numbers, invalid UTF-8 and nesting beyond 128 levels. Numeric identity types
-remain significant. Caller-supplied records are assertions, never authority.
+remain significant. Signed predicates allow object keys in any order, but a
+boolean or floating-point value cannot stand in for an integer ID.
+Caller-supplied records are assertions, never authority.
 
 After approval, the verifier reads the captured run and artifact IDs and checks
 current gates, signatures and retained bytes again. It rejects changed attempts,
@@ -398,6 +403,7 @@ On retry, use the original bytes:
 
 ```python
 from functools import partial
+
 from research_repo_tools.release_receipts import FrozenReceipt, TagSource, retrieve_draft_receipt
 from research_repo_tools.release_validation import api
 

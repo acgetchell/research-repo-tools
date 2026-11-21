@@ -118,6 +118,7 @@ class PythonDistributionPolicy:
         return self.max_distribution_bytes + 64 * 1024 * 1024
 
     def filenames(self, package: str, version: str) -> tuple[str, ...]:
+        """Expand the declared distribution filenames for the package and version and validate the result."""
         return distribution_names(f"v{version}", package=package, filenames=tuple(name.replace("{version}", version) for name in self.files))
 
 
@@ -240,6 +241,7 @@ def _bounded_file(path: Path, limit: int) -> bytes:
 
 
 def _crate(payload: bytes, package: str, version: str, commit: str, path_in_vcs: str) -> str:
+    """Check the archive's package and Git metadata against the release, then return the SHA-256 of the original compressed bytes."""
     prefix = f"{_package(package)}-{_version(version)}"
     _commit(commit)
     _relative(path_in_vcs)

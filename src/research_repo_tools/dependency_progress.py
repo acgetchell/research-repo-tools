@@ -35,6 +35,7 @@ class DependencyProgress:
         self.retries = 0
 
     def emit(self, event: str, phase: str, *, graph: str | None = None, checked: int = 0, total: int | None = None, detail: str | None = None) -> None:
+        """Update request counts and report progress to the configured observer and output stream."""
         if event == "request":
             self.requests += 1
         elif event == "retry":
@@ -71,6 +72,7 @@ _CURRENT: ContextVar[DependencyProgress | None] = ContextVar("dependency_progres
 
 
 def report(event: str, phase: str, *, graph: str | None = None, checked: int = 0, total: int | None = None, detail: str | None = None) -> None:
+    """Emit an event to the active dependency progress reporter when one is configured."""
     progress = _CURRENT.get()
     if progress is not None:
         progress.emit(event, phase, graph=graph, checked=checked, total=total, detail=detail)
@@ -78,6 +80,7 @@ def report(event: str, phase: str, *, graph: str | None = None, checked: int = 0
 
 @contextmanager
 def reporting(progress: DependencyProgress | None, phase: str) -> Iterator[None]:
+    """Bind a reporter for the duration of a phase and restore the previous reporter on exit."""
     token = _CURRENT.set(progress if progress is not None else _CURRENT.get())
     try:
         report("started", phase)

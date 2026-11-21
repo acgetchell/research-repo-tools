@@ -24,7 +24,8 @@ class TestLiveProcess(unittest.TestCase):
     def probe(self, body: str, *, stdin: bytes | None = None) -> subprocess.CompletedProcess[bytes]:
         return subprocess.run([sys.executable, "-I", "-X", "utf8", "-c", body], input=stdin, capture_output=True, timeout=20, check=False)
 
-    def timeout_probe(self, body: str) -> subprocess.CompletedProcess[bytes]:
+    def timeout_probe(self, body: str, survivor: Path) -> subprocess.CompletedProcess[bytes]:
+        """Observe the actual command's exit and every forwarder's cleanup at the timeout boundary."""
         # The deadline includes interpreter and forwarder startup, so output may
         # not arrive before timeout. Observe actual process cleanup instead.
         return self.probe(
@@ -33,6 +34,8 @@ class TestLiveProcess(unittest.TestCase):
             " child = popen(*args, **kwargs)\n spawned.append(child)\n return child\n"
             "subprocess.Popen = track\n" + body + "assert spawned, 'command was never launched'\n"
             "assert all(child.returncode is not None for child in spawned), 'timeout left a running process'\n"
+            + f"command, = (child for child in spawned if child.args[-1] == {str(survivor)!r})\n"
+            "assert command.returncode != 0, 'timed-out command completed normally'\n"
         )
 
     def test_inherited_and_asserted_streams_preserve_exact_bytes_and_stdin(self) -> None:
@@ -180,12 +183,9 @@ class TestLiveProcess(unittest.TestCase):
                 "except subprocess.TimeoutExpired as e:\n assert e.timeout == 1 and e.stdout is None\n"
                 "else: raise AssertionError('timeout was lost')\n"
             )
-            result = self.timeout_probe(body)
+            result = self.timeout_probe(body, root / "survived")
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(list(root.iterdir()), [])
-            # A later real command gives the killed child enough time to expose
-            # an incorrect timeout implementation without a separate sleep test.
-            run_command(sys.executable, ["-I", "-c", "import time;time.sleep(3)"])
             self.assertFalse((root / "survived").exists())
 
     def test_stderr_timeout_reaps_child_and_cleans_spool(self) -> None:
@@ -200,12 +200,9 @@ class TestLiveProcess(unittest.TestCase):
                 "except subprocess.TimeoutExpired as e:\n assert e.timeout == 1 and e.stderr is None\n"
                 "else: raise AssertionError('timeout was lost')\n"
             )
-            result = self.timeout_probe(body)
+            result = self.timeout_probe(body, root / "survived")
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             self.assertEqual(list(root.iterdir()), [])
-            # A later real command gives the killed child enough time to expose
-            # an incorrect timeout implementation without a separate sleep test.
-            run_command(sys.executable, ["-I", "-c", "import time;time.sleep(3)"])
             self.assertFalse((root / "survived").exists())
 
     def test_invalid_marker_options_never_launch(self) -> None:

@@ -16,6 +16,8 @@ __all__ = ["ReportCheck", "check_report"]
 
 @dataclass(frozen=True, slots=True)
 class ReportCheck:
+    """The report's initialization or freshness status and the output paths that need updating."""
+
     status: Literal["uninitialized", "current", "stale"]
     changed_paths: tuple[Path, ...] = ()
 

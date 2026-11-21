@@ -87,7 +87,7 @@ def test_external_update_cannot_begin_if_any_backup_fails(tmp_path: Path, monkey
 def test_successful_external_update_removes_backups(tmp_path: Path) -> None:
     first, new = tmp_path / "manifest", tmp_path / "lock"
     first.write_bytes(b"original\r\n")
-    with files.preserve_files((first, new)) as originals:
+    with files.preserve_files(iter((first, new))) as originals:
         assert originals == {first: b"original\r\n", new: None}
         backups = set(tmp_path.iterdir()) - {first}
         assert len(backups) == 1

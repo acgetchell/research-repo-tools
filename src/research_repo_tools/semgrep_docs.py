@@ -48,6 +48,8 @@ def _documentation(path: Path, *, preserve_source: bool = False) -> list[str]:
 
 @dataclass(frozen=True, slots=True)
 class RustBlock:
+    """An extracted Rust block with coordinates for mapping findings back to its source."""
+
     index: int
     start_line: int
     end_line: int

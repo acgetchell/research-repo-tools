@@ -7,6 +7,7 @@ method aliases, computed source, and computed newline values need code review.
 
 import argparse
 import ast
+import stat
 import sys
 import textwrap
 import warnings
@@ -16,10 +17,12 @@ ROOT = Path(__file__).resolve().parents[1]
 
 
 def argument(call: ast.Call, name: str, position: int, default: ast.expr | None = None) -> ast.expr | None:
+    """Find the named keyword or positional argument and use the supplied default when omitted."""
     return next((keyword.value for keyword in call.keywords if keyword.arg == name), call.args[position] if len(call.args) > position else default)
 
 
 def qualified_name(node: ast.expr, imports: dict[str, str]) -> str:
+    """Resolve an imported callable name or attribute chain for the newline checker."""
     if isinstance(node, ast.Name):
         return imports.get(node.id, node.id)
     if isinstance(node, ast.Attribute):
@@ -60,6 +63,7 @@ def newline_position(call: ast.Call, imports: dict[str, str]) -> int | None:
 
 
 def violations(source: str | bytes, filename: str, *, embedded: bool = False) -> list[str]:
+    """Find Python text writers that omit explicit newline behavior, including embedded source where selected."""
     try:
         with warnings.catch_warnings():
             # Regexes and other data strings can look like Python expressions.
@@ -96,20 +100,36 @@ def violations(source: str | bytes, filename: str, *, embedded: bool = False) ->
 
 
 def main() -> int:
+    """Scan the selected Python sources and report newline policy violations."""
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("paths", type=Path, nargs="*", default=[ROOT / name for name in ("src", "scripts", "tests")])
     args = parser.parse_args()
     paths: set[Path] = set()
     errors: list[str] = []
+
+    def scan_error(error: OSError) -> None:
+        """Record unreadable subtrees so a partial scan cannot pass the gate."""
+        errors.append(f"cannot enumerate Python sources: {error}")
+
     for path in args.paths:
-        if not path.exists():
+        try:
+            mode = path.stat().st_mode
+        except FileNotFoundError:
             errors.append(f"{path}: input does not exist")
-        elif path.is_dir():
-            paths.update(path.rglob("*.py"))
+            continue
+        except OSError as error:
+            scan_error(error)
+            continue
+        if stat.S_ISDIR(mode):
+            for directory, _, names in path.walk(on_error=scan_error):
+                paths.update(directory / name for name in names if name.endswith((".py", ".pyi")))
         else:
             paths.add(path)
     for path in sorted(paths):
         try:
+            if not stat.S_ISREG(path.stat().st_mode):
+                errors.append(f"{path}: Python source must be a regular file")
+                continue
             errors.extend(violations(path.read_bytes(), str(path)))
         except OSError as error:
             errors.append(f"{path}: cannot read Python source: {error}")

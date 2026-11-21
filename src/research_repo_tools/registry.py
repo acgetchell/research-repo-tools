@@ -5,16 +5,17 @@ import http.client
 import re
 import time
 import urllib.error
-import urllib.request
 from collections.abc import Mapping
 from dataclasses import dataclass
-from typing import Literal, override
+from typing import Literal
 from urllib.parse import urlsplit
 
 from packaging.utils import canonicalize_name
 
-from research_repo_tools._http import closing_http_errors
-from research_repo_tools._registry_requests import RegistryHTTPSHandler
+from research_repo_tools import _registry_requests
+from research_repo_tools._registry_requests import RegistryHTTPSHandler as RegistryHTTPSHandler
+from research_repo_tools._registry_requests import RegistryLookupError as RegistryLookupError
+from research_repo_tools._registry_requests import TransientRegistryError as TransientRegistryError
 from research_repo_tools.evidence import _load_json
 from research_repo_tools.release_validation import MAX_BYTES, distribution_names
 
@@ -22,33 +23,28 @@ LIMIT = 1024 * 1024
 _NOT_FOUND = object()
 
 
-class _NoRedirectHandler(urllib.request.HTTPRedirectHandler):
-    """Reject redirects before any request is made to a second endpoint."""
-
-    @override
-    def redirect_request(self, req, fp, code, msg, headers, newurl) -> None:
-        return None
-
-
-_OPENER = urllib.request.build_opener(RegistryHTTPSHandler(), _NoRedirectHandler())
-
-
 def pypi_destination(url: str) -> str:
     """Require an explicit HTTPS PyPI JSON API origin/prefix, without credentials."""
-    parsed = urlsplit(url)
+    if not isinstance(url, str) or any(character.isspace() or ord(character) < 32 or ord(character) == 127 for character in url):
+        raise ValueError("PyPI destination must be an HTTPS URL without whitespace or control characters")
+    try:
+        parsed = urlsplit(url)
+        port = parsed.port  # urlsplit defers port syntax and range checks until this property is read.
+    except ValueError:
+        raise ValueError("PyPI destination requires a valid HTTPS authority and port") from None
     if (
         parsed.scheme != "https"
         or not parsed.hostname
         or parsed.username is not None
         or parsed.password is not None
-        or parsed.query
-        or parsed.fragment
+        or "?" in url
+        or "#" in url
+        or parsed.netloc.endswith(":")
         or url.endswith("/")
-        or any(character.isspace() for character in url)
         or "\\" in url
     ):
         raise ValueError("PyPI destination must be an HTTPS origin/prefix without credentials, query, fragment or trailing slash")
-    if parsed.hostname == "pypi.org" and parsed.port in (None, 443):
+    if parsed.hostname == "pypi.org" and port in (None, 443):
         return parsed._replace(netloc="pypi.org").geturl()
     return url
 
@@ -102,16 +98,11 @@ def verify_published_distributions(package: str, version: str, files: Mapping[st
             download = pypi_destination(upload["url"])
             host = urlsplit(download).netloc
             if public_pypi:
-                from research_repo_tools._registry_requests import read_registry
-
-                if urlsplit(download).netloc != "files.pythonhosted.org":
+                if host != "files.pythonhosted.org":
                     raise RegistryLookupError("published distribution requires the exact files.pythonhosted.org origin")
-                payload = read_registry(download, limit=MAX_BYTES)
+                payload = _registry_requests.read_registry(download, limit=MAX_BYTES)
             else:
-                with closing_http_errors(), _OPENER.open(download, timeout=30) as response:
-                    payload = response.read(MAX_BYTES + 1)
-                    if response.status != 200 or response.url != download:
-                        raise RegistryLookupError("published distribution returned an unexpected status or redirect")
+                payload = _registry_requests.read_custom_index(download, limit=MAX_BYTES, metadata=False)
         except RegistryLookupError:
             raise
         except (OSError, http.client.HTTPException, ValueError) as error:
@@ -122,16 +113,10 @@ def verify_published_distributions(package: str, version: str, files: Mapping[st
     return result
 
 
-class RegistryLookupError(ValueError):
-    """Registry evidence is unavailable or malformed, rather than absent."""
-
-
-class TransientRegistryError(RegistryLookupError):
-    """A transient registry GET failure exhausted the bounded retry policy."""
-
-
 @dataclass(frozen=True, slots=True)
 class RegistryVersion:
+    """The result of an exact-version lookup, including publication status and an optional checksum."""
+
     registry: Literal["pypi", "crates-io"]
     package: str
     version: str
@@ -152,21 +137,13 @@ def identity(registry: str, package: str, version: str) -> None:
 
 
 def _json(url: str) -> object:
-    from research_repo_tools._registry_requests import _identity, read_registry
-
     parsed = urlsplit(url)
-    identity = _identity(parsed)
+    identity = _registry_requests._identity(parsed)
     try:
         if parsed.netloc in {"pypi.org", "crates.io"}:
-            payload = read_registry(url, limit=LIMIT)
+            payload = _registry_requests.read_registry(url, limit=LIMIT)
         else:
-            request = urllib.request.Request(
-                url, headers={"Accept": "application/json", "User-Agent": "research-repo-tools (https://github.com/acgetchell/research-repo-tools)"}
-            )
-            with closing_http_errors(), _OPENER.open(request, timeout=15) as response:
-                payload = response.read(LIMIT + 1)
-                if response.status != 200 or response.url != url:
-                    raise RegistryLookupError("registry returned an unexpected status or redirect")
+            payload = _registry_requests.read_custom_index(url, limit=LIMIT, metadata=True)
     except urllib.error.HTTPError as error:
         if error.code == 404 and error.url == url:
             return _NOT_FOUND

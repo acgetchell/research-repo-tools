@@ -54,6 +54,7 @@ class TagSource:
 
     @property
     def tag(self) -> str:
+        """Return the release tag without its Git ref prefix."""
         return self.ref.removeprefix("refs/tags/")
 
 

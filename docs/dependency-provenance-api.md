@@ -59,7 +59,8 @@ Custom indexes, missing wheel artifacts, or ambiguous installed wheel tags fail
 closed. Package directories are inventoried for added code, including files
 omitted from RECORD. In complete-environment checks, shared namespace files are
 verified against their owning distributions; unrecorded files still fail.
-Symlinked package directories remain unsupported.
+Windows RECORD entries may use forward or backward slashes. Package directory
+symlinks, Windows junctions, and unreadable subdirectories prevent verification.
 
 `prepare_dependency_builds(root)` rebuilds explicitly selected sdists using
 hash-locked build-tool wheels and issues authenticated local receipts. It then
@@ -68,7 +69,9 @@ wheel bytes to the live manifest, lock, policy, builder, interpreter and platfor
 It rejects unauthenticated receipt content and does not import installed dependencies.
 Complete-environment checks support `purelib`, `platlib`, environment-relative
 `data` and byte-preserving native script relocation for both published and
-authenticated source-built wheels. Other relocation schemes fail closed. See the
+authenticated source-built wheels. Relocation applies only to the wheel's own
+top-level `.data` directory. Resources such as `assets/model.data` are checked
+against their installed bytes at their original paths. Other relocation schemes fail closed. See the
 [source-build trust boundary](../README.md#source-built-python-dependencies).
 Installer-generated RECORD,
 bytecode and entry-point wrappers are not publication evidence; package payloads,

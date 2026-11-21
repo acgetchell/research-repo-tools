@@ -102,9 +102,11 @@ def test_isolated_consumer_sanitizes_before_first_git_call(tmp_path: Path, copie
     tests = Path(__file__).resolve().parents[1]
     suite = tests / "validation/public_validation_consumer.py"
     if copied:
-        shutil.copyfile(suite, tmp_path / suite.name)
-        shutil.copyfile(tests / "fixture_environment.py", tmp_path / "fixture_environment.py")
-        suite = tmp_path / suite.name
+        copied_suite = tmp_path / "tests/validation" / suite.name
+        copied_suite.parent.mkdir(parents=True)
+        shutil.copyfile(suite, copied_suite)
+        shutil.copyfile(tests / "fixture_environment.py", tmp_path / "tests/fixture_environment.py")
+        suite = copied_suite
     child = """import os, runpy, sys
 from pathlib import Path
 from unittest.mock import patch

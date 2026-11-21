@@ -9,6 +9,8 @@ from research_repo_tools.evidence import _digest, _load_json, deterministic_json
 
 __all__ = ["CompletedReview", "ConsentRequired", "FailedReview", "ReviewApproval", "ReviewDenied", "ReviewQuote", "ReviewResult", "UncertainReview"]
 
+_MAX_EVENT_BYTES = 1024 * 1024
+
 
 @dataclass(frozen=True, slots=True)
 class ReviewQuote:
@@ -22,7 +24,7 @@ class ReviewQuote:
     payload: bytes
 
     def __post_init__(self) -> None:
-        if not isinstance(self.payload, bytes) or len(self.payload) > 1024 * 1024:
+        if not isinstance(self.payload, bytes) or len(self.payload) > _MAX_EVENT_BYTES:
             raise ValueError("CodeRabbit quote must be bytes within the byte limit")
         data = _load_json(self.payload, "CodeRabbit quote")
         if not isinstance(data, dict) or data.get("type") != "action_required" or data.get("status") != "awaiting_confirmation":
@@ -30,6 +32,7 @@ class ReviewQuote:
 
     @property
     def identity(self) -> str:
+        """Return the SHA-256 of the serialized provider quote."""
         return sha256(self.payload)
 
     def terms(self) -> tuple[int, int, str]:
@@ -74,6 +77,8 @@ class ReviewApproval:
 
 @dataclass(frozen=True, slots=True)
 class CompletedReview:
+    """The provider's finding count, reviewed files, and reuse or skip status."""
+
     findings: int
     reviewed_files: tuple[str, ...]
     reused: bool = False
@@ -82,6 +87,8 @@ class CompletedReview:
 
 @dataclass(frozen=True, slots=True)
 class ConsentRequired:
+    """A provider quote with the pending-record details available for an approval decision."""
+
     quote: ReviewQuote
     pending_path: str | None = None
     pending_identity: str | None = None
@@ -96,12 +103,16 @@ class ConsentRequired:
 
 @dataclass(frozen=True, slots=True)
 class FailedReview:
+    """Exit status and diagnostic for a review that did not complete successfully."""
+
     exit_code: int
     reason: str
 
 
 @dataclass(frozen=True, slots=True)
 class ReviewDenied:
+    """The identity of a pending review whose quote was declined."""
+
     pending_identity: str
 
 
@@ -125,16 +136,17 @@ class AgentEvents:
         self.failure: str | None = None
 
     def feed(self, chunk: bytes) -> None:
+        """Buffer a stream chunk and parse complete bounded CodeRabbit events."""
         self.pending.extend(chunk)
         while b"\n" in self.pending:
             line, _, rest = self.pending.partition(b"\n")
             self.pending = bytearray(rest)
             self._line(bytes(line))
-        if len(self.pending) > 1024 * 1024:
+        if len(self.pending) > _MAX_EVENT_BYTES:
             raise ValueError("CodeRabbit event exceeds the byte limit")
 
     def _line(self, line: bytes) -> None:
-        if len(line) > 1024 * 1024:
+        if len(line) > _MAX_EVENT_BYTES:
             raise ValueError("CodeRabbit event exceeds the byte limit")
         if not line.strip():
             return
@@ -154,6 +166,7 @@ class AgentEvents:
             self.terminal = data
 
     def finish(self, exit_code: int) -> CompletedReview | ConsentRequired | FailedReview:
+        """Classify the process exit and observed events as completed, pending consent, or failed."""
         exit_code = exit_code if exit_code >= 0 else 128 - exit_code
         if self.pending:
             self._line(bytes(self.pending))

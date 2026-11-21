@@ -15,6 +15,8 @@ _COMMAND = re.compile(r"(?<!\\)\\date(?![A-Za-z])\s*\{([^{}]*)\}")
 
 @dataclass(frozen=True, slots=True)
 class PaperDate:
+    """An English TeX date and its matching timezone-aware midnight UTC."""
+
     raw: str
     instant: datetime
 
@@ -29,6 +31,7 @@ class PaperDate:
 
     @classmethod
     def from_raw(cls, raw: str) -> Self:
+        """Parse a calendar date with an English month name at midnight UTC."""
         match = _DATE.fullmatch(raw)
         if match is None or match[1] not in _MONTHS:
             raise ValueError(f"paper date must use 'Month day, year' with an English month: {raw!r}")
@@ -39,6 +42,7 @@ class PaperDate:
 
     @property
     def source_date_epoch(self) -> int:
+        """Return the paper date as whole seconds since the Unix epoch at midnight UTC."""
         # Arithmetic avoids platform time_t limits for dates before 1970.
         return (self.instant - datetime(1970, 1, 1, tzinfo=UTC)).days * 86400
 
@@ -63,6 +67,7 @@ def parse_source_date(source: str) -> PaperDate:
 
 
 def read_source_date(path: Path) -> PaperDate:
+    """Read a UTF-8 paper source date and include the filename in parse or read errors."""
     try:
         return parse_source_date(path.read_text(encoding="utf-8"))
     except (OSError, UnicodeError, ValueError) as error:

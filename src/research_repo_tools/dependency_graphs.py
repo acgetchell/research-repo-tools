@@ -28,6 +28,7 @@ from research_repo_tools.dependency_sources import (
     verify_source,
 )
 from research_repo_tools.evidence import _load_json
+from research_repo_tools.toml_source import inherits_workspace
 
 PYPI = "https://pypi.org/simple"
 CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
@@ -35,6 +36,8 @@ CRATES_IO = "registry+https://github.com/rust-lang/crates.io-index"
 
 @dataclass(frozen=True, slots=True)
 class LockedDependency:
+    """A resolved package source and version with the artifact identities recorded in its lockfile."""
+
     source: Source
     version: str
     artifacts: tuple[tuple[str, str, int], ...] = ()
@@ -43,6 +46,8 @@ class LockedDependency:
 
 @dataclass(frozen=True, slots=True)
 class DependencyGraph:
+    """A project's locked dependencies and owned packages bound to the inputs captured during inspection."""
+
     project: DependencyProject
     root: Path
     snapshot: InputSnapshot
@@ -89,6 +94,7 @@ def _cargo_dependencies(document: dict[str, object]) -> Iterator[tuple[str, dict
 
 
 def _check_configuration(root: Path, ecosystem: str, snapshot: InputSnapshot) -> None:
+    """Reject source-affecting overrides using the same captured inputs as the graph."""
     prefixes = ("UV_",) if ecosystem == "python" else ("CARGO_", "RUSTC", "RUSTDOC", "RUSTUP_TOOLCHAIN")
     allowed = {
         "UV_CACHE_DIR",
@@ -181,7 +187,7 @@ def inspect_project(checkout: Path, project: DependencyProject, *, release: bool
             raise ValueError("release-owned packages must be declared members of this workspace")
         data = table(documents[path].get("project" if project.ecosystem == "python" else "package"), "release-owned package")
         version = data.get("version")
-        if project.ecosystem == "cargo" and version == {"workspace": True}:
+        if project.ecosystem == "cargo" and inherits_workspace(version):
             version = table(table(root_document.get("workspace"), "workspace").get("package"), "workspace.package").get("version")
         name = package_name(project.ecosystem, string(data.get("name"), "owned package name"))
         pin = RegistryRelease(project.ecosystem, name, string(version, "owned package version"))
@@ -212,7 +218,7 @@ def inspect_project(checkout: Path, project: DependencyProject, *, release: bool
                 if requirement.url and release:
                     raise ValueError("Python release dependency declarations cannot use direct URLs, Git or paths")
             for name, raw in table(uv.get("sources", {}), "uv sources").items():
-                if release and not (canonicalize_name(name) in owned_names and raw == {"workspace": True}):
+                if release and not (canonicalize_name(name) in owned_names and inherits_workspace(raw)):
                     raise ValueError("Python release source overrides must select release-owned workspace packages only")
         else:
             patches = table(document.get("patch", {}), "Cargo patches")

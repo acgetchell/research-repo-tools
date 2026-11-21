@@ -33,6 +33,8 @@ type _Sampler = Callable[[], tuple[tuple[tuple[str, CompleteSample], ...], tuple
 
 @dataclass(frozen=True, slots=True)
 class AcquisitionSuite:
+    """A named benchmark suite with a measurement contract and release availability interval."""
+
     name: str
     contract: str
     measurement: CompleteMeasurementPlan
@@ -68,6 +70,7 @@ class AcquisitionSuite:
         return (self.since is None or version >= _tag_version(self.since)) and (self.before is None or version < _tag_version(self.before))
 
     def decision(self, release: str, source: str) -> dict[str, object]:
+        """Record whether the release falls within the suite's declared availability interval."""
         available = self.available(release)
         return {
             "state": "available" if available else "unavailable",
@@ -126,14 +129,17 @@ class SuiteMeasurementPlan:
 
     @property
     def schema(self) -> int:
+        """Return the acquisition schema selected by the presence of a trial schedule."""
         return 6 if self.schedule is not None else 5
 
     @property
     def backend(self) -> str:
+        """Return the source-export backend used for suite acquisition."""
         return "export"
 
     @property
     def harness_mode(self) -> str:
+        """Return the harness mode shared by the declared suites."""
         return self.suites[0].measurement.harness_mode
 
     @property
@@ -149,10 +155,12 @@ class SuiteMeasurementPlan:
 
     @property
     def sources(self) -> tuple[str, ...]:
+        """Return the sorted union of current-phase source patterns across suites."""
         return self.measurement.sources
 
     @property
     def harness(self) -> tuple[str, ...]:
+        """Return the sorted union of harness patterns across suites."""
         return self.measurement.harness
 
     def validate_release(self, release: str) -> None:
@@ -162,6 +170,7 @@ class SuiteMeasurementPlan:
                 suite.measurement.measurement.validate_release(release)
 
     def document(self) -> dict[str, Any]:
+        """Represent the complete acquisition policy as a schema-versioned JSON-compatible document."""
         return {
             "schema": self.schema,
             **({"schedule": self.schedule.document(), "outputs": list(self.outputs)} if self.schedule else {}),
@@ -182,6 +191,7 @@ class SuiteMeasurementPlan:
 
 
 def parse_suite_plan(document: dict[str, Any]) -> SuiteMeasurementPlan:
+    """Validate the suite declarations and schema-specific schedule and output options."""
     raw = _table(document, "suite measurement", {"schema", "suites"}, {"schedule", "outputs", "preparation-storage-bytes"})
     if type(raw["schema"]) is not int or raw["schema"] not in {5, 6} or not isinstance(raw["suites"], list):
         raise ValueError("suite measurement requires schema 5 or 6 and a suite array")
@@ -279,7 +289,7 @@ def measure_suites(
     verify: Callable[[], None] | None = None,
 ) -> Evidence:
     """Resolve availability before native commands and resume whole complete units."""
-    reporter = progress or ProgressReporter()
+    reporter = ProgressReporter() if progress is None else progress
     try:
         if plan.schedule is not None:
             from research_repo_tools.scheduled_runs import measure_schedule
@@ -319,7 +329,7 @@ def _measure_suites(
         raise ValueError("first-release acquisition requires one working-tree acquisition without a trial schedule")
     if first:
         phase_order = ("current",)
-    reporter = progress or ProgressReporter()
+    reporter = ProgressReporter() if progress is None else progress
     with reporter.stage("availability"):
         captures = {
             **({"baseline": capture_source(root, pair.baseline)} if isinstance(pair, ReleasePair) else {}),

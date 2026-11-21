@@ -3,6 +3,7 @@
 import ast
 import re
 import sys
+from collections.abc import Iterable
 from pathlib import Path
 from warnings import catch_warnings
 
@@ -40,7 +41,8 @@ def _timeouts(source: str, number: int) -> tuple[list[Diagnostic], list[Diagnost
     return warnings, []
 
 
-def advise(settings: Config, paths: list[Path], *, strict: bool = False, timeout: int = 30) -> int:
+def advise(settings: Config, paths: Iterable[Path], *, strict: bool = False, timeout: int = 30) -> int:
+    """Report configured readability advice for selected Python notebooks without rewriting them."""
     if type(timeout) is not int or timeout <= 0:
         raise ValueError("notebook advice timeout must be a positive integer")
     notebooks = python_notebooks(paths)

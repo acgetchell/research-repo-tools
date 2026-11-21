@@ -139,6 +139,32 @@ class TestToolingRuntime(unittest.TestCase):
             ],
         )
 
+    def test_pinned_runtime_flags_reach_python_independently_of_option_order(self):
+        for group_options in (
+            ["--isolated-runtime", "--runtime-policy", "runtime.json"],
+            ["--runtime-policy=runtime.json", "--isolated-runtime"],
+        ):
+            arguments = ["--config", "consumer.toml", "release", *group_options, "--runtime-policy-sha256", "a" * 64, "dependencies"]
+            with self.subTest(group_options=group_options):
+                self.assertEqual(runtime.run_tooling(runtime.ReleasePin(VERSION), tuple(arguments), root=self.root), 7)
+                command = self.launch.call_args.args[0]
+                self.assertEqual(
+                    command[command.index("python") :], ["python", "-I", "-B", "-m", "research_repo_tools", "--root", str(self.root.resolve()), *arguments]
+                )
+
+    def test_forwarded_arguments_cannot_select_the_bootstrap_interpreter(self):
+        arguments = ("--config=release", "toolchain", "run", "example", "--", "release", "--isolated-runtime")
+        runtime.run_tooling(runtime.ReleasePin(VERSION), arguments, root=self.root)
+        command = self.launch.call_args.args[0]
+        self.assertEqual(command[command.index("--from") + 2 :], ["research-repo-tools", "--root", str(self.root.resolve()), *arguments])
+
+    def test_timeout_diagnostic_omits_private_child_arguments(self):
+        self.launch.side_effect = subprocess.TimeoutExpired(["uvx", "private-argument"], 7200)
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(runtime.main([VERSION, "--dry-run"]), 1)
+        self.assertIn("7200 seconds", errors.getvalue())
+        self.assertNotIn("private-argument", errors.getvalue())
+
     def test_optional_github_credentials_are_sent_only_to_the_api(self):
         for lookup, primary, fallback, expected in (
             ("lookup-fixture", "primary-fixture", "fallback-fixture", "Bearer lookup-fixture"),
@@ -174,6 +200,20 @@ class TestToolingRuntime(unittest.TestCase):
                     environment = self.launch.call_args.kwargs["env"]
                     self.assertFalse(any(key.upper() == "RRT_GITHUB_LOOKUP_TOKEN" for key in environment))
                     self.assertEqual(environment["GH_TOKEN"], "explicit-tooling-fixture")
+        self.opener.assert_not_called()
+
+    def test_saved_metadata_obeys_the_same_byte_limit_as_the_registry(self):
+        metadata = Path(self.enterContext(tempfile.TemporaryDirectory())) / "release.json"
+        data = json.dumps(self.release).encode().ljust(1024 * 1024)
+        metadata.write_bytes(data)
+        args = [VERSION, "--metadata-file", str(metadata), "--root", str(self.root), "--dry-run"]
+        self.assertEqual(runtime.main(args), 7)
+        self.launch.reset_mock()
+        metadata.write_bytes(data + b" ")
+        with contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(runtime.main(args), 1)
+        self.assertIn("byte limit", errors.getvalue())
+        self.launch.assert_not_called()
         self.opener.assert_not_called()
 
     def test_malformed_lookup_credentials_are_rejected_without_disclosing_them(self):
@@ -266,6 +306,9 @@ class TestToolingRuntime(unittest.TestCase):
             self.responses[url] = json.dumps(document).encode()
             with self.subTest(document=document), self.assertRaises(ValueError):
                 runtime.run_tooling(runtime.ReleasePin(VERSION), ("toolchain", "check"), root=self.root)
+        self.responses[url] = json.dumps(self.release).removesuffix("}").encode() + b',"extra":1e9999}'
+        with self.assertRaisesRegex(ValueError, "non-finite"):
+            runtime.run_tooling(runtime.ReleasePin(VERSION), ("toolchain", "check"), root=self.root)
         self.launch.assert_not_called()
 
     def test_unverified_or_wrong_project_commit_never_launches(self):
