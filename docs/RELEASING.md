@@ -84,6 +84,8 @@ and verify each finding against the release branch.
 
 Also regenerate if another changelog input changes, such as the prepared release
 date. Review any generated diff and commit it as `chore(release): prepare $TAG notes`.
+If the release metadata or generated notes have changed since the earlier check,
+rerun `just release-version-check` on the final commit before pushing.
 After any edits, run `just security`, `just ci`, and `just review origin/main`
 again on the final commit before pushing.
 See the [PR push requirements](../AGENTS.md).
