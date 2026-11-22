@@ -198,5 +198,5 @@ Source reuse never authorizes promotion of a PR-built package containing another
 commit. Native Cargo publication, `.cargo_vcs_info.json`, package metadata,
 signed archive evidence and this package's wheel/sdist build-once promotion keep
 their exact-release-commit contracts. See [release evidence](release-evidence-api.md)
-and [Cargo publication policy](cargo-publication-policy.md). Real consumer
+and [Cargo publication policy](publishing-api.md#cargo-publication-policy). Real consumer
 migrations remain separate from implementation and publication of this package.

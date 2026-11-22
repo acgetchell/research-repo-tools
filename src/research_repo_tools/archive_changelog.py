@@ -551,6 +551,9 @@ def archive_changelog(
     _write_texts_transactionally(plan_archives(changelog_path, text, archive_dir))
 
 
+MINOR_ARCHIVE = re.compile(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.md")
+
+
 def plan_archives(
     changelog_path: Path,
     text: str,
@@ -558,11 +561,12 @@ def plan_archives(
     *,
     formatter: Callable[[str, Path], str] | None = None,
     retained_histories: Callable[[str], Iterator[str]] | None = None,
+    rebuild: bool = False,
 ) -> list[tuple[Path, str]]:
     """Plan root and archive replacements from a candidate without writing files.
 
-    Generation and standalone archiving share the same rotation, retained-history
-    checks, and link relocation. Callers publish the complete plan together.
+    Ordinary rotation checks retained history. A rebuild renders the archives
+    from the supplied complete history. The caller handles obsolete archives.
     """
     if archive_dir is None:
         archive_dir = changelog_path.parent / _DEFAULT_ARCHIVE_DIR
@@ -577,7 +581,7 @@ def plan_archives(
     parsed = parse_changelog(text)
 
     if not parsed.version_blocks:
-        return _existing_archive_updates(archive_dir)
+        return [] if rebuild else _existing_archive_updates(archive_dir)
 
     groups = group_by_minor(parsed.version_blocks)
     minor_keys = list(groups.keys())
@@ -586,7 +590,7 @@ def plan_archives(
     active_minor = minor_keys[0]
 
     # Render every minor except the active one before publishing any output.
-    archived_minors = [path.stem for path in archive_dir.glob("*.md") if re.fullmatch(r"(?:0|[1-9]\d*)\.(?:0|[1-9]\d*)", path.stem)]
+    archived_minors = [] if rebuild else [path.stem for path in archive_dir.glob("*.md") if MINOR_ARCHIVE.fullmatch(path.name)]
     planned_writes: list[tuple[Path, str]] = []
     relocation = _archive_dir_link_prefix(changelog_path.parent, archive_dir, warn_outside=False)
 
@@ -606,20 +610,24 @@ def plan_archives(
     for minor in minor_keys[1:]:
         archive_path = archive_dir / f"{minor}.md"
         blocks, definitions = relocate(groups[minor], link_defs)
-        candidate = _merge_archive(
-            archive_path,
-            minor,
-            blocks,
-            definitions,
-            formatter,
-            retained_archives if retained_histories is not None else None,
-            keep_heading_targets=keep_heading_targets,
+        candidate = (
+            _render_archive(minor, blocks, definitions, keep_heading_targets=keep_heading_targets)
+            if rebuild
+            else _merge_archive(
+                archive_path,
+                minor,
+                blocks,
+                definitions,
+                formatter,
+                retained_archives if retained_histories is not None else None,
+                keep_heading_targets=keep_heading_targets,
+            )
         )
         planned_writes.append((archive_path, candidate))
         archived_minors.append(minor)
 
     if not archived_minors:
-        return _existing_archive_updates(archive_dir)
+        return [] if rebuild else _existing_archive_updates(archive_dir)
 
     archive_dir_rel = _archive_dir_link_prefix(archive_dir, changelog_path.parent)
 
@@ -635,7 +643,8 @@ def plan_archives(
 
     planned_writes.append((changelog_path, root_text))
     planned_targets = {path for path, _text in planned_writes}
-    planned_writes.extend(_existing_archive_updates(archive_dir, planned_targets))
+    if not rebuild:
+        planned_writes.extend(_existing_archive_updates(archive_dir, planned_targets))
     return planned_writes
 
 

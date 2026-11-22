@@ -27,6 +27,7 @@ __all__ = [
     "RUN_SCHEMA_V4",
     "RUN_SCHEMA_V5",
     "RUN_SCHEMA_V6",
+    "RUN_SCHEMA_V7",
     "ratio_incompatibilities",
     "CompleteCase",
     "CompletePolicy",
@@ -50,7 +51,8 @@ RUN_SCHEMA_V3 = "research-repo-tools/complete-run/v3"
 RUN_SCHEMA_V4 = "research-repo-tools/complete-run/v4"
 RUN_SCHEMA_V5 = "research-repo-tools/complete-run/v5"
 RUN_SCHEMA_V6 = "research-repo-tools/complete-run/v6"
-RUN_SCHEMAS = (RUN_SCHEMA, RUN_SCHEMA_V2, RUN_SCHEMA_V3, RUN_SCHEMA_V4, RUN_SCHEMA_V5, RUN_SCHEMA_V6)
+RUN_SCHEMA_V7 = "research-repo-tools/complete-run/v7"
+RUN_SCHEMAS = (RUN_SCHEMA, RUN_SCHEMA_V2, RUN_SCHEMA_V3, RUN_SCHEMA_V4, RUN_SCHEMA_V5, RUN_SCHEMA_V6, RUN_SCHEMA_V7)
 
 
 def _array(value: object, context: str) -> list[Any]:
@@ -439,7 +441,7 @@ def validate_run_evidence(evidence: Evidence) -> "CompleteRun | SuiteRun | Sched
         from research_repo_tools.scheduled_runs import parse_scheduled_run
 
         return parse_scheduled_run(evidence)
-    if evidence.payload_schema in {RUN_SCHEMA_V4, RUN_SCHEMA_V6}:
+    if evidence.payload_schema in {RUN_SCHEMA_V4, RUN_SCHEMA_V6, RUN_SCHEMA_V7}:
         from research_repo_tools.suite_runs import parse_suite_run
 
         return parse_suite_run(evidence)
@@ -517,7 +519,7 @@ def ratio_incompatibilities(evidence: Evidence) -> tuple[str, ...]:
     Valid v1/v2 evidence returns an empty tuple without assessing ratio eligibility.
     """
     run = validate_run_evidence(evidence)
-    if run.schema in {RUN_SCHEMA_V4, RUN_SCHEMA_V5, RUN_SCHEMA_V6}:
+    if run.schema in {RUN_SCHEMA_V4, RUN_SCHEMA_V5, RUN_SCHEMA_V6, RUN_SCHEMA_V7}:
         return ("suite evidence requires observation-level comparison eligibility",)
     if run.schema != RUN_SCHEMA_V3:
         return ()
@@ -750,7 +752,7 @@ def _render_run_v2(
         from research_repo_tools.scheduled_runs import render_scheduled_run
 
         return render_scheduled_run(evidence, title=title, links=links, identity=run_identity(evidence))
-    if evidence.payload_schema in {RUN_SCHEMA_V4, RUN_SCHEMA_V6}:
+    if evidence.payload_schema in {RUN_SCHEMA_V4, RUN_SCHEMA_V6, RUN_SCHEMA_V7}:
         from research_repo_tools.suite_runs import render_suite_run
 
         return render_suite_run(evidence, title=title, links=links, identity=run_identity(evidence))

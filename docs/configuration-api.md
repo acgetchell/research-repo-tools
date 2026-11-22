@@ -137,7 +137,7 @@ errors return nonzero; argument errors return `2`. Help and version output are
 successful exits. Diagnostics use stderr, while reports and generated content
 use stdout. Human-readable diagnostics and progress messages are not a structured
 machine API. Template output and extracted release notes are intended for reuse.
-Notebook inspection additionally supports a [versioned JSON inventory](notebook-inspection.md).
+Notebook inspection additionally supports a [versioned JSON inventory](notebooks-api.md#notebook-inspection-schema).
 Completed inventories may report repair problems with status zero; advisory
 warnings fail only when strict mode is enabled. These review commands do not
 replace notebook validation.
@@ -146,7 +146,7 @@ Review commands require Git and an externally installed, authenticated CodeRabbi
 CLI. `review branch --base origin/main` verifies the cached base against the remote;
 `review uncommitted` does not query a remote. Both use the configured consumer root
 and require its `AGENTS.md` and exactly one CodeRabbit YAML configuration. See the
-[review contract](review-api.md) and [consumer recipes](../README.md#coderabbit-reviews).
+[review contract](review-api.md) and [consumer recipes](RUNNING_CHECKS.md#coderabbit-review).
 CodeRabbit output streams without a timeout by default; branch/uncommitted accept
 `--pending PATH` and `--timeout SECONDS`. `review deny PENDING` consumes a quote
 without a provider call. `review resume PENDING` requires the exact `--approve`

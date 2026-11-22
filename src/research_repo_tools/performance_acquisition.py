@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from pathlib import Path
 
+from research_repo_tools.benchmark_series import SeriesBaseline, SeriesPair, select_series
 from research_repo_tools.evidence import publish_evidence
 from research_repo_tools.files import _validate_distinct_paths
 from research_repo_tools.measurement import MeasurementConfig, _measurement_backend, load_measurement, measure_pair
@@ -19,7 +20,7 @@ __all__ = ["measure_and_retain"]
 def measure_and_retain(
     root: Path,
     configuration_path: str,
-    pair: ReleasePair | FirstRelease,
+    pair: ReleasePair | FirstRelease | SeriesBaseline,
     *,
     payload: str,
     manifest: str,
@@ -39,12 +40,25 @@ def measure_and_retain(
     configuration_bytes = _path(root, configuration_path).read_bytes()
     configuration = load_measurement(root, configuration_path)
     selected_backend = _measurement_backend(configuration, backend)
+
+    def verify_history() -> None:
+        if isinstance(pair, (SeriesBaseline, SeriesPair)):
+            if read_release is None or not isinstance(configuration, SuiteMeasurementPlan) or configuration.benchmark_series is None:
+                raise ValueError("series acquisition requires a history reader and declared series")
+            if not working_tree or (isinstance(pair, SeriesBaseline) != (configuration.schedule is None)):
+                raise ValueError("series acquisition must use the prepared working tree and matching trial policy")
+            if select_series(root, configuration_path, configuration, pair.current, read_release) != pair:
+                raise ValueError("series history changed after preparation")
+        elif isinstance(pair, FirstRelease):
+            assert read_release is not None
+            require_first_release_history(read_release)
+
     if isinstance(pair, FirstRelease):
         if read_release is None or not isinstance(configuration, SuiteMeasurementPlan) or configuration.schedule is not None or not working_tree:
             raise ValueError("first release requires a release history reader and an unscheduled working-tree suite declaration")
-        require_first_release_history(read_release)
-    elif read_release is not None:
+    elif read_release is not None and not isinstance(pair, (SeriesBaseline, SeriesPair)):
         raise ValueError("first-release history reader is only used for a first release")
+    verify_history()
     if isinstance(configuration, SuiteMeasurementPlan) and configuration_path in configuration.outputs:
         raise ValueError("measurement declaration cannot be an output exception")
     if selected_backend == "worktree" and not allow_git_mutations:
@@ -101,12 +115,11 @@ def measure_and_retain(
         # even use the same path kinds/spellings across independently valid trees.
         for capture in captured_references.values():
             _validate_distinct_paths((*targets, *(root / name for name, _, _ in capture.files)))
-    if isinstance(pair, FirstRelease):
+    if not isinstance(pair, ReleasePair):
         assert isinstance(configuration, SuiteMeasurementPlan) and read_release is not None
         retained = _measure_suites(
             root, configuration, pair, working_tree=True, checkpoint=checkpoint_path, resume=resume, progress=reporter, verify=verify_controller
         )
-        require_first_release_history(read_release)
     else:
         retained = measure_pair(
             root,
@@ -120,6 +133,7 @@ def measure_and_retain(
             resume=resume,
             progress=reporter,
         )
+    verify_history()
     reports = {}
     if report:
         from research_repo_tools.complete_runs import RUN_SCHEMAS, render_run

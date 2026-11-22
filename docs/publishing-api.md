@@ -4,6 +4,7 @@ Part of the [supported interface contract](api.md). Use the [task guides](../REA
 for setup and ordinary workflows.
 
 - [Reviewed registry publication API](#reviewed-registry-publication-api)
+- [Cargo publication policy](#cargo-publication-policy)
 - [Python release API](#python-release-api)
 
 ## Reviewed registry publication API
@@ -36,7 +37,7 @@ accept the original `ReleaseTarget` as optional `target` to
 bind the configured repository/tag and remote commit to its captured release ID.
 The event gate also requires its event ID to match this target. Final verification
 checks assertions before and after registry verification and rejects changed
-release IDs. See the [publication workflow](../README.md#releases) for CLI usage.
+release IDs. See the [consumer release procedure](../src/research_repo_tools/templates/RELEASING.md) for CLI usage.
 Omitting the target preserves existing callers and binds the ID observed at entry
 for that verification operation.
 
@@ -155,6 +156,64 @@ prepared version without a tag argument. `tag TAG [--commit SHA]` and
 checks themselves. Tag creation reports the commit and annotation.
 The low-level CLI also retains untagged `release check` for metadata inspection.
 
+## Cargo publication policy
+
+The shared tooling supports **native Cargo publication**. It does not provide a
+custom exact-archive registry uploader. The evidence core
+supports retained-archive verification and reproduction without claiming that
+native publication uploads those retained bytes.
+
+The supported [Cargo publish interface](https://doc.rust-lang.org/cargo/commands/cargo-publish.html)
+creates an archive from the checkout before uploading. Its `--no-verify` option
+skips build verification; it does not accept an existing archive or suppress
+packaging. A checked reproduction can establish equal bytes before approval or
+token acquisition, but Cargo still packages again during actual publication.
+
+The [registry web API](https://doc.rust-lang.org/cargo/reference/registry-web-api.html#publish)
+accepts separate publication metadata and archive bytes, so an exact-byte
+uploader is technically feasible. Maintaining it would add responsibility for
+metadata/archive agreement, Cargo's publication restrictions, renamed and
+target-specific dependencies, features and registry mappings, request framing,
+short-lived credentials, limits, errors, uncertain upload outcomes and registry
+checksum verification. Archive metadata inspection alone does not preserve all
+of Cargo's publication checks.
+
+The [packaged Cargo workflow](../src/research_repo_tools/templates/publish-crates.yml)
+uses the validated `.crate` attached to the immutable GitHub Release as its
+checksum reference. Attach the archive to the draft before publishing on GitHub.
+The workflow checks that attachment before requesting a token and fails
+verification if crates.io reports a different SHA-256 after upload. GitHub
+publication and registry deployment approval remain separate steps.
+
+The bounded alternative review included the upstream command and registry
+interfaces, [cargo-release's publication configuration](https://github.com/crate-ci/cargo-release/blob/main/docs/reference.md),
+and [release-plz's release operation](https://release-plz.dev/docs/usage/release).
+Both orchestration tools document using Cargo publication. This review did not
+establish a supported existing-archive path with equivalent metadata and
+publication guarantees; it does not claim an exhaustive survey of all uploaders.
+
+| Option | Benefit | Maintenance and guarantee boundary |
+| --- | --- | --- |
+| Native Cargo with signed source validation | Retains Cargo checks and established publishing workflow | Signed source validation does not attest archive bytes |
+| Native Cargo with retained-archive checks and reproduction | Verifies original CI archive identity and equal local reproduction before credentials | Final native upload still repackages |
+| Separate exact-archive uploader | Could keep consumer packaging outside the credential-bearing step and upload the retained bytes | Requires a separately reviewed, supported metadata/upload contract and checksum recovery |
+
+Packaging, download and verification costs are **unmeasured**. There is no
+performance claim or assumed savings. The potential provenance benefit does not
+justify taking ownership of an additional publishing client. Consumer
+native/scientific/feature checks, approval, registry absence,
+tag/version/commit checks and post-upload visibility remain required.
+
+A future proposal may reopen the uploader decision with a maintained supported
+implementation or a bounded implementation design. It must preserve Cargo's
+checks, bind exact archive and publication-metadata digests through validation
+and approval, upload with short-lived credentials without executing consumer
+code, and confirm the registry checksum. On an upload timeout, inspect registry
+state and checksum before deciding recovery; never retry blindly. A speed claim
+would additionally require representative packaging/download/verification
+measurements. Consumers must retain the supported native publication path until
+any replacement is implemented, published, and integration-tested.
+
 ## Python release API
 
 `research_repo_tools.releases` is a supported public interface. All roots are
@@ -247,12 +306,8 @@ target release notes afterwards; `final_changelog=True` and final-release checks
 still require the actual target heading. Previewing remains non-mutating and
 `apply_release(plan)` retains the normal stale-input and rollback guarantees.
 
-The CLI equivalents are `research-repo-tools release update v0.1.0
---first-release --date 2026-09-25 --dry-run` and the same command without
-`--dry-run` to apply. Add `--offline` only when empty history has been reviewed.
-The template's `just release-first TAG DATE` uses online discovery. For subsequent
-releases, `just update-version TAG` discovers the predecessor;
-`--previous-release PREVIOUS --date DATE` selects explicit inputs without discovery.
+For the online recipe, offline preview and final changelog check, see
+[first-release preparation](UPDATING_RELEASE_METADATA.md#first-release-preparation).
 
 ## Preparing a structured release
 

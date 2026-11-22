@@ -26,6 +26,18 @@ def _run_report_paths(settings: Config, payload: str, manifest: str, output: str
     return dict(zip(("report_path", "payload_path", "manifest_path"), names, strict=True))
 
 
+def _phase_identities(args: argparse.Namespace) -> dict[str, tuple[str, str]]:
+    """Collect explicit release/revision pairs from publication or README arguments."""
+    identities: dict[str, tuple[str, str]] = {}
+    for phase in ("baseline", "current"):
+        release, revision = getattr(args, f"{phase}_release"), getattr(args, f"{phase}_revision")
+        if (release is None) != (revision is None):
+            raise ValueError(f"--{phase}-release and --{phase}-revision must be supplied together")
+        if release is not None:
+            identities[phase] = (release, revision)
+    return identities
+
+
 def add_commands(groups) -> None:
     """Register the shared benchmark acquisition, comparison, and evidence commands."""
     from research_repo_tools.performance_workflows import add_command
@@ -207,14 +219,7 @@ def run(args: argparse.Namespace, settings: Config) -> int:
         from research_repo_tools.publication import preview_publication, publish_publication
         from research_repo_tools.publication_config import load_publication
 
-        identities = {}
-        for phase in ("baseline", "current"):
-            release, revision = getattr(args, f"{phase}_release"), getattr(args, f"{phase}_revision")
-            if (release is None) != (revision is None):
-                raise ValueError(f"--{phase}-release and --{phase}-revision must be supplied together")
-            if release is not None:
-                identities[phase] = (release, revision)
-        plan = load_publication(settings.root, args.configuration, identities=identities, artifacts_only=args.artifacts_only)
+        plan = load_publication(settings.root, args.configuration, identities=_phase_identities(args), artifacts_only=args.artifacts_only)
         if args.preview:
             _write_stdout(preview_publication(plan).encode("utf-8"))
         elif args.check:

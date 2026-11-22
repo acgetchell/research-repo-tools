@@ -39,7 +39,7 @@ lookup credentials; explicit commands retain the caller's credential environment
 `environment()` alone composes paths and does not certify tool readiness; use
 `inspect()`, checked export or `run_command()` before relying on selected tools.
 
-See [consumer selection and migration](../README.md#selecting-tools-for-a-job)
+See [consumer selection and migration](INSTALLING.md#selecting-tools-for-a-job)
 for the equivalent repeatable CLI `--tool` option and MCMC adapter replacement.
 
 ## Shared Python adoption API

@@ -9,7 +9,7 @@ from pathlib import Path
 from typing import cast
 from urllib.parse import quote
 
-from research_repo_tools.complete_runs import RUN_SCHEMA_V4, RUN_SCHEMA_V6, run_identity
+from research_repo_tools.complete_runs import RUN_SCHEMA_V4, RUN_SCHEMA_V6, RUN_SCHEMA_V7, run_identity
 from research_repo_tools.criterion import COMPARISON_SCHEMA, _markdown_text, _unit, parse_comparison
 from research_repo_tools.evidence import Evidence, Provenance, _object, _string, compare_provenance, fingerprint_files, parse_evidence
 from research_repo_tools.files import _validate_distinct_paths
@@ -163,11 +163,17 @@ def load_publication(
     """Load a v1 comparison or v2 complete-run publication and plan all outputs.
 
     Paths are root-relative POSIX names. No measurement or network access occurs.
-    Provenance pins require independent baseline/current commit and release values.
+    Each measured phase requires an independent commit and release pin.
     ReleaseRule selectors bind package/report captures to those release identities.
     Optional GitHub links require a locally present current tag with exact blobs.
     Use plan_publication for historical schemas or consumer-specific rendering.
     """
+    return _load_publication(root, configuration, identities=identities, artifacts_only=artifacts_only, require_all_phases=False)
+
+
+def _load_publication(
+    root: Path, configuration: str, *, identities: Mapping[str, tuple[str, str]] | None, artifacts_only: bool = False, require_all_phases: bool
+) -> PublicationPlan:
     root = root.resolve(strict=True)
     identities = dict[str, tuple[str, str]]() if identities is None else dict(identities)
     if identities.keys() - {"baseline", "current"}:
@@ -251,7 +257,13 @@ def load_publication(
                 if not isinstance(measurement, SuiteMeasurementPlan):
                     raw.setdefault("current-sources", list(measurement.sources))
                     raw.setdefault("current-harness", list(measurement.harness))
-        if not artifacts_only and dict(dict(retained.sources)["current"].context)["release"] == dict(dict(retained.sources)["baseline"].context)["release"]:
+        if retained.payload_schema == RUN_SCHEMA_V7 and (raw.get("comparisons") or "svg" in raw):
+            raise ValueError("initial series baseline publication requires absolute timings")
+        if (
+            not artifacts_only
+            and retained.payload_schema != RUN_SCHEMA_V7
+            and dict(dict(retained.sources)["current"].context)["release"] == dict(dict(retained.sources)["baseline"].context)["release"]
+        ):
             raise ValueError("same-release local comparisons cannot be published as release documentation")
     selected_trial = None
     from research_repo_tools.scheduled_runs import SCHEDULED_RUN_SCHEMA, select_trial
@@ -265,14 +277,19 @@ def load_publication(
         retained = select_trial(retained, selected_trial[0])
     elif "trial" in raw:
         raise ValueError("trial selection requires scheduled evidence")
-    pins = _table(raw["provenance"], "provenance", {"baseline", "current"})
+    phases = ("current",) if retained.payload_schema == RUN_SCHEMA_V7 else ("baseline", "current")
+    if require_all_phases and set(identities) != set(phases):
+        raise ValueError(f"README publication requires explicit release and revision assertions for {', '.join(phases)}")
+    if set(identities) - set(phases):
+        raise ValueError("publication identities differ from acquisition phases")
+    pins = _table(raw["provenance"], "provenance", set(phases))
     sources = dict(retained.sources)
     tag_policy = raw.get("tag-policy", "existing")
     if tag_policy not in {"existing", "prepare"}:
         raise ValueError("tag-policy must be existing or prepare")
     releases: dict[str, str] = {}
     checks = []
-    for name in ("baseline", "current"):
+    for name in phases:
         pin = _table(pins[name], f"provenance.{name}", set(), {"revision", "release", "source-sha256", "harness-sha256", "context", "verify-tag"})
         if name in identities:
             for key, supplied in zip(("release", "revision"), identities[name], strict=True):
@@ -306,14 +323,16 @@ def load_publication(
             raise ValueError("provenance verify-tag must be a boolean")
         if verify:
             checks.append(GitCheck(release, revision=expected.revision))
-    values = {"tag": releases["current"], "previous-tag": releases["baseline"], "version": releases["current"].removeprefix("v")}
+    values = {"tag": releases["current"], "version": releases["current"].removeprefix("v")}
+    if "baseline" in releases:
+        values["previous-tag"] = releases["baseline"]
     references = []
     selected_sources: set[str] = set()
     for item in _array(raw["references"], "references") if not artifacts_only else []:
         rule = _table(item, "publication reference", {"path", "pattern", "source"}, {"count", "exclude"})
         source = _string(rule["source"], "reference source")
         if source not in values:
-            raise ValueError("publication reference source must be previous-tag, tag, or version")
+            raise ValueError(f"publication reference source must be one of: {', '.join(sorted(values))}")
         selected_sources.add(source)
         count = rule.get("count", 1)
         if type(count) is not int:
@@ -328,19 +347,23 @@ def load_publication(
             )
         )
     if not artifacts_only and selected_sources != set(values):
-        raise ValueError("publication references must check the current version and both report tags (version, tag, previous-tag)")
+        if "baseline" in releases:
+            raise ValueError("publication references must check the current version and both report tags (version, tag, previous-tag)")
+        raise ValueError("series baseline publication references must check the current version and tag")
     document = names.get("document", "README.md")
     if tag_policy == "prepare":
         from research_repo_tools.release_discovery import _tag_version
 
         if "repository" not in raw:
             raise ValueError("prepare policy requires a repository for existing-tag verification")
-        if dict(sources["current"].context).get("mode") != "working-tree" or _tag_version(releases["current"]) <= _tag_version(releases["baseline"]):
+        if dict(sources["current"].context).get("mode") != "working-tree" or (
+            "baseline" in releases and _tag_version(releases["current"]) <= _tag_version(releases["baseline"])
+        ):
             raise ValueError("prepare policy requires prospective working-tree evidence newer than its baseline")
-        if retained.payload_schema != RUN_SCHEMA_V4 and not {"current-sources", "current-harness"} <= raw.keys():
+        if retained.payload_schema not in {RUN_SCHEMA_V4, RUN_SCHEMA_V7} and not {"current-sources", "current-harness"} <= raw.keys():
             raise ValueError("prepare policy requires current-sources and current-harness inventories")
     inventories = []
-    if retained.payload_schema == RUN_SCHEMA_V4:
+    if retained.payload_schema in {RUN_SCHEMA_V4, RUN_SCHEMA_V7}:
         if {"current-sources", "current-harness"} & raw.keys():
             raise ValueError("suite evidence derives current input checks from its per-suite declarations")
         if not artifacts_only or tag_policy == "prepare":
@@ -432,7 +455,7 @@ def load_publication(
             _validate_distinct_paths(tuple(_path(root, name) for name in (_string(raw["document"], "document"), *figures)))
         for selection in run_checks:
             _validate_distinct_paths((root / selection.archive, *(_path(root, name) for name in figures)))
-        if retained.payload_schema == RUN_SCHEMA_V4 and tag_policy == "prepare":
+        if retained.payload_schema in {RUN_SCHEMA_V4, RUN_SCHEMA_V7} and tag_policy == "prepare":
             paths = tuple(dict.fromkeys([*(name for name in inputs if name != configuration), *figures]))
             checks.append(GitCheck(releases["current"], paths, allow_missing=True))
         plan = plan_outputs(root, figures, inputs=inputs)

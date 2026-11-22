@@ -1,31 +1,15 @@
 # Retained performance evidence migration
 
-Adoption requires a published package supplying the
-[performance APIs](performance-api.md); check
-[release availability](../README.md#release-availability). Package implementation, publication,
-and consumer adoption are separate checkpoints. Keep retained evidence readable
-throughout the migration; a new common envelope does not replace old schemas
-automatically. Consumer commands and new-evidence examples are in the
-[task guide](RECORDING_PERFORMANCE.md#performance-evidence).
+Keep historical evidence readable while moving generic helpers to the shared
+[performance APIs](performance-api.md). Check [release availability](../README.md#release-availability)
+for the pin that supplies the required capability.
 
 ## Release capability adoption
 
-Use the published pin from the [quickstart](../README.md#install-with-uv), or a
-newer verified release supplying the required contract. A merged implementation,
-local build or sibling checkout does not satisfy the publication gate.
-
-All listed capabilities ship in the base package; no optional extra is required.
-Native measurement still requires the consumer's Git/Rust/Cargo toolchain, and
-GitHub release operations require authenticated GitHub CLI. Notebook, paper and
-Python validator dependencies retain their separately documented extras.
-
-The current package requires Python 3.15 or newer and selects Python 3.15 for development.
-Use the existing [shared Python adoption recipes](UPDATING_DEPENDENCIES.md#shared-python-adoption)
-to reconcile the exact package pin, support metadata, tool declarations and
-locked environment. Preserve consumer Ruff configuration and precise exceptions;
-the shared gate now runs format, lint and strict ty with first-failure termination.
-Refresh the packaged Just/configuration templates, then exercise the consumer's
-actual native workflow before deleting generic helpers.
+All capabilities below ship in the base package. Native measurement requires
+the consumer's Git/Rust/Cargo toolchain. GitHub release operations require
+authenticated GitHub CLI. Upgrade with the [Python adoption recipes](UPDATING_DEPENDENCIES.md#shared-python-adoption),
+refresh the matching templates and test the consumer workflow before deleting its helpers.
 
 | Capability | Migration and supported interface | Compatibility boundary |
 | --- | --- | --- |
@@ -130,38 +114,21 @@ own the choice to adopt these contracts and any explicit remediation of old evid
 ## Execution and downstream acceptance
 
 For README and document publishers, follow the
-[publication migration guide](publication-migration.md). It covers reuse of
+[publication migration guide](PUBLISHING_REPORTS.md#document-publication-migration). It covers reuse of
 legacy schema adapters and renderers, exact tagged artifact verification, and
 the shared marker/snapshot/transaction contract.
 
-The coordinated extraction supplies configured release selection, authenticated
-assets, provenance capture, live measurement, explicit worktree lifecycle,
-retained report promotion and rerendering. See the [workflow contracts](workflow-api.md)
-and [shared helper ownership map](shared-capability-migration.md#performance-and-release-helper-adoption). Consumers select benchmark
-commands/inventories, compatibility fields, workloads, statistical interpretation,
-and publication decisions in configuration and prose. The earlier incremental
-guidance to retain generic wrappers is superseded by these complete workflows.
-
-Before deleting helpers, pin the published package and exercise each consumer's
-complete workflow: retained legacy reads, unchanged reports, missing benchmarks,
-stale source/harness rejection, unsafe release assets, and failed promotion with
-unchanged originals. Keep domain tests in consumers and shared implementation
-regressions here. Native Linux/macOS/Windows checks and wheel/sdist checks belong
-to this package's existing CI matrix. A local run is not evidence that the other
-platforms or a migrated consumer passed. Record publication and downstream
-integration evidence separately; downstream adoption does not block upstream publication.
+The [ownership map](migration.md#performance-and-release-helper-adoption)
+identifies replacements for release selection, measurement, retention and rendering.
+Before removing an adapter, exercise retained legacy reads, unchanged reports,
+missing benchmarks, stale source or harness rejection, unsafe release assets
+and failed promotion with the consumer's original files.
 
 ## Common harness and host adoption
 
-The schema-2 measurement/report and versioned host contracts are defined in the
-[complete-run API](complete-run-api.md). Pin an exact PyPI
-release containing these contracts, then test the consumer before
-retiring working implementations. The installed suite uses a small representative
-common-harness fixture with a substituted Cargo lock/toolchain, independent input
-gates and a baseline-only reference. It is not proof of la-stack or delaunay
-adoption, nor a replacement for native package jobs. The maps below describe
-historical helper roles; reconcile current consumer paths and behavior before
-removing code.
+Use the [complete-run API](complete-run-api.md) for schema-2 measurement,
+report and host contracts. These paths identify historical helper roles.
+Check the current consumer's wiring before removing them.
 
 | Consumer surface | Shared replacement | Consumer responsibility |
 | --- | --- | --- |
@@ -205,22 +172,11 @@ figure paths. Existing domain renderers can compose pre-rendered figures and pro
 with retained evidence through `publication.plan_outputs`. No consumer names,
 matrix dimensions, nalgebra or faer dispatch belong in the shared runtime.
 
-Generic sample/identity, source/harness mismatch, gate failure, immutable retention,
-pointer corruption, rollback and cross-platform probe regressions belong here.
-Consumers keep focused tests proving their actual pinned release, native
-toolchain, expected full IDs, scientific gates, compatibility adapters and legacy
-artifact preservation. Publication and the Linux/macOS/Windows package jobs are
-required before declaring downstream extraction complete.
-
 ## Criterion discovery and saved-baseline adoption
 
-Use the [public contracts](criterion-api.md). Pin an
-exact published package containing them, run a focused consumer integration
-test, then remove the generic helpers. An implementation merge does not unblock
-consumer adoption. Existing raw baselines, archives, legacy fingerprints and
-scientific gates remain intact; this extraction authorizes no history pruning or
-rewriting. Examples and ordered commands live in the
-[task guide](RECORDING_PERFORMANCE.md#criterion-inventory-and-saved-baselines).
+Preserve original raw baselines, archives, fingerprints and scientific gates.
+Use the [Criterion task guide](RECORDING_PERFORMANCE.md#criterion-inventory-and-saved-baselines)
+to wire and verify the replacement against the [public contracts](criterion-api.md).
 
 The deletion map refers to la-stack's merged `f3eb43d` consumer sources:
 [release_baseline.py](https://github.com/acgetchell/la-stack/blob/f3eb43dde08bef4a5aba04baf0e57e1c79de443c/scripts/release_baseline.py)
@@ -277,10 +233,8 @@ historical archives; this changes newly collected artifacts only.
 
 ## Captured release target adoption
 
-Use the [release-target contract](workflow-api.md#release-assets) from a verified
-published package and record its release and native validation evidence.
-Consumers must pass focused integration checks before deleting their working
-implementation; an upstream merge alone does not establish downstream acceptance.
+Use the [release-target contract](workflow-api.md#release-assets) to replace
+the preflight and writer steps in the consumer.
 
 The following map refers to la-stack's
 [release benchmark workflow](https://github.com/acgetchell/la-stack/blob/b8ffb208addb5eda68c71eb142253b382b384028/.github/workflows/release-benchmarks.yml)

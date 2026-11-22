@@ -1,11 +1,14 @@
 """Configured changelog generation, resources, release notes, and local tags."""
 
+import difflib
+import io
 import re
 import shlex
 import subprocess
 import tempfile
 import tomllib
 from collections.abc import Iterator
+from contextlib import ExitStack
 from dataclasses import replace
 from datetime import UTC, date, datetime
 from functools import cache
@@ -17,7 +20,7 @@ from research_repo_tools.release_tags import _GITHUB_REPO_COMPONENT_RE, _GITHUB_
 lazy from research_repo_tools import archive_changelog as archive
 lazy from research_repo_tools import changelog_issues, changelog_notes
 lazy from research_repo_tools.config import Config
-lazy from research_repo_tools.files import replace_many
+lazy from research_repo_tools.files import preserve_files, replace_many
 lazy from research_repo_tools.postprocess_changelog import check_markdown, fix_markdown, postprocess_text
 
 TEMPLATES = (
@@ -95,20 +98,29 @@ def _paths(config: Config) -> tuple[Path, Path, Path | None]:
     return path, archives, formatter
 
 
-def _declared_dates(path: Path, archives: Path) -> dict[str, str]:
-    """Read dated release authorities before generating replacement history."""
-    dates: dict[str, str] = {}
+def _retained_files(path: Path, archives: Path) -> dict[Path, bytes]:
+    """Snapshot the original bytes for date authority, preview, and publication checks."""
+    retained = {}
     for source in (path, *sorted(archives.glob("*.md"))):
-        if not source.exists():
-            continue
-        parsed = archive.parse_changelog(archive._extract_link_defs(source.read_text(encoding="utf-8"))[0])
+        if source.is_symlink():
+            raise ValueError(f"Changelog output must not be a symlink: {source}")
+        if source.exists():
+            retained[source] = source.read_bytes()
+    return retained
+
+
+def _retained_versions(retained: dict[Path, bytes]) -> dict[str, str | None]:
+    """Collect every retained release, including headings without date authority."""
+    versions: dict[str, str | None] = {}
+    for source, data in retained.items():
+        text = io.StringIO(data.decode("utf-8"), newline=None).read()
+        parsed = archive.parse_changelog(archive._extract_link_defs(text)[0])
         for heading in parsed.release_headings:
-            if heading.date is None:
-                continue
-            if heading.version in dates and dates[heading.version] != heading.date:
+            previous = versions.get(heading.version)
+            if previous and heading.date and previous != heading.date:
                 raise ValueError(f"conflicting declared dates for {heading.version} in {source}")
-            dates[heading.version] = heading.date
-    return dates
+            versions[heading.version] = heading.date or previous
+    return versions
 
 
 def _preserve_declared_dates(text: str, dates: dict[str, str]) -> str:
@@ -182,11 +194,63 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
     Dry runs validate every candidate and return the trimmed root changelog
     without creating directories or replacing root/archive files.
     """
+    path, archives, _formatter = _paths(config)
+    outputs = _generate_candidates(config, tag, released, _retained_files(path, archives), rebuild=False)
+    if not dry_run:
+        replace_many(outputs)
+    return outputs[path].decode("utf-8")
+
+
+def rebuild(config: Config, *, tag: str | None = None, released: str | None = None, apply: bool = False) -> str:
+    """Diff the complete rebuilt history and optionally publish the reviewed changes."""
+    path, archives, _formatter = _paths(config)
+
+    def snapshot() -> dict[Path, bytes]:
+        if any(parent.is_symlink() or parent.is_junction() for parent in (archives, *archives.parents) if parent.is_relative_to(config.root)):
+            raise ValueError("rebuild archive directory must not contain links")
+        return _retained_files(path, archives)
+
+    before = snapshot()
+    outputs = _generate_candidates(config, tag, released, before, rebuild=True)
+    removed = sorted(target for target in before.keys() - outputs.keys() if archive.MINOR_ARCHIVE.fullmatch(target.name))
+    updates = {target: data for target, data in outputs.items() if before.get(target) != data}
+    chunks = []
+    for target in sorted((*updates, *removed)):
+        name = target.relative_to(config.root).as_posix()
+        old = io.StringIO(before.get(target, b"").decode("utf-8")).readlines()
+        new = io.StringIO(outputs.get(target, b"").decode("utf-8")).readlines()
+        chunks.append(f"diff --git a/{name} b/{name}\n")
+        left = f"a/{name}" if target in before else "/dev/null"
+        right = f"b/{name}" if target in outputs else "/dev/null"
+        if not old and not new:
+            chunks.append(f"--- {left}\n+++ {right}\n")
+        for line in difflib.unified_diff(old, new, left, right):
+            chunks.append(line if line.endswith("\n") else line + "\n\\ No newline at end of file\n")
+    if apply and (updates or removed):
+        with ExitStack() as rollback:
+
+            def verify_and_remove() -> None:
+                if snapshot() != before:
+                    raise ValueError("retained changelogs changed during rebuild")
+                if removed:
+                    rollback.enter_context(preserve_files(removed))
+                    for target in removed:
+                        target.unlink()
+
+            if updates:
+                replace_many(updates, verify=verify_and_remove)
+            else:
+                verify_and_remove()
+    return "".join(chunks)
+
+
+def _generate_candidates(config: Config, tag: str | None, released: str | None, retained: dict[Path, bytes], *, rebuild: bool) -> dict[Path, bytes]:
     path, archives, formatter = _paths(config)
     section = config.changelog
     if path.is_symlink():
         raise ValueError(f"Changelog output must not be a symlink: {path}")
-    dates = _declared_dates(path, archives)
+    versions = _retained_versions(retained)
+    dates = {version: value for version, value in versions.items() if value is not None}
     released = resolve_date(config, tag=tag, released=released)
     if tag:
         validate_semver(tag)
@@ -203,7 +267,7 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
     args = ["--tag", tag] if tag is not None else []
     # Both historic representations must describe the same commits and tags.
     shared = section.cliff_config is None
-    context = _run_cliff(config.root, rendered, [*args, "--context"]) if shared and any(archives.glob("*.md")) else None
+    context = _run_cliff(config.root, rendered, [*args, "--context"]) if shared and not rebuild and any(archives.glob("*.md")) else None
     generated = _run_cliff(config.root, rendered, args if context is None else [], context=context)
     if not generated.strip():
         raise ValueError("git-cliff returned empty changelog output")
@@ -240,6 +304,8 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
 
     result = prepare(cleaned, closing_notes)
     parsed = archive.parse_changelog(archive._extract_link_defs(result)[0])
+    if rebuild and (missing := versions.keys() - {heading.version for heading in parsed.release_headings}):
+        raise ValueError(f"rebuild drops retained releases: {', '.join(sorted(missing))}")
     if parsed.unreleased is None and not parsed.version_blocks:
         raise ValueError("git-cliff must generate at least one release or Unreleased section")
 
@@ -259,6 +325,7 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
             result,
             archives,
             formatter=format_candidate if formatter is not None else None,
+            rebuild=rebuild,
             retained_histories=retained_histories if context is not None else None,
         )
     )
@@ -268,9 +335,18 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
     outputs = {target: candidate.encode("utf-8") for target, candidate in candidates.items()}
     if formatter is not None:
         check_markdown(candidates[path], path, formatter, outputs)
-    if not dry_run:
-        replace_many(outputs)
-    return candidates[path]
+    if rebuild:
+        seen = set()
+        # Include untouched, non-series Markdown files in the final inventory.
+        unchanged = {target: data for target, data in retained.items() if target not in outputs and not archive.MINOR_ARCHIVE.fullmatch(target.name)}
+        for target, data in (outputs | unchanged).items():
+            for version in _retained_versions({target: data}):
+                if version in seen:
+                    raise ValueError(f"duplicate rebuilt release {version}")
+                seen.add(version)
+        if missing := versions.keys() - seen:
+            raise ValueError(f"rebuild drops retained releases: {', '.join(sorted(missing))}")
+    return outputs
 
 
 def notes(config: Config, tag: str) -> tuple[str, Path, str]:

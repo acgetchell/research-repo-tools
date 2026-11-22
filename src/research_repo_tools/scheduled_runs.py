@@ -15,6 +15,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from research_repo_tools.benchmark_series import SeriesPair
 from research_repo_tools.complete_runs import RUN_SCHEMA_V5, _array, _integer, run_identity
 from research_repo_tools.criterion import _markdown_text
 from research_repo_tools.evidence import Evidence, Provenance, _load_json, _object, deterministic_json, parse_evidence, serialize_evidence
@@ -101,7 +102,7 @@ def _parse_scheduled_run(evidence: Evidence, *, partial: bool = False) -> Schedu
             raise ValueError("trial intervals overlap or are reordered")
         original = parse_evidence(_decode(record["payload"]), _decode(record["manifest"]))
         run = validate_suite_policy(original, base)
-        if run.first_release:
+        if run.current_only:
             raise ValueError("scheduled trials require paired suite runs")
         if original.sources != evidence.sources:
             raise ValueError("trial original source differs from envelope")
@@ -202,6 +203,7 @@ def measure_schedule(
         "declaration": plan.document(),
         "sources": {phase: source.provenance() for phase, source in captures.items()},
         "environment": ambient,
+        **({"series-selection": pair.history.document()} if isinstance(pair, SeriesPair) else {}),
     }
 
     def unchanged() -> None:

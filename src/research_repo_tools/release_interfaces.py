@@ -353,6 +353,15 @@ def add_evidence_commands(release) -> None:
     candidate.add_argument("--publication-receipt", type=Path, help="original shared-publisher receipt captured before promotion")
     candidate.add_argument("--publication-sha256", help="independent Step 1 publication digest from the trusted owner")
     candidate.add_argument("--target", type=Path, help="independently captured draft target for attachment revalidation")
+    preflight = commands.add_parser("candidate-preflight", help="check retained benchmark evidence against a clean preparation commit offline")
+    preflight.add_argument("--acquisition-sha256", required=True, help="independent Step 1 assertion digest from the trusted acquisition owner")
+    preflight.add_argument("--checkout", type=Path, required=True, help="clean release preparation checkout")
+    preflight.add_argument("--commit", required=True, help="independently selected full preparation commit")
+    preflight.add_argument("--manifest", type=Path, required=True)
+    preflight.add_argument("--payload", type=Path, required=True)
+    preflight.add_argument("--policy", type=Path, required=True, help="original acquisition policy")
+    preflight.add_argument("--publication-receipt", type=Path, help="original shared-publisher receipt captured before promotion")
+    preflight.add_argument("--publication-sha256", help="independent Step 1 publication digest from the trusted owner")
     for operation in ("create", "published", "published-python", "receive-acquisition", "verify", "verify-python-approval"):
         if operation in ("published-python", "verify-python-approval"):
             _add_python_approval_command(commands, operation)
@@ -432,6 +441,9 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
         return
     if args.operation == "candidate":
         _run_candidate(args, settings)
+        return
+    if args.operation == "candidate-preflight":
+        _run_candidate_preflight(args)
         return
     checkout = args.checkout.resolve(strict=True)
     dependencies = DependencyOperation(checkout, settings.release.published_dependencies)
@@ -756,6 +768,30 @@ def _run_candidate_attachment(args: argparse.Namespace, settings: Config) -> Non
 
     write_release_outputs(args.output, receipt, verify=unchanged)
     print(f"Verified candidate archive on draft {target.release_id}. Retain the attachment receipt for approval.")
+
+
+def _run_candidate_preflight(args: argparse.Namespace) -> None:
+    from research_repo_tools._console import write_json_stdout
+    from research_repo_tools.candidate_reuse import parse_candidate_policy, preflight_candidate_release
+    from research_repo_tools.evidence import parse_evidence
+
+    paths = (args.policy, args.payload, args.manifest, *([args.publication_receipt] if args.publication_receipt else []))
+    _validate_distinct_paths(paths)
+    inputs = {path: _read_candidate_input(path) for path in paths}
+    result = preflight_candidate_release(
+        args.checkout.resolve(strict=True),
+        parse_evidence(inputs[args.payload], inputs[args.manifest]),
+        parse_candidate_policy(inputs[args.policy]),
+        commit=args.commit,
+        acquisition_sha256=args.acquisition_sha256,
+        publication_receipt=inputs[args.publication_receipt] if args.publication_receipt else None,
+        publication_sha256=args.publication_sha256,
+    )
+    if any(_read_candidate_input(path) != original for path, original in inputs.items()):
+        raise ValueError("candidate handoff changed during preflight")
+    write_json_stdout(
+        {"schema": "research-repo-tools/candidate-preflight/v1", "commit": result.commit, "identity": result.identity, "changed_paths": result.changed_paths}
+    )
 
 
 def _run_candidate(args: argparse.Namespace, settings: Config) -> None:

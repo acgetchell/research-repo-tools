@@ -4,12 +4,18 @@ The candidate contract supports measurement before the release-preparation
 merge. It is separate from the unchanged [exact-tag v1 contract](benchmark-reuse-api.md).
 Scheduled paired acquisitions require measurement schema 6 and complete-run v5
 evidence. A first release requires unscheduled schema-5 measurement and
-complete-run v6 evidence; see the [first-release procedure under committed publisher
-evidence](#committed-publisher-evidence). Historical v1–v4 evidence is not upgraded,
+complete-run v6 evidence. See the [first stable release procedure](#first-stable-release).
+Historical v1–v4 evidence is not upgraded,
 assigned missing receipts, or silently measured again.
 Use the [published package and matching templates](../README.md#release-availability)
 for the owner-capture, hosted-retrieval, archive-attachment and first-release
 commands below.
+
+A declared series can acquire its first baseline in an existing repository.
+Series candidates use policy v4, with the measurement contract and complete
+published-history selection bound to the original acquisition assertions.
+Current-only series runs use complete-run v7. Follow the [series declaration,
+preparation, and recovery procedure](REUSING_BENCHMARKS.md#starting-a-benchmark-series-after-earlier-releases).
 
 ## Source and trust contract
 
@@ -111,8 +117,9 @@ run publisher**, including configurable archive locations such as
 `docs/performance-runs` and `docs/performance/runs`. Schema-1 comparison histories
 require explicit adoption of schema 2; existing history is never rewritten or
 assigned missing acquisition receipts. For paired acquisitions, the optional
-declaration serializes as candidate-policy v2; policies without it retain their
-v1 bytes and behavior. First-release policies use v3 as described below.
+declaration serializes as candidate-policy v2. Paired policies without a series
+or report use v1. First-release policies use v3. Declared series use v4 and
+require a report for both inaugural and subsequent acquisitions.
 
 After acquisition and before promotion, call
 `candidate_publication.plan_candidate_publication(root, payload, manifest, policy,
@@ -154,6 +161,21 @@ calling `measure_release` again is a new acquisition. The standalone
 also support explicit staged orchestration. README publication remains separate
 and uses the existing exact declared document exceptions.
 
+```python
+from research_repo_tools.candidate_publication import plan_candidate_publication
+from research_repo_tools.publication import publish_publication
+
+plan, receipt = plan_candidate_publication(
+    root,
+    "target/run.json",
+    "target/evidence.json",
+    step_one_policy,
+    acquisition_sha256=trusted_acquisition_digest,
+)
+# Save receipt and its SHA-256 through the separate trusted handoff.
+publish_publication(plan)
+```
+
 For a prepared scheduled release, use
 `just performance-release tooling/performance-release.toml --owner "$owner"`.
 The shared command writes the original payload, envelope, policy, publisher
@@ -163,6 +185,8 @@ scratch pair and retry with
 `just performance capture tooling/performance-release.toml --owner "$owner" --promote`.
 The retry checks the frozen receipt against the prior or already promoted report
 state. Each suite must declare its repository and acquisition owner in its context.
+
+### First stable release
 
 A first release has no predecessor. Use `performance first-release` with an
 unscheduled schema-5 suite declaration and a schema-2 report configuration.
@@ -191,19 +215,43 @@ the command with `--retained` and the same scratch and owner paths.
 This publishes the complete-run report; paired schema-2 README publication
 rejects first-release v6 evidence.
 
+## Offline preparation preflight
+
+With v0.3.2 installed in a trusted environment, check the clean preparation
+commit before merge. Set `checkout` to its absolute path and `preparation_commit`
+to its independently selected full commit ID. Use the acquisition owner's
+original files and separately trusted digests. Run the installed interpreter
+(on Windows, its `Scripts/python.exe`).
+
+```sh
+/trusted/release-tools/bin/python -I -B -m research_repo_tools release evidence candidate-preflight \
+  --checkout "$checkout" --commit "$preparation_commit" \
+  --policy "$owner/policy.json" --payload "$owner/run.json" \
+  --manifest "$owner/evidence.json" --acquisition-sha256 "$acquisition_sha256" \
+  --publication-receipt "$owner/publication.json" --publication-sha256 "$publication_sha256"
+```
+
+The command returns a `research-repo-tools/candidate-preflight/v1` JSON record
+on stdout with the checked commit, acquisition identity, and changed output paths.
+A mismatch returns a nonzero exit and a diagnostic. Review every undeclared path
+before reusing the acquisition. Preflight runs offline and writes no evidence.
+After merge, final acceptance still verifies the actual release commit, published
+history where applicable, release dependencies, and signed native CI evidence.
+
 ## Public interfaces
 
 Import from `research_repo_tools.candidate_reuse`:
 
 | Interface | Contract |
 | --- | --- |
-| `CandidatePolicy` | Repository, canonical tag, final commit (`None` until selected), original owner/run identity, scheduled paired or unscheduled first-release measurement, original current envelope provenance, `(trial, suite, phase, Provenance)` assertions, and original `report` configuration when required |
+| `CandidatePolicy` | Repository, canonical tag, final commit (`None` until selected), owner/run identity, measurement, original current provenance, and per-trial/suite/phase assertions. First-release and series policies also require the original report configuration. Series policies bind the published-history selection. |
 | `acquisition_assertion_digest(policy)` | Step 1 digest captured by the trusted acquisition owner; excludes only the future final commit |
 | `parse_candidate_policy`, `serialize_candidate_policy` | Strict versioned JSON handoff; serialization does not authenticate the assertions |
-| `retain_candidate_release(..., destination, policy_output=None, native_output=None, verify_inputs=None, verify_acceptance=None)` | Same verification with a fresh dependency pass in the final transaction guard; retain acceptance and optional final policy/native selection together. Matching existing bytes are accepted; conflicts preserve the original records. Callbacks add checks and cannot replace mandatory verification. |
-| `verify_candidate_release(root, evidence, policy, native_policy, read, *, acquisition_sha256, publication_receipt=None, publication_sha256=None, expected=None)` | Step 2 whole-tree binding plus existing native release verification; returns frozen acceptance bytes. When `policy.report` is set, both publication arguments are required as a pair, and `publication_sha256` must be independently trusted |
 | `plan_candidate_archive(root, payload, manifest, policy, acceptance, output)` | Offline immutable archive planning with stale-input checks and shared publication transactions |
+| `preflight_candidate_release(root, evidence, policy, *, commit, acquisition_sha256, publication_receipt=None, publication_sha256=None)` | Validate the original evidence, generated bytes and permitted tree differences on a clean preparation commit. Returns an immutable `CandidatePreflight(commit, identity, changed_paths)`. Policies declaring a report require both publication arguments. |
+| `retain_candidate_release(..., destination, policy_output=None, native_output=None, verify_inputs=None, verify_acceptance=None)` | Retain acceptance and optional final policy/native selection together, with a fresh dependency check immediately before writing. Matching records can be reused. Conflicting records raise an error. |
 | `verify_candidate_archive(archive, policy, acceptance, *, target=None)` | Bounded verification of the exact frozen archive and every member, optionally bound to the independently captured draft target |
+| `verify_candidate_release(root, evidence, policy, native_policy, read, *, acquisition_sha256, publication_receipt=None, publication_sha256=None, expected=None)` | Bind the whole tree, verify native evidence, and return frozen acceptance bytes. A policy with a report requires its original receipt and independently trusted digest. |
 
 All archive interfaces accept `ArchiveLimits`. Publish plans with
 `publication.publish_publication`. Policy, acceptance, evidence, and archive paths

@@ -4,21 +4,24 @@ import re
 import tomllib
 from collections.abc import Callable, Mapping
 from dataclasses import dataclass, replace
+from functools import partial
 from pathlib import Path
 from typing import Literal, cast
 
+from research_repo_tools.benchmark_series import SeriesBaseline, SeriesHistory, SeriesPair, select_series
 from research_repo_tools.evidence import Provenance, _load_json, _object, _string, deterministic_json, sha256
 from research_repo_tools.files import _validate_distinct_paths, replace_many
 from research_repo_tools.measurement import MeasurementConfig, load_measurement, resolve_revision
 from research_repo_tools.performance_progress import ProgressReporter
 from research_repo_tools.process import run_git_bytes
 from research_repo_tools.publication import PublicationPlan, _path, _publication_name
-from research_repo_tools.publication_config import _table, load_publication
+from research_repo_tools.publication_config import _load_publication, _table
 from research_repo_tools.release_assets import _repository
 from research_repo_tools.release_discovery import _tag_version
 from research_repo_tools.release_metadata import read_package_info
 from research_repo_tools.release_pairs import PairMode, ReleaseOrder, ReleasePair, resolve_pair
 from research_repo_tools.releases import published_releases
+from research_repo_tools.suite_measurement import SuiteMeasurementPlan
 
 __all__ = [
     "PerformanceRelease",
@@ -34,6 +37,7 @@ __all__ = [
 ]
 
 PREPARATION_SCHEMA = "research-repo-tools/performance-preparation/v1"
+SERIES_PREPARATION_SCHEMA = "research-repo-tools/performance-preparation/v2"
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,16 +119,22 @@ def select_measurement_pair(
     order: ReleaseOrder = "published",
     current: str | None = None,
     baseline: str | None = None,
-) -> tuple[ReleasePair, bool]:
+) -> tuple[ReleasePair | SeriesBaseline, bool]:
     """Select from package metadata and publication order, without measuring/fetching."""
     root = root.resolve(strict=True)
     if (current is None) != (baseline is None):
         raise ValueError("current and baseline tags must be provided together")
-    releases = () if mode == "explicit" else published_releases(root, repository=repository)
-    pair = resolve_pair(mode, package_tag="v" + read_package_info(root).version, releases=releases, order=order, current=current, baseline=baseline)
     measurement = load_measurement(root, configuration)
-    from research_repo_tools.suite_measurement import SuiteMeasurementPlan
-
+    package_tag = "v" + read_package_info(root).version
+    if isinstance(measurement, SuiteMeasurementPlan) and measurement.benchmark_series is not None:
+        if not repository or mode != "infer-release" or order != "version" or current is not None:
+            raise ValueError("series selection requires a repository, infer-release mode and numeric version order")
+        selection = select_series(root, configuration, measurement, package_tag, _series_reader(repository))
+        if isinstance(selection, SeriesBaseline) != (measurement.schedule is None):
+            raise ValueError("initial series baseline requires an unscheduled plan; an existing compatible predecessor requires a paired schedule")
+        return selection, True
+    releases = () if mode == "explicit" else published_releases(root, repository=repository)
+    pair = resolve_pair(mode, package_tag=package_tag, releases=releases, order=order, current=current, baseline=baseline)
     policy = measurement if isinstance(measurement, (MeasurementConfig, SuiteMeasurementPlan)) else measurement.measurement
     policy.validate_release(pair.current)
     policy.validate_release(pair.baseline)
@@ -140,9 +150,9 @@ class Preparation:
     measurement: str
     measurement_sha256: str
     package_version: str
-    pair: ReleasePair
+    pair: ReleasePair | SeriesBaseline
     current_revision: str
-    baseline_revision: str
+    baseline_revision: str | None
     working_tree: bool
     mode: PairMode = "infer-release"
     order: ReleaseOrder = "published"
@@ -154,32 +164,54 @@ class Preparation:
             raise ValueError("preparation requires the measurement declaration SHA-256")
         if not isinstance(self.package_version, str) or re.fullmatch(r"(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)\.(?:0|[1-9][0-9]*)", self.package_version) is None:
             raise ValueError("preparation requires a stable package version")
-        if not isinstance(self.pair, ReleasePair) or type(self.working_tree) is not bool:
+        if not isinstance(self.pair, (ReleasePair, SeriesBaseline)) or type(self.working_tree) is not bool:
             raise ValueError("preparation requires a release pair and boolean working-tree policy")
         Provenance(self.current_revision)
-        Provenance(self.baseline_revision)
+        if isinstance(self.pair, (SeriesPair, SeriesBaseline)):
+            if self.mode != "infer-release" or self.order != "version" or not self.working_tree or self.pair.history.declaration != self.measurement:
+                raise ValueError("series preparation requires a prospective inferred release and its original declaration")
+            previous = self.pair.history.predecessor
+            if isinstance(self.pair, SeriesPair):
+                if previous != (self.pair.baseline, self.baseline_revision):
+                    raise ValueError("series predecessor differs from prepared baseline")
+            elif previous is not None or self.baseline_revision is not None:
+                raise ValueError("initial series baseline cannot have a predecessor")
+        if isinstance(self.pair, ReleasePair):
+            if self.baseline_revision is None:
+                raise ValueError("paired preparation requires a baseline revision")
+            Provenance(self.baseline_revision)
         if self.mode not in ("infer-release", "explicit", "current-vs-latest") or self.order not in ("published", "version"):
             raise ValueError("invalid preparation selection mode/order")
         if (self.mode == "explicit" and self.working_tree) or (self.mode == "current-vs-latest" and not self.working_tree):
             raise ValueError("preparation source mode disagrees with selection")
         if self.mode != "explicit" and self.pair.current != "v" + self.package_version:
             raise ValueError("preparation current label must match the selected package")
-        if self.mode != "current-vs-latest" and self.pair.current == self.pair.baseline:
+        if isinstance(self.pair, ReleasePair) and self.mode != "current-vs-latest" and self.pair.current == self.pair.baseline:
             raise ValueError("release preparation requires distinct releases")
-        if self.mode == "infer-release" and self.working_tree and _tag_version(self.pair.current) <= _tag_version(self.pair.baseline):
+        if (
+            isinstance(self.pair, ReleasePair)
+            and self.mode == "infer-release"
+            and self.working_tree
+            and _tag_version(self.pair.current) <= _tag_version(self.pair.baseline)
+        ):
             raise ValueError("prospective preparation must be newer than its baseline")
 
     @property
     def identities(self) -> dict[str, tuple[str, str]]:
         """Return the asserted release tag and revision for each phase."""
-        return {"current": (self.pair.current, self.current_revision), "baseline": (self.pair.baseline, self.baseline_revision)}
+        phases = {"current": (self.pair.current, self.current_revision)}
+        if isinstance(self.pair, ReleasePair):
+            assert self.baseline_revision is not None
+            phases["baseline"] = (self.pair.baseline, self.baseline_revision)
+        return phases
 
     def verify(self, root: Path) -> None:
         """Recheck local source assertions and declaration, without provider queries."""
         root = root.resolve(strict=True)
         if read_package_info(root).version != self.package_version or sha256(_path(root, self.measurement).read_bytes()) != self.measurement_sha256:
             raise ValueError("stale preparation: package or measurement declaration changed; prepare again")
-        for reference, revision in (("HEAD" if self.working_tree else self.pair.current, self.current_revision), (self.pair.baseline, self.baseline_revision)):
+        for phase, (tag, revision) in self.identities.items():
+            reference = "HEAD" if self.working_tree and phase == "current" else tag
             if resolve_revision(root, reference) != revision:
                 raise ValueError(f"stale preparation: {reference} moved; prepare again")
         if self.working_tree and self.mode == "infer-release":
@@ -194,7 +226,8 @@ def serialize_preparation(record: Preparation) -> bytes:
     """Encode a release pair, measurement identity, and preparation options as deterministic JSON."""
     return deterministic_json(
         {
-            "schema": PREPARATION_SCHEMA,
+            "schema": PREPARATION_SCHEMA if not isinstance(record.pair, (SeriesPair, SeriesBaseline)) else SERIES_PREPARATION_SCHEMA,
+            **({"series_selection": record.pair.history.document()} if isinstance(record.pair, (SeriesPair, SeriesBaseline)) else {}),
             "repository": record.repository,
             "measurement": record.measurement,
             "measurement_sha256": record.measurement_sha256,
@@ -209,22 +242,34 @@ def serialize_preparation(record: Preparation) -> bytes:
 
 def parse_preparation(payload: bytes) -> Preparation:
     """Read the independently prepared release identities and retained measurement checksum."""
-    raw = _object(
-        _load_json(payload, "performance preparation"),
-        "preparation",
-        {"schema", "repository", "measurement", "measurement_sha256", "package_version", "working_tree", "current", "baseline", "mode", "order"},
-    )
-    if raw["schema"] != PREPARATION_SCHEMA:
+    raw = _object(_load_json(payload, "performance preparation"), "performance preparation")
+    fields = {"schema", "repository", "measurement", "measurement_sha256", "package_version", "working_tree", "current", "baseline", "mode", "order"}
+    history = None
+    if raw.get("schema") == SERIES_PREPARATION_SCHEMA:
+        history = SeriesHistory.parse(raw.get("series_selection"))
+        fields.add("series_selection")
+        if history.predecessor is None:
+            fields.remove("baseline")
+    elif raw.get("schema") != PREPARATION_SCHEMA:
         raise ValueError("unsupported performance preparation schema; prepare a new record")
-    phases = {phase: _object(raw[phase], phase, {"release", "revision"}) for phase in ("current", "baseline")}
+    _object(raw, "performance preparation", fields)
+    phases = {phase: _object(raw[phase], phase, {"release", "revision"}) for phase in ("current", "baseline") if phase in fields}
+    current = _string(phases["current"]["release"], "current")
+    baseline = _string(phases["baseline"]["release"], "baseline") if "baseline" in phases else None
+    pair: ReleasePair | SeriesBaseline
+    if history is None:
+        assert baseline is not None
+        pair = ReleasePair(current, baseline)
+    else:
+        pair = SeriesPair(current, baseline, history) if baseline is not None else SeriesBaseline(current, history)
     return Preparation(
         _string(raw["repository"], "repository"),
         _string(raw["measurement"], "measurement"),
         _string(raw["measurement_sha256"], "measurement_sha256"),
         _string(raw["package_version"], "package_version"),
-        ReleasePair(_string(phases["current"]["release"], "release"), _string(phases["baseline"]["release"], "release")),
+        pair,
         _string(phases["current"]["revision"], "revision"),
-        _string(phases["baseline"]["revision"], "revision"),
+        _string(phases["baseline"]["revision"], "revision") if "baseline" in phases else None,
         cast(bool, raw["working_tree"]),
         cast(PairMode, _string(raw["mode"], "mode")),
         cast(ReleaseOrder, _string(raw["order"], "order")),
@@ -241,7 +286,7 @@ def _scratch(root: Path, name: str) -> Path:
 
 
 def load_preparation(root: Path, settings: PerformanceRelease) -> Preparation:
-    """Load all four independent assertions, rejecting missing/partial/stale records."""
+    """Load the prepared identities for every measured phase and verify local freshness."""
     root = root.resolve(strict=True)
     settings.verify_paths(root)
     record = parse_preparation(_scratch(root, settings.preparation).read_bytes())
@@ -301,7 +346,7 @@ def prepare_performance(
         read_package_info(root).version,
         pair,
         resolve_revision(root, "HEAD" if working_tree else pair.current),
-        resolve_revision(root, pair.baseline),
+        resolve_revision(root, pair.baseline) if isinstance(pair, ReleasePair) else None,
         working_tree,
         settings.mode,
         settings.order,
@@ -315,14 +360,12 @@ def load_readme_plan(root: Path, settings: PerformanceRelease, *, identities: Ma
     """Plan only README/figure publication from retained evidence; never acquire it."""
     root = root.resolve(strict=True)
     if identities is not None:
-        if set(identities) != {"current", "baseline"}:
-            raise ValueError("README publication requires all four explicit release/revision assertions")
-        return load_publication(root, settings.publication, identities=identities)
+        return _load_publication(root, settings.publication, identities=identities, require_all_phases=True)
     record = load_preparation(root, settings)
     original = _path(root, settings.preparation).read_bytes()
     if parse_preparation(original) != record:
         raise ValueError("preparation changed while planning README publication")
-    plan = load_publication(root, settings.publication, identities=record.identities)
+    plan = _load_publication(root, settings.publication, identities=record.identities, require_all_phases=True)
     _validate_distinct_paths(tuple(_path(root, name) for name in (settings.preparation, settings.measurement, *(name for name, _ in plan.outputs))))
     originals = dict(plan.originals)
     for name, value in ((settings.preparation, original), (settings.measurement, _path(root, settings.measurement).read_bytes())):
@@ -382,8 +425,13 @@ def measure_release(
             raise ValueError("owner or retained scratch evidence already exists; use performance capture to recover it")
         measurement = load_measurement(root, settings.measurement)
         _, report = report_configuration(root, settings.report)
-        if not isinstance(measurement, SuiteMeasurementPlan) or measurement.schedule is None or type(report["schema"]) is not int or report["schema"] != 2:
-            raise ValueError("candidate capture requires a scheduled suite declaration and a schema-2 complete-run report")
+        if (
+            not isinstance(measurement, SuiteMeasurementPlan)
+            or (measurement.schedule is None and measurement.benchmark_series is None)
+            or type(report["schema"]) is not int
+            or report["schema"] != 2
+        ):
+            raise ValueError("candidate capture requires a scheduled suite or a declared series baseline and a schema-2 complete-run report")
         for suite in measurement.suites:
             context = dict(suite.measurement.measurement.context)
             if (context.get("repository"), context.get("acquisition-owner")) != (settings.repository, "local"):
@@ -393,6 +441,8 @@ def measure_release(
 
         check_release_dependencies(root, packages=dependencies)
     record = load_preparation(root, settings)
+    if isinstance(record.pair, (SeriesPair, SeriesBaseline)) and owner is None:
+        raise ValueError("series release acquisition requires an external --owner handoff")
     reporter = ProgressReporter() if progress is None else progress
     measure_and_retain(
         root,
@@ -406,6 +456,7 @@ def measure_release(
         checkpoint=checkpoint,
         resume=resume,
         progress=reporter,
+        **({"read_release": _series_reader(settings.repository)} if isinstance(record.pair, (SeriesPair, SeriesBaseline)) else {}),
     )
     if before_promotion is not None:
         before_promotion()
@@ -416,3 +467,9 @@ def measure_release(
             plan, _, _ = capture_candidate_handoff(root, settings, owner)
             return publish_publication(plan)
         return publish_publication(load_report_plan(root, settings.report, payload=settings.payload, manifest=settings.manifest))
+
+
+def _series_reader(repository: str) -> Callable[[str], object]:
+    from research_repo_tools.release_validation import api
+
+    return partial(api, repository=repository)

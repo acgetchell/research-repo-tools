@@ -7,7 +7,17 @@ from typing import Literal
 
 from research_repo_tools.evidence import _digest, _load_json, deterministic_json, sha256
 
-__all__ = ["CompletedReview", "ConsentRequired", "FailedReview", "ReviewApproval", "ReviewDenied", "ReviewQuote", "ReviewResult", "UncertainReview"]
+__all__ = [
+    "CompletedReview",
+    "ConsentRequired",
+    "FailedReview",
+    "IncompleteReview",
+    "ReviewApproval",
+    "ReviewDenied",
+    "ReviewQuote",
+    "ReviewResult",
+    "UncertainReview",
+]
 
 _MAX_EVENT_BYTES = 1024 * 1024
 
@@ -110,6 +120,15 @@ class FailedReview:
 
 
 @dataclass(frozen=True, slots=True)
+class IncompleteReview(FailedReview):
+    """Findings and file coverage reported by a partially completed review."""
+
+    findings: int
+    unreviewed_file_count: int
+    unreviewed_files: tuple[tuple[str, str | None], ...]
+
+
+@dataclass(frozen=True, slots=True)
 class ReviewDenied:
     """The identity of a pending review whose quote was declined."""
 
@@ -121,6 +140,7 @@ class UncertainReview:
     """A paid invocation started but completion/billing needs reconciliation."""
 
     reason: str
+    incomplete: IncompleteReview | None = None
 
 
 type ReviewResult = CompletedReview | ConsentRequired | FailedReview | ReviewDenied | UncertainReview
@@ -175,23 +195,58 @@ class AgentEvents:
             return FailedReview(exit_code or 1, self.failure)
         # Consent is a rate-limit stop: older providers exit 0, while providers
         # with failure reporting can exit 1. A crash/signal is not a usable quote.
-        if self.quote is not None and exit_code in (0, 1):
+        if exit_code not in (0, 1):
+            return FailedReview(exit_code, "CodeRabbit failed; review is unavailable")
+        if self.quote is not None:
             return ConsentRequired(self.quote)
-        if exit_code:
-            return FailedReview(exit_code if exit_code > 0 else 128 - exit_code, "CodeRabbit failed; review is unavailable")
         data = self.terminal
         if data is None:
-            return FailedReview(1, "CodeRabbit exited without a completion event")
-        if data.get("status") not in ("review_completed", "review_skipped") or data.get("outcome") not in (None, "completed", "completed_with_warnings"):
+            return FailedReview(1, "CodeRabbit failed; review is unavailable" if exit_code else "CodeRabbit exited without a completion event")
+        if data.get("status") not in ("review_completed", "review_skipped") or data.get("outcome") not in (
+            None,
+            "completed",
+            "completed_with_warnings",
+            "failed",
+        ):
             return FailedReview(1, "CodeRabbit did not complete the review")
-        remaining = data.get("unreviewedFileCount", 0)
         count = data.get("findings")
         files = data.get("reviewedFiles", [])
-        if type(remaining) is not int or remaining != 0:
-            return FailedReview(1, "CodeRabbit left files unreviewed")
         if type(count) is not int or count < 0 or not isinstance(files, list) or any(not isinstance(path, str) for path in files):
             return FailedReview(1, "malformed CodeRabbit completion")
         reused = data.get("reused", False)
         if type(reused) is not bool:
             return FailedReview(1, "malformed CodeRabbit reuse state")
+        if incomplete := _incomplete_review(data, count):
+            return incomplete
+        if exit_code or data.get("outcome") == "failed":
+            return FailedReview(1, "CodeRabbit did not complete the review")
         return CompletedReview(count, tuple(files), reused, data["status"] == "review_skipped")
+
+
+def _incomplete_review(data: dict[str, object], findings: int) -> FailedReview | None:
+    """Classify skipped coverage, or return None when every file was reviewed."""
+    details = data.get("unreviewedFiles", [])
+    if not isinstance(details, list):
+        return FailedReview(1, "malformed CodeRabbit unreviewed files")
+    count = data.get("unreviewedFileCount", len(details))
+    if type(count) is not int or count < len(details):
+        return FailedReview(1, "malformed CodeRabbit unreviewed file count")
+    if not count:
+        return None
+    skipped = []
+    for item in details:
+        if not isinstance(item, dict):
+            return FailedReview(1, "malformed CodeRabbit unreviewed file")
+        path = item.get("fileName", item.get("path", item.get("filePath", item.get("file"))))
+        reason = item.get("reason")
+        if not isinstance(path, str) or not path or (reason is not None and not isinstance(reason, str)):
+            return FailedReview(1, "malformed CodeRabbit unreviewed file")
+        skipped.append((path, reason))
+    lines = [
+        f"CodeRabbit review incomplete. The provider reported {findings} finding{'s' if findings != 1 else ''} and skipped {count} file{'s' if count != 1 else ''}."
+    ]
+    for path, reason in skipped:
+        lines.append(f"  {ascii(path)}" + (f" ({ascii(reason)})" if reason is not None else ""))
+    if any(reason == "diff_too_large" for _, reason in skipped):
+        lines.append("Reduce the oversized file diff before rerunning the review. An identical retry leaves that file uncovered.")
+    return IncompleteReview(1, "\n".join(lines), findings, count, tuple(skipped))

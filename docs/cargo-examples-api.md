@@ -5,7 +5,7 @@ discover and execute a consumer's Cargo examples. Pin a published package and
 validate the consumer's selection and assertions when adopting the runner.
 The general `validation run` contract remains supported.
 See the [consumer example](RUNNING_CHECKS.md#cargo-examples)
-and [migration guidance](cargo-examples-migration.md).
+and [migration guidance](#migrating-static-cargo-example-validation).
 
 ## CLI and discovery
 
@@ -148,3 +148,40 @@ streaming assertion mode on each selected stream, with exact binary matching and
 or exceptions. Invalid marker arguments raise `TypeError` before launch; absent
 markers raise `ValueError` only after a successful command, including when
 `check=False`. An unchecked nonzero exit is returned without asserting markers.
+
+## Migrating static Cargo example validation
+
+The old schema-1 validation plan has `prerequisites` and `[[checks]]` containing
+build commands, explicit binary paths, timeouts and `expect` markers. The new
+schema-1 example plan is a separate contract selected by a separate CLI action;
+passing an old plan to the new action is an error, not implicit conversion.
+
+| Static plan element | Consumer migration |
+| --- | --- |
+| Cargo prerequisite and explicit build-default check | Provide Cargo/toolchain beforehand; the runner discovers targets and owns one ordinary-example build |
+| Hard-coded ordinary binary paths | Omit them; metadata and compiler artifacts supply target names and executable paths |
+| Static target inventory | Omit `include` for runtime discovery of all binary examples; retain consumer inventory/coverage tests |
+| Build-diagnostics check with features | Set `features` under that target's `examples` table, including when its default binary is a stub |
+| Per-check execution timeout | Preserve it as root `timeout` or a per-example override |
+| Build timeout | Preserve it as `build-timeout`, applied to each build |
+| Scientific stdout expectations | Copy unchanged into the corresponding target's `expect`; upstream does not choose or rewrite them |
+| Logger/stderr expectations and shell `2>&1` | Copy stderr markers unchanged into `expect-stderr`; remove shell redirection and guessed executable paths |
+| Arguments or intentional omissions | Preserve literal `args` and explicit consumer `include`/`exclude` policy |
+
+Use the [worked example](RUNNING_CHECKS.md#cargo-examples) to wire a thin Just recipe.
+The runner's order is sorted ordinary targets followed by sorted feature
+overrides. A static plan depending on custom interleaving or arbitrary commands
+should retain `validation run` for those steps rather than assume its list order
+carries across.
+
+Previously, `validation run` captured each command and printed output when it
+completed. The example runner inherits output immediately when there are no
+markers. Per-target `expect` and `expect-stderr` independently enable live
+forwarding and exact matching on stdout and stderr; stdin stays inherited. Read the
+documented buffering, temporary-disk,
+newline and direct-child timeout limits before adopting it. Wrapping the complete
+runner in an outer captured `validation run` check buffers that outer command and
+therefore hides its live output until completion; place per-example markers in
+the example configuration to preserve live forwarding.
+
+Verify the consumer’s expected examples, feature-specific execution, budgets and scientific assertions before retiring the static plan.

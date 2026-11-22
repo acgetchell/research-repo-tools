@@ -8,6 +8,7 @@ preparation = "scratch/preparation.json"
 payload = "scratch/performance/run.json"
 manifest = "scratch/performance/evidence.json"
 mode = "infer-release"
+# Use "version" with an explicitly declared benchmark-series in the measurement file.
 order = "published"
 # Explicit pairs require mode = "explicit" and BOTH current and baseline.
 # current = "v1.2.0"

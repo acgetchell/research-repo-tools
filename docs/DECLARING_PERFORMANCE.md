@@ -332,12 +332,12 @@ the measurement's source/harness patterns when explicit current inventories are
 absent. Membership and hashes must match; all selected bytes, configurations and
 the archive selection are rechecked before the multi-file commit.
 
-Leave `release` and `revision` out of the two `provenance` tables to reuse a
-configuration across releases. Supply `--baseline-release`, `--baseline-revision`,
-`--current-release`, and `--current-revision` from independent workflow inputs.
-Each release/revision pair is required together. Supplied values must agree with
-static assertions when present, and must match the retained evidence. Never
-extract these assertions from the evidence being checked.
+To reuse a configuration, omit `release` and `revision` from each measured
+phase's provenance table. Supply `--current-release` and `--current-revision`
+from the independent handoff. For paired runs, also supply `--baseline-release`
+and `--baseline-revision`. Each pair must agree with the retained evidence
+and any static assertions. See the [initial series configuration](REUSING_BENCHMARKS.md#starting-a-benchmark-series-after-earlier-releases)
+for a current-only example.
 
 The public API is `load_publication(root, configuration, *, identities=None,
 artifacts_only=False)`. `identities` maps `baseline` and/or `current` to

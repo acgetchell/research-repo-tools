@@ -1,8 +1,13 @@
-# Requires a supplying v0.2.5 release. Copy the suites block for independent
+# Copy the suites block for independent
 # targets, with per-suite source/harness/input declarations and semantic identity.
 schema = 5
-# With v0.2.6, use schema = 6 and declare these top-level settings before suites:
+# Optional new-series baseline for the complete current workload. Replace the
+# inventory with every native case ID per suite. Save this example as
+# benchmark-series/extended-suite.toml and select that path in the release workflow.
+# benchmark-series = { id = "extended-suite", first-release = "v1.1.0", workloads = { extended = ["extended/size-2"] } }
+# Declare the exact generated document outputs for either schema.
 # outputs = ["README.md", "docs/performance.md"]
+# For a subsequent paired release, use schema = 6 and add a schedule:
 # schedule = { order = "alternating", trials = 4 }
 # Or schedule = { order = "randomized", trials = 4, seed = 42 }
 # Schema 6 retains each trial and observed phase order; it never pools samples.
@@ -17,6 +22,8 @@ compilation = { baseline = ["just", "extended-build"], current = ["just", "exten
 
 [suites.measurement]
 schema = 4
+# For local owner capture, set this in every suite with the release workflow's repository.
+# context = { repository = "owner/project", acquisition-owner = "local" }
 backend = "export"
 harness-mode = "common"
 sources = ["src/**/*.rs"]

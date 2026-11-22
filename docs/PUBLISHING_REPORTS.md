@@ -9,6 +9,8 @@ See the [publication API](publication-api.md) for the precise transaction limits
 
 - [Document publication](#document-publication)
 - [Complete-run document sections and coordinate plots](#complete-run-document-sections-and-coordinate-plots)
+- [Complete figure generations](#complete-figure-generations)
+- [Document publication migration](#document-publication-migration)
 
 ## Document publication
 
@@ -94,7 +96,7 @@ Git checks; fetching release assets remains a separate explicit operation.
 
 Historical CSV/JSON formats can use declarative conversion into shared companions
 at new paths. See the [publication API](publication-api.md) and
-[migration guide](publication-migration.md). Scientific prose remains consumer-owned.
+[migration guide](#document-publication-migration). Scientific prose remains consumer-owned.
 
 ## Complete-run document sections and coordinate plots
 
@@ -110,28 +112,15 @@ just performance publish tooling/complete-publication.toml
 just performance publish tooling/complete-publication.toml --check
 ```
 
-Schema 2 selects a validated complete-run `archive`, or explicit `payload` and
-`manifest` paths. Archive selection works after scratch cleanup; explicit missing
-or partial scratch inputs fail. The document section links the original full
-payload and envelope, preserving raw cases outside the selected presentation.
-The selected history remains immutable and is revalidated before publication.
+Select the retained `archive` to publish after scratch cleanup, or supply both
+`payload` and `manifest`. Choose named views and map each row to a measured
+benchmark ID. Match the recorded statistic and unit. For a coordinate plot,
+give each row a distinct finite coordinate and use positive values on log axes.
+The generated section links the original evidence, including cases outside the view.
 
-Each configured series names an existing retained view, supplies a display label,
-and maps row keys to semantic benchmark IDs within that view. Row order controls
-the table and CSV; series order controls columns and the plot legend. Every row
-needs a finite, unique numeric coordinate for a coordinate plot. Plot lines follow
-numeric coordinate order. Mean or median and the timing unit must match recorded
-evidence; no unit conversion occurs. Consumer configuration owns workload
-coordinates, labels, scientific eligibility and interpretation.
-
-The optional `plot` produces a deterministic accessible SVG with point timings
-and recorded marginal confidence intervals. Both axes support `linear` or `log`;
-log coordinates must be positive. Reused peers keep their original baseline phase,
-revision and release in tables, figures and CSV, with the complete-run identity.
-Optional `comparisons` select numerator/denominator series by name. Ratios are
-point estimates; time reduction is `100 × (numerator − denominator) / numerator`,
-so positive values mean less denominator time. `svg` requires exactly one such
-comparison; `csv` exports selected timings with provenance and confidence bounds.
+For paired timings, name the numerator and denominator of each comparison.
+The ratio SVG accepts one comparison. A [new series baseline](REUSING_BENCHMARKS.md#starting-a-benchmark-series-after-earlier-releases)
+uses absolute current timings and omits comparisons.
 
 For compact tables, schema 2 also accepts a `table` style. This example selects
 one row column, three configured timing series and two ratio-only comparisons.
@@ -153,48 +142,14 @@ row-heading = "Dimension"
 timing-legend = true
 ```
 
-Cells become `5<br>[4.5, 5.5]`; the caption states the selected statistic,
-recorded unit and common confidence level once. Ratios such as `2×` retain
-explicit numerator/denominator labels below the table. Use `["reduction"]`
-for percentage reductions, `["ratio", "reduction"]` for both, or `[]` for
-timings alone. `reduction-headings` customizes the percentage headings. Heading
-arrays follow comparison order and must cover every comparison when supplied.
-Omitting `table` preserves the existing inline intervals, `Case` heading and
-both comparison columns. Differing confidence levels fail complete-run
-validation; they cannot be presented as one shared level.
+The example renders a timing as `5<br>[4.5, 5.5]` and a ratio as `2×`.
+The shared caption identifies the statistic, unit and confidence level.
+Use `missing = "unavailable"` to display gaps for unmapped cells. A mapped ID
+must exist in its retained view.
 
-The same controls are available through the public Python API:
-
-```python
-from research_repo_tools.run_presentation import RunTableStyle, render_run_table
-
-table = render_run_table(
-    evidence,
-    layout,
-    style=RunTableStyle(
-        row_heading="Dimension",
-        intervals="below",
-        timing_legend=True,
-        comparison_columns=("ratio",),
-        ratio_headings=("Baseline / current", "Reference / current"),
-        ratio_suffix="×",
-    ),
-)
-```
-
-Here `layout.comparisons` selects the same two pairs as the TOML example.
-These table style controls are available from v0.2.0. Older consumers must
-update their published pin before adopting this configuration.
-
-Missing selections fail by default. Explicit `missing = "unavailable"` permits
-unmapped cells, labels them in tables and CSV, and breaks plot lines at those
-rows. Invalid or unmeasured mapped IDs always fail. Coverage states selected,
-unavailable and omitted phase cases. Without an optional formatter, document bytes
-outside markers survive, and
-the document, SVGs and CSV move in one transaction with the existing freshness,
-release-reference, tagged-link and rollback checks. See the
-[publication configuration](publication-api.md#publication-configuration-v2)
-and [presentation API](complete-run-api.md#configured-presentation).
+See the [publication fields and accepted evidence](publication-api.md#publication-configuration-v2)
+for input and output constraints, and the [presentation API](complete-run-api.md#configured-presentation)
+for the Python equivalent, style defaults and comparison arithmetic.
 
 ## Complete figure generations
 
@@ -213,5 +168,103 @@ with publish_directory(Path("figures/validation")) as candidate:
 Only after generation and validation finish does the directory replace the
 previous figure set. Caught commit failures restore the original tree; incomplete
 rollback reports a retained recovery directory. See the
-[consumer deletion map](shared-capability-migration.md) before removing
+[consumer deletion map](migration.md#shared-capability-migration) before removing
 working implementations; adoption requires an exact published release.
+
+## Document publication migration
+
+Pin a published package supplying the [publication API](publication-api.md);
+see [release availability](../README.md#release-availability). Package publication
+and downstream migration are separate checkpoints. Keep the consumer's retained schemas and original evidence
+bytes throughout adoption; follow the
+[performance migration contract](performance-migration.md).
+
+### Shared mechanics and consumer policy
+
+Move marker validation, byte-preserving section replacement, candidate snapshots,
+reference assertions, deterministic timing tables/SVGs, local tagged-blob checks,
+and multi-file publication into shared calls. Consumers retain benchmark selection,
+scientific conclusions, eligibility rules, release/measurement choices, source
+inventories and historical layout declarations. Shared configured workflows own
+discovery, measurement, provenance capture and conversion mechanics. No consumer
+name selects behavior.
+
+MCMC's `publish_performance_readme.py` is replaced by publication TOML and separate
+scientific prose. Convert historical input to shared evidence at new paths;
+preserve historical tables/SVGs as immutable files without retaining their writers.
+For a consumer with additional scientific rendering requirements, after checking the
+artifact/report release pair and current package release, pass the original CSV,
+JSON provenance, report, and package metadata bytes as `inputs` to
+`plan_publication`. Use `MarkerPair` for the existing PERFORMANCE delimiters,
+`figures` for candidate SVG bytes, and fixed-value `ReleaseRule` assertions for
+active references. Call `publish_publication` once for all outputs.
+
+The supported adapter structure is:
+
+```python
+from research_repo_tools.publication import GitCheck, MarkerPair, plan_publication
+
+
+def plan_validated_report(root, original_inputs, section, svg_path, svg_bytes, tag):
+    """Plan report edits from the input bytes the consumer validated for this release.
+
+    The consumer must already have checked payload integrity, release and report
+    consistency, source and harness identity, and eligibility.
+    """
+    linked_artifacts = ("docs/PERFORMANCE.md", "evidence/report.csv", "evidence/report.json", svg_path)
+    return plan_publication(
+        root,
+        "README.md",
+        MarkerPair("<!-- PERFORMANCE:BEGIN -->", "<!-- PERFORMANCE:END -->"),
+        section,
+        inputs=original_inputs,
+        figures={svg_path: svg_bytes},
+        git_checks=(GitCheck(tag, linked_artifacts),),
+    )
+```
+
+Snapshot inputs before parsing them, and validate those same bytes rather than
+rereading a file after validation to populate `inputs`. This lets the planner
+reject changes between parsing, rendering, preview, and publication. Include
+all files that affect consumer validation, not only the table payload. The
+shared API's file checks do not replace domain/schema validation.
+
+For new shared-envelope evidence, the configuration adapter can replace this
+Python wrapper. Record baseline/current releases under provenance `context.release`,
+maintain independent revision and optional context/digest expectations in the
+publication TOML, and configure all three package/report reference selectors.
+The [task guide](#document-publication) contains a complete example.
+
+### Intentional contract changes
+
+The default tagged publisher requires an existing local tag. Explicit
+`tag-policy="prepare"` permits a missing future tag only with newer working-tree
+evidence, a repository, and matching current source/harness inventories using
+shared fingerprint framing. If the tag exists at planning or publication time,
+exact blob verification is mandatory. This replaces the former two-step advice
+to publish local links first; see the [workflow contract](workflow-api.md).
+
+Exact blob verification replaces text-mode or attribute-filtered hashes.
+Different CRLF/LF bytes, repaired retained evidence, or a newly rendered SVG cannot
+claim the identity of an older tagged artifact. Preserve historical figure bytes
+and renderers when required; adopt the dependency-free SVG layout for new
+publications explicitly. Do not silently regenerate evidence hashes or mutate tags
+to make checks pass.
+
+The shared renderer uses explicit row order, fixed general numeric formatting,
+recorded timing units, full coverage counts, and neutral point-ratio language.
+It does not preserve MCMC's Matplotlib layout or duration formatter byte for byte.
+Preserve old figures at their original paths. Custom scientific plotting belongs
+in consumer notebooks; shared maintenance and SVG rendering add no plotting
+dependencies. Historical visual identity alone does not require legacy writers.
+
+Marker interiors use LF while surrounding bytes remain untouched. Paths reject
+all symlink components and portable aliases, and failures preserve original
+outputs with the shared rollback/recovery behavior. These defaults are consistent
+across consumers and are not optional compatibility modes.
+
+Before deleting the consumer helpers, pin the released package and exercise its
+legacy evidence, release mismatch, malformed markers, historical links, tagged
+artifact mismatch, deterministic rerender, and failed multi-output publication
+cases. Keep scientific assertions and retained-schema fixtures in the consumer;
+shared mechanics and isolated wheel/sdist regression coverage belong here.

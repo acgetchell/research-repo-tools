@@ -99,4 +99,4 @@ $native.PSObject.Properties | ForEach-Object { Set-Item "Env:$($_.Name)" $_.Valu
 `GITHUB_ENV`. Missing prerequisites and probe errors return nonzero and publish
 no assignments. Provision hosts explicitly in consumer setup/CI before discovery.
 See the [API contracts](papers-api.md#paper-date-pdf-and-native-discovery-api) and
-[consumer deletion maps](shared-capability-migration.md#paper-and-raw-line-adoption).
+[consumer deletion maps](migration.md#paper-and-raw-line-adoption).

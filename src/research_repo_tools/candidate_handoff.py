@@ -3,6 +3,7 @@
 from collections.abc import Callable
 from pathlib import Path
 
+from research_repo_tools.benchmark_series import SeriesBaseline, SeriesPair, select_series
 from research_repo_tools.candidate_hosted import AcquisitionProducer, serialize_acquisition_producer
 from research_repo_tools.candidate_publication import _resume_candidate_publication, plan_candidate_publication
 from research_repo_tools.candidate_reuse import CandidatePolicy, _candidate_observations, acquisition_assertion_digest, serialize_candidate_policy
@@ -40,14 +41,26 @@ def capture_candidate_handoff(
     if producer is not None and (producer.repository, producer.commit) != (settings.repository, preparation.current_revision):
         raise ValueError("hosted producer differs from the prepared repository or current source")
 
+    series = isinstance(preparation.pair, (SeriesBaseline, SeriesPair))
+    measurement = load_measurement(root, settings.measurement)
+
     def unchanged() -> None:
+        if isinstance(preparation.pair, (SeriesBaseline, SeriesPair)):
+            from research_repo_tools.performance_release import _series_reader
+            from research_repo_tools.suite_measurement import SuiteMeasurementPlan
+
+            if not isinstance(measurement, SuiteMeasurementPlan):
+                raise ValueError("series acquisition requires a suite plan")
+            observed = select_series(root, settings.measurement, measurement, preparation.pair.current, _series_reader(settings.repository))
+            if observed != preparation.pair:
+                raise ValueError("published series history changed since acquisition")
         if serialize_preparation(load_preparation(root, settings)) != preparation_bytes:
             raise ValueError("preparation changed during handoff capture")
 
     payload, manifest = (_path(root, name).read_bytes() for name in (settings.payload, settings.manifest))
     evidence = parse_evidence(payload, manifest)
-    run = validate_run_policy(evidence, load_measurement(root, settings.measurement), release=True)
-    if not isinstance(run, ScheduledRun):
+    run = validate_run_policy(evidence, measurement, release=True)
+    if not (isinstance(run, ScheduledRun) or (series and isinstance(run, SuiteRun) and run.current_only)):
         raise ValueError("candidate handoff requires a declared trial schedule")
     sources = dict(evidence.sources)
     for phase, (tag, revision) in preparation.identities.items():
@@ -72,6 +85,7 @@ def capture_candidate_handoff(
             sources["current"],
             tuple((trial, suite, phase, source) for trial, suite, phase, _, source in _candidate_observations(run)),
             report=settings.report,
+            series_history=preparation.pair.history if isinstance(preparation.pair, (SeriesBaseline, SeriesPair)) else None,
         ),
         verify=unchanged,
         preparation=preparation_bytes,

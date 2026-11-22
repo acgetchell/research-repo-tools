@@ -8,12 +8,13 @@ import json
 import tempfile
 import unicodedata
 from collections.abc import Callable, Iterator, Mapping
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any
 
 from research_repo_tools._dependency_observation import DependencyOperation
 from research_repo_tools.archives import ArchiveLimits, extract_archive
+from research_repo_tools.benchmark_series import SeriesHistory, select_series
 from research_repo_tools.candidate_publication import _acquisition_input_keys, _parse_publication, _PublicationReceipt
 from research_repo_tools.complete_runs import CompleteSample, _array, _integer, run_identity
 from research_repo_tools.criterion_suites import _archive
@@ -41,9 +42,11 @@ from research_repo_tools.suite_runs import SuiteRun, _source, parse_suite_run, v
 
 __all__ = [
     "CandidatePolicy",
+    "CandidatePreflight",
     "acquisition_assertion_digest",
     "parse_candidate_policy",
     "plan_candidate_archive",
+    "preflight_candidate_release",
     "retain_candidate_release",
     "serialize_candidate_policy",
     "verify_candidate_archive",
@@ -75,6 +78,12 @@ class CandidatePolicy:
     observations: tuple[tuple[int, str, str, Provenance], ...]
     report: str | None = None
     first_release: bool = False
+    series_history: SeriesHistory | None = None
+
+    @property
+    def current_only(self) -> bool:
+        """Return whether the acquisition has no predecessor to measure."""
+        return self.first_release or (self.series_history is not None and self.series_history.predecessor is None)
 
     def __post_init__(self) -> None:
         _repository(self.repository)
@@ -86,13 +95,19 @@ class CandidatePolicy:
             raise ValueError("candidate reuse requires an explicit owner and a suite measurement declaration")
         if type(self.first_release) is not bool:
             raise ValueError("first_release must be a boolean")
-        schedule = self.measurement.schedule
-        if self.first_release and (schedule is not None or self.report is None):
-            raise ValueError("first-release candidate reuse requires a single acquisition and a declared report")
-        if not self.first_release and schedule is None:
-            raise ValueError("paired candidate reuse requires schema-6 measurement")
         if not isinstance(self.candidate, Provenance):
             raise ValueError("candidate requires independent original source provenance")
+        schedule = self.measurement.schedule
+        if (self.series_history is None) != (self.measurement.benchmark_series is None):
+            raise ValueError("series candidate requires its frozen selection and workload contract")
+        if self.series_history is not None:
+            captured = dict(self.candidate.context).get("benchmark-series-selection")
+            if self.first_release or self.report is None or captured != self.series_history.context_value():
+                raise ValueError("series candidate differs from original selection")
+        if self.current_only and (schedule is not None or self.report is None):
+            raise ValueError("first-release candidate reuse requires a single acquisition and a declared report")
+        if not self.current_only and schedule is None:
+            raise ValueError("paired candidate reuse requires schema-6 measurement")
         receipt = dict(self.candidate.context).get("source-export", "")
         validate_source_record(receipt, self.candidate.revision)
         if self.report is not None:
@@ -113,7 +128,7 @@ class CandidatePolicy:
                 or not 1 <= trial <= (schedule.trials if schedule is not None else 1)
                 or suite not in {s.name for s in self.measurement.suites}
                 or phase not in {"baseline", "current"}
-                or (self.first_release and phase != "current")
+                or (self.current_only and phase != "current")
                 or not isinstance(source, Provenance)
             ):
                 raise ValueError("invalid candidate observation assertion")
@@ -129,9 +144,12 @@ def serialize_candidate_policy(policy: CandidatePolicy) -> bytes:
     schema = POLICY_SCHEMA if policy.report is None else "research-repo-tools/candidate-policy/v2"
     if policy.first_release:
         schema = "research-repo-tools/candidate-policy/v3"
+    if policy.series_history is not None:
+        schema = "research-repo-tools/candidate-policy/v4"
     return deterministic_json(
         {
             "schema": schema,
+            **({"series_selection": policy.series_history.document()} if policy.series_history is not None else {}),
             **({"first_release": True} if policy.first_release else {}),
             **({"report": policy.report} if policy.report is not None else {}),
             "repository": policy.repository,
@@ -160,6 +178,8 @@ def parse_candidate_policy(payload: bytes) -> CandidatePolicy:
         fields.update(("first_release", "report"))
         if raw.get("first_release") is not True:
             raise ValueError("candidate policy v3 requires explicit first-release intent")
+    elif raw.get("schema") == "research-repo-tools/candidate-policy/v4":
+        fields.update(("report", "series_selection"))
     elif raw.get("schema") == "research-repo-tools/candidate-policy/v2":
         fields.add("report")
     elif raw.get("schema") != POLICY_SCHEMA:
@@ -188,6 +208,7 @@ def parse_candidate_policy(payload: bytes) -> CandidatePolicy:
         tuple(observations),
         _string(raw["report"], "report") if "report" in raw else None,
         first,
+        SeriesHistory.parse(raw["series_selection"]) if "series_selection" in raw else None,
     )
 
 
@@ -214,8 +235,8 @@ def _candidate_observations(run: ScheduledRun | SuiteRun) -> Iterator[tuple[int,
 
 
 def _eligible(evidence: Evidence, policy: CandidatePolicy) -> ScheduledRun | SuiteRun:
-    run = validate_suite_policy(evidence, policy.measurement) if policy.first_release else validate_scheduled_policy(evidence, policy.measurement)
-    if isinstance(run, SuiteRun) and not run.first_release:
+    run = validate_suite_policy(evidence, policy.measurement) if policy.current_only else validate_scheduled_policy(evidence, policy.measurement)
+    if isinstance(run, SuiteRun) and not run.current_only:
         raise ValueError("first-release candidate requires evidence without a predecessor")
     if run_identity(evidence) != policy.identity or dict(evidence.sources)["current"] != policy.candidate:
         raise ValueError("candidate differs from independent acquisition assertions")
@@ -255,8 +276,8 @@ def _binding(policy: CandidatePolicy, final: str, publication: _PublicationRecei
         archive = publication.archive
         # Legacy document exceptions cannot authorize edits to old history.
         historical = {name for name in before if name.startswith(f"{archive}/runs/")}
-        if any(before[name] != after.get(name) for name in historical):
-            raise ValueError("historical benchmark run bytes or modes changed")
+        if changed_history := sorted(name for name in historical if before[name] != after.get(name)):
+            raise ValueError(f"historical benchmark run bytes or modes changed: {changed_history}")
         # Reserve the complete history namespace. A legacy Markdown exception
         # must not introduce an unindexed partial run beside the new run trio.
         outputs = {name for name in outputs if not name.startswith(f"{archive}/")}
@@ -273,11 +294,12 @@ def _binding(policy: CandidatePolicy, final: str, publication: _PublicationRecei
     def canonical(name: str) -> str:
         return unicodedata.normalize("NFC", name).casefold()
 
-    if {canonical(name) for name in inputs} & {canonical(name) for name in outputs}:
-        raise ValueError("output exception overlaps independently observed acquisition inputs")
+    input_keys = {canonical(name) for name in inputs}
+    if overlaps := sorted(name for name in outputs if canonical(name) in input_keys):
+        raise ValueError(f"output exception overlaps independently observed acquisition inputs: {overlaps}")
     for name in outputs:
         if before.get(name, (None, False))[1] or after.get(name, (None, False))[1]:
-            raise ValueError("executable files cannot be declared report outputs")
+            raise ValueError(f"executable files cannot be declared report outputs: {name}")
     changed = sorted(name for name in before.keys() | after.keys() if before.get(name) != after.get(name))
     if set(changed) - outputs:
         raise ValueError(f"performance-relevant or undeclared final-tree differences: {sorted(set(changed) - outputs)}")
@@ -334,6 +356,34 @@ def _acceptance(payload: bytes, policy: CandidatePolicy) -> dict[str, Any]:
         raise ValueError("candidate acceptance policy/identity changed")
     _digest(raw["archive_sha256"], "accepted archive")
     return raw
+
+
+@dataclass(frozen=True, slots=True)
+class CandidatePreflight:
+    """Local source comparison for one preparation commit and one acquisition."""
+
+    commit: str
+    identity: str
+    changed_paths: tuple[str, ...]
+
+
+def preflight_candidate_release(
+    root: Path,
+    evidence: Evidence,
+    policy: CandidatePolicy,
+    *,
+    commit: str,
+    acquisition_sha256: str,
+    publication_receipt: bytes | None = None,
+    publication_sha256: str | None = None,
+) -> CandidatePreflight:
+    """Check the clean preparation commit offline against the original owner's handoff."""
+    if policy.commit is not None and policy.commit != commit:
+        raise ValueError("preflight commit differs from the commit selected in the acquisition policy")
+    selected = replace(policy, commit=_sha(commit))
+    binding, recheck = _candidate_source_binding(root, evidence, selected, acquisition_sha256, publication_receipt, publication_sha256)
+    recheck()
+    return CandidatePreflight(commit, policy.identity, tuple(binding["changed"]))
 
 
 def verify_candidate_release(
@@ -501,6 +551,42 @@ def _retain_candidate_release(
     )
 
 
+def _candidate_source_binding(
+    root: Path, evidence: Evidence, policy: CandidatePolicy, acquisition_sha256: str, publication_receipt: bytes | None, publication_sha256: str | None
+) -> tuple[dict[str, Any], Callable[[], None]]:
+    """Authenticate the original acquisition and bind it to a locally observed clean commit."""
+    _digest(acquisition_sha256, "trusted Step 1 assertion digest")
+    if acquisition_assertion_digest(policy) != acquisition_sha256:
+        raise ValueError("candidate assertions differ from trusted Step 1 handoff")
+    commit = _final_commit(policy)
+    _eligible(evidence, policy)
+    publication = None
+    if policy.report is not None:
+        if publication_receipt is None or publication_sha256 is None:
+            raise ValueError("committed evidence requires a publication receipt and independently trusted publication SHA-256")
+        if not isinstance(publication_receipt, bytes):
+            raise TypeError("publication receipt must be immutable bytes")
+        _digest(publication_sha256, "trusted publication digest")
+        if sha256(publication_receipt) != publication_sha256:
+            raise ValueError("publication receipt differs from trusted Step 1 handoff")
+        publication = _parse_publication(publication_receipt, policy)
+    elif publication_receipt is not None or publication_sha256 is not None:
+        raise ValueError("publication receipt requires a declared candidate report")
+    require_release_checkout(root, commit, offline=True)
+    final = capture_source(root, commit)
+    working = capture_source(root, "HEAD", working_tree=True)
+    if working.revision != commit or working.dirty:
+        raise ValueError("candidate binding requires the selected clean HEAD")
+    binding = _binding(policy, final.provenance(), publication)
+
+    def recheck() -> None:
+        final.verify()
+        working.verify()
+        require_release_checkout(root, commit, offline=True)
+
+    return binding, recheck
+
+
 def _verify_candidate_release(
     root: Path,
     evidence: Evidence,
@@ -537,34 +623,21 @@ def _verify_candidate_release(
         if entry.root != root or entry.packages != dependencies:
             raise ValueError("candidate dependency entry differs from the observed source")
         entry.verify()
-    _digest(acquisition_sha256, "trusted Step 1 assertion digest")
-    if acquisition_assertion_digest(policy) != acquisition_sha256:
-        raise ValueError("candidate assertions differ from trusted Step 1 handoff")
     commit = _final_commit(policy)
-    _eligible(evidence, policy)
+    pinned = _acceptance(expected, policy) if expected is not None else None
     if native_policy.validation.repository != policy.repository:
         raise ValueError("native evidence repository differs")
-    if policy.first_release:
-        require_first_release_history(read)
-    pinned = _acceptance(expected, policy) if expected is not None else None
-    publication = None
-    if policy.report is not None:
-        if publication_receipt is None or publication_sha256 is None:
-            raise ValueError("committed evidence requires a publication receipt and independently trusted publication SHA-256")
-        if not isinstance(publication_receipt, bytes):
-            raise TypeError("publication receipt must be immutable bytes")
-        _digest(publication_sha256, "trusted publication digest")
-        if sha256(publication_receipt) != publication_sha256:
-            raise ValueError("publication receipt differs from trusted Step 1 handoff")
-        publication = _parse_publication(publication_receipt, policy)
-    elif publication_receipt is not None or publication_sha256 is not None:
-        raise ValueError("publication receipt requires a declared candidate report")
-    require_release_checkout(root, commit)
-    final = capture_source(root, commit)
-    working = capture_source(root, "HEAD", working_tree=True)
-    if working.revision != commit or working.dirty:
-        raise ValueError("final acceptance requires the selected clean HEAD")
-    binding = _binding(policy, final.provenance(), publication)
+    binding, recheck_source = _candidate_source_binding(root, evidence, policy, acquisition_sha256, publication_receipt, publication_sha256)
+
+    def verify_history() -> None:
+        if policy.series_history is not None:
+            selection = select_series(root, policy.series_history.declaration, policy.measurement, policy.tag, read)
+            if selection.history != policy.series_history:
+                raise ValueError("published benchmark series history changed since preparation")
+        elif policy.first_release:
+            require_first_release_history(read)
+
+    verify_history()
     native = verify_release_evidence(
         native_policy,
         policy.tag.removeprefix("v"),
@@ -590,11 +663,8 @@ def _verify_candidate_release(
 
     def guard() -> None:
         check_release_dependencies(root, packages=dependencies)
-        final.verify()
-        working.verify()
-        require_release_checkout(root, commit)
-        if policy.first_release:
-            require_first_release_history(read)
+        recheck_source()
+        verify_history()
 
     if retain is None:
         guard()

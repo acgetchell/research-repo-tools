@@ -1,27 +1,15 @@
 # Installing and managing toolchains
 
 For a first installation, use the [consumer quickstart](../README.md#install-with-uv).
-For an existing v0.3.0 pin, follow the [v0.3.1 upgrade instructions](../README.md#automatically-adopting-a-published-supplier).
+To change an existing pin, follow [shared Python adoption](UPDATING_DEPENDENCIES.md#shared-python-adoption).
 Use this guide to configure optional tools, understand what setup installs, or recover a failed installation.
 
 ## Ownership and declarations
 
-Consumers own tool declarations; the exact installed shared package owns the
-mandatory Python support minimum through its `Requires-Python` metadata.
-This language-feature guard applies to application packaging and dependency-only
-projects without an enablement switch. `toolchain.inherit-python` controls only
-development-selector mirroring and cannot bypass the minimum. See
-[consumer adoption](UPDATING_DEPENDENCIES.md#shared-python-adoption). There are no repository-name profiles.
-The independent `toolchain.inherit-python-tools` opt-in selects the installed
-`python-tools` extra as the authority for Ruff, ty, and pytest. See
-[tool-profile adoption](UPDATING_DEPENDENCIES.md#shared-python-tool-versions).
-
-Install the published `python-bootstrap.py` template beside the matching Justfile
-adoption recipes. This standard-library-only helper starts under older Python,
-reads the exact requested release's PyPI metadata, and selects a compatible managed
-interpreter before importing the target package. The installed target distribution
-then owns the mandatory floor. See [standalone adoption](UPDATING_DEPENDENCIES.md#shared-python-adoption)
-for offline/local-artifact metadata and dry-run/apply behavior.
+Install the matching Justfile and `python-bootstrap.py` from the pinned package.
+The [Python adoption guide](UPDATING_DEPENDENCIES.md#shared-python-adoption)
+covers interpreter selection and application support bounds. To inherit Ruff,
+ty and pytest versions, opt into the [shared Python tool profile](UPDATING_DEPENDENCIES.md#shared-python-tool-versions).
 
 | Input | Authority |
 | --- | --- |
@@ -80,8 +68,7 @@ without package synchronization or dependency builds. The
 keeps locked package installation and ordinary setup in separate steps.
 Setup commands and toolchain probes remove both lookup variables from child
 environments; explicitly requested `toolchain run` commands retain them.
-Other build settings remain inherited. This replaces the former forwarding of
-lookup credentials to every setup subprocess. Release-installation diagnostics
+Other build settings remain inherited. Release-installation diagnostics
 redact both credential values, and asset downloads remain unauthenticated.
 Missing checksums, unsupported assets and mismatched versions fail before
 publication. Setup, check, run, export and upgrade use these same managed paths;
@@ -139,33 +126,12 @@ rerun it. Setup does not rewrite declarations, locks, or existing recipes.
 
 ## Routine recipes and CLI contract
 
-The consumer template provides:
-
-- `just actions-check`: check declared Actions pin consistency offline, using the same `actions_inputs` as the updater.
-- `just changelog`: run the shared generator with the checked managed git-cliff.
-- `just clean`: preview obsolete tool installations and retained coverage; pass `--apply` to remove them.
-- `just clean-coverage`: preview retained coverage only; pass `--apply` to remove it, preserving current reports.
-- `just help`: list all available commands and arguments in lexicographic order.
-- `just setup`: synchronize declared tools and then the locked Python environment, including `dev`.
-- `just tools-check`: inspect without syncing the environment or downloading Python.
-- `just tools-sync-binaries`: verify and repair pinned release binaries without package synchronization.
-- `just update`: upgrade tools, then Cargo and Python dependencies and synchronize dev.
-- `just update-actions`: explicitly update selected Actions commit pins; preview with `--dry-run` or `--check`.
-- `just update-cargo-dependencies`: upgrade root Cargo requirements and lock resolution, if present.
-- `just update-cargo-tools`: upgrade declared Cargo tools and publish verified TOML pins.
-- `just update-dependencies`: run the Cargo and Python dependency workflows.
-- `just update-python-dependencies`: update main dev pins, refresh project locks and sync their environments.
-  Enable `supplier_update` to include the shared package pin.
-- `just update-tools`: upgrade uv and declared tools without shell/bootstrap setup.
-- `just update-uv`: upgrade uv through its installation owner and reconcile its pin.
-- `just workflow-allowlist-check`: check external workflow/composite references against strict consumer selected-actions policy.
-
-Bare `just` shows help. When merging the template, reconcile its default recipe
-with the consuming repository's existing default.
-
-After setup, use the recipes above directly without environment activation.
-`just tools-check` checks the existing environment without synchronization or
-Python downloads. Its recipe carries the read-only uv flags internally.
+After setup, run `just tools-check` to inspect the existing environment without
+syncing or downloading Python. Run `just tools-sync-binaries` to repair only
+release binaries. Bare `just` and `just help` list the installed recipes. When
+merging the template, reconcile its default recipe with the consumer's existing
+default. See the [consumer command reference](RUNNING_COMMANDS.md#just-recipes)
+for the full catalog.
 
 The underlying commands are:
 
@@ -198,6 +164,28 @@ the path selected by `UV_PROJECT_ENVIRONMENT`) so its installed dependencies rem
 available. If that environment is missing or incompatible with the declarations,
 the toolchain selects a compatible uv-managed interpreter.
 
+## Selecting tools for a job
+
+A narrow CI job can select exact keys from its existing tool catalog. After
+one-time setup and adopting the matching Just template, use the same repeatable
+`--tool` selection for setup, verification, export and execution. For example,
+with a declared `zizmor` pin:
+
+```sh
+just tools-sync --tool zizmor
+just tools-check --tool zizmor
+just tools-export --tool zizmor
+just tools-run --tool zizmor -- zizmor .github/workflows
+```
+
+Export appends checked assignments to `GITHUB_ENV`; locally pass `--file PATH`.
+Repeat `--tool` for multiple tools. `--tool cargo` selects only pinned minimal
+Rust/Cargo for packaging; `--tool cargo-edit` selects the package providing
+`cargo upgrade`. Binary selections such as `gitleaks` need no Rust; Cargo tools
+add minimal Rust without the catalog's extra components or targets. Omission
+keeps full contributor behavior. Selection does not install native libraries or
+synchronize project Python groups; retain those prerequisites in the owning job.
+
 ## Installation ownership and failures
 
 uv remains owned by its original installer. Just is installed in uv's user tool
@@ -209,10 +197,9 @@ without activating that environment.
 Managed installations live under `~/.cache/research-repo-tools`, overridden by an
 absolute `RESEARCH_REPO_TOOLS_HOME`. New Python installs default to its `python`
 subdirectory; an explicit `UV_PYTHON_INSTALL_DIR` remains honored. Existing
-compatible project environments remain usable. This replaces the former default
-of installing Python into uv's user-wide store; those existing installs are not
-migrated or cleaned. Explicit Python installation through uv disables user-level
-executable aliases and Windows registry entries.
+compatible project environments remain usable. Setup and cleanup preserve
+installations in uv's user-wide store. Explicit Python installation through uv
+disables user-level executable aliases and Windows registry entries.
 
 On Windows, keep a custom `RESEARCH_REPO_TOOLS_HOME` short: Rust adds nested
 toolchain and library directories, and native build tools can still hit the
@@ -377,77 +364,11 @@ version probe establishes executable availability, not those workflows' success.
 
 ## Updates
 
-Sync converges on declared versions; changing versions is a separate reviewed
-operation. Edit Cargo pins or `rust-toolchain.toml`, then run setup and the
-consumer's validation. Change the package pin with uv, refresh `uv.lock`, and
-review its release notes, then rerun setup.
-
-`just update` runs the tools workflow before the dependency workflow.
-`just update-tools` and `just update-uv` also start with the uv owner upgrade.
-Standalone uv uses its official self-updater; Homebrew uv is upgraded through
-Homebrew. Self-update requires a matching standalone installation receipt.
-`uv tool` installations require a receipt binding the selected entrypoint to its
-environment binary. Their native upgrade verifies the actual interpreter identity and retains requirement
-constraints and selects stable releases without downloading another Python.
-Other installation owners receive a diagnostic before any upgrade is attempted;
-upgrade uv through that manager and reconcile its project pin manually, or use
-the official standalone installer to enable automatic updates. A supported,
-externally updated uv can run `just update` even while the old project pin differs:
-that recipe starts the
-already-installed package without syncing or enforcing the stale uv configuration.
-
-Upgrading the user-level uv affects other checkouts using it. Their exact uv pins
-must also be reconciled before running their locked commands. An installed uv
-upgrade cannot be rolled back if
-writing the project pin fails. Fix the reported cause and rerun `just update`.
-The tools steps retain the Rust compiler and shared package pins. Review compiler
-pin changes separately. The dependency steps update Cargo requirements and
-resolution, update main Python pins, refresh the main lock, sync dev, and
-refresh and sync any declared independent Python projects. With
-[supplier adoption](UPDATING_DEPENDENCIES.md#automatically-adopting-a-published-supplier)
-enabled, the Python step can also advance the named shared package pin.
-See the [consumer update recipes](UPDATING_DEPENDENCIES.md#dependency-and-tool-updates) for
-Cargo exclusions, extra manifests, and Python-only behavior.
-Other included tooling-group pins remain resolver constraints.
-
-Use `just update-cargo-tools` for declared managed Cargo tools and release binaries.
-It resolves the latest non-yanked stable Cargo releases from the crates.io sparse
-index and stable release binaries from their upstream GitHub repositories.
-It never downgrades a pin or opts into a prerelease;
-an existing prerelease advances when a newer stable release exists. Build
-metadata does not change SemVer precedence, so equal-precedence pins are retained.
-No undeclared package is queried or installed. Rust compatibility is verified by
-the exact `cargo install --locked --version =VERSION` build, not guessed from
-registry metadata. An incompatible release fails without publishing new pins.
-
-The command checks the exact stable uv prerequisite before resolution, reports
-proposed changes, installs in distinct managed version directories, and verifies
-every selected executable before changing the TOML source. `toolchain upgrade
---dry-run` performs resolution and prints changes without installing or writing.
-Current declarations produce a verified no-op. Missing/current installations
-fail verification; use sync to repair them before retrying upgrades.
-Comments, unrelated configuration, line endings, permissions, and symlink targets
-are preserved. Standalone configuration updates its own `[toolchain.cargo]`
-and `[toolchain.binaries]` tables. Dotted and quoted keys work; inline-table declarations must first be
-expanded into standalone assignments. Unsupported source forms fail before installation.
-
-If resolution, installation, or publication fails, old declarations and old
-versioned installations remain usable. Successful candidate installations stay
-cached. Fix the cause and rerun the upgrade. Concurrent configuration edits are
-detected before publication and are never deliberately overwritten. No lockfile,
-user Cargo installation, or Rust compiler pin is changed by this command.
-
-`deps update-tools` supports consumers whose Just variables track user-installed
-Cargo tools, explicitly declared Homebrew tools, and uv. It reconciles mapped pins after the consumer's
-native package-manager update; it never installs tools itself. Machine-configuration
-repositories can use the [user-installed tool recipes](UPDATING_DEPENDENCIES.md#user-installed-tool-updates),
-including `cargo install-update --all --locked`. This separate ownership model
-does not change the isolated TOML toolchain contract or its standard template.
-For mixed inventories, see the [portable ownership composition](UPDATING_DEPENDENCIES.md#mixed-installation-owners-on-linux-and-macos).
-Prebuilt dprint and rumdl use `toolchain.binaries`; their authoritative TOML pins
-are upgraded by the existing verified release-binary machinery. Do not map those
-managed tools back into competing Just variables. Just remains supplied by
-`rust-just`. Native Windows ARM64 rumdl binaries are unavailable; use Cargo there.
+Run setup to install or repair the declared versions. To change an exact pin,
+follow the [uv and managed tool upgrade procedure](UPDATING_DEPENDENCIES.md#upgrading-uv-and-managed-tools).
+Consumers with user-wide Cargo or Homebrew tools use the
+[user-installed tool recipes](UPDATING_DEPENDENCIES.md#user-installed-tool-updates).
+To upgrade the shared package itself, follow [shared Python adoption](UPDATING_DEPENDENCIES.md#shared-python-adoption).
 
 Upstream behavior: [uv installation](https://docs.astral.sh/uv/getting-started/installation/),
 [user tools](https://docs.astral.sh/uv/concepts/tools/),
@@ -503,3 +424,89 @@ package-owned store; user-wide Cargo, rustup and uv Python installs, project
 [cleanup contract](INSTALLING.md#cleaning-obsolete-installations) for retention
 rules and Windows guidance. Consumers copy the packaged recipe and pin the shared
 package; the cleanup implementation lives here.
+
+## Reproducible isolated release runtimes
+
+The stronger runtime-policy capability selects a **dedicated runtime lock**,
+independent of the consumer's development lock. A reviewed manifest binds the
+complete installed dependency graph, exact wheel bytes, Python/platform, and
+any required native source-build evidence. The [isolated tooling wrapper](UPDATING_DEPENDENCIES.md#development-pins-and-release-dependencies)
+continues to resolve its transitive dependencies independently; `--locked` with
+`--no-project` does not turn that environment into a locked runtime.
+
+Use a trusted bootstrap installation outside the consumer checkout, with the
+matching `release-runtime` recipe from the shipped Justfile. With v0.3.1 installed,
+resolve the dedicated project there:
+
+```sh
+just release-runtime resolve --directory /trusted/runtime-project --require 'research-repo-tools==0.3.1'
+```
+
+Keep uv as a prerequisite. Add these bootstrap recipes alongside the trusted
+Justfile with positional arguments enabled. `runtime-sync` installs only wheels
+from the lock. `runtime-builds` supports the existing explicit native-build
+policy, using the bootstrap interpreter rather than executing the target venv:
+
+```just
+runtime-builds project:
+    uv run --locked research-repo-tools --root "$1" release dependency-builds
+
+runtime-lock project:
+    uv lock --no-config --no-build --project "$1"
+
+runtime-sync project *args:
+    runtime_project="$1"; shift; uv sync --locked --no-config --no-default-groups --no-build --project "$runtime_project" "$@"
+```
+
+For a wheel-only graph, run `just runtime-sync /trusted/runtime-project`. If
+native source builds are required, first configure the dedicated project's
+`dependency-sources.toml` and build group using the
+[source-build contract](UPDATING_DEPENDENCIES.md#source-built-python-dependencies). Run
+`just runtime-lock /trusted/runtime-project`, then `just runtime-sync` with
+that project and `--no-install-package NAME` for each selected source build.
+This creates the venv and installs the remaining locked dependencies. Then run
+`just runtime-builds /trusted/runtime-project` to build/install the selected
+native wheels and authenticate their evidence.
+Record from the separate bootstrap installation; do not launch the target venv
+or compile bytecode before recording:
+
+```sh
+just release-runtime record --project /trusted/runtime-project --output /trusted/runtime-bundle
+```
+
+Review the dedicated lock, `runtime.json`, retained wheels and native receipts/logs.
+Pin the printed SHA-256 in protected workflow configuration or another independently
+authenticated handoff. A digest supplied alongside an untrusted bundle is not
+authentication. Transfer the bundle, **never the machine-local signing key**.
+The selected Python patch version and platform must match on the receiving host:
+
+```sh
+just release-runtime install --policy /trusted/runtime-bundle/runtime.json --sha256 APPROVED_SHA256 --directory /trusted/writer
+just release-runtime verify --policy /trusted/runtime-bundle/runtime.json --sha256 APPROVED_SHA256 --environment /trusted/writer
+```
+
+Installation uses the approved manifest's hashes and retained wheels offline,
+then verifies the installed graph; it does not trust an editable requirements file.
+An existing destination is never overwritten. If installation fails, preserve it
+for inspection and retry with a new directory after repairing the reported input.
+
+Launch release writers through a recipe using the exact installed interpreter,
+`-I -B`, and the approved manifest. On Windows, select `Scripts/python.exe` in
+place of `bin/python`. For example, define the following in the trusted Justfile:
+
+```just
+[positional-arguments]
+runtime-release python policy digest root +args:
+    runtime_python="$1" runtime_policy="$2" runtime_digest="$3" runtime_root="$4"; \
+    shift 4; \
+    "$runtime_python" -I -B -m research_repo_tools --root "$runtime_root" release \
+        --isolated-runtime --runtime-policy "$runtime_policy" --runtime-policy-sha256 "$runtime_digest" "$@"
+```
+
+Pass the existing `assets`, `evidence` or other release arguments unchanged.
+The same prefix supports candidate/native evidence, authenticated draft preparation,
+and checkout-free attachment writers. Keep standalone controller configuration
+outside the observed checkout and pass its existing `--checkout` argument where
+required. The Python API accepts `policy=` and `artifacts=` on
+`isolated_release_runtime`; [runtime policy API](runtime-policy-api.md)
+describes all public functions and trust boundaries.

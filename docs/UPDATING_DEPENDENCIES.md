@@ -10,6 +10,9 @@ Use [installation and recovery](INSTALLING.md) for provisioning failures and
 - [Shared Python tool versions](#shared-python-tool-versions)
 - [Dependency and tool updates](#dependency-and-tool-updates)
 - [Actions allowlists and opt-in pin updates](#actions-allowlists-and-opt-in-pin-updates)
+- [Development pins and release dependencies](#development-pins-and-release-dependencies)
+- [Verified dependency sources](#verified-dependency-sources)
+- [Source-built Python dependencies](#source-built-python-dependencies)
 
 ## Shared Python adoption
 
@@ -40,8 +43,7 @@ infer targets from project metadata. Consumer lint rules, fixture exceptions,
 notebook policy, and deliberate lower targets remain consumer decisions.
 
 Use the standalone bootstrap from the currently pinned package. If the consumer
-already has the helper and adoption recipes, go straight to the README upgrade
-commands below. To add a missing helper, run:
+already has the helper and adoption recipes, use the exact target version in the upgrade commands below. To add a missing helper, run:
 
 ```sh
 just templates python-bootstrap.py --output python-bootstrap.py
@@ -50,11 +52,11 @@ just templates python-bootstrap.py --output python-bootstrap.py
 Merge any missing adoption recipes from `just templates justfile` into the
 consumer's Justfile. If the `templates` recipe itself is missing, use the
 [tooling-only template export](../README.md#install-with-uv) with the existing pin.
-Follow the
-[README upgrade commands](../README.md#automatically-adopting-a-published-supplier)
-to preview and apply the upgrade. Then check the updated environment.
+Set `VERSION` to the selected published release. Review the preview before applying it.
 
 ```sh
+just shared-python-plan "$VERSION"
+just shared-python-update "$VERSION"
 just python-check
 ```
 
@@ -112,7 +114,7 @@ inherit-python-tools = true
 Keep your current exact shared-package pin in `tooling` and include that group
 from `dev`. The same standalone adoption recipes prepare the extra, declarations,
 lock and environment. For a published target, follow the
-[README upgrade commands](../README.md#automatically-adopting-a-published-supplier)
+[shared Python adoption procedure](#shared-python-adoption)
 to preview and apply the upgrade. Then verify the tool versions and run the Python checks.
 
 ```sh
@@ -194,8 +196,32 @@ at release acquisition, evidence and publication boundaries.
 ### Automatically adopting a published supplier
 
 Automatic adoption runs the updater from the consumer's locked `tooling` group.
-Consumers on v0.3.0 need a one-time bootstrap to v0.3.1 before enabling
-`supplier_update`. Follow the [supplier adoption setup](../README.md#automatically-adopting-a-published-supplier).
+Merge the matching template's `update-python-dependencies` recipe and
+`supplier_update` setting into the Justfile. Declare the exact published package
+pin from the main project's manifest and lock in `dependency-sources.toml`.
+For a single Python project at the repository root:
+
+```toml
+schema = 1
+
+[projects.python]
+ecosystem = "python"
+directory = "."
+release-owned = ["."]
+
+[sources.tooling]
+project = "python"
+package = "research-repo-tools"
+version = "0.3.1"
+```
+
+Set `supplier_update := "tooling"` to select that entry. On subsequent runs,
+`just update-python-dependencies` checks for a newer compatible release;
+`just update` includes the same check. The recipe runs the updater in an
+isolated environment using the locked `tooling` group and passes
+`--adopt-supplier tooling` to `deps update-python`.
+For the first upgrade from v0.3.0, follow the
+[migration instructions](migration.md#upgrading-from-v030-to-v031).
 
 In v0.3.1 the main project's supplier requirements must be unmarked exact
 `==` pins. An environment marker on one of those requirements stops adoption
@@ -266,6 +292,8 @@ requires a published version. Keep the source policy under the release
 controller's trust boundary, and preserve independently supplied release
 assertions and the existing provenance gates.
 
+### Updating independent Python projects
+
 Relative paths, source directories, workspace, floating or conditional Git, direct URL, group/extra-scoped
 sources, scoped override tables, dynamic dependencies, legacy uv dev dependencies
 and conflicting-group policies are rejected before writes. Use explicit uv
@@ -329,6 +357,8 @@ before removing local source-index or audit workarounds. See
 [release availability](../README.md#release-availability) for features that still
 require a supplying release.
 
+### Updating Cargo dependencies
+
 For Rust projects, pin `cargo-edit` to an exact version in the managed Cargo tool
 table (for example, `cargo-edit = "0.13.13"`) and keep the compiler pinned in
 `rust-toolchain.toml`, then run `just setup` to install and verify the declared tool.
@@ -356,6 +386,34 @@ declared constraints. Keep the required order of these commands and retain
 consumer checks for coupled dependencies and additional manifests. Review both
 manifests and lockfiles after updating. See [update adoption](migration.md#dependency-and-tool-update-adoption)
 for superseded policies and consumer integration requirements.
+
+### Upgrading uv and managed tools
+
+`just update-tools` upgrades uv first. `just update-uv --dry-run` shows which
+installation owns the selected executable and how the project pin would change.
+Standalone uv needs a matching receipt for self-update. Homebrew and `uv tool`
+installations upgrade through their owner. For a `uv tool` installation, the updater
+verifies the receipt, entrypoint and interpreter and retains its requirement
+constraints. Unknown owners require a manual upgrade and pin reconciliation.
+
+An externally updated uv can run `just update` with a stale project pin.
+Other checkouts sharing that uv may also need their pins reconciled. If writing
+the pin fails after a successful upgrade, fix the cause and rerun the update.
+
+`just update-cargo-tools` upgrades declared managed Cargo tools and release
+binaries. Preview exact candidates with `toolchain upgrade --dry-run`. The
+updater selects stable, non-yanked Cargo releases and stable upstream binary
+releases. It retains equal-precedence versions and never downgrades. It checks
+Cargo compatibility by building the exact release with
+`cargo install --locked --version =VERSION`. Change Rust compiler pins separately.
+
+Candidates install in separate managed directories. All selected executables
+must verify, including unchanged versions. Repair a missing current installation
+with setup. A failed upgrade keeps the old pins and installations usable, and a
+successful candidate can be reused on retry. Pin publication detects concurrent
+configuration edits and preserves comments, line endings, permissions and symlink
+targets. Dotted and quoted keys are supported. Expand inline tables to standalone
+assignments before upgrading.
 
 ### User-installed tool updates
 
@@ -541,9 +599,27 @@ an update selector: the check does not resolve it, contact GitHub, invoke `gh`,
 or verify that a tag actually names a SHA. Compatibility inventories are used
 only by the updater.
 
-Follow the [consumer Actions wiring example](../README.md#actions-pin-consistency)
-to merge the shared scope and recipes into a provisioned project, enable argument
-forwarding, and add the offline check to the consumer's validation gate.
+### Actions pin consistency
+
+Merge the following recipes from the pinned template. For workflow-only projects,
+keep the default `.github/workflows` input. This example also selects a composite
+action. Quote each path separately and enable positional arguments so both
+preview flags reach the updater.
+
+```just
+set positional-arguments
+
+actions_inputs := quote(".github/workflows") + " " + quote(".github/actions/setup-just/action.yml")
+
+actions-check:
+    uv run --no-sync --no-python-downloads --offline research-repo-tools actions check --policy .github/action-updates.toml {{ actions_inputs }}
+
+update-actions *args:
+    uv run --locked --only-group tooling --inexact research-repo-tools actions update --policy .github/action-updates.toml {{ actions_inputs }} "$@"
+```
+
+After setup, add `actions-check` to the consumer's `check` prerequisites. It uses
+the installed environment offline. Keep lock validation in the normal gate.
 
 The read-only check uses the same YAML parser and input expansion as the updater.
 It returns nonzero for drift, malformed selected pins, or absent declared
@@ -556,6 +632,8 @@ anchor locations; pins require inline version comments, so folded/block scalars
 are rejected. Keep the allowlist and zizmor gates for their separate policies.
 This offline check is distinct from `update-actions --check`, which resolves
 upstream versions and checks whether updates are available.
+
+### Previewing and applying Actions updates
 
 `latest` selects GitHub's published stable release and permits major upgrades.
 An explicit stable version tag restricts the target. GitHub CLI (`gh`) is required
@@ -609,20 +687,85 @@ are allowed; duplicate or unsupported entries fail). This avoids an embedded com
 table. Other wrappers may opt into the same contract. This detects absent version
 support, not every possible runtime incompatibility; retain focused consumer CI.
 
+## Development pins and release dependencies
+
+For development or CI, select a reviewed commit on the tooling repository's main
+branch. Set `X.Y.Z` to the version declared at that commit, preserve the required
+extras, and lock and sync the manifest.
+
+```toml
+[dependency-groups]
+tooling = ["research-repo-tools[python-tools]==X.Y.Z"]
+dev = [{include-group = "tooling"}]
+
+[tool.uv.sources]
+research-repo-tools = {git = "https://github.com/acgetchell/research-repo-tools.git", rev = "FULL_40_CHARACTER_SHA"}
+
+[tool.research-repo-tools.release]
+published-dependencies = ["research-repo-tools"]
+```
+
+Keep isolated invocations on the same source. Export the matching bootstrap helper
+alongside the Justfile. Use `--github acgetchell/research-repo-tools --commit FULL_40_CHARACTER_SHA`
+for rehearsal. For a release, remove the Git override, pin the supplying PyPI
+version in the consumer and controller, refresh the lock and verify the transition.
+
+```sh
+just templates python-bootstrap.py --output python-bootstrap.py
+just tooling-run --version 0.3.1 --release-intent --arguments-json '["release","dependencies"]'
+```
+
+In Actions, install uv first and replace the placeholder with the reviewed full
+commit for the indicated release.
+
+```yaml
+- uses: acgetchell/research-repo-tools/.github/actions/run-tooling@FULL_40_CHARACTER_SHA # v0.3.1
+  with:
+    version: '0.3.1'
+    release-intent: 'true'
+    arguments: '["release", "dependencies"]'
+```
+
+For development, supply `github` and `commit` in place of `version` and omit
+`release-intent`. Use `extras` for optional dependencies. Run `just release-dependencies`
+before release measurements and pass `--release-intent` to preparation and acquisition.
+Revalidate any evidence affected by the pin transition. See the [wrapper's lookup
+and credential rules](dependency-provenance-api.md#python-api-and-boundaries)
+or [install a dedicated locked release runtime](INSTALLING.md#reproducible-isolated-release-runtimes).
+
 ## Verified dependency sources
 
-The [dependency source workflow](../README.md#verified-python-and-cargo-dependency-sources)
-supports exact development commits and explicit commit-to-release transitions. The
-canonical `dependency-sources.toml` belongs at the checkout root. It declares
-Python/uv and Cargo projects, the package directories owned by each release,
-and optional named source selections. The same file is inspected at release
-acquisition, candidate revalidation, evidence, tag and publication boundaries.
-A source selection never changes release policy: GitHub commits are development
-inputs, while release dependencies must come from PyPI or crates.io.
-Without this file, only checkouts without declared or locked dependencies pass;
-workspace membership and source overrides also require an explicit policy.
-The older `published-dependencies` selection adds checks and cannot bypass this
-requirement.
+Export the scaffold with `just templates dependency-sources.toml --output dependency-sources.toml`.
+Declare each Python/uv or Cargo project and its release-owned directories at
+the checkout root. For example, select an upstream crate at an exact GitHub
+commit for development.
+
+```toml
+schema = 1
+
+[projects.rust]
+ecosystem = "cargo"
+directory = "."
+release-owned = ["."]
+
+[sources.upstream]
+project = "rust"
+package = "upstream-crate"
+github = "owner/repository"
+commit = "0123456789abcdef0123456789abcdef01234567"
+```
+
+Preview with `just dependency-source upstream`, then apply the reviewed changes
+with `just dependency-source upstream --apply`. Synchronize the native environment
+and run the consumer checks. After upstream publication, replace `github`, `commit`
+and any source `directory` with an exact `version`. Repeat the preview, apply
+and checks before running `just release-dependencies`. In the run-tooling Action,
+the corresponding arguments are `["deps", "source", "upstream", "--apply"]` and
+`["release", "dependencies"]` (with release intent).
+
+Release dependencies must come from PyPI or crates.io. Only dependency-free
+checkouts can omit the policy. Workspace membership and source overrides require
+an explicit declaration. The older `published-dependencies` setting adds checks.
 
 The first `release-owned` directory identifies the package being released;
 additional directories must be declared workspace members that are private
@@ -669,50 +812,54 @@ retrying. Generated/cache directories are omitted unless they contain declared
 workspace manifests. Required workspace inputs are never omitted just to meet
 these limits.
 
-Release inspection reads all declared requirements and universal lock entries,
-including development/build dependencies, optional features and alternate
-targets. Cargo additionally checks an all-features, unfiltered-target native
-metadata graph with `--locked --offline`. uv checks lock freshness offline with
-builds and interpreter downloads disabled. Neither inspection runs consumer
-startup or build hooks. The native inspector executable must be outside the
-observed checkout. Source replacements, alternate registries/indexes, external
-paths, floating selectors, ambiguous metadata and unsupported provenance fail
-closed. Python build requirements must also have a matching locked identity;
-include them in a dependency group when uv would otherwise resolve them only
-in an isolated build environment.
-
-Availability proof binds exact PyPI upload URLs, sizes and SHA-256 digests, or
-the crates.io archive checksum and size, and rejects yanked uploads. Cargo's
-resolved input files are compared with an archive authenticated against the
-lock and fresh crates.io metadata. The verifier uses matching compressed bytes
-from the same Cargo cache when available and fetches the published archive on
-a cache miss or mismatch.
-Each Cargo archive is limited to 32 MiB compressed, 32 MiB per member, 64 MiB
-expanded in total, and 10,000 members. Size diagnostics identify the crate and
-the exceeded limit.
-Existing Python environments are inspected through static distribution metadata
-and compared with matching published wheels; packages are never imported into
-the controller. An absent Python environment is an acquisition input: sync the
-checked lock and run the required downstream validation before promotion.
-Explicitly configured source builds use authenticated machine-local receipts
-and retained wheels, including supported wheel relocation; see
-[source-built dependencies](../README.md#source-built-python-dependencies).
-Unrecorded local builds cannot substitute for published-wheel proof. Universal
-lock checks cover variants not installed on the current host; they do not claim
-that those variants were tested there.
-The exact legacy uv 0.8.0 `_virtualenv.py`/`_virtualenv.pth` pair is recognized
-by content without executing or changing it. Modified or unknown startup hooks
-are rejected; recreate such environments with the supported uv.
-
-GitHub proof requires an exact full lowercase commit SHA, matching repository
-identity, and static package metadata at the selected directory. Cargo additionally
-requires a complete repository tree with at most 100 Cargo manifests and exactly
-one package with the selected name. GitHub redirects, dynamic Python versions,
-missing commits/packages and unavailable providers are errors. Commit existence
-is development availability evidence, not a signature or publication assertion.
+See the [release dependency verification rules](dependency-provenance-api.md#registry-and-lock-verification) for native lock checks, registry proof, limits and failure conditions.
 
 Keep `dependency-sources.toml`, affected manifests and locks in the source and
 harness inventories used by the existing evidence workflow. Applying a source
 transition preserves prior rehearsal files and changes those input identities.
 Rerun the affected downstream checks against the final registry configuration;
 never rename or relabel commit-based evidence as a published-artifact result.
+
+### Source-built Python dependencies
+
+When a locked PyPI dependency needs a native source build, explicitly select it
+in the canonical policy and pin its build requirements in a locked dependency
+group. One root Python project is supported for source-build preparation:
+
+```toml
+[source-builds]
+packages = ["package-needing-a-build"]
+group = "build"
+```
+
+Run `just release-dependency-builds` before `just release-dependencies`. The
+builder checks the published sdist against the lock, installs hash-locked build
+tools from wheels into a fresh environment, builds with automatic build dependency
+resolution disabled, and installs the resulting wheel. It never certifies an
+existing local installation without rebuilding it. The release gate compares
+installed files with that authenticated wheel, including supported `purelib`,
+`platlib`, environment-relative `data`, and unchanged native `scripts` relocation. Other wheel relocation
+schemes or rewritten script shebangs remain unsupported.
+
+Backends that package downloaded executables must declare each platform's input
+under `[[source-builds.external]]`: `package`, `platform`, exact GitHub release
+asset `url`, `sha256`, archive `member`, and destination `wheel-member`. The builder
+independently checks the archive hash and compares the packaged executable byte
+for byte. This repository's [policy](../dependency-sources.toml) provides a complete
+actionlint example. Keep these pins synchronized when updating that dependency.
+
+Receipts and retained wheels live in `~/.research-repo-tools/source-builds`,
+outside the checkout. `RESEARCH_REPO_TOOLS_BUILD_STORE` can select another absolute,
+private directory outside it. Receipts authenticate the source, lock, policy,
+manifest, build-tool inventory, builder, interpreter, native platform and output
+wheel using a machine-local key. Changes require rebuilding. Each CI runner
+creates its own evidence; do not copy signing keys between machines.
+
+This trusts the local runtime, filesystem, native toolchain and verified upstream
+build hooks. A fresh virtual environment is not a security sandbox; build hooks
+can execute native tools or access the network. The receipt records observed
+inputs and output, not a complete system dependency closure, reproducible build,
+portable attestation, or publisher signature. Keep the store private using user
+permissions on POSIX and the user profile's ACLs on Windows. If installation
+fails partway, rerun preparation; release verification continues to reject any
+unverified installed payload.

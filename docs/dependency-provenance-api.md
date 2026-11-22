@@ -3,7 +3,7 @@
 Introduced in v0.2.7, this capability separates reproducible development sources
 from published upstream tooling required for a consumer release. Select only
 tooling dependencies; scientific dependencies and native release gates remain
-consumer policy. See the [usage and transition example](../README.md#development-pins-and-release-dependencies).
+consumer policy. See the [usage and transition example](UPDATING_DEPENDENCIES.md#development-pins-and-release-dependencies).
 
 ## Configuration and proof
 
@@ -72,7 +72,7 @@ Complete-environment checks support `purelib`, `platlib`, environment-relative
 authenticated source-built wheels. Relocation applies only to the wheel's own
 top-level `.data` directory. Resources such as `assets/model.data` are checked
 against their installed bytes at their original paths. Other relocation schemes fail closed. See the
-[source-build trust boundary](../README.md#source-built-python-dependencies).
+[source-build trust boundary](UPDATING_DEPENDENCIES.md#source-built-python-dependencies).
 Installer-generated RECORD,
 bytecode and entry-point wrappers are not publication evidence; package payloads,
 METADATA and WHEEL bytes are compared. Matching normal and isolated installations
@@ -109,7 +109,7 @@ source declarations follow [uv's dependency sources](https://docs.astral.sh/uv/c
 - `check_release_dependencies(root, *, packages=None)`: returns a tuple of verified
   published identities. Explicit package selections add to the manifest policy.
   An empty selected-package policy still enforces the canonical
-  [dependency-source policy](api.md#dependency-sources); without that policy,
+  [dependency-source policy](#dependency-sources); without that policy,
   only dependency-free checkouts pass. Failures raise `ValueError` with recovery
   guidance; no dependency mutation is performed.
 
@@ -143,7 +143,7 @@ before lookup. A verified release cannot be redirected by ambient uv source/inde
 configuration. This existence check complements the subsequent checkout, lock and
 installed-byte release gate; it does not replace it or assert scientific validity.
 The action `.github/actions/run-tooling` and exported `python-bootstrap.py` use
-this single module. See [wrapper usage](../README.md#development-pins-and-release-dependencies).
+this single module. See [wrapper usage](UPDATING_DEPENDENCIES.md#development-pins-and-release-dependencies).
 
 The CLI `release dependencies` exposes the release check independently.
 Configured checks run at pre-tag `release evidence` creation/verification,
@@ -227,3 +227,98 @@ Changing a Git pin to a published pin changes manifest/lock and often harness
 inputs. Preserve old rehearsal results and revalidate the final configuration;
 changed measured inputs require a fresh acquisition and checkpoint. Never relabel
 an old candidate or modify its independent assertions to fit the final pin.
+
+## Dependency sources
+
+`research_repo_tools.dependency_sources` owns `RegistryRelease`, `GitCommit`,
+`parse_source` and `verify_source`. Each immutable selector validates its own
+syntax; `verify_source` alone creates `VerifiedSource` availability evidence.
+Python versions follow public PEP 440 rules; Cargo versions follow SemVer.
+Supported release registries are exclusively PyPI and crates.io. Development
+repositories are GitHub repositories pinned to full commit SHAs. A provider's
+`read(url) -> bytes` supplies the response bytes for each lookup. Passing a
+provider selects that transport even when it represents an empty cache. Omitting
+it or passing `None` selects HTTP. Registry and artifact verification also
+apply to injected responses.
+
+```python
+from research_repo_tools.dependency_sources import GitCommit, verify_source
+
+source = GitCommit("cargo", "upstream-crate", "owner/repository", "a" * 40)
+verified = verify_source(source)
+# verify_source(source, release=True) rejects before any lookup.
+```
+
+`research_repo_tools.dependency_workflows` provides the consumer workflow:
+
+```python
+from pathlib import Path
+
+from research_repo_tools.dependency_workflows import (
+    apply_source,
+    check_dependency_policy,
+    plan_source,
+)
+
+root = Path("/path/to/consumer")
+plan = plan_source(root, "upstream")  # verifies and resolves in a temporary copy
+print(plan.diff())
+apply_source(plan)  # reverifies; recoverable multi-file publication
+# After transitioning to a published source and rerunning downstream checks:
+check_dependency_policy(root)  # read-only, all configured projects
+```
+
+`plan_source` may populate native resolution caches but leaves consumer inputs,
+environments and retained evidence unchanged. `SourcePlan` cannot be constructed
+or deserialized directly. `apply_source` rejects stale inputs/provider metadata;
+file-publication failures use the existing recoverable rollback contract.
+`check_dependency_policy` returns verified external sources. Without the canonical
+policy, only dependency-free checkouts pass. Existing `check_release_dependencies`
+entry points also enforce this policy, preserving the earlier selected-tooling
+checks. Invalid input/proof raises `ValueError`; native process and filesystem
+failures retain their existing exception categories. See the
+[proof boundaries and recovery guide](UPDATING_DEPENDENCIES.md#verified-dependency-sources).
+
+## Registry and lock verification
+
+Release inspection reads all declared requirements and universal lock entries,
+including development/build dependencies, optional features and alternate
+targets. Cargo additionally checks an all-features, unfiltered-target native
+metadata graph with `--locked --offline`. uv checks lock freshness offline with
+builds and interpreter downloads disabled. Neither inspection runs consumer
+startup or build hooks. The native inspector executable must be outside the
+observed checkout. Source replacements, alternate registries/indexes, external
+paths, floating selectors, ambiguous metadata and unsupported provenance fail
+closed. Python build requirements must also have a matching locked identity;
+include them in a dependency group when uv would otherwise resolve them only
+in an isolated build environment.
+
+Availability proof binds exact PyPI upload URLs, sizes and SHA-256 digests, or
+the crates.io archive checksum and size, and rejects yanked uploads. Cargo's
+resolved input files are compared with an archive authenticated against the
+lock and fresh crates.io metadata. The verifier uses matching compressed bytes
+from the same Cargo cache when available and fetches the published archive on
+a cache miss or mismatch.
+Each Cargo archive is limited to 32 MiB compressed, 32 MiB per member, 64 MiB
+expanded in total, and 10,000 members. Size diagnostics identify the crate and
+the exceeded limit.
+Existing Python environments are inspected through static distribution metadata
+and compared with matching published wheels; packages are never imported into
+the controller. An absent Python environment is an acquisition input: sync the
+checked lock and run the required downstream validation before promotion.
+Explicitly configured source builds use authenticated machine-local receipts
+and retained wheels, including supported wheel relocation; see
+[source-built dependencies](UPDATING_DEPENDENCIES.md#source-built-python-dependencies).
+Unrecorded local builds cannot substitute for published-wheel proof. Universal
+lock checks cover variants not installed on the current host; they do not claim
+that those variants were tested there.
+The exact legacy uv 0.8.0 `_virtualenv.py`/`_virtualenv.pth` pair is recognized
+by content without executing or changing it. Modified or unknown startup hooks
+are rejected; recreate such environments with the supported uv.
+
+GitHub proof requires an exact full lowercase commit SHA, matching repository
+identity, and static package metadata at the selected directory. Cargo additionally
+requires a complete repository tree with at most 100 Cargo manifests and exactly
+one package with the selected name. GitHub redirects, dynamic Python versions,
+missing commits/packages and unavailable providers are errors. Commit existence
+is development availability evidence, not a signature or publication assertion.

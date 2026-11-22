@@ -29,9 +29,10 @@ measurement/report/publication paths, and ignore the declared scratch directory
 in Git. Use matching installed configuration/templates from a verified published
 supplying release before replacing a working consumer adapter.
 
-These prepared stages select a current/baseline pair. For a repository's first
-stable release, use the separate [first-release procedure](candidate-reuse-api.md#committed-publisher-evidence).
-The first-release command retains a current-only snapshot and report.
+For paired releases, run the stages below. If published releases predate this
+workload, follow [starting a benchmark series](REUSING_BENCHMARKS.md#starting-a-benchmark-series-after-earlier-releases)
+to record a current-only baseline. For a repository's first stable release, use
+the [first-release procedure](candidate-reuse-api.md#first-stable-release).
 
 ```sh
 just performance-prepare tooling/performance-release.toml
@@ -50,7 +51,8 @@ Successful measurements survive README errors. Repair the README/view or source
 assertions and retry only `performance-readme`. A failed report promotion can be
 retried using `just performance promote REPORT --payload PAYLOAD --manifest MANIFEST`
 with the declared retained raw paths. README publication never measures, promotes,
-fetches tags or changes Git refs. All four independent overrides remain supported:
+fetches tags or changes Git refs. For paired measurements, supply both phase
+identities when retrying without the saved preparation.
 
 ```sh
 just performance-readme tooling/performance-release.toml \
@@ -69,12 +71,9 @@ guards = ["tooling/performance-publication.toml"]
 
 `just performance promote tooling/performance-report.toml --check` then accepts
 only a completely empty declared inventory when the current report is missing.
-The archive is included automatically; extra directories must be disjoint and
-companion guards must be outside them. Any payload, manifest, CSV, figure,
-archived report, pointer, companion plan or partial directory rejects first use.
-Initialized reports retain strict evidence/history/render checks. The check
-creates nothing. See the [prepared performance API](performance-release-api.md)
-for schema, freshness and retry details.
+Any retained or partial output defeats first use. See the
+[first-use inventory contract](performance-release-api.md#first-use-report-inventory)
+for directory and guard selection and the checks applied to initialized reports.
 
 ## Common harness and complete runs
 
