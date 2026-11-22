@@ -265,7 +265,7 @@ Keep the retained evidence associated with that candidate.
 | Release PR merged, exact CI still pending | Resume [Step 2.1](#1-synchronize-main-and-wait-for-ci) with the original `MAIN_RUN_ID`. |
 | Tag preflight requires a tracked metadata correction | Commit and review the correction. Wait for main CI on the new commit and retry `just tag "$TAG" --commit "$RELEASE_COMMIT"` with its SHA. |
 | Tag preflight stopped on an external dependency or tool | Resolve the reported prerequisite and retry `just tag "$TAG" --commit "$RELEASE_COMMIT"` with the same reviewed SHA. |
-| Tag pushed, draft pending | Resume [Step 2.5](#5-wait-for-the-draft-github-release) with the recorded `PREPARATION_RUN_ID`. |
+| Tag pushed, draft pending | Restore `RELEASE_COMMIT` from the merged PR using [Step 2.1](#1-synchronize-main-and-wait-for-ci), then resume [Step 2.5](#5-wait-for-the-draft-github-release) with the recorded `PREPARATION_RUN_ID`. |
 | GitHub Release published, PyPI approval pending | Review the verification result and approve the `pypi` deployment in the original publishing run. |
 | PyPI upload interrupted | Inspect the original GitHub Release and publishing run. Check the exact registry version with `just release-registry "$TAG" --expect present` and compare any published file hashes before deciding whether to retry. |
 | Unpublished candidate needs a different commit | Follow the [replacement procedure](RECOVERING_RELEASES.md#replace-an-unpublished-candidate). |
@@ -300,6 +300,9 @@ for inspection.
 Use the [recovery decision table](RECOVERING_RELEASES.md#choose-the-recovery-path)
 to reconcile the release ID, draft state, and remote asset inventory. When all
 three uploaded assets match the signed evidence, resume [draft review](#6-review-the-draft).
+RRT staging stops on any nonempty draft. For a partial upload, including an asset
+in the `starter` state, preserve the attachment and reconcile the captured draft
+and its asset IDs against the signed inventory before retrying.
 If the draft is absent or empty and the verified inputs still match, keep a
 copy of the attachment before retrying. In a reused working directory, move
 the inspected attachment aside first. Staging refuses to overwrite it.

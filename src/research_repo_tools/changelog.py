@@ -202,7 +202,10 @@ def generate(config: Config, *, tag: str | None = None, released: str | None = N
 
 
 def rebuild(config: Config, *, tag: str | None = None, released: str | None = None, apply: bool = False) -> str:
-    """Diff the complete rebuilt history and optionally publish the reviewed changes."""
+    """Regenerate from full Git history, return the diff, and optionally apply it."""
+    shallow = run_git_command(["rev-parse", "--is-shallow-repository"], cwd=config.root).stdout.strip()
+    if shallow != "false":
+        raise ValueError("changelog rebuild requires full Git history; use a non-shallow checkout (fetch-depth: 0 in GitHub Actions)")
     path, archives, _formatter = _paths(config)
 
     def snapshot() -> dict[Path, bytes]:

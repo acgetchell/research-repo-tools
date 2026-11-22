@@ -663,8 +663,8 @@ def _verify_candidate_release(
 
     def guard() -> None:
         check_release_dependencies(root, packages=dependencies)
-        recheck_source()
         verify_history()
+        recheck_source()
 
     if retain is None:
         guard()

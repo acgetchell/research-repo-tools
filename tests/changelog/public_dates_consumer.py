@@ -151,6 +151,7 @@ class TestCitationDates(unittest.TestCase):
     def test_rebuild_reviews_changes_before_replacing_retained_history(self):
         from research_repo_tools import files
 
+        self.enterContext(patch.object(changelog, "run_git_command", return_value=subprocess.CompletedProcess([], 0, "false\n")))
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             policy = root / "research.toml"
@@ -221,6 +222,7 @@ class TestCitationDates(unittest.TestCase):
     def test_rebuild_preserves_a_concurrent_edit_while_replacements_are_staged(self):
         from research_repo_tools import files
 
+        self.enterContext(patch.object(changelog, "run_git_command", return_value=subprocess.CompletedProcess([], 0, "false\n")))
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
             settings = config.parse({"changelog": {"cliff-config": "cliff.toml"}}, root=root)
@@ -246,6 +248,25 @@ class TestCitationDates(unittest.TestCase):
                 changelog.rebuild(settings, apply=True)
             self.assertEqual(path.read_bytes(), edit)
             self.assertEqual(obsolete.read_bytes(), b"# Obsolete\n")
+
+    def test_shallow_rebuild_refuses_preview_and_apply_before_rendering(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "pyproject.toml").write_bytes(b'[tool.research-repo-tools.changelog]\nowner="example"\nrepository="fixture"\n')
+            path = root / "CHANGELOG.md"
+            original = b"# Changelog\n\n## [1.2.0]\n\n- Retained history.\n"
+            path.write_bytes(original)
+            for flags in ([], ["--apply"]):
+                with (
+                    self.subTest(flags=flags),
+                    patch.object(changelog, "run_git_command", return_value=subprocess.CompletedProcess([], 0, "true\n")) as git,
+                    patch.object(changelog, "_run_cliff", side_effect=AssertionError("shallow history reached the renderer")),
+                    redirect_stderr(io.StringIO()) as errors,
+                ):
+                    self.assertEqual(cli.main(["--root", str(root), "changelog", "rebuild", *flags]), 1)
+                    self.assertIn("full Git history", errors.getvalue())
+                    git.assert_called_once_with(["rev-parse", "--is-shallow-repository"], cwd=root.resolve())
+                    self.assertEqual(path.read_bytes(), original)
 
     def test_cli_preview_and_failure_use_same_policy(self):
         with tempfile.TemporaryDirectory() as temporary:

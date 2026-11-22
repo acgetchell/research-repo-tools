@@ -1651,13 +1651,13 @@ sys.exit(status)
                 ("sign", ("Sign",)),
             )
 
-            def verify(expected=None):
+            def verify(expected=None, read=provider):
                 return verify_candidate_release(
                     checkout,
                     retained,
                     policy,
                     native,
-                    provider,
+                    read,
                     expected=expected,
                     acquisition_sha256=(owner / "acquisition.sha256").read_text(encoding="ascii").strip(),
                     publication_receipt=(owner / "publication.json").read_bytes(),
@@ -1666,6 +1666,19 @@ sys.exit(status)
 
             with patch("research_repo_tools.candidate_reuse.verify_release_evidence", return_value=b"{}"):
                 accepted = verify()
+                history_reads = 0
+
+                def edit_during_final_history(endpoint):
+                    nonlocal history_reads
+                    if endpoint == "releases?per_page=100&page=1":
+                        history_reads += 1
+                        if history_reads == 2:
+                            (checkout / "README.md").write_bytes(readme + b"Edited during approval\n")
+                    return provider(endpoint)
+
+                with self.assertRaisesRegex(ValueError, "original source changed after capture"):
+                    verify(accepted, read=edit_during_final_history)
+                (checkout / "README.md").write_bytes(readme)
                 published["v1.0.0"] = policy.commit
                 with self.assertRaisesRegex(ValueError, "series identity|history changed"):
                     verify(accepted)

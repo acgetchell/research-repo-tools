@@ -57,11 +57,12 @@ Standalone `research-repo-tools changelog generate` runs the same complete workf
 
 ## Rebuilding retained history
 
-When updated rendering rules affect archived notes, use the v0.3.2
-`just changelog-rebuild` recipe to preview the changes. Review the unified diff
-for the root changelog and each affected minor-series archive, including added
-and removed files. Run `just changelog-rebuild --apply` with the same inputs
-to publish the validated files. Repeat the preview to verify an empty diff.
+When updated rendering rules affect archived notes, run `just changelog-rebuild`
+from a checkout with full Git history (v0.3.2 or later). Review the diff for
+the root changelog and each affected minor-series archive, including added and
+removed files. `just changelog-rebuild --apply` regenerates from the inputs
+present at invocation. If the history, tags, renderer, configuration, or retained
+files change, preview again before applying. After applying, verify an empty diff.
 Both commands accept `--tag TAG` and the same date options as generation.
 Rebuild retains declared dates and requires every retained release to appear
 exactly once in the result. Ordinary generation and release preparation continue
