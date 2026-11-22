@@ -5,10 +5,11 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
-## [Unreleased]
+## [0.3.1] - 2026-11-21
 
 ### Merged Pull Requests
 
+- Preserve squash details and link closed issues [#263](https://github.com/acgetchell/research-repo-tools/pull/263)
 - Automate supplier adoption and release verification [#262](https://github.com/acgetchell/research-repo-tools/pull/262)
 
 ### Changed
@@ -88,6 +89,99 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 #### fix(security): verify complete exception scan inputs
 
+### Fixed
+
+- Preserve squash details and link closed issues [#263](https://github.com/acgetchell/research-repo-tools/pull/263)
+  [`f913d83`](https://github.com/acgetchell/research-repo-tools/commit/f913d83c9f126c1128b50e29b3c65e463eb288ba)
+
+#### fix(changelog): preserve squash details and link closed issues
+
+  Render full squash bodies and link explicit issue closures from the original commits in current and archived releases. Preserve distinct entries with repeated
+  titles and validate Markdown links across the complete output before writing.
+
+  Regenerate the project history with the shared rules and use the same 160-column limit in the editor.
+
+#### fix(changelog): retain nested details and resolve escaped archive links
+
+  Keep child subsections attached to repeated titles and recognize generated commit links across wrapped title lines. Validate escaped relative links against
+  the existing target when planning new archives.
+
+#### fix(changelog): preserve heading targets and wrapped issue notes
+
+  Retain navigable numbered headings when release notes contain local fragment links. Recognize closing annotations whose first link wraps and reject
+  conflicting link destinations on regeneration.
+
+#### fix(changelog): retain subsection prose after link definitions
+
+  Keep body reference definitions and subsequent prose in their generated list item while retaining document-level definitions outside the final item.
+
+#### fix(changelog): decode escaped fragment delimiters before checking paths
+
+  Resolve Markdown escapes before separating the path from its fragment or query. Keep percent-encoded delimiters in filenames and exercise both forms with real
+  archive validation.
+
+#### fix(changelog): preserve fenced issue examples and formatted heading targets
+
+  Protect closing directives during commit parsing and distinguish literal examples during Markdown normalization. Use parsed inline heading text to preserve
+  navigation, and recognize existing issue notes after blank separators.
+
+#### fix(changelog): retain literal titles and nested archive links
+
+  Preserve Unicode and marker-like subject text when reading issue references. Use CommonMark block boundaries to rebase nested list links while keeping code
+  examples intact.
+
+#### fix(changelog): resolve character references in archived links
+
+  Use CommonMark destination decoding for both punctuation escapes and character references before checking archive targets. Cover named and numeric ampersands
+  during generation and regeneration.
+
+#### fix(changelog): restore archived squash details and preserve custom issue notes
+
+  Compare title-only archives against the same captured Git history before restoring missing details. Preserve custom closing directives and separate commit
+  entries from preceding detail lists.
+
+#### fix(changelog): preserve literal issue examples and linked headings
+
+  Recognize multiline code when collecting and rendering closing directives. Retain heading targets reached by local Markdown links, including path-qualified
+  references.
+
+#### fix(changelog): match archived closing directives before migration
+
+  Verify the original archived directive against the prior rendering before replacing it with a link. Reject a changed issue number or edited release text.
+
+#### fix(changelog): remove only directives covered by generated issue links
+
+  Use the original commit to match every target in a closing directive before removing its raw text. Keep custom templates, literal examples and unmatched
+  references intact.
+
+#### fix(changelog): attach issue links to their original entries
+
+  Annotate commit entries before their subsections are formatted. Reconstruct retained releases with the notes they already contain, resolve reference-style
+  heading labels, and preserve literal indented fence examples during generation and extraction.
+
+#### fix(changelog): preserve authored issue paragraphs and Markdown targets
+
+  Keep linked prose when adding an independent closing note. Count rendered headings when preserving fragment links and keep literal code indented under
+  repeated subsections.
+
+#### fix(changelog): retain paragraph breaks and link community repositories
+
+  Preserve paragraph boundaries when removing linked directives, and recognize GitHub repository names such as .github in issue references and shared templates.
+
+#### fix(changelog): keep issue examples in preformatted HTML literal
+
+  Distinguish issue directives in prose from code rendered by Markdown or HTML before adding a closing link.
+
+#### fix(changelog): keep cited commits and code examples in their subsections
+
+  Preserve the displayed indentation of literal examples when a list moves. Keep commit citations in the authored detail so repeated normalization lists only
+  genuine entries in the pull request summary.
+
+#### fix(changelog): retain archive heading targets and indented code
+
+  Number repeated headings within each generated document so links from the root or an archive reach the intended subsection. Preserve literal code when nesting
+  repeated subsections.
+
 ## [0.3.0] - 2026-11-19
 
 ### Merged Pull Requests
@@ -140,5 +234,5 @@ Older releases are archived by minor series:
 - [0.2.x](docs/archives/changelog/0.2.md)
 - [0.1.x](docs/archives/changelog/0.1.md)
 
-[Unreleased]: https://github.com/acgetchell/research-repo-tools/compare/v0.3.0...HEAD
+[0.3.1]: https://github.com/acgetchell/research-repo-tools/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.9...v0.3.0

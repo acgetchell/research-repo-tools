@@ -21,6 +21,8 @@ release PR.
 
 ## Step 1: Prepare the release PR
 
+### 1. Prepare the release branch and metadata
+
 ```bash
 git switch -c "release/$TAG"
 just update-version "$TAG"
@@ -33,6 +35,13 @@ a UTC citation date. Generation reuses that prepared date on retries. To change
 it deliberately, pass `--date YYYY-MM-DD` to `just update-version` and rerun
 generation. See [metadata](UPDATING_RELEASE_METADATA.md) and
 [changelog generation](GENERATING_CHANGELOGS.md).
+
+Review the README installation pin, first-upgrade instructions, and consumer
+command examples against the target package and its Justfile template. The
+metadata updater leaves these Python examples for manual review. Keep versions
+that identify when a feature first appeared or the minimum an interface requires.
+
+### 2. Run the release checks
 
 ```bash
 just release-dependency-builds
@@ -48,10 +57,55 @@ the configured local builds. Repeat preparation when its inputs change.
 and sdist tests. See [local validation](VALIDATING.md) and
 [source-built dependencies](../README.md#source-built-python-dependencies).
 
-Stage and commit only the reviewed release artifacts. Complete the local review
-required by [AGENTS.md](../AGENTS.md), then push the branch and open
-`chore(release): release $TAG`. Include validation results and resolve review
-findings before merging.
+### 3. Commit the release preparation
+
+Stage only the reviewed release artifacts. Use the preparation commit subject
+shown below. The changelog generator skips this subject when regenerating the notes.
+
+```bash
+git diff --cached
+git commit -m "chore(release): prepare $TAG"
+```
+
+### 4. Run the local CodeRabbit review
+
+```bash
+just review origin/main
+```
+
+The review covers the full diff against `origin/main`. Wait for it to finish
+and verify each finding against the release branch.
+
+- For a release-preparation correction such as a typo in this guide, amend the
+  unpushed preparation commit with its existing subject. The changelog stays
+  current when the correction leaves its inputs unchanged.
+- For a user-facing fix, make a separate commit with a descriptive subject.
+  Then run `just changelog-release "$TAG"` so the notes include that commit.
+
+Also regenerate if another changelog input changes, such as the prepared release
+date. Review any generated diff and commit it as `chore(release): prepare $TAG notes`.
+If the release metadata or generated notes have changed since the earlier check,
+rerun `just release-version-check` on the final commit before pushing.
+After any edits, run `just security`, `just ci`, and `just review origin/main`
+again on the final commit before pushing.
+See the [PR push requirements](../AGENTS.md).
+
+### 5. Push the branch and open the release PR
+
+Push the reviewed release branch to `origin`.
+
+```bash
+git push -u origin "release/$TAG"
+```
+
+After the push succeeds, open the PR against `main`.
+
+```bash
+gh pr create --base main --head "release/$TAG" --title "chore(release): release $TAG"
+```
+
+When GitHub CLI prompts for the PR description, include the release check and
+local review results. Resolve review findings before merging.
 
 ## Step 2: Publish after the PR is merged
 

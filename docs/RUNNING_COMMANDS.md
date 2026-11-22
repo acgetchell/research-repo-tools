@@ -79,7 +79,7 @@ arguments in lexicographic order.
 | `just shared-python-plan VERSION` | Preview mandatory Python-minimum and optional tool-profile adoption outside the old environment |
 | `just shared-python-update VERSION` | Apply the migration and recreate the locked environment and notebook kernel |
 | `just tag TAG [--commit SHA] [--force]` | Verify the target and release prerequisites, then report the created local tag and annotation |
-| `just tag-preview TAG [--commit SHA]` | Inspect the release annotation without changing Git state |
+| `just tag-preview TAG [--commit SHA] [--force]` | Check the reviewed commit and preview the annotation, including for an unpublished replacement |
 | `just tectonic COMMAND...` | Discover or export existing native dependency environments |
 | `just templates ARGS...` | Export a packaged configuration or workflow template |
 | `just tooling-run ARGS...` | Verify a released version or GitHub commit and run isolated tooling |
@@ -94,7 +94,7 @@ arguments in lexicographic order.
 | `just update-cargo-dependencies` | Upgrade root Cargo requirements (including incompatible releases) and lock resolution; skip projects without a root Cargo.toml |
 | `just update-cargo-tools` | Upgrade declared Cargo tools and release binaries; publish verified TOML pins |
 | `just update-dependencies` | Run Cargo and Python dependency updates, then audit the final selected locks |
-| `just update-python-dependencies` | Update main dev pins, then upgrade locks and sync the main and declared independent Python projects |
+| `just update-python-dependencies` | Update dev pins, locks and environments. Set `supplier_update` to a named source to enable [supplier adoption](UPDATING_DEPENDENCIES.md#automatically-adopting-a-published-supplier). |
 | `just update-tools` | Upgrade uv and managed tools without repeating shell configuration |
 | `just update-uv` | Upgrade uv through its installation owner and reconcile its pin |
 | `just update-version TAG [ARGS...]` | Prepare release metadata; optionally override predecessor or date |
@@ -119,7 +119,7 @@ root/configuration options before the group. See
 | CI environment | `ci export` | Validate all single-line values before appending a GitHub environment command file |
 | Cleanup | `clean` | Compose tool-installation and coverage cleanup; preview by default; `--keep-root` retains other consumers' tool pins |
 | Coverage | `coverage clean`, `report` | Preview/remove retained Python coverage artifacts; summarize Cobertura with deduplicated source lines |
-| Dependencies | `deps check-uv`, `source`, `update-python`, `update-tools`, `update-uv` | Verified source previews/transitions; exact development pins; canonical Cargo SemVer; stable uv pins |
+| Dependencies | `deps check-uv`, `source`, `update-python`, `update-tools`, `update-uv` | Verified source changes and exact tool pins. Use `update-python --adopt-supplier SOURCE` for automatic supplier updates. |
 | Documentation | `docs check-lines` | Existing explicit-path Markdown policy: 160 characters with table exemptions |
 | File selection | `files check-lines`, `list`, `run` | Configurable raw line gate, tracked/nonignored inputs, exclusions and portable argument batching |
 | Notebooks | `notebooks advise`, `check`, `clear`, `execute`, `group`, `inspect`, `launch`, `lint`, `reset`, `sync` | Read-only review, locked JupyterLab, native Ruff/ty checks, execution reports, and explicit restoration |
@@ -129,7 +129,7 @@ root/configuration options before the group. See
 | Releases | `release assets`, `check`, `dependencies`, `dependency-builds`, `evidence`, `gate`, `publish`, `registry`, `reuse`, `runtime`, `update`, `verify`, `visibility` | Metadata preparation, published-only dependency gates, isolated runtime policies and exact registry/GitHub verification. `visibility` requires v0.3.0 or a supplying commit. |
 | Review | `review branch`, `review deny`, `review resume`, `review uncommitted` | Opt-in review, typed quote-and-stop and one-use explicit paid resume |
 | SARIF | `sarif split` | Consumer-selected drivers/namespaces, corrected rule indices and complete output generations |
-| Security | `security osv`, `secrets` | Managed OSV/Gitleaks, explicit inputs, full history, redacted native reports |
+| Security | `security check-exceptions`, `findings`, `osv`, `secrets` | Scan dependencies and secrets, inspect redacted findings, and compare a proposed Gitleaks policy with the baseline. [Exception review](RUNNING_CHECKS.md#reviewing-gitleaks-exceptions) |
 | Semgrep | `semgrep check-fixtures`, `check-reports`, `scan`, `setup` | Validate consumer rules, explicit inventory, reports and fixture expectations |
 | Setup | `setup` | Require uv; install user Just and declared tools; sync the locked environment |
 | Tectonic dependencies | `tectonic discover`, `export` | Read-only pkg-config/vcpkg discovery; consumer-owned provisioning |

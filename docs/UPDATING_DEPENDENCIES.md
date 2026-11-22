@@ -39,18 +39,22 @@ Ruff and ty
 infer targets from project metadata. Consumer lint rules, fixture exceptions,
 notebook policy, and deliberate lower targets remain consumer decisions.
 
-Use the packaged standalone bootstrap with the
-[published quickstart pin](../README.md#release-availability):
+Use the packaged standalone bootstrap once the
+[quickstart version is available on PyPI](../README.md#release-availability).
 
 ```sh
 just templates python-bootstrap.py --output python-bootstrap.py
-# Merge the matching published Justfile recipes into the consumer's Justfile.
-just shared-python-plan 0.3.0
-just shared-python-update 0.3.0
+```
+
+Merge the matching published recipes into the consumer's Justfile. Follow the
+[README upgrade commands](../README.md#automatically-adopting-a-published-supplier)
+to preview and apply the upgrade. Then check the updated environment.
+
+```sh
 just python-check
 ```
 
-These recipes run the exact target package outside the old project environment,
+The bootstrap recipes run the exact target package outside the old project environment,
 using the packaged standard-library-only `python-bootstrap.py` beside the Justfile.
 Copy both templates when installing this contract. The helper runs on older
 uv-supported Python, reads the exact target release's PyPI `Requires-Python`, then
@@ -103,11 +107,11 @@ inherit-python-tools = true
 
 Keep your current exact shared-package pin in `tooling` and include that group
 from `dev`. The same standalone adoption recipes prepare the extra, declarations,
-lock and environment. This example targets the published quickstart pin:
+lock and environment. Once the target version is available on PyPI, follow the
+[README upgrade commands](../README.md#automatically-adopting-a-published-supplier)
+to preview and apply the upgrade. Then verify the tool versions and run the Python checks.
 
 ```sh
-just shared-python-plan 0.3.0
-just shared-python-update 0.3.0
 just tools-python-check
 just python-check
 ```
@@ -133,10 +137,10 @@ same candidate verification and recoverable apply process described above.
 `just tools-python-check` checks declarations, locked versions, and the actual
 executables selected by PATH. `just python-check`, `just python-typecheck`, and
 managed tool checks enforce the profile too. They never synchronize or upgrade.
-`just setup` synchronizes the existing lock. `just update-python-dependencies`
-updates unrelated development pins and the lock while retaining the exact shared
-release and inherited versions. Upgrade the profile only by adopting another exact
-shared release. Tools outside Ruff/ty/pytest remain consumer-owned.
+`just setup` synchronizes the existing lock. By default, `just update-python-dependencies`
+retains the shared release and its inherited tool versions. When
+[supplier adoption](#automatically-adopting-a-published-supplier) advances the
+pin, the new release supplies the inherited Ruff, ty, and pytest versions.
 
 To opt out, disable `inherit-python-tools`, remove only `python-tools` from each
 shared-package requirement, and choose consumer-owned tool requirements in the
@@ -158,8 +162,9 @@ dependencies, so they can start before a native consumer is ready to rebuild.
 `just update-python-dependencies` advances exact direct `dev` pins, upgrades the
 entire lock resolution within the resulting manifest constraints, and explicitly
 synchronizes `dev`, even with `default-groups = []`. The final sync runs with
-checked managed tools so native Python builds can find Rust. Included groups,
-including the pinned shared package in `tooling`, retain their declared constraints.
+checked managed tools so native Python builds can find Rust. Included groups
+retain their declared constraints by default. To advance the shared package pin
+in `tooling`, opt in to [automatic supplier adoption](#automatically-adopting-a-published-supplier).
 
 Candidate resolution retains named uv indexes, marker-split
 package source mappings, explicit-index isolation, overrides, constraints, build
@@ -184,21 +189,27 @@ at release acquisition, evidence and publication boundaries.
 
 ### Automatically adopting a published supplier
 
-Follow the [supplier adoption setup](../README.md#automatically-adopting-a-published-supplier)
-to opt in from a consumer repository.
+Automatic adoption runs the updater from the consumer's locked `tooling` group.
+Consumers on v0.3.0 need a one-time bootstrap to v0.3.1 before enabling
+`supplier_update`. Follow the [supplier adoption setup](../README.md#automatically-adopting-a-published-supplier).
+
+In v0.3.1 the main project's supplier requirements must be unmarked exact
+`==` pins. An environment marker on one of those requirements stops adoption
+before the PyPI lookup. To express a Python floor for the entire tooling group,
+set `tool.uv.dependency-groups.tooling.requires-python` in `pyproject.toml`.
 
 For a registry pin, the updater checks the newest stable, non-yanked PyPI release
 above that pin that supports the running interpreter and the Python range
 declared where the supplier is used. For a workspace, the updater intersects
 every explicit `project.requires-python` from the root and its members. If
-all omit it, the updater uses its default of `>=3.15`. Dependency markers and
-a dependency group's Python constraint narrow that shared range for each
-declaration. Workspace adoption refreshes the shared lock with native uv and
+all omit it, the updater uses its default of `>=3.15`. A dependency group's
+Python constraint narrows that shared range for its declaration.
+Workspace adoption refreshes the shared lock with native uv and
 retains exact development pins other than the supplier. The workspace root and
 member manifests participate in rollback. The standalone pin resolver continues
-to require an independent project. uv resolves the selected candidate and stops the update on a resolution failure. If exact registry
-verification confirms a candidate was yanked, the updater checks the next
-eligible release. For an exact Git SHA,
+to require an independent project. uv resolves the selected candidate and stops
+the update on a resolution failure. If exact registry verification confirms a
+candidate was yanked, the updater checks the next eligible release. For an exact Git SHA,
 the updater applies the same Python compatibility check and uses the signed
 promotion proof below, including releases of the same version as the development
 pin. If there is no eligible release, it retains the original source and

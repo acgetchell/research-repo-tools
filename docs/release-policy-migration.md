@@ -164,9 +164,9 @@ publication follow package adoption.
 | Previous surface | Canonical replacement |
 | --- | --- |
 | Untagged `release-check` recipe | `release-version-check` for prepared metadata; `release-check TAG` for explicit publication preflight |
-| `release-tag`, `tag-release` | `tag TAG` |
-| `release-tag-preview` | `tag-preview TAG` |
-| `tag-force` recipe | Use `tag TAG --force` with the v0.3.0 recipe only for [guarded unpublished-candidate recovery](RECOVERING_RELEASES.md#4-replace-the-superseded-draft-and-tag) |
+| `release-tag`, `tag-release` | `tag TAG --commit SHA` using the full reviewed commit |
+| `release-tag-preview` | `tag-preview TAG --commit SHA` |
+| `tag-force` recipe | For [guarded unpublished-candidate recovery](RECOVERING_RELEASES.md#4-replace-the-superseded-draft-and-tag), add `--force` to the preview and tag commands. |
 | `release-update TAG PREVIOUS DATE` | `update-version TAG`; add `--previous-release PREVIOUS --date DATE` for explicit inputs |
 | Transitional manual `publish` / Cargo upload | `release-publish TAG`, then approve the OIDC workflow |
 | Local Cargo info / registry-only checks | `release-verify TAG` for exact registry and GitHub state |

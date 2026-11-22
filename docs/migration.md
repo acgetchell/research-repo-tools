@@ -1,11 +1,11 @@
 # Shared scope and adoption
 
-For the workflow-security and Python-typing adoption contract, see the
-[installed validation guide](../src/research_repo_tools/templates/VALIDATING_WORKFLOWS.md).
-It replaces separate zizmor-action scanner authority with the shared direct
-scanner path, reuses file selection for complete Python coverage, and retains
-consumer scientific annotations, precise fixture exceptions, and gate wiring.
-Publication does not complete consumer adoption.
+For the v0.3.0 to v0.3.1 upgrade, start with the
+[one-time bootstrap and supplier setup](../README.md#automatically-adopting-a-published-supplier).
+It lets consumers upgrade with their existing recipes before enabling automatic
+updates. For repositories replacing local scripts, the
+[capability migration map](shared-capability-migration.md) lists the shared
+replacement for each helper and the checks its consumer still owns.
 
 ## Mandatory Python support inheritance
 
@@ -88,63 +88,17 @@ classes are not public compatibility surfaces.
 
 ## Shared and consumer ownership
 
-Consumers install one package and retain thin wrappers that invoke its commands.
-Common defaults live here: `CHANGELOG.md`, `docs/archives/changelog/`, canonical
-Cargo SemVer pins (including prereleases and build metadata), stable uv pins,
-and staged file replacement with rollback diagnostics.
+Install the exact published package, merge the recipes your project uses, and
+exercise each replacement in consumer CI before retiring the old helper. Keep
+scientific cases, notebook content, scanner rules, and deployment approvals in
+the consuming repository.
 
-Repository-specific scientific code, benchmark cases, notebooks, custom commands,
-and Semgrep rules remain in consumers. This package checks supplied Semgrep rules;
-it does not distribute a rule set copied from a particular repository. Custom
-commands and release-pinned links retain their contents unless explicitly selected
-by a [declarative release policy](UPDATING_RELEASE_METADATA.md#declarative-consumer-policies).
-The [worked release-policy migration](release-policy-migration.md) replaces consumer
-discovery, staging, CLI-output parsing, and publication wrappers with structured plans.
-Use the documented public interfaces from the selected installed release.
-
-Tests exercise the shared implementation with small synthetic inputs grouped by
-capability, including representative edge and failure cases. Fixes and release
-history are recorded in the generated
-[CHANGELOG.md](../CHANGELOG.md).
-Historical feature-name or sentence migrations remain consumer-owned;
-normalization preserves those names in prose, code spans, and link destinations.
-
-[Shared toolchain setup](INSTALLING.md) requires uv and provides explicit
-installation and verification of declared Python, Rust, and Cargo tools.
-Native installer and isolated installed-package validation are release gates;
-consumer migrations are tracked in downstream repositories and use an exact
-published package. Optional [notebook infrastructure](RUNNING_NOTEBOOKS.md)
-provides environment/kernel setup, execution reports, cleanup, structural validation,
-and Python lint/format/type gates using the consumer's Ruff and ty. Scientific
-notebook content and experiment choices remain consumer-owned. Native notebook
-analysis supersedes extracted Python files; migrate notebook-specific checker
-configuration to `.ipynb` paths and validate each consumer's selected workflow.
-
-The [performance APIs](performance-api.md) provide Criterion timing comparisons,
-exact-byte evidence envelopes, provenance comparison, bounded archive retrieval
-and extraction, and transactional promotion. Follow the
-[retained-evidence migration plan](performance-migration.md) before adoption.
-The [publication API](publication-api.md) adds document sections and deterministic
-SVG figures from that evidence; follow its [migration guide](publication-migration.md)
-for historical formats and tagged artifact guarantees. The [workflow APIs](workflow-api.md)
-provide configured benchmark execution and isolated worktree orchestration.
-Consumers retain scientific case definitions, harness commands, custom plotting,
-and experiment policy.
-
-To adopt the package:
-
-1. Configure the tooling group and setup using the [toolchain guide](INSTALLING.md).
-   Install a pinned PyPI release with uv and commit the consumer's lockfile.
-2. Replace one duplicate script with a thin call to the shared command.
-3. Run the consumer's own checks against that command before removing its old script.
-4. Keep special scientific and deployment behavior in the consumer.
-
-Consumers choose their own adoption order and retain integration issues in
-their repositories. Shared-package publication does not imply that those
-workflows have migrated. Validate each adoption against the exact published pin;
-local package checks and source-checkout rehearsals do not establish consumer
-release readiness. The [capability migration map](shared-capability-migration.md)
-identifies reusable replacements and the checks that remain downstream.
+| What you are migrating | Where to start |
+| --- | --- |
+| Setup, Python validation, and workflow scanning | [Toolchain installation](INSTALLING.md) and the [packaged validation guide](../src/research_repo_tools/templates/VALIDATING_WORKFLOWS.md) |
+| Notebook checkers that extract Python files | [Notebook adoption](RUNNING_NOTEBOOKS.md#adoption). Point notebook-specific checks at the original `.ipynb` paths. |
+| Benchmark measurements and published figures | [Retained performance evidence](performance-migration.md) and [document publication](publication-migration.md) cover historical formats and tagged artifacts. |
+| Release discovery, metadata, and publication wrappers | [Release policy migration](release-policy-migration.md) shows how to select the files and references a release can update. |
 
 ## Dependency and tool update adoption
 
@@ -177,9 +131,9 @@ The shared contract deliberately supersedes these historical policies:
 - uv is upgraded through its installation owner and its resulting stable pin is
   reconciled. Merely validating an already-installed stable uv is no longer the
   aggregate update policy.
-- Just comes from the shared package's pinned `rust-just` dependency. It is not
-  independently upgraded through Cargo. Changing the shared package pin remains
-  an explicit consumer change.
+- Just comes from the shared package's pinned `rust-just` dependency. Consumers
+  can select an exact package version with the bootstrap or opt in to
+  [automatic supplier updates](UPDATING_DEPENDENCIES.md#automatically-adopting-a-published-supplier).
 - The managed Cargo updater replaces cargo-update; consumers do not need to keep
   that implementation dependency for parity.
 - Cargo upgrades publish verified exact TOML declarations and retain old managed

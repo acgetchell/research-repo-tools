@@ -21,8 +21,8 @@ Run `just help` for the complete command list and arguments.
 | `just changelog-preview` | Validate all candidate files and print the resulting root changelog without writing |
 | `just changelog-release TAG [DATE]` | Generate and archive with a citation-owned or explicit ISO date |
 | `just release-notes TAG` | Print notes from the root file or an archive |
-| `just tag TAG [--commit SHA]` | Create the validated annotated tag and print its target and annotation |
-| `just tag-preview TAG [--commit SHA]` | Inspect the annotation without changing Git state |
+| `just tag TAG [--commit SHA] [--force]` | Create the validated annotated tag and print its target and annotation |
+| `just tag-preview TAG [--commit SHA] [--force]` | Run the tag checks and print the proposed annotation |
 
 For a prospective-release preview, use
 `just changelog-preview --tag v1.2.0`.
@@ -195,9 +195,11 @@ publication retain strict validation; `changelog tag` performs the full changelo
 check as well as checking package version and release date before any tag mutation. By default
 the date must be today's UTC date; `release.date-policy = "declared"` explicitly
 permits historical release dates. Oversized annotations link to the complete
-notes. A successful `--dry-run` writes only the annotation to stdout, so it can
-be redirected to a file. `--force` uses Git's ref replacement and never
-deletes the old tag before creating its replacement. Tagging is local only.
+notes. Pass the full reviewed commit SHA to `--commit` to require a clean
+checkout at that commit. A successful `--dry-run` writes only the annotation
+to stdout. For an [unpublished replacement](RECOVERING_RELEASES.md#4-replace-the-superseded-draft-and-tag),
+pass the same `--commit` and `--force` arguments to the preview and the actual
+tag recipe. The tag recipe replaces the local ref in one Git operation.
 
 Regression tests live under `tests/changelog/`, including real Git and git-cliff
 scenarios using minimal disposable repositories.

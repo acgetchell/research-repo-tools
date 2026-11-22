@@ -147,7 +147,7 @@ The root and consumer Justfiles share these release recipes.
 `release-publish TAG [ARGS...]`, `release-registry TAG --expect absent|present`,
 `release-reuse COMMIT ARGS...`,
 `release-verify TAG [ARGS...]`, `release-version-check`, `tag TAG [--commit SHA] [--force]`,
-`tag-preview TAG [--commit SHA]`, and `update-version TAG [ARGS...]`.
+`tag-preview TAG [--commit SHA] [--force]`, and `update-version TAG [ARGS...]`.
 `release-verify` defaults to seven attempts at ten-second intervals; optional
 flags override those defaults. `release-version-check` validates the current
 prepared version without a tag argument. `tag TAG [--commit SHA]` and
