@@ -15,7 +15,8 @@ Follow the shared steps, then use the registry instructions for
 
 ## Prepare the environment
 
-Set `TAG=vX.Y.Z` and start from clean, current `main`. Check `gh auth status`
+Set `TAG` to the intended tag (for example, `TAG=v1.2.3`) and start from
+clean, current `main`. Use the same Bash or zsh session throughout. Check `gh auth status`
 and [Trusted Publishing](#configure-trusted-publishing-before-the-next-release).
 Use `just setup` for the locked development tools. Land any tool or dependency
 updates separately before preparing the release PR.
@@ -64,17 +65,45 @@ just ci
 
 Require verified published dependencies, synchronized metadata and dated
 notes, and the repository's packaging, platform, and scientific checks.
-Commit the reviewed release artifacts, push the branch after its review gates
-pass, and open the PR. Record any separately retained evidence in the
-release tracker.
+Stage the reviewed release artifacts and commit them with the subject
+`chore(release): prepare $TAG`, substituting the release tag. Run the
+repository's local security and review gates on the outgoing changes.
+If a correction changes release metadata or generated notes, repeat
+`just release-version-check` on the final candidate. Once the gates pass,
+push the branch and open the release PR:
+
+```sh
+git push -u origin "release/$TAG"
+gh pr create --base main --head "release/$TAG" --title "chore(release): release $TAG"
+```
+
+Include validation results in the PR and link any separately retained evidence
+in the release tracker.
 
 ## Step 2: Publish after the PR is merged
 
 ### 1. Synchronize `main`
 
-Use a clean checkout at the reviewed merged commit. Save its full SHA as
-`RELEASE_COMMIT`. Require the complete exact main-push run, package producer,
-and native checks. If benchmarks are required, verify and save acceptance for
+Set `CI_WORKFLOW` to the filename of the repository's main validation workflow.
+Start with a clean checkout and set `TAG` in this terminal. The first lookup
+gets the merge commit from the release PR. The second selects the CI run only
+if exactly one push run matches that commit. Stop if either lookup fails.
+
+```sh
+CI_WORKFLOW=ci.yml
+git switch main
+git pull --ff-only origin main
+RELEASE_COMMIT=$(gh pr view "release/${TAG:?Set TAG first}" --json state,baseRefName,mergeCommit \
+  --jq 'select(.state == "MERGED" and .baseRefName == "main") | .mergeCommit.oid')
+MAIN_RUN_ID=$(gh run list --workflow "$CI_WORKFLOW" --event push --branch main --commit "${RELEASE_COMMIT:?Check the merged release PR}" \
+  --limit 2 --json databaseId --jq 'select(length == 1) | .[0].databaseId')
+gh run watch "${MAIN_RUN_ID:?Expected one main-push CI run for the merged commit}" --exit-status
+```
+
+If the run is not visible yet, repeat the lookup. Investigate multiple matches.
+Continue after all required checks pass, including the package producer and native
+jobs. If `main` has advanced, use `git switch --detach "$RELEASE_COMMIT"` before
+tagging. If benchmarks are required, verify and save acceptance for
 that commit using the original acquisition and publication receipts, and the
 repository's external trusted runtime.
 [Verifying release evidence](https://github.com/acgetchell/research-repo-tools/blob/main/docs/VERIFYING_RELEASE_EVIDENCE.md)
@@ -105,17 +134,25 @@ the exact tagged commit.
 
 ### 5. Create the draft GitHub release
 
-Let the configured preparation workflow create the draft. Record its original
-run, draft ID, and captured target. Use the repository's
-`just release-assets retrieve` command with the original full SHA and output
-directory to retrieve or reverify those records.
-[Draft preparation and receipt retrieval](https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md#retrieve-original-preparation-output)
+Wait for the tag's preparation workflow to succeed. If it produces RRT draft
+receipts, follow the [receipt retrieval command](https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md#retrieve-original-preparation-output)
+with `TAG` and `RELEASE_COMMIT` from this release. It saves the original run,
+attempt, draft ID and commit outside the checkout. A retry revalidates those
+same records. If your workflow supplies its own authenticated target, use the
+original file it produced. For workflows that only create a draft, capture it
+once using the [release target handoff](https://github.com/acgetchell/research-repo-tools/blob/main/docs/VERIFYING_RELEASE_EVIDENCE.md#trusted-release-target-handoff).
+Set `RELEASE_TARGET` to the saved target file for the remaining steps.
 
 ### 6. Review the draft
 
 Require the expected stable tag, title, generated notes, and complete required
 assets. If the repository attaches benchmarks separately, run its attachment
 recipe with the original acceptance and captured draft target.
+
+```sh
+gh release view "${TAG:?}"
+gh release view "$TAG" --json assets --jq '.assets[] | [.name, .state, .size, .digest] | @tsv'
+```
 
 For the [Cargo publication workflow template](https://github.com/acgetchell/research-repo-tools/blob/main/src/research_repo_tools/templates/publish-crates.yml),
 enable immutable releases and attach the exact `PACKAGE-VERSION.crate` retained
@@ -125,7 +162,7 @@ so `just release-publish` requires it at the GitHub approval step.
 ### 7. Publish the reviewed GitHub Release
 
 ```bash
-just release-publish "$TAG"
+just release-publish "$TAG" --target "$RELEASE_TARGET"
 ```
 
 Preserve any required receipt and acceptance arguments from the repository's
@@ -141,7 +178,7 @@ the upload job. Use the registry-specific check below to confirm what it publish
 ### 9. Verify registry availability and downstream resolution
 
 ```bash
-just release-verify "$TAG"
+just release-verify "$TAG" --target "$RELEASE_TARGET"
 ```
 
 Require the published stable GitHub Release, its required assets, and the exact
@@ -191,9 +228,9 @@ asset, consumer, and applicable Zenodo verification.
 
 ## Choose where to resume
 
-Restore the tag, reviewed SHA and original run IDs from the release tracker.
-Reuse the retained owner directory, acceptance, receipt, and captured target
-paths when running the same recipes from a new shell.
+Set the release tag again and use Step 2.1 to recover the reviewed SHA and main
+run. Restore `RELEASE_TARGET` to the original captured file. Reuse the retained
+owner directory, acceptance and receipt when running the same recipes in a new shell.
 
 | Stop | Next operation |
 | --- | --- |

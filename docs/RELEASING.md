@@ -13,7 +13,8 @@
 
 ## Prepare the environment
 
-Set `TAG=vX.Y.Z`. Check `gh auth status` and verify [Trusted Publishing](#configure-trusted-publishing-before-the-next-release).
+Set `TAG` to the intended new tag in `vX.Y.Z` format. Use the same Bash
+or zsh session for the commands below. Check `gh auth status` and verify [Trusted Publishing](#configure-trusted-publishing-before-the-next-release).
 Start from a clean, current `main` with the [development environment](../CONTRIBUTING.md#development-environment)
 and pinned `git-cliff` available. Run `just changelog-setup` if the generator is
 missing. Land tool and dependency updates separately before starting the
@@ -111,15 +112,24 @@ local review results. Resolve review findings before merging.
 
 ### 1. Synchronize `main` and wait for CI
 
-From a clean checkout of the reviewed main commit, use its full SHA as
-`RELEASE_COMMIT`. Enter the matching run ID from the list and require the
-complete run to pass.
+Start with a clean checkout and set `TAG` in this terminal. The first lookup
+gets the merge commit from the release PR. The second selects the CI run only
+if exactly one push run matches that commit. Stop if either lookup fails.
 
 ```bash
-gh run list --workflow ci.yml --event push --branch main --commit "$RELEASE_COMMIT" --limit 20
-read -r -p "Main CI run ID: " MAIN_RUN_ID
-gh run watch "$MAIN_RUN_ID" --exit-status
+git switch main
+git pull --ff-only origin main
+RELEASE_COMMIT=$(gh pr view "release/${TAG:?Set TAG first}" --json state,baseRefName,mergeCommit \
+  --jq 'select(.state == "MERGED" and .baseRefName == "main") | .mergeCommit.oid')
+MAIN_RUN_ID=$(gh run list --workflow ci.yml --event push --branch main --commit "${RELEASE_COMMIT:?Check the merged release PR}" \
+  --limit 2 --json databaseId --jq 'select(length == 1) | .[0].databaseId')
+gh run watch "${MAIN_RUN_ID:?Expected one main-push CI run for the merged commit}" --exit-status
 ```
+
+If GitHub has not listed the run yet, repeat the lookup. If multiple runs match,
+inspect their history before selecting one. Continue only after the exact run
+passes. If `main` has advanced, use `git switch --detach "$RELEASE_COMMIT"`
+to return to the reviewed commit before tagging.
 
 ### 2. Create and verify the annotated tag
 
@@ -146,49 +156,67 @@ The push starts `Prepare GitHub release` for this tag and commit.
 just release-evidence
 ```
 
-Record the verified main run and attempt, distribution hashes, and original
-artifact IDs and digests. The recipe derives the tag and commit from the clean
+The summary includes the verified main run and attempt, distribution hashes,
+and original artifact IDs and digests. Retain the summary with the release
+tracker. The recipe derives the tag and commit from the clean
 checkout, verifies the already-pushed tag, and inspects retained signed CI
 evidence. See [reusable CI evidence](#reusable-ci-evidence).
 
 ### 5. Wait for the draft GitHub release
 
-Enter the matching preparation run ID from the list.
+Look up the preparation run for the pushed tag and the same commit.
 
 ```bash
-gh run list --workflow prepare-release.yml --event push --branch "$TAG" --commit "$RELEASE_COMMIT" --limit 20
-read -r -p "Preparation run ID: " PREPARATION_RUN_ID
-gh run watch "$PREPARATION_RUN_ID" --exit-status
+PREPARATION_RUN_ID=$(gh run list --workflow prepare-release.yml --event push --branch "${TAG:?}" --commit "${RELEASE_COMMIT:?}" \
+  --limit 2 --json databaseId --jq 'select(length == 1) | .[0].databaseId')
+gh run watch "${PREPARATION_RUN_ID:?Expected one tag-push preparation run}" --exit-status
 ```
 
-The workflow creates the original draft and attaches the validated wheel,
-sdist, and `release-attestation.json`.
+If the run is not visible yet, repeat the lookup. Continue after it succeeds.
+The workflow creates the draft and attaches the validated wheel, sdist, and
+`release-attestation.json`.
 
 ### 6. Review the draft
 
+Capture the draft once. The v0.3.1 CLI saves the release ID, repository, tag,
+title assertion and reviewed commit in a target file outside the checkout.
+Keep that file for publication, verification and retries.
+
 ```bash
-gh release view "$TAG" --json databaseId,tagName,name,isDraft,isPrerelease,body,assets
+RELEASE_DIR="../release-handoffs/research-repo-tools/${TAG:?}"
+RELEASE_TARGET="$RELEASE_DIR/target.json"
+if [ ! -e "$RELEASE_TARGET" ]; then
+  uv run --locked research-repo-tools performance release-draft acgetchell/research-repo-tools "$TAG" \
+    --commit "${RELEASE_COMMIT:?}" --expected-title "$TAG" --output "$RELEASE_TARGET"
+fi
+gh release view "$TAG"
+gh release view "$TAG" --json assets --jq '.assets[] | [.name, .state, .size, .digest] | @tsv'
 ```
 
-Record the draft ID. Require the expected stable tag and title, the three
-complete uploaded assets, and the generated notes or their canonical changelog
-link. Inspect the release in GitHub or use `just release-notes "$TAG"` to
-review the notes separately.
+Review the stable draft's title and generated notes (or canonical changelog
+link). All three assets must be uploaded and nonempty.
 
 Before publishing the draft, compare each attached wheel and sdist filename
 and SHA-256 digest with the signed distribution records from
 `just release-evidence`. Confirm that the attached `release-attestation.json`
-identifies the same validation run and attempt. A missing or differing digest
-must be reconciled while the release is still editable.
+identifies the same validation run and attempt. Download it for inspection with
+`gh release download "$TAG" --pattern release-attestation.json --dir "$RELEASE_DIR"`.
+The JSON in `evidence.manifest` contains the validation run and file hashes.
+Reconcile any missing or differing digest while the release is still editable.
 
 ### 7. Publish the reviewed GitHub Release
 
 ```bash
-just release-publish "$TAG"
+just release-publish "$TAG" --target "$RELEASE_TARGET"
 ```
 
 Use a human GitHub CLI session. The published event starts `Publish to PyPI`.
-Find and record the `publish.yml` run for the exact tag and commit.
+Open the URL for the matching run to review the protected deployment:
+
+```bash
+gh run list --workflow publish.yml --event release --branch "${TAG:?}" --commit "${RELEASE_COMMIT:?}" \
+  --json status,conclusion,url
+```
 
 ### 8. Approve the PyPI deployment
 
@@ -201,7 +229,7 @@ Wait for the upload job to finish.
 ### 9. Verify registry availability and downstream resolution
 
 ```bash
-just release-verify "$TAG"
+just release-verify "$TAG" --target "$RELEASE_TARGET"
 ```
 
 Success confirms the stable GitHub Release, its required assets, and the exact
@@ -226,9 +254,10 @@ release branch locally and on the remote.
 
 ## Choose where to resume
 
-In a new shell, take `TAG`, `RELEASE_COMMIT`, and workflow run IDs from the
-release tracker. Cross-check them with the exact tag, main-run listing, and
-recorded draft. Keep the retained evidence associated with that candidate.
+In a new shell, set `TAG` again. Step 2.1 looks up the merged PR's commit and
+main run, and Step 2.5 looks up the tag's preparation run. After draft capture,
+restore `RELEASE_TARGET` to the original target file in the release handoff directory.
+Keep the retained evidence associated with that candidate.
 
 | Last completed operation | Resume with |
 | --- | --- |

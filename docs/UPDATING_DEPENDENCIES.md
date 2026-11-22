@@ -39,14 +39,18 @@ Ruff and ty
 infer targets from project metadata. Consumer lint rules, fixture exceptions,
 notebook policy, and deliberate lower targets remain consumer decisions.
 
-Use the packaged standalone bootstrap once the
-[quickstart version is available on PyPI](../README.md#release-availability).
+Use the standalone bootstrap from the currently pinned package. If the consumer
+already has the helper and adoption recipes, go straight to the README upgrade
+commands below. To add a missing helper, run:
 
 ```sh
 just templates python-bootstrap.py --output python-bootstrap.py
 ```
 
-Merge the matching published recipes into the consumer's Justfile. Follow the
+Merge any missing adoption recipes from `just templates justfile` into the
+consumer's Justfile. If the `templates` recipe itself is missing, use the
+[tooling-only template export](../README.md#install-with-uv) with the existing pin.
+Follow the
 [README upgrade commands](../README.md#automatically-adopting-a-published-supplier)
 to preview and apply the upgrade. Then check the updated environment.
 
@@ -107,7 +111,7 @@ inherit-python-tools = true
 
 Keep your current exact shared-package pin in `tooling` and include that group
 from `dev`. The same standalone adoption recipes prepare the extra, declarations,
-lock and environment. Once the target version is available on PyPI, follow the
+lock and environment. For a published target, follow the
 [README upgrade commands](../README.md#automatically-adopting-a-published-supplier)
 to preview and apply the upgrade. Then verify the tool versions and run the Python checks.
 

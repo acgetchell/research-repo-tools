@@ -14,15 +14,16 @@ research software repositories. Install one pinned Python package and invoke it
 through your repository's Just recipes. Keep scientific algorithms, benchmark
 case selections, native builds and deployment policy in your own project.
 
-Start with [installation](#install-with-uv), try the [first workflow](#first-workflow),
-then choose a [capability](#capability-index). Package development belongs in
-[CONTRIBUTING.md][contributing].
+For a new consumer, start with [installation](#install-with-uv) and try the
+[first workflow](#first-workflow). For an existing v0.3.0 consumer, follow the
+[upgrade instructions](#automatically-adopting-a-published-supplier). Package
+development belongs in [CONTRIBUTING.md][contributing].
 
 ## Release availability
 
-The examples below target **v0.3.1**. Confirm that version is available on
-[PyPI][pypi] before installing it, and use the Justfile and bootstrap helper
-from the same release. See the [generated changelog][changelog-history] for release notes.
+**v0.3.1 is published on [PyPI][pypi].** Pin the package and take the Justfile
+and bootstrap helper from that same release. See the [changelog][changelog-history]
+for release notes.
 
 - To keep a consumer's tooling pin current, opt in to [automatic supplier adoption](#automatically-adopting-a-published-supplier).
 - To tag the commit that passed review, use `just tag TAG --commit SHA`. Cargo consumers can
@@ -41,44 +42,41 @@ its integration checks against the updated lockfile.
 
 ## Install with uv
 
-Use an existing consumer Git repository; you do not need to clone this package.
-Install [uv](https://docs.astral.sh/uv/getting-started/installation/) and Git first.
-Recipes require a POSIX `sh` on PATH, including on Windows: add Git for Windows'
-`bin` directory, typically `C:\Program Files\Git\bin`. uv supplies managed Python;
-the published package requires Python 3.15 or newer.
+Work in the root of the **consumer's Git repository**. Install Git and
+[uv](https://docs.astral.sh/uv/getting-started/installation/) (0.12.10 or newer).
+Recipes need POSIX `sh` on PATH. On Windows, add Git for Windows' `bin` directory,
+typically `C:\Program Files\Git\bin`. Setup installs Just.
 
-From the consumer root, add the exact published package:
+**1. Declare the package and interpreter.** If the repo has no `pyproject.toml`,
+create one with `uv init --bare --python 3.15`. In an existing manifest, keep
+the project's name, dependencies and stricter Python bounds. v0.3.1 requires
+`project.requires-python` to enforce at least 3.15. Review that compatibility
+change before adopting it in a project that supports older Python.
 
-```sh
-uv add --group tooling --no-sync "research-repo-tools==0.3.1"
-```
-
-Include `tooling` from `dev`, retaining your other dependencies. Set
-`.python-version` to a compatible selection such as `3.15`. Keep any stricter
-application Python constraints; use the [adoption workflow][python-adoption]
-if the project currently requires an older interpreter.
+Set `.python-version` to a compatible interpreter such as `3.15`. Merge these
+groups into `pyproject.toml`, retaining existing entries. Replace the example
+uv pin with the version reported by `uv --version`.
 
 ```toml
 [dependency-groups]
 tooling = ["research-repo-tools==0.3.1"]
 dev = [{include-group = "tooling"}]
+
+[tool.uv]
+required-version = "==0.13.9"
 ```
 
-Declare the uv version you installed as `tool.uv.required-version = "==X.Y.Z"`.
-The [toolchain guide][toolchain] explains Rust and optional tool declarations;
-a Python-only consumer can omit them. Refresh the lock, then export the matching
-installed Just template:
+**2. Lock the pin and export both templates.** For a repo with an existing
+Justfile or helper, omit the corresponding `--output` argument and merge the
+printed template into the existing file. Run both exports from the consumer root.
 
 ```sh
 uv lock
 uv run --locked --only-group tooling research-repo-tools templates justfile --output justfile
+uv run --locked --only-group tooling research-repo-tools templates python-bootstrap.py --output python-bootstrap.py
 ```
 
-For an existing justfile, omit `--output justfile` and merge the printed recipes;
-the exporter refuses to overwrite files. Review and retain the manifest, lockfile,
-Python selector and recipes together.
-
-Run the one-time setup:
+**3. Run setup.** Add any [Rust or optional tool declarations][toolchain] first.
 
 ```sh
 uv run --locked --managed-python --only-group tooling research-repo-tools setup
@@ -86,9 +84,10 @@ uv run --locked --managed-python --only-group tooling research-repo-tools setup
 
 Setup verifies the declarations, installs a pinned user-level Just and declared
 tools, configures PATH and synchronizes the locked development environment.
-Open a new terminal if PATH changed. A failed step stops setup with a diagnostic;
-fix that prerequisite and rerun. [Installation and recovery][toolchain] explains
-ownership, native build prerequisites and platform behavior.
+Open a new terminal if PATH changed. Run `just help` and the [first workflow](#first-workflow)
+from the consumer root. Keep the manifest, `uv.lock`, `.python-version`, Justfile
+and `python-bootstrap.py` together in version control. See [installation and recovery][toolchain]
+if setup reports a missing prerequisite.
 
 Managed Cargo tool installs reuse compilation output across setup
 and update runs while retaining exact-version installation and executable checks.
@@ -393,21 +392,31 @@ ownership, registry proof limits and recovery are described in the
 
 ### Automatically adopting a published supplier
 
-If your consumer pins v0.3.0 on PyPI, use its existing shared Python bootstrap
-for the first upgrade. Once v0.3.1 is available on PyPI, preview the changes,
-review the proposed manifest and lockfile, then apply them.
+If your consumer pins v0.3.0 on PyPI, use its existing Justfile and
+`python-bootstrap.py` for the first upgrade. If either is missing, first
+[install the matching bootstrap recipes and helper][python-adoption].
+Review the proposed manifest and lockfile after the first command, then apply.
 
 ```sh
 just shared-python-plan 0.3.1
 just shared-python-update 0.3.1
 ```
 
-With v0.3.1 installed, merge its `update-python-dependencies` recipe and
+Run the consumer's Python and integration checks on the updated lockfile.
+To opt in to future automatic upgrades, merge v0.3.1's `update-python-dependencies` recipe and
 `supplier_update` setting into the consumer Justfile. In `dependency-sources.toml`,
 add or update the named selection to match the exact package pin in the main
-project's manifest and lockfile. This example assumes an existing `[projects.python]`.
+project's manifest and lockfile. For a single Python project at the repository
+root, merge the following into the policy, keeping any existing projects and sources.
 
 ```toml
+schema = 1
+
+[projects.python]
+ecosystem = "python"
+directory = "."
+release-owned = ["."]
+
 [sources.tooling]
 project = "python"
 package = "research-repo-tools"
@@ -793,8 +802,11 @@ record saved by `--output`; default shared CLI status messages remain compatible
 Checks that are not configured are labeled explicitly. Failures print diagnostics
 and a nonzero status, without a success summary or replacement acceptance.
 
-Follow the ordered release procedure in the matching installed `RELEASING.md`
-template and adapt it to your repository. The [RRT release guide][publishing]
+Use `just templates RELEASING.md` to print the installed release guide and merge
+the steps into your repository's runbook. If you already pin v0.3.1, the
+[current consumer guide][consumer-release-guide] also shows how to look up the
+merge commit and reuse the captured draft ID with that version. Configure your
+own CI workflow, registry and approval environment. The [RRT release guide][publishing]
 is a worked Python publication workflow. Exact-commit checks are the default. [CI reuse][reuse-guide]
 is an explicit reviewed option with its own eligibility and revalidation;
 package and artifact checks still apply. Approval, registry publication,
@@ -1059,6 +1071,7 @@ BSD-3-Clause. See [LICENSE][license].
 [commands]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_COMMANDS.md
 [complete-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/complete-run-api.md
 [configuration-api]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/configuration-api.md
+[consumer-release-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/src/research_repo_tools/templates/RELEASING.md
 [contributing]: https://github.com/acgetchell/research-repo-tools/blob/main/CONTRIBUTING.md
 [coverage-cleanup]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/INSTALLING.md#cleaning-retained-coverage
 [dependabot]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/AUTOMATING_DEPENDABOT.md

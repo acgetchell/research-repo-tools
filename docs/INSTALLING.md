@@ -1,10 +1,8 @@
 # Installing and managing toolchains
 
-Toolchain management provides explicit setup, checks, synchronization, and
-managed execution. uv is a hard prerequisite. Native installer verification and
-isolated installed-package validation are release gates. Consumers migrate to
-an exact published package or verified development commit and validate their
-selected configuration; [release gates require published tooling](dependency-provenance-api.md).
+For a first installation, use the [consumer quickstart](../README.md#install-with-uv).
+For an existing v0.3.0 pin, follow the [v0.3.1 upgrade instructions](../README.md#automatically-adopting-a-published-supplier).
+Use this guide to configure optional tools, understand what setup installs, or recover a failed installation.
 
 ## Ownership and declarations
 
@@ -120,11 +118,6 @@ On Windows, install Git for Windows and add its `bin` directory containing
 `sh.exe` to PATH (typically `C:\Program Files\Git\bin`). Having `git.exe` on
 PATH alone is insufficient. Setup checks the shell before installing tools;
 `just tools-check` includes the same read-only shell check.
-
-Follow the [consumer quickstart](../README.md#install-with-uv) to add the published
-pin, include `tooling` from `dev`, refresh the lock, export the matching Justfile
-and run setup. The template exporter refuses to overwrite existing files.
-Installing the dependency alone does not modify source or run setup.
 
 The tooling-only environment excludes the consumer project and its runtime or
 notebook dependencies, so setup can start before a native build backend has Rust

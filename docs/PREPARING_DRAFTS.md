@@ -271,12 +271,14 @@ runner-labels = ["ubuntu-24.04"]
 ```
 
 Observe the full source commit independently, peeling an annotated tag to its
-commit. Then run the consumer's existing `release-assets` wrapper:
+commit. Use the release guide's `TAG` and `RELEASE_COMMIT` from the merged PR.
+From the consumer root, run its `release-assets` wrapper:
 
 ```sh
+RELEASE_DIR="../release-handoffs/$(basename "$PWD")/${TAG:?Set TAG first}"
 just release-assets retrieve tooling/draft-receipt.toml \
-  --tag v1.2.3 --commit FULL_OBSERVED_COMMIT \
-  --output ../release-handoffs/v1.2.3
+  --tag "$TAG" --commit "${RELEASE_COMMIT:?Set the reviewed merge SHA first}" --output "$RELEASE_DIR"
+RELEASE_TARGET="$RELEASE_DIR/target.json"
 ```
 
 The destination must be outside the consumer root. First retrieval requires one
