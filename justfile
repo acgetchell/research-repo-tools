@@ -152,7 +152,7 @@ release-dependencies:
 release-dependency-builds:
     uv run --locked research-repo-tools release dependency-builds
 
-# Capture or revalidate the merged release PR's draft target and print its path.
+# Wait for draft preparation, capture or revalidate the target, and print its path.
 release-draft tag:
     uv run --locked python scripts/release_handoff.py draft "$1"
 

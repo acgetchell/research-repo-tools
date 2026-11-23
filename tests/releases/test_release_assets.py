@@ -513,6 +513,65 @@ def test_reviewed_tag_outside_checkout_history_cannot_supply_evidence(checkout):
         release.inspect_evidence(root, reviewed_ancestor=lambda tag: tagged)
 
 
+def preparation_run(**changes):
+    return {
+        "id": 42,
+        "path": ".github/workflows/prepare-release.yml",
+        "head_branch": TAG,
+        "head_sha": COMMIT,
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+    } | changes
+
+
+def test_draft_waits_for_the_same_preparation_run(monkeypatch, capsys, release_handoff):
+    pages = iter([[], [preparation_run(status="queued", conclusion=None)], [preparation_run()]])
+    sleeps = []
+
+    def list_runs(endpoint):
+        assert endpoint == f"actions/workflows/prepare-release.yml/runs?event=push&branch={TAG}&head_sha={COMMIT}&per_page=2"
+        runs = next(pages)
+        return {"total_count": len(runs), "workflow_runs": runs}
+
+    monkeypatch.setattr(release_handoff, "api", list_runs)
+    monkeypatch.setattr(release_handoff, "sleep", sleeps.append)
+    release_handoff._wait_for_preparation(TAG, COMMIT)
+    result = capsys.readouterr()
+    assert not result.out and "Waiting for draft preparation" in result.err and "Draft preparation passed" in result.err
+    assert "/actions/runs/42" in result.err and len(sleeps) == 2
+
+
+@pytest.mark.parametrize(
+    ("pages", "error"),
+    [
+        ([[]], "has not listed preparation"),
+        ([[preparation_run(conclusion="failure")]], "ended with failure"),
+        ([[preparation_run(), preparation_run(id=43)]], "expected one tag-push"),
+        ([[preparation_run(head_sha="f" * 40)]], "differs from the expected"),
+        ([[preparation_run(status="in_progress", conclusion=None)], [preparation_run(id=43)]], "identity is invalid or changed"),
+    ],
+)
+def test_incomplete_preparation_cannot_capture_a_target(tmp_path, monkeypatch, release_handoff, pages, error):
+    root = tmp_path / "checkout"
+    root.mkdir()
+    clock = iter([0, 121])
+    replies = iter(pages)
+
+    def list_runs(endpoint):
+        runs = next(replies)
+        return {"total_count": len(runs), "workflow_runs": runs}
+
+    monkeypatch.setattr(release_handoff, "api", list_runs)
+    monkeypatch.setattr(release_handoff, "_merged_release_commit", lambda *args: COMMIT)
+    monkeypatch.setattr(release_handoff, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(release_handoff, "sleep", lambda _: None)
+    monkeypatch.setattr(release_handoff.release_assets, "preflight_release_target", lambda *a, **kw: pytest.fail("draft inspected before preparation passed"))
+    with pytest.raises(ValueError, match=error):
+        release_handoff.capture_draft(root, TAG)
+    assert not (root.parent / "release-handoffs").exists()
+
+
 def test_maintainer_draft_revalidates_without_replacing_original(tmp_path, monkeypatch, capsys, release_handoff):
     root = tmp_path / "release café"
     root.mkdir()
@@ -532,6 +591,8 @@ def test_maintainer_draft_revalidates_without_replacing_original(tmp_path, monke
         return release_handoff.release_assets.ReleaseTarget(repo, tag, release_id, commit, expected_title)
 
     monkeypatch.setattr(release_handoff, "run_command_bytes", transport)
+    monkeypatch.setattr(release_handoff, "api", lambda endpoint: {"total_count": 1, "workflow_runs": [preparation_run()]})
+    monkeypatch.setattr(release_handoff, "sleep", lambda _: pytest.fail("completed preparation should return immediately"))
     monkeypatch.setattr(release_handoff.release_assets, "preflight_release_target", preflight)
     monkeypatch.setenv("RRT_RELEASE_CHECKOUT", str(root))
     monkeypatch.setattr(release_handoff.sys, "argv", ["release_handoff.py", "draft", TAG])
