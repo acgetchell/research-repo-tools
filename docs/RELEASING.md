@@ -152,15 +152,24 @@ The push starts `Prepare GitHub release` for this tag and commit.
 
 ### 4. Verify the final release commit
 
+Set `RELEASE_ISSUE` to the numeric issue ID of this version's release tracker.
+
 ```bash
-just release-evidence
+just release-evidence "${RELEASE_ISSUE:?Set the release tracker issue number}"
 ```
 
-The summary includes the verified main run and attempt, distribution hashes,
-and original artifact IDs and digests. Retain the summary with the release
-tracker. The recipe derives the tag and commit from the clean
-checkout, verifies the already-pushed tag, and inspects retained signed CI
-evidence. See [reusable CI evidence](#reusable-ci-evidence).
+The recipe verifies the pushed tag and the retained signed CI artifacts for the
+clean release checkout. It saves the main run and attempt, distribution hashes,
+and original artifact IDs and digests on the tracker and prints the comment URL.
+Repeating it reuses an identical comment. A prior terminal-only
+`just release-evidence` can be recorded by running the numbered form. This
+rechecks the existing evidence without rebuilding or rerunning CI.
+See [reusable CI evidence](#reusable-ci-evidence).
+
+When using newer handoff recipes from a separate worktree, export
+`RRT_RELEASE_CHECKOUT` to the absolute path of the clean tagged checkout for
+Steps 2.4 and 2.6. The draft target is stored beside that checkout. Use the
+tagged checkout for publication.
 
 ### 5. Wait for the draft GitHub release
 
@@ -178,17 +187,18 @@ The workflow creates the draft and attaches the validated wheel, sdist, and
 
 ### 6. Review the draft
 
-Capture the draft once. The CLI saves the release ID, repository, tag,
-title assertion and reviewed commit in a target file outside the checkout.
-Keep that file for publication, verification and retries.
+Capture the draft target for the merged release PR. The recipe verifies the
+draft ID, repository, tag, title and commit. It saves the target outside the
+checkout and prints its path. On retry it checks the original target against
+the live draft. Keep that file for publication and verification.
 
 ```bash
-RELEASE_DIR="../release-handoffs/research-repo-tools/${TAG:?}"
-RELEASE_TARGET="$RELEASE_DIR/target.json"
-if [ ! -e "$RELEASE_TARGET" ]; then
-  uv run --locked research-repo-tools performance release-draft acgetchell/research-repo-tools "$TAG" \
-    --commit "${RELEASE_COMMIT:?}" --expected-title "$TAG" --output "$RELEASE_TARGET"
-fi
+RELEASE_TARGET=$(just release-draft "${TAG:?}")
+```
+
+After capture succeeds, inspect the draft and its uploaded assets.
+
+```bash
 gh release view "$TAG"
 gh release view "$TAG" --json assets --jq '.assets[] | [.name, .state, .size, .digest] | @tsv'
 ```
@@ -200,7 +210,7 @@ Before publishing the draft, compare each attached wheel and sdist filename
 and SHA-256 digest with the signed distribution records from
 `just release-evidence`. Confirm that the attached `release-attestation.json`
 identifies the same validation run and attempt. Download it for inspection with
-`gh release download "$TAG" --pattern release-attestation.json --dir "$RELEASE_DIR"`.
+`gh release download "$TAG" --pattern release-attestation.json --dir "${RELEASE_TARGET%/*}"`.
 The JSON in `evidence.manifest` contains the validation run and file hashes.
 Reconcile any missing or differing digest while the release is still editable.
 

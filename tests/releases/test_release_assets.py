@@ -3,6 +3,7 @@
 import copy
 import gzip
 import hashlib
+import importlib
 import inspect
 import io
 import json
@@ -422,7 +423,83 @@ def test_maintainer_evidence_recipe_accepts_local_and_shared_commands():
     shared = dry_run(ROOT, "release-evidence", ["verify", "policy with spaces.toml", "--output", "selection.json"]).stderr
     assert 'research-repo-tools release evidence "$@"' in shared
     guide = (ROOT / "docs/RELEASING.md").read_text(encoding="utf-8")
-    assert "```bash\njust release-evidence\n```" in guide
+    assert 'just release-evidence "${RELEASE_ISSUE:?' in guide
+    assert "scripts/release_handoff.py evidence" in dry_run(ROOT, "release-evidence", ["268"]).stderr
+    assert "scripts/release_handoff.py draft" in dry_run(ROOT, "release-draft", [TAG]).stderr
+
+
+@pytest.fixture
+def release_handoff(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    return importlib.import_module("release_handoff")
+
+
+def test_tracker_handoff_posts_only_verified_evidence_and_reuses_comment(checkout, monkeypatch, release_handoff):
+    root, git, remote = checkout
+    commit = git("rev-parse", "HEAD")
+    url = "https://example.test/issues/8#issuecomment-1"
+    comments = []
+
+    def transport(tool, args, *, cwd, input=None):
+        assert tool == "gh" and cwd == root
+        if args == ["api", "--paginate", "--slurp", f"repos/{release.REPOSITORY}/issues/8/comments?per_page=100"]:
+            return subprocess.CompletedProcess(args, 0, json.dumps([[], comments]).encode())
+        assert args == ["issue", "comment", "8", "--repo", release.REPOSITORY, "--body-file", "-"]
+        assert isinstance(input, bytes)
+        comments.append({"body": input.decode("utf-8"), "html_url": url})
+        return subprocess.CompletedProcess(args, 0, url.encode())
+
+    monkeypatch.setattr(release_handoff, "run_command_bytes", transport)
+    for _ in range(2):
+        assert release_handoff.record_evidence(root, "8") == url
+    (comment,) = comments
+    body = comment["body"]
+    assert commit in body and "run 123, attempt 1" in body
+    for artifact in remote["artifacts"]:
+        assert artifact["digest"] in body and str(artifact["id"]) in body
+    for name, payload in remote["contents"].items():
+        assert f"{hashlib.sha256(payload).hexdigest()}  {name}" in body
+    remote["tag_commit"] = "f" * 40
+    with pytest.raises(ValueError, match="remote release tag"):
+        release_handoff.record_evidence(root, "8")
+    assert comments == [comment]
+
+
+def test_maintainer_draft_revalidates_without_replacing_original(tmp_path, monkeypatch, capsys, release_handoff):
+    root = tmp_path / "release café"
+    root.mkdir()
+    prs = [{"isCrossRepository": False, "mergeCommit": {"oid": COMMIT}}]
+
+    def transport(tool, args, *, cwd):
+        assert tool == "gh" and cwd == root
+        assert args[:2] == ["pr", "list"] and args[args.index("--repo") + 1] == release.REPOSITORY
+        for flag, value in (("--head", f"release/{TAG}"), ("--base", "main"), ("--state", "merged")):
+            assert args[args.index(flag) + 1] == value
+        return subprocess.CompletedProcess(args, 0, json.dumps(prs).encode())
+
+    release_id = 91
+
+    def preflight(directory, repo, tag, commit, *, expected_title):
+        assert (directory, repo, tag, commit, expected_title) == (root, release.REPOSITORY, TAG, COMMIT, TAG)
+        return release_handoff.release_assets.ReleaseTarget(repo, tag, release_id, commit, expected_title)
+
+    monkeypatch.setattr(release_handoff, "run_command_bytes", transport)
+    monkeypatch.setattr(release_handoff.release_assets, "preflight_release_target", preflight)
+    monkeypatch.setenv("RRT_RELEASE_CHECKOUT", str(root))
+    monkeypatch.setattr(release_handoff.sys, "argv", ["release_handoff.py", "draft", TAG])
+    assert release_handoff.main() == 0
+    path = tmp_path / "release-handoffs" / "research-repo-tools" / TAG / "target.json"
+    assert capsys.readouterr().out == f"{path.as_posix()}\n"
+    original = path.read_bytes()
+    assert json.loads(original)["release_id"] == release_id
+    assert release_handoff.capture_draft(root, TAG) == path
+    release_id += 1
+    with pytest.raises(ValueError, match="retained target differs"):
+        release_handoff.capture_draft(root, TAG)
+    prs.clear()
+    with pytest.raises(ValueError, match="expected one merged"):
+        release_handoff.capture_draft(root, TAG)
+    assert path.read_bytes() == original
 
 
 @pytest.fixture
