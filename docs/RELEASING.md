@@ -299,9 +299,11 @@ for inspection.
 
 1. Preserve the original attachment outside the staging directory with the failed
    preparation run ID and attempt. Wait for its uploader to stop. Confirm the
-   remote tag still resolves to `RELEASE_COMMIT`. Use an authenticated release
-   listing to locate the unique mutable draft for that tag. Record its numeric
-   release ID and check it against any previously captured target.
+   remote tag still resolves to `RELEASE_COMMIT`. List all releases for the tag
+   with authenticated access. If the listing is empty and the failed attempt
+   never captured a release ID, go directly to step 4. Otherwise, continue only
+   if the listing shows one mutable draft and its numeric ID matches any
+   previously captured target. Record that ID for step 2.
 2. List every page of `GET /repos/{owner}/{repo}/releases/{release_id}/assets`.
    Record each asset's ID, name, state, size and digest. Download each `uploaded`
    asset by its recorded ID. Compare the wheel and sdist names and SHA-256 hashes
