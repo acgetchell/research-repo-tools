@@ -148,6 +148,126 @@ class TestCitationDates(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     changelog.resolve_date(settings, tag="v1.2.3", released=value)
 
+    def test_rebuild_reviews_changes_before_replacing_retained_history(self):
+        from research_repo_tools import files
+
+        self.enterContext(patch.object(changelog, "run_git_command", return_value=subprocess.CompletedProcess([], 0, "false\n")))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            policy = root / "research.toml"
+            policy.write_bytes(b'[changelog]\ncliff-config="cliff.toml"\n')
+            (root / "cliff.toml").write_bytes(b"[changelog]\n")
+            args = ["--config", str(policy), "changelog"]
+            settings = config.load(root=root, path=policy)
+            path = root / "CHANGELOG.md"
+            path.write_bytes(b"# Changelog\r\r## [1.2.0] - 2020-04-01\r\r- New.\r")
+            archives = root / "docs/archives/changelog"
+            archives.mkdir(parents=True)
+            old = archives / "1.0.md"
+            old.write_bytes(b"# Archive\n\n## [1.0.0] - 2019-01-01\n\n- Truncated.\n")
+            obsolete = archives / "1.2.md"
+            obsolete.write_bytes(b"# Obsolete archive\n")
+            # Only ASCII numeric filenames belong to the generated archive inventory.
+            notes = archives / "1.2\N{ARABIC-INDIC DIGIT THREE}.md"
+            notes.write_bytes(b"# Maintainer notes\n")
+            generated = "# Changelog\n\n## [1.2.0] - 2022-01-01\n\n- New.\n\n## [1.1.0] - 2019-08-09\n\n- Middle.\n\n## [1.0.0] - 2018-01-01\n\n- Complete continuation.\n"
+
+            def snapshot():
+                return {target: target.read_bytes() for target in (path, *archives.glob("*.md"))}
+
+            before = snapshot()
+            for prospective in (False, True):
+                with (
+                    patch("research_repo_tools.changelog._run_cliff", return_value=generated),
+                    self.assertRaisesRegex(ValueError, "conflicting retained release"),
+                ):
+                    changelog.generate(settings, **({"tag": "v1.2.0", "released": "2020-04-01"} if prospective else {}))
+            with patch("research_repo_tools.changelog._run_cliff", return_value=generated):
+                preview = io.StringIO()
+                with redirect_stdout(preview):
+                    self.assertEqual(cli.main([*args, "rebuild"]), 0)
+                diff = preview.getvalue()
+                self.assertIn("a/CHANGELOG.md", diff)
+                self.assertIn("--- /dev/null\n+++ b/docs/archives/changelog/1.1.md", diff)
+                self.assertIn("--- a/docs/archives/changelog/1.2.md\n+++ /dev/null", diff)
+                self.assertIn("-- Truncated.", diff)
+                self.assertIn("+- Complete continuation.", diff)
+                self.assertEqual(snapshot(), before)
+                replace_path = files._replace_path
+
+                def interrupt_archive(source, destination):
+                    if destination == old.resolve():
+                        self.assertFalse(obsolete.exists())
+                        raise OSError("publication interrupted")
+                    replace_path(source, destination)
+
+                with patch.object(files, "_replace_path", side_effect=interrupt_archive), self.assertRaisesRegex(OSError, "interrupted"):
+                    changelog.rebuild(settings, apply=True)
+                self.assertEqual(snapshot(), before)
+                self.assertEqual(changelog.rebuild(settings, apply=True), diff)
+                self.assertFalse(obsolete.exists())
+                self.assertEqual(notes.read_bytes(), before[notes])
+                self.assertIn(b"2019-01-01", old.read_bytes())
+                self.assertIn(b"2020-04-01", path.read_bytes())
+                self.assertEqual(changelog.rebuild(settings), "")
+            published = snapshot()
+            for damaged, error in (
+                (generated.split("## [1.0.0]")[0], "drops retained releases"),
+                (generated + "\n## [1.0.0]\n", "Duplicate release"),
+            ):
+                with patch("research_repo_tools.changelog._run_cliff", return_value=damaged), self.assertRaisesRegex(ValueError, error):
+                    changelog.rebuild(settings, apply=True)
+                self.assertEqual(snapshot(), published)
+
+    def test_rebuild_preserves_a_concurrent_edit_while_replacements_are_staged(self):
+        from research_repo_tools import files
+
+        self.enterContext(patch.object(changelog, "run_git_command", return_value=subprocess.CompletedProcess([], 0, "false\n")))
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            settings = config.parse({"changelog": {"cliff-config": "cliff.toml"}}, root=root)
+            (root / "cliff.toml").write_bytes(b"[changelog]\n")
+            path = root / "CHANGELOG.md"
+            path.write_bytes(b"# Changelog\n\n## [1.2.0]\n\n- Original.\n")
+            obsolete = root / "docs/archives/changelog/1.2.md"
+            obsolete.parent.mkdir(parents=True)
+            obsolete.write_bytes(b"# Obsolete\n")
+            edit = b"# Changelog\n\n## [1.2.0]\n\n- Concurrent edit.\n"
+            stage = files._stage_writes
+
+            def stage_and_edit(writes):
+                result = stage(writes)
+                path.write_bytes(edit)
+                return result
+
+            with (
+                patch.object(changelog, "_run_cliff", return_value="# Changelog\n\n## [1.2.0]\n\n- Generated.\n"),
+                patch.object(files, "_stage_writes", side_effect=stage_and_edit),
+                self.assertRaisesRegex(ValueError, "changed during rebuild"),
+            ):
+                changelog.rebuild(settings, apply=True)
+            self.assertEqual(path.read_bytes(), edit)
+            self.assertEqual(obsolete.read_bytes(), b"# Obsolete\n")
+
+    def test_shallow_rebuild_refuses_preview_and_apply_before_rendering(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            (root / "pyproject.toml").write_bytes(b'[tool.research-repo-tools.changelog]\nowner="example"\nrepository="fixture"\n')
+            path = root / "CHANGELOG.md"
+            original = b"# Changelog\n\n## [1.2.0]\n\n- Retained history.\n"
+            path.write_bytes(original)
+            for flags in ([], ["--apply"]):
+                with (
+                    self.subTest(flags=flags),
+                    patch.object(changelog, "run_git_command", return_value=subprocess.CompletedProcess([], 0, "true\n")) as git,
+                    patch.object(changelog, "_run_cliff", side_effect=AssertionError("shallow history reached the renderer")),
+                    redirect_stderr(io.StringIO()) as errors,
+                ):
+                    self.assertEqual(cli.main(["--root", str(root), "changelog", "rebuild", *flags]), 1)
+                    self.assertIn("full Git history", errors.getvalue())
+                    git.assert_called_once_with(["rev-parse", "--is-shallow-repository"], cwd=root.resolve())
+                    self.assertEqual(path.read_bytes(), original)
+
     def test_cli_preview_and_failure_use_same_policy(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)

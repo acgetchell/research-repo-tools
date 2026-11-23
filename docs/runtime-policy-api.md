@@ -2,9 +2,8 @@
 
 The runtime policy selects a complete, platform-specific dependency graph from a
 dedicated virtual project for isolated Python execution.
-It does not require equality with the consumer's development lock. Consumer
-commands and migration examples belong in the
-[README](../README.md#reproducible-isolated-release-runtimes).
+It does not require equality with the consumer's development lock. For setup and commands, follow the
+[isolated runtime guide](INSTALLING.md#reproducible-isolated-release-runtimes).
 
 `research_repo_tools.runtime_policy_build` exports:
 

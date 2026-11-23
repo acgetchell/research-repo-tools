@@ -322,7 +322,7 @@ An editable install with `uv add --dev --editable /path/to/research-repo-tools`
 also supports local development. For setup evaluation, use the `tooling`
 group described in the [toolchain guide](docs/INSTALLING.md). Local wheels and
 editable installs are development aids. Consumers can also use a reviewed
-exact Git commit through the [development-pin workflow](README.md#development-pins-and-release-dependencies).
+exact Git commit through the [development-pin workflow](docs/UPDATING_DEPENDENCIES.md#development-pins-and-release-dependencies).
 Release validation requires the selected upstream tooling to be published.
 
 ## Generated changelog

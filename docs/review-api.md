@@ -2,7 +2,7 @@
 
 `research_repo_tools.review` owns CodeRabbit invocation and review identity.
 `research_repo_tools.review_protocol` owns immutable result and approval records.
-Consumer usage is in the [README](../README.md#coderabbit-reviews); routine
+Consumer usage is in the [review guide](RUNNING_CHECKS.md#coderabbit-review); routine
 commands remain opt-in and outside checks. See [release availability](../README.md#release-availability)
 before adopting these interfaces.
 
@@ -32,8 +32,9 @@ total. Native byte transport preserves CRLF and split UTF-8 sequences.
 | `CompletedReview(findings, reviewed_files, reused, skipped)` | Successful completion or no-change skip; findings can be nonzero. A reused result is not evidence of a new review. |
 | `ConsentRequired(quote, pending_path, pending_identity, repository, base, head, base_commit, content_identity, selected_paths, branch)` | Stopped for consent, with a new saved selection. `selected_paths` counts the conservative local inventory, **not** billable files or full PR changes. |
 | `FailedReview(exit_code, reason)` | Provider failure, incomplete output, interruption or invalidated review. |
+| `IncompleteReview` | A failed review with a finding count, an unreviewed file count, and the paths and reasons the provider supplied. |
 | `ReviewDenied(pending_identity)` | Explicit refusal consumed the selection without a provider call. |
-| `UncertainReview(reason)` | A paid invocation was attempted; completion, validity or billing needs external reconciliation. Never retry it automatically. |
+| `UncertainReview(reason, incomplete=None)` | A paid invocation needs external reconciliation. When the provider reports partial coverage, `incomplete` holds the finding count and skipped-file details. |
 
 Local precondition, filesystem and Git errors raise `ValueError`, `OSError` or
 `subprocess.SubprocessError`. Provider transport/protocol failures return
@@ -47,6 +48,14 @@ uncertain paid work. Provider failures preserve their nonzero status; signals ma
 to 128+signal, interruption to 130, timeout to 124, and local errors to 1. Thus an
 exit code alone does not distinguish every state; inspect the terminal record.
 Local precondition errors have stderr diagnostics and no terminal JSON guarantee.
+
+An included review with partial coverage returns exit 1 and `status="incomplete"`. The terminal result
+includes `findings`, `unreviewed_file_count` and `unreviewed_files`. Each entry
+contains a `path` and the provider's `reason`, when supplied. The original
+finding events remain in the output stream. For `diff_too_large`, reduce the
+offending file's diff and obtain review coverage before pushing. A paid attempt
+with incomplete coverage retains these details under `status="uncertain"`,
+exits 5, and requires billing reconciliation. Never retry paid work automatically.
 
 ## Provider evidence and compatibility
 
@@ -114,7 +123,7 @@ work; reconcile usage externally, then explicitly obtain a new quote and approva
 
 ## Identity and local-state boundary
 
-Review identity uses [native path observations](path-identity-api.md) over all
+Review identity uses [native path observations](files-api.md#native-path-observations) over all
 tracked HEAD/index paths and non-ignored untracked files, plus instruction files.
 HEAD-only names are bound as `MissingPath` staged deletions unless they alias a
 current observation under Windows path normalization. A case-only rename retains

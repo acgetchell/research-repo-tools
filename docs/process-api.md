@@ -19,6 +19,17 @@ without decoding, quoting or newline translation. The existing general
 | `git_diff_paths_bytes(cwd=None, *, base=None, cached=False, paths=(), env=None, timeout=30)` | NUL-terminated changed paths; default compares index to worktree, `base` compares a tree to worktree, `cached=True` compares HEAD (or `base`) to index |
 | `git_status_bytes(cwd=None, *, paths=(), env=None, timeout=30)` | Porcelain-v1 `XY path` records terminated by NUL, including individual nonignored untracked files |
 
+```python
+from pathlib import Path
+
+from research_repo_tools.git_inspect import git_diff_paths_bytes, git_status_bytes
+
+root = Path.cwd()
+status = git_status_bytes(root).stdout
+staged = git_diff_paths_bytes(root, cached=True).stdout.split(b"\0")[:-1]
+worktree = git_diff_paths_bytes(root, base="HEAD", paths=["src"]).stdout.split(b"\0")[:-1]
+```
+
 `cwd: Path | None` selects the working directory; omission uses the caller's.
 `paths: Sequence[str]` are literal Git path boundaries relative to that directory.
 Directories include their descendants. An empty sequence selects the repository;

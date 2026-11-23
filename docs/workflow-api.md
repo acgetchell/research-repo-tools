@@ -4,7 +4,7 @@ This reference describes current source; check
 [release availability](../README.md#release-availability) before adoption.
 Consumer commands and configuration examples are in the
 [task guide](RECORDING_PERFORMANCE.md#configured-benchmark-workflows).
-The [shared ownership map](shared-capability-migration.md#performance-and-release-helper-adoption)
+The [shared ownership map](migration.md#performance-and-release-helper-adoption)
 defines the helper boundary and downstream integration requirements.
 Schema-2 through schema-6 measurement, complete-run retention and reusable host/
 profiling capture are described in the [complete-run contract](complete-run-api.md).
@@ -318,7 +318,7 @@ complete publication preflight.
 `run_examples` add metadata discovery, feature-specific builds and bounded live
 execution. This separate plan keeps consumer selection, budgets and stdout
 assertions declarative; see the [Cargo example contract](cargo-examples-api.md)
-and [static-plan migration](cargo-examples-migration.md).
+and [static-plan migration](cargo-examples-api.md#migrating-static-cargo-example-validation).
 
 `ci.export_environment(destination, names, *, environment=None)` validates every
 requested name and nonempty value before appending UTF-8/LF `NAME=value` lines.

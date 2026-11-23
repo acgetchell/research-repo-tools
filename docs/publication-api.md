@@ -4,7 +4,7 @@ This reference describes current source; check
 [release availability](../README.md#release-availability) before adoption.
 Consumer commands and complete configuration examples live in the
 [task guide](PUBLISHING_REPORTS.md#document-publication). Historical-schema adoption is covered
-in [publication migration](publication-migration.md).
+in [publication migration](PUBLISHING_REPORTS.md#document-publication-migration).
 
 ## Python API
 
@@ -176,14 +176,17 @@ traceback; a successful check is silent.
 
 ## Publication configuration v2
 
-Schema 2 accepts complete-run v1–v5 evidence, with the same independent provenance pins, source/harness
+Schema 2 accepts complete-run v1–v5 and initial benchmark-series v7 evidence, with the same independent provenance pins, source/harness
 checks, references, markers, tagged links, preview/check and transaction contracts
 as schema 1. The [task guide](PUBLISHING_REPORTS.md#complete-run-document-sections-and-coordinate-plots)
 owns commands and the packaged `complete-publication.toml` provides an editable
 configuration example. Schema 1 continues to require comparison evidence.
 First-release complete-run v6 evidence is explicitly rejected by this document
 publisher; use [schema-2 report promotion](complete-run-api.md#first-release-acquisition)
-for its current-only absolute timing report.
+for its current-only absolute timing report. A v7 series baseline uses only the
+current provenance and references for `version` and `tag`. It can publish absolute
+timings to a document. Comparisons, ratio SVGs and baseline references are invalid.
+See [starting a benchmark series](REUSING_BENCHMARKS.md#starting-a-benchmark-series-after-earlier-releases).
 Suite v4 evidence preserves availability and observation-level comparison rules.
 Scheduled v5 evidence requires an explicit one-based `trial`; validation checks
 the entire schedule before selecting that trial, labels the selected trial in

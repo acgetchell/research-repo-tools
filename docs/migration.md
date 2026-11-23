@@ -1,72 +1,54 @@
-# Shared scope and adoption
+# Migrating consumer repositories
 
-For the v0.3.0 to v0.3.1 upgrade, start with the
-[one-time bootstrap and supplier setup](../README.md#automatically-adopting-a-published-supplier).
-It lets consumers upgrade with their existing recipes before enabling automatic
-updates. For repositories replacing local scripts, the
-[capability migration map](shared-capability-migration.md) lists the shared
-replacement for each helper and the checks its consumer still owns.
+Use this guide when upgrading a pinned release or replacing local helpers.
+For first-time setup, follow the [consumer quick start](../README.md#quick-start).
+For a helper-by-helper comparison, use the [capability migration map](#shared-capability-migration).
+
+## Upgrading from v0.3.1 to v0.3.2
+
+After publication, follow [shared Python adoption](UPDATING_DEPENDENCIES.md#shared-python-adoption)
+with `VERSION=0.3.2`. Merge `changelog-rebuild` from the matching Justfile
+to [preview and apply a full history rebuild](GENERATING_CHANGELOGS.md#rebuilding-retained-history).
+Benchmark consumers can [preflight a preparation commit](candidate-reuse-api.md#offline-preparation-preflight)
+or [start a series for a new workload](REUSING_BENCHMARKS.md#starting-a-benchmark-series-after-earlier-releases).
+
+Update any automation that enumerates
+CodeRabbit outcomes. An included review with partial coverage now emits
+`status="incomplete"` in the terminal `rrt_review_result` record and exits 1.
+A paid attempt with partial coverage reports `status="uncertain"` and requires
+billing reconciliation. Both carry the finding count and unreviewed file details.
+Keep the push gate closed. See the [Python results and CLI fields](review-api.md#calls-and-results).
+
+## Upgrading from v0.3.0 to v0.3.1
+
+The v0.3.0 Justfile and `python-bootstrap.py` can perform this upgrade. Follow
+[shared Python adoption](UPDATING_DEPENDENCIES.md#shared-python-adoption) with
+`VERSION=0.3.1`, including the preview, update and consumer checks. That guide
+also covers recovering either template from the current pin. Once v0.3.1 is
+installed, merge its [supplier recipe and configuration](UPDATING_DEPENDENCIES.md#automatically-adopting-a-published-supplier)
+to opt into subsequent automatic upgrades.
 
 ## Mandatory Python support inheritance
 
-The v0.1.8 capability supersedes the earlier policy that preserved an installable
-consumer's lower application minimum while only its development settings advanced.
-Every managed consumer's `project.requires-python` must enforce at least the exact
-installed release's published minimum. This guards required language features even
-when the application is installed without development dependencies. The shared
-support minimum is Python 3.15 because CLI/handler boundaries use explicit
-`lazy` imports. The standard-library bootstrap remains compatible with older
-interpreters so it can acquire the new release before importing it.
-`inherit-python = false`, an absent setting, and tool-profile opt-out cannot bypass
-ordinary validation. Development selection and minimum support remain distinct.
+Starting with v0.1.8, an installable consumer's `project.requires-python` must
+enforce the installed tooling release's published minimum, including installations
+without development dependencies. Previously consumers could update only their
+development settings. A stricter application minimum, upper bound or exclusion
+still applies. Opting out of development interpreter mirroring or the tool profile
+keeps the minimum in force. See [selector and range handling](UPDATING_DEPENDENCIES.md#shared-python-adoption).
 
 ## Python 3.15 validation contract
 
-Runtime support and the selected development minor are Python 3.15. Existing
-3.14 selectors are migration inputs, not supported runtime
-overrides. The package uses explicit selective lazy imports; it never enables a
-global lazy-import mode. Native CI reads `.python-version`; the universal lock
-records the 3.15 floor and the project's resolved dependency versions.
+Migrate legacy Python 3.14 selectors using the bootstrap from the pinned release.
+It can start on an older interpreter and select a compatible one for the target.
+After updating the metadata, selector and lock, build the consumer's wheel and
+sdist. Check their `Requires-Python` and test installation on supported and
+unsupported interpreters.
 
-The common gate supersedes the previous lint/format/type order and continuation
-after failures. Checks now use format, lint, then `ty --error all`, stopping at the
-first failing batch. Fixes use lint fixes followed by formatting, stopping on
-failure. Every policy receives the same selected inventory, including fixtures;
-executables and all argument batches are preflighted before any validator runs.
-Consumer warning settings cannot relax the strict type gate. Consumers should
-remove copied validation runners when adopting this contract and use the packaged
-Python recipes; keep their lint rules and deliberate fixture exceptions.
-
-Use an exact published version through the shared-Python plan/update recipes,
-review the metadata, selector and lock diff, then run consumer CI. Do not use a local baseline override,
-an unpublished package pin, or a sibling checkout as a released dependency.
-
-When adopting a published release:
-
-1. Review the release's `Requires-Python` compatibility implications, consumer
-   upper bounds/exclusions, and any stricter minimum. Keep scientific dependencies,
-   native build behavior, lint rules, notebook content, and artifact contracts local.
-2. Copy the published `justfile` and `python-bootstrap.py` templates together,
-   then use `just shared-python-plan VERSION`. The standard-library-only helper
-   runs on older uv-supported Python and reads the exact release's PyPI JSON
-   `Requires-Python` to request a compatible interpreter for isolated uvx startup.
-   The installed target package then owns the support minimum. The old project's
-   interpreter, environment and lock do not control startup. Review the candidate diff.
-3. Use `just shared-python-update VERSION` to apply the validated plan. Adoption
-   reconciles application metadata, direct package pins/extras, tooling constraints,
-   `.python-version`, `uv.lock`, the environment, and the notebook kernel. It
-   preserves stricter bounds and unrelated restrictions, and rejects conflicts.
-4. Run ordinary Python/toolchain checks and the consumer's canonical CI. Build
-   its wheel and sdist, inspect `Requires-Python`, and test independent installation on
-   supported and unsupported interpreters before reviewing a consumer release.
-
-Dry runs and checks leave source files, environments and Git state untouched.
-Checks do not select a newer shared release or repair metadata. Apply restores
-prior declarations and the environment on caught failures; recovery errors name
-retained backups. See [adoption and recovery](UPDATING_DEPENDENCIES.md#shared-python-adoption).
-Merge, shared-package publication, and consumer rollout are separate steps.
-See [release availability](../README.md#release-availability) before selecting
-a version; development pins support rehearsal but do not prove publication.
+Replace copied validation runners with the [packaged Python checks](RUNNING_CHECKS.md#workflow-security-and-complete-python-validation).
+The gate runs format, lint and strict types (`ty --error all`) in order, stopping
+on failure. Fixes run lint fixes before formatting. Keep local rules and fixture
+exceptions, and include the same selected files in every check.
 
 ## Python API changes for v0.2.7
 
@@ -88,175 +70,185 @@ classes are not public compatibility surfaces.
 
 ## Shared and consumer ownership
 
-Install the exact published package, merge the recipes your project uses, and
-exercise each replacement in consumer CI before retiring the old helper. Keep
-scientific cases, notebook content, scanner rules, and deployment approvals in
-the consuming repository.
+Install an [exact published release](../README.md#release-availability), merge
+the recipes your project uses, and exercise each replacement in consumer CI
+before retiring its helper. Choose the migration guide for the local code.
 
-| What you are migrating | Where to start |
+| Local implementation | Migration guide |
 | --- | --- |
-| Setup, Python validation, and workflow scanning | [Toolchain installation](INSTALLING.md) and the [packaged validation guide](../src/research_repo_tools/templates/VALIDATING_WORKFLOWS.md) |
-| Notebook checkers that extract Python files | [Notebook adoption](RUNNING_NOTEBOOKS.md#adoption). Point notebook-specific checks at the original `.ipynb` paths. |
-| Benchmark measurements and published figures | [Retained performance evidence](performance-migration.md) and [document publication](publication-migration.md) cover historical formats and tagged artifacts. |
-| Release discovery, metadata, and publication wrappers | [Release policy migration](release-policy-migration.md) shows how to select the files and references a release can update. |
-
-## Dependency and tool update adoption
-
-Adopt the [complete update recipe contract](UPDATING_DEPENDENCIES.md#dependency-and-tool-updates)
-as a unit. Retain consumer exclusions and extra Cargo resolution roots in
-`update-cargo-dependencies`; Python-only consumers use the same template with
-no Rust declarations or root Cargo manifest. Use the canonical
-`update-python-dependencies` name; the former `update-python-deps` alias is removed.
-Likewise, use `help` and `changelog-release` in place of the removed
-`help-workflows` and `changelog-unreleased` aliases.
-
-The Python recipe calls `deps update-python --all-projects`. Declare any extra
-independent uv project directories in `deps.python-projects`, keeping each
-project's Python selector and dependency requirements. Package upgrades do not
-rewrite copied Justfiles: merge the updated recipe once when adopting this
-capability. Additional project locks and environments then participate in every
-Python dependency update without duplicated consumer update commands.
-
-Retain consumer source-index workarounds and local audit composition until the
-selected published package passes consumer integration. Merge the packaged
-`audit`/`security` recipes, select all maintained Python and
-Cargo locks, and retain the final audit stage in `update-dependencies`. Source
-policy remains consumer-owned. Verify a normal upgrade with named indexes and
-overrides, downgrade rejection, all-project rollback, and nonzero post-update
-audit findings before removing temporary local wiring. Separate scanner/wrapper
-projects must use the explicit environment selection shown in the README.
-
-The shared contract deliberately supersedes these historical policies:
-
-- uv is upgraded through its installation owner and its resulting stable pin is
-  reconciled. Merely validating an already-installed stable uv is no longer the
-  aggregate update policy.
-- Just comes from the shared package's pinned `rust-just` dependency. Consumers
-  can select an exact package version with the bootstrap or opt in to
-  [automatic supplier updates](UPDATING_DEPENDENCIES.md#automatically-adopting-a-published-supplier).
-- The managed Cargo updater replaces cargo-update; consumers do not need to keep
-  that implementation dependency for parity.
-- Cargo upgrades publish verified exact TOML declarations and retain old managed
-  installations. They do not feed the legacy Just-variable pin reconciler.
-- Dependency updates stop on failure but do not roll back earlier package-manager
-  steps. Within the Python workflow, all selected manifests and locks roll back
-  together, with environment recovery after sync failures. Post-update audit
-  failures retain the updated files for repair. Cargo exclusions constrain
-  requirement upgrades, not independent policy for lockfile resolution.
-
-The catalog includes cargo-machete, cargo-audit, samply, tectonic, and tex-fmt.
-Their native build prerequisites and profiling/typesetting runtime configuration
-remain consumer/platform responsibilities; see [tool installation](INSTALLING.md#additional-cargo-tools-and-native-prerequisites).
-Declare tools in TOML only after provisioning those prerequisites. Keep any
-consumer-owned prerequisite operations and checks during migration.
-
-Before removing old helpers, run focused integration checks in each consumer
-against its pinned published package, merged recipes, and configuration. Verify
-the selected tools and their versions, dependency-only and tool-only boundaries,
-failure propagation, full Python lock refresh with dev synchronization, and any
-coupled Cargo exclusions or additional manifests. Keep domain checks in consumers.
-Shared synthetic tests and local wheel evaluation do not replace these pinned
-consumer checks. Release preparation and downstream adoption remain separate work.
+| Tool installers, scanners, paper checks and CI helpers | [Capability map and ownership](#shared-capability-migration) |
+| Notebook checkers that extract Python files | [Notebook adoption](RUNNING_NOTEBOOKS.md#adoption) |
+| Benchmark measurements, retained evidence or published figures | [Performance migration](performance-migration.md) and [document publication](PUBLISHING_REPORTS.md#document-publication-migration) |
+| Release discovery, metadata and publication wrappers | [Release policy migration](release-policy-migration.md) |
+| Static Cargo example lists | [Cargo example migration](cargo-examples-api.md#migrating-static-cargo-example-validation) |
 
 ## CI ownership after adoption
 
-This repository owns tests, linting, type checks, and distribution checks for the
-shared Python implementation. Consumers install a pinned release from PyPI and
-keep thin recipes, local configuration, and focused integration checks that
-exercise the commands they use. They can remove tests and checks for scripts
-replaced by the package.
+The shared package tests generic behavior from source, wheel and sdist. Replace
+local tests of a retired helper with focused checks of the installed pin,
+recipes and configuration. Keep native builds, scientific workloads, notebook
+content, generated artifacts and deployment approvals in the consumer.
 
-Rust builds, domain tests, repository-specific Python or notebook checks, and
-validation of each consumer's generated artifacts remain in that consumer.
+## Dependency and tool update adoption
+
+Merge the [current update recipes](UPDATING_DEPENDENCIES.md#dependency-and-tool-updates)
+into the consumer's Justfile. An installed upgrade does not rewrite a copied recipe.
+
+| Retired recipe | Replacement |
+| --- | --- |
+| `changelog-unreleased` | `changelog-release` |
+| `help-workflows` | `help` |
+| `update-python-deps` | `update-python-dependencies` |
+
+Keep Cargo exclusions and extra resolution roots in `update-cargo-dependencies`.
+Declare independent uv projects in `deps.python-projects` so the shared Python
+recipe updates all their locks. Before removing source-index workarounds or audit
+wrappers, verify named indexes and overrides, downgrade rejection, all-project
+rollback and the final audit against the consumer's maintained locks. A failed
+post-update audit leaves the updated files available for repair.
 
 ## CodeRabbit review adoption
 
-The shared review contract provides branch/uncommitted scopes and verifies the
-selected base before invoking CodeRabbit. Adopt it with the selected package's
-thin [review recipes](RUNNING_CHECKS.md#coderabbit-review).
-
-Replace duplicated review helpers with the packaged thin recipes. The common
-default is verified `origin/main`, superseding local `main` defaults; explicit local
-bases remain available. Instructions are discovered only at the configured root,
-with `AGENTS.md` and exactly one CodeRabbit YAML configuration required. Keep
-repository instructions and scientific validation local. Move common regressions
-upstream before removing local helpers and retain focused integration checks for
-the pinned package, recipes, and configuration. Live reviews remain explicitly
-authorized work, outside routine checks and CI.
+Replace local review wrappers with the [review recipes](RUNNING_CHECKS.md#coderabbit-review).
+The default base moved from local `main` to verified `origin/main`. Pass a local
+base explicitly when needed. Keep `AGENTS.md` and exactly one CodeRabbit YAML
+configuration at the configured root. Run live reviews only when authorized.
 
 ## Migrating Python helpers
 
-Use the [public APIs](process-api.md#python-process-api) from the selected
-published pin, and run the consumer's focused integration checks before
-removing local helper copies. Local wheels remain a pre-publication evaluation aid.
-
-Replace executable lookup with `resolve_executable`; use `run_command` for captured
-text, `run_command_bytes` for binary data, and `run_git_bytes` for Git input that
-must reach clean filters unchanged. The text runner preserves newlines and raises
-checked failures with raw byte diagnostics. `env` replaces the environment rather
-than overlaying it. Use `run_command_live` for inherited input/output streams;
-repository-specific command policy remains in the consumer.
-
-For index-preserving status and changed-path inspection, adopt
-`research_repo_tools.git_inspect.git_status_bytes` and `git_diff_paths_bytes`
-from the installed package. Replace
-local status calls with `git_status_bytes`; replace index/worktree diffs with
-`git_diff_paths_bytes`, selecting `cached=True` for staged changes or `base=...`
-for a resolved base tree. Both return byte `CompletedProcess` results; split
-stdout on NUL rather than lines. Diff returns 0/1 for content selection and
-raises on fatal exits. See the [inspection contract](process-api.md#python-git-inspection-api)
-and [usage example](../README.md#git-inspection). Keep review modes, merge-base
-selection, capture identities, repair/staging lifecycles and consumer-specific
-path normalization downstream. Retain a working adapter until the normally
-resolved published distribution supplies the imports and passes focused native
-consumer checks; a local wheel or source override does not establish availability.
-`run_git_bytes` remains the general Git runner with its existing defaults.
-
-Replace generic multi-file writers with `replace_many`, including single-file
-writes as one-entry mappings. Encode payloads explicitly. Leaf symlinks are
-rejected, overlapping targets fail before effects, and incomplete rollback exposes
-recovery files through `RecoveryError` children of the exception group. This
-supersedes local writers that follow output symlinks or discard recovery failures;
-do not add compatibility flags to retain those behaviors. See the
-[worked example](process-api.md#calling-from-python) and full publication contract.
-
-Clippy SARIF consumers can also remove their separate Cargo installers and Just
-version variables after adopting a release with the catalog additions. Move the
-exact `clippy-sarif` and `sarif-fmt` pins to the managed Cargo table; keep Clippy's
-arguments, managed Rust component declaration, SARIF upload, and pipeline failure
-handling in the consumer.
+| Local helper | Shared replacement and migration detail |
+| --- | --- |
+| Executable lookup and child processes | Use [the process API](process-api.md#python-process-api). Choose captured text, bytes or live streams explicitly. A supplied `env` replaces the inherited environment. |
+| Git status and changed-path lists | Use [`git_status_bytes` and `git_diff_paths_bytes`](process-api.md#python-git-inspection-api). Split stdout on NUL. Handle diff statuses 0 and 1 and propagate fatal errors. Keep merge-base selection and staging decisions local. |
+| Multi-file writers | Use [`replace_many`](files-api.md#python-file-publication-api) with explicitly encoded bytes. Output symlinks and overlapping targets fail. Surface any `RecoveryError` and its retained files after incomplete rollback. |
 
 ## Portable update and Actions policy adoption
 
-Pin a published package containing the required capabilities before downstream
-adoption. Release publication and consumer PRs are separate operations.
-Follow the [Actions policy wiring](UPDATING_DEPENDENCIES.md#actions-allowlists-and-opt-in-pin-updates)
-and [mixed installation ownership](UPDATING_DEPENDENCIES.md#mixed-installation-owners-on-linux-and-macos).
+- Run setup explicitly after changing tool declarations. Aggregate updates now
+  upgrade uv through its installation owner and reconcile the project pin.
+  Just comes from the tooling package's pinned `rust-just` dependency.
+- Move prebuilt dprint and rumdl pins out of Just variables and into managed
+  declarations where a binary is available. Managed Cargo tools no longer need
+  `cargo-update`. Repair missing current installations with setup before upgrading.
+  Keep user-wide Cargo upgrades and conditional Homebrew steps in the
+  [owner-specific recipes](UPDATING_DEPENDENCIES.md#mixed-installation-owners-on-linux-and-macos).
+- For Clippy SARIF, move `clippy-sarif` and `sarif-fmt` pins into the managed
+  Cargo table. Retain the Rust component, Clippy arguments, upload and pipeline
+  failure handling. Provision [native prerequisites](INSTALLING.md#additional-cargo-tools-and-native-prerequisites)
+  for the tools your consumer selects.
+- Replace duplicated allowlist regexes with the consumer's strict selected-actions
+  JSON. Preserve exact SHA restrictions, list each action subpath and reusable
+  workflow, and set both broad approval flags to false. Include composite metadata
+  in both the check and updater inputs. Exercise the shared gate before retiring
+  the local rules. Pin updates remain [opt-in by identity, scope and target](UPDATING_DEPENDENCIES.md#actions-allowlists-and-opt-in-pin-updates).
 
-Move generic YAML allowlist checks upstream while retaining the consumer's existing
-strict selected-actions JSON and focused integration tests. Remove duplicate
-Semgrep allowlist regex lists after the shared gate is exercised; retain scanner
-coverage and pin/security checks. No policy or GitHub settings change is implicit.
-For strict policy adoption, explicitly enumerate each approved action subpath
-and reusable workflow path, set both broad approval flags to false, and retain
-every existing exact 40-hex-SHA restriction. Do not replace restricted commits
-with `@*`, and do not assume a repository-level entry approves its children.
-Repository names and SHA hex ignore case; nested paths retain case-sensitive
-matching. A changed authentication-action commit must fail its exact approval.
-Add existing composite metadata files/directories to both commands' explicit
-inputs after adopting the published capability. Quoted/folded references and
-aliases work in the allowlist; pin updates retain single-line, unaliased scalar
-requirements and validate all candidates before replacing any file.
-Actions updates remain explicit opt-in by exact identity, workflow/composite scope, and
-target; scheduled Dependabot review remains consumer policy.
+## Shared capability migration
 
-The update aggregate no longer invokes shell/bootstrap setup. Run explicit setup
-when adopting/changing declarations. This supersedes the previous update-tools
-composition ending in setup. Linux requires no Homebrew; macOS Brewfile updates
-stay conditional and consumer-owned. uv-tool ownership extends the existing
-receipt-verified contract without trusting arbitrary PATH version probes.
-Move prebuilt dprint/rumdl to managed binary declarations and delete old Cargo/Just
-pin mappings. Shared Just uses the package's rust-just authority. Keep Cargo
-exclusions, extra roots, and deliberate user-wide upgrades in the consumer.
-An unchanged managed version now requires a verified installation before an
-upgrade can succeed; this supersedes a successful no-op for missing current tools.
+| Consumer implementation | Shared replacement | Retained consumer responsibility |
+| --- | --- | --- |
+| Repeated Python baseline literals and migration scripts | Installed `python_baseline`, `python_adoption`, and `toolchain adopt` | Development opt-ins, exact package pin, application compatibility, lint policy and exceptions |
+| Cargo deny installer/version wrapper | `toolchain.cargo.cargo-deny`, setup/check/run/export/upgrade | `deny.toml`, accepted advisories/licenses and scan scope |
+| First-release special cases and fake predecessor tags | `release update --first-release`, validated release plans | Canonical target, release date, offline intent and publication |
+| Notebook dependency installation checker | `notebooks.prohibit-installs`, blocking notebook lint | Opt-in policy, dependencies in locked groups, unsupported dynamic-call review |
+| `tooling/security_tools.py`, `tooling/security-tools.toml` | Exact `toolchain.binaries`, verified release installation | Selected versions and consumer setup/cache wrappers |
+| `tooling/security_scan.py` | `security osv`, `security secrets`, shared portable inventory | Lockfile selection, allowlists, schedules, workflow permissions and report upload |
+| Generic inventory/report and Rust-doc parts of `tooling/semgrep.py` | `semgrep scan --rust-docs`, `semgrep check-fixtures --rust-docs` | Rules, scientific/model-loading restrictions, annotated fixtures and selected paths |
+| Isolated scanner-project launchers | Shared compatibility range and overrides, with the exact scanner selected by the consumer lock and verified by `semgrep setup` | Rule configuration, representation/extraction scope, fixtures, suppression policy and current-report upload gate |
+| Old package-managed tool installation cleanup | `toolchain clean`, included in the packaged `just clean` recipe | Retention roots for other consumers sharing the store |
+| Python coverage shard/run cleanup | `coverage clean` through `just clean-coverage`, also included in `just clean` | Custom artifact layouts and the decision to discard failed-run evidence |
+
+The [CI ownership guide](#ci-ownership-after-adoption) explains
+which tests to move upstream when retiring a helper.
+
+If a consumer's existing `clean` recipe removes build or custom coverage artifacts,
+keep that repository-specific work in a separate recipe when adopting the shared `clean`
+contract. Shared cleanup handles obsolete owned installations and the
+[standard retained Python coverage layout](INSTALLING.md#cleaning-retained-coverage),
+while preserving current coverage reports. New package-managed
+Python installs use the private store; existing user-wide uv interpreters remain
+user-owned. See the [installation guide](INSTALLING.md#cleaning-obsolete-installations).
+
+For projects upgrading from v0.1.7, check [mandatory Python support inheritance](migration.md#mandatory-python-support-inheritance).
+For first-time publication, an Unreleased-only changelog is accepted during
+[first-release preparation](UPDATING_RELEASE_METADATA.md#first-release-preparation).
+Final release validation requires the dated target heading.
+
+### SARIF and batched scan adoption
+
+| Consumer implementation to remove | Shared replacement | Retained consumer responsibility |
+| --- | --- | --- |
+| `scripts/ci/filter_codacy_sarif.py` parsing, filtering, splitting, staging and command-file writer | `sarif split`, consumer `sarif.drivers`, `files.publish_directory`, `ci.export_environment` | Codacy driver names/namespaces, upload conditions, permissions and category prefix |
+| `_copy_file`, `_replace_path` and generic directory swap in `scripts/notebook_validation_rendering.py` | `files.publish_directory`, copying or rendering into the yielded directory | Figure names, rendering, complete-set validation and scientific assertions |
+| Shell target-array and native launch/report plumbing in `just semgrep-scan` | `semgrep scan` with the same shared inventory for the findings gate and upload | Include/exclude patterns, deliberate fixture exclusions, inline suppression review and rule YAML |
+| Native scan launch in `.github/workflows/semgrep-sarif.yml` | Thin consumer recipe calling the configured shared scanner and uploading `semgrep.sarif` | Actions pins, permissions, fork/upload conditions and stable category policy |
+
+Exercise the consumer's Codacy selections, upload conditions and scientific
+figure assertions against the installed package.
+
+Batched Semgrep replaces older two-launch-per-file wrappers with one launch
+per bounded batch. Its dedicated directory replaces every prior member rather
+than preserving unrelated files; choose a separate output directory. Aggregate
+SARIF uses one run/category. Configure reviewed suppressions explicitly instead
+of retaining the former unconditional `--disable-nosem` policy. Defaults are
+one job and a 120-second rule/target timeout; rules and exclusions stay local.
+
+### Paper and raw line adoption
+
+Adopt these interfaces through a published pin and focused paper/build
+integration checks. Scientific content, native TeX builds, and retained
+artifact refresh decisions remain consumer-owned.
+
+| Consumer implementation to remove after published adoption | Shared replacement | Retained consumer responsibility |
+| --- | --- | --- |
+| `scripts/paper_source_date.py`, its entry point and generic date tests | `papers source-date`, `paper_dates` | Explicit TeX dates, source paths and build recipe exporting `SOURCE_DATE_EPOCH` |
+| `scripts/paper_pdf_normalize.py`, its entry point and generic metadata/atomic-write tests | `papers normalize`, `paper_pdf.normalize_pdf` and shared file publication | Stable identity, candidate/output paths, refresh intent and supported builder profile |
+| `scripts/paper_check.py`, its entry point and generic parsing/text/geometry tests | `papers check`, `paper_pdf.check_pdf` and `compare_structure` | Title/reference expectations, forbidden text, minimum pages and scientific/visual assertions |
+| `scripts/tectonic_native_dependencies.sh` generic discovery and shell-specific tests | `tectonic discover`/`export`, `tectonic.discover_environment` | Explicit host provisioning, SDK/library versions, permissions and environment application |
+| `just markdown-check` target arrays and raw-line shell loop | `files check-lines` using shared selection | Active Markdown includes, generated/history excludes and 160-character limit |
+| Duplicated Markdown discovery in check/fix recipes | `files run` with consumer include/exclude declarations | rumdl policy and explicit formatting intent; the raw gate never formats |
+| Generic paper launches and discovery exports in recipes and `.github/workflows/papers.yml` | Thin configured `papers`/`tectonic` wrappers | TeX lint/format, compilation, figures, cache ownership, CI triggers and uploads |
+
+Test the consumer's native build, title and references, figures and scientific
+assertions. The [paper guide](BUILDING_PAPERS.md) covers the build environment
+and artifact checks.
+
+The shared normalizer validates complete input/candidate PDFs before replacement;
+the former malformed metadata-only byte stubs no longer qualify as PDFs. Info
+dates must match the source epoch, including compressed objects. Unsupported
+profiles fail without replacing output. Build into staging paths before deciding
+to refresh retained artifacts, rather than deleting valid outputs before success.
+The strict `files check-lines` gate counts tables, fences and URLs; the existing
+`docs check-lines` Markdown table exemption remains its separate policy.
+Native PDF bytes may differ while page text, boxes, rotation and units match.
+
+### Performance and release helper adoption
+
+Replace generic support code by capability; keep scientific and deployment
+policy in the consuming repository. Follow the [performance migration](performance-migration.md)
+and [release-policy example](release-policy-migration.md) for detailed contracts.
+
+| Consumer implementation | Shared or native replacement | Retained consumer responsibility |
+| --- | --- | --- |
+| Release-pair discovery, source capture and worktree orchestration | Prepared performance workflow, explicit source/harness modes and mutation controls | Independent release selection, scientific cases, native commands and gates |
+| Criterion sample copying and comparison helpers | Configured acquisition, saved-sample comparison and provenance | Workload definitions, sample selection and timing interpretation |
+| Archive download, extraction and legacy evidence conversion | Authenticated assets, bounded extraction and explicit conversion | Repository/asset declarations, original historical bytes and conversion acceptance |
+| Report/index promotion and README rendering | Retained-report and document publication | Report paths, selected rows, scientific interpretation and figure policy |
+| Release metadata discovery, staging and output parsing | Declarative release rules and structured plans | DOI assertions, required files, historical exclusions and publication decisions |
+| Draft lookup, attachment and retry wrappers | Captured release targets and verified asset commands; v0.2.7 adds draft preparation | Signing, trusted handoffs, workflow credentials, triggers and approval |
+| Generic setup, file discovery and process checks | Managed toolchains, file selection and command validation | Native prerequisites, cache declarations, output markers and recipe ordering |
+| Notebook, example, coverage and scan wrappers | Shared notebook/example commands and native Cargo/scanner tools | Trace/figure assertions, domain tests, exclusions, permissions and report upload |
+
+Keep focused consumer tests for benchmark names, fixtures outside timed regions,
+scientific result interpretation, notebook/figure behavior, release configuration,
+and installed-command wiring. Generic parsing, Git byte transport, rollback,
+asset retry and command-file safety belong in the shared package's tests.
+Remove a consumer's Python package scaffolding only if it no longer distributes
+Python functionality; preserve notebook/tool groups and domain Python modules.
+
+Before deleting a helper or test group, identify its shared replacement,
+configuration/native replacement, or independently justified obsolescence.
+Deletion counts are not an acceptance criterion. Retire historical converters
+only after retained artifacts have verified shared-format companions and no
+active workflow invokes the conversion path; keep immutable originals.
+Shared native wheel/sdist checks establish package behavior. Consumer integration
+checks establish adoption, and neither substitutes for the other.

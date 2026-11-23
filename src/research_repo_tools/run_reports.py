@@ -28,12 +28,20 @@ def _report_renderer(value: object) -> _ReportRenderer:
 
 
 def _entry(evidence: Evidence) -> dict[str, str]:
-    return {"id": run_identity(evidence), **{name: dict(source.context)["release"] for name, source in evidence.sources}}
+    from research_repo_tools.complete_runs import RUN_SCHEMA_V7
+    from research_repo_tools.suite_runs import parse_suite_run
+
+    labels = {}
+    if evidence.payload_schema == RUN_SCHEMA_V7:
+        series = parse_suite_run(evidence).plan.benchmark_series
+        assert series is not None
+        labels["benchmark_series"] = series.name
+    return {"id": run_identity(evidence), **labels, **{name: dict(source.context)["release"] for name, source in evidence.sources}}
 
 
 def _parse_entry(value: object) -> dict[str, str]:
     raw = _object(value, "run entry")
-    _object(raw, "run entry", {"id", "current"} | ({"baseline"} if "baseline" in raw else set()))
+    _object(raw, "run entry", {"id", "current"} | ({"baseline"} if "baseline" in raw else {"benchmark_series"} if "benchmark_series" in raw else set()))
     entry = {name: _string(value, name) for name, value in raw.items()}
     if re.fullmatch(r"[0-9a-f]{64}", entry["id"]) is None:
         raise ValueError("invalid run identity")
@@ -209,7 +217,14 @@ def load_run_report_plan(root: Path, configuration: str, *, payload: str | None 
         "# Complete performance runs\n\n"
         + "\n".join(
             links.render(
-                (f"{item['current']} vs {item['baseline']}" if "baseline" in item else f"{item['current']} (first release)") + f" — {key}",
+                (
+                    f"{item['current']} vs {item['baseline']}"
+                    if "baseline" in item
+                    else f"{item['current']} ({item['benchmark_series']} baseline)"
+                    if "benchmark_series" in item
+                    else f"{item['current']} (first release)"
+                )
+                + f" — {key}",
                 f"runs/{key}/report.md",
                 prefix="- ",
             )

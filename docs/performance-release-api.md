@@ -11,11 +11,11 @@ acceptance, interpretation and deployment remain consumer decisions.
 | `Preparation` | Immutable independent release labels and full commits, source mode, package version, selection policy and measurement declaration SHA-256 |
 | `load_performance_release(root, configuration)` | Strict schema-1 declaration with root-relative portable paths; rejects unknown fields and path aliases |
 | `load_preparation(root, settings)` | Require a complete supported record and recheck local package/declaration/reference identity; never reads evidence to supply assertions |
-| `load_readme_plan(root, settings, *, identities=None)` | Use preparation or all four explicit assertions with the existing retained-evidence publisher; no acquisition, promotion, network or Git mutation |
+| `load_readme_plan(root, settings, *, identities=None)` | Plan README publication from saved preparation or an explicit release and revision for each measured phase |
 | `measure_release(root, settings, *, allow_git_mutations=False, before_promotion=None, owner=None, ...)` | Acquire the prepared pair, retain raw evidence, optionally capture trusted handoffs, then promote the report; README is independent |
-| `parse_preparation(payload)`, `serialize_preparation(record)` | Strict deterministic UTF-8 JSON using `research-repo-tools/performance-preparation/v1`; reject unsupported schemas, missing/extra/duplicate fields and invalid identities |
+| `parse_preparation(payload)`, `serialize_preparation(record)` | Strict deterministic UTF-8 JSON with v1 for ordinary pairs and v2 for a declared series and its published history |
 | `prepare_performance(root, settings, *, fetch_tags=False, allow_git_mutations=False, release_intent=False, dependencies=())` | Independently select/resolve and atomically save all assertions; no acquisition or README publication |
-| `select_measurement_pair(root, configuration, *, repository=None, mode="infer-release", order="published", current=None, baseline=None)` | Common direct/prepared selection, returning `(ReleasePair, working_tree)` with the measurement release floor enforced |
+| `select_measurement_pair(root, configuration, *, repository=None, mode="infer-release", order="published", current=None, baseline=None)` | Return the selected release pair or inaugural series baseline and a working-tree flag, enforcing the applicable measurement release floors |
 
 `prepare_performance` and `measure_release` accept `release_intent=True` to
 verify [published upstream dependencies](dependency-provenance-api.md) before
@@ -23,9 +23,10 @@ acquisition effects. Pass `dependencies=settings.release.published_dependencies`
 to carry selections from standalone controller configuration; these are combined
 with the checkout's manifest policy. The default permits development rehearsals.
 
-The `owner` option requires a new directory outside the checkout, a scheduled
-suite plan, a schema-2 report, and
-local acquisition-owner context in every suite. It also checks published upstream
+The `owner` option requires a new directory outside the checkout, a schema-2
+report and local acquisition-owner context in every suite. Use a scheduled suite
+plan for pairs or an unscheduled plan for an inaugural declared series. Series
+acquisition requires this handoff. It also checks published upstream
 dependencies before acquisition. It cannot be combined with `before_promotion`.
 The handoff freezes the original evidence, policy and publisher receipt before
 promotion. Recover capture/promotion failures from retained evidence with
@@ -40,6 +41,9 @@ Optional `mode` selects `infer-release` (default), `explicit`, or
 chronology only. Measurement schema 6 adds the predeclared acquisition schedule
 used unchanged by both prepare and release. See
 [scheduled acquisition and candidate reuse](REUSING_BENCHMARKS.md).
+Declared series select by numeric version from authenticated published history
+in the specified repository. The preparation records the declaration and each
+published tag's commit and compatible workload contract.
 
 Preparation uses the same package/publication chronology as direct measurement.
 Prospective packages resolve HEAD; published and explicit pairs resolve their
@@ -64,9 +68,10 @@ planning and publication, in addition to the publisher's source/harness,
 references, archived-evidence and rendering checks. A newly present prospective
 tag must identify captured HEAD. Missing or stale preparation fails before
 publication; recapture reviewed assertions without rerunning measurements when
-the retained evidence still satisfies the new assertions. Explicit four-assertion
-publication remains available through both `performance readme` and the existing
-`performance publish` interface. Formatting/README configuration repairs do not
+the retained evidence still satisfies the new assertions. Both `performance readme`
+and `performance publish` accept explicit release and revision pairs. An initial
+series baseline takes the current pair. A paired README retry requires both the
+current and baseline pairs. Formatting/README configuration repairs do not
 invalidate independent preparation.
 
 Report-promotion failure leaves successful raw acquisition available at the

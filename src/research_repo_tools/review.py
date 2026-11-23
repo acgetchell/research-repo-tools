@@ -19,7 +19,16 @@ from research_repo_tools._review_stream import stream_review
 from research_repo_tools.evidence import deterministic_json, sha256
 from research_repo_tools.path_identity import fingerprint_paths, observe_paths
 from research_repo_tools.process import ExecutableNotFoundError, _positive_timeout, get_safe_executable, run_git_command, run_safe_command
-from research_repo_tools.review_protocol import CompletedReview, ConsentRequired, FailedReview, ReviewApproval, ReviewDenied, ReviewResult, UncertainReview
+from research_repo_tools.review_protocol import (
+    CompletedReview,
+    ConsentRequired,
+    FailedReview,
+    IncompleteReview,
+    ReviewApproval,
+    ReviewDenied,
+    ReviewResult,
+    UncertainReview,
+)
 
 __all__ = ["DEFAULT_BASE", "deny", "resume", "run", "start"]
 
@@ -234,7 +243,10 @@ def resume(pending_path: Path, approval: ReviewApproval, *, output: Callable[[by
     try:
         paid = _invoke(provider, pending.root, [*args, "--use-credits"], output, timeout, env)
         if not isinstance(paid, CompletedReview):
-            return UncertainReview("paid invocation did not establish completion; reconcile CodeRabbit usage before requesting another review")
+            return UncertainReview(
+                "paid invocation did not establish completion; reconcile CodeRabbit usage before requesting another review",
+                paid if isinstance(paid, IncompleteReview) else None,
+            )
         if _observe(pending.root, pending.base, _provider(), _environment()) != before:
             return UncertainReview("inputs changed during paid review; reconcile usage and review validity before requesting another review")
         return paid
@@ -253,6 +265,13 @@ def deny(pending_path: Path) -> ReviewDenied:
 def report(result: ReviewResult) -> int:
     """Emit the wrapper's versioned terminal result, after provider NDJSON."""
     data: dict[str, object] = {"type": "rrt_review_result", "schema": "research-repo-tools/review-result/v1"}
+    incomplete = result.incomplete if isinstance(result, UncertainReview) else result
+    if isinstance(incomplete, IncompleteReview):
+        data.update(
+            findings=incomplete.findings,
+            unreviewed_file_count=incomplete.unreviewed_file_count,
+            unreviewed_files=[{"path": path, "reason": reason} for path, reason in incomplete.unreviewed_files],
+        )
     match result:
         case CompletedReview():
             data.update(status="completed", findings=result.findings, reviewed_files=result.reviewed_files, reused=result.reused, skipped=result.skipped)
@@ -280,11 +299,13 @@ def report(result: ReviewResult) -> int:
             data.update(status="denied", pending_identity=result.pending_identity)
             status = 4
         case FailedReview():
-            data.update(status="failed", reason=result.reason)
+            data.update(status="incomplete" if isinstance(result, IncompleteReview) else "failed", reason=result.reason)
             print(result.reason, file=sys.stderr)
             status = result.exit_code if result.exit_code > 0 else 128 - result.exit_code
         case UncertainReview():
             data.update(status="uncertain", reason=result.reason)
+            if result.incomplete is not None:
+                print(result.incomplete.reason, file=sys.stderr)
             print(result.reason, file=sys.stderr)
             status = 5
     write_json_stdout(data, sort_keys=True)

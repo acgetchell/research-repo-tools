@@ -191,7 +191,7 @@ def run(args: argparse.Namespace, settings: Config) -> int:
         _first_release(args, settings)
         return 0
     if args.action in {"capture", "prepare", "readme", "release"}:
-        from research_repo_tools.performance import _write_stdout
+        from research_repo_tools.performance import _phase_identities, _write_stdout
         from research_repo_tools.performance_release import load_performance_release, load_readme_plan, measure_release, prepare_performance
         from research_repo_tools.publication import preview_publication, publish_publication
 
@@ -210,12 +210,8 @@ def run(args: argparse.Namespace, settings: Config) -> int:
             _write_stdout(deterministic_json({"owner_directory": str(owner.resolve()), "acquisition_sha256": acquisition, "publication_sha256": publication}))
         elif args.action == "prepare":
             record = prepare_performance(root, workflow, fetch_tags=args.fetch_tags, allow_git_mutations=args.allow_git_mutations)
-            _write_stdout(
-                (
-                    f"Current: {record.pair.current} {record.current_revision}\nBaseline: {record.pair.baseline} {record.baseline_revision}\n"
-                    f"Saved preparation: {workflow.preparation}\n"
-                ).encode("utf-8")
-            )
+            phases = "".join(f"{phase.title()}: {tag} {revision}\n" for phase, (tag, revision) in record.identities.items())
+            _write_stdout(f"{phases}Saved preparation: {workflow.preparation}\n".encode("utf-8"))
         elif args.action == "release":
             measure_release(
                 root,
@@ -229,11 +225,7 @@ def run(args: argparse.Namespace, settings: Config) -> int:
             )
             print("Retained measurement and report. README publication is a separate step.")
         else:
-            values = [getattr(args, f"{phase}_{field}") for phase in ("current", "baseline") for field in ("release", "revision")]
-            if any(value is not None for value in values) and not all(value is not None for value in values):
-                raise ValueError("README publication requires all four explicit release/revision assertions")
-            identities = {"current": (values[0], values[1]), "baseline": (values[2], values[3])} if any(value is not None for value in values) else None
-            plan = load_readme_plan(root, workflow, identities=identities)
+            plan = load_readme_plan(root, workflow, identities=_phase_identities(args) or None)
             if args.preview:
                 _write_stdout(preview_publication(plan).encode("utf-8"))
             elif args.check:
@@ -288,6 +280,7 @@ def run(args: argparse.Namespace, settings: Config) -> int:
     elif args.action == "measure":
         if bool(args.current) != bool(args.baseline):
             raise ValueError("current and baseline tags must be provided together")
+        from research_repo_tools.benchmark_series import SeriesBaseline, SeriesPair
         from research_repo_tools.performance_acquisition import measure_and_retain
         from research_repo_tools.performance_release import select_measurement_pair
 
@@ -300,6 +293,8 @@ def run(args: argparse.Namespace, settings: Config) -> int:
             current=args.current or None,
             baseline=args.baseline or None,
         )
+        if isinstance(pair, (SeriesBaseline, SeriesPair)):
+            raise ValueError("declared series acquisition requires performance prepare and performance release --owner")
         measure_and_retain(
             root,
             args.configuration,

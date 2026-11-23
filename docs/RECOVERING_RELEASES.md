@@ -9,8 +9,8 @@ benchmark commands, and publication approvals.
 
 | Current state | Start here | What stays valid? |
 | --- | --- | --- |
-| The intended commit is unchanged; preparation timed out waiting for healthy main CI | Wait for the complete original main run, then resume under the owning workflow's recovery contract. RRT permits retrying the failed preparation job. | Keep the tag. Reuse successful, unexpired evidence from that complete attempt. |
-| The intended commit is unchanged; draft creation or upload failed | Inspect the captured release ID, journal/receipt, and remote assets before retrying. An uncertain creation needs explicit reconciliation. | Preserve original receipts and accepted bytes. Follow the owning workflow's partial-draft recovery rules. |
+| The intended commit is unchanged; preparation timed out waiting for healthy main CI | Wait for the complete original main run, then resume under the owning workflow's recovery contract. Use the [RRT preparation retry](RELEASING.md#preparation-timed-out-waiting-for-main-ci). | Keep the tag. Reuse successful, unexpired evidence from that complete attempt. |
+| The intended commit is unchanged; draft creation or upload failed | For RRT, [reconcile the draft and its assets before retrying staging](RELEASING.md#draft-creation-or-upload-failed). For the shared consumer writer, use its [retained-state recovery](PREPARING_DRAFTS.md#retry-and-recovery). | Preserve the original attachment, receipts and accepted bytes. |
 | Corrections must land after the tag or draft was created | Follow **[Replace an unpublished candidate](#replace-an-unpublished-candidate)** below. | Keep the version and declared date unless deliberately changing them. Reassess benchmark reuse separately. |
 | GitHub or the registry already contains a published release | Preserve that publication. Resume verification or the missing publication stage for the same bytes; use a new version for corrected contents. | Never move its tag or replace its published assets. |
 
@@ -239,6 +239,8 @@ Choose the PR title now:
 
 **No uncommitted corrections? Continue directly to 2.3.** Keep existing commits;
 do not attempt an empty commit. This also covers the notes-only path.
+
+<!-- rumdl-configure-file { "MD033": { "allowed-elements": ["details", "summary"] } } -->
 
 <details>
 <summary>Only if corrections still need committing: review and commit them</summary>
@@ -631,7 +633,7 @@ when its reuse contract passes; its final acceptance and attachment must match
 the new commit and draft. RRT itself has no release benchmark.
 
 Return to the normal guide's draft review and publication steps. For RRT, start
-with [retained evidence verification](RELEASING.md#4-verify-the-release-commit)
+with [retained evidence verification](RELEASING.md#4-verify-the-final-release-commit)
 and continue through draft review. After the replacement passes these checks,
 coordinate lifting the freeze and re-enable the publication workflows before
 publishing the new draft. For RRT:

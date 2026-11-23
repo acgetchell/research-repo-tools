@@ -37,7 +37,7 @@ it deliberately, pass `--date YYYY-MM-DD` to `just update-version` and rerun
 generation. See [metadata](UPDATING_RELEASE_METADATA.md) and
 [changelog generation](GENERATING_CHANGELOGS.md).
 
-Review the README installation pin, first-upgrade instructions, and consumer
+Review the README installation pin, [upgrade instructions](UPDATING_DEPENDENCIES.md#shared-python-adoption), and consumer
 command examples against the target package and its Justfile template. The
 metadata updater leaves these Python examples for manual review. Keep versions
 that identify when a feature first appeared or the minimum an interface requires.
@@ -56,7 +56,7 @@ The dependency checks require published sources and authenticated receipts for
 the configured local builds. Repeat preparation when its inputs change.
 `just ci` includes the build, strict PyPI metadata check, and isolated wheel
 and sdist tests. See [local validation](VALIDATING.md) and
-[source-built dependencies](../README.md#source-built-python-dependencies).
+[source-built dependencies](UPDATING_DEPENDENCIES.md#source-built-python-dependencies).
 
 ### 3. Commit the release preparation
 
@@ -110,7 +110,7 @@ local review results. Resolve review findings before merging.
 
 ## Step 2: Publish after the PR is merged
 
-### 1. Synchronize `main` and wait for CI
+### 1. Synchronize main and wait for CI
 
 Start with a clean checkout and set `TAG` in this terminal. The first lookup
 gets the merge commit from the release PR. The second selects the CI run only
@@ -131,7 +131,7 @@ inspect their history before selecting one. Continue only after the exact run
 passes. If `main` has advanced, use `git switch --detach "$RELEASE_COMMIT"`
 to return to the reviewed commit before tagging.
 
-### 2. Create and verify the annotated tag
+### 2. Create the annotated tag
 
 ```bash
 just tag "$TAG" --commit "$RELEASE_COMMIT"
@@ -150,7 +150,7 @@ git push origin "refs/tags/$TAG"
 
 The push starts `Prepare GitHub release` for this tag and commit.
 
-### 4. Verify the release commit
+### 4. Verify the final release commit
 
 ```bash
 just release-evidence
@@ -178,7 +178,7 @@ The workflow creates the draft and attaches the validated wheel, sdist, and
 
 ### 6. Review the draft
 
-Capture the draft once. The v0.3.1 CLI saves the release ID, repository, tag,
+Capture the draft once. The CLI saves the release ID, repository, tag,
 title assertion and reviewed commit in a target file outside the checkout.
 Keep that file for publication, verification and retries.
 
@@ -254,18 +254,18 @@ release branch locally and on the remote.
 
 ## Choose where to resume
 
-In a new shell, set `TAG` again. Step 2.1 looks up the merged PR's commit and
-main run, and Step 2.5 looks up the tag's preparation run. After draft capture,
+In a new shell, set `TAG` again. [Step 2.1](#1-synchronize-main-and-wait-for-ci) looks up the merged PR's commit and
+main run, and [Step 2.5](#5-wait-for-the-draft-github-release) looks up the tag's preparation run. After draft capture,
 restore `RELEASE_TARGET` to the original target file in the release handoff directory.
 Keep the retained evidence associated with that candidate.
 
 | Last completed operation | Resume with |
 | --- | --- |
 | Metadata prepared, notes missing or rendering failed | Fix the reported generator prerequisite and run `just changelog-release "$TAG"` with the prepared date. |
-| Release PR merged, exact CI still pending | Watch the original `MAIN_RUN_ID`. |
+| Release PR merged, exact CI still pending | Resume [Step 2.1](#1-synchronize-main-and-wait-for-ci) with the original `MAIN_RUN_ID`. |
 | Tag preflight requires a tracked metadata correction | Commit and review the correction. Wait for main CI on the new commit and retry `just tag "$TAG" --commit "$RELEASE_COMMIT"` with its SHA. |
 | Tag preflight stopped on an external dependency or tool | Resolve the reported prerequisite and retry `just tag "$TAG" --commit "$RELEASE_COMMIT"` with the same reviewed SHA. |
-| Tag pushed, draft pending | Inspect or watch the recorded `PREPARATION_RUN_ID`. |
+| Tag pushed, draft pending | Restore `RELEASE_COMMIT` from the merged PR using [Step 2.1](#1-synchronize-main-and-wait-for-ci). If the release tracker lacks the `just release-evidence` summary for this tag and commit, run [Step 2.4](#4-verify-the-final-release-commit) from that clean commit and retain the summary. Then resume [Step 2.5](#5-wait-for-the-draft-github-release) with the recorded `PREPARATION_RUN_ID`. |
 | GitHub Release published, PyPI approval pending | Review the verification result and approve the `pypi` deployment in the original publishing run. |
 | PyPI upload interrupted | Inspect the original GitHub Release and publishing run. Check the exact registry version with `just release-registry "$TAG" --expect present` and compare any published file hashes before deciding whether to retry. |
 | Unpublished candidate needs a different commit | Follow the [replacement procedure](RECOVERING_RELEASES.md#replace-an-unpublished-candidate). |
@@ -273,9 +273,7 @@ Keep the retained evidence associated with that candidate.
 
 ### Recovering a failed run
 
-Inspect the failed operation and the actual GitHub and registry state. Use the
-[shared recovery guide](RECOVERING_RELEASES.md) for partial drafts, uncertain
-uploads, and unpublished corrections. Published corrections use a new version.
+Use the [recovery decision table](RECOVERING_RELEASES.md#choose-the-recovery-path) to select the procedure for the observed GitHub and registry state.
 
 #### Preparation timed out waiting for main CI
 
@@ -299,15 +297,35 @@ operation fails. On a hosted runner, download `draft-recovery-<attempt>` from
 the failed preparation run when available. The artifact contains the attachment
 for inspection.
 
-Inspect the release for the tag, including its ID, draft state, asset names,
-sizes, and digests. A transport error can occur after GitHub accepted a write.
-If the release is still a draft and all three assets match the signed evidence,
-continue with the draft review. For a published release, check the publishing
-run and its registry approval.
-For partial or conflicting assets, follow the [recovery guide](RECOVERING_RELEASES.md).
-If the draft is absent or empty and the verified inputs still match, keep a
-copy of the attachment before retrying. In a reused working directory, move
-the inspected attachment aside first. Staging refuses to overwrite it.
+1. Preserve the original attachment outside the staging directory with the failed
+   preparation run ID and attempt. Wait for its uploader to stop. Confirm the
+   remote tag still resolves to `RELEASE_COMMIT`. List all releases for the tag
+   with authenticated access. If the listing is empty and the failed attempt
+   never captured a release ID, go directly to step 4. Otherwise, continue only
+   if the listing shows one mutable draft and its numeric ID matches any
+   previously captured target. Record that ID for step 2.
+2. List every page of `GET /repos/{owner}/{repo}/releases/{release_id}/assets`.
+   Record each asset's ID, name, state, size and digest. Download each `uploaded`
+   asset by its recorded ID. Compare the wheel and sdist names and SHA-256 hashes
+   with [Step 2.4's signed inventory](#4-verify-the-final-release-commit).
+   Compare the uploaded `release-attestation.json` byte for byte with the
+   retained attachment from that preparation attempt. If exactly these three
+   assets match, resume [draft review](#6-review-the-draft).
+3. A `starter` asset is an incomplete upload. Record its ID and exclude it
+   from the verified files. RRT staging refuses a nonempty draft, even when
+   every uploaded file matches. Keep the inventory and downloaded bytes.
+   If an asset is unexpected, has different bytes, or its
+   ownership is unclear, stop for maintainer reconciliation. Once a maintainer
+   confirms which assets belong to the failed attempt and authorizes cleanup,
+   recheck the mutable draft and asset IDs and remove only those assets, including
+   incomplete uploads. [GitHub release asset operations](https://docs.github.com/en/rest/releases/assets)
+4. Retry staging only when a fresh authenticated listing shows **no release
+   for the tag** after failed creation (with no previously captured ID), or the
+   **same mutable draft with zero assets**. Reconfirm the tag, commit and signed
+   distribution inputs. In a reused working directory, move the original
+   attachment into the recovery handoff first. Rerun the failed jobs of the
+   original `PREPARATION_RUN_ID` and inspect the new attempt's complete draft
+   in [Step 2.6](#6-review-the-draft).
 
 #### Artifact retention and recovery window
 

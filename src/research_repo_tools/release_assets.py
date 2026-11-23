@@ -287,14 +287,17 @@ def _require_identity(release: GitHubRelease, target: ReleaseTarget) -> None:
         raise ValueError("release title differs from captured assertion")
 
 
-def require_release_checkout(checkout: Path, commit: str) -> None:
+def require_release_checkout(checkout: Path, commit: str, *, offline: bool = False) -> None:
     """Observe a clean checkout at the asserted commit without executing its code.
 
     Keep this source directory separate from the trusted installed runtime used
     for publication. This does not authenticate the checkout's repository remote.
+    Offline verification requires the Git objects to be available locally.
     """
     commit = _sha(commit)
     executable, environment = git_context(checkout)
+    if offline:
+        environment["GIT_NO_LAZY_FETCH"] = "1"
     require_checkout(commit, lambda args: run_command_bytes(executable, args, cwd=checkout, env=environment, timeout=30).stdout, executable=executable)
 
 

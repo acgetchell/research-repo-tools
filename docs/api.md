@@ -40,15 +40,15 @@ type namespace; signature display does not require resolving them.
 
 | Capability | Authoritative reference |
 | --- | --- |
-| Cargo documentation | [Stable packaged library docs](cargo-docs-api.md) |
+| Cargo documentation | [Stable packaged library docs](RUNNING_CHECKS.md#cargo-documentation) |
 | Cargo examples | [Discovery, configuration and live streams](cargo-examples-api.md) |
 | Configuration and CLI | [Configuration objects, entry point and platform contract](configuration-api.md) |
 | Coverage cleanup | [Plans, typed removals and explicit application](#coverage-cleanup) |
 | Files and text | [Selection, line checks and transactional file/directory publication](files-api.md) |
 | Git inspection | [Index-preserving status and content-based changed paths](process-api.md#python-git-inspection-api) |
-| Notebooks | [Workflow and isolated test APIs](notebooks-api.md), [inspection JSON](notebook-inspection.md) |
+| Notebooks | [Workflow and isolated test APIs](notebooks-api.md), [inspection JSON](notebooks-api.md#notebook-inspection-schema) |
 | Papers | [Explicit dates, PDFs and native dependency discovery](papers-api.md) |
-| Path identity | [Typed native observations and versioned fingerprints](path-identity-api.md) |
+| Path identity | [Typed native observations and versioned fingerprints](files-api.md#native-path-observations) |
 | Processes and Just | [Byte/text execution, stderr assertions and recipe inspection](process-api.md) |
 | Publication | [Document markers, tables, plots and evidence selection](publication-api.md) |
 | Releases | [Metadata planning and registry publication](publishing-api.md), [evidence/assets](release-evidence-api.md) ([workflow](VERIFYING_RELEASE_EVIDENCE.md)) |
@@ -104,51 +104,7 @@ adapter or changing a historical evidence format.
 
 ## Dependency sources
 
-`research_repo_tools.dependency_sources` owns `RegistryRelease`, `GitCommit`,
-`parse_source` and `verify_source`. Each immutable selector validates its own
-syntax; `verify_source` alone creates `VerifiedSource` availability evidence.
-Python versions follow public PEP 440 rules; Cargo versions follow SemVer.
-Supported release registries are exclusively PyPI and crates.io. Development
-repositories are GitHub repositories pinned to full commit SHAs. A provider's
-`read(url) -> bytes` supplies the response bytes for each lookup. Passing a
-provider selects that transport even when it represents an empty cache. Omitting
-it or passing `None` selects HTTP. Registry and artifact verification also
-apply to injected responses.
-
-```python
-from research_repo_tools.dependency_sources import GitCommit, verify_source
-
-source = GitCommit("cargo", "upstream-crate", "owner/repository", "a" * 40)
-verified = verify_source(source)
-# verify_source(source, release=True) rejects before any lookup.
-```
-
-`research_repo_tools.dependency_workflows` provides the consumer workflow:
-
-```python
-from pathlib import Path
-
-from research_repo_tools.dependency_workflows import (
-    apply_source,
-    check_dependency_policy,
-    plan_source,
-)
-
-root = Path("/path/to/consumer")
-plan = plan_source(root, "upstream")  # verifies and resolves in a temporary copy
-print(plan.diff())
-apply_source(plan)  # reverifies; recoverable multi-file publication
-# After transitioning to a published source and rerunning downstream checks:
-check_dependency_policy(root)  # read-only, all configured projects
-```
-
-`plan_source` may populate native resolution caches but leaves consumer inputs,
-environments and retained evidence unchanged. `SourcePlan` cannot be constructed
-or deserialized directly. `apply_source` rejects stale inputs/provider metadata;
-file-publication failures use the existing recoverable rollback contract.
-`check_dependency_policy` returns verified external sources. Without the canonical
-policy, only dependency-free checkouts pass. Existing `check_release_dependencies`
-entry points also enforce this policy, preserving the earlier selected-tooling
-checks. Invalid input/proof raises `ValueError`; native process and filesystem
-failures retain their existing exception categories. See the
-[proof boundaries and recovery guide](UPDATING_DEPENDENCIES.md#verified-dependency-sources).
+Use [dependency selectors and source plans](dependency-provenance-api.md#dependency-sources)
+to verify a PyPI release, crates.io release or exact GitHub commit and apply a
+reviewed change to a consumer. For the manifest, lock and installed-byte checks
+required before release, see [configuration and proof](dependency-provenance-api.md#configuration-and-proof).

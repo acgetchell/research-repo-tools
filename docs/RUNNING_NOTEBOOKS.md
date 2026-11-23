@@ -67,26 +67,11 @@ in memory and leaves source files untouched.
 
 ## Commands and artifacts
 
-The consumer template provides these recipes:
-
-- `just notebook-advise FILE...`: report opt-in review policy, with `--strict`
-  to fail on advisory warnings.
-- `just notebook-check FILE...`: validate nbformat 4.5 structure, unique existing
-  cell IDs, and the declared output policy without repairing files.
-- `just notebook-clear FILE...`: deliberately remove outputs, counts, execution
-  timing, and widget state; preserve cell IDs, source, attachments, and other metadata.
-- `just notebook-execute FILE...`: run selected notebooks in fresh kernels using
-  the configured working directory and the current locked project interpreter.
-- `just notebook-inspect FILE...`: inventory existing cells and problems awaiting
-  repair; `--json` selects the [structured schema](notebook-inspection.md), and
-  `--no-preview` omits source text.
-- `just notebook-launch [ARGS...]`: launch consumer-declared JupyterLab with
-  the locked notebook group, explicit browser policy, and private session caches.
-- `just notebook-lint FILE...`: check structure, output policy, Python syntax,
-  Ruff rules, formatting, and ty types without executing or rewriting cells.
-- `just notebook-reset [PATH...] [--revision REF] [--apply]`: preview tracked
-  notebook restoration and declared scratch/checkpoint cleanup; apply explicitly.
-- `just notebook-sync`: synchronize notebook dependencies and the project kernel.
+Use `just notebook-inspect FILE --no-preview` to inventory cells and repair
+problems without exposing source text. Add `--json` for the [inspection schema](notebooks-api.md#notebook-inspection-schema).
+Use `just notebook-check FILE` for structural and output-policy validation, and
+`just notebook-execute FILE` for an execution report. The [recipe reference](RUNNING_COMMANDS.md#just-recipes)
+lists the full notebook command set.
 
 The underlying `notebooks execute` accepts `--cwd`, `--output-dir`, and `--timeout`
 overrides. Sources must be inside the consumer root. Artifacts mirror their
@@ -106,14 +91,9 @@ the CLI returns nonzero and prints the notebook and cell diagnostic. A failure
 to publish artifacts is also an error. Files written by notebook code remain the
 consumer's responsibility. Interrupted runs are not successful reports.
 
-Execution uses an owned selector loop in a temporary worker
-for PyZMQ socket readers, with explicit kernel and loop cleanup. It preserves
-the caller's current event loop and does not change deprecated global asyncio
-policies. Synchronous calls from a running loop remain supported. Kernel startup
-uses Jupyter's local `subprocess.Popen` provisioner, so Windows selector loops'
-lack of asyncio subprocess support does not prevent startup. See Python's
-[loop-factory guidance](https://docs.python.org/3.15/library/asyncio-runner.html)
-and [Windows loop limitations](https://docs.python.org/3.15/library/asyncio-platforms.html#windows).
+Python integrations can run notebooks from an active event loop. The
+[execution API](notebooks-api.md#python-notebook-integration-test-api) describes
+worker isolation, kernel cleanup and interruption handling.
 
 Output cleanup validates every selected notebook before publishing any change.
 It rechecks the selected source bytes before replacement and stops if a notebook
@@ -219,8 +199,7 @@ file. Resolve relative selections from the consumer root, including when
 working directory without traversal, symlink/junction components, or hard-link aliases. Selection
 uses an encoded Lab tree URL, preserving spaces, Unicode, and URL punctuation
 without forwarding arbitrary Jupyter arguments. No selection preserves the Lab
-landing page; consumer recipes choose any preferred starting notebook. See the
-[launch examples](#interactive-launch-and-explicit-reset).
+landing page. Consumer recipes choose any preferred starting notebook.
 
 A consumer can configure browser/cache policy and an explicit cleanup map:
 
@@ -273,7 +252,7 @@ The consumer deletion map is entirely declarative:
 | `notebooks.reset.checkpoints` | Literal directories whose final component is `.ipynb_checkpoints` | Entire declared checkpoint trees; absent paths are no-ops |
 
 There are no default deletion paths. Consumers declare execution/report/cache
-outputs that they intend to discard, as in the [cleanup example](#interactive-launch-and-explicit-reset).
+outputs that they intend to discard.
 Other scratch artifacts and checkpoint directories remain untouched. This
 replaces broad shell cleanup with an explicit deletion map. Lint, check, sync,
 and launch never call source reset or its declared cleanup.

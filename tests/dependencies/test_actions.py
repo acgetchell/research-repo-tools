@@ -14,9 +14,9 @@ OLD, NEW = "a" * 40, "b" * 40
 
 
 @pytest.mark.parametrize("preview", ["--check", "--dry-run"])
-def test_readme_actions_recipe_forwards_preview_flags(tmp_path, preview):
-    readme = (Path(__file__).resolve().parents[2] / "README.md").read_text(encoding="utf-8")
-    section = readme.split("### Actions pin consistency", 1)[1].split("## Capability index", 1)[0]
+def test_documented_actions_recipe_forwards_preview_flags(tmp_path, preview):
+    guide = (Path(__file__).resolve().parents[2] / "docs" / "UPDATING_DEPENDENCIES.md").read_text(encoding="utf-8")
+    section = guide.split("### Actions pin consistency\n", 1)[1]
     example = section.split("```just\n", 1)[1].split("```", 1)[0]
     # Execute the documented shell wiring with an inert argument recorder.
     updater = "uv run --locked --only-group tooling --inexact research-repo-tools actions update"

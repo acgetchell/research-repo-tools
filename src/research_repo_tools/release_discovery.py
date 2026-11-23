@@ -64,8 +64,8 @@ def stable_published_releases(document: object) -> tuple[PublishedRelease, ...]:
     return tuple(sorted(releases, key=lambda item: _tag_version(item.tag), reverse=True))
 
 
-def require_first_release_history(read: Callable[[str], object]) -> None:
-    """Prove absence of a stable release using the selected repository provider.
+def _stable_history(read: Callable[[str], object], *, canonical: bool = False) -> tuple[tuple[PublishedRelease, int], ...]:
+    """Enumerate stable releases and provider IDs from complete repository history.
 
     The reader must propagate provider failures. Pagination is bounded and
     malformed or incomplete results are errors, never empty history.
@@ -91,7 +91,20 @@ def require_first_release_history(read: Callable[[str], object]) -> None:
         }
         for release in releases
     ]
-    if stable_published_releases(document):
+    stable = stable_published_releases(document)
+    ids = {}
+    for row, identifier in zip(releases, identifiers, strict=True):
+        tag = row["tag_name"] if not row["draft"] and not row["prerelease"] else None
+        if isinstance(tag, str) and TAG.fullmatch(tag):
+            if canonical and tag != normalize_tag(tag):
+                raise ValueError("series discovery requires canonical stable release tag names")
+            ids[normalize_tag(tag)] = identifier
+    return tuple((release, ids[release.tag]) for release in stable)
+
+
+def require_first_release_history(read: Callable[[str], object]) -> None:
+    """Require a successful enumeration with no published stable release."""
+    if _stable_history(read):
         raise ValueError("first-release acquisition requires empty stable published release history; select the release again")
 
 

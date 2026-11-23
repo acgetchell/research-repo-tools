@@ -16,8 +16,10 @@ the distinction between source validation and package/archive identity.
 The v0.2.6 `release evidence candidate` command composes this exact final-commit
 verification with [pre-tag benchmark acceptance](candidate-reuse-api.md). It
 requires the separately trusted Step 1 assertion digest and freezes the original
-acquisition, full-tree binding, native selection, and exact benchmark archive.
-Later approval uses the original `--acceptance`; no benchmark or preflight runs.
+acquisition identity, full-tree binding, native selection, and benchmark archive
+digest. At approval, `--acceptance` rechecks the source and native selection
+against the saved record without collecting new samples. Before merge, v0.3.2
+can check the preparation commit with the [offline preflight](candidate-reuse-api.md#offline-preparation-preflight).
 
 For the v0.2.7 committed-publication contract, schema-2 publisher outputs
 additionally require `--publication-receipt` and the acquisition owner's
@@ -268,7 +270,7 @@ live evidence verification, checks published bytes at the captured destination,
 and revalidates the same evidence again before saving the selection. It does not
 upload, create a tag, rebuild or modify a draft. Saved selection JSON alone is
 neither an offline publication authorization nor a permanent registry receipt.
-Usage is in the [README](../README.md#releases). Downstream adoption requires the
+See the [distribution verification workflow](VERIFYING_RELEASE_EVIDENCE.md#verifying-python-distributions). Downstream adoption requires the
 exact supplying release to be published and its wheel/sdist and locked consumer
 installation verified; source-only availability does not satisfy that gate.
 
@@ -288,7 +290,7 @@ declares a separately approved destination and publisher. Only unauthenticated
 HTTPS PyPI JSON verification is supported; credentials in URLs, other protocols
 and private authentication modes reject before requests. This protocol declaration
 does not configure the consumer's upload credentials. `load_registry_authority`
-loads the strict schema-1 policy shown in the [README](../README.md#releases).
+loads the strict schema-1 policy shown in [registry approval after capture](VERIFYING_RELEASE_EVIDENCE.md#approving-a-registry-after-capture).
 
 `approve_python_publication(policy, version, commit, read, *, selection,
 authority, distributions, approve=False)` returns deterministic approval bytes
@@ -547,8 +549,7 @@ recovered from a uniquely matching asset. Recorded IDs cannot be replaced;
 changed inputs, dependencies, receipts, duplicate names or ambiguous lifecycle
 state stop recovery for explicit reconciliation. The original transfer is never
 overwritten with conflicting evidence. Default human progress and `--progress
-json` report the current asset and checked/total count. CLI examples are in
-[README](../README.md#releases).
+json` report the current asset and checked/total count. See the [batch staging example](VERIFYING_RELEASE_EVIDENCE.md#staging-assets-on-a-captured-draft).
 
 ### Existing target and attachment commands
 
@@ -643,5 +644,5 @@ privileged actions. A failed upload or uncertain publication must be inspected
 before retrying; the existing API preserves its uncertainty error contract.
 
 Native Cargo still repackages during publication. See the
-[Cargo publication policy](cargo-publication-policy.md) for the exact-byte
+[Cargo publication policy](publishing-api.md#cargo-publication-policy) for the exact-byte
 promotion evaluation and preserved guarantees.

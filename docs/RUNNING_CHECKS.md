@@ -96,8 +96,34 @@ private/default-feature workspace docs check in its current gate. Run the
 packaged public build at the release boundary where it adds coverage, using the
 default packaged build only when it covers a distinct feature set.
 
-The [Cargo documentation contract](cargo-docs-api.md) describes evidence,
-consumer configuration and the boundary with docs.rs.
+The Python entry point is
+`cargo_docs.check_documentation(root, package, *, features=(), default_features=True, all_features=False, cfg=(), target=None)`.
+The CLI exposes the same check as `validation cargo-docs PACKAGE`.
+
+Cargo packages the member with the workspace lock enforced. The check extracts
+that exact crate archive, then runs stable rustdoc on its library with its
+packaged lock and warnings denied. The archive, extracted sources, and build
+outputs live in temporary storage. The source tree, manifests, and locks stay in
+place. Cargo failures propagate to Python callers and give the CLI a nonzero
+exit status with the diagnostic.
+
+Defaults select the host target and Cargo's default features. Use repeatable
+`--features NAME` with optional `--no-default-features`, or select
+`--all-features` on crates that support the combination. An explicit
+`--target TRIPLE` requires an installed target. Cargo reads the consumer's
+normal configuration from the workspace root. Use repeatable `--cfg VALUE` for
+an explicit stable-compatible rustdoc configuration. Cargo and rustdoc report
+unsupported options and unstable crate features as errors. The check rejects
+`RUSTC_BOOTSTRAP`. Enable a `docsrs` cfg only by explicit configuration when the
+crate supports it on the selected stable compiler.
+
+Success returns `DocumentationEvidence` in Python and emits a JSON object in the
+CLI. It includes the package name and version, SHA-256 digests of the source
+manifest, workspace lock and exact crate archive, the declared toolchain and
+full compiler version, the target, feature selection, explicit cfg values, and
+a digest of the Cargo configuration files and inherited compiler flags.
+
+Hosted docs.rs builds select their own compiler, target and metadata.
 
 ## Cargo examples
 
@@ -136,7 +162,7 @@ and literal matching; `expect-stderr` does the same for stderr. The child's
 buffering may change and temporary disk use scales with selected output.
 Stdin and unasserted streams remain inherited. See the
 [CLI/configuration/Python contract](cargo-examples-api.md) and
-[migration from static validation plans](cargo-examples-migration.md).
+[migration from static validation plans](cargo-examples-api.md#migrating-static-cargo-example-validation).
 
 ## Dependency and secret scanning
 
@@ -275,14 +301,13 @@ exit 1 produce status 2. A timeout produces status 124. For example, an invalid
 history JSON report followed by a SARIF timeout leaves the command status at 2.
 
 `security check-exceptions` exits 0 after a complete comparison, including when
-it finds differences. A failed scan stops the comparison and the command exits
-1. Its diagnostic includes the individual scan status, such as 124 for a
-baseline timeout. Both commands use the declared, managed scanner.
+it finds differences. A failed scan stops the comparison with exit status 1.
+The diagnostic includes the individual scan status, such as 124 for a baseline timeout. Both commands use the declared, managed scanner.
 
 The standalone binaries require neither a paid GitHub security product nor a
 Gitleaks Action license. Consumers own exceptions, schedules, Actions permissions,
 and whether SARIF uploads are available for their repositories. See the
-[migration map](shared-capability-migration.md) before deleting local tools.
+[migration map](migration.md#shared-capability-migration) before deleting local tools.
 
 ## Rust documentation scans
 
@@ -310,7 +335,7 @@ wcmatch, a consistent OpenTelemetry release family, and pywin32 312 for Windows
 Python 3.15. Root uv overrides cannot propagate through an extra. The normal
 `toolchain adopt` workflow adds this policy for shared-package pins requesting
 `[semgrep]`, rejects competing overrides, resolves a private candidate and
-preserves normal rollback. See [Python adoption](INSTALLING.md).
+preserves normal rollback. See [Python adoption](UPDATING_DEPENDENCIES.md#shared-python-adoption).
 For an explicit review of the exact installed policy, export it with the template
 command. Keep the corresponding root `tool.uv.override-dependencies` declarations
 and lock together. Installed wheel/sdist consumers resolve with these same
@@ -435,17 +460,11 @@ just files check-lines
 just files check-lines --limit 100 --include '*.txt' --exclude 'generated/**'
 ```
 
-Each supplied option replaces its configured value; repeated include/exclude
-options form that override's list. Shared selection uses Git pathspec includes
-and case-sensitive POSIX glob excludes, fails on discovery errors, and checks
-every selected raw line. Fences, tables, URLs, tabs and trailing spaces count.
-Lengths are Unicode code points, independent of locale, rather than bytes or
-display columns. LF/CRLF/CR endings do not count; final lines without a newline
-do. Diagnostics are `file:one-based-line: line length N exceeds LIMIT` on stderr.
-Violations return 1, a clean or empty inventory returns 0, and read/selection or
-configuration errors return 1. The gate never formats source. The separate
-`docs check-lines FILE...` preserves its established fixed 160 limit and table
-exemption. Use `files check-lines` for a strict raw-source policy.
+Command-line selections override the configured values. This gate counts every raw
+line, including tables, fences and URLs, in Unicode code points. The older
+`docs check-lines FILE...` has a fixed limit of 160 and exempts Markdown tables.
+See the [raw text API](files-api.md#raw-text-api) for selection, line endings,
+diagnostics and exit status.
 
 ## SARIF selection
 
@@ -505,10 +524,17 @@ exact, locked Cargo installer and checked execution. See the
 
 ## CodeRabbit review
 
-Use the [consumer review recipes](../README.md#coderabbit-reviews) after explicitly
-installing and authenticating CodeRabbit. These commands are opt-in and outside
-`check`/`ci`; agents need a maintainer request before a live review. Package tests
-use synthetic events and executables, never paid service calls.
+Install and authenticate [CodeRabbit](https://docs.coderabbit.ai/cli) and select
+**On demand** continuation. Keep `AGENTS.md` and exactly one CodeRabbit YAML
+configuration at the consumer root. Use CodeRabbit 0.7.7 or newer for completed
+reviews. Version 0.7.6 supports quote-and-stop only. Run an authorized review
+with the scope you intend.
+
+```sh
+just review
+just review main
+just review-uncommitted
+```
 
 Ordinary branch/uncommitted reviews stream agent output without enabling credits.
 The default base must match origin; explicit local bases avoid the remote lookup.
@@ -538,8 +564,23 @@ rechecks cannot close the provider pricing/content race. The wrapper does not
 execute service command strings or add fresh/gate options. Uncertain paid work
 remains consumed and requires external reconciliation before another review.
 
+A consent request exits with status 3. Show the repository, scope, review kind,
+quoted billable files, and maximum charge with currency. The local selected-path
+count and the provider's billable count can differ. After explicit approval of the
+exact quote and its limitations, supply the saved identity and confirmed terms.
+
+```sh
+just review-resume /absolute/pending.json --approve SAVED_PENDING_SHA256 \
+  --currency USD --review-kind incremental \
+  --terms-source 'Where this currency and review kind were confirmed' \
+  --accept-unenforced-quote
+```
+
+To decline, use `just review-deny /absolute/pending.json`. Preserve the pending
+file and its `.used` receipt when reconciling an uncertain paid outcome.
+
 See the [review API](review-api.md) for verified provider fields, compatibility,
-state schemas and recovery, and the [native identity contract](path-identity-api.md)
+state schemas and recovery, and the [native identity contract](files-api.md#native-path-observations)
 for filesystem observation limits. These are cooperative controls, not protection
 against caller tampering or direct raw-CLI bypasses.
 

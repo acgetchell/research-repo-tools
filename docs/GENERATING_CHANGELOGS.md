@@ -19,6 +19,7 @@ Run `just help` for the complete command list and arguments.
 | `just changelog-archive` | Archive existing notes without regenerating Git history |
 | `just changelog-check` | Validate the whole root changelog and all archives without writing |
 | `just changelog-preview` | Validate all candidate files and print the resulting root changelog without writing |
+| `just changelog-rebuild [--apply]` | Preview the complete rebuild diff or explicitly apply it |
 | `just changelog-release TAG [DATE]` | Generate and archive with a citation-owned or explicit ISO date |
 | `just release-notes TAG` | Print notes from the root file or an archive |
 | `just tag TAG [--commit SHA] [--force]` | Create the validated annotated tag and print its target and annotation |
@@ -53,6 +54,19 @@ Here `date -u` deliberately chooses today's UTC date. The maintainer must ensure
 it agrees with prepared citation metadata; an explicit override does not perform
 citation lookup or rewrite that metadata.
 Standalone `research-repo-tools changelog generate` runs the same complete workflow.
+
+## Rebuilding retained history
+
+When updated rendering rules affect archived notes, run `just changelog-rebuild`
+from a checkout with full Git history (v0.3.2 or later). Review the diff for
+the root changelog and each affected minor-series archive, including added and
+removed files. `just changelog-rebuild --apply` regenerates from the inputs
+present at invocation. If the history, tags, renderer, configuration, or retained
+files change, preview again before applying. After applying, verify an empty diff.
+Both commands accept `--tag TAG` and the same date options as generation.
+Rebuild retains declared dates and requires every retained release to appear
+exactly once in the result. Ordinary generation and release preparation continue
+to check for conflicts with archived entries.
 
 ## Generation and normalization
 

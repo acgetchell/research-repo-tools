@@ -5,17 +5,16 @@ recipe/workflow wiring. The shared package owns acquisition, trial receipts,
 validation, archive conversion, and evidence mechanics. See the
 [API and trust contract](candidate-reuse-api.md).
 The procedure below acquires scheduled pairs. For a first release without a
-predecessor, follow the [current-only procedure](candidate-reuse-api.md#committed-publisher-evidence)
-with unscheduled schema-5 measurement and complete-run v6 evidence.
+predecessor, follow the [current-only procedure](candidate-reuse-api.md#first-stable-release)
+with unscheduled schema-5 measurement and complete-run v6 evidence. If earlier
+stable releases exist but predate the workload, [start a benchmark series](#starting-a-benchmark-series-after-earlier-releases).
 
 ## Step 1: prepare and acquire
 
-When using the published-dependency policy, run `just release-dependencies`
-and pass `--release-intent` to preparation and acquisition before final release
-measurements. Exact Git pins remain supported for development rehearsals.
-Replacing them with a published pin changes dependency/harness inputs and can
-invalidate checkpoints and candidates; revalidate and reacquire when required.
-See [upstream provenance](dependency-provenance-api.md).
+Run `just release-dependencies` before collecting reusable evidence. Owner
+capture checks the published dependencies again before timing. Development
+rehearsals can use exact Git pins without owner capture or release intent.
+Switching pins changes the measured inputs. See [upstream provenance](dependency-provenance-api.md).
 
 Before acquisition, set the prospective package version and finish source,
 dependency, build, harness, fixture, command/feature, and tool changes. Declare
@@ -39,12 +38,15 @@ release`. `PerformanceRelease.order = "published"` continues to choose release
 history; it does not choose acquisition order. Editing the declaration after
 preparation invalidates the saved preparation.
 
-Using the consumer's configured recipes:
+Configure a schema-2 report using the `complete-report.toml` template before acquisition. In each suite's
+`[suites.measurement]` table, set `context = { repository = "owner/project", acquisition-owner = "local" }`
+with the repository from the release workflow. Set `owner` to a new absolute
+directory path outside the checkout, under the acquisition owner's control.
 
 ```sh
-just performance-prepare performance-release.toml
-just performance-release performance-release.toml --checkpoint target/release-trials
-just performance-readme performance-release.toml
+just performance-prepare tooling/performance-release.toml --release-intent
+just performance-release tooling/performance-release.toml --owner "$owner" --checkpoint target/release-trials
+just performance-readme tooling/performance-release.toml
 ```
 
 This is one bounded campaign containing the declared trial slots. Each paired
@@ -55,29 +57,15 @@ trial indices by SHA-256 of the ASCII string `rrt-schedule-v1:SEED:INDEX`, with
 index as the tie-breaker; the first half run current/baseline. The declaration
 retains the resulting entire schedule. No consumer chooses a fresh seed later.
 
-The acquisition owner freezes the independent Step 1 assertion digest and original
-payload/envelope through the trusted handoff before report edits or final merge.
-Use `CandidatePolicy(commit=None, ...)` and `acquisition_assertion_digest` under
-that owner's control. Retain original raw evidence in ignored scratch or immutable
-artifact storage. To commit the shared publisher's generated evidence, declare
-`report="tooling/performance-report.toml"` in that policy before freezing its
-digest. The schema-2 report declaration must be present before acquisition.
-Use `plan_candidate_publication` to freeze a separate exact-byte publication
-receipt **before** promotion, then publish its returned plan. Independently retain
-both the receipt and its SHA-256. The existing content-addressed run files,
-indexes, pointer and reports may then be committed in the release PR.
-
-To capture the local handoff through the shared command, add `--owner "$owner"`
-to `just performance-release`, where the owner directory is new and outside the
-checkout. Each suite must declare the repository and `acquisition-owner = "local"`
-in its measurement context. This retains the original assertions and publisher
-receipt before promotion. Recover completed acquisition after capture or promotion
-failure with `just performance capture performance-release.toml --owner "$owner" --promote`.
-For existing Python adapters, `measure_release` also accepts `owner=...` or a
-custom `before_promotion` callback; these alternatives are mutually exclusive.
-Never rerun acquisition merely because capture or promotion failed.
-See the [committed publisher contract](candidate-reuse-api.md#committed-publisher-evidence).
-After report/README generation, review and merge the release-preparation PR.
+Before promoting the report, the command saves the original run, evidence manifest,
+policy, publication receipt, and both SHA-256 digests in the owner directory.
+Retain this handoff independently of the release PR. If capture or promotion
+fails after measurement, retry with
+`just performance capture tooling/performance-release.toml --owner "$owner" --promote`.
+For Python adapters, see the [publisher contract and capture hooks](candidate-reuse-api.md#committed-publisher-evidence).
+Commit the generated outputs to the preparation PR. With v0.3.2, run the
+[offline preflight](candidate-reuse-api.md#offline-preparation-preflight)
+on its clean commit before merging.
 
 Complete-run v5 retains original v4 payload/envelope bytes per trial, unique trial
 and suite sessions, observed phase start/end timestamps, and exact execution
@@ -90,21 +78,27 @@ Criterion samples does not create independent trials or significance evidence.
 
 ## Step 2: freeze final release evidence
 
-On the final clean main commit, independently supply the final commit in the
-candidate policy. The separately retained Step 1 digest must remain unchanged.
-The consumer's Step 2 recipe invokes the shared `release evidence candidate`
-command using a trusted installed interpreter outside the observed checkout;
-the [README invocation](../README.md#performance) shows this boundary. Do not use
-that checkout's uv environment. Supply the native evidence configuration, clean checkout,
-original payload/envelope, independent candidate policy, trusted
-`--acquisition-sha256`, and a new `--output` acceptance file outside the checkout. When committing
-publisher evidence, also supply the original `--publication-receipt` and separately
-trusted `--publication-sha256`. Add `--format summary` for a concise verification
-result; the acceptance bytes are unchanged. This may run before
-tag creation; it does not require a GitHub draft or perform measurement/preflight.
+Wait for the required native CI evidence on the final main commit. From its
+clean checkout, set `release_commit` to the independently selected full commit
+ID. Obtain both digest values from the trusted Step 1 handoff.
+Use a separately installed interpreter (on Windows, its
+`Scripts/python.exe`) and a durable directory outside the checkout for the
+final policy and acceptance. This can run before tag or draft creation.
 
-Only after Step 2 succeeds, create/push the release tag and follow the consumer's
-normal native/package and draft-release procedure. A final source, dependency,
+```sh
+/trusted/release-tools/bin/python -I -B -m research_repo_tools release evidence candidate tooling/release-evidence.toml \
+  --checkout . --commit "$release_commit" --policy-output /durable/final-policy.json \
+  --policy "$owner/policy.json" --payload "$owner/run.json" --manifest "$owner/evidence.json" \
+  --acquisition-sha256 "$acquisition_sha256" \
+  --publication-receipt "$owner/publication.json" --publication-sha256 "$publication_sha256" \
+  --output /durable/accepted.json
+```
+
+Final acceptance checks the source binding again and verifies the signed native
+evidence for this commit. Add `--format summary` for a concise verification result.
+
+After Step 2 succeeds, create and push the release tag, then follow the consumer's
+package and draft-release procedure. A final source, dependency,
 harness, fixture, plan, command, feature, or tool change requires another Step 1
 acquisition. A matching version or subset of Rust files is insufficient. The
 original candidate revision, dirty status, tools, host, session, and collection
@@ -120,8 +114,8 @@ measured-input contract and retry the read-only operation; retained raw evidence
 does not need reacquisition. Calling `performance release` deliberately measures
 again and is not a rendering retry.
 
-At approval, rerun the candidate verifier with the original acceptance supplied
-as `--acceptance`. Reverify the current native selection, whole-tree binding and
+At approval, rerun the candidate verifier with `--acceptance /durable/accepted.json`
+and a new output path. Reverify the current native selection, whole-tree binding and
 original acquisition before acquiring publication credentials. Verify the private
 archive copy against the frozen acceptance and captured draft target, then pass
 that same path to the existing asset uploader. Upload retries keep the exact
@@ -138,6 +132,72 @@ committed source; they bind the final commit and cannot be committed into that
 same commit. Implementation, maintainer-approved patch publication, and consumer
 adoption are separate gates. Verify the supplying published package before
 adoption; consumer migrations do not block upstream publication.
+
+## Starting a benchmark series after earlier releases
+
+With v0.3.2, use a series when earlier published releases predate the workload.
+Copy the suite measurement template to `benchmark-series/ID.toml` and point
+the release workflow's `measurement` at that path. Keep the suite declarations,
+local owner context, and schema-2 report from Step 1. Set these top-level fields
+to the series ID, first participating tag, and exact native case IDs per suite.
+The declaration path, suite names, and semantic `contract` values identify
+the series across release tags.
+
+```toml
+# benchmark-series/complete-suite.toml
+schema = 5
+outputs = ["README.md"]
+benchmark-series = { id = "complete-suite", first-release = "v1.2.0", workloads = { extended = ["extended/size-2"] } }
+```
+
+Configure the release workflow with `mode = "infer-release"` and
+`order = "version"`. Preparation enumerates stable GitHub releases, resolves each
+published tag to its commit, and reads the measurement declaration from that
+Git tree. Make the historical objects available locally first. A complete tree
+listing establishes whether the declaration existed. An inaccessible object,
+failed provider request, or changed contract stops selection. The preparation
+records the release IDs, tags, commits, and matching contract digests. Review
+that record before measurement. The initial release must match `first-release`.
+
+Use the same three recipes for initial and paired releases. Choose new ignored
+scratch paths and a new trusted owner directory for each acquisition.
+
+```sh
+just performance-prepare tooling/performance-release.toml
+just performance-release tooling/performance-release.toml --owner "$owner"
+just performance-readme tooling/performance-release.toml
+```
+
+For the initial README, configure a schema-2 publication from the report
+archive with current-phase series, `[provenance.current]`, and references for
+`version` and `tag`. Omit comparisons, the ratio SVG, and baseline references.
+Declare the README and any generated figures in `outputs` before acquisition.
+The report and README reuse the original samples and timing intervals. Review
+the resulting files with the consumer's scientific gates and the final commit.
+
+For the next compatible release, keep the ID, first tag, suite contracts, and
+workload inventory. Select schema 6 and declare the paired trial schedule.
+For the README, select a numbered `trial` and configure both phases.
+Preparation selects the highest participating published version and binds
+its tag and commit. Existing acquisitions without
+a series keep their existing selection rules. The repository's first-release
+command continues to require empty stable published history.
+
+### Recovering a series candidate
+
+If the raw payload and envelope exist, retry handoff and report promotion with
+`just performance capture tooling/performance-release.toml --owner "$owner" --promote`.
+A README retry uses `just performance-readme tooling/performance-release.toml`.
+To retry an initial series README with independent assertions, pass
+`--current-release` and `--current-revision` with the prospective tag and the
+base commit of the measured working tree from the trusted Step 1 handoff.
+Keep the original preparation and independent handoff digests. Follow
+[Step 2](#step-2-freeze-final-release-evidence) and the [attachment procedure](#packaging-approval-and-retries)
+for the reviewed commit. The verifier enumerates history again at acceptance
+and approval. A changed predecessor or tag identity invalidates the selection.
+Native/package evidence, archive derivation, attachment retries, and approval
+all refer to the original acquisition. The consumer owns scientific
+compatibility, Cargo guarantees, and release approval.
 
 ## Release recovery decisions
 

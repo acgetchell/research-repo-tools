@@ -31,6 +31,10 @@ changelog-check:
 changelog-preview *args:
     uv run --locked research-repo-tools changelog generate --dry-run "$@"
 
+# Preview a full history rebuild or publish it with --apply.
+changelog-rebuild *args:
+    uv run --locked research-repo-tools changelog rebuild "$@"
+
 # Generate a prospective release using prepared citation metadata or an explicit date.
 changelog-release tag date="":
     if [ -n "$2" ]; then uv run --locked research-repo-tools changelog generate --tag "$1" --date "$2"; else uv run --locked research-repo-tools changelog generate --tag "$1"; fi

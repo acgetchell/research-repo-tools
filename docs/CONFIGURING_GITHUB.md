@@ -108,20 +108,16 @@ To bind the required status to CodeRabbit, verify the installed App's integratio
 ID, add it as `integration_id` to the CodeRabbit entry in
 `.github/settings/main-ruleset.json`, and reconcile the existing live ruleset.
 
-The Dependabot caller uses the shared
-[dependency approval workflow](AUTOMATING_DEPENDABOT.md). It approves eligible updates
-permitted by this repository's Dependabot configuration, including GitHub Actions,
-then enables native squash auto-merge. All required checks,
-resolved review threads, and stale-approval dismissal still apply. It does not
-wait on a runner for checks or a CodeRabbit approval.
+This repository's Dependabot caller enables native squash auto-merge for eligible
+updates, including GitHub Actions. Apply `.github/settings/workflow-permissions.json`
+for Actions approvals and `.github/settings/allowed-actions.json` for the pinned
+metadata action. Keep default token permissions read-only. Follow the
+[approval contract and rollout procedure](AUTOMATING_DEPENDABOT.md) to verify
+the caller and required settings.
 
-Apply `.github/settings/workflow-permissions.json` to permit Actions approvals
-and `.github/settings/allowed-actions.json` to allow the SHA-pinned metadata
-action. Default token permissions remain read-only. These payloads describe the
-desired configuration; committing them does not apply repository settings.
-No `CODERABBIT_REVIEW_TOKEN` is needed by this workflow. Existing copies can be
-removed from this repository after confirming no other workflow uses them; do
-not revoke a token shared with other repositories.
+The workflow uses the repository token. Remove an obsolete
+`CODERABBIT_REVIEW_TOKEN` from this repository only after checking for other
+callers. A token shared with other repositories must stay valid for them.
 
 ## Release configuration
 

@@ -61,14 +61,17 @@ def parser() -> argparse.ArgumentParser:
         "generate": "generate and normalize history, then rotate completed minor series",
         "normalize": "normalize the existing changelog without regenerating history",
         "notes": "extract release notes from the root changelog or an archive",
+        "rebuild": "preview the full changelog and archive diff or explicitly apply it",
         "tag": "create a local annotated tag from validated release notes",
     }.items():
         command = changelog.add_parser(name, help=help_text, description=help_text)
         if name in {"notes", "tag"}:
             command.add_argument("tag")
-        if name == "generate":
+        if name in {"generate", "rebuild"}:
             command.add_argument("--tag")
             command.add_argument("--date")
+        if name == "rebuild":
+            command.add_argument("--apply", action="store_true", help="publish the validated rebuild")
         if name in {"generate", "tag"}:
             command.add_argument("--dry-run", action="store_true", help="print candidate output without publishing")
         if name == "tag":
@@ -1000,6 +1003,9 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
         path = settings.root / "CHANGELOG.md"
         if args.action == "check":
             changelog.check(settings)
+            return 0
+        if args.action == "rebuild":
+            _write_stdout(changelog.rebuild(settings, tag=args.tag, released=args.date, apply=args.apply).encode("utf-8"))
             return 0
         if args.action == "generate":
             rendered = changelog.generate(settings, tag=args.tag, released=args.date, dry_run=args.dry_run)

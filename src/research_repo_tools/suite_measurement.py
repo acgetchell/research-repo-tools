@@ -13,6 +13,7 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from research_repo_tools.benchmark_series import BenchmarkSeries, SeriesBaseline, SeriesPair
 from research_repo_tools.common_measurement import CompleteMeasurementPlan, DiscoveryPolicy, _plan_document, _prepare_phases, parse_plan
 from research_repo_tools.complete_runs import CompletePolicy, CompleteSample, _integer, serialize_policy
 from research_repo_tools.evidence import Evidence, Provenance, _object, _string, deterministic_json, sha256
@@ -90,6 +91,7 @@ class SuiteMeasurementPlan:
     schedule: TrialSchedule | None = None
     outputs: tuple[str, ...] = ()
     preparation_storage_bytes: int = 0
+    benchmark_series: BenchmarkSeries | None = None
 
     def __post_init__(self) -> None:
         if type(self.preparation_storage_bytes) is not int or self.preparation_storage_bytes < 0:
@@ -110,7 +112,9 @@ class SuiteMeasurementPlan:
 
         outputs = tuple(self.outputs)
         _names(None, outputs)
-        if outputs and self.schedule is None:
+        if self.benchmark_series is not None and set(dict(self.benchmark_series.workloads)) != {suite.name for suite in suites}:
+            raise ValueError("series workload inventory must cover every declared suite")
+        if outputs and self.schedule is None and self.benchmark_series is None:
             raise ValueError("candidate output declarations require a schema-6 schedule")
         if self.schedule is not None and not isinstance(self.schedule, TrialSchedule):
             raise ValueError("invalid trial schedule")
@@ -174,6 +178,8 @@ class SuiteMeasurementPlan:
         return {
             "schema": self.schema,
             **({"schedule": self.schedule.document(), "outputs": list(self.outputs)} if self.schedule else {}),
+            **({"benchmark-series": self.benchmark_series.document()} if self.benchmark_series is not None else {}),
+            **({"outputs": list(self.outputs)} if self.outputs and self.schedule is None else {}),
             **({"preparation-storage-bytes": self.preparation_storage_bytes} if self.preparation_storage_bytes else {}),
             "suites": [
                 {
@@ -192,10 +198,10 @@ class SuiteMeasurementPlan:
 
 def parse_suite_plan(document: dict[str, Any]) -> SuiteMeasurementPlan:
     """Validate the suite declarations and schema-specific schedule and output options."""
-    raw = _table(document, "suite measurement", {"schema", "suites"}, {"schedule", "outputs", "preparation-storage-bytes"})
+    raw = _table(document, "suite measurement", {"schema", "suites"}, {"schedule", "outputs", "preparation-storage-bytes", "benchmark-series"})
     if type(raw["schema"]) is not int or raw["schema"] not in {5, 6} or not isinstance(raw["suites"], list):
         raise ValueError("suite measurement requires schema 5 or 6 and a suite array")
-    if (raw["schema"] == 6) != ("schedule" in raw) or (raw["schema"] == 5 and "outputs" in raw):
+    if (raw["schema"] == 6) != ("schedule" in raw) or (raw["schema"] == 5 and "outputs" in raw and "benchmark-series" not in raw):
         raise ValueError("schedule/output declarations require schema 6")
     suites = []
     for value in raw["suites"]:
@@ -218,6 +224,7 @@ def parse_suite_plan(document: dict[str, Any]) -> SuiteMeasurementPlan:
         parse_schedule(raw["schedule"]) if "schedule" in raw else None,
         _strings(raw.get("outputs", []), "outputs", nonempty=False),
         _integer(raw.get("preparation-storage-bytes", 0), "preparation-storage-bytes"),
+        BenchmarkSeries.parse(raw["benchmark-series"]) if "benchmark-series" in raw else None,
     )
 
 
@@ -304,7 +311,7 @@ def measure_suites(
 def _measure_suites(
     root: Path,
     plan: SuiteMeasurementPlan,
-    pair: ReleasePair | FirstRelease,
+    pair: ReleasePair | FirstRelease | SeriesBaseline,
     *,
     working_tree: bool = False,
     checkpoint: Path | None = None,
@@ -324,7 +331,10 @@ def _measure_suites(
 
     if resume and checkpoint is None:
         raise ValueError("resume requires an explicit checkpoint path")
-    first = isinstance(pair, FirstRelease)
+    series = isinstance(pair, (SeriesBaseline, SeriesPair))
+    if series != (plan.benchmark_series is not None):
+        raise ValueError("series measurements require their independently prepared series selection")
+    first = not isinstance(pair, ReleasePair)
     if first and (plan.schedule is not None or not working_tree):
         raise ValueError("first-release acquisition requires one working-tree acquisition without a trial schedule")
     if first:
@@ -335,6 +345,8 @@ def _measure_suites(
             **({"baseline": capture_source(root, pair.baseline)} if isinstance(pair, ReleasePair) else {}),
             "current": capture_source(root, "HEAD" if working_tree else pair.current, working_tree=working_tree),
         }
+        if isinstance(pair, SeriesPair) and pair.history.predecessor != (pair.baseline, captures["baseline"].revision):
+            raise ValueError("local baseline tag differs from the published series predecessor")
         # A prospective label is an independent assertion, but must also match
         # the ORIGINAL captured package metadata, never the overlaid harness.
         if working_tree:
@@ -354,6 +366,7 @@ def _measure_suites(
                 capture.revision,
                 capture.identity,
                 context=(
+                    *([("benchmark-series-selection", pair.history.context_value())] if isinstance(pair, (SeriesBaseline, SeriesPair)) else []),
                     ("release", getattr(pair, phase)),
                     ("source-export", capture.provenance()),
                     ("mode", "working-tree" if capture.working_tree else "tag"),
@@ -378,6 +391,7 @@ def _measure_suites(
             "sources": {phase: capture.provenance() for phase, capture in captures.items()},
             "releases": {phase: getattr(pair, phase) for phase in captures},
             "availability": decisions,
+            **({"series-selection": pair.history.document()} if isinstance(pair, (SeriesBaseline, SeriesPair)) else {}),
             "environment-sha256": ambient,
         }
         journal = None
@@ -405,6 +419,9 @@ def _measure_suites(
 
         active_phases = {suite.name: tuple(phase for phase in captures if decisions[suite.name][phase]["state"] == "available") for suite in plan.suites}
         checked = {suite.name: _checked_executables(suite, active_phases[suite.name]) for suite in plan.suites} if plan.preparation_storage_bytes else {}
+
+        if plan.benchmark_series is not None and any(set(active) != set(captures) for active in active_phases.values()):
+            raise ValueError("series workload contract requires every declared suite in each selected phase")
 
         def prepare(
             suite: AcquisitionSuite,
@@ -461,6 +478,10 @@ def _measure_suites(
                 continue
             with ExitStack() as resources:
                 policies, declared, acquire = prepare(suite, resources)
+                if plan.benchmark_series is not None:
+                    required = dict(plan.benchmark_series.workloads)[suite.name]
+                    if any(tuple(sorted(policy.expected)) != required for policy in policies.values()):
+                        raise ValueError(f"series workload inventory differs for {suite.name}")
                 if suite.name not in retained and checked.get(suite.name) and remaining_storage:
                     used = 0
                     for phase in captures:
@@ -553,7 +574,9 @@ def _measure_suites(
                     reporter.state, reporter.phase = "checkpoint", phase
                     reporter.accept(_work_class(suite, declared[phase], policy), len(policy.expected), elapsed * len(policy.expected) / count, retained=reused)
         unchanged()
-        schema = FIRST_RELEASE_RUN_SCHEMA if first else SUITE_RUN_SCHEMA
+        from research_repo_tools.complete_runs import RUN_SCHEMA_V7
+
+        schema = RUN_SCHEMA_V7 if isinstance(pair, SeriesBaseline) else FIRST_RELEASE_RUN_SCHEMA if first else SUITE_RUN_SCHEMA
         result = Evidence(
             deterministic_json({"schema": schema, "declaration": plan.document(), "units": units, "reused": sorted(retained)}),
             schema,

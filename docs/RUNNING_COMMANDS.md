@@ -24,6 +24,7 @@ arguments in lexicographic order.
 | `just changelog-archive` | Archive existing notes without regenerating history |
 | `just changelog-check` | Validate the whole root changelog and all archives without writing |
 | `just changelog-preview [ARGS...]` | Validate the generated root and archives without writing; print the root candidate |
+| `just changelog-rebuild [--apply]` | Show the complete rebuilt changelog and archive diff or apply it |
 | `just changelog-release TAG [DATE]` | Generate a prospective release from prepared citation metadata or an explicit date |
 | `just check` | Run Python, Semgrep fixture, and zizmor validation; extend with consumer domain gates |
 | `just ci` | Run the same canonical consumer gate as local validation |
@@ -115,7 +116,7 @@ root/configuration options before the group. See
 | Capability | Commands | Contract |
 | --- | --- | --- |
 | Actions | `actions allowlist`, `check`, `update` | [Strict consumer allowlists, offline pin consistency, and opt-in updates](UPDATING_DEPENDENCIES.md#actions-allowlists-and-opt-in-pin-updates) |
-| Changelog | `changelog archive`, `check`, `generate`, `normalize`, `notes`, `tag` | Root `CHANGELOG.md`; completed minor series in `docs/archives/changelog/` |
+| Changelog | `changelog archive`, `check`, `generate`, `normalize`, `notes`, `rebuild`, `tag` | Root `CHANGELOG.md`; completed minor series in `docs/archives/changelog/` |
 | CI environment | `ci export` | Validate all single-line values before appending a GitHub environment command file |
 | Cleanup | `clean` | Compose tool-installation and coverage cleanup; preview by default; `--keep-root` retains other consumers' tool pins |
 | Coverage | `coverage clean`, `report` | Preview/remove retained Python coverage artifacts; summarize Cobertura with deduplicated source lines |

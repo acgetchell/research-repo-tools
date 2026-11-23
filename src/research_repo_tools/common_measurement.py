@@ -14,6 +14,7 @@ if TYPE_CHECKING:
     from research_repo_tools.suite_measurement import SuiteMeasurementPlan
     from research_repo_tools.suite_runs import SuiteRun
 
+from research_repo_tools.benchmark_series import SeriesBaseline
 from research_repo_tools.complete_runs import (
     RUN_SCHEMA,
     RUN_SCHEMA_V2,
@@ -480,7 +481,7 @@ def _prepare_phases(
     baseline: Path | None,
     current: Path,
     plan: CompleteMeasurementPlan,
-    pair: ReleasePair | FirstRelease,
+    pair: ReleasePair | FirstRelease | SeriesBaseline,
     *,
     working_tree: bool = False,
     captured_sources: dict[str, CapturedSource] | None = None,
@@ -498,7 +499,7 @@ def _prepare_phases(
 ) -> tuple[dict[str, CompletePolicy], dict[str, Provenance], Callable[[], tuple[tuple[tuple[str, CompleteSample], ...], tuple[tuple[str, Provenance], ...]]]]:
     """Prepare a complete unit; return the same validated sampler used by v1-v3."""
     reporter = ProgressReporter(mode="none") if progress is None else progress
-    phases = {"current"} if isinstance(pair, FirstRelease) else {"baseline", "current"}
+    phases = {"baseline", "current"} if isinstance(pair, ReleasePair) else {"current"}
     if len(phase_order) != len(phases) or set(phase_order) != phases:
         raise ValueError("phase order must contain each selected source exactly once")
     for phase in active:

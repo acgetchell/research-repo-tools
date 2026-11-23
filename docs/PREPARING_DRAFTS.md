@@ -24,7 +24,7 @@ Preserve this distinction and path containment when migrating older examples.
 Full contributor setup remains supported for development. Release phases must
 declare their required tools and carry the same explicit selection through
 sync, check, export and run; a later full-catalog check would reintroduce the
-unrelated prerequisites. See [selecting tools for a job](../README.md#selecting-tools-for-a-job).
+unrelated prerequisites. See [selecting tools for a job](INSTALLING.md#selecting-tools-for-a-job).
 
 Before using the adopted workflow for a release, exercise its actual commands
 against the published installed package with inert provider boundaries. Check
@@ -243,6 +243,21 @@ Upload-on-failure cannot guarantee durability after hard runner termination or
 artifact upload failure. If the journal was not retained, stop automation and
 reconcile provider/audit state manually before any further creation. Do not
 treat a new workflow run or a missing receipt as permission to replace a draft.
+
+### Preparing a draft in a trusted local project
+
+For a manual preparation from a trusted project, the recipe uses that project's
+Justfile and uv environment. Supply the previously verified selection and retain
+the original receipt and target for every retry. CI writers use the isolated
+authenticated workflow above.
+
+```sh
+just release-assets prepare /trusted/evidence.toml \
+  --repository owner/repository --tag v1.2.3 --commit FULL_COMMIT \
+  --expected /trusted/selection.json --expected-title v1.2.3 \
+  --notes /trusted/notes.md --receipt /durable/draft-receipt.json \
+  --output /trusted/target.json --approve
+```
 
 ## Retrieve original preparation output
 

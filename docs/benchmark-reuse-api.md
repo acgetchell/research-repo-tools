@@ -53,7 +53,7 @@ exact-tag acquisition. A matching source subtree cannot turn the earlier commit
 into the final commit. Working-tree-to-tag equivalence is unsupported by this v1 API;
 the paired candidate contract requires new schema-6/v5 acquisition evidence,
 independent assertions and an explicit whole-tree binding. Its separate
-[first-release procedure](candidate-reuse-api.md#committed-publisher-evidence)
+[first-release procedure](candidate-reuse-api.md#first-stable-release)
 uses schema-5/v6 evidence without inventing a predecessor. Release ordering and scientific
 acceptance remain consumer responsibilities.
 
@@ -100,6 +100,22 @@ before the shared rollback/recovery transaction. An identical existing archive
 is a no-op; a conflicting archive, stale input, alias or unsafe path fails before
 replacement. Callers must exclude concurrent writers; this is not locking or
 crash atomicity. `ArchiveLimits` applies to inputs, archive members and total content.
+
+```python
+from pathlib import Path
+
+from research_repo_tools.benchmark_reuse import plan_reuse_archive
+from research_repo_tools.publication import publish_publication
+
+candidate = plan_reuse_archive(
+    Path.cwd(),
+    "target/run.json",
+    "target/evidence.json",
+    "tooling/reuse-policy.json",
+    "target/benchmark-release.tar.gz",
+)
+publish_publication(candidate)
+```
 
 ## Derived archive format
 

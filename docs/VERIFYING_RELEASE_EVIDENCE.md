@@ -68,13 +68,115 @@ Neither interface acquires a registry token or runs scientific workloads. See th
 [release evidence API](release-evidence-api.md) and
 [migration map](performance-migration.md#release-interface-reconciliation).
 
+## Verifying Python distributions
+
+Use a separate trusted controller project with its own pinned tools and policies.
+Set `package-kind = "python"` and `guarantee = "python-distributions"` in the
+evidence policy to select the Python project, including beside a Cargo workspace.
+Build once and run installed-package and security checks against the same files.
+
+```toml
+[distributions]
+files = ["example_app-{version}-py3-none-any.whl", "example_app-{version}.tar.gz"]
+index-url = "https://test.pypi.org"
+max-age-seconds = 86400
+```
+
+In a subsequent job of the same push attempt, retain the manifest with the
+validated distributions. Add a signature bundle when the policy selects a signer.
+
+```sh
+just release-evidence create tooling/release-evidence.toml \
+  --checkout /path/to/source --commit FULL_COMMIT --version 1.2.3 \
+  --run-id RUN_ID --attempt ATTEMPT --distributions /path/to/dist \
+  --output /trusted/validation.json
+```
+
+```sh
+just release-evidence wait tooling/release-evidence.toml \
+  --commit FULL_COMMIT --attempts 241 --interval 30
+just release-evidence verify tooling/release-evidence.toml \
+  --checkout /path/to/source --commit FULL_COMMIT --version 1.2.3 \
+  --distributions /path/to/dist --output /trusted/selection.json
+# After approval, immediately before the consumer's publication step:
+just release-evidence verify tooling/release-evidence.toml \
+  --checkout /path/to/source --commit FULL_COMMIT --version 1.2.3 \
+  --distributions /path/to/dist --expected /trusted/selection.json \
+  --output /trusted/revalidated.json
+# After the consumer uploads those exact files to the configured destination:
+just release-evidence published tooling/release-evidence.toml \
+  --checkout /path/to/source --commit FULL_COMMIT --version 1.2.3 \
+  --expected /trusted/selection.json --output /trusted/published.json
+```
+
+Allow enough time for the producer and verification in the enclosing job. The
+example allows two hours of retry delay. The final `published` check downloads
+and compares the actual registry files. See the [distribution evidence contract](release-evidence-api.md#python-distribution-evidence).
+
+### Approving a registry after capture
+
+Select `destination = "undecided"` in place of `index-url` to defer the registry
+decision. Bound evidence keeps its original endpoint. For undecided evidence,
+retain the original selection and use a separate trusted authority declaration.
+
+```toml
+schema = 1
+index-url = "https://test.pypi.org"
+account = "publishing-account"
+project = "example-app"
+repository = "owner/repository"
+workflow = ".github/workflows/publish.yml"
+environment = "registry-approval"
+protocol = "pypi-json"
+authentication = "none"
+```
+
+```sh
+just release-evidence approve-python tooling/release-evidence.toml \
+  --authority tooling/registry.toml --commit FULL_COMMIT --version 1.2.3 \
+  --distributions /path/to/dist --expected /trusted/selection.json \
+  --output /trusted/approval.json --approve
+# Immediately before the consumer requests credentials:
+just release-evidence verify-python-approval tooling/release-evidence.toml \
+  --authority tooling/registry.toml --commit FULL_COMMIT --version 1.2.3 \
+  --distributions /path/to/dist --expected /trusted/selection.json \
+  --approval /trusted/approval.json --output /trusted/verified-approval.json
+# After upload, including an uncertain outcome, inspect before any retry:
+just release-evidence published-python tooling/release-evidence.toml \
+  --authority tooling/registry.toml --commit FULL_COMMIT --version 1.2.3 \
+  --distributions /path/to/dist --expected /trusted/selection.json \
+  --approval /trusted/approval.json --output /trusted/published-approval.json
+```
+
+Verify the authority and the original bytes before requesting credentials. A new
+endpoint or publisher requires new approval. After an uncertain upload, check the
+registry before retrying. See the [supported registry protocol](release-evidence-api.md#python-registry-approval).
+
+## Staging assets on a captured draft
+
+Use an asset policy with `schema = 1`, the exact `repository`, and
+`expected-title = "tag"`. Run from the observed checkout with a trusted Python
+installation outside it. On Windows select `Scripts/python.exe`.
+
+```sh
+/trusted/release-tools/bin/python -I -m research_repo_tools release assets stage tooling/release-assets.toml \
+  --checkout . --commit FULL_COMMIT --tag v1.2.3 \
+  --target /durable/target.json --asset /durable/final-policy.json \
+  --asset /durable/accepted.json --asset /durable/benchmark.tar.gz \
+  --journal /durable/staging.json --output /durable/transfer.json --approve
+```
+
+Retain the journal and original files across retries. The stage command verifies
+existing attachments and rejects conflicting identities or bytes. It leaves the
+draft unpublished. See the [batch contract](release-evidence-api.md#asset-batch-staging).
+
 ## Complete-run recovery
 
 Pending evidence requires waiting for the selected run to complete and then
 retrying. Use the shared `release evidence wait` command before the verifier or
 draft planner, with an explicit polling budget sized for the complete producer
 workflow and sufficient additional time in the enclosing job. The
-[consumer command example](../README.md#releases) shows the
+[distribution verification example](#verifying-python-distributions) shows the
 wait followed by strict verification. A pending timeout preserves the original
 run and does not require rerunning main CI. Failed, cancelled, incomplete,
 expired or ambiguous evidence rejects;
@@ -93,7 +195,7 @@ artifact/draft identity. Diagnose duplicate runs/artifacts and failed required
 steps before retrying. Python distribution policy, private-repository provenance
 limits and published-byte verification are described in the
 [API contract](release-evidence-api.md#python-distribution-evidence), with
-[consumer commands](../README.md#releases) in the README.
+[consumer commands](#verifying-python-distributions) above.
 
 ## Trusted release target handoff
 

@@ -26,6 +26,7 @@ from research_repo_tools.review_protocol import (
     CompletedReview,
     ConsentRequired,
     FailedReview,
+    IncompleteReview,
     ReviewApproval,
     ReviewDenied,
     ReviewQuote,
@@ -128,6 +129,8 @@ class TestReviewConsumer(unittest.TestCase):
         self.stack.enter_context(patch.object(review, "_verify_base", lambda root, base: self.base_checks.append(base)))
         self.calls: list[list[str]] = []
         self.results: list[Mapping[str, object] | int] = [QUOTE]
+        self.findings: list[dict[str, str]] = []
+        self.exit_code = 0
         self.output: list[bytes] = []
         self.final_newline = True
         self.script = self.area / "synthetic provider.py"
@@ -141,10 +144,10 @@ class TestReviewConsumer(unittest.TestCase):
         if isinstance(selected, int):
             source = f"raise SystemExit({selected})\n"
         else:
-            payload = event({"type": "status", "message": "café progress"}) + event(selected)
+            payload = event({"type": "status", "message": "café progress"}) + b"".join(event(finding) for finding in self.findings) + event(selected)
             if not self.final_newline:
                 payload = payload.removesuffix(b"\r\n")
-            source = f"import os, sys\npayload = {payload!r}\nfor byte in payload:\n    os.write(sys.stdout.fileno(), bytes([byte]))\n"
+            source = f"import os, sys\npayload = {payload!r}\nfor byte in payload:\n    os.write(sys.stdout.fileno(), bytes([byte]))\nraise SystemExit({self.exit_code})\n"
         self.script.write_text(source, encoding="utf-8", newline="\n")
         return stream_review(Path(sys.executable), [str(self.script), *args], cwd=cwd, env=env, output=output, timeout=timeout)
 
@@ -439,6 +442,44 @@ class TestReviewConsumer(unittest.TestCase):
         self.assertEqual(records[0]["message"], "café")
         self.assertEqual(records[1]["status"], "completed")
 
+    def test_exit_one_preserves_findings_and_oversized_file(self) -> None:
+        path = "docs/history/runs/initial/run.json"
+        self.findings = [{"type": "finding", "title": name, "fileName": "code.py"} for name in ("first finding", "second finding")]
+        self.results = [
+            {
+                **COMPLETE,
+                "findings": 2,
+                "outcome": "completed_with_warnings",
+                "unreviewedFileCount": 1,
+                "unreviewedFiles": [{"fileName": path, "reason": "diff_too_large"}],
+            }
+        ]
+        self.exit_code = 1
+        with contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(cli.main(["--root", str(self.root), "review", "branch", "--base", "main"]), 1)
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([record for record in records if record["type"] == "finding"], self.findings)
+        result = records[-1]
+        self.assertEqual((result["type"], result["status"], result["findings"], result["unreviewed_file_count"]), ("rrt_review_result", "incomplete", 2, 1))
+        self.assertEqual(result["unreviewed_files"], [{"path": path, "reason": "diff_too_large"}])
+        for detail in (path, "diff_too_large", "2 findings", "skipped 1 file", "Reduce the oversized file diff"):
+            self.assertIn(detail, errors.getvalue())
+        self.assertEqual(len(self.calls), 1)
+
+    def test_paid_partial_review_retains_coverage_and_requires_reconciliation(self) -> None:
+        selected = self.start()
+        self.results = [QUOTE, {**COMPLETE, "unreviewedFileCount": 2, "unreviewedFiles": [{"fileName": "large.py", "reason": "diff_too_large"}]}]
+        self.exit_code = 1
+        result = review.resume(self.pending, self.approval(selected), output=self.output.append)
+        with contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(review.report(result), 5)
+        record = json.loads(output.getvalue())
+        self.assertEqual((record["status"], record["findings"], record["unreviewed_file_count"]), ("uncertain", 0, 2))
+        self.assertEqual(record["unreviewed_files"], [{"path": "large.py", "reason": "diff_too_large"}])
+        self.assertIn("large.py", errors.getvalue())
+        self.assertIn("reconcile CodeRabbit usage", errors.getvalue())
+        self.assertEqual(len(self.calls), 3)
+
     def test_unterminated_provider_records_remain_separate_during_resume(self) -> None:
         selected = self.start()
         self.final_newline = False
@@ -669,6 +710,8 @@ class TestAgentEvents(unittest.TestCase):
             {**COMPLETE, "outcome": []},
             {**COMPLETE, "status": {}},
             {**COMPLETE, "unreviewedFileCount": 1},
+            {**COMPLETE, "unreviewedFiles": [{"fileName": "uncovered.py", "reason": "diff_too_large"}]},
+            {**COMPLETE, "unreviewedFileCount": 1, "unreviewedFiles": [42]},
             {**COMPLETE, "findings": True},
             {"type": "error"},
             {"type": "status"},
@@ -698,6 +741,15 @@ class TestAgentEvents(unittest.TestCase):
             failed = parser.finish(status)
             assert isinstance(failed, FailedReview)
             self.assertEqual(failed.exit_code, expected)
+
+    def test_malformed_completion_is_not_reported_as_valid_partial_coverage(self) -> None:
+        for invalid in ({"reviewedFiles": "source.py"}, {"reused": "false"}):
+            parser = AgentEvents()
+            parser.feed(event({**COMPLETE, "unreviewedFileCount": 1, **invalid}))
+            result = parser.finish(1)
+            with self.subTest(invalid=invalid):
+                self.assertIsInstance(result, FailedReview)
+                self.assertNotIsInstance(result, IncompleteReview)
 
     def test_conflicting_terminal_events_and_invalid_quote(self) -> None:
         parser = AgentEvents()

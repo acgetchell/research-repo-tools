@@ -9,6 +9,7 @@ from typing import Any
 from research_repo_tools.common_measurement import DiscoveredSeries, _validate_phase_sample
 from research_repo_tools.complete_runs import (
     RUN_SCHEMA_V6,
+    RUN_SCHEMA_V7,
     CompleteCase,
     CompleteSample,
     _integer,
@@ -132,10 +133,18 @@ class SuiteRun:
     units: tuple[dict[str, Any], ...]
     observations: tuple[tuple[str, str, CompleteSample, Provenance], ...]
     first_release: bool = False
+    series_baseline: bool = False
+
+    @property
+    def current_only(self) -> bool:
+        """Return whether the acquisition has no baseline phase."""
+        return self.first_release or self.series_baseline
 
     @property
     def schema(self) -> str:
         """Return the retained evidence schema for the run's release mode."""
+        if self.series_baseline:
+            return RUN_SCHEMA_V7
         return FIRST_RELEASE_RUN_SCHEMA if self.first_release else SUITE_RUN_SCHEMA
 
     @property
@@ -148,7 +157,7 @@ class SuiteRun:
         """Build report phase views for paired or first-release observations."""
         settings = self.plan.suites[0].measurement.baseline.policy
         result = []
-        for phase in ("current",) if self.first_release else ("baseline", "current"):
+        for phase in ("current",) if self.current_only else ("baseline", "current"):
             cases = tuple(sorted((case for _, side, sample, _ in self.observations if side == phase for case in sample.cases), key=lambda case: case.full_id))
             result.append(
                 (
@@ -174,7 +183,7 @@ class SuiteRun:
         result = []
         for suite in self.plan.suites:
             for series in suite.measurement.series:
-                if self.first_release and series.phase != "current":
+                if self.current_only and series.phase != "current":
                     continue
                 sample = samples.get((suite.name, series.phase))
                 rows = () if sample is None else series.resolve(sample.policy.expected).rows if isinstance(series, DiscoveredSeries) else series.rows
@@ -191,13 +200,15 @@ class SuiteRun:
 
 def parse_suite_run(evidence: Evidence) -> SuiteRun:
     """Validate suite-run evidence against the declared units and release mode."""
-    first = evidence.payload_schema == FIRST_RELEASE_RUN_SCHEMA
-    if evidence.payload_schema not in {SUITE_RUN_SCHEMA, FIRST_RELEASE_RUN_SCHEMA}:
+    first = evidence.payload_schema in {FIRST_RELEASE_RUN_SCHEMA, RUN_SCHEMA_V7}
+    if evidence.payload_schema not in {SUITE_RUN_SCHEMA, FIRST_RELEASE_RUN_SCHEMA, RUN_SCHEMA_V7}:
         raise ValueError("requires suite-run evidence")
     raw = _object(_load_json(evidence.payload, "suite run"), "suite run", {"schema", "declaration", "units", "reused"})
     if raw["schema"] != evidence.payload_schema or not isinstance(raw["units"], list):
         raise ValueError("invalid suite run schema/units")
     plan = parse_suite_plan(_object(raw["declaration"], "suite declaration"))
+    if first and (evidence.payload_schema == RUN_SCHEMA_V7) != (plan.benchmark_series is not None):
+        raise ValueError("current-only evidence differs from declared series mode")
     if plan.schedule is not None:
         raise ValueError("scheduled declarations require complete-run v5 receipts")
     sources = dict(evidence.sources)
@@ -249,7 +260,28 @@ def parse_suite_run(evidence: Evidence) -> SuiteRun:
             observations.append((suite.name, phase, sample, source))
     if first and not observations:
         raise ValueError("first-release evidence requires at least one complete suite observation")
-    return SuiteRun(plan, units, tuple(observations), first)
+    if plan.benchmark_series is not None:
+        expected = dict(plan.benchmark_series.workloads)
+        actual = {(suite, phase): tuple(sorted(sample.policy.expected)) for suite, phase, sample, _ in observations}
+        if actual != {(suite, phase): cases for suite, cases in expected.items() for phase in sources}:
+            raise ValueError("retained series workload inventory differs")
+        from research_repo_tools.benchmark_series import SeriesHistory
+
+        selections = {dict(source.context).get("benchmark-series-selection") for source in sources.values()}
+        if len(selections) != 1 or (recorded := selections.pop()) is None:
+            raise ValueError("every phase must record the same benchmark series selection")
+        history = SeriesHistory.parse(_load_json(recorded.encode(), "series selection"))
+        history.selection(plan, releases["current"])
+        predecessor = None if first else (releases["baseline"], sources["baseline"].revision)
+        if history.predecessor != predecessor:
+            raise ValueError("retained series predecessor differs")
+    return SuiteRun(
+        plan,
+        units,
+        tuple(observations),
+        first_release=evidence.payload_schema == FIRST_RELEASE_RUN_SCHEMA,
+        series_baseline=evidence.payload_schema == RUN_SCHEMA_V7,
+    )
 
 
 def comparison_incompatibilities(evidence: Evidence, numerator: tuple[str, str], denominator: tuple[str, str]) -> tuple[str, ...]:
@@ -264,6 +296,8 @@ def comparison_for_run(run: SuiteRun, numerator: tuple[str, str], denominator: t
     """
     a, left, first = run.observation(*numerator)
     b, right, second = run.observation(*denominator)
+    if run.series_baseline:
+        return ("initial benchmark series baselines contain absolute timings only",)
     reasons = []
     if a != b:
         return ("observations belong to different collection units; cross-unit comparisons are absolute-only",)
@@ -292,7 +326,7 @@ def validate_suite_policy(evidence: Evidence, plan: SuiteMeasurementPlan, *, rel
     run = parse_suite_run(evidence)
     if deterministic_json(run.plan.document()) != deterministic_json(plan.document()):
         raise ValueError("suite acquisition declaration changed")
-    if release and not run.first_release:
+    if release and not run.current_only:
         sources = dict(evidence.sources)
         pair = ReleasePair(dict(sources["current"].context)["release"], dict(sources["baseline"].context)["release"])
         if pair.current == pair.baseline:
@@ -316,7 +350,21 @@ def validate_suite_policy(evidence: Evidence, plan: SuiteMeasurementPlan, *, rel
 def render_suite_run(evidence: Evidence, *, title: str, links: str, identity: str) -> bytes:
     """Render accepted suite evidence as Markdown, with ratios only for eligible pairs."""
     run = parse_suite_run(evidence)
-    phases = ("current",) if run.first_release else ("baseline", "current")
+    phases = ("current",) if run.current_only else ("baseline", "current")
+    if run.first_release:
+        introduction = (
+            "First-release benchmark acquisition. This release has no published predecessor. "
+            "The measured source is a working-tree snapshot. The listed revision is its base commit, "
+            "and the measured source SHA-256 identifies the snapshot."
+        )
+    elif run.series_baseline:
+        assert run.plan.benchmark_series is not None
+        introduction = (
+            f"Initial baseline for benchmark series `{run.plan.benchmark_series.name}`. Timings include uncertainty intervals. "
+            "The revision identifies the base commit and the source SHA-256 identifies the measured working-tree snapshot."
+        )
+    else:
+        introduction = "Ratios are point estimates within one accepted paired suite. Marginal timing intervals do not establish significance."
     lines = [
         "<!-- research-repo-tools/run-report/v2 -->",
         f"# {_markdown_text(title)}",
@@ -325,13 +373,7 @@ def render_suite_run(evidence: Evidence, *, title: str, links: str, identity: st
         "",
         links,
         "",
-        (
-            "First-release benchmark acquisition. This release has no published predecessor. "
-            "The measured source is a working-tree snapshot. The listed revision is its base commit, "
-            "and the measured source SHA-256 identifies the snapshot."
-            if run.first_release
-            else "Ratios are point estimates within one accepted paired suite. Marginal timing intervals do not establish significance."
-        ),
+        introduction,
     ]
     observations = {(name, phase): (sample, source) for name, phase, sample, source in run.observations}
     reused = _strings(_object(_load_json(evidence.payload, "suite run"), "suite run")["reused"], "reused units", nonempty=False)
@@ -359,7 +401,7 @@ def render_suite_run(evidence: Evidence, *, title: str, links: str, identity: st
         }
         for statistic in policy.statistics:
             lines.extend(("", f"### {statistic.title()} ({policy.unit})", ""))
-            if run.first_release:
+            if run.current_only:
                 lines.extend(("| Workload | Current |", "| --- | --- |"))
                 for full_id, case in sorted(cases["current"].items()):
                     lines.append(f"| {_markdown_text(full_id)} | {_format_estimate(case.estimate(statistic), policy.unit)} |")
