@@ -9,7 +9,7 @@
 4. Approve the protected PyPI deployment after its verification job passes.
 5. Verify the exact published version on PyPI and in a fresh consumer. Record
    the commit, run and attempt IDs, artifact IDs and digests, and consumer
-   results in the release tracker.
+   results in the release handoff directory.
 
 ## Prepare the environment
 
@@ -24,20 +24,29 @@ release PR.
 
 ### 1. Prepare the release branch and metadata
 
+If the tag already exists and its unpublished draft needs corrections, keep
+the prepared version and date. Follow [Replace an unpublished candidate](RECOVERING_RELEASES.md#replace-an-unpublished-candidate)
+before running any commands in this step.
+
 ```bash
 git switch -c "release/$TAG"
 just update-version "$TAG"
 just changelog-release "$TAG"
 ```
 
-Review the synchronized package, lock, citation, and generated changelog
-changes. The update selects the previous stable published release and prepares
+In `pyproject.toml`, `uv.lock`, and `CITATION.cff`, check that the package
+version matches the tag without its leading `v`. The top entry in
+`CHANGELOG.md` should have that version, the citation's release date, and the
+changes you intend to ship. Step 1.2's `just release-version-check` checks
+that the package metadata and dated changelog entry agree.
+
+The update selects the previous stable published release and prepares
 a UTC citation date. Generation reuses that prepared date on retries. To change
 it deliberately, pass `--date YYYY-MM-DD` to `just update-version` and rerun
 generation. See [metadata](UPDATING_RELEASE_METADATA.md) and
 [changelog generation](GENERATING_CHANGELOGS.md).
 
-Review the README installation pin, [upgrade instructions](UPDATING_DEPENDENCIES.md#shared-python-adoption), and consumer
+Review the README quickstart, [upgrade instructions](UPDATING_DEPENDENCIES.md#shared-python-adoption), and consumer
 command examples against the target package and its Justfile template. The
 metadata updater leaves these Python examples for manual review. Keep versions
 that identify when a feature first appeared or the minimum an interface requires.
@@ -156,39 +165,42 @@ The push starts `Prepare GitHub release` for this tag and commit.
 just release-evidence
 ```
 
-The summary includes the verified main run and attempt, distribution hashes,
-and original artifact IDs and digests. Retain the summary with the release
-tracker. The recipe derives the tag and commit from the clean
-checkout, verifies the already-pushed tag, and inspects retained signed CI
-evidence. See [reusable CI evidence](#reusable-ci-evidence).
+Run this from a clean checkout. The recipe uses the package version to find the
+pushed tag, even when the checkout has advanced beyond it. It verifies the
+signed CI artifacts for the tagged commit and prints the summary and its saved
+path under `../release-handoffs/research-repo-tools/<tag>/`. Keep this file for
+draft review. Repeating the command reuses the evidence for the same CI attempt.
 
-### 5. Wait for the draft GitHub release
+Release issues are optional. If exactly one open issue is titled
+`release: validate and publish research-repo-tools <tag>`, the recipe also
+saves the summary there and prints the comment URL. A numeric argument selects
+a differently named tracker. Use the tagged checkout for publication.
+[Reusable CI evidence](#reusable-ci-evidence)
 
-Look up the preparation run for the pushed tag and the same commit.
+### 5. Capture the prepared draft
 
 ```bash
-PREPARATION_RUN_ID=$(gh run list --workflow prepare-release.yml --event push --branch "${TAG:?}" --commit "${RELEASE_COMMIT:?}" \
-  --limit 2 --json databaseId --jq 'select(length == 1) | .[0].databaseId')
-gh run watch "${PREPARATION_RUN_ID:?Expected one tag-push preparation run}" --exit-status
+just release-draft "$TAG"
 ```
 
-If the run is not visible yet, repeat the lookup. Continue after it succeeds.
-The workflow creates the draft and attaches the validated wheel, sdist, and
-`release-attestation.json`.
+Pushing the tag starts draft preparation. The recipe finds that run for the
+merged release commit and waits if it is still running. Once preparation passes,
+the recipe verifies the draft ID, repository, tag, title and commit. It saves
+`<commit>/target.json` in the Step 2.4 handoff directory and prints its path. Publication
+and verification read this file by tag. Repeating the recipe revalidates the
+original draft. If preparation fails, follow the printed run link for
+[recovery](#recovering-a-failed-run).
+
+The recipe also recognizes an earlier `target.json` at the top of the tag's
+handoff directory when it matches the tagged commit. If the tagged checkout
+predates automatic target lookup, pass the printed path to its publish and
+verify recipes with `--target`.
 
 ### 6. Review the draft
 
-Capture the draft once. The CLI saves the release ID, repository, tag,
-title assertion and reviewed commit in a target file outside the checkout.
-Keep that file for publication, verification and retries.
+Inspect the draft and its uploaded assets.
 
 ```bash
-RELEASE_DIR="../release-handoffs/research-repo-tools/${TAG:?}"
-RELEASE_TARGET="$RELEASE_DIR/target.json"
-if [ ! -e "$RELEASE_TARGET" ]; then
-  uv run --locked research-repo-tools performance release-draft acgetchell/research-repo-tools "$TAG" \
-    --commit "${RELEASE_COMMIT:?}" --expected-title "$TAG" --output "$RELEASE_TARGET"
-fi
 gh release view "$TAG"
 gh release view "$TAG" --json assets --jq '.assets[] | [.name, .state, .size, .digest] | @tsv'
 ```
@@ -200,17 +212,18 @@ Before publishing the draft, compare each attached wheel and sdist filename
 and SHA-256 digest with the signed distribution records from
 `just release-evidence`. Confirm that the attached `release-attestation.json`
 identifies the same validation run and attempt. Download it for inspection with
-`gh release download "$TAG" --pattern release-attestation.json --dir "$RELEASE_DIR"`.
+`gh release download "$TAG" --pattern release-attestation.json --dir "../release-handoffs/research-repo-tools/$TAG"`.
 The JSON in `evidence.manifest` contains the validation run and file hashes.
 Reconcile any missing or differing digest while the release is still editable.
 
 ### 7. Publish the reviewed GitHub Release
 
 ```bash
-just release-publish "$TAG" --target "$RELEASE_TARGET"
+just release-publish "$TAG"
 ```
 
-Use a human GitHub CLI session. The published event starts `Publish to PyPI`.
+Run this from the clean tagged checkout using a human GitHub CLI session.
+The published event starts `Publish to PyPI`.
 Open the URL for the matching run to review the protected deployment:
 
 ```bash
@@ -229,7 +242,7 @@ Wait for the upload job to finish.
 ### 9. Verify registry availability and downstream resolution
 
 ```bash
-just release-verify "$TAG" --target "$RELEASE_TARGET"
+just release-verify "$TAG"
 ```
 
 Success confirms the stable GitHub Release, its required assets, and the exact
@@ -239,13 +252,13 @@ matching filename and hash recorded during `just release-evidence` before markin
 the release verified. Automation can perform this comparison with the
 [published distribution verifier](publishing-api.md#reviewed-registry-publication-api).
 Install the version in a fresh project, run its focused consumer checks, and
-record the results in the release tracker.
+record the results alongside the saved evidence.
 [Consumer installation](../README.md#install-with-uv)
 
 ### 10. Verify the Zenodo release metadata
 
 If enabled, verify the version-specific record against `CITATION.cff`, including
-date, authors, ORCID, and license. Record its version DOI in the release tracker.
+date, authors, ORCID, and license. Record its version DOI alongside the saved evidence.
 
 ### 11. Remove the merged release branch
 
@@ -255,9 +268,8 @@ release branch locally and on the remote.
 ## Choose where to resume
 
 In a new shell, set `TAG` again. [Step 2.1](#1-synchronize-main-and-wait-for-ci) looks up the merged PR's commit and
-main run, and [Step 2.5](#5-wait-for-the-draft-github-release) looks up the tag's preparation run. After draft capture,
-restore `RELEASE_TARGET` to the original target file in the release handoff directory.
-Keep the retained evidence associated with that candidate.
+main run, and [Step 2.5](#5-capture-the-prepared-draft) verifies preparation and captures the draft.
+Keep the original `target.json` and evidence together in the release handoff directory.
 
 | Last completed operation | Resume with |
 | --- | --- |
@@ -265,7 +277,7 @@ Keep the retained evidence associated with that candidate.
 | Release PR merged, exact CI still pending | Resume [Step 2.1](#1-synchronize-main-and-wait-for-ci) with the original `MAIN_RUN_ID`. |
 | Tag preflight requires a tracked metadata correction | Commit and review the correction. Wait for main CI on the new commit and retry `just tag "$TAG" --commit "$RELEASE_COMMIT"` with its SHA. |
 | Tag preflight stopped on an external dependency or tool | Resolve the reported prerequisite and retry `just tag "$TAG" --commit "$RELEASE_COMMIT"` with the same reviewed SHA. |
-| Tag pushed, draft pending | Restore `RELEASE_COMMIT` from the merged PR using [Step 2.1](#1-synchronize-main-and-wait-for-ci). If the release tracker lacks the `just release-evidence` summary for this tag and commit, run [Step 2.4](#4-verify-the-final-release-commit) from that clean commit and retain the summary. Then resume [Step 2.5](#5-wait-for-the-draft-github-release) with the recorded `PREPARATION_RUN_ID`. |
+| Tag pushed, draft pending | Restore `RELEASE_COMMIT` from the merged PR using [Step 2.1](#1-synchronize-main-and-wait-for-ci). If the handoff lacks the verified summary for this tag and commit, run [Step 2.4](#4-verify-the-final-release-commit). Once the summary is saved, repeat [Step 2.5](#5-capture-the-prepared-draft) to check the original tag-push run. |
 | GitHub Release published, PyPI approval pending | Review the verification result and approve the `pypi` deployment in the original publishing run. |
 | PyPI upload interrupted | Inspect the original GitHub Release and publishing run. Check the exact registry version with `just release-registry "$TAG" --expect present` and compare any published file hashes before deciding whether to retry. |
 | Unpublished candidate needs a different commit | Follow the [replacement procedure](RECOVERING_RELEASES.md#replace-an-unpublished-candidate). |
@@ -277,12 +289,12 @@ Use the [recovery decision table](RECOVERING_RELEASES.md#choose-the-recovery-pat
 
 #### Preparation timed out waiting for main CI
 
-Keep the original tag. Once the original complete main run passes, rerun the
-recorded RRT preparation run's failed jobs and watch the new attempt:
+Keep the original tag. Set `PREPARATION_RUN_ID` to the numeric ID in the failed run
+URL printed by `just release-draft`. Once the original complete main run passes,
+rerun the failed jobs and repeat [Step 2.5](#5-capture-the-prepared-draft).
 
 ```bash
 gh run rerun "$PREPARATION_RUN_ID" --failed
-gh run watch "$PREPARATION_RUN_ID" --exit-status
 ```
 
 This retry is for an RRT preparation run that stopped while waiting for CI,

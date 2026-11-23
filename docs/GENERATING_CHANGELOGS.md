@@ -211,7 +211,7 @@ the date must be today's UTC date; `release.date-policy = "declared"` explicitly
 permits historical release dates. Oversized annotations link to the complete
 notes. Pass the full reviewed commit SHA to `--commit` to require a clean
 checkout at that commit. A successful `--dry-run` writes only the annotation
-to stdout. For an [unpublished replacement](RECOVERING_RELEASES.md#4-replace-the-superseded-draft-and-tag),
+to stdout. For an [unpublished replacement](RECOVERING_RELEASES.md#9-replace-the-local-tag),
 pass the same `--commit` and `--force` arguments to the preview and the actual
 tag recipe. The tag recipe replaces the local ref in one Git operation.
 

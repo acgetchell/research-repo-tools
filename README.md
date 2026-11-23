@@ -40,24 +40,21 @@ typically `C:\Program Files\Git\bin`. Setup installs Just.
 
 **1. Declare the package and interpreter.** If the repo has no `pyproject.toml`,
 create one with `uv init --bare --python 3.15`. In an existing manifest, keep
-the project's name, dependencies and stricter Python bounds. v0.3.1 requires
-`project.requires-python` to enforce at least 3.15. Review that compatibility
-change before adopting it in a project that supports older Python.
+the project's name and dependencies. Set `project.requires-python` to
+require Python 3.15 or later, preserving any stricter bounds and exclusions.
+Set `.python-version` to an interpreter version that satisfies that range.
 
-Set `.python-version` to a compatible interpreter such as `3.15`. Merge these
-groups into `pyproject.toml`, retaining existing entries. Replace the example
-uv pin with the version reported by `uv --version`.
+Set `tool.uv.required-version` to `==` followed by the version number reported
+by `uv --version`. Then add the published package to the tooling group.
 
-```toml
-[dependency-groups]
-tooling = ["research-repo-tools==0.3.1"]
-dev = [{include-group = "tooling"}]
-
-[tool.uv]
-required-version = "==0.13.9"
+```sh
+uv add --group tooling --bounds exact research-repo-tools
 ```
 
-**2. Lock the pin and export both templates.** For a repo with an existing
+Include `{include-group = "tooling"}` in the existing `dev` group or create that
+group. See [toolchain declarations][toolchain].
+
+**2. Lock the dependencies and export both templates.** For a repo with an existing
 Justfile or helper, omit the corresponding `--output` argument and merge the
 printed template into the existing file. Run both exports from the consumer root.
 
@@ -173,7 +170,7 @@ covers the intervening approval and publication steps.
 
 ## Release availability
 
-**v0.3.1 is published on [PyPI][pypi].** Take the Justfile and bootstrap helper
+Check [PyPI][pypi] for published versions. Take the Justfile and bootstrap helper
 from the same release as your pin. For an existing repository, follow the
 [migration guide][migration] and run your consumer checks. The [changelog][changelog-history]
 records release history.

@@ -152,9 +152,16 @@ release-dependencies:
 release-dependency-builds:
     uv run --locked research-repo-tools release dependency-builds
 
-# Inspect this release's signed CI evidence, or pass explicit shared evidence commands.
+# Wait for draft preparation, capture or revalidate the target, and print its path.
+release-draft tag:
+    @uv run --locked python scripts/release_handoff.py draft "$1"
+
+# Save signed evidence locally and on an existing tracker, or run shared evidence commands.
 release-evidence *args:
-    if [ "$#" -eq 0 ]; then uv run --locked python scripts/release_assets.py evidence --format summary; else uv run --locked research-repo-tools release evidence "$@"; fi
+    case "${1-}" in \
+        ''|[0-9]*) uv run --locked python scripts/release_handoff.py evidence "$@" ;; \
+        *) uv run --locked research-repo-tools release evidence "$@" ;; \
+    esac
 
 # Prepare a first release after verifying empty stable published history.
 release-first tag date:
@@ -166,7 +173,12 @@ release-notes tag:
 
 # Approve the reviewed draft GitHub Release and trigger registry publication.
 release-publish tag *args:
-    uv run --locked research-repo-tools release publish "$@" --approve
+    @target=$(uv run --locked python scripts/release_handoff.py target-path "$1") && \
+        uv run --locked research-repo-tools release publish --target "$target" "$@" --approve
+
+# Recover an unpublished candidate one step at a time: record, notes, tag, push.
+release-recover action tag:
+    @uv run --locked python scripts/release_recovery.py "$1" "$2"
 
 # Check the configured package's exact registry version without uploading.
 release-registry tag +args:
@@ -182,7 +194,8 @@ release-runtime +args:
 
 # Require the stable GitHub Release/assets and exact published registry version.
 release-verify tag *args:
-    uv run --locked research-repo-tools release verify --attempts 7 --interval 10 "$@"
+    @target=$(uv run --locked python scripts/release_handoff.py target-path "$1") && \
+        uv run --locked research-repo-tools release verify --target "$target" --attempts 7 --interval 10 "$@"
 
 # Require synchronized package metadata and complete dated release notes.
 release-version-check:

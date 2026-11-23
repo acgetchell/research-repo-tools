@@ -33,7 +33,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Recover the post-tag verification summary before watching the draft workflow. Identify failed uploads by draft and asset ID, preserve the signed attachment,
   and specify when staging can safely retry.
 
-#### docs(release): route failed draft creation to retry checks
+- docs(release): route failed draft creation to retry checks
+
+---
+
+- Save verified evidence and capture draft targets with Just
+  [`64d0194`](https://github.com/acgetchell/research-repo-tools/commit/64d0194c51dfb41ce57939dc8ad4dfd1fd2d372a)
+- Wait for draft preparation within the capture recipe
+  [`fc64e46`](https://github.com/acgetchell/research-repo-tools/commit/fc64e469cfb16a61464003d09dc681d13fb09e6b)
+
+### Changed
+
+- Merge the release handoff recipes into release/v0.3.2
+  [`090652a`](https://github.com/acgetchell/research-repo-tools/commit/090652a4801a0b249a4be6cc8e12da3dc569efc2)
 
 ### Documentation
 
@@ -41,6 +53,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Document fresh installs and upgrades to v0.3.1 with the matching Justfile and bootstrap helper. Show maintainers how to find the reviewed merge commit and CI
   run and reuse the captured draft ID through publication and verification.
+
+### Fixed
+
+- Retain evidence automatically with or without an issue tracker
+  [`7e4c2d9`](https://github.com/acgetchell/research-repo-tools/commit/7e4c2d91077a2371c68eb28afc7aadf012f74dc6)
+- Preserve tagged dependency evidence and reuse the saved draft target
+  [`1246c94`](https://github.com/acgetchell/research-repo-tools/commit/1246c9400e00159f81b22c95ae04c5428c68547e)
+- Correct recovery for v0.3.2 [`a96f38c`](https://github.com/acgetchell/research-repo-tools/commit/a96f38c3cee3db7743521d9f7f5a5da09184c039)
 
 ## [0.3.1] - 2026-11-21
 

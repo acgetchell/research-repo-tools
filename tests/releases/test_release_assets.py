@@ -3,6 +3,7 @@
 import copy
 import gzip
 import hashlib
+import importlib
 import inspect
 import io
 import json
@@ -418,11 +419,217 @@ def test_local_evidence_failure_preserves_files_and_emits_no_selection(checkout,
 
 def test_maintainer_evidence_recipe_accepts_local_and_shared_commands():
     local = dry_run(ROOT, "release-evidence").stderr
-    assert "scripts/release_assets.py evidence" in local
+    assert 'scripts/release_handoff.py evidence "$@"' in local
     shared = dry_run(ROOT, "release-evidence", ["verify", "policy with spaces.toml", "--output", "selection.json"]).stderr
     assert 'research-repo-tools release evidence "$@"' in shared
     guide = (ROOT / "docs/RELEASING.md").read_text(encoding="utf-8")
     assert "```bash\njust release-evidence\n```" in guide
+    assert "scripts/release_handoff.py evidence" in dry_run(ROOT, "release-evidence", ["268"]).stderr
+    assert "scripts/release_handoff.py draft" in dry_run(ROOT, "release-draft", [TAG]).stderr
+
+
+@pytest.fixture
+def release_handoff(monkeypatch):
+    monkeypatch.syspath_prepend(str(ROOT / "scripts"))
+    return importlib.import_module("release_handoff")
+
+
+def release_pr(commit, branch=f"release/{TAG}"):
+    repo = {"full_name": release.REPOSITORY}
+    return {"merge_commit_sha": commit, "merged_at": "2026-11-23T03:24:38Z", "head": {"ref": branch, "repo": repo}, "base": {"ref": "main", "repo": repo}}
+
+
+def test_tracker_handoff_posts_only_verified_evidence_and_reuses_comment(checkout, monkeypatch, release_handoff):
+    root, git, remote = checkout
+    commit = git("rev-parse", "HEAD")
+    url = "https://example.test/issues/8#issuecomment-1"
+    comments = []
+
+    def transport(tool, args, *, cwd, input=None):
+        assert tool == "gh" and cwd == root
+        if args[-1].endswith("/pulls?per_page=100"):
+            return subprocess.CompletedProcess(args, 0, json.dumps([[release_pr(commit)]]).encode())
+        if args == ["api", "--paginate", "--slurp", f"repos/{release.REPOSITORY}/issues?state=open&per_page=100"]:
+            return subprocess.CompletedProcess(
+                args, 0, json.dumps([[], [{"title": f"release: validate and publish research-repo-tools {TAG}", "number": 8}]]).encode()
+            )
+        if args == ["api", "--paginate", "--slurp", f"repos/{release.REPOSITORY}/issues/8/comments?per_page=100"]:
+            return subprocess.CompletedProcess(args, 0, json.dumps([[], comments]).encode())
+        assert args == ["issue", "comment", "8", "--repo", release.REPOSITORY, "--body-file", "-"]
+        assert isinstance(input, bytes)
+        comments.append({"body": input.decode("utf-8"), "html_url": url})
+        return subprocess.CompletedProcess(args, 0, url.encode())
+
+    monkeypatch.setattr(release_handoff, "run_command_bytes", transport)
+    git("commit", "--allow-empty", "-m", "Later main commit")
+    head = git("rev-parse", "HEAD")
+    assert release_handoff.record_evidence(root).endswith(url)
+    assert release_handoff.record_evidence(root, "8") == url
+    assert git("rev-parse", "HEAD") == head and git("status", "--porcelain") == ""
+    (comment,) = comments
+    body = comment["body"]
+    saved = root.parent / "release-handoffs" / "research-repo-tools" / TAG / "evidence-123-1.md"
+    assert saved.read_bytes() == (body + "\n").encode()
+    assert commit in body and "run 123, attempt 1" in body
+    for artifact in remote["artifacts"]:
+        assert artifact["digest"] in body and str(artifact["id"]) in body
+    for name, payload in remote["contents"].items():
+        assert f"{hashlib.sha256(payload).hexdigest()}  {name}" in body
+    remote["tag_commit"] = "f" * 40
+    with pytest.raises(ValueError, match="remote release tag"):
+        release_handoff.record_evidence(root, "8")
+    assert comments == [comment]
+
+
+@pytest.mark.parametrize("tracking", ["none", "ambiguous", "disabled"])
+def test_default_recipe_saves_evidence_without_a_tracker(checkout, release_handoff, monkeypatch, capsys, tracking):
+    root, git, _remote = checkout
+    title = f"release: validate and publish research-repo-tools {TAG}"
+    issues = [{"title": title, "number": 7, "pull_request": {}}, {"title": f"{title}0", "number": 8}]
+    if tracking == "ambiguous":
+        issues += [{"title": title, "number": 9}, {"title": title, "number": 10}]
+
+    def list_only(tool, args, *, cwd):
+        assert tool == "gh" and args == ["api", "--paginate", "--slurp", f"repos/{release.REPOSITORY}/issues?state=open&per_page=100"]
+        if tracking == "disabled":
+            raise subprocess.CalledProcessError(1, args, stderr=b"Issues disabled")
+        return subprocess.CompletedProcess(args, 0, json.dumps([issues]).encode())
+
+    monkeypatch.setattr(release_handoff, "run_command_bytes", list_only)
+    monkeypatch.delenv("RELEASE_ISSUE", raising=False)
+    monkeypatch.delenv("RRT_RELEASE_CHECKOUT", raising=False)
+    monkeypatch.setattr(release_handoff.sys, "argv", ["release_handoff.py", "evidence"])
+    assert release_handoff.main() == 0
+    saved = root.parent / "release-handoffs" / "research-repo-tools" / TAG / "evidence-123-1.md"
+    assert git("rev-parse", "HEAD") in saved.read_text(encoding="utf-8")
+    console = capsys.readouterr()
+    assert str(saved) in console.out and "Signature: passed" in console.out
+    assert ("Optional issue handoff incomplete" in console.err) == (tracking != "none")
+    assert git("status", "--porcelain") == ""
+
+
+def test_reviewed_tag_outside_checkout_history_cannot_supply_evidence(checkout, monkeypatch, release_handoff):
+    root, git, _remote = checkout
+    git("switch", "--orphan", "unrelated")
+    (root / "pyproject.toml").write_bytes(b'[project]\nname = "research-repo-tools"\nversion = "0.2.3"\n')
+    (root / ".gitignore").write_bytes(b"/dist/\n")
+    git("add", "pyproject.toml", ".gitignore")
+    git("commit", "-m", "Unrelated release checkout")
+    monkeypatch.setattr(release_handoff, "_require_merged_release", lambda root, tag, commit: None)
+    with pytest.raises(ValueError, match="ancestor of the clean checkout"):
+        release_handoff.record_evidence(root)
+
+
+def preparation_run(**changes):
+    return {
+        "id": 42,
+        "path": ".github/workflows/prepare-release.yml",
+        "head_branch": TAG,
+        "head_sha": COMMIT,
+        "event": "push",
+        "status": "completed",
+        "conclusion": "success",
+    } | changes
+
+
+def test_draft_waits_for_the_same_preparation_run(monkeypatch, capsys, release_handoff):
+    pages = iter([[], [preparation_run(status="queued", conclusion=None)], [preparation_run()]])
+    sleeps = []
+
+    def list_runs(endpoint):
+        assert endpoint == f"actions/workflows/prepare-release.yml/runs?event=push&branch={TAG}&head_sha={COMMIT}&per_page=2"
+        runs = next(pages)
+        return {"total_count": len(runs), "workflow_runs": runs}
+
+    monkeypatch.setattr(release_handoff, "api", list_runs)
+    monkeypatch.setattr(release_handoff, "sleep", sleeps.append)
+    release_handoff._wait_for_preparation(TAG, COMMIT)
+    result = capsys.readouterr()
+    assert not result.out and "Waiting for draft preparation" in result.err and "Draft preparation passed" in result.err
+    assert "/actions/runs/42" in result.err and len(sleeps) == 2
+
+
+@pytest.mark.parametrize(
+    ("pages", "error"),
+    [
+        ([[]], "has not listed preparation"),
+        ([[preparation_run(conclusion="failure")]], "ended with failure"),
+        ([[preparation_run(), preparation_run(id=43)]], "expected one tag-push"),
+        ([[preparation_run(head_sha="f" * 40)]], "differs from the expected"),
+        ([[preparation_run(status="in_progress", conclusion=None)], [preparation_run(id=43)]], "identity is invalid or changed"),
+    ],
+)
+def test_incomplete_preparation_cannot_capture_a_target(tmp_path, monkeypatch, release_handoff, pages, error):
+    root = tmp_path / "checkout"
+    root.mkdir()
+    clock = iter([0, 121])
+    replies = iter(pages)
+
+    def list_runs(endpoint):
+        runs = next(replies)
+        return {"total_count": len(runs), "workflow_runs": runs}
+
+    monkeypatch.setattr(release_handoff, "api", list_runs)
+    monkeypatch.setattr(release_handoff.release_assets, "_remote_commit", lambda *args: COMMIT)
+    monkeypatch.setattr(release_handoff, "_require_merged_release", lambda *args: None)
+    monkeypatch.setattr(release_handoff, "monotonic", lambda: next(clock))
+    monkeypatch.setattr(release_handoff, "sleep", lambda _: None)
+    monkeypatch.setattr(release_handoff.release_assets, "preflight_release_target", lambda *a, **kw: pytest.fail("draft inspected before preparation passed"))
+    with pytest.raises(ValueError, match=error):
+        release_handoff.capture_draft(root, TAG)
+    assert not (root.parent / "release-handoffs").exists()
+
+
+def test_maintainer_draft_revalidates_without_replacing_original(tmp_path, monkeypatch, capsys, release_handoff):
+    root = tmp_path / "release café"
+    root.mkdir()
+    old_commit = "b" * 40
+    foreign_pr = release_pr(COMMIT)
+    foreign_pr["head"]["repo"] = {"full_name": "fork/research-repo-tools"}
+    prs = [release_pr(old_commit), foreign_pr, release_pr(COMMIT)]
+
+    def transport(tool, args, *, cwd):
+        assert tool == "gh" and cwd == root
+        assert args == ["api", "--paginate", "--slurp", f"repos/{release.REPOSITORY}/commits/{COMMIT}/pulls?per_page=100"]
+        return subprocess.CompletedProcess(args, 0, json.dumps([prs[:1], prs[1:]]).encode())
+
+    release_id = 91
+
+    def preflight(directory, repo, tag, commit, *, expected_title):
+        assert (directory, repo, tag, commit, expected_title) == (root, release.REPOSITORY, TAG, COMMIT, TAG)
+        return release_handoff.release_assets.ReleaseTarget(repo, tag, release_id, commit, expected_title)
+
+    monkeypatch.setattr(release_handoff, "run_command_bytes", transport)
+    monkeypatch.setattr(release_handoff.release_assets, "_remote_commit", lambda root, repo, tag: COMMIT)
+    monkeypatch.setattr(release_handoff, "api", lambda endpoint: {"total_count": 1, "workflow_runs": [preparation_run()]})
+    monkeypatch.setattr(release_handoff, "sleep", lambda _: pytest.fail("completed preparation should return immediately"))
+    monkeypatch.setattr(release_handoff.release_assets, "preflight_release_target", preflight)
+    monkeypatch.setenv("RRT_RELEASE_CHECKOUT", str(root))
+    monkeypatch.setattr(release_handoff.sys, "argv", ["release_handoff.py", "draft", TAG])
+    handoff = tmp_path / "release-handoffs" / "research-repo-tools" / TAG
+    handoff.mkdir(parents=True)
+    legacy = handoff / "target.json"
+    old_target = release_handoff.release_assets.ReleaseTarget(release.REPOSITORY, TAG, 90, old_commit, TAG)
+    old_payload = release_handoff.release_assets.serialize_release_target(old_target)
+    legacy.write_bytes(old_payload)
+    assert release_handoff._target_path(root, TAG, old_commit) == legacy
+    assert release_handoff.main() == 0
+    path = handoff / COMMIT / "target.json"
+    assert capsys.readouterr().out == f"{path.as_posix()}\n"
+    monkeypatch.setattr(release_handoff.sys, "argv", ["release_handoff.py", "target-path", TAG])
+    assert release_handoff.main() == 0
+    assert capsys.readouterr().out == f"{path.as_posix()}\n"
+    original = path.read_bytes()
+    assert json.loads(original)["release_id"] == release_id
+    assert release_handoff.capture_draft(root, TAG) == path
+    release_id += 1
+    with pytest.raises(ValueError, match="retained target differs"):
+        release_handoff.capture_draft(root, TAG)
+    prs.clear()
+    with pytest.raises(ValueError, match="expected one merged"):
+        release_handoff.capture_draft(root, TAG)
+    assert path.read_bytes() == original
+    assert legacy.read_bytes() == old_payload
 
 
 @pytest.fixture
