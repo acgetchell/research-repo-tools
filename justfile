@@ -176,6 +176,10 @@ release-publish tag *args:
     @target=$(uv run --locked python scripts/release_handoff.py target-path "$1") && \
         uv run --locked research-repo-tools release publish --target "$target" "$@" --approve
 
+# Recover an unpublished candidate one step at a time: record, notes, tag, push.
+release-recover action tag:
+    @uv run --locked python scripts/release_recovery.py "$1" "$2"
+
 # Check the configured package's exact registry version without uploading.
 release-registry tag +args:
     uv run --locked research-repo-tools release registry "$@"

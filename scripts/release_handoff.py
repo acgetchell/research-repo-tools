@@ -25,13 +25,28 @@ def _handoff_directory(root: Path, tag: str) -> Path:
     return root.parent / "release-handoffs" / "research-repo-tools" / release_assets._stable_tag(tag)
 
 
+def _target_path(root: Path, tag: str, commit: str) -> Path:
+    """Preserve the first captured draft identity for each tagged commit."""
+    directory = _handoff_directory(root, tag)
+    legacy = directory / "target.json"
+    try:
+        prior = release_assets._read_target(legacy)
+    except FileNotFoundError:
+        pass
+    else:
+        if (prior.repository, prior.tag) != (REPOSITORY, tag):
+            raise ValueError(f"retained target belongs to a different release: {legacy}")
+        if prior.commit == commit:
+            return legacy
+    return directory / release_assets._sha(commit) / "target.json"
+
+
 def _inspect_release(root: Path) -> dict[str, Any]:
     """Verify the exact pushed tag, including from a clean descendant checkout."""
     tag, head = release_validation._checkout_identity(root)
     commit = release_assets._resolve_tag_commit(tag, release_validation.api)
     if commit != head:
-        if _merged_release_commit(root, tag) != commit:
-            raise ValueError("remote release tag differs from the reviewed release commit")
+        _require_merged_release(root, tag, commit)
         git, environment = git_context(root)
         ancestry = subprocess.run(
             [git, *READ_ONLY_OPTIONS, "merge-base", "--is-ancestor", commit, head], cwd=root, env=environment, capture_output=True, timeout=30
@@ -95,34 +110,24 @@ def record_evidence(root: Path, issue: str | None = None) -> str:
     return receipt
 
 
-def _merged_release_commit(root: Path, tag: str) -> str:
-    """Resolve the reviewed commit for the release branch in this repository."""
+def _require_merged_release(root: Path, tag: str, commit: str) -> None:
+    """Identify the release or recovery PR for this exact tagged merge commit."""
     release_assets._stable_tag(tag)
-    prs = run_command_bytes(
-        "gh",
-        [
-            "pr",
-            "list",
-            "--repo",
-            REPOSITORY,
-            "--state",
-            "merged",
-            "--base",
-            "main",
-            "--head",
-            f"release/{tag}",
-            "--limit",
-            "2",
-            "--json",
-            "isCrossRepository,mergeCommit",
-        ],
-        cwd=root,
-    )
-    match json.loads(prs.stdout):
-        case [{"isCrossRepository": False, "mergeCommit": {"oid": commit}}]:
-            return release_assets._sha(commit)
-        case _:
-            raise ValueError(f"expected one merged release/{tag} PR from {REPOSITORY} into main")
+    endpoint = f"repos/{REPOSITORY}/commits/{release_assets._sha(commit)}/pulls?per_page=100"
+    pages = run_command_bytes("gh", ["api", "--paginate", "--slurp", endpoint], cwd=root)
+    matches = [
+        pr
+        for page in json.loads(pages.stdout)
+        for pr in page
+        if pr["merged_at"]
+        and pr["merge_commit_sha"] == commit
+        and pr["base"]["ref"] == "main"
+        and pr["base"]["repo"]["full_name"] == REPOSITORY
+        and pr["head"]["ref"] in {f"release/{tag}", f"fix/recover-{tag}"}
+        and (pr["head"]["repo"] or {}).get("full_name") == REPOSITORY
+    ]
+    if len(matches) != 1:
+        raise ValueError(f"expected one merged release or recovery PR into main for remote release tag {tag} at {commit}")
 
 
 def _wait_for_preparation(tag: str, commit: str) -> None:
@@ -163,10 +168,11 @@ def _wait_for_preparation(tag: str, commit: str) -> None:
 
 def capture_draft(root: Path, tag: str) -> Path:
     """Wait for the reviewed release's preparation, then capture or revalidate its draft."""
-    commit = _merged_release_commit(root, tag)
+    commit = release_assets._remote_commit(root, REPOSITORY, tag)
+    _require_merged_release(root, tag, commit)
     _wait_for_preparation(tag, commit)
     target = release_assets.preflight_release_target(root, REPOSITORY, tag, commit, expected_title=tag)
-    path = _handoff_directory(root, tag) / "target.json"
+    path = _target_path(root, tag, commit)
     try:
         _publish_new_file(path, release_assets.serialize_release_target(target))
     except FileExistsError:
@@ -188,7 +194,8 @@ def main() -> int:
         if args.command == "draft":
             output = capture_draft(root, args.tag).as_posix()
         elif args.command == "target-path":
-            output = (_handoff_directory(root, args.tag) / "target.json").as_posix()
+            commit = release_assets._remote_commit(root, REPOSITORY, args.tag)
+            output = _target_path(root, args.tag, commit).as_posix()
         else:
             output = record_evidence(root, args.issue)
         write_stdout(f"{output}\n".encode("utf-8"))
