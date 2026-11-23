@@ -77,8 +77,7 @@ git push -u origin "release/$TAG"
 gh pr create --base main --head "release/$TAG" --title "chore(release): release $TAG"
 ```
 
-Include validation results in the PR and link any separately retained evidence
-in the release tracker.
+Include validation results and links to any separately retained evidence in the PR.
 
 ## Step 2: Publish after the PR is merged
 

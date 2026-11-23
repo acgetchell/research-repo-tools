@@ -156,16 +156,12 @@ release-dependency-builds:
 release-draft tag:
     uv run --locked python scripts/release_handoff.py draft "$1"
 
-# Inspect signed CI evidence, retain it on a numbered issue, or run shared evidence commands.
+# Save signed evidence locally and on an existing tracker, or run shared evidence commands.
 release-evidence *args:
-    if [ "$#" -eq 0 ]; then \
-        uv run --locked python scripts/release_assets.py evidence --format summary; \
-    else \
-        case "$1" in \
-            [0-9]*) uv run --locked python scripts/release_handoff.py evidence "$@" ;; \
-            *) uv run --locked research-repo-tools release evidence "$@" ;; \
-        esac; \
-    fi
+    case "${1-}" in \
+        ''|[0-9]*) uv run --locked python scripts/release_handoff.py evidence "$@" ;; \
+        *) uv run --locked research-repo-tools release evidence "$@" ;; \
+    esac
 
 # Prepare a first release after verifying empty stable published history.
 release-first tag date:
