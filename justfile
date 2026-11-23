@@ -154,7 +154,7 @@ release-dependency-builds:
 
 # Wait for draft preparation, capture or revalidate the target, and print its path.
 release-draft tag:
-    uv run --locked python scripts/release_handoff.py draft "$1"
+    @uv run --locked python scripts/release_handoff.py draft "$1"
 
 # Save signed evidence locally and on an existing tracker, or run shared evidence commands.
 release-evidence *args:
@@ -173,7 +173,8 @@ release-notes tag:
 
 # Approve the reviewed draft GitHub Release and trigger registry publication.
 release-publish tag *args:
-    uv run --locked research-repo-tools release publish "$@" --approve
+    @target=$(uv run --locked python scripts/release_handoff.py target-path "$1") && \
+        uv run --locked research-repo-tools release publish --target "$target" "$@" --approve
 
 # Check the configured package's exact registry version without uploading.
 release-registry tag +args:
@@ -189,7 +190,8 @@ release-runtime +args:
 
 # Require the stable GitHub Release/assets and exact published registry version.
 release-verify tag *args:
-    uv run --locked research-repo-tools release verify --attempts 7 --interval 10 "$@"
+    @target=$(uv run --locked python scripts/release_handoff.py target-path "$1") && \
+        uv run --locked research-repo-tools release verify --target "$target" --attempts 7 --interval 10 "$@"
 
 # Require synchronized package metadata and complete dated release notes.
 release-version-check:

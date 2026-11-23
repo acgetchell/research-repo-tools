@@ -171,15 +171,20 @@ a differently named tracker. Use the tagged checkout for publication.
 ### 5. Capture the prepared draft
 
 ```bash
-RELEASE_TARGET=$(just release-draft "${TAG:?}")
+just release-draft "$TAG"
 ```
 
 Pushing the tag starts draft preparation. The recipe finds that run for the
-merged release commit and waits if it is still running. After it succeeds, the
-recipe checks the draft ID, repository, tag, title and commit, and saves the
-target path in `RELEASE_TARGET`. Keep that file for publication. On retry the
-recipe revalidates the original target. If preparation fails, the recipe shows
-the run link for [recovery](#recovering-a-failed-run).
+merged release commit and waits if it is still running. Once preparation passes,
+the recipe verifies the draft ID, repository, tag, title and commit. It saves
+`target.json` alongside the Step 2.4 evidence and prints its path. Publication
+and verification read this file by tag. Repeating the recipe revalidates the
+original draft. If preparation fails, follow the printed run link for
+[recovery](#recovering-a-failed-run).
+
+If the tagged checkout predates automatic target lookup, pass the saved file
+to its publish and verify recipes with
+`--target "../release-handoffs/research-repo-tools/$TAG/target.json"`.
 
 ### 6. Review the draft
 
@@ -197,17 +202,18 @@ Before publishing the draft, compare each attached wheel and sdist filename
 and SHA-256 digest with the signed distribution records from
 `just release-evidence`. Confirm that the attached `release-attestation.json`
 identifies the same validation run and attempt. Download it for inspection with
-`gh release download "$TAG" --pattern release-attestation.json --dir "${RELEASE_TARGET%/*}"`.
+`gh release download "$TAG" --pattern release-attestation.json --dir "../release-handoffs/research-repo-tools/$TAG"`.
 The JSON in `evidence.manifest` contains the validation run and file hashes.
 Reconcile any missing or differing digest while the release is still editable.
 
 ### 7. Publish the reviewed GitHub Release
 
 ```bash
-just release-publish "$TAG" --target "$RELEASE_TARGET"
+just release-publish "$TAG"
 ```
 
-Use a human GitHub CLI session. The published event starts `Publish to PyPI`.
+Run this from the clean tagged checkout using a human GitHub CLI session.
+The published event starts `Publish to PyPI`.
 Open the URL for the matching run to review the protected deployment:
 
 ```bash
@@ -226,7 +232,7 @@ Wait for the upload job to finish.
 ### 9. Verify registry availability and downstream resolution
 
 ```bash
-just release-verify "$TAG" --target "$RELEASE_TARGET"
+just release-verify "$TAG"
 ```
 
 Success confirms the stable GitHub Release, its required assets, and the exact
@@ -252,9 +258,8 @@ release branch locally and on the remote.
 ## Choose where to resume
 
 In a new shell, set `TAG` again. [Step 2.1](#1-synchronize-main-and-wait-for-ci) looks up the merged PR's commit and
-main run, and [Step 2.5](#5-capture-the-prepared-draft) verifies preparation and captures the draft. After draft capture,
-restore `RELEASE_TARGET` to the original target file in the release handoff directory.
-Keep the retained evidence associated with that candidate.
+main run, and [Step 2.5](#5-capture-the-prepared-draft) verifies preparation and captures the draft.
+Keep the original `target.json` and evidence together in the release handoff directory.
 
 | Last completed operation | Resume with |
 | --- | --- |

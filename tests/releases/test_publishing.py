@@ -330,19 +330,25 @@ def test_common_release_recipes_and_guides_share_argument_contracts(tmp_path):
         ("release-first", ["v1.2.3", "2026-09-01"], "--first-release"),
         ("release-notes", ["v1.2.3"], "changelog notes"),
         ("release-publish", ["v1.2.3"], "--approve"),
-        ("release-publish", ["v1.2.3", "--reuse-evidence", "saved approval.json"], 'release publish "$@" --approve'),
+        ("release-publish", ["v1.2.3", "--reuse-evidence", "saved approval.json"], '"$@" --approve'),
         ("release-reuse", [SHA, "--pull-request", "9", "--run-id", "123", "--attempt", "2", "--output", "saved approval.json"], "release reuse"),
         ("tag", ["v1.2.3"], "changelog tag"),
         ("tag-preview", ["v1.2.3"], "--dry-run"),
         ("update-version", ["v1.2.3"], 'release update "$@"'),
         ("update-version", ["v1.2.3", "--previous-release", "v1.2.2", "--date", "2026-09-01"], 'release update "$@"'),
         ("release-version-check", [], "release check --final-release"),
-        ("release-verify", ["v1.2.3"], 'release verify --attempts 7 --interval 10 "$@"'),
-        ("release-verify", ["v1.2.3", "--attempts", "2", "--interval", "0"], 'release verify --attempts 7 --interval 10 "$@"'),
+        ("release-verify", ["v1.2.3"], '--attempts 7 --interval 10 "$@"'),
+        ("release-verify", ["v1.2.3", "--attempts", "2", "--interval", "0"], '--attempts 7 --interval 10 "$@"'),
     ]:
         for path in [root / "justfile", justfile]:
             result = publishing.run_safe_command("just", ["--justfile", str(path), "--dry-run", recipe, *arguments], cwd=tmp_path)
             assert expected in result.stderr
+            if recipe in {"release-publish", "release-verify"}:
+                action = recipe.removeprefix("release-")
+                assert f"research-repo-tools release {action} " in result.stderr
+                if path == root / "justfile":
+                    assert 'scripts/release_handoff.py target-path "$1"' in result.stderr
+                    assert f'release {action} --target "$target" ' in result.stderr
         assert maintained.recipes[recipe]["parameters"] == packaged.recipes[recipe]["parameters"]
 
     for inspected in [maintained, packaged]:
@@ -365,7 +371,12 @@ def test_common_release_recipes_and_guides_share_argument_contracts(tmp_path):
     def commands(text):
         return [line for line in text.splitlines() if line.startswith("just ")]
 
-    common = commands(changelog.template("RELEASING.md"))
+    # Consumers supply their own target. The maintainer recipes resolve the same
+    # argument from Step 2.5's saved file.
+    common = [
+        command.removesuffix(' --target "$RELEASE_TARGET"') if command.startswith(("just release-publish ", "just release-verify ")) else command
+        for command in commands(changelog.template("RELEASING.md"))
+    ]
     shared_recipes = {command.split()[1] for command in common}
     documented = commands((root / "docs/RELEASING.md").read_text(encoding="utf-8"))
     shared = [command for command in documented if command.split()[1] in shared_recipes]

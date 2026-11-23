@@ -7,15 +7,42 @@ import re
 import subprocess
 import sys
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from time import monotonic, sleep
+from typing import Any
 
-from research_repo_tools import release_assets
+from research_repo_tools import release_assets, release_validation
 from research_repo_tools._console import console_text, write_stdout
 from research_repo_tools._diagnostics import format_exception_diagnostics
+from research_repo_tools._git_checkout import READ_ONLY_OPTIONS, git_context
 from research_repo_tools.files import _publish_new_file
 from research_repo_tools.process import run_command_bytes
 from research_repo_tools.release_summary import render_distribution_summary
-from research_repo_tools.release_validation import REPOSITORY, api, inspect_evidence, redact_release_diagnostic
+from research_repo_tools.release_validation import REPOSITORY, api, redact_release_diagnostic
+
+
+def _handoff_directory(root: Path, tag: str) -> Path:
+    return root.parent / "release-handoffs" / "research-repo-tools" / release_assets._stable_tag(tag)
+
+
+def _inspect_release(root: Path) -> dict[str, Any]:
+    """Verify the exact pushed tag, including from a clean descendant checkout."""
+    tag, head = release_validation._checkout_identity(root)
+    commit = release_assets._resolve_tag_commit(tag, release_validation.api)
+    if commit != head:
+        if _merged_release_commit(root, tag) != commit:
+            raise ValueError("remote release tag differs from the reviewed release commit")
+        git, environment = git_context(root)
+        ancestry = subprocess.run(
+            [git, *READ_ONLY_OPTIONS, "merge-base", "--is-ancestor", commit, head], cwd=root, env=environment, capture_output=True, timeout=30
+        )
+        if ancestry.returncode != 0:
+            raise ValueError("cannot establish that the remote release tag is an ancestor of the clean checkout")
+    with TemporaryDirectory() as temporary:
+        proof = release_validation._retrieve_evidence(tag, commit, Path(temporary) / "dist", attempts=1, interval=0)
+    if release_validation._checkout_identity(root) != (tag, head):
+        raise ValueError("checkout changed during evidence inspection; retry from the reviewed release commit")
+    return {**release_validation._json(proof["manifest"]), "tag": tag, "evidence_artifact": proof["evidence_artifact"]}
 
 
 def _tracker(root: Path, tag: str) -> str | None:
@@ -44,11 +71,11 @@ def record_evidence(root: Path, issue: str | None = None) -> str:
     """Retain verified evidence locally and optionally mirror it to a release issue."""
     if issue is not None and re.fullmatch(r"[1-9][0-9]*", issue) is None:
         raise ValueError("expected a positive release tracker issue number")
-    result = inspect_evidence(root, reviewed_ancestor=lambda tag: _merged_release_commit(root, tag))
+    result = _inspect_release(root)
     tag, run, proof = result["tag"], result["run"], result["evidence_artifact"]
     summary = render_distribution_summary(result) + f"Signed evidence artifact: {proof['id']}, {proof['digest']}\n"
     body = f"### {tag} release evidence\n\n```text\n{summary}```"
-    path = root.parent / "release-handoffs" / "research-repo-tools" / tag / f"evidence-{run['id']}-{run['run_attempt']}.md"
+    path = _handoff_directory(root, tag) / f"evidence-{run['id']}-{run['run_attempt']}.md"
     payload = (body + "\n").encode("utf-8")
     try:
         _publish_new_file(path, payload)
@@ -139,7 +166,7 @@ def capture_draft(root: Path, tag: str) -> Path:
     commit = _merged_release_commit(root, tag)
     _wait_for_preparation(tag, commit)
     target = release_assets.preflight_release_target(root, REPOSITORY, tag, commit, expected_title=tag)
-    path = root.parent / "release-handoffs" / "research-repo-tools" / tag / "target.json"
+    path = _handoff_directory(root, tag) / "target.json"
     try:
         _publish_new_file(path, release_assets.serialize_release_target(target))
     except FileExistsError:
@@ -154,10 +181,16 @@ def main() -> int:
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("draft").add_argument("tag")
     commands.add_parser("evidence").add_argument("issue", nargs="?")
+    commands.add_parser("target-path").add_argument("tag")
     args = parser.parse_args()
     root = Path(os.environ.get("RRT_RELEASE_CHECKOUT", ".")).resolve()
     try:
-        output = capture_draft(root, args.tag).as_posix() if args.command == "draft" else record_evidence(root, args.issue)
+        if args.command == "draft":
+            output = capture_draft(root, args.tag).as_posix()
+        elif args.command == "target-path":
+            output = (_handoff_directory(root, args.tag) / "target.json").as_posix()
+        else:
+            output = record_evidence(root, args.issue)
         write_stdout(f"{output}\n".encode("utf-8"))
     except (OSError, ValueError, subprocess.SubprocessError) as error:
         print(console_text(redact_release_diagnostic(format_exception_diagnostics(error)), sys.stderr), file=sys.stderr)

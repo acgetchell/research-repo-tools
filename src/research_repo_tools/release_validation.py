@@ -765,7 +765,7 @@ def _current(run: dict[str, Any], *, completed: bool = True) -> dict[str, Any]:
     return current
 
 
-def _remote_tag_commit(tag: str) -> str:
+def _remote_tag(tag: str, commit: str) -> None:
     data = _object(api(f"git/ref/tags/{tag}"), "remote tag")
     if data.get("ref") != f"refs/tags/{tag}":
         raise ValueError("remote tag reference differs")
@@ -773,7 +773,9 @@ def _remote_tag_commit(tag: str) -> str:
     for _ in range(5):
         sha = _commit(obj.get("sha", ""))
         if obj.get("type") == "commit":
-            return sha
+            if sha != commit:
+                raise ValueError("remote release tag moved or resolves to another commit")
+            return
         if obj.get("type") != "tag":
             break
         data = _object(api(f"git/tags/{sha}"), "annotated tag")
@@ -781,11 +783,6 @@ def _remote_tag_commit(tag: str) -> str:
             break
         obj = _object(data.get("object"), "annotated tag object")
     raise ValueError("remote tag does not resolve to a bounded commit identity")
-
-
-def _remote_tag(tag: str, commit: str) -> None:
-    if _remote_tag_commit(tag) != commit:
-        raise ValueError("remote release tag moved or resolves to another commit")
 
 
 def verify_attestation(
@@ -1019,22 +1016,12 @@ def _checkout_identity(root: Path) -> tuple[str, str]:
     return tag, commit
 
 
-def inspect_evidence(root: Path, *, reviewed_ancestor: Callable[[str], str] | None = None) -> dict[str, Any]:
-    """Inspect signed distributions for the clean checkout or its pushed release ancestor."""
-    tag, head = _checkout_identity(root)
-    commit = _remote_tag_commit(tag) if reviewed_ancestor is not None else head
-    if commit != head:
-        if reviewed_ancestor is None or reviewed_ancestor(tag) != commit:
-            raise ValueError("remote release tag differs from the reviewed release commit")
-        git, environment = git_context(root)
-        ancestry = subprocess.run(
-            [git, *READ_ONLY_OPTIONS, "merge-base", "--is-ancestor", commit, head], cwd=root, env=environment, capture_output=True, timeout=30
-        )
-        if ancestry.returncode != 0:
-            raise ValueError("cannot establish that the remote release tag is an ancestor of the clean checkout")
+def inspect_evidence(root: Path) -> dict[str, Any]:
+    """Inspect this clean checkout's signed distributions without persistent writes."""
+    tag, commit = _checkout_identity(root)
     with tempfile.TemporaryDirectory(prefix="research-repo-tools-evidence-") as temporary:
         document = _retrieve_evidence(tag, commit, Path(temporary) / "dist", attempts=1, interval=0)
-        if _checkout_identity(root) != (tag, head):
+        if _checkout_identity(root) != (tag, commit):
             raise ValueError("checkout changed during evidence inspection; retry from the reviewed release commit")
     manifest = _json(document["manifest"])
     return {

@@ -457,8 +457,10 @@ def test_tracker_handoff_posts_only_verified_evidence_and_reuses_comment(checkou
 
     monkeypatch.setattr(release_handoff, "run_command_bytes", transport)
     git("commit", "--allow-empty", "-m", "Later main commit")
+    head = git("rev-parse", "HEAD")
     assert release_handoff.record_evidence(root).endswith(url)
     assert release_handoff.record_evidence(root, "8") == url
+    assert git("rev-parse", "HEAD") == head and git("status", "--porcelain") == ""
     (comment,) = comments
     body = comment["body"]
     saved = root.parent / "release-handoffs" / "research-repo-tools" / TAG / "evidence-123-1.md"
@@ -501,7 +503,7 @@ def test_default_recipe_saves_evidence_without_a_tracker(checkout, release_hando
     assert git("status", "--porcelain") == ""
 
 
-def test_reviewed_tag_outside_checkout_history_cannot_supply_evidence(checkout):
+def test_reviewed_tag_outside_checkout_history_cannot_supply_evidence(checkout, monkeypatch, release_handoff):
     root, git, _remote = checkout
     tagged = git("rev-parse", "HEAD")
     git("switch", "--orphan", "unrelated")
@@ -509,8 +511,9 @@ def test_reviewed_tag_outside_checkout_history_cannot_supply_evidence(checkout):
     (root / ".gitignore").write_bytes(b"/dist/\n")
     git("add", "pyproject.toml", ".gitignore")
     git("commit", "-m", "Unrelated release checkout")
+    monkeypatch.setattr(release_handoff, "_merged_release_commit", lambda root, tag: tagged)
     with pytest.raises(ValueError, match="ancestor of the clean checkout"):
-        release.inspect_evidence(root, reviewed_ancestor=lambda tag: tagged)
+        release_handoff.record_evidence(root)
 
 
 def preparation_run(**changes):
@@ -598,6 +601,9 @@ def test_maintainer_draft_revalidates_without_replacing_original(tmp_path, monke
     monkeypatch.setattr(release_handoff.sys, "argv", ["release_handoff.py", "draft", TAG])
     assert release_handoff.main() == 0
     path = tmp_path / "release-handoffs" / "research-repo-tools" / TAG / "target.json"
+    assert capsys.readouterr().out == f"{path.as_posix()}\n"
+    monkeypatch.setattr(release_handoff.sys, "argv", ["release_handoff.py", "target-path", TAG])
+    assert release_handoff.main() == 0
     assert capsys.readouterr().out == f"{path.as_posix()}\n"
     original = path.read_bytes()
     assert json.loads(original)["release_id"] == release_id
