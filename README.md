@@ -40,18 +40,19 @@ typically `C:\Program Files\Git\bin`. Setup installs Just.
 
 **1. Declare the package and interpreter.** If the repo has no `pyproject.toml`,
 create one with `uv init --bare --python 3.15`. In an existing manifest, keep
-the project's name and dependencies. Check that `project.requires-python`
-and `.python-version` both support Python 3.15 or later.
+the project's name and dependencies. Set `project.requires-python` to
+require Python 3.15 or later, preserving any stricter bounds and exclusions.
+Set `.python-version` to an interpreter version that satisfies that range.
 
-Add the published package to the tooling group:
+Set `tool.uv.required-version` to `==` followed by the version number reported
+by `uv --version`. Then add the published package to the tooling group.
 
 ```sh
 uv add --group tooling --bounds exact research-repo-tools
 ```
 
 Include `{include-group = "tooling"}` in the existing `dev` group or create that
-group. Set `tool.uv.required-version` to `==` followed by your installed uv
-version. See [toolchain declarations][toolchain].
+group. See [toolchain declarations][toolchain].
 
 **2. Lock the dependencies and export both templates.** For a repo with an existing
 Justfile or helper, omit the corresponding `--output` argument and merge the
