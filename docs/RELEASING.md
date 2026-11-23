@@ -265,7 +265,7 @@ Keep the retained evidence associated with that candidate.
 | Release PR merged, exact CI still pending | Resume [Step 2.1](#1-synchronize-main-and-wait-for-ci) with the original `MAIN_RUN_ID`. |
 | Tag preflight requires a tracked metadata correction | Commit and review the correction. Wait for main CI on the new commit and retry `just tag "$TAG" --commit "$RELEASE_COMMIT"` with its SHA. |
 | Tag preflight stopped on an external dependency or tool | Resolve the reported prerequisite and retry `just tag "$TAG" --commit "$RELEASE_COMMIT"` with the same reviewed SHA. |
-| Tag pushed, draft pending | Restore `RELEASE_COMMIT` from the merged PR using [Step 2.1](#1-synchronize-main-and-wait-for-ci), then resume [Step 2.5](#5-wait-for-the-draft-github-release) with the recorded `PREPARATION_RUN_ID`. |
+| Tag pushed, draft pending | Restore `RELEASE_COMMIT` from the merged PR using [Step 2.1](#1-synchronize-main-and-wait-for-ci). If the release tracker lacks the `just release-evidence` summary for this tag and commit, run [Step 2.4](#4-verify-the-final-release-commit) from that clean commit and retain the summary. Then resume [Step 2.5](#5-wait-for-the-draft-github-release) with the recorded `PREPARATION_RUN_ID`. |
 | GitHub Release published, PyPI approval pending | Review the verification result and approve the `pypi` deployment in the original publishing run. |
 | PyPI upload interrupted | Inspect the original GitHub Release and publishing run. Check the exact registry version with `just release-registry "$TAG" --expect present` and compare any published file hashes before deciding whether to retry. |
 | Unpublished candidate needs a different commit | Follow the [replacement procedure](RECOVERING_RELEASES.md#replace-an-unpublished-candidate). |
@@ -297,15 +297,33 @@ operation fails. On a hosted runner, download `draft-recovery-<attempt>` from
 the failed preparation run when available. The artifact contains the attachment
 for inspection.
 
-Use the [recovery decision table](RECOVERING_RELEASES.md#choose-the-recovery-path)
-to reconcile the release ID, draft state, and remote asset inventory. When all
-three uploaded assets match the signed evidence, resume [draft review](#6-review-the-draft).
-RRT staging stops on any nonempty draft. For a partial upload, including an asset
-in the `starter` state, preserve the attachment and reconcile the captured draft
-and its asset IDs against the signed inventory before retrying.
-If the draft is absent or empty and the verified inputs still match, keep a
-copy of the attachment before retrying. In a reused working directory, move
-the inspected attachment aside first. Staging refuses to overwrite it.
+1. Preserve the original attachment outside the staging directory with the failed
+   preparation run ID and attempt. Wait for its uploader to stop. Confirm the
+   remote tag still resolves to `RELEASE_COMMIT`. Use an authenticated release
+   listing to locate the unique mutable draft for that tag. Record its numeric
+   release ID and check it against any previously captured target.
+2. List every page of `GET /repos/{owner}/{repo}/releases/{release_id}/assets`.
+   Record each asset's ID, name, state, size and digest. Download each `uploaded`
+   asset by its recorded ID. Compare the wheel and sdist names and SHA-256 hashes
+   with [Step 2.4's signed inventory](#4-verify-the-final-release-commit).
+   Compare the uploaded `release-attestation.json` byte for byte with the
+   retained attachment from that preparation attempt. If exactly these three
+   assets match, resume [draft review](#6-review-the-draft).
+3. A `starter` asset is an incomplete upload. Record its ID and exclude it
+   from the verified files. RRT staging refuses a nonempty draft, even when
+   every uploaded file matches. Keep the inventory and downloaded bytes.
+   If an asset is unexpected, has different bytes, or its
+   ownership is unclear, stop for maintainer reconciliation. Once a maintainer
+   confirms which assets belong to the failed attempt and authorizes cleanup,
+   recheck the mutable draft and asset IDs and remove only those assets, including
+   incomplete uploads. [GitHub release asset operations](https://docs.github.com/en/rest/releases/assets)
+4. Retry staging only when a fresh authenticated listing shows **no release
+   for the tag** after failed creation (with no previously captured ID), or the
+   **same mutable draft with zero assets**. Reconfirm the tag, commit and signed
+   distribution inputs. In a reused working directory, move the original
+   attachment into the recovery handoff first. Rerun the failed jobs of the
+   original `PREPARATION_RUN_ID` and inspect the new attempt's complete draft
+   in [Step 2.6](#6-review-the-draft).
 
 #### Artifact retention and recovery window
 

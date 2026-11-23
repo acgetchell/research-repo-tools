@@ -10,7 +10,7 @@ benchmark commands, and publication approvals.
 | Current state | Start here | What stays valid? |
 | --- | --- | --- |
 | The intended commit is unchanged; preparation timed out waiting for healthy main CI | Wait for the complete original main run, then resume under the owning workflow's recovery contract. Use the [RRT preparation retry](RELEASING.md#preparation-timed-out-waiting-for-main-ci). | Keep the tag. Reuse successful, unexpired evidence from that complete attempt. |
-| The intended commit is unchanged; draft creation or upload failed | Inspect the captured release ID, journal/receipt, and remote assets before retrying. An uncertain creation needs explicit reconciliation. | Preserve original receipts and accepted bytes. For RRT, inspect the [retained attestation and draft](RELEASING.md#draft-creation-or-upload-failed). |
+| The intended commit is unchanged; draft creation or upload failed | For RRT, [reconcile the draft and its assets before retrying staging](RELEASING.md#draft-creation-or-upload-failed). For the shared consumer writer, use its [retained-state recovery](PREPARING_DRAFTS.md#retry-and-recovery). | Preserve the original attachment, receipts and accepted bytes. |
 | Corrections must land after the tag or draft was created | Follow **[Replace an unpublished candidate](#replace-an-unpublished-candidate)** below. | Keep the version and declared date unless deliberately changing them. Reassess benchmark reuse separately. |
 | GitHub or the registry already contains a published release | Preserve that publication. Resume verification or the missing publication stage for the same bytes; use a new version for corrected contents. | Never move its tag or replace its published assets. |
 
