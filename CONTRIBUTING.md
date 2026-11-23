@@ -87,7 +87,8 @@ including changelog and release recipes.
 | `just release-check TAG` | Check final release metadata and generated notes |
 | `just release-dependencies` | Verify configured upstream tooling provenance before release work |
 | `just release-dependency-builds` | Build selected source dependencies and retain authenticated wheel receipts |
-| `just release-evidence [COMMAND...]` | Inspect this checkout's signed CI evidence; explicit commands create/verify shared handoffs |
+| `just release-draft TAG` | Capture or revalidate the draft target and print its path |
+| `just release-evidence [ISSUE or COMMAND...]` | Save signed CI evidence locally and to a matching tracker if present, or run a shared evidence command |
 | `just release-first TAG DATE` | Prepare a first release after checking stable published history |
 | `just release-notes TAG` | Print reviewed generated release notes |
 | `just release-publish TAG` | Approve a validated draft GitHub Release and trigger its registry workflow |

@@ -56,7 +56,7 @@ resulting state before continuing.
 
 Use the same shell throughout. The assignments below retain the candidate's
 identity; they do not create tags or drafts. Copy the printed assignments into
-the release tracker as you complete each step. After a shell restart, restore
+the recovery handoff as you complete each step. After a shell restart, restore
 those recorded values before resuming. Do not recompute `OLD_*` from a candidate
 that you have already replaced.
 
@@ -73,7 +73,7 @@ REPO=$(gh repo view "$(git --no-pager remote get-url origin)" --json nameWithOwn
 ```
 
 Confirm `origin` is the named repository and the account can see its drafts.
-Record a publication freeze in the release tracker and coordinate it with every
+Record a publication freeze in the recovery handoff and coordinate it with every
 maintainer: do not publish this tag or the recorded draft (`OLD_RELEASE_ID` below)
 until replacement completes and the new candidate passes step 5. Do not publish
 any other release while its publication workflow is disabled: those release
@@ -164,7 +164,7 @@ succeeds only on a proven exact-version 404. An existing version or an unavailab
 registry stops recovery; lookup errors never prove absence.
 
 Preserve the old/full commit IDs, tag object, draft ID and asset digests,
-preparation/main run IDs and attempts in the release tracker. Retain original
+preparation/main run IDs and attempts in the recovery handoff. Retain original
 benchmark payloads, envelopes, and owner receipts in durable storage outside
 the checkout and the draft being replaced. Coordinate one operator
 for replacement. Inspect active preparation and publication runs for this
@@ -400,7 +400,7 @@ gh pr edit "$RECOVERY_BRANCH" --repo "$REPO"
 ```
 
 Describe the corrections and generated notes, record actual validation results
-and pending native checks, and reference the release tracker without closing it.
+and pending native checks. If the release has a tracker, reference it without closing it.
 **After either PR block**, enable squash automerge and watch the checks for RRT:
 
 ```bash
@@ -643,8 +643,8 @@ gh workflow enable publish.yml --repo "$REPO"
 gh api "repos/$REPO/actions/workflows/publish.yml" --jq .state
 ```
 
-Require `active` before publication. Keep the release tracker open until registry
-publication and required post-publication verification succeed. Continue with
+Require `active` before publication. If the release has a tracker, keep it open until
+registry publication and required post-publication verification succeed. Continue with
 [publishing the reviewed GitHub Release](RELEASING.md#7-publish-the-reviewed-github-release),
 then [approving the PyPI deployment](RELEASING.md#8-approve-the-pypi-deployment)
 and completing registry, consumer, and applicable Zenodo verification.

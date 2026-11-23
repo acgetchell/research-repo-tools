@@ -9,7 +9,7 @@
 4. Approve the protected PyPI deployment after its verification job passes.
 5. Verify the exact published version on PyPI and in a fresh consumer. Record
    the commit, run and attempt IDs, artifact IDs and digests, and consumer
-   results in the release tracker.
+   results in the release handoff directory.
 
 ## Prepare the environment
 
@@ -156,11 +156,17 @@ The push starts `Prepare GitHub release` for this tag and commit.
 just release-evidence
 ```
 
-The summary includes the verified main run and attempt, distribution hashes,
-and original artifact IDs and digests. Retain the summary with the release
-tracker. The recipe derives the tag and commit from the clean
-checkout, verifies the already-pushed tag, and inspects retained signed CI
-evidence. See [reusable CI evidence](#reusable-ci-evidence).
+Run this from a clean checkout. The recipe uses the package version to find the
+pushed tag, even when the checkout has advanced beyond it. It verifies the
+signed CI artifacts for the tagged commit and prints the summary and its saved
+path under `../release-handoffs/research-repo-tools/<tag>/`. Keep this file for
+draft review. Repeating the command reuses the evidence for the same CI attempt.
+
+Release issues are optional. If exactly one open issue is titled
+`release: validate and publish research-repo-tools <tag>`, the recipe also
+saves the summary there and prints the comment URL. A numeric argument selects
+a differently named tracker. Use the tagged checkout for publication.
+[Reusable CI evidence](#reusable-ci-evidence)
 
 ### 5. Wait for the draft GitHub release
 
@@ -178,17 +184,18 @@ The workflow creates the draft and attaches the validated wheel, sdist, and
 
 ### 6. Review the draft
 
-Capture the draft once. The CLI saves the release ID, repository, tag,
-title assertion and reviewed commit in a target file outside the checkout.
-Keep that file for publication, verification and retries.
+Capture the draft target for the merged release PR. The recipe verifies the
+draft ID, repository, tag, title and commit. It saves the target outside the
+checkout and prints its path. On retry it checks the original target against
+the live draft. Keep that file for publication and verification.
 
 ```bash
-RELEASE_DIR="../release-handoffs/research-repo-tools/${TAG:?}"
-RELEASE_TARGET="$RELEASE_DIR/target.json"
-if [ ! -e "$RELEASE_TARGET" ]; then
-  uv run --locked research-repo-tools performance release-draft acgetchell/research-repo-tools "$TAG" \
-    --commit "${RELEASE_COMMIT:?}" --expected-title "$TAG" --output "$RELEASE_TARGET"
-fi
+RELEASE_TARGET=$(just release-draft "${TAG:?}")
+```
+
+After capture succeeds, inspect the draft and its uploaded assets.
+
+```bash
 gh release view "$TAG"
 gh release view "$TAG" --json assets --jq '.assets[] | [.name, .state, .size, .digest] | @tsv'
 ```
@@ -200,7 +207,7 @@ Before publishing the draft, compare each attached wheel and sdist filename
 and SHA-256 digest with the signed distribution records from
 `just release-evidence`. Confirm that the attached `release-attestation.json`
 identifies the same validation run and attempt. Download it for inspection with
-`gh release download "$TAG" --pattern release-attestation.json --dir "$RELEASE_DIR"`.
+`gh release download "$TAG" --pattern release-attestation.json --dir "${RELEASE_TARGET%/*}"`.
 The JSON in `evidence.manifest` contains the validation run and file hashes.
 Reconcile any missing or differing digest while the release is still editable.
 
@@ -239,13 +246,13 @@ matching filename and hash recorded during `just release-evidence` before markin
 the release verified. Automation can perform this comparison with the
 [published distribution verifier](publishing-api.md#reviewed-registry-publication-api).
 Install the version in a fresh project, run its focused consumer checks, and
-record the results in the release tracker.
+record the results alongside the saved evidence.
 [Consumer installation](../README.md#install-with-uv)
 
 ### 10. Verify the Zenodo release metadata
 
 If enabled, verify the version-specific record against `CITATION.cff`, including
-date, authors, ORCID, and license. Record its version DOI in the release tracker.
+date, authors, ORCID, and license. Record its version DOI alongside the saved evidence.
 
 ### 11. Remove the merged release branch
 
@@ -265,7 +272,7 @@ Keep the retained evidence associated with that candidate.
 | Release PR merged, exact CI still pending | Resume [Step 2.1](#1-synchronize-main-and-wait-for-ci) with the original `MAIN_RUN_ID`. |
 | Tag preflight requires a tracked metadata correction | Commit and review the correction. Wait for main CI on the new commit and retry `just tag "$TAG" --commit "$RELEASE_COMMIT"` with its SHA. |
 | Tag preflight stopped on an external dependency or tool | Resolve the reported prerequisite and retry `just tag "$TAG" --commit "$RELEASE_COMMIT"` with the same reviewed SHA. |
-| Tag pushed, draft pending | Restore `RELEASE_COMMIT` from the merged PR using [Step 2.1](#1-synchronize-main-and-wait-for-ci). If the release tracker lacks the `just release-evidence` summary for this tag and commit, run [Step 2.4](#4-verify-the-final-release-commit) from that clean commit and retain the summary. Then resume [Step 2.5](#5-wait-for-the-draft-github-release) with the recorded `PREPARATION_RUN_ID`. |
+| Tag pushed, draft pending | Restore `RELEASE_COMMIT` from the merged PR using [Step 2.1](#1-synchronize-main-and-wait-for-ci). If the handoff lacks the verified summary for this tag and commit, run [Step 2.4](#4-verify-the-final-release-commit). Once the summary is saved, resume [Step 2.5](#5-wait-for-the-draft-github-release) with the recorded `PREPARATION_RUN_ID`. |
 | GitHub Release published, PyPI approval pending | Review the verification result and approve the `pypi` deployment in the original publishing run. |
 | PyPI upload interrupted | Inspect the original GitHub Release and publishing run. Check the exact registry version with `just release-registry "$TAG" --expect present` and compare any published file hashes before deciding whether to retry. |
 | Unpublished candidate needs a different commit | Follow the [replacement procedure](RECOVERING_RELEASES.md#replace-an-unpublished-candidate). |
