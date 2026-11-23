@@ -5,6 +5,43 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.2] - 2026-11-23
+
+### Merged Pull Requests
+
+- Support benchmark series, candidate preflight, and changelog rebuilds [#271](https://github.com/acgetchell/research-repo-tools/pull/271)
+
+### Added
+
+- Support benchmark series, candidate preflight, and changelog rebuilds [#271](https://github.com/acgetchell/research-repo-tools/pull/271)
+  [`50411be`](https://github.com/acgetchell/research-repo-tools/commit/50411bece810360c831413ccb35751b6f8dcd61d)
+
+#### feat(release): support benchmark series and offline candidate checks
+
+  Capture a new workload baseline before tagging, bind later paired acquisitions to published series history, and verify candidate source and report evidence
+  before merge.
+
+  Add a preview-first changelog rebuild, retain skipped-file details for incomplete CodeRabbit reviews, and consolidate consumer and release documentation.
+
+#### fix(release): reject shallow rebuilds and recheck candidate source after history lookup
+
+  Cover shallow preview and apply, and reject a tracked edit made during final candidate verification. Clarify how to restore the release commit and reconcile
+  an incomplete draft.
+
+#### docs(release): verify evidence before resuming and reconcile partial drafts
+
+  Recover the post-tag verification summary before watching the draft workflow. Identify failed uploads by draft and asset ID, preserve the signed attachment,
+  and specify when staging can safely retry.
+
+#### docs(release): route failed draft creation to retry checks
+
+### Documentation
+
+- Clarify consumer setup and release steps [`9bc4cc3`](https://github.com/acgetchell/research-repo-tools/commit/9bc4cc38c9c28fca7c3e1d95edb1ce45aff08dcb)
+
+  Document fresh installs and upgrades to v0.3.1 with the matching Justfile and bootstrap helper. Show maintainers how to find the reviewed merge commit and CI
+  run and reuse the captured draft ID through publication and verification.
+
 ## [0.3.1] - 2026-11-21
 
 ### Merged Pull Requests
@@ -234,5 +271,6 @@ Older releases are archived by minor series:
 - [0.2.x](docs/archives/changelog/0.2.md)
 - [0.1.x](docs/archives/changelog/0.1.md)
 
+[0.3.2]: https://github.com/acgetchell/research-repo-tools/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/acgetchell/research-repo-tools/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.9...v0.3.0
