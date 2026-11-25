@@ -145,10 +145,12 @@ nesting. All six fields are required, including nullable `expected_title`:
 Parsing proves structural validity, not authenticity, freshness or approval.
 Consumers own a trusted job-output/artifact handoff and must prevent benchmark
 code from replacing the captured target. See the [trusted-job example](VERIFYING_RELEASE_EVIDENCE.md#trusted-release-target-handoff).
-`revalidate_release_target(root, target, *, checkout=None, dependencies=())` reads the captured ID directly and
+`revalidate_release_target(root, target, *, checkout=None, dependencies=(), allow_published=False)` reads the captured ID directly and
 returns `GitHubRelease` after checking identity, title assertion, mutable stable
 draft state and resolved tag SHA. A missing/deleted ID fails; it never substitutes
-a replacement draft selected by tag.
+a replacement draft selected by tag. Read-only attachment verification can set
+`allow_published=True` to accept the same ID and tag SHA after immutable stable
+publication. Asset uploads require a mutable draft.
 
 `publish_release_asset(root, repository, tag, asset, *, target=None, checkout=None,
 publish=False, limits=ArchiveLimits(), dependencies=())` snapshots nonempty regular-file bytes to

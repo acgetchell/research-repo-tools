@@ -7,12 +7,7 @@ from collections.abc import Callable
 from dataclasses import asdict, dataclass, field, replace
 from fnmatch import fnmatchcase
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING, Any, overload
-
-if TYPE_CHECKING:
-    from research_repo_tools.scheduled_runs import ScheduledRun
-    from research_repo_tools.suite_measurement import SuiteMeasurementPlan
-    from research_repo_tools.suite_runs import SuiteRun
+from typing import Any, overload
 
 from research_repo_tools.benchmark_series import SeriesBaseline
 from research_repo_tools.complete_runs import (
@@ -52,6 +47,9 @@ from research_repo_tools.publication import _inventory, _path
 from research_repo_tools.publication_config import _table
 from research_repo_tools.release_pairs import FirstRelease, ReleasePair
 from research_repo_tools.source_exports import CapturedSource, _files, verify_export
+lazy from research_repo_tools.scheduled_runs import ScheduledRun
+lazy from research_repo_tools.suite_measurement import SuiteMeasurementPlan
+lazy from research_repo_tools.suite_runs import SuiteRun
 
 __all__ = [
     "CompleteMeasurementPlan",
@@ -382,20 +380,19 @@ def validate_run_policy(evidence: Evidence, plan: CompleteMeasurementPlan, *, re
 
 
 @overload
-def validate_run_policy(evidence: Evidence, plan: "SuiteMeasurementPlan", *, release: bool = False) -> "SuiteRun | ScheduledRun": ...
+def validate_run_policy(evidence: Evidence, plan: SuiteMeasurementPlan, *, release: bool = False) -> SuiteRun | ScheduledRun: ...
 
 
 @overload
 def validate_run_policy(
-    evidence: Evidence, plan: "MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan", *, release: bool = False
-) -> "CompleteRun | SuiteRun | ScheduledRun": ...
+    evidence: Evidence, plan: MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan, *, release: bool = False
+) -> CompleteRun | SuiteRun | ScheduledRun: ...
 
 
 def validate_run_policy(
-    evidence: Evidence, plan: "MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan", *, release: bool = False
-) -> "CompleteRun | SuiteRun | ScheduledRun":
+    evidence: Evidence, plan: MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan, *, release: bool = False
+) -> CompleteRun | SuiteRun | ScheduledRun:
     """Validate acquisition against independent declarations; release adds eligibility."""
-    from research_repo_tools.suite_measurement import SuiteMeasurementPlan
     from research_repo_tools.suite_runs import validate_suite_policy
 
     if isinstance(plan, SuiteMeasurementPlan):

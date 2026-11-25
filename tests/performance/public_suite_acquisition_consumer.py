@@ -483,7 +483,7 @@ class TestSuiteAcquisition(unittest.TestCase):
             self.assertEqual(publish_publication(self.reuse_plan()), ())
             report = render_run(retained)
             self.assertIn(policy.identity.encode(), report)
-            self.assertTrue(report.startswith(b"<!-- research-repo-tools/run-report/v3 -->"))
+            self.assertTrue(report.startswith(b"<!-- research-repo-tools/run-report/v4 -->"))
             self.assertLessEqual(max(map(len, report.decode().splitlines())), 160)
             original = b"intro\r\n<!-- begin -->\r\nold\r\n<!-- end -->\r\nend\xff"
             (self.root / "README.md").write_bytes(original)
@@ -1548,13 +1548,28 @@ sys.exit(status)
         git("commit", "-m", "Prior release without benchmark series")
         git("tag", "v1.0.0")
         published = {"v1.0.0": git("rev-parse", "HEAD")}
+        draft = "v1.1.0"
 
-        def provider(endpoint, **_):
+        def provider(endpoint, **_) -> Any:
             if endpoint == "releases?per_page=100&page=1":
-                return [
+                rows: list[dict[str, object]] = [
                     {"id": i, "tag_name": tag, "draft": False, "prerelease": False, "published_at": "2026-01-01T00:00:00Z"}
                     for i, tag in enumerate(published, 1)
                 ]
+                if draft not in published:
+                    rows.append({"id": len(rows) + 1, "tag_name": draft, "draft": True, "prerelease": False, "published_at": None})
+                return rows
+            if endpoint.startswith("releases/tags/"):
+                tag = endpoint.removeprefix("releases/tags/")
+                identifier = list(published).index(tag) + 1
+                return {
+                    "tag_name": tag,
+                    "id": identifier,
+                    "url": f"https://api.github.com/repos/example/library/releases/{identifier}",
+                    "draft": False,
+                    "prerelease": False,
+                    "immutable": True,
+                }
             tag = endpoint.removeprefix("git/ref/tags/")
             self.assertIn(tag, published)
             return {"ref": "refs/tags/" + tag, "object": {"type": "commit", "sha": published[tag]}}
@@ -1624,7 +1639,6 @@ sys.exit(status)
         self.assertIsNone(record.pair.baseline)
         self.assertEqual(main(release), 0)
         raw = (owner / "run.json").read_bytes(), (owner / "evidence.json").read_bytes()
-        retained = parse_evidence(*raw)
         policy = parse_candidate_policy((owner / "policy.json").read_bytes())
         assert policy.series_history is not None
         self.assertEqual(policy.series_history.releases, (("v1.0.0", 1, published["v1.0.0"], None),))
@@ -1633,6 +1647,29 @@ sys.exit(status)
         self.assertNotIn(b"Baseline / current", report)
         self.assertIn(b"shared/case", report)
         self.assertEqual(self.log.read_bytes().count(b"shared measure"), 1)
+        native = EvidencePolicy(
+            ValidationPolicy("example/library", ".github/workflows/ci.yml", "CI", (("native", ("Checks",)),)),
+            "fixture",
+            "evidence",
+            "signed-source",
+            ("sign", ("Sign",)),
+        )
+
+        def verify(storage, selected, expected=None, read=provider):
+            return verify_candidate_release(
+                checkout,
+                parse_evidence((storage / "run.json").read_bytes(), (storage / "evidence.json").read_bytes()),
+                selected,
+                native,
+                read,
+                expected=expected,
+                acquisition_sha256=(storage / "acquisition.sha256").read_text(encoding="ascii").strip(),
+                publication_receipt=(storage / "publication.json").read_bytes(),
+                publication_sha256=(storage / "publication.sha256").read_text(encoding="ascii").strip(),
+            )
+
+        native_check = self.enterContext(patch("research_repo_tools.candidate_reuse.verify_release_evidence", return_value=b"{}"))
+
         with patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("recovery must not reacquire")):
             self.assertEqual(main([*args, "capture", "workflow.toml", "--owner", str(owner), "--promote"]), 0)
             self.assertEqual(main([*args, "readme", "workflow.toml"]), 0)
@@ -1643,54 +1680,89 @@ sys.exit(status)
             git("add", ".")
             git("commit", "-m", "Prepared series baseline and absolute reports")
             policy = replace(policy, commit=git("rev-parse", "HEAD"))
-            native = EvidencePolicy(
-                ValidationPolicy("example/library", ".github/workflows/ci.yml", "CI", (("native", ("Checks",)),)),
-                "fixture",
-                "evidence",
-                "signed-source",
-                ("sign", ("Sign",)),
-            )
+            accepted = verify(owner, policy)
+            history_reads = 0
 
-            def verify(expected=None, read=provider):
-                return verify_candidate_release(
-                    checkout,
-                    retained,
-                    policy,
-                    native,
-                    read,
-                    expected=expected,
-                    acquisition_sha256=(owner / "acquisition.sha256").read_text(encoding="ascii").strip(),
-                    publication_receipt=(owner / "publication.json").read_bytes(),
-                    publication_sha256=(owner / "publication.sha256").read_text(encoding="ascii").strip(),
-                )
+            def edit_during_final_history(endpoint):
+                nonlocal history_reads
+                if endpoint == "releases?per_page=100&page=1":
+                    history_reads += 1
+                    if history_reads == 2:
+                        (checkout / "README.md").write_bytes(readme + b"Edited during approval\n")
+                return provider(endpoint)
 
-            with patch("research_repo_tools.candidate_reuse.verify_release_evidence", return_value=b"{}"):
-                accepted = verify()
-                history_reads = 0
-
-                def edit_during_final_history(endpoint):
-                    nonlocal history_reads
-                    if endpoint == "releases?per_page=100&page=1":
-                        history_reads += 1
-                        if history_reads == 2:
-                            (checkout / "README.md").write_bytes(readme + b"Edited during approval\n")
-                    return provider(endpoint)
-
-                with self.assertRaisesRegex(ValueError, "original source changed after capture"):
-                    verify(accepted, read=edit_during_final_history)
-                (checkout / "README.md").write_bytes(readme)
-                published["v1.0.0"] = policy.commit
-                with self.assertRaisesRegex(ValueError, "series identity|history changed"):
-                    verify(accepted)
-                published["v1.0.0"] = git("rev-parse", "v1.0.0")
+            with self.assertRaisesRegex(ValueError, "original source changed after capture"):
+                verify(owner, policy, accepted, read=edit_during_final_history)
+            (checkout / "README.md").write_bytes(readme)
+            published["v1.0.0"] = policy.commit
+            with self.assertRaisesRegex(ValueError, "series identity|history changed"):
+                verify(owner, policy, accepted)
+            published["v1.0.0"] = git("rev-parse", "v1.0.0")
             (owner / "final-policy.json").write_bytes(serialize_candidate_policy(policy))
             (owner / "acceptance.json").write_bytes(accepted)
             publish_publication(plan_candidate_archive(owner, "run.json", "evidence.json", "final-policy.json", "acceptance.json", "benchmark.tar.gz"))
             self.assertEqual(serialize_evidence(verify_candidate_archive(owner / "benchmark.tar.gz", policy, accepted)), raw)
             self._verify_candidate_attachment_commands(owner, policy)
 
-        git("tag", "v1.1.0")
-        published["v1.1.0"] = git("rev-parse", "HEAD")
+        def publish_and_reverify(storage, selected, original):
+            archived = storage / "benchmark.tar.gz"
+            archive_bytes = archived.read_bytes()
+            git("tag", selected.tag)
+            published[selected.tag] = selected.commit
+            with patch("research_repo_tools.common_measurement.run_command_live", side_effect=AssertionError("approval must not reacquire")):
+                self.assertEqual(verify(storage, selected, original), original)
+                self.assertEqual(native_check.call_args.kwargs["expected"], deterministic_json({}))
+                with patch("research_repo_tools.release_interfaces.api", side_effect=provider):
+                    command = [
+                        "--root",
+                        str(storage),
+                        "release",
+                        "evidence",
+                        "candidate",
+                        "native.toml",
+                        "--checkout",
+                        str(checkout),
+                        "--policy",
+                        "final-policy.json",
+                        "--acceptance",
+                        "acceptance.json",
+                        "--payload",
+                        "run.json",
+                        "--manifest",
+                        "evidence.json",
+                        "--acquisition-sha256",
+                        (storage / "acquisition.sha256").read_text(encoding="ascii").strip(),
+                        "--publication-receipt",
+                        "publication.json",
+                        "--publication-sha256",
+                        (storage / "publication.sha256").read_text(encoding="ascii").strip(),
+                        "--output",
+                        "published.json",
+                    ]
+                    self.assertEqual(main(command), 0)
+                    self.assertEqual((storage / "published.json").read_bytes(), original)
+                publish_publication(plan_candidate_archive(storage, "run.json", "evidence.json", "final-policy.json", "published.json", archived.name))
+                self.assertEqual(archived.read_bytes(), archive_bytes)
+                with patch("research_repo_tools.candidate_reuse.verify_release_evidence", return_value=b'{"attempt":2}') as renewed_native:
+                    renewed = json.loads(verify(storage, selected))
+                    self.assertIsNone(renewed_native.call_args.kwargs["expected"])
+                    self.assertEqual(renewed, {**json.loads(original), "native": {"attempt": 2}})
+                with patch.dict(published, {selected.tag: published["v1.0.0"]}), self.assertRaisesRegex(ValueError, "history changed"):
+                    verify(storage, selected, original)
+                with patch.dict(published, {"v0.9.0": published["v1.0.0"]}), self.assertRaisesRegex(ValueError, "history changed"):
+                    verify(storage, selected, original)
+
+        publish_and_reverify(owner, policy, accepted)
+        for fields, reason in (({"id": 99}, "invalid tag or identity"), ({"immutable": False}, "immutable stable release")):
+
+            def inconsistent_release(endpoint):
+                data = provider(endpoint)
+                return {**data, **fields} if endpoint.startswith("releases/tags/") else data
+
+            with self.subTest(fields=fields), self.assertRaisesRegex(ValueError, reason):
+                verify(owner, policy, accepted, read=inconsistent_release)
+        rejection(prepare, "newer than published stable history")
+        draft = "v1.2.0"
         (checkout / "Cargo.toml").write_bytes(b'[package]\nname="fixture"\nversion="1.2.0"\n')
         rejection(prepare, "existing compatible predecessor requires a paired schedule")
         declaration.update(schema=6, schedule={"order": "sequential", "trials": 1})
@@ -1709,6 +1781,19 @@ sys.exit(status)
             damaged = {**declaration, "benchmark-series": {**series, field: value}}
             measurement.write_bytes(tomli_w.dumps(damaged).encode())
             rejection(prepare, "stable declaration path" if field == "id" else "workload contract changed")
+        measurement.write_bytes(tomli_w.dumps(declaration).encode())
+        git("add", ".")
+        git("commit", "-m", "Prepared paired successor")
+        successor = replace(parse_candidate_policy((next_owner / "policy.json").read_bytes()), commit=git("rev-parse", "HEAD"))
+        successor_acceptance = verify(next_owner, successor)
+        (next_owner / "final-policy.json").write_bytes(serialize_candidate_policy(successor))
+        (next_owner / "acceptance.json").write_bytes(successor_acceptance)
+        (next_owner / "native.toml").write_bytes((owner / "native.toml").read_bytes())
+        publish_publication(plan_candidate_archive(next_owner, "run.json", "evidence.json", "final-policy.json", "acceptance.json", "benchmark.tar.gz"))
+        publish_and_reverify(next_owner, successor, successor_acceptance)
+        with patch.dict(published, {policy.tag: successor.commit}), self.assertRaisesRegex(ValueError, "history changed"):
+            verify(next_owner, successor, successor_acceptance)
+        self.assertEqual(self.log.read_bytes().count(b"shared measure"), 3)
 
     def _verify_candidate_attachment_commands(self, owner: Path, policy: CandidatePolicy) -> None:
         from research_repo_tools.criterion import Estimate, Sample
@@ -1723,14 +1808,15 @@ sys.exit(status)
         digest = hashlib.sha256(expected).hexdigest()
         transferred: list[tuple[str, int, int, str | None]] = []
         downloaded = expected
+        published = False
 
         def release(*args, **kwargs):
             return GitHubRelease(
                 policy.repository,
                 policy.tag,
                 42,
-                True,
-                False,
+                not published,
+                published,
                 False,
                 tuple(transferred),
                 asset_states=tuple((identifier, "uploaded") for _, identifier, _, _ in transferred),
@@ -1808,6 +1894,11 @@ sys.exit(status)
             self.assertEqual(post.call_count, 1)
             self.assertEqual(main(approval), 0)
             self.assertEqual(acceptance_check.call_args.kwargs["expected"], frozen_acceptance)
+            if policy.series_history is not None:
+                published = True
+                self.assertEqual(main(verify), 0)
+                self.assertEqual(main(approval), 0)
+                self.assertEqual(post.call_count, 1)
             downloaded = expected + b"changed"
             self.assertNotEqual(main(verify), 0)
             downloaded = expected
@@ -3418,7 +3509,13 @@ sys.exit(status)
             with self.subTest(name=name), patch("sys.stderr", new_callable=io.StringIO):
                 self.assertEqual(main(command), 1)
             (owner / name).write_bytes(originals[name])
-        for changes, diagnostic in (({"bench.py": b"edited", "rumdl.toml": b"added"}, "undeclared"), ({"docs/performance.md": b"edited"}, "generated output")):
+        publication = json.loads(self.publication_receipt)
+        raw_path = f"{publication['archive']}/runs/{policy.identity}/run.json"
+        for changes, diagnostic in (
+            ({"bench.py": b"edited", "rumdl.toml": b"added"}, "undeclared"),
+            ({"docs/performance.md": b"edited"}, "generated output"),
+            ({raw_path: mapping["final"][raw_path] + b" "}, "generated output"),
+        ):
             files = mapping["final"] | changes
             for name, data in changes.items():
                 (self.root / name).write_bytes(data)

@@ -4,7 +4,7 @@ from collections.abc import Callable
 from dataclasses import dataclass, replace
 from functools import partial
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, cast
+from typing import Literal, cast
 from urllib.parse import quote, urlsplit
 
 from research_repo_tools.evidence import _load_json
@@ -27,9 +27,7 @@ from research_repo_tools.release_assets import (
     revalidate_release_target,
 )
 from research_repo_tools.release_reuse import ReusePolicy, parse_reuse_policy, verify_ci_reuse
-
-if TYPE_CHECKING:
-    from research_repo_tools.config import Config
+lazy from research_repo_tools.config import Config
 
 __all__ = [
     "PublishingSettings",
@@ -188,7 +186,7 @@ def validate_event(event: object, repository: str, commit: str, ref: str) -> Rev
     return ReviewedRelease(tag, commit, identifier)
 
 
-def check_metadata(config: "Config", tag: str, *, previous_tag: str | None = None) -> None:
+def check_metadata(config: Config, tag: str, *, previous_tag: str | None = None) -> None:
     """Reuse final metadata, date, and nonempty notes validation for both registries."""
     from research_repo_tools import changelog, release_metadata
 
@@ -297,7 +295,7 @@ def _retained_crate_sha256(release: GitHubRelease, registry: str, package: str, 
     raise ValueError(f"immutable GitHub Release requires an uploaded {filename} with a SHA-256 for the retained crate")
 
 
-def _release_assertions(config: "Config", release: GitHubRelease, tag: str, *, draft: bool) -> None:
+def _release_assertions(config: Config, release: GitHubRelease, tag: str, *, draft: bool) -> None:
     from research_repo_tools.changelog import notes
 
     settings = _settings(config)
@@ -333,7 +331,7 @@ def _protected_source(root: Path, repository: str, tag: str, head: str) -> None:
         raise ValueError("release commit is not an ancestor of the protected default branch")
 
 
-def check_release_source(config: "Config", tag: str, *, commit: str | None = None, reuse_evidence: bytes | None = None) -> str:
+def check_release_source(config: Config, tag: str, *, commit: str | None = None, reuse_evidence: bytes | None = None) -> str:
     """Verify clean metadata/source, protected-branch ancestry and exact checks."""
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
@@ -341,7 +339,7 @@ def check_release_source(config: "Config", tag: str, *, commit: str | None = Non
     return _check_release_source(config, tag, commit=commit, reuse_evidence=reuse_evidence)
 
 
-def _check_release_source(config: "Config", tag: str, *, commit: str | None, reuse_evidence: bytes | None) -> str:
+def _check_release_source(config: Config, tag: str, *, commit: str | None, reuse_evidence: bytes | None) -> str:
     """Recheck source and provider assertions within a dependency-verified operation."""
     settings = _settings(config)
     check_metadata(config, tag)
@@ -369,7 +367,7 @@ def _check_release_source(config: "Config", tag: str, *, commit: str | None, reu
 
 
 def check_reviewed_release(
-    config: "Config",
+    config: Config,
     tag: str,
     *,
     event: ReviewedRelease | None = None,
@@ -386,7 +384,7 @@ def check_reviewed_release(
 
 
 def _check_reviewed_target(
-    config: "Config", tag: str, head: str, *, draft: bool, target: ReleaseTarget | None, event: ReviewedRelease | None = None, require_crate_asset: bool = False
+    config: Config, tag: str, head: str, *, draft: bool, target: ReleaseTarget | None, event: ReviewedRelease | None = None, require_crate_asset: bool = False
 ) -> GitHubRelease:
     settings = _settings(config)
     if target is not None and (target.repository, target.tag, target.commit) != (settings.repository, tag, head):
@@ -404,7 +402,7 @@ def _check_reviewed_target(
 
 
 def publish_reviewed_release(
-    config: "Config",
+    config: Config,
     tag: str,
     *,
     reuse_evidence: bytes | None = None,
@@ -456,7 +454,7 @@ def publish_reviewed_release(
 
 
 def verify_publication(
-    config: "Config", tag: str, *, attempts: int = 1, interval: int = 10, target: ReleaseTarget | None = None, require_crate_asset: bool = False
+    config: Config, tag: str, *, attempts: int = 1, interval: int = 10, target: ReleaseTarget | None = None, require_crate_asset: bool = False
 ) -> None:
     """Check publication, optionally binding the registry checksum to an immutable crate asset."""
     from research_repo_tools.dependency_provenance import check_release_dependencies
@@ -465,9 +463,7 @@ def verify_publication(
     _verify_configured_publication(config, tag, attempts=attempts, interval=interval, target=target, require_crate_asset=require_crate_asset)
 
 
-def _verify_configured_publication(
-    config: "Config", tag: str, *, attempts: int, interval: int, target: ReleaseTarget | None, require_crate_asset: bool
-) -> None:
+def _verify_configured_publication(config: Config, tag: str, *, attempts: int, interval: int, target: ReleaseTarget | None, require_crate_asset: bool) -> None:
     """Observe GitHub and registry publication using the configured assertions."""
     settings = _settings(config)
     _verify_publication(

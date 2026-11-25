@@ -58,6 +58,15 @@ acquisition, checkpoints, publication receipt, and digests outside the checkout.
 Include the generated report in the release PR.
 [Benchmark acquisition and recovery](https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_BENCHMARKS.md)
 
+If the consumer assigns its archived raw measurements to candidate preflight,
+require successful preflight on the clean preparation commit against the
+original owner receipts and independent digests. Exclude only
+`<report archive>/runs/<verified identity>/run.json` from the local branch
+review. Review every sibling, including declarations, code and interpretation.
+Any in-scope skip blocks the gate. Use the disposable worktree procedure with
+the verified v0.3.3 distribution once published.
+[Reviewing a large archived payload](https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_BENCHMARKS.md#reviewing-a-large-archived-payload)
+
 ```bash
 just release-version-check
 just ci

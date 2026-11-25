@@ -25,6 +25,7 @@ from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.source_exports import capture_source
 from research_repo_tools.suite_measurement import SuiteMeasurementPlan, _environment_digest, _measure_suites, _source_record, parse_suite_plan
 from research_repo_tools.suite_runs import SUITE_RUN_SCHEMA, parse_suite_run, validate_suite_policy
+from research_repo_tools.text_lines import _physical_lines
 from research_repo_tools.trial_recovery import LIFECYCLE_SCHEMA, _event_timestamp, replay_trial
 
 __all__ = ["SCHEDULED_RUN_SCHEMA", "ScheduledRun", "parse_scheduled_run", "select_trial"]
@@ -402,7 +403,9 @@ def measure_schedule(
         return result
 
 
-def render_scheduled_run(evidence: Evidence, *, title: str, links: str, identity: str) -> bytes:
+def render_scheduled_run(
+    evidence: Evidence, *, title: str, links: str, identity: str, split_trial_lines: Callable[[str], list[str]] = _physical_lines
+) -> bytes:
     """Render trial results separately as UTF-8 Markdown without pooling within-phase samples."""
     from research_repo_tools.suite_runs import render_suite_run
 
@@ -443,7 +446,7 @@ def render_scheduled_run(evidence: Evidence, *, title: str, links: str, identity
                     lines.append(f"- Recovery finalization observed: {event['at_ns']} (Unix ns); original collection finish unknown.")
         for receipt in records[index]["receipts"]:
             lines.append(f"- {receipt['suite']}/{receipt['phase']}: {receipt['started_ns']}–{receipt['finished_ns']} (Unix ns).")
-        trial_report = render_suite_run(trial, title=f"Trial {index + 1}", links=links, identity=run_identity(trial)).decode("utf-8").splitlines()
+        trial_report = split_trial_lines(render_suite_run(trial, title=f"Trial {index + 1}", links=links, identity=run_identity(trial)).decode("utf-8"))
         # The scheduled report owns the marker, title, identity and evidence links.
         lines.extend(["", *trial_report[7:]])
     return ("\n".join(lines) + "\n").encode("utf-8")

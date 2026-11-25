@@ -4,7 +4,7 @@ import re
 from pathlib import Path
 from typing import Literal
 
-from research_repo_tools.complete_runs import _render_run_v1, _render_run_v2, render_run, run_identity, validate_run_evidence
+from research_repo_tools.complete_runs import _render_run_v1, _render_run_v2, _render_wrapped_report, render_run, run_identity, validate_run_evidence
 from research_repo_tools.evidence import Evidence, _load_json, _object, _string, deterministic_json, parse_evidence, serialize_evidence
 from research_repo_tools.files import _validate_distinct_paths
 from research_repo_tools.markdown import _GeneratedLinks
@@ -18,13 +18,13 @@ _INDEX = "research-repo-tools/run-index/v2"
 _LEGACY_INDEX = "research-repo-tools/run-index/v1"
 _LATEST = "research-repo-tools/latest-run/v1"
 
-type _ReportRenderer = Literal[1, 2, 3]
+type _ReportRenderer = Literal[1, 2, 3, 4]
 
 
 def _report_renderer(value: object) -> _ReportRenderer:
-    if type(value) is not int or value not in {1, 2, 3}:
+    if type(value) is not int or value not in {1, 2, 3, 4}:
         raise ValueError("unsupported retained report renderer")
-    return 1 if value == 1 else 2 if value == 2 else 3
+    return value
 
 
 def _entry(evidence: Evidence) -> dict[str, str]:
@@ -106,8 +106,8 @@ def _history(root: Path, archive: str) -> tuple[dict[str, dict[str, str]], dict[
         else:
             renderer = 1
             entry = _parse_entry(_object(value, "legacy run entry", {"id", "baseline", "current"}))
-        if "baseline" not in entry and renderer != 3:
-            raise ValueError("first-release history requires the current report renderer")
+        if "baseline" not in entry and renderer < 3:
+            raise ValueError("first-release history requires report renderer 3 or later")
         identity = entry["id"]
         if identity in entries:
             raise ValueError("duplicate run index entry")
@@ -117,9 +117,10 @@ def _history(root: Path, archive: str) -> tuple[dict[str, dict[str, str]], dict[
         evidence = parse_evidence(inputs[targets[0]], inputs[targets[1]])
         if renderer == 1:
             report = _render_run_v1(evidence)
+        elif renderer == 2:
+            report = _render_run_v2(evidence, report_path=targets[2], payload_path=targets[0], manifest_path=targets[1])
         else:
-            render = _render_run_v2 if renderer == 2 else render_run
-            report = render(evidence, report_path=targets[2], payload_path=targets[0], manifest_path=targets[1])
+            report = _render_wrapped_report(evidence, renderer=renderer, report_path=targets[2], payload_path=targets[0], manifest_path=targets[1])
         if _entry(evidence) != entry or inputs[targets[2]] != report:
             raise ValueError("retained run identity, labels or report do not match the index")
         entries[identity] = entry
@@ -199,7 +200,7 @@ def load_run_report_plan(root: Path, configuration: str, *, payload: str | None 
     # every host. A current report inside it would corrupt the next index read.
     _validate_distinct_paths((_path(root, current), root / archive / "runs"))
     entries[entry["id"]] = entry
-    renderers.setdefault(entry["id"], 3)
+    renderers.setdefault(entry["id"], 4)
     data, envelope = serialize_evidence(evidence)
     # Existing report bytes remain immutable, even when the latest selection
     # predates the current presentation. Only the mutable current report migrates.

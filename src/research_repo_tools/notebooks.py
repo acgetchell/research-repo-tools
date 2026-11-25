@@ -18,14 +18,11 @@ from importlib import import_module
 from importlib.metadata import version
 from pathlib import Path
 from threading import Event
-from typing import TYPE_CHECKING, Any, Literal
+from typing import Any, Literal
 
 from research_repo_tools import files, toolchain, toolchain_config
 from research_repo_tools.config import Config, notebook_output_policy
 from research_repo_tools.process import format_exception_diagnostics, run_safe_command
-
-if TYPE_CHECKING:
-    from nbformat import NotebookNode
 
 KERNEL = "research-repo-tools"
 CELL_ID = re.compile(r"[A-Za-z0-9_-]{1,64}")
@@ -48,6 +45,11 @@ class Notebook:
     path: Path
     original: bytes
     node: "NotebookNode"
+
+
+# Dataclasses looks up even string field annotations while building Notebook.
+# Bind the optional type afterwards so only explicit type resolution imports it.
+lazy from nbformat import NotebookNode  # noqa: E402
 
 
 @dataclass(frozen=True)

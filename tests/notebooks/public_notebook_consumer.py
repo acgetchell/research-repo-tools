@@ -47,6 +47,17 @@ class Consumer(unittest.TestCase):
 
 
 class TestExecutionPreflight(Consumer):
+    def test_installed_notebook_extra_resolves_node_annotations(self):
+        from typing import get_type_hints
+
+        from nbformat import NotebookNode
+
+        from research_repo_tools import notebooks
+
+        for owner in (notebooks.Notebook, notebooks.clear_node, notebooks.generated_state, notebooks.serialize):
+            with self.subTest(owner=owner.__name__):
+                self.assertIs(get_type_hints(owner)["node"], NotebookNode)
+
     @override
     def setUp(self):
         super().setUp()
@@ -163,6 +174,12 @@ class TestExecutionPreflight(Consumer):
 
 
 class TestInspection(Consumer):
+    def test_counts_physical_source_lines_in_string_and_array_cells(self):
+        self.write([code(""), code(["x = 'a\u2028b\x85c'\r", "\ny = 1\rz = 2"], "mixed"), code("\n\n", "blank")])
+        status, out, err = self.run_cli("inspect", "--json", "--no-preview")
+        self.assertEqual((status, err), (0, ""))
+        self.assertEqual([cell["source_lines"] for cell in json.loads(out)["notebooks"][0]["cells"]], [0, 3, 2])
+
     def test_one_shot_selection_is_inspected_and_empty_selection_is_rejected(self):
         from research_repo_tools.notebook_inspect import inspect
 

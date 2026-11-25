@@ -135,7 +135,7 @@ and [Python's annotation model](https://docs.python.org/3.15/reference/compound_
 
 ## Consumer review and adoption
 
-Exclude deliberate negative fixtures from general CodeRabbit review using the
+Exclude deliberate negative fixtures from hosted CodeRabbit review using the
 consumer's `reviews.path_filters`, for example `"!tests/semgrep/**"`. This review
 filter must not become a validation exclusion. If the docstring policy requires
 documentation for public scientific APIs rather than a percentage of all helpers
@@ -144,6 +144,10 @@ policy in path instructions or keep the percentage check with a compatible
 threshold. These are consumer choices; they do not alter Ruff/Ty. Consult
 [CodeRabbit's configuration reference](https://docs.coderabbit.ai/reference/configuration)
 when updating the consumer's settings.
+
+For a local release review, assign an archived raw payload to verified
+preflight only under the consumer's declared review policy. The release
+template links the exact-path Git procedure. [Preparing the release PR](RELEASING.md#step-1-prepare-the-release-pr)
 
 Each consumer owns its annotations, exact fixture exceptions, CodeRabbit choices,
 tool pins, and local/CI wiring. Verify those checks against the selected registry

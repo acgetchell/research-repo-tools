@@ -311,3 +311,28 @@ def test_source_digest_preserves_posix_component_order_across_platforms(harness,
     digest = hashlib.sha256(b"pass\n").hexdigest()
     expected = json.dumps([[name, digest] for name in names], separators=(",", ":")).encode()
     assert harness.source_digest(tmp_path) == hashlib.sha256(expected).hexdigest()
+
+
+def test_source_digest_hashes_linked_packages_and_diagnoses_cycles(harness, tmp_path):
+    def link_directory(link, target):
+        if os.name == "nt":
+            subprocess.run(["cmd", "/d", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True, timeout=30)
+            assert link.is_junction()
+        else:
+            link.symlink_to(target, target_is_directory=True)
+            assert link.is_symlink()
+
+    source = tmp_path / "src"
+    package = tmp_path / "shared"
+    source.mkdir()
+    package.mkdir()
+    link_directory(source / "library", package)
+    ordinary = tmp_path / "ordinary"
+    (ordinary / "library").mkdir(parents=True)
+    for content in (b"version = 1\n", b"version = 2\n"):
+        (package / "__init__.py").write_bytes(content)
+        (ordinary / "library/__init__.py").write_bytes(content)
+        assert harness.source_digest(source) == harness.source_digest(ordinary)
+    link_directory(package / "back", source)
+    with pytest.raises(ValueError, match="cycle"):
+        harness.source_digest(source)

@@ -5,6 +5,7 @@ standard-library boundaries. No pytest dependency is needed in installations.
 """
 
 import hashlib
+import io
 import os
 import runpy
 import shlex
@@ -13,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from contextlib import redirect_stdout
 from pathlib import Path
 from types import MappingProxyType
 from typing import assert_type, override
@@ -55,6 +57,20 @@ class TestEnvironmentExport(ConsumerCase):
             status = cli.main(["--root", str(self.root), "ci", "export", "--file", str(target), "REVIEW_RESULT"])
         self.assertEqual(status, 0)
         self.assertEqual(target.read_bytes(), b"EXISTING=yes\nREVIEW_RESULT=caf\xc3\xa9\n")
+
+
+class TestCoverageReport(ConsumerCase):
+    def test_file_and_directory_prefixes_report_each_source_line_once(self) -> None:
+        (self.root / "coverage.xml").write_bytes(
+            b'<coverage><class filename="src/sub/a.py"><lines><line number="1" hits="0"/></lines></class>'
+            b'<class filename="./src\\sub/a.py"><lines><line number="1" hits="1"/></lines></class>'
+            b'<class filename="src/submarine/a.py"><lines><line number="1" hits="1"/></lines></class></coverage>'
+        )
+        for prefix in ("src/sub/a.py", "src/sub/", r"src\sub"):
+            with self.subTest(prefix=prefix), redirect_stdout(io.StringIO()) as output:
+                status = cli.main(["--root", str(self.root), "coverage", "report", "--report", "coverage.xml", "--prefix", prefix])
+                self.assertEqual(status, 0)
+                self.assertEqual(output.getvalue(), "100.00%  src/sub/a.py\n")
 
 
 class TestCoverageCleanup(ConsumerCase):

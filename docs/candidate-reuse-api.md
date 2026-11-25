@@ -17,6 +17,12 @@ published-history selection bound to the original acquisition assertions.
 Current-only series runs use complete-run v7. Follow the [series declaration,
 preparation, and recovery procedure](REUSING_BENCHMARKS.md#starting-a-benchmark-series-after-earlier-releases).
 
+Candidate verification accepts the original history before publication and that
+same history plus the exact immutable series release afterward. The provider's
+tag lookup must match its listed release ID, the independently selected final
+commit, and the tagged series contract. Retain the draft target and attachment
+receipt to pin the new release's provider and asset IDs across publication.
+
 ## Source and trust contract
 
 Step 1 declares the whole experiment, including source and harness selections,
@@ -318,7 +324,8 @@ deployment approval, rerun `release evidence candidate` with the original
 `--acceptance`, `--attachment` and `--target` to check both records together.
 An existing attachment
 receipt pins the asset ID on every retry. Verification downloads that exact
-asset and checks its bytes, metadata and captured draft again.
+asset and checks its bytes, metadata and captured target again. For a declared
+series, the same read-only checks also accept the immutable published target.
 
 For hosted paired acquisition, set the measurement owner to `github-actions`
 and use `performance capture --hosted` in the original trusted Actions job.

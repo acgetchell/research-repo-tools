@@ -798,7 +798,7 @@ def _run_candidate_attachment(args: argparse.Namespace, settings: Config) -> Non
             raise ValueError("candidate attachment assertions changed during verification")
 
     write_release_outputs(args.output, receipt, verify=unchanged)
-    print(f"Verified candidate archive on draft {target.release_id}. Retain the attachment receipt for approval.")
+    print(f"Verified candidate archive on release {target.release_id}. Retain the attachment receipt for approval.")
 
 
 def _run_candidate_preflight(args: argparse.Namespace) -> None:

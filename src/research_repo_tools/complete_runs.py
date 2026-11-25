@@ -5,18 +5,17 @@ import binascii
 import hashlib
 import json
 import re
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
-
-if TYPE_CHECKING:
-    from research_repo_tools.scheduled_runs import ScheduledRun
-    from research_repo_tools.suite_runs import SuiteRun
+from typing import Any, Literal
 
 from research_repo_tools.criterion import Estimate, Statistic, Unit, _format_estimate, _markdown_text, _positive, _statistic, _unit, parse_estimate
 from research_repo_tools.evidence import Evidence, Provenance, _digest, _load_json, _object, _string, compare_provenance, deterministic_json, serialize_evidence
 from research_repo_tools.publication import _publication_name, _relative_link
 from research_repo_tools.release_pairs import ReleasePair
+lazy from research_repo_tools.scheduled_runs import ScheduledRun
+lazy from research_repo_tools.suite_runs import SuiteRun
 
 __all__ = [
     "LEGACY_RUN_SCHEMA",
@@ -431,7 +430,7 @@ def parse_run(payload: bytes) -> CompleteRun:
     )
 
 
-def validate_run_evidence(evidence: Evidence) -> "CompleteRun | SuiteRun | ScheduledRun":
+def validate_run_evidence(evidence: Evidence) -> CompleteRun | SuiteRun | ScheduledRun:
     """Validate evidence and return its schema-specific view.
 
     Narrow the result by type before accessing phase/series views: ScheduledRun
@@ -557,8 +556,6 @@ def run_identity(evidence: Evidence) -> str:
 def _render_run_v1(evidence: Evidence, *, title: str = "Benchmark timings") -> bytes:
     """Frozen timing presentation for validating immutable renderer-1 histories."""
     run = validate_run_evidence(evidence)
-    from research_repo_tools.scheduled_runs import ScheduledRun
-
     if isinstance(run, ScheduledRun):
         raise ValueError("select an explicit trial before using a legacy presentation")
     phases = dict(run.phases)
@@ -736,6 +733,7 @@ def _render_run_v2(
     report_path: str | None = None,
     payload_path: str | None = None,
     manifest_path: str | None = None,
+    split_trial_lines: Callable[[str], list[str]] = str.splitlines,
 ) -> bytes:
     """Frozen provenance presentation for validating renderer-2 histories."""
     _string(title, "report title")
@@ -751,7 +749,7 @@ def _render_run_v2(
     if evidence.payload_schema == RUN_SCHEMA_V5:
         from research_repo_tools.scheduled_runs import render_scheduled_run
 
-        return render_scheduled_run(evidence, title=title, links=links, identity=run_identity(evidence))
+        return render_scheduled_run(evidence, title=title, links=links, identity=run_identity(evidence), split_trial_lines=split_trial_lines)
     if evidence.payload_schema in {RUN_SCHEMA_V4, RUN_SCHEMA_V6, RUN_SCHEMA_V7}:
         from research_repo_tools.suite_runs import render_suite_run
 
@@ -759,8 +757,6 @@ def _render_run_v2(
     timings = _render_run_v1(evidence, title=title).decode("utf-8").removesuffix("\n").split("\n")
     timings[4:4] = [links, ""]
     run = validate_run_evidence(evidence)
-    from research_repo_tools.scheduled_runs import ScheduledRun
-
     assert not isinstance(run, ScheduledRun)
     if run.schema == RUN_SCHEMA_V3:
         reasons = ratio_incompatibilities(evidence)
@@ -800,13 +796,30 @@ def render_run(
     observations are captured. Missing locations are explicitly unlinked.
     Wide tables use HTML; old immutable reports keep their recorded renderer.
     """
-    from research_repo_tools.markdown import _generated_report_layout, _GeneratedLinks
+    return _render_wrapped_report(evidence, renderer=4, title=title, report_path=report_path, payload_path=payload_path, manifest_path=manifest_path)
 
-    report = _render_run_v2(evidence, title=title, report_path=report_path, payload_path=payload_path, manifest_path=manifest_path).decode("utf-8")
-    lines = report.splitlines()
-    lines[0] = "<!-- research-repo-tools/run-report/v3 -->"
+
+def _render_wrapped_report(
+    evidence: Evidence,
+    *,
+    renderer: Literal[3, 4],
+    title: str = "Benchmark timings",
+    report_path: str | None,
+    payload_path: str | None,
+    manifest_path: str | None,
+) -> bytes:
+    """Replay renderer 3's Unicode line splitting or preserve physical lines in renderer 4."""
+    from research_repo_tools.markdown import _generated_report_layout, _GeneratedLinks
+    from research_repo_tools.text_lines import _physical_lines
+
+    split_lines = str.splitlines if renderer == 3 else _physical_lines
+    report = _render_run_v2(
+        evidence, title=title, report_path=report_path, payload_path=payload_path, manifest_path=manifest_path, split_trial_lines=split_lines
+    ).decode("utf-8")
+    lines = split_lines(report)
+    lines[0] = f"<!-- research-repo-tools/run-report/v{renderer} -->"
     links = _GeneratedLinks(report)
     if report_path is not None and payload_path is not None and manifest_path is not None:
         payload_link, manifest_link = (_relative_link(report_path, path) for path in (payload_path, manifest_path))
         lines[5] = "Evidence: " + links.render("run payload", payload_link) + " · " + links.render("evidence envelope", manifest_link) + "."
-    return (_generated_report_layout("\n".join(lines)) + links.definitions()).encode("utf-8")
+    return (_generated_report_layout(split_lines("\n".join(lines))) + links.definitions()).encode("utf-8")

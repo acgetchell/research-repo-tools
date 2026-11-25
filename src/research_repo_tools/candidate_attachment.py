@@ -7,7 +7,6 @@ from research_repo_tools.archives import ArchiveLimits
 from research_repo_tools.candidate_reuse import CandidatePolicy, _acceptance, verify_candidate_archive
 from research_repo_tools.evidence import _digest, _load_json, _object, _string, deterministic_json, sha256
 from research_repo_tools.release_assets import (
-    GitHubRelease,
     ReleaseTarget,
     _asset_name,
     _download,
@@ -81,7 +80,7 @@ def verify_candidate_attachment(
     limits: ArchiveLimits = ArchiveLimits(),
     dependencies: tuple[str, ...] = (),
 ) -> None:
-    """Revalidate the same draft, acceptance, asset ID, digest and downloaded bytes."""
+    """Revalidate the captured release and exact asset, including a series release after immutable publication."""
     digest = _bound_archive(policy, acceptance, target)
     record = _object(_load_json(expected, "candidate attachment"), "candidate attachment", {"schema", "target", "acceptance_sha256", "asset"})
     asset = _object(record["asset"], "attached asset", {"name", "id", "size", "sha256"})
@@ -98,11 +97,12 @@ def verify_candidate_attachment(
     ):
         raise ValueError("attachment receipt differs from the approved target or archive")
 
-    def confirm(release: GitHubRelease) -> None:
+    def confirm() -> None:
+        release = revalidate_release_target(root, target, checkout=checkout, dependencies=dependencies, allow_published=policy.series_history is not None)
         if (name, identifier, size, digest) not in release.assets or dict(release.asset_states).get(identifier) != "uploaded":
             raise ValueError("attached asset identity changed since verification")
 
-    confirm(revalidate_release_target(root, target, checkout=checkout, dependencies=dependencies))
+    confirm()
     data = _download(root, target.repository, identifier, limits.archive_bytes)
     if len(data) != size or sha256(data) != digest:
         raise ValueError("downloaded attachment differs from the approved archive")
@@ -110,4 +110,4 @@ def verify_candidate_attachment(
         archive = Path(temporary) / name
         archive.write_bytes(data)
         verify_candidate_archive(archive, policy, acceptance, target=target, limits=limits)
-    confirm(revalidate_release_target(root, target, checkout=checkout, dependencies=dependencies))
+    confirm()

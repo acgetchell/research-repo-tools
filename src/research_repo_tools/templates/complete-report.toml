@@ -1,6 +1,9 @@
 schema = 2
 current = "docs/complete-performance.md"
 archive = "docs/performance-runs"
+# A consumer may assign docs/performance-runs/runs/<identity>/run.json alone to
+# verified candidate preflight. Derive the path from this archive and the trusted
+# run identity, and review all siblings. See the local review procedure in RELEASING.md.
 # For committed candidate evidence, declare this configuration in CandidatePolicy.report.
 # Freeze plan_candidate_publication's receipt and independent digest before promotion;
 # keep final acceptance outside the committed archive. See docs/REUSING_BENCHMARKS.md.

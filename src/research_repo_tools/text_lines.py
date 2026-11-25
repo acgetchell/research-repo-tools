@@ -2,12 +2,18 @@
 
 from collections.abc import Sequence
 from dataclasses import dataclass
+from io import StringIO
 from pathlib import Path
 from typing import override
 
-from research_repo_tools.selection import select_files
+lazy from research_repo_tools.selection import select_files
 
 __all__ = ["LineCheck", "LineViolation", "check_lines", "inspect_lines"]
+
+
+def _physical_lines(text: str) -> list[str]:
+    """Strip CR, LF and CRLF endings while preserving Unicode separators inside lines."""
+    return [line.removesuffix("\n") for line in StringIO(text, newline=None)]
 
 
 @dataclass(frozen=True, slots=True)

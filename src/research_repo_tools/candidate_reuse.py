@@ -14,7 +14,7 @@ from typing import Any
 
 from research_repo_tools._dependency_observation import DependencyOperation
 from research_repo_tools.archives import ArchiveLimits, extract_archive
-from research_repo_tools.benchmark_series import SeriesHistory, select_series
+from research_repo_tools.benchmark_series import SeriesHistory, verify_series_history
 from research_repo_tools.candidate_publication import _acquisition_input_keys, _parse_publication, _PublicationReceipt
 from research_repo_tools.complete_runs import CompleteSample, _array, _integer, run_identity
 from research_repo_tools.criterion_suites import _archive
@@ -629,15 +629,14 @@ def _verify_candidate_release(
         raise ValueError("native evidence repository differs")
     binding, recheck_source = _candidate_source_binding(root, evidence, policy, acquisition_sha256, publication_receipt, publication_sha256)
 
-    def verify_history() -> None:
+    def verify_history() -> int | None:
         if policy.series_history is not None:
-            selection = select_series(root, policy.series_history.declaration, policy.measurement, policy.tag, read)
-            if selection.history != policy.series_history:
-                raise ValueError("published benchmark series history changed since preparation")
-        elif policy.first_release:
+            return verify_series_history(root, policy.series_history, policy.measurement, policy.repository, policy.tag, commit, read)
+        if policy.first_release:
             require_first_release_history(read)
+        return None
 
-    verify_history()
+    published_id = verify_history()
     native = verify_release_evidence(
         native_policy,
         policy.tag.removeprefix("v"),
@@ -663,7 +662,8 @@ def _verify_candidate_release(
 
     def guard() -> None:
         check_release_dependencies(root, packages=dependencies)
-        verify_history()
+        if verify_history() != published_id:
+            raise ValueError("published benchmark series release identity changed during verification")
         recheck_source()
 
     if retain is None:

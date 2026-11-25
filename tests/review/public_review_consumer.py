@@ -480,6 +480,31 @@ class TestReviewConsumer(unittest.TestCase):
         self.assertIn("reconcile CodeRabbit usage", errors.getvalue())
         self.assertEqual(len(self.calls), 3)
 
+    def test_lowercase_filename_in_provider_warning(self) -> None:
+        path = "docs/performance/runs/runs/d07027f4d34144015cbb9d2b5f9f97e82469e6ee9220755737dd6198b9bf05fa/run.json"
+        self.findings = [{"type": "finding", "title": "Check the interpretation", "fileName": "report.md"}]
+        self.results = [
+            {
+                "type": "complete",
+                "status": "review_completed",
+                "findings": 1,
+                "outcome": "completed_with_warnings",
+                "message": "Review completed with warnings",
+                "unreviewedFileCount": 1,
+                "unreviewedFiles": [{"filename": path, "reason": "diff_too_large"}],
+            }
+        ]
+        self.exit_code = 1
+        with contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(cli.main(["--root", str(self.root), "review", "branch", "--base", "main"]), 1)
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertIn(self.findings[0], records)
+        details = records[-1]
+        self.assertEqual((details["status"], details["findings"], details["unreviewed_file_count"]), ("incomplete", 1, 1))
+        self.assertEqual(details["unreviewed_files"], [{"path": path, "reason": "diff_too_large"}])
+        for detail in ("1 finding and skipped 1 file", path, "diff_too_large"):
+            self.assertIn(detail, errors.getvalue())
+
     def test_unterminated_provider_records_remain_separate_during_resume(self) -> None:
         selected = self.start()
         self.final_newline = False
@@ -858,6 +883,42 @@ class TestAgentEvents(unittest.TestCase):
 
 @unittest.skipIf(os.environ.get("RESEARCH_REPO_TOOLS_SKIP_GIT_MUTATIONS") == "1", "disposable Git fixture mutations disabled")
 class TestNativeGitReviewIdentity(unittest.TestCase):
+    def test_release_review_worktree_excludes_only_the_verified_payload(self) -> None:
+        area = Path(self.enterContext(tempfile.TemporaryDirectory())).resolve()
+        root, scoped = area / "release", area / "review"
+        root.mkdir()
+        environment = fixture_git_environment()
+
+        def git(cwd: Path, *args: str) -> bytes:
+            return process.run_git_bytes(["-c", "core.autocrlf=false", "-c", "commit.gpgsign=false", *args], cwd=cwd, env=environment).stdout
+
+        git(root, "init", "--template=", "-b", "main")
+        git(root, "commit", "--allow-empty", "-m", "Base")
+        git(root, "switch", "-c", "release/fixture")
+        archive = "docs/performance/runs"
+        raw = f"{archive}/runs/{'a' * 64}/run.json"
+        sibling = f"{archive}/runs/{'a' * 64}/report.md"
+        (root / raw).parent.mkdir(parents=True)
+        payload = b'{"samples":[' + b"1.0, " * 490_000 + b"2.0]}\n"
+        (root / raw).write_bytes(payload)
+        (root / sibling).write_bytes(b"# Absolute timings\n")
+        git(root, "add", ".")
+        git(root, "commit", "-m", "Add raw samples and their interpretation")
+        prepared = git(root, "rev-parse", "HEAD").decode("ascii").strip()
+        git(root, "worktree", "add", "--detach", str(scoped), "main")
+        git(scoped, "restore", f"--source={prepared}", "--staged", "--worktree", "--", ":/")
+        git(scoped, "--literal-pathspecs", "restore", "--source=HEAD", "--staged", "--worktree", "--", raw)
+        git(scoped, "diff", "--cached", "--quiet", prepared, "--", ".", f":(top,exclude,literal){raw}")
+        git(scoped, "--literal-pathspecs", "diff", "--cached", "--quiet", "main", "--", raw)
+        self.assertEqual(git(scoped, "diff", "--name-only", "-z", "main"), sibling.encode() + b"\0")
+        self.assertFalse((scoped / raw).exists())
+        self.assertEqual((root / raw).read_bytes(), payload)
+        parser = AgentEvents()
+        parser.feed(event({**COMPLETE, "reviewedFiles": [], "unreviewedFileCount": 1, "unreviewedFiles": [{"filename": sibling, "reason": "diff_too_large"}]}))
+        with contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()):
+            self.assertEqual(review.report(parser.finish(1)), 1)
+        self.assertEqual(json.loads(output.getvalue())["unreviewed_files"], [{"path": sibling, "reason": "diff_too_large"}])
+
     def test_staged_file_directory_replacements(self) -> None:
         with tempfile.TemporaryDirectory(prefix="native replacements café ") as directory:
             root = Path(directory).resolve()

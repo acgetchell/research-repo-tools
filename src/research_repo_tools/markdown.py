@@ -65,13 +65,12 @@ def _html_cell(value: str, tag: str) -> str:
     return "\n".join(lines)
 
 
-def _generated_report_layout(text: str) -> str:
+def _generated_report_layout(source: list[str]) -> str:
     """Format our escaped report grammar; this is not a general Markdown parser.
 
     Wide tables use HTML so physical line wrapping preserves each displayed
     cell. Recorded URLs in cells are plain data, not Markdown autolinks.
     """
-    source = text.splitlines()
     result: list[str] = []
     index = 0
     while index < len(source):

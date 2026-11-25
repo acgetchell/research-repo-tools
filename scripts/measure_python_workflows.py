@@ -27,7 +27,13 @@ def _source_modules(source: Path) -> Iterator[Path]:
         """Propagate the path and reason from the failed directory scan."""
         raise error
 
-    for directory, _, names in source.walk(on_error=walk_error):
+    for directory, directories, names in source.walk(on_error=walk_error, follow_symlinks=True):
+        for name in directories:
+            child = directory / name
+            if child.is_symlink() or child.is_junction():
+                target = child.resolve(strict=True)
+                if any(parent.resolve(strict=True) == target for parent in (directory, *directory.parents)):
+                    raise ValueError(f"directory cycle in measured Python source: {child}")
         for name in names:
             path = directory / name
             if path.suffix in {".py", ".pyi"}:

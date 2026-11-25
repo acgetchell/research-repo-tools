@@ -38,7 +38,7 @@ def stable_published_releases(document: object) -> tuple[PublishedRelease, ...]:
     """Filter out drafts and prereleases and sort stable published releases newest by version."""
     if not isinstance(document, list):
         raise ValueError("GitHub releases must be an array")
-    releases: list[PublishedRelease] = []
+    releases: dict[str, PublishedRelease] = {}
     for entry in document:
         if not isinstance(entry, dict):
             raise ValueError("GitHub release must be an object")
@@ -58,10 +58,10 @@ def stable_published_releases(document: object) -> tuple[PublishedRelease, ...]:
         if timestamp.tzinfo is None:
             raise ValueError("release publication time must include a timezone")
         normalized = normalize_tag(tag)
-        if any(item.tag == normalized for item in releases):
+        if normalized in releases:
             raise ValueError(f"duplicate published release: {tag}")
-        releases.append(PublishedRelease(normalized, timestamp))
-    return tuple(sorted(releases, key=lambda item: _tag_version(item.tag), reverse=True))
+        releases[normalized] = PublishedRelease(normalized, timestamp)
+    return tuple(releases[tag] for tag in sorted(releases, key=_tag_version, reverse=True))
 
 
 def _stable_history(read: Callable[[str], object], *, canonical: bool = False) -> tuple[tuple[PublishedRelease, int], ...]:

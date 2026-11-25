@@ -4,7 +4,6 @@ import json
 import tomllib
 from collections.abc import Mapping
 from pathlib import Path
-from typing import cast
 from urllib.parse import urlsplit
 
 from packaging._parser import MarkerItem, MarkerList, Value, Variable
@@ -222,7 +221,7 @@ def _marker_python_support(markers: MarkerList) -> VersionRange:
         elif isinstance(marker, list):
             group &= _marker_python_support(marker)
         elif isinstance(marker, tuple):
-            group &= _marker_atom_support(cast(MarkerItem, marker))
+            group &= _marker_atom_support(marker)
     return alternatives | group
 
 

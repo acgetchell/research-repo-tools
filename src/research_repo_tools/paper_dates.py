@@ -6,6 +6,8 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import Self
 
+from research_repo_tools.text_lines import _physical_lines
+
 __all__ = ["PaperDate", "parse_source_date", "read_source_date"]
 
 _MONTHS = ("January", "February", "March", "April", "May", "June", "July", "August", "September", "October", "November", "December")
@@ -58,7 +60,7 @@ def _uncomment(line: str) -> str:
 
 def parse_source_date(source: str) -> PaperDate:
     """Require one explicit uncommented date; this is not a general TeX parser."""
-    source = "\n".join(_uncomment(line) for line in source.splitlines())
+    source = "\n".join(_uncomment(line) for line in _physical_lines(source))
     commands = list(re.finditer(r"(?<!\\)\\date(?![A-Za-z])", source))
     matches = list(_COMMAND.finditer(source))
     if len(commands) != 1 or len(matches) != 1:

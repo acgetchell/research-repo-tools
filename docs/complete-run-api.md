@@ -380,8 +380,9 @@ replaced; differing bytes, partial directories, corrupt pointers and mismatching
 indexes fail. Empty directories left by a caught rollback are harmless.
 Do not share these new paths with legacy reports or schema-1 archives.
 
-New reports use `research-repo-tools/run-report/v3`. New indexes use
-`research-repo-tools/run-index/v2`, with an integer `report_renderer` (1, 2 or 3)
+New reports use `research-repo-tools/run-report/v4`. Renderer 4 preserves Unicode
+line and paragraph separators inside titles and workload labels. New indexes use
+`research-repo-tools/run-index/v2`, with an integer `report_renderer` (1 through 4)
 in every run entry. The latest-pointer schema and content-derived run identity
 remain version 1. Renderer versions describe presentation; they do not alter the
 run payload, evidence envelope or evidence hashes. Current and new retained
@@ -396,8 +397,9 @@ mutable index to version 2 and renders the current report with wrapped source,
 provenance and links. Every existing immutable report, payload and envelope stays byte for byte,
 including when an old run is selected or promoted again. Old reports therefore
 retain their original presentation without new links. Mixed histories record
-renderer 1 or 2 for those entries and renderer 3 for newly retained runs; unknown
-renderer versions or report bytes inconsistent with the recorded version fail.
+the original renderer (1, 2 or 3) for those entries and renderer 4 for newly
+retained runs. Validation rejects unknown versions and reports whose bytes differ
+from their recorded renderer's output.
 Historical reports keep their original formatting, including any long lines;
 scope lint exceptions to those frozen files rather than rewriting them.
 No benchmark resampling is needed. Older package versions cannot read newer
