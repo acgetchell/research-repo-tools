@@ -314,20 +314,31 @@ def test_source_digest_preserves_posix_component_order_across_platforms(harness,
 
 
 def test_source_digest_hashes_linked_packages_and_diagnoses_cycles(harness, tmp_path):
+    root = tmp_path / "links&targets"
+    root.mkdir()
+
     def link_directory(link, target):
         if os.name == "nt":
-            subprocess.run(["cmd", "/d", "/c", "mklink", "/J", str(link), str(target)], check=True, capture_output=True, timeout=30)
+            # Only the fixture's fixed relative names pass through cmd.exe.
+            subprocess.run(
+                ["cmd.exe", "/d", "/c", "mklink", "/J", str(link.relative_to(root)), str(target.relative_to(root))],
+                cwd=root,
+                check=True,
+                capture_output=True,
+                timeout=30,
+            )
             assert link.is_junction()
         else:
             link.symlink_to(target, target_is_directory=True)
             assert link.is_symlink()
+        assert link.samefile(target)
 
-    source = tmp_path / "src"
-    package = tmp_path / "shared"
+    source = root / "src"
+    package = root / "shared"
     source.mkdir()
     package.mkdir()
     link_directory(source / "library", package)
-    ordinary = tmp_path / "ordinary"
+    ordinary = root / "ordinary"
     (ordinary / "library").mkdir(parents=True)
     for content in (b"version = 1\n", b"version = 2\n"):
         (package / "__init__.py").write_bytes(content)
