@@ -13,7 +13,7 @@ from collections.abc import Callable, Sequence
 from contextvars import ContextVar
 from datetime import datetime, timezone
 from email.utils import parsedate_to_datetime
-from queue import Empty, SimpleQueue
+from queue import Empty, Queue
 from typing import cast, override
 from urllib.parse import SplitResult, urlsplit
 
@@ -90,7 +90,8 @@ def _resolve_addresses(address: tuple[str, int], cap: float, remaining: Callable
     if not _DNS_SLOTS.acquire(timeout=_io_timeout(remaining, cap)):
         _io_timeout(remaining, cap)
         raise TimeoutError("registry DNS resolver slots are busy")
-    result: SimpleQueue[Sequence[_AddressInfo] | BaseException] = SimpleQueue()
+    # Queue.get rechecks its monotonic deadline if the native wait wakes early.
+    result: Queue[Sequence[_AddressInfo] | BaseException] = Queue()
     ownership = threading.Lock()
     claimed = False
 
