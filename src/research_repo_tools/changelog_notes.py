@@ -4,6 +4,7 @@ import re
 
 from research_repo_tools import archive_changelog as archive
 from research_repo_tools.postprocess_changelog import _backtick_span_end, _balanced_delimiter_end, _changelog_prose
+from research_repo_tools.text_lines import _physical_lines
 
 _BOUNDARY = re.compile(r"^ {0,3}#{1,2}(?:[ \t]+|$)")
 _REFERENCE = re.compile(r"^ {0,3}\[([^\]\n]+)\]:[ \t]+\S+.*$")
@@ -11,7 +12,7 @@ _REFERENCE = re.compile(r"^ {0,3}\[([^\]\n]+)\]:[ \t]+\S+.*$")
 
 def _scan(text: str) -> tuple[list[str], list[int], dict[str, list[str]], set[int]]:
     """Locate section boundaries and reference definitions outside closed fences."""
-    lines = text.splitlines()
+    lines = _physical_lines(text)
     boundaries: list[int] = []
     definitions: dict[str, list[str]] = {}
     definition_lines: set[int] = set()
@@ -44,7 +45,7 @@ def reference_definitions(text: str, required: set[str] | None = None) -> dict[s
 
 def _required_references(body: str) -> set[str]:
     """Collect reference labels while keeping literal code and inline links opaque."""
-    text = "\n".join(line for _, line in _changelog_prose(body.splitlines()))
+    text = "\n".join(line for _, line in _changelog_prose(body.split("\n")))
     labels: set[str] = set()
     index = 0
     while index < len(text):

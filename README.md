@@ -175,8 +175,10 @@ just performance-readme tooling/performance-release.toml
 
 If only the README step fails, fix the presentation and retry it using retained
 evidence. For a [first stable release][first-release], record current timings.
-If published releases predate the workload, v0.3.2 adds a [benchmark series
-procedure][series-guide] for use once that tooling version is published.
+If published releases predate the workload, follow the [benchmark series
+procedure][series-guide]. For v0.3.3 adoption, use the verified published
+distribution to revalidate an immutable series release or to
+[review a preparation PR with a large archived payload][raw-review].
 
 ### Releases
 
@@ -260,6 +262,7 @@ BSD-3-Clause. See [LICENSE][license].
 [reuse-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_CI.md
 [review-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_CHECKS.md#coderabbit-review
 [series-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_BENCHMARKS.md#starting-a-benchmark-series-after-earlier-releases
+[raw-review]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_BENCHMARKS.md#reviewing-a-large-archived-payload
 [timing-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/TIMING_COMMANDS.md
 [toolchain]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/INSTALLING.md
 [updates-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_DEPENDENCIES.md

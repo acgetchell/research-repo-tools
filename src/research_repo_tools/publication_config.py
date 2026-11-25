@@ -31,6 +31,7 @@ from research_repo_tools.publication import (
 )
 from research_repo_tools.release_policy import FixedValue, ReleaseRule
 from research_repo_tools.release_tags import _github_repo_url, validate_semver
+from research_repo_tools.text_lines import _physical_lines
 
 __all__ = ["load_publication"]
 
@@ -464,7 +465,7 @@ def _load_publication(
 
         _verify_plan(plan)
         return plan
-    content = _generated_report_layout(content)
+    content = _generated_report_layout(_physical_lines(content))
     repository = _github_repo_url(_string(raw["repository"], "repository")) if "repository" in raw else None
     link_paths: list[str] = []
 

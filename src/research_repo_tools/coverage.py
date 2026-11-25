@@ -108,18 +108,17 @@ def coverage_entries(root: ET.Element) -> Iterable[CoverageEntry]:
     Yields:
         CoverageEntry: Coverage details for each file with coverable lines.
     """
-    files: dict[str, dict[int, int]] = {}
+    files: dict[Path, dict[int, int]] = {}
     for class_element in root.findall(".//class"):
         raw_path = class_element.get("filename")
         if not raw_path:
             continue
 
         lines = class_element.findall("./lines/line")
-        coverable = len(lines)
-        if not coverable:
+        if not lines:
             continue
 
-        observed = files.setdefault(raw_path.replace("\\", "/"), {})
+        observed = files.setdefault(Path(raw_path.replace("\\", "/")), {})
         for line in lines:
             hits = _line_hits(line, raw_path)
             raw_number = line.get("number", "")
@@ -127,10 +126,9 @@ def coverage_entries(root: ET.Element) -> Iterable[CoverageEntry]:
                 raise ValueError(f"Coverage report has invalid line number for {raw_path}: {raw_number!r}")
             number = int(raw_number)
             observed[number] = max(observed.get(number, 0), hits)
-    for raw_path, observed in sorted(files.items()):
+    for path, observed in sorted(files.items(), key=lambda item: item[0].as_posix()):
         coverable = len(observed)
         covered = sum(hits > 0 for hits in observed.values())
-        path = Path(raw_path)
         coverage = (covered / coverable) * 100
         yield CoverageEntry(coverage=coverage, coverable=coverable, covered=covered, path=path)
 
@@ -166,14 +164,8 @@ def filter_entries(
     """
     if not prefix:
         return list(entries)
-    normalized_prefix = prefix if prefix.endswith("/") else f"{prefix}/"
-    filtered: list[CoverageEntry] = []
-    for entry in entries:
-        relative = entry.relative_path(relative_to)
-        relative_str = relative.as_posix()
-        if relative_str.startswith(normalized_prefix):
-            filtered.append(entry)
-    return filtered
+    prefix_path = Path(prefix.replace("\\", "/"))
+    return [entry for entry in entries if entry.relative_path(relative_to).is_relative_to(prefix_path)]
 
 
 def main(argv: list[str] | None = None, *, root: Path | None = None) -> int:

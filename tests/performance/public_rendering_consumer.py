@@ -12,6 +12,8 @@ from decimal import Decimal, localcontext
 from typing import Literal
 from unittest.mock import patch
 
+from markdown_it import MarkdownIt
+
 from research_repo_tools.complete_runs import (
     RUN_SCHEMA,
     RUN_SCHEMA_V2,
@@ -22,6 +24,7 @@ from research_repo_tools.complete_runs import (
     CompleteSample,
     RunSeries,
     _render_run_v2,
+    _render_wrapped_report,
     render_run,
     serialize_policy,
     serialize_run,
@@ -133,6 +136,32 @@ def report(evidence):
 
 
 class TestRenderingConsumer(unittest.TestCase):
+    def test_unicode_title_keeps_report_heading_and_evidence_links_on_their_lines(self):
+        evidence = fixture()
+        paths = {"report_path": "docs/report.md", "payload_path": "data/run.json", "manifest_path": "data/evidence.json"}
+        title = "Timings\u2028continued"
+        # Captured from renderer 3 before the physical-line correction.
+        old = _render_wrapped_report(evidence, renderer=3, title=title, **paths)
+        self.assertEqual(hashlib.sha256(old).hexdigest(), "6fc29f2d77b8a7ff29bd53e808d8605578739579edc62a4480dee25ff75351db")
+        output = render_run(evidence, title=title, **paths)
+        lines = output.decode("utf-8").split("\n")
+        self.assertEqual(lines[1], "# Timings\u2028continued")
+        self.assertEqual(
+            [line for line in lines if line.startswith("Evidence: ")],
+            ["Evidence: [run payload](../data/run.json) · [evidence envelope](../data/evidence.json)."],
+        )
+
+    def test_long_unicode_title_renders_as_one_complete_heading(self):
+        evidence = fixture()
+        for separator in ("\u2028", "\u2029"):
+            with self.subTest(separator=separator):
+                title = "a" * 80 + separator + "b" * 80
+                markdown = render_run(evidence, title=title).decode("utf-8")
+                heading_source = markdown.partition("\n\n")[0]
+                rendered = ET.fromstring(f"<article>{MarkdownIt().render(heading_source)}</article>")
+                self.assertEqual(rendered.findtext("h1"), title)
+                self.assertLessEqual(max(map(len, heading_source.split("\n"))), 160)
+
     def test_coordinate_geometry_agrees_with_high_precision_oracle(self):
         nearby = []
         for start in (1e-300, 1.0, 1e100, 1e308):
@@ -224,7 +253,7 @@ class TestRenderingConsumer(unittest.TestCase):
                 )
                 self.assertEqual(hashlib.sha256(rendered).hexdigest(), digest)
                 current = report(evidence)
-                self.assertTrue(current.startswith(b"<!-- research-repo-tools/run-report/v3 -->"))
+                self.assertTrue(current.startswith(b"<!-- research-repo-tools/run-report/v4 -->"))
                 self.assertEqual(report(evidence), current)
                 for output in (rendered, current):
                     self.assertIn(b"| row&#124;&lt;000&gt; | 11 ns [10, 12] (0.95 confidence) |", output)

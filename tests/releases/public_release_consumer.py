@@ -227,7 +227,8 @@ class TestReleaseConsumer(unittest.TestCase):
 
     def test_release_notes_stdout_preserves_utf8_and_lf(self) -> None:
         changelog = self.root / "CHANGELOG.md"
-        changelog.write_bytes("# Changelog\n\n## [1.2.3] - 2026-09-01\n\n- café β → γ.\n".encode())
+        body = "- café β → γ.\u2028## still part of the same paragraph.\n"
+        changelog.write_bytes(("# Changelog\n\n## [1.2.3] - 2026-09-01\n\n" + body).encode())
         before = self.snapshot()
         for encoding in ("utf-8", "cp1252"):
             for newline in ("\n", "\r\n"):
@@ -236,7 +237,7 @@ class TestReleaseConsumer(unittest.TestCase):
                         with patch("sys.stdout", stdout):
                             self.assertEqual(main(["--root", str(self.root), "changelog", "notes", "v1.2.3"]), 0)
                         stdout.flush()
-                        self.assertEqual(buffer.getvalue(), "- café β → γ.\n".encode())
+                        self.assertEqual(buffer.getvalue(), body.encode())
         self.assertEqual(self.snapshot(), before)
 
     def test_discovery_and_preview_apply_preserve_historical_bytes(self) -> None:

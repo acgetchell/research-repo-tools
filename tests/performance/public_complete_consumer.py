@@ -1786,9 +1786,9 @@ if '--list' in sys.argv:
                 self.assertFalse(load_run_report_plan(root, "report.toml").changed_paths)
             index = json.loads((archive / "index.json").read_bytes())
             self.assertEqual(index["schema"], "research-repo-tools/run-index/v2")
-            self.assertEqual(index["runs"][0]["report_renderer"], 3)
+            self.assertEqual(index["runs"][0]["report_renderer"], 4)
             before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
-            for renderer in (True, 0, 4, "2", None):
+            for renderer in (True, 0, 5, "2", None):
                 with self.subTest(renderer=renderer):
                     index["runs"][0]["report_renderer"] = renderer
                     (archive / "index.json").write_bytes(deterministic_json(index))
@@ -1834,7 +1834,7 @@ if '--list' in sys.argv:
                 self.assertEqual(inspect_lines(path, limit=160), (), path)
             for path in (root / "docs/current.md", retained / "report.md"):
                 report = path.read_text(encoding="utf-8")
-                self.assertTrue(report.startswith("<!-- research-repo-tools/run-report/v3 -->"))
+                self.assertTrue(report.startswith("<!-- research-repo-tools/run-report/v4 -->"))
                 self.assertNotIn("<script>", report)
                 rows = report_rows(report)
                 expected = (label, "10 ns [9, 11] (0.95 confidence)", "5 ns [4.5, 5.5] (0.95 confidence)", "10 ns [9, 11] (0.95 confidence)")
@@ -1979,7 +1979,9 @@ if '--list' in sys.argv:
             self.assertIn("publication paths not supplied", (consumer / "unlinked.md").read_text(encoding="utf-8"))
 
     def test_historical_history_migrates_index_and_current_without_rewriting_retained_files(self):
-        for renderer, report in ((1, LEGACY_REPORT), (2, PROVENANCE_REPORT)):
+        # The original renderer 3 changed only the marker for this narrow report.
+        wrapped_report = PROVENANCE_REPORT.replace("run-report/v2", "run-report/v3", 1)
+        for renderer, report in ((1, LEGACY_REPORT), (2, PROVENANCE_REPORT), (3, wrapped_report)):
             with self.subTest(renderer=renderer), tempfile.TemporaryDirectory() as directory:
                 root = Path(directory)
                 evidence = retained_fixture()
@@ -1994,7 +1996,10 @@ if '--list' in sys.argv:
                 for name, data in (("run.json", payload), ("evidence.json", manifest), ("report.md", report.format(identity=identity).encode())):
                     (retained / name).write_bytes(data)
                 index_entry = entry if renderer == 1 else {**entry, "report_renderer": renderer}
-                (root / "history/index.json").write_bytes(deterministic_json({"schema": f"research-repo-tools/run-index/v{renderer}", "runs": [index_entry]}))
+                index_schema = 1 if renderer == 1 else 2
+                (root / "history/index.json").write_bytes(
+                    deterministic_json({"schema": f"research-repo-tools/run-index/v{index_schema}", "runs": [index_entry]})
+                )
                 (root / "history/latest.json").write_bytes(deterministic_json({"schema": "research-repo-tools/latest-run/v1", "run": entry}))
                 (root / "report.toml").write_bytes(b'schema=2\ncurrent="current.md"\narchive="history"\ntitle="Timing"\n')
                 before = {path: path.read_bytes() for path in retained.iterdir()}
@@ -2015,7 +2020,7 @@ if '--list' in sys.argv:
                 self.assertEqual(load_latest_run(root, "history"), second)
                 self.assertEqual({path: path.read_bytes() for path in retained.iterdir()}, before)
                 index = json.loads((root / "history/index.json").read_bytes())
-                self.assertEqual({item["report_renderer"] for item in index["runs"]}, {renderer, 3})
+                self.assertEqual({item["report_renderer"] for item in index["runs"]}, {renderer, 4})
 
     def test_cli_measure_promote_repeat_runs_offline_and_corrupt_pointer(self):
         with tempfile.TemporaryDirectory(prefix="retention café ") as directory:

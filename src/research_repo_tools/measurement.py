@@ -8,7 +8,6 @@ from collections.abc import Callable, Mapping
 from contextlib import ExitStack
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import TYPE_CHECKING
 
 from research_repo_tools.criterion import COMPARISON_SCHEMA, Sample, Statistic, Unit, _statistic, _unit, collect_sample, compare_samples, serialize_comparison
 from research_repo_tools.evidence import Evidence, Provenance, _object, _string, compare_provenance, fingerprint_files
@@ -21,10 +20,8 @@ from research_repo_tools.release_discovery import _tag_version, normalize_tag
 from research_repo_tools.release_pairs import ReleasePair
 from research_repo_tools.source_exports import CapturedSource, capture_source, export_source
 from research_repo_tools.worktrees import apply_snapshot, capture_snapshot, temporary_worktree
-
-if TYPE_CHECKING:
-    from research_repo_tools.common_measurement import CompleteMeasurementPlan
-    from research_repo_tools.suite_measurement import SuiteMeasurementPlan
+lazy from research_repo_tools.common_measurement import CompleteMeasurementPlan
+lazy from research_repo_tools.suite_measurement import SuiteMeasurementPlan
 
 __all__ = ["MeasurementConfig", "capture_provenance", "load_measurement", "measure_checkout", "measure_pair", "resolve_revision"]
 
@@ -122,7 +119,7 @@ class MeasurementConfig:
             raise ValueError(f"unsupported measurement release {tag}; requires {self.minimum_release} or newer")
 
 
-def load_measurement(root: Path, configuration: str) -> "MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan":
+def load_measurement(root: Path, configuration: str) -> MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan:
     """Read strict measurement TOML; commands are trusted consumer configuration."""
     document = tomllib.loads(_path(root.resolve(), configuration).read_bytes().decode("utf-8"))
     if type(document.get("schema")) is int and document["schema"] in {5, 6}:
@@ -251,7 +248,7 @@ def measure_checkout(root: Path, configuration: MeasurementConfig, tag: str, *, 
     return sample, before
 
 
-def _measurement_backend(configuration: "MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan", backend: str | None) -> str:
+def _measurement_backend(configuration: MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan, backend: str | None) -> str:
     """Resolve an omitted backend and require explicit selections to agree with the plan."""
     if backend is None:
         backend = "worktree" if isinstance(configuration, MeasurementConfig) else configuration.backend
@@ -264,7 +261,7 @@ def _measurement_backend(configuration: "MeasurementConfig | CompleteMeasurement
 
 def measure_pair(
     root: Path,
-    configuration: "MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan",
+    configuration: MeasurementConfig | CompleteMeasurementPlan | SuiteMeasurementPlan,
     pair: ReleasePair,
     *,
     working_tree: bool = False,
@@ -284,7 +281,7 @@ def measure_pair(
     selected_backend = _measurement_backend(configuration, backend)
     if selected_backend == "worktree" and not allow_git_mutations:
         raise ValueError("measure requires --allow-git-mutations for isolated worktree lifecycle")
-    from research_repo_tools.suite_measurement import SuiteMeasurementPlan, measure_suites
+    from research_repo_tools.suite_measurement import measure_suites
 
     if isinstance(configuration, SuiteMeasurementPlan):
         return measure_suites(root, configuration, pair, working_tree=working_tree, checkpoint=checkpoint, resume=resume, progress=progress, verify=verify)

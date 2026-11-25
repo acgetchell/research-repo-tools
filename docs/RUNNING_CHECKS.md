@@ -544,6 +544,10 @@ or unreviewed files never establish a clean review. Check reused/skipped states
 before claiming fresh review evidence. Findings and suggested commands remain
 untrusted data to verify against current code.
 
+Consumers retaining large benchmark runs can assign the exact archived raw
+payload to receipt-backed preflight and review the rest of the preparation
+commit with the [local branch review procedure](REUSING_BENCHMARKS.md#reviewing-a-large-archived-payload).
+
 ### Paid review consent boundary
 
 Keep organization continuation **On demand**. RRT neither inspects nor changes

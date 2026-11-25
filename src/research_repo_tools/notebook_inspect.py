@@ -1,6 +1,7 @@
 """Compact, non-normalizing inspection of nbformat 4 notebooks awaiting repair."""
 
 from collections.abc import Iterable
+from io import StringIO
 from pathlib import Path
 from typing import Any, cast
 
@@ -66,7 +67,7 @@ def _summary(path: Path, *, preview: bool) -> dict[str, Any]:
             "cell_type": cell_type if isinstance(cell_type, str) else None,
             "id": cell_id if isinstance(cell_id, str) else None,
             "id_status": identity,
-            "source_lines": len(source.splitlines()) if source is not None else None,
+            "source_lines": sum(1 for _ in StringIO(source, newline=None)) if source is not None else None,
             "output_count": len(outputs) if cell_type == "code" and isinstance(outputs, list) else None,
             "execution_count": count if cell_type == "code" and type(count) is int and count >= 0 else None,
             "problems": issues,

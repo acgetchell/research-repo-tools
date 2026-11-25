@@ -76,6 +76,63 @@ the complete v5 evidence beside derived views; selecting a trial does not make
 its v4 payload standalone proof of counterbalancing. Pooling within-phase
 Criterion samples does not create independent trials or significance evidence.
 
+### Reviewing a large archived payload
+
+For v0.3.3 adoption, pin the verified PyPI distribution once published. A
+consumer can assign the **one raw payload for this acquisition** to offline
+preflight and require complete local CodeRabbit review of the remaining PR
+diff. Record that choice in the consumer's review policy before acquisition.
+Benchmark code, workload and report declarations, envelopes, indexes, figures,
+reports, and scientific interpretation stay in review.
+
+Run [candidate preflight](candidate-reuse-api.md#offline-preparation-preflight)
+on the clean preparation commit with the original owner handoff and independently
+trusted acquisition and publication digests. Stop on failure. The verified
+publication receipt binds the report declaration's `archive` and run identity
+to the exact committed bytes. For `archive = "docs/performance-runs"`, the
+eligible path is `docs/performance-runs/runs/<identity>/run.json`. For
+`archive = "docs/performance/runs"`, it is `docs/performance/runs/runs/<identity>/run.json`.
+
+From the repository root, use the same `preparation_commit` and protected
+`owner` directory as preflight. The following Bash commands use jq and the
+consumer's normal review recipe. Start a disposable worktree at the PR's
+merge base. Stage the preparation tree there and restore just the verified
+payload to its base state. The two quiet comparisons check every other staged
+path against the preparation commit and the selected path against the base.
+
+```bash
+set -eu
+base_ref=origin/main
+base_tip=$(git rev-parse --verify "$base_ref^{commit}")
+base=$(git merge-base --all "$base_tip" "$preparation_commit")
+raw=$(jq -er '.archive + "/runs/" + .identity + "/run.json"' "$owner/publication.json")
+review_tree=$(mktemp -d)
+git worktree add --detach "$review_tree" "$base"
+git -C "$review_tree" restore --source="$preparation_commit" --staged --worktree -- :/
+git -C "$review_tree" --literal-pathspecs restore --source=HEAD --staged --worktree -- "$raw"
+git -C "$review_tree" diff --cached --quiet "$preparation_commit" -- . ":(top,exclude,literal)$raw"
+git -C "$review_tree" --literal-pathspecs diff --cached --quiet "$base" -- "$raw"
+git -C "$review_tree" diff --quiet
+test -z "$(git -C "$review_tree" ls-files --others --exclude-standard)"
+git -C "$review_tree" diff --cached --name-status --no-renames "$base"
+(cd "$review_tree" && just review "$base_ref")
+test "$(git rev-parse "$base_ref")" = "$base_tip"
+```
+
+Retain the preparation SHA, base SHA, exact excluded path, preflight result,
+and terminal review record together. Check review coverage against the staged
+inventory and resolve findings. Any provider-reported skipped sibling blocks
+the gate. Repeat on changed inputs or a changed comparison base. Run the
+consumer's security, CI and scientific checks on the full preparation tree.
+After recording the result, discard the disposable staged copy with
+`git worktree remove --force "$review_tree"`.
+
+In a two-file local branch review with CodeRabbit CLI 0.9.7, the provider
+listed both a 2.45 MB synthetic raw payload and its Markdown sibling despite
+a matching negative `reviews.path_filters` entry. With the scoped Git diff
+it reported only the sibling and completed without reuse. Use the Git scope
+when the consumer requires an auditable local exclusion. [CodeRabbit local review](https://docs.coderabbit.ai/cli/index#local-review)
+
 ## Step 2: freeze final release evidence
 
 Wait for the required native CI evidence on the final main commit. From its
@@ -194,7 +251,14 @@ base commit of the measured working tree from the trusted Step 1 handoff.
 Keep the original preparation and independent handoff digests. Follow
 [Step 2](#step-2-freeze-final-release-evidence) and the [attachment procedure](#packaging-approval-and-retries)
 for the reviewed commit. The verifier enumerates history again at acceptance
-and approval. A changed predecessor or tag identity invalidates the selection.
+and approval. In v0.3.3 it also accepts that history plus the selected
+immutable stable release at the final commit. It verifies the provider ID and
+tag, the resolved commit, and the workload contract from the tagged tree.
+Every earlier record must still match. Added unrelated releases, removed
+records, or changes to a predecessor's ID, commit or contract invalidate the
+selection. Preparation and acquisition still require a prospective tag newer
+than all published stable history. Reuse the saved acceptance at approval,
+or explicitly select renewed native evidence into a new acceptance file.
 Native/package evidence, archive derivation, attachment retries, and approval
 all refer to the original acquisition. The consumer owns scientific
 compatibility, Cargo guarantees, and release approval.

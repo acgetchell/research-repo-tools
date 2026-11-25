@@ -5,7 +5,6 @@ import io
 import os
 import tarfile
 from pathlib import Path, PurePosixPath
-from typing import TYPE_CHECKING
 
 from research_repo_tools._archive_paths import ArchivePaths
 from research_repo_tools._dependency_observation import retain_guard
@@ -14,9 +13,7 @@ from research_repo_tools.dependency_policy import MAX_SNAPSHOT_FILE_BYTES, MAX_S
 from research_repo_tools.dependency_progress import report
 from research_repo_tools.dependency_sources import HttpSourceProvider, SourceProvider, VerifiedSource, table
 from research_repo_tools.evidence import deterministic_json, sha256
-
-if TYPE_CHECKING:
-    from research_repo_tools.dependency_graphs import DependencyGraph
+lazy from research_repo_tools.dependency_graphs import DependencyGraph
 
 CARGO_MAX_COMPRESSED_BYTES = 32 * 1024 * 1024
 CARGO_MAX_EXPANDED_BYTES = 64 * 1024 * 1024

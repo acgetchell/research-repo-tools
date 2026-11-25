@@ -9,6 +9,35 @@ from typing import Any
 
 
 class TestImports(unittest.TestCase):
+    def test_cross_module_annotations_resolve_to_package_types(self) -> None:
+        from typing import get_type_hints
+
+        from research_repo_tools import common_measurement, complete_runs, dependency_artifacts, measurement, release_publishing
+        from research_repo_tools.config import Config
+        from research_repo_tools.dependency_graphs import DependencyGraph
+        from research_repo_tools.scheduled_runs import ScheduledRun
+        from research_repo_tools.suite_measurement import SuiteMeasurementPlan
+        from research_repo_tools.suite_runs import SuiteRun
+
+        plans = measurement.MeasurementConfig | common_measurement.CompleteMeasurementPlan | SuiteMeasurementPlan
+        runs = complete_runs.CompleteRun | SuiteRun | ScheduledRun
+        for function, parameter, expected in (
+            (measurement.load_measurement, "return", plans),
+            (measurement.measure_pair, "configuration", plans),
+            (common_measurement.validate_run_policy, "plan", plans),
+            (common_measurement.validate_run_policy, "return", runs),
+            (complete_runs.validate_run_evidence, "return", runs),
+            (dependency_artifacts.python_environment_layout, "graph", DependencyGraph),
+            (dependency_artifacts.verify_python_environment, "graph", DependencyGraph),
+            (release_publishing.check_metadata, "config", Config),
+            (release_publishing.check_release_source, "config", Config),
+            (release_publishing.check_reviewed_release, "config", Config),
+            (release_publishing.publish_reviewed_release, "config", Config),
+            (release_publishing.verify_publication, "config", Config),
+        ):
+            with self.subTest(function=function.__name__, parameter=parameter):
+                self.assertEqual(get_type_hints(function)[parameter], expected)
+
     def child(self, code: str, *, frozen: str = "on") -> Any:
         env = {key: value for key, value in os.environ.items() if key != "PYTHON_LAZY_IMPORTS"}
         result = subprocess.run(

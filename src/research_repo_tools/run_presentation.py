@@ -319,11 +319,12 @@ def serialize_run_csv(evidence: Evidence, layout: RunLayout) -> bytes:
     for item in layout.series:
         view = next(view for view in run.series if view.name == item.name)
         phase_source = dict(evidence.sources)[view.phase]
+        benchmarks = dict(item.rows)
         for row in layout.rows:
             source = phase_source
             estimate = selected[item.name].get(row.key)
             if isinstance(run, SuiteRun) and estimate is not None:
-                _, _, source = run.observation(view.phase, dict(item.rows)[row.key])
+                _, _, source = run.observation(view.phase, benchmarks[row.key])
             writer.writerow(
                 [
                     identity,
@@ -337,7 +338,7 @@ def serialize_run_csv(evidence: Evidence, layout: RunLayout) -> bytes:
                     row.key,
                     row.label,
                     row.coordinate,
-                    dict(item.rows).get(row.key),
+                    benchmarks.get(row.key),
                     layout.statistic,
                     layout.unit,
                     "available" if estimate is not None else "unavailable",

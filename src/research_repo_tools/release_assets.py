@@ -347,15 +347,17 @@ def preflight_release_target(
     return target
 
 
-def revalidate_release_target(root: Path, target: ReleaseTarget, *, checkout: Path | None = None, dependencies: tuple[str, ...] = ()) -> GitHubRelease:
-    """Read captured ID directly; require identity, title, lifecycle and tag SHA."""
+def revalidate_release_target(
+    root: Path, target: ReleaseTarget, *, checkout: Path | None = None, dependencies: tuple[str, ...] = (), allow_published: bool = False
+) -> GitHubRelease:
+    """Verify the captured draft ID, title and tag SHA. A read-only caller can also accept its immutable published state."""
     from research_repo_tools.dependency_provenance import check_release_dependencies
 
     check_release_dependencies(checkout if checkout is not None else root, packages=dependencies)
-    return _observe_release_target(root, target, checkout=checkout)
+    return _observe_release_target(root, target, checkout=checkout, allow_published=allow_published)
 
 
-def _observe_release_target(root: Path, target: ReleaseTarget, *, checkout: Path | None) -> GitHubRelease:
+def _observe_release_target(root: Path, target: ReleaseTarget, *, checkout: Path | None, allow_published: bool = False) -> GitHubRelease:
     """Live identity observation inside an independently verified operation."""
     if not isinstance(target, ReleaseTarget):
         raise TypeError("release target must be a ReleaseTarget")
@@ -363,7 +365,8 @@ def _observe_release_target(root: Path, target: ReleaseTarget, *, checkout: Path
         require_release_checkout(checkout, target.commit)
     release = _release_by_id(root, target.repository, target.tag, target.release_id)
     _require_identity(release, target)
-    require_draft(release)
+    if not (allow_published is True and release.draft is False and release.prerelease is False and release.immutable is True):
+        require_draft(release)
     if _remote_commit(root, target.repository, target.tag) != target.commit:
         raise ValueError("remote release tag commit differs from captured target")
     if checkout is not None:

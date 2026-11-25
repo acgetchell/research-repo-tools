@@ -66,6 +66,12 @@ def pdf_bytes(
 
 
 class TestDates(unittest.TestCase):
+    def test_unicode_separators_do_not_end_tex_comments(self) -> None:
+        for newline in ("\r", "\r\n", "\n"):
+            with self.subTest(newline=newline):
+                source = "% ignored\u2028" + r"\date{January 1, 1999}" + newline + r"\date{July 6, 2026}"
+                self.assertEqual(parse_source_date(source).raw, "July 6, 2026")
+
     def test_explicit_locale_independent_date_comments_and_epoch(self) -> None:
         date = parse_source_date("% \\date{January 1, 1999}\n" + r"\date{July 6, 2026} % comment")
         self.assertEqual(date.source_date_epoch, 1783296000)

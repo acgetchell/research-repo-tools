@@ -176,8 +176,7 @@ def _tagged_contract(root: Path, commit: str, declaration: str, name: str) -> st
     return series_contract(plan)
 
 
-def select_series(root: Path, declaration: str, plan: SuiteMeasurementPlan, current: str, read: Callable[[str], object]) -> SeriesBaseline | SeriesPair:
-    """Resolve the latest declared compatible release, or prove this is the inaugural tag."""
+def _read_history(root: Path, declaration: str, plan: SuiteMeasurementPlan, read: Callable[[str], object]) -> SeriesHistory:
     from research_repo_tools.release_assets import _resolve_tag_commit
 
     series = plan.benchmark_series
@@ -190,4 +189,31 @@ def select_series(root: Path, declaration: str, plan: SuiteMeasurementPlan, curr
         commit = _resolve_tag_commit(release.tag, read)
         contract = _tagged_contract(root, commit, declaration, series.name)
         rows.append((release.tag, identifier, commit, contract))
-    return SeriesHistory(declaration, tuple(rows)).selection(plan, current)
+    return SeriesHistory(declaration, tuple(rows))
+
+
+def select_series(root: Path, declaration: str, plan: SuiteMeasurementPlan, current: str, read: Callable[[str], object]) -> SeriesBaseline | SeriesPair:
+    """Resolve the latest declared compatible release, or prove this is the inaugural tag."""
+    return _read_history(root, declaration, plan, read).selection(plan, current)
+
+
+def verify_series_history(
+    root: Path, frozen: SeriesHistory, plan: SuiteMeasurementPlan, repository: str, tag: str, commit: str, read: Callable[[str], object]
+) -> int | None:
+    """Require the acquisition history plus, after publication, the exact immutable candidate. Return its provider ID when present."""
+    from research_repo_tools.release_assets import _require_response_identity
+
+    frozen.selection(plan, tag)
+    observed = _read_history(root, frozen.declaration, plan, read)
+    if observed == frozen:
+        return None
+    if not observed.releases or observed.releases[1:] != frozen.releases:
+        raise ValueError("published benchmark series history changed since preparation")
+    current, identifier, revision, contract = observed.releases[0]
+    if (current, revision, contract) != (tag, commit, series_contract(plan)):
+        raise ValueError("published benchmark series history changed: tag, commit or workload contract differs from the candidate")
+    release = _object(read(f"releases/tags/{tag}"), "published series release")
+    _require_response_identity(release, repository, tag, identifier)
+    if release.get("draft") is not False or release.get("prerelease") is not False or release.get("immutable") is not True:
+        raise ValueError("published benchmark series candidate must be an immutable stable release")
+    return identifier
