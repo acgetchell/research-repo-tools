@@ -237,7 +237,7 @@ def _incomplete_review(data: dict[str, object], findings: int) -> FailedReview |
     for item in details:
         if not isinstance(item, dict):
             return FailedReview(1, "malformed CodeRabbit unreviewed file")
-        path = item.get("fileName", item.get("path", item.get("filePath", item.get("file"))))
+        path = item.get("fileName", item.get("filename", item.get("path", item.get("filePath", item.get("file")))))
         reason = item.get("reason")
         if not isinstance(path, str) or not path or (reason is not None and not isinstance(reason, str)):
             return FailedReview(1, "malformed CodeRabbit unreviewed file")

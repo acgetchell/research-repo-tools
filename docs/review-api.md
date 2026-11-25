@@ -51,7 +51,9 @@ Local precondition errors have stderr diagnostics and no terminal JSON guarantee
 
 An included review with partial coverage returns exit 1 and `status="incomplete"`. The terminal result
 includes `findings`, `unreviewed_file_count` and `unreviewed_files`. Each entry
-contains a `path` and the provider's `reason`, when supplied. The original
+contains a `path` and the provider's `reason`, when supplied. Provider entries
+accept `fileName`, `filename`, `path`, `filePath` or `file` as the path key, in
+that precedence order; a malformed higher-priority value is still rejected. The original
 finding events remain in the output stream. For `diff_too_large`, reduce the
 offending file's diff and obtain review coverage before pushing. A paid attempt
 with incomplete coverage retains these details under `status="uncertain"`,

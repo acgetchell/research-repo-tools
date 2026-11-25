@@ -64,6 +64,23 @@ def fixture_git_environment() -> dict[str, str]:
     return environment
 
 
+UNREVIEWED_PATH = "docs/performance/runs/runs/d07027f4d34144015cbb9d2b5f9f97e82469e6ee9220755737dd6198b9bf05fa/run.json"
+INCOMPLETE = {
+    "type": "complete",
+    "status": "review_completed",
+    "findings": 1,
+    "outcome": "completed_with_warnings",
+    "message": "Review completed with warnings",
+    "unreviewedFileCount": 1,
+    "unreviewedFiles": [
+        {
+            "filename": UNREVIEWED_PATH,
+            "reason": "diff_too_large",
+        }
+    ],
+}
+
+
 class GitFixture:
     """Documented read-only byte responses; every other command is rejected."""
 
@@ -466,6 +483,22 @@ class TestReviewConsumer(unittest.TestCase):
             self.assertIn(detail, errors.getvalue())
         self.assertEqual(len(self.calls), 1)
 
+    def test_lowercase_skipped_filename_reaches_the_cli_result(self) -> None:
+        self.findings = [{"type": "finding", "title": "existing finding", "fileName": "code.py"}]
+        self.results = [INCOMPLETE]
+        self.exit_code = 1
+        with contextlib.redirect_stdout(io.StringIO()) as output, contextlib.redirect_stderr(io.StringIO()) as errors:
+            self.assertEqual(cli.main(["--root", str(self.root), "review", "branch", "--base", "main"]), 1)
+        records = [json.loads(line) for line in output.getvalue().splitlines()]
+        self.assertEqual([record for record in records if record["type"] == "finding"], self.findings)
+        result = records[-1]
+        path = UNREVIEWED_PATH
+        self.assertEqual((result["status"], result["findings"], result["unreviewed_file_count"]), ("incomplete", 1, 1))
+        self.assertEqual(result["unreviewed_files"], [{"path": path, "reason": "diff_too_large"}])
+        for detail in (path, "diff_too_large", "1 finding", "skipped 1 file", "Reduce the oversized file diff"):
+            self.assertIn(detail, errors.getvalue())
+        self.assertEqual(len(self.calls), 1)
+
     def test_paid_partial_review_retains_coverage_and_requires_reconciliation(self) -> None:
         selected = self.start()
         self.results = [QUOTE, {**COMPLETE, "unreviewedFileCount": 2, "unreviewedFiles": [{"fileName": "large.py", "reason": "diff_too_large"}]}]
@@ -703,6 +736,45 @@ class TestAgentEvents(unittest.TestCase):
         for byte in payload:
             parser.feed(bytes([byte]))
         self.assertEqual(parser.finish(0), CompletedReview(0, ("café.py",)))
+
+    def test_captured_lowercase_filename_completion_preserves_coverage(self) -> None:
+        path = UNREVIEWED_PATH
+        for exit_code in (0, 1):
+            with self.subTest(exit_code=exit_code):
+                parser = AgentEvents()
+                parser.feed(event(INCOMPLETE))
+                result = parser.finish(exit_code)
+                self.assertIsInstance(result, IncompleteReview)
+                assert isinstance(result, IncompleteReview)
+                self.assertEqual((result.exit_code, result.findings, result.unreviewed_file_count), (1, 1, 1))
+                self.assertEqual(result.unreviewed_files, ((path, "diff_too_large"),))
+
+    def test_skipped_filename_aliases_preserve_precedence(self) -> None:
+        for key in ("fileName", "filename", "path", "filePath", "file"):
+            with self.subTest(key=key):
+                parser = AgentEvents()
+                parser.feed(event({**COMPLETE, "unreviewedFileCount": 1, "unreviewedFiles": [{key: "large.py", "reason": "diff_too_large"}]}))
+                result = parser.finish(1)
+                self.assertIsInstance(result, IncompleteReview)
+                assert isinstance(result, IncompleteReview)
+                self.assertEqual(result.unreviewed_files, (("large.py", "diff_too_large"),))
+        parser = AgentEvents()
+        parser.feed(event({**COMPLETE, "unreviewedFileCount": 1, "unreviewedFiles": [{"fileName": "first.py", "filename": "second.py"}]}))
+        result = parser.finish(1)
+        self.assertIsInstance(result, IncompleteReview)
+        assert isinstance(result, IncompleteReview)
+        self.assertEqual(result.unreviewed_files, (("first.py", None),))
+
+    def test_malformed_lowercase_filename_is_not_valid_partial_coverage(self) -> None:
+        entries: list[Mapping[str, object]] = [{"filename": value, "path": "fallback.py"} for value in (None, "", 42, False, [], {})]
+        entries.extend(({"filename": "large.py", "reason": 42}, {"fileName": None, "filename": "large.py"}))
+        for entry in entries:
+            with self.subTest(entry=entry):
+                parser = AgentEvents()
+                parser.feed(event({**COMPLETE, "unreviewedFileCount": 1, "unreviewedFiles": [entry]}))
+                result = parser.finish(1)
+                self.assertIsInstance(result, FailedReview)
+                self.assertNotIsInstance(result, IncompleteReview)
 
     def test_incomplete_error_missing_and_malformed_are_not_clean(self) -> None:
         for value in (
