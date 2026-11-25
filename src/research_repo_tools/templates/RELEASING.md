@@ -1,23 +1,24 @@
 # Releasing
 
-1. Prepare the version, generated notes, and any benchmark report in a
-   dedicated release PR. Pass local validation and merge after review.
-2. Require complete trusted main CI and any benchmark acceptance for the final
-   commit. Create the annotated tag and push it explicitly.
-3. Review the original draft and attached evidence. Publish the GitHub Release
-   from a human GitHub CLI session.
-4. Approve the protected registry deployment after verification passes.
-5. Verify the exact published package and record downstream verification.
+## Contents
 
-Follow the shared steps, then use the registry instructions for
-[Rust crates on crates.io](#rust-crates-on-cratesio) or
-[Python packages on PyPI](#python-packages-on-pypi).
+1. [Set the release tag](#step-1-set-the-release-tag)
+2. [Prepare the release PR](#step-2-prepare-the-release-pr)
+3. [Publish after the PR is merged](#step-3-publish-after-the-pr-is-merged)
+   - [Open the run and approve publishing](#8-open-the-publishing-run-and-approve-the-registry-deployment)
+   - Verify [crates.io](#rust-crates-on-cratesio) or [PyPI](#python-packages-on-pypi)
 
-## Prepare the environment
+**Resuming a release?** [Choose where to resume](#choose-where-to-resume).
 
-Set `TAG` to the intended tag (for example, `TAG=v1.2.3`) and start from
-clean, current `main`. Use the same Bash or zsh session throughout. Check `gh auth status`
-and [Trusted Publishing](#configure-trusted-publishing-before-the-next-release).
+## Step 1: Set the release tag
+
+Set the target tag first, replacing `X.Y.Z` with the intended version.
+
+```bash
+TAG=vX.Y.Z
+```
+
+Start from clean, current `main`. Use the same Bash or zsh session throughout and check `gh auth status`.
 Use `just setup` for the locked development tools. Land any tool or dependency
 updates separately before preparing the release PR.
 [Consumer setup](https://github.com/acgetchell/research-repo-tools/blob/main/README.md#install-with-uv)
@@ -29,7 +30,7 @@ CI and rehearsal. Use `--release-intent` when preparing or acquiring release
 performance evidence.
 [Supplier adoption and release checks](https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_DEPENDENCIES.md)
 
-## Step 1: Prepare the release PR
+## Step 2: Prepare the release PR
 
 ```bash
 git switch -c "release/$TAG"
@@ -91,7 +92,7 @@ gh pr create --base main --head "release/$TAG" --title "chore(release): release 
 
 Include validation results and links to any separately retained evidence in the PR.
 
-## Step 2: Publish after the PR is merged
+## Step 3: Publish after the PR is merged
 
 ### 1. Synchronize `main`
 
@@ -184,10 +185,21 @@ publication policy. Publish from a human GitHub CLI session. For repositories
 that dispatch the registry workflow explicitly, use the same tag and original
 approved handoff.
 
-### 8. Approve the registry deployment
+### 8. Open the publishing run and approve the registry deployment
 
-Approve the protected deployment after verification succeeds, then wait for
-the upload job. Use the registry-specific check below to confirm what it published.
+In GitHub Actions, open the publishing run for the reviewed tag and commit.
+If the repository dispatches publication explicitly, open that dispatch run.
+
+| Destination | Workflow run | Protected environment to select |
+| --- | --- | --- |
+| Python package on PyPI | **Publish to PyPI** | `pypi` |
+| Rust crate on crates.io | **Publish to crates.io** | `crates-io` |
+
+Use the names configured in your repository if they differ. Once verification
+passes and the upload job requests approval, click **Review deployments**,
+select the environment above, then click **Approve and deploy**. Wait for the
+upload job to succeed before verifying the registry version.
+[GitHub deployment review](https://docs.github.com/en/actions/how-tos/deploy/configure-and-manage-deployments/review-deployments)
 
 ### 9. Verify registry availability and downstream resolution
 
@@ -242,8 +254,8 @@ asset, consumer, and applicable Zenodo verification.
 
 ## Choose where to resume
 
-Set the release tag again and use Step 2.1 to recover the reviewed SHA and main
-run. Restore `RELEASE_TARGET` to the original captured file. Reuse the retained
+Set the release tag again and [recover the reviewed SHA and main run](#1-synchronize-main).
+Restore `RELEASE_TARGET` to the original captured file. Reuse the retained
 owner directory, acceptance and receipt when running the same recipes in a new shell.
 
 | Stop | Next operation |
@@ -253,19 +265,13 @@ owner directory, acceptance and receipt when running the same recipes in a new s
 | Main CI pending or an external tag prerequisite failed | Wait for the exact CI run or fix the external prerequisite, then retry `just tag "$TAG" --commit "$RELEASE_COMMIT"` with the same reviewed SHA. |
 | Tag preflight requires a tracked metadata correction | Commit and review the correction. Wait for main CI on the new commit and retry `just tag "$TAG" --commit "$RELEASE_COMMIT"` with its SHA. |
 | Draft retrieval or attachment interrupted | Reuse the original output directory with `just release-assets retrieve`, then retry the configured attachment recipe with that target. [Draft recovery](https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md#retry-and-recovery) |
-| GitHub Release published, registry approval pending | Review the verification result and approve the protected registry deployment in the original publishing run. |
+| GitHub Release published, registry approval pending | [Open the original publishing run and approve its registry deployment](#8-open-the-publishing-run-and-approve-the-registry-deployment). |
 | Registry upload interrupted | Inspect the original GitHub Release and publishing run. Check the exact registry version with `just release-registry "$TAG" --expect present` and compare any published checksums before deciding whether to retry. |
 | Registry verification timed out | Rerun the failing recipe with `RRT_REGISTRY_TIMEOUT_SECONDS=180` and the same candidate records. |
 
 ### Recovering a failed run
 
 Preserve the original tag, evidence and draft while diagnosing a failure. Use
-the [shared recovery guide](https://github.com/acgetchell/research-repo-tools/blob/main/docs/RECOVERING_RELEASES.md)
+the [consumer recovery procedures](https://github.com/acgetchell/research-repo-tools/blob/main/docs/RECOVERING_RELEASES.md#consumer-workflows)
 for failed workflow attempts, uncertain writes, and unpublished candidate
 replacement. Corrections to already published contents require a new version.
-
-## Configure Trusted Publishing before the next release
-
-Configure the registry publisher and deployment reviewers before starting.
-Keep account setup in the maintainer's private checklist.
-[GitHub release configuration](https://github.com/acgetchell/research-repo-tools/blob/main/docs/CONFIGURING_GITHUB.md#release-configuration)

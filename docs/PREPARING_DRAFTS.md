@@ -262,7 +262,7 @@ just release-assets prepare /trusted/evidence.toml \
 ## Retrieve original preparation output
 
 The `release assets retrieve` command supplies the authenticated captured
-target needed by consumer Step 2. It does not run preparation, look up another
+target needed for post-merge draft review. It does not run preparation, look up another
 draft by tag, build packages, acquire measurements or authorize publication.
 Keep this separate policy in `tooling/draft-receipt.toml`, with the actual
 repository and workflow filename. For the workflow above:
