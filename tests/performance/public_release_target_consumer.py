@@ -234,6 +234,14 @@ class TestReleaseStaging(unittest.TestCase):
             self.assertIn("trusted transfer", error.getvalue())
             self.assertEqual(publish.call_count, 1)
 
+    def test_batch_rejects_nonportable_names_before_opening_files_or_contacting_github(self):
+        for name in ("report.", "CON.txt"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "normalized repository-relative path"):
+                self.stage((self.root / name,))
+        self.assertEqual(self.server.calls, [])
+        self.assertFalse(self.journal.exists())
+        self.assertFalse(self.destination.exists())
+
     def test_batch_rejects_aliased_checkout_outputs_before_effects(self):
         checkout = self.root / "checkout"
         checkout.mkdir()
