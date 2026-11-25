@@ -809,7 +809,8 @@ def _render_wrapped_report(
     manifest_path: str | None,
 ) -> bytes:
     """Replay renderer 3's Unicode line splitting or preserve physical lines in renderer 4."""
-    from research_repo_tools.markdown import _generated_report_layout, _GeneratedLinks
+    from research_repo_tools.markdown import _generated_report_layout, _GeneratedLinks, _wrapped_html_element
+    from research_repo_tools.postprocess_changelog import MAX_LINE_WIDTH
     from research_repo_tools.text_lines import _physical_lines
 
     split_lines = str.splitlines if renderer == 3 else _physical_lines
@@ -818,6 +819,9 @@ def _render_wrapped_report(
     ).decode("utf-8")
     lines = split_lines(report)
     lines[0] = f"<!-- research-repo-tools/run-report/v{renderer} -->"
+    if renderer == 4 and len(lines[1]) > MAX_LINE_WIDTH:
+        # A physical newline ends an ATX heading. Wrap inside HTML comments instead.
+        lines[1] = _wrapped_html_element(lines[1].removeprefix("# "), "h1")
     links = _GeneratedLinks(report)
     if report_path is not None and payload_path is not None and manifest_path is not None:
         payload_link, manifest_link = (_relative_link(report_path, path) for path in (payload_path, manifest_path))

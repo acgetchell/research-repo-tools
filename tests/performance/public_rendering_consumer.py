@@ -12,6 +12,8 @@ from decimal import Decimal, localcontext
 from typing import Literal
 from unittest.mock import patch
 
+from markdown_it import MarkdownIt
+
 from research_repo_tools.complete_runs import (
     RUN_SCHEMA,
     RUN_SCHEMA_V2,
@@ -148,6 +150,17 @@ class TestRenderingConsumer(unittest.TestCase):
             [line for line in lines if line.startswith("Evidence: ")],
             ["Evidence: [run payload](../data/run.json) · [evidence envelope](../data/evidence.json)."],
         )
+
+    def test_long_unicode_title_renders_as_one_complete_heading(self):
+        evidence = fixture()
+        for separator in ("\u2028", "\u2029"):
+            with self.subTest(separator=separator):
+                title = "a" * 80 + separator + "b" * 80
+                markdown = render_run(evidence, title=title).decode("utf-8")
+                heading_source = markdown.partition("\n\n")[0]
+                rendered = ET.fromstring(f"<article>{MarkdownIt().render(heading_source)}</article>")
+                self.assertEqual(rendered.findtext("h1"), title)
+                self.assertLessEqual(max(map(len, heading_source.split("\n"))), 160)
 
     def test_coordinate_geometry_agrees_with_high_precision_oracle(self):
         nearby = []

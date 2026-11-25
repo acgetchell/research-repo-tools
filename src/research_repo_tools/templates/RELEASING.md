@@ -58,6 +58,18 @@ acquisition, checkpoints, publication receipt, and digests outside the checkout.
 Include the generated report in the release PR.
 [Benchmark acquisition and recovery](https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_BENCHMARKS.md)
 
+Stage the reviewed release metadata and generated artifacts. Commit them with
+the subject `chore(release): prepare $TAG`, substituting the release tag.
+
+```bash
+just release-version-check
+just ci
+```
+
+Require verified published dependencies, synchronized metadata and dated
+notes, and the repository's packaging, platform, and scientific checks.
+Run the repository's local security gate on this commit.
+
 If the consumer assigns its archived raw measurements to candidate preflight,
 require successful preflight on the clean preparation commit against the
 original owner receipts and independent digests. Exclude only
@@ -67,19 +79,10 @@ Any in-scope skip blocks the gate. Use the disposable worktree procedure with
 the verified v0.3.3 distribution once published.
 [Reviewing a large archived payload](https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_BENCHMARKS.md#reviewing-a-large-archived-payload)
 
-```bash
-just release-version-check
-just ci
-```
-
-Require verified published dependencies, synchronized metadata and dated
-notes, and the repository's packaging, platform, and scientific checks.
-Stage the reviewed release artifacts and commit them with the subject
-`chore(release): prepare $TAG`, substituting the release tag. Run the
-repository's local security and review gates on the outgoing changes.
-If a correction changes release metadata or generated notes, repeat
-`just release-version-check` on the final candidate. Once the gates pass,
-push the branch and open the release PR:
+Run the repository's local branch review on the preparation commit. If a
+correction changes the candidate, commit it and repeat the validation and
+review gates on the final commit. Once the gates pass, push the branch and
+open the release PR:
 
 ```sh
 git push -u origin "release/$TAG"

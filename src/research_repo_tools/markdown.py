@@ -47,12 +47,11 @@ class _GeneratedLinks:
         return "".join(f"\n[{name}]:\n  <{destination}>\n" for destination, name in self._references.items())
 
 
-def _html_cell(value: str, tag: str) -> str:
-    """Wrap escaped generated cell text without introducing visible characters.
+def _wrapped_html_element(value: str, tag: str) -> str:
+    """Wrap escaped report text without introducing visible characters.
 
     Comments carry physical newlines, including inside an indivisible value.
     Entities and the renderer's explicit line-break elements remain atomic.
-    This accepts only the escaped cells produced by our report renderers.
     """
     lines = []
     line = f"<{tag}>"
@@ -82,11 +81,11 @@ def _generated_report_layout(source: list[str]) -> str:
                 index += 1
             if any(len(row) > MAX_LINE_WIDTH or re.search(r"https?://", row) for row in table):
                 result.extend(["<table>", "<thead>", "<tr>"])
-                result.extend(_html_cell(cell, "th") for cell in table[0][2:-2].split(" | "))
+                result.extend(_wrapped_html_element(cell, "th") for cell in table[0][2:-2].split(" | "))
                 result.extend(["</tr>", "</thead>", "<tbody>"])
                 for row in table[2:]:
                     result.append("<tr>")
-                    result.extend(_html_cell(cell, "td") for cell in row[2:-2].split(" | "))
+                    result.extend(_wrapped_html_element(cell, "td") for cell in row[2:-2].split(" | "))
                     result.append("</tr>")
                 result.extend(["</tbody>", "</table>"])
             else:
