@@ -119,13 +119,16 @@ gh run download "$PREPARATION_RUN_ID" --name "draft-recovery-$ATTEMPT" \
    byte for byte with the original attachment. A `starter` asset is incomplete.
    [GitHub release asset API](https://docs.github.com/en/rest/releases/assets)
 
-3. If preparation **succeeded** and all three assets match, capture the target
-   with `just release-draft "$TAG"` and resume [draft review](RELEASING.md#4-review-the-draft).
-   If preparation **failed**, that recipe requires the original run to succeed.
-   Staging refuses a nonempty draft even when all uploaded files match.
-   Preserve the files and IDs. If ownership or bytes differ, hold publication
-   for maintainer reconciliation. With explicit cleanup approval, recheck the
-   mutable draft and asset IDs and remove only the assets from the failed attempt.
+3. If preparation **succeeded** and all three assets match the current, unexpired
+   evidence, capture the target with `just release-draft "$TAG"` and resume
+   [draft review](RELEASING.md#4-review-the-draft).
+   If an upload failed or the draft needs [renewed evidence](#artifact-retention-and-recovery-window),
+   keep the downloaded files and their IDs in the handoff. If ownership or bytes
+   differ from the original attempt, hold publication for maintainer reconciliation.
+   With explicit maintainer approval, recheck the tag, mutable draft ID and asset
+   IDs. Remove only the recorded assets from the failed upload, or all three
+   verified assets from the successful attempt whose evidence is being replaced.
+   Keep the tag and draft.
 
 4. Retry the original failed jobs only after a fresh successful listing shows
    **no release and no prior captured ID**, or **the same mutable draft with zero
@@ -142,13 +145,18 @@ while it is eligible. Wait for the complete attempt, including `release-evidence
 Preserve the old summary and record the new attempt, artifact IDs and digests.
 [GitHub Actions rerun window](https://docs.github.com/en/actions/how-tos/manage-workflow-runs/re-run-workflows-and-jobs)
 
-For an unpublished tag, run `just release-evidence` for the renewed attempt.
-A draft with older assets needs [reconciliation](#draft-creation-or-upload-failed)
-and fresh promotion before review, even when the wheel hashes match. Once the
-same draft is empty (or no release was created), rerun its original preparation
-run to stage the renewed evidence. If the original main run is no longer
-eligible, prepare a new reviewed candidate. Use the [replacement procedure](#replace-an-unpublished-candidate)
-for an unpublished tag. Published releases retain their original attestation.
+For an unpublished tag, run `just release-evidence` for the renewed main attempt.
+Confirm the original tag-push preparation run is eligible for a rerun before
+clearing any assets. Follow [steps 1–3 of draft reconciliation](#draft-creation-or-upload-failed)
+even when the old and new wheel hashes match. Require a fresh listing that shows
+the same mutable draft with zero assets, or no release and no prior captured ID.
+Then rerun **all jobs** of the original preparation run with
+`gh run rerun "$PREPARATION_RUN_ID"`. It promotes the renewed evidence and
+stages all three assets. After it succeeds, run `just release-draft "$TAG"` and
+[review the draft](RELEASING.md#4-review-the-draft) against the renewed summary.
+
+If either original run is no longer eligible, [replace the unpublished candidate](#replace-an-unpublished-candidate).
+Published releases retain their original attestation.
 
 ## Recover GitHub publication or PyPI upload
 
