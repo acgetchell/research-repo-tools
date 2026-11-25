@@ -205,12 +205,14 @@ def parser() -> argparse.ArgumentParser:
     command = release.add_parser(
         "publish",
         help="approve a validated draft GitHub Release and trigger its publication workflow",
-        description="Approve a validated draft. Unmet checks block publication; wait for running CI to succeed, then manually retry.",
+        description="Approve a validated draft. Ensure exclusive control of draft writers through confirmation. Wait for pending CI checks before invoking.",
     )
     command.add_argument("tag")
     command.add_argument("--approve", action="store_true", required=True, help="explicit approval of the reviewed draft")
     command.add_argument("--reuse-evidence", type=Path, help="revalidate a saved CI reuse approval under the configured opt-in policy")
     command.add_argument("--target", type=Path, help="original captured draft target; never substitute a replacement release")
+    command.add_argument("--asset-transfer", type=Path, help="require this complete staged batch as the exact reviewed asset inventory")
+    command.add_argument("--transfer-sha256", help="independently retained digest of the complete staged batch")
     command = release.add_parser("registry", help="require an absent or present exact registry version; never uploads")
     command.add_argument("tag")
     command.add_argument("--expect", choices=("absent", "present"), required=True)
@@ -357,6 +359,9 @@ def parser() -> argparse.ArgumentParser:
     cargo_docs.add_argument("--target", help="installed Rust target triple (default: compiler host)")
     validation.add_parser("cargo-examples", help="discover, build and run Cargo examples with consumer policy").add_argument("configuration")
     validation.add_parser("cargo-metadata").add_argument("--package")
+    cargo_package = validation.add_parser("cargo-package", help="verify clean locked Cargo publish dry runs with default and all features")
+    cargo_package.add_argument("--package", required=True)
+    cargo_package.add_argument("--output", type=Path, help="retain the common verified .crate in this directory")
     validation.add_parser("require").add_argument("names", nargs="+")
     command = validation.add_parser("run")
     command.add_argument("configuration")
@@ -436,6 +441,10 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             run_examples(settings.root, args.configuration)
         elif args.action == "cargo-metadata":
             check_cargo_metadata(settings.root, package=args.package)
+        elif args.action == "cargo-package":
+            from research_repo_tools.validation import check_cargo_package
+
+            check_cargo_package(settings.root, args.package, output=settings.path(str(args.output)) if args.output is not None else None)
         elif args.action == "require":
             require_executables(settings.root, tuple(args.names))
         else:
@@ -938,7 +947,16 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             )
             return 0
         if args.action == "publish":
-            release_publishing.publish_reviewed_release(settings, args.tag, reuse_evidence=reuse_payload, **target_options)
+            if args.asset_transfer is None and args.transfer_sha256 is None:
+                release_publishing.publish_reviewed_release(settings, args.tag, reuse_evidence=reuse_payload, **target_options)
+                return 0
+            if args.asset_transfer is None or args.transfer_sha256 is None or target is None:
+                raise ValueError("reviewed asset publication requires --asset-transfer, --transfer-sha256 and --target")
+            from research_repo_tools.release_staging import _read, _reviewed_inventory
+
+            transfer = _read(settings.path(str(args.asset_transfer)), 1024 * 1024)
+            assets = _reviewed_inventory(target, transfer, args.transfer_sha256)
+            release_publishing.publish_reviewed_release(settings, args.tag, reuse_evidence=reuse_payload, target=target, expected_assets=assets)
             return 0
         if args.action == "registry":
             from research_repo_tools.registry import lookup_version

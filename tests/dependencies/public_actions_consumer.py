@@ -41,6 +41,28 @@ class TestActionsConsumer(unittest.TestCase):
         self.update_policy = self.root / "updates.toml"
         self.update_policy.write_bytes(b'[actions]\n"approved/action" = "latest"\n')
 
+    def test_reviewed_release_pins_subpaths_and_refuses_a_moved_upstream_tag(self):
+        actions = ("approved/action/init", "approved/action/analyze")
+        declaration = "[actions]\n" + "".join(f'"{action}" = "v1.0.0"\n' for action in actions)
+        members = json.dumps(actions)
+        declaration += f'\n[consistency]\nactions={members}\n[[consistency.releases]]\nactions={members}\ntag="v1.0.0"\ncommit="{OLD}"\n'
+        self.update_policy.write_bytes(declaration.encode())
+        original = self.workflow.read_bytes().replace(b"approved/action@", b"approved/action/init@")
+        original = original.replace(b"  same_repository:", f"      - uses: approved/action/analyze@{OLD} # v1.0.0\r\n  same_repository:".encode())
+        self.workflow.write_bytes(original)
+        for refs in (original, original.replace(OLD.encode(), NEW.encode())):
+            self.workflow.write_bytes(refs)
+            code, _, error = self.invoke("check", "--policy", str(self.update_policy), "ci.yml")
+            self.assertEqual(code, int(refs != original), error)
+            if refs != original:
+                self.assertIn("differs from the reviewed release", error)
+        self.workflow.write_bytes(original)
+        with patch.object(action_updates, "resolve", return_value=(NEW, "v1.0.0")):
+            code, _, error = self.invoke("update", "--policy", str(self.update_policy), "ci.yml")
+        self.assertEqual(code, 1)
+        self.assertIn("upstream resolution differs", error)
+        self.assertEqual(self.workflow.read_bytes(), original)
+
     def invoke(self, *arguments):
         stdout, stderr = io.StringIO(), io.StringIO()
         with redirect_stdout(stdout), redirect_stderr(stderr):

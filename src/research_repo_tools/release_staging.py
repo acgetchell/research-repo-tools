@@ -8,21 +8,28 @@ from research_repo_tools._git_checkout import _in_checkout
 from research_repo_tools.archives import ArchiveLimits
 from research_repo_tools.dependency_progress import DependencyProgress, report, reporting
 from research_repo_tools.evidence import _digest, _load_json, _object, deterministic_json, sha256
-from research_repo_tools.files import _validate_distinct_paths, replace_many
+from research_repo_tools.files import _directory_target, _validate_distinct_paths, publish_directory, replace_many
 from research_repo_tools.process import format_exception_diagnostics
 from research_repo_tools.release_assets import (
     GitHubRelease,
     ReleaseTarget,
     _asset_name,
+    _download,
     _observe_release_target,
     _upload_asset,
     _verified_asset,
+    parse_release_target,
     serialize_release_target,
 )
+from research_repo_tools.release_policy import relative_path
 from research_repo_tools.release_validation import redact_release_diagnostic
 
-__all__ = ["stage_release_assets"]
+__all__ = ["receive_release_assets", "stage_release_assets"]
 _SCHEMA = "research-repo-tools/release-asset-batch/v1"
+
+
+def _batch_asset_name(name: str) -> str:
+    return relative_path(_asset_name(name))
 
 
 def _regular(path: Path) -> None:
@@ -76,6 +83,66 @@ def stage_release_assets(
         )
 
 
+def _reviewed_inventory(
+    target: ReleaseTarget, transfer: bytes, transfer_sha256: str, limits: ArchiveLimits = ArchiveLimits()
+) -> frozenset[tuple[str, int, int, str]]:
+    """Read the exact identities whose bytes were authenticated during staging and approved by digest."""
+    if len(transfer) > 1024 * 1024 or sha256(transfer) != _digest(transfer_sha256, "trusted transfer digest"):
+        raise ValueError("staged batch differs from the trusted transfer")
+    record = _object(_load_json(transfer, "staged batch"), "staged batch", {"schema", "state", "target", "inputs", "assets", "dependencies_sha256"})
+    if record["schema"] != _SCHEMA or record["state"] != "complete" or parse_release_target(deterministic_json(record["target"])) != target:
+        raise ValueError("expected the complete original staging transfer for this target")
+    assets = _object(record["assets"], "staged assets")
+    _digest(record["dependencies_sha256"], "staging dependency digest")
+    inputs = _object(record["inputs"], "staged inputs")
+    if not 1 <= len(assets) <= 64 or assets.keys() != inputs.keys() or len({name.casefold() for name in assets}) != len(assets):
+        raise ValueError("invalid staged asset inventory")
+    expected = set()
+    for name, data in assets.items():
+        _batch_asset_name(name)
+        asset = _object(data, "staged asset", {"id", "size", "sha256"})
+        identifier, size, digest = asset["id"], asset["size"], _digest(asset["sha256"], "staged asset digest")
+        if type(identifier) is not int or identifier <= 0 or type(size) is not int or not 0 < size <= limits.archive_bytes:
+            raise ValueError("invalid staged asset identity or size")
+        if deterministic_json(inputs[name]) != deterministic_json({"size": size, "sha256": digest}):
+            raise ValueError("staged bytes differ from the input selection")
+        expected.add((name, identifier, size, digest))
+    if len({identifier for _, identifier, _, _ in expected}) != len(assets) or sum(size for _, _, size, _ in expected) > limits.content_bytes:
+        raise ValueError("invalid staged asset IDs or aggregate size")
+    return frozenset(expected)
+
+
+def receive_release_assets(
+    root: Path, target: ReleaseTarget, transfer: bytes, *, transfer_sha256: str, output: Path, limits: ArchiveLimits = ArchiveLimits()
+) -> None:
+    """Recover an independently selected complete staged batch from its original draft asset IDs."""
+    expected = _reviewed_inventory(target, transfer, transfer_sha256, limits)
+    names = {name for name, _, _, _ in expected}
+    destination = _directory_target(output)
+
+    def observe() -> None:
+        release = _observe_release_target(root, target, checkout=None)
+        states = dict(release.asset_states)
+        if expected - set(release.assets) or any(states.get(identifier) != "uploaded" for _, identifier, _, _ in expected):
+            raise ValueError("original staged asset identity changed")
+        if _directory_target(output) != destination or (destination.exists() and any(path.name not in names for path in destination.iterdir())):
+            raise ValueError("staged asset destination contains unrelated files")
+        for name, _, size, digest in expected:
+            path = destination / name
+            _regular(path)
+            if path.exists() and sha256(_read(path, size)) != digest:
+                raise ValueError(f"conflicting staged asset output: {name}")
+
+    observe()
+    with publish_directory(destination) as staging:
+        for name, identifier, size, digest in sorted(expected):
+            content = _download(root, target.repository, identifier, size)
+            if len(content) != size or sha256(content) != digest:
+                raise ValueError(f"downloaded bytes differ from staged asset {name}")
+            (staging / name).write_bytes(content)
+        observe()
+
+
 def _stage(
     root: Path,
     target: ReleaseTarget,
@@ -94,12 +161,12 @@ def _stage(
         raise ValueError("asset staging requires explicit approval and an independently captured ReleaseTarget")
     if not 1 <= len(assets) <= 64:
         raise ValueError("asset batch requires 1..64 independently selected files")
+    names = tuple(_batch_asset_name(p.name) for p in assets)
+    if len({name.casefold() for name in names}) != len(names):
+        raise ValueError("asset batch names must be distinct, including portable case aliases")
     _validate_distinct_paths((*assets, journal, destination))
     if checkout is not None and any(_in_checkout(p, checkout.resolve()) for p in (journal, destination)):
         raise ValueError("retain the staging journal and transfer outside the observed source checkout")
-    names = tuple(_asset_name(p.name) for p in assets)
-    if len({name.casefold() for name in names}) != len(names):
-        raise ValueError("asset batch names must be distinct, including portable case aliases")
     payloads = {}
     for path in assets:
         payloads[path.name] = _read(path, limits.archive_bytes)

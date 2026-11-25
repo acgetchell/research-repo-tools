@@ -126,6 +126,9 @@ def update(settings: config.Config, policy: Path, inputs: list[str], *, dry_run:
         raise ValueError("retained zizmor-action requires a compatibility inventory; prefer the shared direct scanner (see #43)")
     tool_versions = {action: _tool_version(settings, tool) for action, (_, tool) in sorted(checks.items())}
     resolved = {action: resolve(action, target, settings.root) for action, target in sorted(targets.items())}
+    for action, sha in declaration.reviewed_commits.items():
+        if action in resolved and resolved[action] != (sha, targets[action]):
+            raise ValueError(f"{action}: upstream resolution differs from reviewed release {targets[action]}@{sha}")
     replacements: dict[Path, bytes] = {}
     report: list[str] = []
     verified: set[tuple[str, str]] = set()

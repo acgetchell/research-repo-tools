@@ -2,10 +2,10 @@
 
 import re
 import tomllib
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
-from research_repo_tools.workflow_uses import identity
+from research_repo_tools.workflow_uses import SHA, identity
 
 TAG = re.compile(r"v?(?:0|[1-9][0-9]*)(?:\.(?:0|[1-9][0-9]*)){0,2}")
 
@@ -17,6 +17,7 @@ class ActionPolicy:
     targets: dict[str, str]
     compatibility: dict[str, tuple[str, str]]
     consistency: tuple[str, ...]
+    reviewed_commits: dict[str, str] = field(default_factory=dict)
 
 
 def load_policy(path: Path) -> ActionPolicy:
@@ -59,8 +60,8 @@ def load_policy(path: Path) -> ActionPolicy:
             raise ValueError(f"{path}: compatibility.{action} requires a relative upstream path and tool name")
         checks[key] = value["path"], value["tool"]
     consistency = data.get("consistency", {})
-    if not isinstance(consistency, dict) or set(consistency) - {"actions"}:
-        raise ValueError(f"{path}: consistency requires only an actions list")
+    if not isinstance(consistency, dict) or set(consistency) - {"actions", "releases"}:
+        raise ValueError(f"{path}: consistency accepts actions and reviewed releases")
     selected = consistency.get("actions", [])
     if not isinstance(selected, list) or any(not isinstance(action, str) for action in selected):
         raise ValueError(f"{path}: consistency.actions must be a list of exact identities")
@@ -70,4 +71,27 @@ def load_policy(path: Path) -> ActionPolicy:
         raise ValueError(f"{path}: consistency.actions: {error}") from error
     if len(set(identities)) != len(identities):
         raise ValueError(f"{path}: consistency.actions contains duplicate identities")
-    return ActionPolicy(targets, checks, identities)
+    return ActionPolicy(targets, checks, identities, _reviewed_commits(path, consistency.get("releases", []), targets, identities))
+
+
+def _reviewed_commits(path: Path, releases: object, targets: dict[str, str], identities: tuple[str, ...]) -> dict[str, str]:
+    """Bind each selected subpath to its repository's independently reviewed release."""
+    if not isinstance(releases, list):
+        raise ValueError(f"{path}: consistency.releases requires an array of tables")
+    reviewed: dict[str, str] = {}
+    for release in releases:
+        if not isinstance(release, dict) or set(release) != {"actions", "tag", "commit"}:
+            raise ValueError(f"{path}: reviewed release requires actions, tag and commit")
+        actions, tag, commit = release["actions"], release["tag"], release["commit"]
+        if not isinstance(tag, str) or not TAG.fullmatch(tag) or not isinstance(commit, str) or not SHA.fullmatch(commit):
+            raise ValueError(f"{path}: reviewed release requires an explicit stable tag and full commit SHA")
+        if not isinstance(actions, list) or not actions or not all(isinstance(action, str) for action in actions):
+            raise ValueError(f"{path}: reviewed release requires a nonempty action list")
+        members = [identity(action) for action in actions]
+        if len({"/".join(member.split("/")[:2]) for member in members}) != 1:
+            raise ValueError(f"{path}: each reviewed release belongs to one repository")
+        for member in members:
+            if member in reviewed or member not in identities or targets.get(member) != tag:
+                raise ValueError(f"{path}: {member} must select its reviewed tag exactly once in the consistency policy")
+            reviewed[member] = commit.lower()
+    return reviewed

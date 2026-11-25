@@ -1,5 +1,7 @@
 # Recovering an unfinished release
 
+<!-- rumdl-configure-file { "MD033": { "allowed-elements": ["details", "summary"] } } -->
+
 ## Choose the recovery path
 
 | What happened? | What to do |
@@ -103,19 +105,49 @@ If they omit changes you intend to ship, regenerate the notes on the corrective 
 
 ### 9. Replace the local tag
 
-Run this from the clean, validated merge commit.
+Start from the clean, validated merge commit. Pause automatic tag fetching
+(for example, quit GitKraken) through step 11 to keep the old remote tag
+from overwriting your local replacement.
 
 ```bash
 just release-recover tag "$TAG"
 ```
 
-Review the printed annotation, commit, and old draft ID. If dependency receipts are stale,
-run `just release-dependency-builds` and `just release-dependencies`, then retry.
+Continue when the recipe prints the reviewed annotation, the corrected merge commit,
+the replacement tag object, and the old draft ID (or `none`). If dependency receipts
+are stale, run `just release-dependency-builds` and `just release-dependencies`, then retry.
+
+<details>
+<summary>If a background fetch restores the old local tag in step 9 or 11</summary>
+
+Pause the fetching client. From the corrected checkout, compare the local
+and remote tag objects with the saved replacement.
+
+```bash
+plan="../release-handoffs/research-repo-tools/$TAG/$(git rev-parse HEAD)/replacement.json"
+git show-ref --verify "refs/tags/$TAG"
+git ls-remote --refs origin "refs/tags/$TAG"
+cat "$plan"
+```
+
+Continue only if both objects equal `old` and the record's `tag` and `commit`
+match this release and checkout. Then restore the reviewed object and repeat step 9.
+
+```bash
+old=$(jq -er '.old' "$plan") &&
+  new=$(jq -er '.new' "$plan") &&
+  git update-ref "refs/tags/$TAG" "${new:?}" "${old:?}" &&
+  just release-recover tag "$TAG"
+```
+
+</details>
 
 ### 10. Delete the old draft in GitHub Releases
 
-Confirm the draft ID, status, and assets match the handoff, then delete that draft only. Keep the remote Git tag.
-If the record shows no draft, skip this step. Stop if the release has been published or its identity changed.
+If step 9 printed `none`, skip this step. Otherwise, confirm the draft ID,
+status, and assets match the original handoff. In GitHub **Releases**, click
+the trash icon beside that draft and confirm **Delete this release**. Keep the
+remote Git tag. Stop if the release has been published or its identity changed.
 
 ### 11. Push the replacement tag
 
@@ -123,22 +155,38 @@ If the record shows no draft, skip this step. Stop if the release has been publi
 just release-recover push "$TAG"
 ```
 
-The recipe checks the saved tag objects and requires the old draft to be gone. The push starts a new preparation run.
+The recipe checks the saved tag objects and requires the old draft to be gone.
+The push starts **Prepare GitHub release**, which creates the new draft. Once
+the recipe confirms the push, you can resume automatic tag fetching.
 
-If a push was interrupted, repeat the push recipe. It recognizes the recorded
-replacement on the remote. An unexpected tag object stops recovery.
+If a push was interrupted, repeat the recipe. It recognizes the recorded
+replacement on the remote. For a local tag mismatch, see [step 9](#9-replace-the-local-tag).
 
-### 12. Verify the new draft and resume publication
+### 12. Capture and review the replacement draft
 
-Run [Step 2.4 through draft review](RELEASING.md#4-verify-the-final-release-commit)
-for the corrected commit. Require a new preparation run, new draft ID, and new
-signed evidence. Once the new draft passes review, coordinate lifting the freeze:
+Keep publication frozen. Save the signed evidence for the corrected commit,
+then capture the new draft. The second recipe waits for preparation to finish.
+
+```bash
+just release-evidence && just release-draft "$TAG"
+```
+
+Confirm the saved target identifies the corrected commit and the new draft ID.
+[Review the draft](RELEASING.md#6-review-the-draft). Check the title, notes, and
+three uploaded assets. Match the wheel and sdist digests to the saved evidence
+and the attestation to the same CI run and attempt.
+
+### 13. Lift the freeze and resume publication
+
+Once the draft passes review, coordinate with the other maintainers and re-enable
+the PyPI workflow.
 
 ```bash
 gh workflow enable publish.yml
 ```
 
-Resume at [Step 2.7, publish the reviewed GitHub Release](RELEASING.md#7-publish-the-reviewed-github-release).
+Then run `just release-publish "$TAG"` to [publish the reviewed GitHub Release (step 2.7)](RELEASING.md#7-publish-the-reviewed-github-release)
+and trigger the PyPI workflow. Continue with [deployment approval](RELEASING.md#8-approve-the-pypi-deployment).
 
 ## Consumer workflows
 

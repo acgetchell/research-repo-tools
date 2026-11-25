@@ -385,6 +385,9 @@ class TestEvidenceConsumer(unittest.TestCase):
             provider.retain(manifest, payload)
             selected = self.verify(provider)
             self.assertEqual(self.verify(provider, expected=selected, reproduced_archive=path, reproduced_tools=TOOLS), selected)
+            retained = []
+            self.assertEqual(self.verify(provider, expected=selected, collect_crate=retained.append), selected)
+            self.assertEqual(retained, [payload])
             self.assertFalse(any(args[1] == "attestation" for args in provider.commands))
             with self.assertRaisesRegex(ValueError, "tools differ"):
                 self.verify(provider, expected=selected, reproduced_archive=path, reproduced_tools={**TOOLS, "cargo": "another cargo"})
@@ -1085,8 +1088,10 @@ class TestEvidenceInterfaces(unittest.TestCase):
                 raise OSError("output denied")
             _replace_path(source, destination)
 
+        archive = self.root / "retained.crate"
         with patch("research_repo_tools.files._replace_path", side_effect=fail_command), self.assertRaises(OSError):
-            write_release_outputs(self.output, b"original", github_output=self.command_file, values={"identity": "value"})
+            write_release_outputs(self.output, b"original", github_output=self.command_file, values={"identity": "value"}, additional={archive: b"verified"})
+        self.assertFalse(archive.exists())
         self.assertEqual(self.output.read_bytes(), b"original")
         self.assertEqual(self.command_file.read_bytes(), prior)
         opening = Path.open

@@ -10,6 +10,19 @@ the documented interfaces. Exact-release-commit evidence is the default;
 
 ## Release evidence and attachment handoffs
 
+For Cargo archives, `release evidence verify --expected SELECTION --retain-crate DIRECTORY` retains the authenticated original crate for staging.
+Use `release evidence candidate --required-checks` to require the publishing policy's hosted checks before accepting the measurement and native selection.
+Pass the frozen native selection digest to `release assets retrieve --expected-native-sha256 DIGEST` when retrieving the tag-push draft receipt.
+
+After `release assets stage`, retain the complete transfer, its SHA-256, and the original target independently. A checkout-free receiver can use
+`release assets receive --transfer TRANSFER --transfer-sha256 DIGEST --target TARGET --output DIRECTORY`. It observes the draft before and after
+downloading the exact asset IDs and verifies their sizes and hashes. For a release whose complete inventory was staged together, supply
+`--asset-transfer TRANSFER --transfer-sha256 DIGEST --target TARGET` to `release publish`. Publication checks the approved IDs immediately before
+the request and checks the response. The original staging transfer binds each asset ID to its verified size and SHA-256. Publication reuses those
+assertions and requires the current GitHub inventory to match every field, including the uploaded state, without downloading the asset payloads again.
+Wait for every asset writer to finish and hold exclusive control of the draft through confirmation, including manual edits, uploads and other workflows.
+GitHub does not offer an atomic conditional publication against an asset inventory. Inspect an uncertain result before attempting recovery.
+
 Declare selected tooling under
 `release.published-dependencies`. Pre-tag evidence and later approval/asset gates
 check the observed checkout's dependency declarations and lock against the

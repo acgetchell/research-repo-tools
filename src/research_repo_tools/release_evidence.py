@@ -415,6 +415,7 @@ def verify_release_evidence(
     reproduced_archive: Path | None = None,
     reproduced_tools: Mapping[str, str] | None = None,
     distributions: Path | None = None,
+    collect_crate: Callable[[bytes], None] | None = None,
 ) -> bytes:
     """Verify one exact complete push; return a deterministic JSON approval record.
 
@@ -426,6 +427,8 @@ def verify_release_evidence(
     """
     _commit(commit)
     _version(version)
+    if collect_crate is not None and (expected is None or policy.guarantee != "cargo-archive"):
+        raise ValueError("crate retention requires the original approved Cargo selection")
     if distributions is not None and policy.guarantee != "python-distributions":
         raise ValueError("distribution inputs require Python distribution evidence")
     if (reproduced_archive is None) != (reproduced_tools is None) or (reproduced_archive is not None and policy.guarantee != "cargo-archive"):
@@ -449,6 +452,7 @@ def verify_release_evidence(
         names += (f"{policy.package}-{version}.crate",)
     if policy.distributions is not None:
         names += policy.distributions.filenames(policy.package, version)
+    archive_bytes = None
     with tempfile.TemporaryDirectory(prefix="research-release-evidence-") as temporary:
         directory = Path(temporary) / "retained"
         max_bytes = MAX_BYTES if policy.distributions is None else policy.distributions.max_artifact_bytes
@@ -481,6 +485,10 @@ def verify_release_evidence(
             recorded_tools = _tools(_object(archive.get("tools")))
             digest = verify_cargo_archive(directory / names[-1], policy.package, version, commit, path_in_vcs=policy.path_in_vcs)
             wanted["archive"] = {"file": names[-1], "sha256": digest, "tools": recorded_tools}
+            if collect_crate is not None:
+                archive_bytes = _bounded_file(directory / names[-1], MAX_BYTES)
+                if hashlib.sha256(archive_bytes).hexdigest() != digest:
+                    raise ValueError("verified archive changed during retention")
             if reproduced_archive is not None and reproduced_tools is not None:
                 reproduced = verify_cargo_archive(reproduced_archive, policy.package, version, commit, path_in_vcs=policy.path_in_vcs)
                 if reproduced != digest or _tools(reproduced_tools) != recorded_tools:
@@ -508,4 +516,6 @@ def verify_release_evidence(
             selected["files"] = wanted["files"]
     if pinned is not None and deterministic_json(pinned) != deterministic_json(selected):
         raise ValueError("approved evidence manifest changed")
+    if collect_crate is not None and archive_bytes is not None:
+        collect_crate(archive_bytes)
     return deterministic_json(selected)

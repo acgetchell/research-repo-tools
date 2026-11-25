@@ -172,6 +172,76 @@ class TestReleaseStaging(unittest.TestCase):
             self.root, self.target, self.assets if assets is None else assets, journal=self.journal, destination=self.destination, approve=True
         )
 
+    def test_receiver_checks_original_ids_bytes_and_target_on_every_retry(self):
+        transfer = self.stage()
+        target = self.root / "target.json"
+        target.write_bytes(serialize_release_target(self.target))
+        destination = self.root / "restored"
+        args = [
+            "--root",
+            str(self.root),
+            "release",
+            "assets",
+            "receive",
+            "--target",
+            str(target),
+            "--output",
+            str(destination),
+            "--transfer",
+            str(self.destination),
+            "--transfer-sha256",
+            hashlib.sha256(transfer).hexdigest(),
+        ]
+        with patch.object(release_staging, "_download", side_effect=self.server.download):
+            for _ in range(2):
+                self.assertEqual(cli.main(args), 0)
+                self.assertEqual([(destination / p.name).read_bytes() for p in self.assets], [p.read_bytes() for p in self.assets])
+            self.server.release["assets"][0]["id"] += 500
+            with contextlib.redirect_stderr(io.StringIO()) as error:
+                self.assertEqual(cli.main(args), 1)
+            self.assertIn("original staged asset identity changed", error.getvalue())
+            self.assertEqual(cli.main([*args[:-1], "0" * 64]), 1)
+        self.assertEqual(self.server.uploaded, [p.read_bytes() for p in self.assets])
+
+    def test_publish_reuses_the_exact_reviewed_transfer_without_downloading_again(self):
+        transfer = self.stage()
+        (self.root / "target.json").write_bytes(serialize_release_target(self.target))
+        args = [
+            "--root",
+            str(self.root),
+            "release",
+            "publish",
+            TAG,
+            "--approve",
+            "--target",
+            "target.json",
+            "--asset-transfer",
+            "transfer.json",
+            "--transfer-sha256",
+            hashlib.sha256(transfer).hexdigest(),
+        ]
+        expected = {(asset["name"], asset["id"], asset["size"], asset["digest"].removeprefix("sha256:")) for asset in self.server.release["assets"]}
+        with (
+            patch.object(release_staging, "_download", side_effect=AssertionError("repeated asset download")),
+            patch("research_repo_tools.release_publishing.publish_reviewed_release") as publish,
+        ):
+            self.assertEqual(cli.main(args), 0)
+            self.assertEqual(publish.call_args.kwargs["target"], self.target)
+            self.assertEqual(publish.call_args.kwargs["expected_assets"], expected)
+            self.destination.write_bytes(transfer + b" ")
+            with contextlib.redirect_stderr(io.StringIO()) as error:
+                self.assertEqual(cli.main(args), 1)
+            self.assertIn("trusted transfer", error.getvalue())
+            self.assertEqual(publish.call_count, 1)
+
+    def test_batch_rejects_nonportable_names_before_opening_files_or_contacting_github(self):
+        for name in ("report.", "CON.txt"):
+            with self.subTest(name=name), self.assertRaisesRegex(ValueError, "normalized repository-relative path"):
+                self.stage((self.root / name,))
+        self.assertEqual(self.server.calls, [])
+        self.assertFalse(self.journal.exists())
+        self.assertFalse(self.destination.exists())
+
     def test_batch_rejects_aliased_checkout_outputs_before_effects(self):
         checkout = self.root / "checkout"
         checkout.mkdir()

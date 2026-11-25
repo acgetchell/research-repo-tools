@@ -590,6 +590,9 @@ Action updates require separate, explicit opt-in targets in
 actions = ["actions/checkout", "owner/repo/subpath"]
 ```
 
+For subpaths that must share one reviewed tag and peeled commit, see
+[Pin Actions from the same release](../README.md#pin-actions-from-the-same-release).
+
 The optional `[consistency]` list declares exact identities that must use the
 same full commit SHA and version comment everywhere in the selected inputs.
 `actions check` requires a nonempty list. Checked identities need not be update

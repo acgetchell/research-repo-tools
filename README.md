@@ -105,6 +105,30 @@ locked environment. Run `just help` to see the recipes in your project's Justfil
 | `just tools-check` | Verify the installed tools against their declared versions. |
 | `just update` | Upgrade declared tools and dependencies, then audit the updated locks. |
 
+### Pin Actions from the same release
+
+To check multiple subpaths from one repository against a reviewed release, add
+the exact Action identities to `.github/action-updates.toml`. Replace the
+example identities, tag and commit below with your reviewed values.
+
+```toml
+[actions]
+"owner/repo/init" = "v1.2.3"
+"owner/repo/analyze" = "v1.2.3"
+
+[consistency]
+actions = ["owner/repo/init", "owner/repo/analyze"]
+
+[[consistency.releases]]
+actions = ["owner/repo/init", "owner/repo/analyze"]
+tag = "v1.2.3"
+commit = "0123456789abcdef0123456789abcdef01234567"
+```
+
+Run `just actions-check` to check the pins offline. On update, the updater
+resolves the upstream tag and compares its peeled commit before writing.
+See [release availability](#release-availability) when selecting the supplying version.
+
 ## Capability index
 
 | Task | Guides |
