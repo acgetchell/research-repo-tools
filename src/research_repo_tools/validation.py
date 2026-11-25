@@ -1,7 +1,9 @@
 """Configured command checks and reusable executable/package preflights."""
 
+import os
 import re
 import sys
+import tempfile
 import tomllib
 from pathlib import Path
 
@@ -11,7 +13,7 @@ from research_repo_tools.process import resolve_executable, run_command
 from research_repo_tools.publication import _path
 from research_repo_tools.publication_config import _table
 
-__all__ = ["check_cargo_metadata", "require_executables", "run_checks"]
+__all__ = ["check_cargo_metadata", "check_cargo_package", "require_executables", "run_checks"]
 
 
 def require_executables(root: Path, names: tuple[str, ...]) -> tuple[Path, ...]:
@@ -59,6 +61,10 @@ def run_checks(root: Path, configuration: str, names: tuple[str, ...] = ()) -> N
 
 def check_cargo_metadata(root: Path, *, package: str | None = None) -> None:
     """Check keyword/category/description constraints before native packaging."""
+    _cargo_metadata(root, package)
+
+
+def _cargo_metadata(root: Path, package: str | None) -> dict[str, object]:
     data = _object(
         _load_json(run_command("cargo", ["metadata", "--locked", "--no-deps", "--format-version=1"], cwd=root).stdout.encode(), "Cargo metadata"),
         "Cargo metadata",
@@ -81,3 +87,37 @@ def check_cargo_metadata(root: Path, *, package: str | None = None) -> None:
     description = _string(selected.get("description"), "Cargo description")
     if len(description) > 1000:
         raise ValueError("Cargo description exceeds 1000 characters")
+    return selected
+
+
+def check_cargo_package(root: Path, package: str, *, output: Path | None = None) -> None:
+    """Verify default and all-feature Cargo publish dry runs, optionally retaining their common bytes."""
+    from research_repo_tools.archives import ArchiveLimits
+    from research_repo_tools.release_assets import _asset_name
+    from research_repo_tools.release_evidence import _bounded_file
+    from research_repo_tools.release_interfaces import write_release_outputs
+
+    metadata = _cargo_metadata(root, package)
+    name = _asset_name(f"{package}-{_string(metadata.get('version'), 'Cargo version')}.crate")
+    limit = ArchiveLimits().archive_bytes
+    retained = None
+    with tempfile.TemporaryDirectory(prefix="rrt-cargo-package-") as temporary:
+        for phase, features in (("default", []), ("all", ["--all-features"])):
+            target = Path(temporary).resolve() / phase
+            run_command(
+                "cargo",
+                ["publish", "--locked", "--dry-run", "--registry", "crates-io", "--package", package, "--target-dir", str(target), *features],
+                cwd=root,
+                env={**os.environ, "CARGO_BUILD_BUILD_DIR": str(target)},
+                timeout=3600,
+            )
+            for subdirectory in ("tmp-crate", "tmp-registry"):
+                archive = target / "package" / subdirectory / name
+                if archive.resolve(strict=True) != archive:
+                    raise ValueError(f"Cargo archive path contains a link: {archive}")
+                data = _bounded_file(archive, limit)
+                if retained is not None and data != retained:
+                    raise ValueError(f"Cargo publish dry runs produced inconsistent archive bytes: {phase}/{subdirectory}/{name}")
+                retained = data
+    if output is not None:
+        write_release_outputs(output / name, retained)

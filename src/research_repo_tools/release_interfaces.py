@@ -160,7 +160,13 @@ def _regular(path: Path) -> None:
 
 
 def write_release_outputs(
-    destination: Path, payload: bytes, *, github_output: Path | None = None, values: Mapping[str, str] | None = None, verify: Callable[[], None] | None = None
+    destination: Path,
+    payload: bytes,
+    *,
+    github_output: Path | None = None,
+    values: Mapping[str, str] | None = None,
+    verify: Callable[[], None] | None = None,
+    additional: Mapping[Path, bytes] | None = None,
 ) -> None:
     """Transactionally retain immutable handoff bytes and optional Actions output.
 
@@ -168,14 +174,17 @@ def write_release_outputs(
     handoff survive caught failures. Use a new handoff filename for a changed
     selection. Exclusive writer control is required; files are not crash-atomic.
     """
-    _regular(destination)
-    original = destination.read_bytes() if destination.exists() else None
-    if original is not None and original != payload:
-        raise ValueError("release handoff already contains different evidence; select a new output path")
-    originals = {destination: original}
-    outputs = {destination: payload}
+    other = additional or {}
+    _validate_distinct_paths((destination, *other, *([github_output] if github_output is not None else [])))
+    outputs = {destination: payload, **other}
+    originals = {}
+    for path, data in outputs.items():
+        _regular(path)
+        original = path.read_bytes() if path.exists() else None
+        if original is not None and original != data:
+            raise ValueError("release handoff already contains different evidence; select a new output path")
+        originals[path] = original
     if github_output is not None:
-        _validate_distinct_paths((destination, github_output))
         _regular(github_output)
         before = github_output.read_bytes()
         with github_output.open("rb+"):
@@ -220,8 +229,15 @@ def add_commands(release) -> None:
     assets = release.add_parser("assets", help="prepare drafts, capture/revalidate targets and upload verified inert assets").add_subparsers(
         dest="operation", required=True
     )
-    for operation in ("plan", "preflight", "prepare", "prepare-authenticated", "retrieve", "stage", "upload", "verify"):
+    for operation in ("plan", "preflight", "prepare", "prepare-authenticated", "receive", "retrieve", "stage", "upload", "verify"):
         command = assets.add_parser(operation)
+        if operation == "receive":
+            command.description = "Download a complete independently reviewed staged batch by original asset ID, without a checkout."
+            command.add_argument("--target", type=Path, required=True)
+            command.add_argument("--transfer", type=Path, required=True)
+            command.add_argument("--transfer-sha256", required=True)
+            command.add_argument("--output", type=Path, required=True)
+            continue
         command.add_argument("configuration")
         if operation == "plan":
             command.description = "Verify a tag-push source and freeze its signed evidence and generated notes; no release mutation."
@@ -262,6 +278,7 @@ def add_commands(release) -> None:
         if operation == "retrieve":
             command.description = "Retrieve the original authenticated tag-push receipt; existing outputs freeze every retry. No release mutation."
             command.add_argument("--commit", required=True, help="independent full peeled release commit")
+            command.add_argument("--expected-native-sha256", help="digest of the independently reviewed pre-tag native selection")
             selection = command.add_mutually_exclusive_group()
             selection.add_argument("--expected", type=Path, help="original frozen selection, for restoration into a new output directory")
             command.add_argument("--output", type=Path, required=True, help="immutable receipt directory outside the consumer root")
@@ -350,6 +367,7 @@ def add_evidence_commands(release) -> None:
     candidate.add_argument("--policy", type=Path, required=True, help="independently trusted acquisition assertions and final commit")
     candidate.add_argument("--policy-output", type=Path, help="retain the final policy with acceptance in one guarded update")
     candidate.add_argument("--progress", choices=("human", "json", "none"), default="none")
+    candidate.add_argument("--required-checks", action="store_true", help="also require the publishing policy's exact-commit hosted checks")
     candidate.add_argument("--publication-receipt", type=Path, help="original shared-publisher receipt captured before promotion")
     candidate.add_argument("--publication-sha256", help="independent Step 1 publication digest from the trusted owner")
     candidate.add_argument("--target", type=Path, help="independently captured draft target for attachment revalidation")
@@ -397,6 +415,10 @@ def add_evidence_commands(release) -> None:
         command.add_argument("--output", type=Path, required=True)
         if operation != "create":
             command.add_argument("--reproduced-archive", type=Path)
+            if operation == "verify":
+                command.add_argument(
+                    "--retain-crate", type=Path, help="retain the verified archive from the expected native selection in this external directory"
+                )
         else:
             command.add_argument("--run-id", type=int, required=True)
         command.add_argument("--tools", type=Path, help="JSON object containing independently observed cargo and rustc producer identities")
@@ -466,7 +488,13 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
             else []
         ),
     ]
-    _validate_distinct_paths((args.output, *([args.github_output] if args.github_output else []), *inputs))
+    cargo_dir = getattr(args, "retain_crate", None)
+    archive_output = None
+    if cargo_dir is not None:
+        if policy.guarantee != "cargo-archive" or args.expected is None or _in_checkout(cargo_dir, checkout):
+            raise ValueError("retaining a crate requires an approved Cargo selection and an external destination")
+        archive_output = cargo_dir / f"{policy.package}-{args.version}.crate"
+    _validate_distinct_paths((args.output, *([archive_output] if archive_output else []), *([args.github_output] if args.github_output else []), *inputs))
     read = partial(api, repository=policy.validation.repository)
 
     def observe() -> None:
@@ -476,6 +504,7 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
         _checkout(checkout, policy.package, args.version, args.commit, path_in_vcs=policy.path_in_vcs, package_kind=policy.package_kind)
 
     observe()
+    retained: dict[Path, bytes] = {}
     tools = parse_release_json(args.tools.read_bytes()) if args.tools else None
     if args.operation == "create":
         expected = {
@@ -502,6 +531,7 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
             reproduced_archive=args.reproduced_archive,
             reproduced_tools=tools,
             distributions=args.distributions,
+            **({"collect_crate": partial(retained.__setitem__, archive_output)} if archive_output is not None else {}),
         )
         if args.operation == "published":
             assert policy.distributions is not None
@@ -512,7 +542,7 @@ def run_evidence(args: argparse.Namespace, settings: Config) -> None:
             verify_release_evidence(policy, args.version, args.commit, read, expected=payload, distributions=args.distributions)
     observe()
     values = {"identity": json.dumps(parse_release_json(payload), sort_keys=True, separators=(",", ":")), "commit": args.commit}
-    write_release_outputs(args.output, payload, github_output=args.github_output, values=values, verify=observe)
+    write_release_outputs(args.output, payload, github_output=args.github_output, values=values, verify=observe, additional=retained)
     if args.operation == "create":
         if args.format == "json":
             write_stdout(payload)
@@ -626,11 +656,12 @@ def _run_python_approval(args: argparse.Namespace, settings: Config) -> None:
     print("Verified original registry publication approval and exact distribution bytes; no credentials or upload requested.")
 
 
-def _read_candidate_input(path: Path) -> bytes:
+def _read_candidate_input(path: Path, *, limit: int | None = None) -> bytes:
     from research_repo_tools.archives import ArchiveLimits
 
     _regular(path)
-    limit = ArchiveLimits().content_bytes
+    if limit is None:
+        limit = ArchiveLimits().content_bytes
     with path.open("rb") as stream:
         data = stream.read(limit + 1)
     if len(data) > limit:
@@ -842,6 +873,14 @@ def _run_candidate(args: argparse.Namespace, settings: Config) -> None:
         _checkout(checkout, native.package, policy.tag.removeprefix("v"), commit, path_in_vcs=native.path_in_vcs, package_kind=native.package_kind)
 
     def verify_attachment(accepted: bytes) -> None:
+        if args.required_checks:
+            from research_repo_tools.release_publishing import _api, _settings, require_checks
+
+            publishing = _settings(settings)
+            if publishing.repository != policy.repository:
+                raise ValueError("publishing policy and candidate repositories differ")
+            pages = _api(checkout, publishing.repository, f"commits/{commit}/check-runs?filter=latest&per_page=100", paginate=True)
+            require_checks(pages, commit, publishing.required_checks)
         if args.attachment is not None:
             from research_repo_tools.candidate_attachment import verify_candidate_attachment
 
@@ -911,6 +950,8 @@ def _retrieve_receipt(args: argparse.Namespace, settings: Config) -> None:
     else:
         mode = DiscoverOriginal() if args.run_id is None else OriginalRun(args.run_id)
     retrieved = retrieve_draft_receipt(policy, source, partial(api, repository=policy.repository), selection=mode)
+    if args.expected_native_sha256 is not None and parse_release_json(retrieved.receipt_bytes)["selection_sha256"] != args.expected_native_sha256:
+        raise ValueError("original draft used a different native evidence selection")
     updates = {
         paths["selection.json"]: retrieved.selection,
         paths["target.json"]: retrieved.target_bytes,
@@ -934,6 +975,15 @@ def _retrieve_receipt(args: argparse.Namespace, settings: Config) -> None:
 def run_assets(args: argparse.Namespace, settings: Config) -> None:
     """Plan, acquire, verify, or publish candidate assets according to the selected operation."""
     from research_repo_tools.dependency_provenance import check_release_dependencies
+
+    if args.operation == "receive":
+        from research_repo_tools.release_staging import receive_release_assets
+
+        _validate_distinct_paths((args.target, args.transfer, args.output))
+        target = parse_release_target(_read_candidate_input(args.target))
+        transfer = _read_candidate_input(args.transfer, limit=1024 * 1024)
+        receive_release_assets(settings.root, target, transfer, transfer_sha256=args.transfer_sha256, output=args.output)
+        return
 
     if args.operation in ("plan", "prepare-authenticated"):
         from research_repo_tools.draft_workflow import DraftHandoffArtifact, plan_release_draft, prepare_authenticated_draft

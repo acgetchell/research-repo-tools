@@ -136,5 +136,9 @@ root/configuration options before the group. See
 | Tectonic dependencies | `tectonic discover`, `export` | Read-only pkg-config/vcpkg discovery; consumer-owned provisioning |
 | Templates | `templates NAME` | Shared changelog, release guide/OIDC workflow, just, TOML, and rumdl resources |
 | Toolchain | `toolchain adopt`, `check`, `clean`, `export`, `python-check`, `python-tools-check`, `run`, `sync`, `sync-binaries`, `upgrade` | Exact declarations; managed installations and cleanup; verified execution and checked CI export |
-| Validation | `validation cargo-docs`, `cargo-examples`, `cargo-metadata`, `require`, `run` | Runtime Cargo example discovery, bounded live execution, package preflight and configured assertions |
+| Validation | `validation cargo-docs`, `cargo-examples`, `cargo-metadata`, `cargo-package`, `require`, `run` | Cargo documentation, example discovery, metadata checks, clean dry runs and configured assertions |
 | Workflow security | `zizmor check` | One declared scanner/persona, token discovery, explicit offline or required-online audits |
+
+`validation cargo-package --package NAME --output DIRECTORY` runs locked crates.io publish dry runs with default and all features.
+Each uses a fresh Cargo target directory. The command compares Cargo's packaged and dry-run registry bytes across both runs, then retains the
+verified crate. Omit `--output` to validate without retaining a copy.

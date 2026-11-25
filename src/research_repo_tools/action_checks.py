@@ -46,6 +46,8 @@ def check(root: Path, policy: Path, inputs: list[str]) -> int:
             if target is not None and target != "latest" and target != tag:
                 diagnostics.append(f"{use.location}: {use.action}: version comment {tag!r} does not match explicit policy tag {target!r} in {policy}")
             sha = use.ref.lower()
+            if use.action in declaration.reviewed_commits and declaration.reviewed_commits[use.action] != sha:
+                diagnostics.append(f"{use.location}: {use.action}@{sha} # {tag} differs from the reviewed release in {policy}")
             if use.action in pins:
                 expected_sha, expected_tag, first = pins[use.action]
                 if (sha, tag) != (expected_sha, expected_tag):

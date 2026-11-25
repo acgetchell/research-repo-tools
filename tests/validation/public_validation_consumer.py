@@ -360,6 +360,40 @@ class TestGitDiscovery(unittest.TestCase):
 
 
 class TestSelectionPreflight(unittest.TestCase):
+    def test_cargo_package_retains_only_the_common_dry_run_bytes(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary).resolve()
+            name = "example-1.0.0.crate"
+            output = root / "retained"
+            calls = []
+            conflict = False
+
+            def cargo(program, args, *, cwd, env: dict[str, str] | None = None, **_):
+                self.assertEqual((program, cwd), ("cargo", root))
+                if args[0] == "metadata":
+                    metadata = {"name": "example", "version": "1.0.0", "description": "Example", "keywords": [], "categories": []}
+                    return subprocess.CompletedProcess(args, 0, json.dumps({"packages": [metadata]}), "")
+                self.assertEqual(args[:7], ["publish", "--locked", "--dry-run", "--registry", "crates-io", "--package", "example"])
+                calls.append("--all-features" in args)
+                assert env is not None
+                self.assertEqual(env["CARGO_BUILD_BUILD_DIR"], args[args.index("--target-dir") + 1])
+                for part in ("tmp-crate", "tmp-registry"):
+                    path = Path(env["CARGO_BUILD_BUILD_DIR"]) / "package" / part / name
+                    path.parent.mkdir(parents=True)
+                    path.write_bytes(b"other" if conflict and calls[-1] and part == "tmp-registry" else b"original")
+                return subprocess.CompletedProcess(args, 0, "", "")
+
+            args = ["--root", str(root), "validation", "cargo-package", "--package", "example", "--output", "retained"]
+            with patch.dict(os.environ, CARGO_BUILD_BUILD_DIR=str(root / "unrelated")), patch("research_repo_tools.validation.run_command", side_effect=cargo):
+                self.assertEqual(main(args), 0)
+                self.assertEqual(calls, [False, True])
+                self.assertEqual((output / name).read_bytes(), b"original")
+                conflict = True
+                with contextlib.redirect_stderr(io.StringIO()) as error:
+                    self.assertEqual(main(args), 1)
+                self.assertIn("inconsistent archive bytes", error.getvalue())
+                self.assertEqual((output / name).read_bytes(), b"original")
+
     def test_empty_selection_cannot_hide_an_invalid_batch_timeout(self):
         with tempfile.TemporaryDirectory() as directory, patch("research_repo_tools.selection.select_files", return_value=()) as select:
             with contextlib.redirect_stdout(io.StringIO()) as out, contextlib.redirect_stderr(io.StringIO()) as err:

@@ -590,6 +590,18 @@ Action updates require separate, explicit opt-in targets in
 actions = ["actions/checkout", "owner/repo/subpath"]
 ```
 
+Use a reviewed release to bind multiple subpaths from the same repository to one
+independently reviewed tag and peeled commit. Include each identity in both
+`[actions]` and `consistency.actions`. The updater checks the resolved upstream
+commit before writing. The offline checker enforces the same identity.
+
+```toml
+[[consistency.releases]]
+actions = ["owner/repo/init", "owner/repo/analyze"]
+tag = "v1.2.3"
+commit = "0123456789abcdef0123456789abcdef01234567"
+```
+
 The optional `[consistency]` list declares exact identities that must use the
 same full commit SHA and version comment everywhere in the selected inputs.
 `actions check` requires a nonempty list. Checked identities need not be update

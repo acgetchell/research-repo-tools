@@ -144,6 +144,9 @@ class TestPublishingConsumer(unittest.TestCase):
                 publish_reviewed_release(settings, "v1.2.3", target=target)
             publish.assert_not_called()
             lookup.return_value = draft
+            with self.assertRaisesRegex(ValueError, "reviewed inventory"):
+                publish_reviewed_release(settings, "v1.2.3", target=target, expected_assets=frozenset({("crate", 99, 10, "1" * 64)}))
+            publish.assert_not_called()
             publish_reviewed_release(settings, "v1.2.3", target=target)
             publish.assert_called_once_with(settings.root, target)
             lookup.return_value = replace(draft, identifier=10, draft=False, immutable=True)

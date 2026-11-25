@@ -403,29 +403,52 @@ def _check_reviewed_target(
     return release
 
 
-def publish_reviewed_release(config: "Config", tag: str, *, reuse_evidence: bytes | None = None, target: ReleaseTarget | None = None) -> None:
+def publish_reviewed_release(
+    config: "Config",
+    tag: str,
+    *,
+    reuse_evidence: bytes | None = None,
+    target: ReleaseTarget | None = None,
+    expected_assets: frozenset[tuple[str, int, int, str]] | None = None,
+) -> None:
     """Publish a validated draft as the invoking maintainer, triggering its workflow.
 
     Invocation is approval of the draft. This never uploads registry packages,
     creates tags, replaces assets, or configures a trusted publisher.
+    The maintainer must serialize every writer for this repository and tag
+    until the publication response is confirmed. GitHub's draft transition has
+    no asset inventory precondition. Inspect an uncertain result before retry.
     """
+    if expected_assets is not None and target is None:
+        raise ValueError("reviewed asset publication requires its original draft target")
+
+    def check_inventory(observed: GitHubRelease) -> None:
+        if expected_assets is not None and (
+            set(observed.assets) != expected_assets or any(dict(observed.asset_states).get(identifier) != "uploaded" for _, identifier, _, _ in expected_assets)
+        ):
+            raise ValueError("release assets differ from the reviewed inventory")
+
     head = _sha(run_git_command(["--no-pager", "rev-parse", "HEAD"], cwd=config.root).stdout.strip())
     release = check_reviewed_release(config, tag, draft=True, reuse_evidence=reuse_evidence, target=target)
     require_draft(release)
+    check_inventory(release)
     # Recheck tag and CI here. The final target observation runs the fresh
     # dependency check immediately before the one lifecycle mutation.
     current_head = _check_release_source(config, tag, commit=head, reuse_evidence=reuse_evidence)
     current = _check_reviewed_target(config, tag, current_head, draft=True, target=target)
     require_draft(current)
+    check_inventory(current)
     if current.identifier != release.identifier:
         raise ValueError("draft release identity changed before publication")
     if target is None:
         target = ReleaseTarget(release.repository, tag, release.identifier, head)
     final = revalidate_release_target(config.root, target, dependencies=config.release.published_dependencies)
     _release_assertions(config, final, tag, draft=True)
+    check_inventory(final)
     published = _publish_release(config.root, target)
     try:
         _release_assertions(config, published, tag, draft=False)
+        check_inventory(published)
     except ValueError as error:
         raise ReleasePublicationUnknownError(
             f"publication outcome unknown for {target.repository} release {target.release_id}: response did not confirm declared release assertions; inspect before retrying"
