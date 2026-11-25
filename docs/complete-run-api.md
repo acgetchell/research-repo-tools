@@ -390,16 +390,13 @@ reports link directly to that run's immutable `run.json` and `evidence.json`,
 relative to each report's own directory. Measurement CLI reports link to their
 explicit output evidence paths.
 
-Version-1 indexes remain readable and select the frozen renderer-1 presentation
-for exact-byte report validation. Version-2 entries also retain their frozen
-renderer-2 provenance presentation. Promotion or offline rerender upgrades the
-mutable index to version 2 and renders the current report with wrapped source,
-provenance and links. Every existing immutable report, payload and envelope stays byte for byte,
-including when an old run is selected or promoted again. Old reports therefore
-retain their original presentation without new links. Mixed histories record
-the original renderer (1, 2 or 3) for those entries and renderer 4 for newly
-retained runs. Validation rejects unknown versions and reports whose bytes differ
-from their recorded renderer's output.
+To verify an archived report, a version-1 index uses renderer 1 for every entry.
+A version-2 index uses each entry's recorded `report_renderer`. Promotion or
+offline rerender writes a version-2 index and renders the mutable current report
+with renderer 4. It preserves the exact bytes of each existing archived report,
+payload and envelope, even when promoting that run again. Only newly retained
+runs get an archived report from renderer 4. Validation rejects unknown
+renderers and reports whose bytes differ from their recorded renderer's output.
 Historical reports keep their original formatting, including any long lines;
 scope lint exceptions to those frozen files rather than rewriting them.
 No benchmark resampling is needed. Older package versions cannot read newer

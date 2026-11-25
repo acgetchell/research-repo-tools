@@ -74,7 +74,7 @@ provides opt-in source-check equivalence for PR merge and squash release trees.
 `publish_reviewed_release` accept keyword-only `reuse_evidence=None`. Omitting it
 retains exact-commit checks. `require_checks` always retains exact-SHA semantics.
 
-`publish_reviewed_release(config, tag)` validates a stable draft twice and publishes
+`publish_reviewed_release(config, tag)` validates a stable draft and publishes
 that GitHub Release as the invoking maintainer. Calling it constitutes approval;
 the CLI additionally requires `--approve`. It never changes Git state or uploads
 registry packages. Consumers retain native Cargo packaging/upload commands.
@@ -86,6 +86,14 @@ before mutation, and validates the publication response through the shared
 [release-target contract](workflow-api.md#release-assets). An invalid/unavailable
 publication response raises `release_assets.ReleasePublicationUnknownError`;
 inspect the captured ID before retrying because publication may have succeeded.
+
+For a fully staged release, pass the original `target` and the independently
+reviewed `expected_assets`, a frozenset of `(name, asset_id, size, sha256)` tuples.
+The publisher requires an exact inventory match and the uploaded state at each
+draft check and in the publication response. Hold exclusive control of draft
+edits and uploads through confirmation. The [staging and publication guide](VERIFYING_RELEASE_EVIDENCE.md#release-evidence-and-attachment-handoffs)
+shows how the CLI obtains that inventory from a verified transfer.
+
 `verify_publication(config, tag, *, attempts=1, interval=10, target=None,
 require_crate_asset=False)`
 rechecks upstream dependencies and requires a published stable GitHub Release,

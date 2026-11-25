@@ -164,12 +164,13 @@ are not offline authorization tokens or substitutes for a live release/tag gate.
 For Cargo reproduction, pass both `reproduced_archive` and `reproduced_tools`.
 The consumer creates that archive without publishing credentials. Verification
 requires identical original archive SHA-256 and exact tool identity strings.
-`verify_cargo_archive(path, package, version, commit, *, path_in_vcs="")` is also
-available as a separate integrity check; it makes no CI or signature claim.
-It inspects at most 64 MiB each of compressed and expanded data, 4,096 members,
+`verify_cargo_archive(archive, package, version, commit, *, path_in_vcs="")`
+checks the package and source identity and returns the SHA-256 of the original
+compressed archive. The function inspects at most 64 MiB each of compressed and expanded data, 4,096 members,
 and 1 MiB per metadata member without extracting or executing files. It rejects
 links, sparse files, duplicate or unsafe member paths, and mismatched Cargo
-metadata. In v0.3.0, the shared path check also rejects file/directory overlaps
+metadata. CI evidence and signature checks belong to the verifier above.
+In v0.3.0, the shared path check also rejects file/directory overlaps
 and case or Unicode aliases and limits each member path to 128 components,
 including the package directory and filename.
 The outer artifact download additionally enforces its 32 MiB ZIP/expanded bound,

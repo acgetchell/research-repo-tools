@@ -33,10 +33,11 @@ Use `just help` for the consumer's actual recipes and the
 ## Capability references
 
 Public function and dataclass signatures can be inspected with
-`inspect.signature` without loading optional dependencies. Annotations involving
-optional dependencies or cyclic module references remain forward-reference
-strings. Tools that evaluate those annotations must supply the corresponding
-type namespace; signature display does not require resolving them.
+`inspect.signature` without loading optional dependencies. For evaluated types,
+`typing.get_type_hints` resolves package types such as the measurement plan
+returned by `measurement.load_measurement`. Evaluating an optional type also
+loads its dependency. For example, install the `notebooks` extra before
+resolving the `Notebook.node` annotation to `nbformat.NotebookNode`.
 
 | Capability | Authoritative reference |
 | --- | --- |

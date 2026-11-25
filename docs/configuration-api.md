@@ -43,8 +43,13 @@ repository settings remain unchanged. See [consumer wiring](UPDATING_DEPENDENCIE
 `actions check --policy PATH INPUT...` checks the update policy's nonempty
 `[consistency].actions` list offline. Each exact identity must occur in the
 configured workflow/composite scope with identical full commit SHAs and inline
-version comments. An explicit `[actions]` tag must match the comment exactly;
-`latest` is not resolved. Identities can be checked without opting into updates.
+version comments across occurrences of that identity. An explicit `[actions]` tag
+must match the comment exactly. With `latest`, the offline check compares recorded
+pins. Identities can be checked without opting into updates.
+Each optional `[[consistency.releases]]` table binds its listed identities from one
+repository to a reviewed tag and full commit SHA. Each member must also appear in
+`consistency.actions` and select that exact tag in `[actions]`.
+See the [grouped policy example](../README.md#pin-actions-from-the-same-release).
 The command reads files only, performs no compatibility lookups, and needs no
 GitHub CLI or credentials. Mismatches and malformed pins report file/line
 locations; absent identities report the configured scope. Aliases refer to their

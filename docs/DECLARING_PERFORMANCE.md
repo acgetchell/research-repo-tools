@@ -501,11 +501,11 @@ freshness checks, immutable retention and transactional writes still apply.
 
 ### Export semantics and limits
 
-`capture_source(repository, reference, working_tree=False)` resolves an existing
+`capture_source(root, reference="HEAD", *, working_tree=False)` resolves an existing
 canonical stable tag, full commit ID, or HEAD. It reads stored Git tree/blob data,
 verifies object hashes, and captures ordinary regular files only. Export-ignore,
 export-subst, clean/smudge filters and checkout newline conversion are deliberately
-not applied. Working-tree capture uses HEAD plus the actual tracked/nonignored
+not applied. Working-tree capture requires `reference="HEAD"` and reads the actual tracked/nonignored
 inventory, including edits, deletions and new files. The recorded dirty flag
 compares captured bytes and supported executable modes with the stored commit;
 checkout filters or newline conversion can therefore make it differ from Git's

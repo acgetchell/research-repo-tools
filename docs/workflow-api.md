@@ -51,21 +51,27 @@ fail. Inventories are sorted and deduplicated. Optional fields follow the packag
 - `minimum-release` optionally declares a stable tag, normalized to `vX.Y.Z`,
   below which acquisition is rejected before measurement begins.
 
-`capture_provenance(root, config, tag, *, mode)` captures HEAD, versioned source
-and harness fingerprints, complete inventories, host OS/architecture/available
-CPU, versioned host counts/memory, exact command, probes, dependencies, mode, and release. Missing CPU identity
-stays unknown. `measure_checkout` additionally executes the trusted command with
+`capture_provenance(root, configuration, tag, *, mode, env=None, source=None)`
+records the supplied source's revision or the checkout's HEAD when `source` is
+omitted. It also records source and harness fingerprints and inventories, the
+host OS and architecture, available CPU and memory observations, the command,
+tool probes, dependency versions, mode and release. Missing CPU identity stays
+unknown. `measure_checkout` additionally executes the trusted command with
 live inherited streams, collects the configured Criterion sample, and rejects
 changes to captured inputs or metadata. The sample must be absent before the
 run; use a fresh checkout to avoid mixing stale benchmark rows.
 
-`measure_pair(root, config, pair, *, working_tree=False,
-allow_git_mutations=False)` compares separate fresh checkouts and returns
-`Evidence`. It requires explicit mutation opt-in. Tagged sources use locally
-available stable tags; it never fetches. Working files use HEAD plus the exact
-binary patch and tracked/nonignored untracked inputs. Parent checkout changes
-during measurement reject the result. No evidence is published on failure.
-Inputs and benchmark programs must be trusted; execution is not sandboxed.
+`measure_pair(root, configuration, pair, *, working_tree=False, allow_git_mutations=False,
+backend=None, verify=None, checkpoint=None, resume=False, progress=None)` measures two
+isolated sources and returns `Evidence`. Schema 1 defaults to `worktree` and also
+accepts `backend="export"`. Complete and suite plans use their configured backend.
+Only the worktree backend requires `allow_git_mutations=True` to create and remove
+detached checkouts. The export backend materializes files in temporary directories.
+See [export semantics](DECLARING_PERFORMANCE.md#export-semantics-and-limits).
+Both backends resolve tags locally. With `working_tree=True`, the current phase uses
+the tracked and nonignored files at the working revision, including local changes.
+The operation rechecks the captured inputs before returning evidence. Benchmark
+commands execute with the caller's privileges and must be trusted.
 
 `worktrees.TreeSnapshot(revision, patch, untracked)` stores a full commit ID,
 patch bytes, and `(relative_name, bytes, ordinary_permission_bits)` entries.

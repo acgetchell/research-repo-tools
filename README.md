@@ -48,11 +48,12 @@ Set `tool.uv.required-version` to `==` followed by the version number reported
 by `uv --version`. Then add the published package to the tooling group.
 
 ```sh
-uv add --group tooling --bounds exact research-repo-tools
+uv add --group tooling --bounds exact --no-sync research-repo-tools
 ```
 
 Include `{include-group = "tooling"}` in the existing `dev` group or create that
-group. See [toolchain declarations][toolchain].
+group. Setup installs the project's declared tools before syncing the
+development environment. See [toolchain declarations][toolchain].
 
 **2. Lock the dependencies and export both templates.** For a repo with an existing
 Justfile or helper, omit the corresponding `--output` argument and merge the
@@ -107,9 +108,11 @@ locked environment. Run `just help` to see the recipes in your project's Justfil
 
 ### Pin Actions from the same release
 
-To check multiple subpaths from one repository against a reviewed release, add
-the exact Action identities to `.github/action-updates.toml`. Replace the
-example identities, tag and commit below with your reviewed values.
+The v0.3.2 policy checks occurrences of each Action identity independently.
+To check several subpaths against one reviewed release, use a tooling pin that
+supports `[[consistency.releases]]`. See [release availability](#release-availability).
+Add the exact Action identities to `.github/action-updates.toml` and replace
+the example tag and commit with your reviewed values.
 
 ```toml
 [actions]
@@ -127,7 +130,6 @@ commit = "0123456789abcdef0123456789abcdef01234567"
 
 Run `just actions-check` to check the pins offline. On update, the updater
 resolves the upstream tag and compares its peeled commit before writing.
-See [release availability](#release-availability) when selecting the supplying version.
 
 ## Capability index
 
@@ -176,9 +178,9 @@ just performance-readme tooling/performance-release.toml
 If only the README step fails, fix the presentation and retry it using retained
 evidence. For a [first stable release][first-release], record current timings.
 If published releases predate the workload, follow the [benchmark series
-procedure][series-guide]. For v0.3.3 adoption, use the verified published
-distribution to revalidate an immutable series release or to
-[review a preparation PR with a large archived payload][raw-review].
+procedure][series-guide]. To revalidate the series after publication, pin v0.3.3
+once available on [PyPI][pypi]. The series guide also covers
+[reviewing a preparation PR with a large archived payload][raw-review].
 
 ### Releases
 
@@ -209,6 +211,7 @@ verify it with `just release-dependencies`. [Dependency source verification][dep
 
 See [CONTRIBUTING.md][contributing] for package development, tests and maintainer
 commands. [Supported interfaces][api] defines the consumer compatibility boundary.
+Report vulnerabilities through the [security policy][security-policy].
 
 ## Citation
 
@@ -261,6 +264,7 @@ BSD-3-Clause. See [LICENSE][license].
 [reports-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/PUBLISHING_REPORTS.md
 [reuse-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_CI.md
 [review-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RUNNING_CHECKS.md#coderabbit-review
+[security-policy]: https://github.com/acgetchell/research-repo-tools/blob/main/SECURITY.md
 [series-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_BENCHMARKS.md#starting-a-benchmark-series-after-earlier-releases
 [raw-review]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_BENCHMARKS.md#reviewing-a-large-archived-payload
 [timing-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/TIMING_COMMANDS.md

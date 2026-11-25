@@ -146,13 +146,16 @@ the exact tagged commit.
 ### 5. Create the draft GitHub release
 
 Wait for the tag's preparation workflow to succeed. If it produces RRT draft
-receipts, follow the [receipt retrieval command](https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md#retrieve-original-preparation-output)
+receipts, follow the [receipt retrieval command][draft-receipt]
 with `TAG` and `RELEASE_COMMIT` from this release. It saves the original run,
 attempt, draft ID and commit outside the checkout. A retry revalidates those
 same records. If your workflow supplies its own authenticated target, use the
 original file it produced. For workflows that only create a draft, capture it
-once using the [release target handoff](https://github.com/acgetchell/research-repo-tools/blob/main/docs/VERIFYING_RELEASE_EVIDENCE.md#trusted-release-target-handoff).
+once using the [release target handoff][release-target].
 Set `RELEASE_TARGET` to the saved target file for the remaining steps.
+
+[draft-receipt]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md#retrieve-original-preparation-output
+[release-target]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/VERIFYING_RELEASE_EVIDENCE.md#trusted-release-target-handoff
 
 ### 6. Review the draft
 

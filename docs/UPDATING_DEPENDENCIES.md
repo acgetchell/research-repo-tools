@@ -815,7 +815,8 @@ retrying. Generated/cache directories are omitted unless they contain declared
 workspace manifests. Required workspace inputs are never omitted just to meet
 these limits.
 
-See the [release dependency verification rules](dependency-provenance-api.md#registry-and-lock-verification) for native lock checks, registry proof, limits and failure conditions.
+For native lock checks, registry proof, limits and failure conditions, see the
+[release dependency verification rules](dependency-provenance-api.md#registry-and-lock-verification).
 
 Keep `dependency-sources.toml`, affected manifests and locks in the source and
 harness inventories used by the existing evidence workflow. Applying a source
