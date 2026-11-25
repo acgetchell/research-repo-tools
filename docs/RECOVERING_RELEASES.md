@@ -79,16 +79,19 @@ gh run view "$RUN_ID" --attempt "$ATTEMPT" --log-failed
 
 Keep the original tag. Once the exact complete main-push run passes, confirm the
 failed preparation attempt stopped before draft creation. Set `PREPARATION_RUN_ID`
-to its ID and rerun its failed jobs. Then repeat `just release-draft "$TAG"`.
+to its ID. From the tagged checkout, retry those jobs, save the signed main
+evidence and capture the draft. The last command waits for preparation to succeed.
 
 ```bash
-gh run rerun "$PREPARATION_RUN_ID" --failed
+gh run rerun "$PREPARATION_RUN_ID" --failed &&
+  just release-evidence &&
+  just release-draft "$TAG"
 ```
 
 ## Draft creation or upload failed
 
-Wait for the original writer to stop. Preserve its preparation run ID, attempt,
-signed attachment and signed distribution summary. When the workflow retained
+Wait for the original writer to stop. Record its preparation run ID and attempt.
+Preserve any saved attachment and signed distribution summary. When the workflow retained
 `draft-recovery-<attempt>`, download it into a fresh directory outside the checkout.
 
 ```bash
@@ -114,13 +117,17 @@ gh run download "$PREPARATION_RUN_ID" --name "draft-recovery-$ATTEMPT" \
    gh api --paginate "repos/{owner}/{repo}/releases/$DRAFT_ID/assets?per_page=100" --jq '.[] | {id,name,state,size,digest}'
    ```
 
-   Save the inventory. Download each uploaded asset by ID. Compare the wheel and
-   sdist names and bytes with the signed summary. Compare the attestation
-   byte for byte with the original attachment. A `starter` asset is incomplete.
+   Save the inventory. Download each uploaded asset by ID into a fresh handoff
+   directory using its recorded filename. Check the distribution names and
+   hashes against the original signed summary. If you retained the attachment,
+   compare its bytes with the draft copy. If preparation succeeded before you
+   saved a copy or summary, [verify the signed promotion](#verify-a-successful-draft-without-a-saved-attachment).
+   A `starter` asset is incomplete. Hold a failed upload for maintainer
+   reconciliation if the available evidence cannot identify its assets.
    [GitHub release asset API](https://docs.github.com/en/rest/releases/assets)
 
 3. If preparation **succeeded** and all three assets match the current, unexpired
-   evidence, capture the target with `just release-draft "$TAG"` and resume
+   evidence, [save the summary and capture the draft](RELEASING.md#3-save-the-signed-evidence-and-capture-the-draft) before
    [draft review](RELEASING.md#4-review-the-draft).
    If an upload failed or the draft needs [renewed evidence](#artifact-retention-and-recovery-window),
    keep the downloaded files and their IDs in the handoff. If ownership or bytes
@@ -135,6 +142,40 @@ gh run download "$PREPARATION_RUN_ID" --name "draft-recovery-$ATTEMPT" \
    assets**. Reconfirm the tag, commit and signed inputs. In a reused staging
    directory, move the original attachment into the handoff first. After the run
    succeeds, repeat evidence and draft capture and compare all three assets again.
+
+### Verify a successful draft without a saved attachment
+
+A successful run leaves its signed attachment on the draft. To identify the
+old assets for cleanup, verify that signature against both downloaded files.
+Set `ASSET_DIR` to their directory. Use the reviewed `TAG` and
+`RELEASE_COMMIT`, and get `PREPARATION_RUN_ID` and `ATTEMPT` from the
+[successful tag-push run](#inspect-the-original-runs) that staged these assets.
+
+```bash
+(
+  set -eu
+  cd "${ASSET_DIR:?Set the directory containing the three downloaded assets}"
+  repo=acgetchell/research-repo-tools
+  predicate="https://github.com/$repo/attestations/release-promotion/v1"
+  invocation="https://github.com/$repo/actions/runs/${PREPARATION_RUN_ID:?}/attempts/${ATTEMPT:?}"
+  jq -erj '.promotion_bundle' release-attestation.json > promotion.sigstore.json
+  for file in "research_repo_tools-${TAG#v}-py3-none-any.whl" "research_repo_tools-${TAG#v}.tar.gz"; do
+    gh attestation verify "$file" --bundle promotion.sigstore.json --repo "$repo" \
+      --signer-workflow "$repo/.github/workflows/prepare-release.yml" --signer-digest "${RELEASE_COMMIT:?}" \
+      --source-digest "$RELEASE_COMMIT" --source-ref "refs/tags/${TAG:?}" --deny-self-hosted-runners \
+      --predicate-type "$predicate" --format json > "$file.verified.json"
+    jq -e --arg uri "$invocation" --arg schema "$predicate" --slurpfile proof release-attestation.json '
+      length == 1 and ($proof[0].schema == $schema) and (.[0].verificationResult |
+        .signature.certificate.runInvocationURI == $uri and .signature.certificate.buildTrigger == "push" and
+        .statement.predicate == $proof[0].evidence)' "$file.verified.json"
+  done
+)
+```
+
+Require both checks to print `true` and exit successfully. Read the original
+file hashes with `jq '.evidence.manifest | fromjson | .files' "$ASSET_DIR/release-attestation.json"`.
+If either check fails, preserve the draft for reconciliation. Publication
+still requires [current evidence](#artifact-retention-and-recovery-window).
 
 ## Artifact retention and recovery window
 
@@ -223,8 +264,11 @@ Resume [final verification and cleanup](RELEASING.md#7-verify-the-published-pack
 ## Replace an unpublished candidate
 
 **If you have uncommitted corrections on the release branch, stay on that branch.**
-Keep the version, declared date, old tag, and draft while you prepare one corrective PR.
+Otherwise, after the original PR merges, start `fix/recover-$TAG` from a clean,
+synchronized `main`. Keep the version, old tag, and draft while you prepare one corrective PR.
 You move the tag only after the PR merges and the corrected commit passes CI.
+If the contents and declared date must both stay fixed, leave the candidate on
+hold or [prepare a new version](RELEASING.md#step-1-set-the-release-tag) before starting this procedure.
 
 ### 1. Hold publication and record the old candidate
 
@@ -250,6 +294,12 @@ published version requires a new version even if its files were later removed.
 
 ### 2. Stage the corrections
 
+For a content correction, keep the declared release date. If only the evidence
+expired, choose the new planned release date and run
+`just update-version "$TAG" --date YYYY-MM-DD` with that date. Review the
+changed date in `CITATION.cff` and the current `CHANGELOG.md` heading.
+These tracked changes give the recovery PR a new commit for the same version.
+
 ```bash
 git status --short
 git diff
@@ -273,12 +323,15 @@ Address any findings and stage the fixes before committing.
 
 ### 4. Commit the reviewed corrections
 
+For a date-only change, use `git commit -m "chore(release): prepare $TAG"`.
+For a content correction, use a subject that describes the fix.
+
 ```bash
 git commit -m "fix(release): correct recovery for $TAG"
-git status --short
 ```
 
-Continue when `git status --short` prints nothing. The notes recipe reads committed history.
+Run `git status --short` after committing. Continue when it prints nothing.
+The notes recipe reads committed history.
 
 ### 5. Generate and review the notes
 
