@@ -62,7 +62,7 @@ for account setup and fork uploads.
 A successful main push signs evidence tying the exact commit and workflow attempt
 to the producer, native gates and distribution bytes. Distribution and evidence
 artifacts are retained for 30 days. For incomplete attempts or expired artifacts,
-follow the [release recovery window](RELEASING.md#artifact-retention-and-recovery-window).
+follow the [release recovery window](RECOVERING_RELEASES.md#artifact-retention-and-recovery-window).
 Published-package verification belongs to the [release procedure](RELEASING.md).
 
 ## Validation under the agent Git policy

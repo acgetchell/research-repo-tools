@@ -147,7 +147,7 @@ when updating the consumer's settings.
 
 For a local release review, assign an archived raw payload to verified
 preflight only under the consumer's declared review policy. The release
-template links the exact-path Git procedure. [Preparing the release PR](RELEASING.md#step-1-prepare-the-release-pr)
+template links the exact-path Git procedure. [Preparing the release PR](RELEASING.md#step-2-prepare-the-release-pr)
 
 Each consumer owns its annotations, exact fixture exceptions, CodeRabbit choices,
 tool pins, and local/CI wiring. Verify those checks against the selected registry

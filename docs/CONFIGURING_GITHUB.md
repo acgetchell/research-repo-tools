@@ -124,11 +124,8 @@ callers. A token shared with other repositories must stay valid for them.
 Normal changes go through pull requests. The maintainer performs Git mutations
 under [AGENTS.md](../AGENTS.md).
 
-Registry trust and deployment approvals must be configured before publishing.
-Keep account-specific registration and approval choices in the maintainer's
-private setup task. Follow [Releasing research-repo-tools](RELEASING.md) for
-repeat releases. Committing workflow YAML does not apply account settings or
-publish distributions.
+For each release, the maintainer approves the protected `pypi` deployment
+after the verification job passes. [Open the run and approve publishing](RELEASING.md#6-open-the-run-and-approve-publishing-to-pypi)
 
 For consumer adoption, follow the [migration guide](migration.md) and
 [installation guide](INSTALLING.md), then validate the exact published package
