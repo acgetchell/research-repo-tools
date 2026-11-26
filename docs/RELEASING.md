@@ -86,33 +86,29 @@ git push -u origin "release/$TAG" &&
 ```
 
 Include the gate results in the PR description. Wait for required checks and
-reviews before merging. Keep the PR number for step 3.
+reviews before merging.
 
 ## Step 3: Publish after the PR is merged
 
 ### 1. Synchronize main and wait for CI
 
-Set `RELEASE_PR` to the merged PR number. From a clean checkout, find its merge
-commit and the **Package checks** push run for that SHA.
+From a clean checkout, update your local `main` after the release PR merges.
 
 ```bash
-git switch main
-git pull --ff-only origin main
-RELEASE_COMMIT=$(gh pr view "${RELEASE_PR:?Set the release PR number}" --json state,baseRefName,mergeCommit \
-  --jq 'select(.state == "MERGED" and .baseRefName == "main") | .mergeCommit.oid')
-MAIN_RUN_ID=$(gh run list --workflow ci.yml --event push --branch main --commit "${RELEASE_COMMIT:?Check the merged PR}" \
-  --limit 2 --json databaseId --jq 'select(length == 1) | .[0].databaseId')
-gh run watch "${MAIN_RUN_ID:?Expected one main-push CI run for the reviewed commit}" --exit-status
+git switch main && git pull --ff-only origin main
 ```
 
-Wait for the complete attempt, including Linux, macOS, Windows and signed
-release evidence. If the run lookup is empty or ambiguous, [inspect the runs](RECOVERING_RELEASES.md#inspect-the-original-runs).
-If `main` has advanced, use `git switch --detach "$RELEASE_COMMIT"` before tagging.
+In **Actions → Package checks**, open the push to `main` for the release PR you
+just merged. Wait for **Success**, including Linux, macOS, Windows and the
+`release-evidence` job. When the commit shown on the run matches your local
+checkout, continue to tagging. If your pull brought in a later commit,
+[check out the release commit](RECOVERING_RELEASES.md#check-out-the-release-commit).
+If the run is missing or ambiguous, [inspect the original runs](RECOVERING_RELEASES.md#inspect-the-original-runs).
 
 ### 2. Create and push the annotated tag
 
 ```bash
-just tag "$TAG" --commit "$RELEASE_COMMIT"
+just tag "$TAG"
 ```
 
 Confirm the printed SHA and annotation, then push just that tag to start **Prepare GitHub release**.
@@ -123,7 +119,9 @@ git push origin "refs/tags/$TAG"
 
 ### 3. Save the signed evidence and capture the draft
 
-From the clean tagged checkout, verify the signed distributions for the pushed tag.
+**Save the evidence after pushing the tag.** From the clean tagged checkout,
+run this as soon as the tag is on GitHub. It reads the signed distributions
+from the successful **Package checks** run on `main`, even while draft preparation is running.
 
 ```bash
 just release-evidence
@@ -135,31 +133,25 @@ SHA-256 of each file. If there is one open issue titled
 `release: validate and publish research-repo-tools <tag>`, the recipe also posts
 the summary there. Use `just release-evidence ISSUE_NUMBER` for another tracker.
 
+**Confirm preparation in GitHub.** Open
+[Actions → Prepare GitHub release](https://github.com/acgetchell/research-repo-tools/actions/workflows/prepare-release.yml)
+and select the run triggered by your tag push. Once that run shows **Success**,
+capture the prepared draft from the same checkout.
+
 ```bash
 just release-draft "$TAG"
 ```
 
-This waits for the original tag-push run, verifies the draft ID, tag, title
+The recipe rechecks the original tag-push run, verifies the draft ID, tag, title
 and commit, and prints the retained `target.json` path. Keep it with the
 evidence. Publish and verify both use this target.
 
 ### 4. Review the draft
 
-```bash
-gh release view "$TAG"
-gh release view "$TAG" --json assets --jq '.assets[] | [.name, .state, .size, .digest] | @tsv'
-```
-
-Check the title and generated notes or canonical changelog link. Require exactly
-three nonempty, uploaded assets. Match the wheel and sdist names and SHA-256
-digests to the saved evidence. Download `release-attestation.json` and check
-the commit, run ID, attempt and file hashes in its embedded manifest.
-
-```bash
-REVIEW_DIR=$(mktemp -d "../release-handoffs/research-repo-tools/$TAG/draft-review.XXXXXX") &&
-  gh release download "$TAG" --pattern release-attestation.json --dir "$REVIEW_DIR" &&
-  jq '.evidence.manifest | fromjson | {run, files}' "$REVIEW_DIR/release-attestation.json"
-```
+Open the draft for your tag in [GitHub Releases](https://github.com/acgetchell/research-repo-tools/releases).
+Read the title and notes as they will appear to users. Under **Assets**, look for the
+wheel (`.whl`), source distribution (`.tar.gz`) and `release-attestation.json`.
+If the draft looks right, continue to step 5. [Command-line draft checks](RECOVERING_RELEASES.md#inspect-a-draft-from-the-command-line)
 
 ### 5. Publish the GitHub Release
 
@@ -169,15 +161,14 @@ From the clean tagged checkout and a human GitHub CLI session, publish the revie
 just release-publish "$TAG"
 ```
 
+The initial check verifies the release metadata, required CI checks and captured
+draft. The final check repeats those checks immediately before publishing the
+GitHub Release. Its publication triggers the separate PyPI workflow.
+
 ### 6. Open the run and approve publishing to PyPI
 
-Publishing the GitHub Release starts **Publish to PyPI**. Find its run URL for the tag and reviewed commit.
-
-```bash
-gh run list --workflow publish.yml --event release --branch "$TAG" --commit "$RELEASE_COMMIT" --json url --jq '.[].url'
-```
-
-1. Open the run URL in your browser. Wait for `verify` to pass and `publish` to request approval.
+1. In [Actions → Publish to PyPI](https://github.com/acgetchell/research-repo-tools/actions/workflows/publish.yml),
+   open the run for the release you just published. Wait for `verify` to pass and `publish` to request approval.
 2. Click **Review deployments**, select **pypi**, then click **Approve and deploy**.
 3. Wait for `publish` to succeed before checking the files on PyPI.
 

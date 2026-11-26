@@ -594,15 +594,17 @@ Generate a Cobertura XML report with the consumer's native coverage tool first.
 To summarize it, add a thin recipe:
 
 ```just
-coverage-summary:
-    uv run --locked --group dev research-repo-tools coverage report --report coverage/cobertura.xml
+[positional-arguments]
+coverage-summary *args:
+    uv run --locked --group dev research-repo-tools coverage report --report coverage/cobertura.xml "$@"
 ```
 
 `just coverage-summary` prints files with coverable lines in ascending coverage
-order. Duplicate source lines are counted once. The CLI supports `--prefix`,
-`--limit` and `--descending`; missing or malformed reports fail. This summary
-does not run tests or impose a minimum coverage threshold. Consumers own those
-gates and their interpretation of the results.
+order, counting each line once per file. For the ten lowest entries under
+`src`, run `just coverage-summary --prefix src --limit 10`. Match the path
+spelling in the report. Add `--descending` to see the highest coverage first.
+Missing or malformed reports fail. The consumer runs the tests and sets its
+coverage threshold.
 
 Use the packaged `just clean-coverage` recipe to preview retained Python coverage
 shards and failed/interrupted runs; add `--apply` after stopping coverage writers.

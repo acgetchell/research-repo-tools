@@ -439,6 +439,29 @@ def release_pr(commit, branch=f"release/{TAG}"):
     return {"merge_commit_sha": commit, "merged_at": "2026-11-23T03:24:38Z", "head": {"ref": branch, "repo": repo}, "base": {"ref": "main", "repo": repo}}
 
 
+def test_incomplete_github_listings_cannot_select_a_tracker_or_post_a_duplicate(tmp_path, monkeypatch, release_handoff):
+    def incomplete(tool, args, *, cwd):
+        assert args[:3] == ["api", "--paginate", "--slurp"]
+        return subprocess.CompletedProcess(args, 0, b"[[{}]]")
+
+    monkeypatch.setattr(release_handoff, "run_command_bytes", incomplete)
+    with pytest.raises(ValueError, match="issue listing"):
+        release_handoff._tracker(tmp_path, TAG)
+    with pytest.raises(ValueError, match="comment listing"):
+        release_handoff._post_summary(tmp_path, "8", "signed evidence")
+    with pytest.raises(ValueError, match="pull request listing"):
+        release_handoff._require_merged_release(tmp_path, TAG, COMMIT)
+
+
+@pytest.mark.parametrize("merged_at", [True, "yesterday", "2026-11-23"])
+def test_release_pr_requires_a_merge_timestamp(tmp_path, monkeypatch, release_handoff, merged_at):
+    pr = {**release_pr(COMMIT), "merged_at": merged_at}
+    result = subprocess.CompletedProcess([], 0, json.dumps([[pr]]).encode())
+    monkeypatch.setattr(release_handoff, "run_command_bytes", lambda *args, **kwargs: result)
+    with pytest.raises(ValueError, match="timestamp|[Ii]soformat"):
+        release_handoff._require_merged_release(tmp_path, TAG, COMMIT)
+
+
 def test_tracker_handoff_posts_only_verified_evidence_and_reuses_comment(checkout, monkeypatch, release_handoff):
     root, git, remote = checkout
     commit = git("rev-parse", "HEAD")
@@ -547,6 +570,18 @@ def test_draft_waits_for_the_same_preparation_run(monkeypatch, capsys, release_h
     result = capsys.readouterr()
     assert not result.out and "Waiting for draft preparation" in result.err and "Draft preparation passed" in result.err
     assert "/actions/runs/42" in result.err and len(sleeps) == 2
+
+
+@pytest.mark.parametrize("reply", [{}, {"total_count": True, "workflow_runs": [preparation_run()]}, {"total_count": 1, "workflow_runs": [{}]}])
+def test_malformed_preparation_listing_reports_a_cli_error(tmp_path, monkeypatch, capsys, release_handoff, reply):
+    monkeypatch.setenv("RRT_RELEASE_CHECKOUT", str(tmp_path))
+    monkeypatch.setattr(release_handoff.sys, "argv", ["release_handoff.py", "draft", TAG])
+    monkeypatch.setattr(release_handoff.release_assets, "_remote_commit", lambda *args: COMMIT)
+    monkeypatch.setattr(release_handoff, "_require_merged_release", lambda *args: None)
+    monkeypatch.setattr(release_handoff, "api", lambda _: reply)
+    monkeypatch.setattr(release_handoff.release_assets, "preflight_release_target", lambda *a, **kw: pytest.fail("unexpected draft capture"))
+    assert release_handoff.main() == 1
+    assert "malformed draft preparation run" in capsys.readouterr().err
 
 
 @pytest.mark.parametrize(

@@ -113,16 +113,36 @@ own the choice to adopt these contracts and any explicit remediation of old evid
 
 ## Execution and downstream acceptance
 
-For README and document publishers, follow the
-[publication migration guide](PUBLISHING_REPORTS.md#document-publication-migration). It covers reuse of
-legacy schema adapters and renderers, exact tagged artifact verification, and
-the shared marker/snapshot/transaction contract.
-
 The [ownership map](migration.md#performance-and-release-helper-adoption)
 identifies replacements for release selection, measurement, retention and rendering.
 Before removing an adapter, exercise retained legacy reads, unchanged reports,
 missing benchmarks, stale source or harness rejection, unsafe release assets
 and failed promotion with the consumer's original files.
+
+### Document publisher migration
+
+Replace generic README marker handling, snapshots, tagged-file checks and
+multi-file writes with [configured publication](PUBLISHING_REPORTS.md#document-publication).
+For a retained schema or scientific renderer that still needs an adapter,
+[pass the original validated inputs and rendered figures](PUBLISHING_REPORTS.md#publishing-a-custom-scientific-view).
+The consumer owns the workloads, interpretation, expected releases and figure paths.
+
+Keep historical CSVs, tables and SVGs at their original paths with their exact
+bytes. A different line ending, numeric formatter or plot layout changes a
+tagged artifact. Record converted evidence at a new path. New tables use the
+declared row order, timing units, coverage counts and point ratios. New SVGs
+use the shared renderer unless the consumer requires its own scientific view.
+
+For tagged links, the default publisher verifies the referenced artifact bytes
+against the existing local tag. A prospective release can use `tag-policy="prepare"`
+under the [working-tree evidence rules](publication-api.md#publication-configuration-v1). Once the tag exists, its
+blobs must match. Only marker interiors are normalized to LF. Other document
+bytes are preserved.
+
+Before retiring a publisher, exercise a legacy input, a release mismatch,
+malformed markers, a changed tagged file, deterministic rerendering and failure
+during a multi-output write. Keep consumer-specific schema and scientific
+assertions with those fixtures.
 
 ## Common harness and host adoption
 

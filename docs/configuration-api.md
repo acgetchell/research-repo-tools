@@ -49,7 +49,7 @@ pins. Identities can be checked without opting into updates.
 Each optional `[[consistency.releases]]` table binds its listed identities from one
 repository to a reviewed tag and full commit SHA. Each member must also appear in
 `consistency.actions` and select that exact tag in `[actions]`.
-See the [grouped policy example](../README.md#pin-actions-from-the-same-release).
+See the [grouped policy example](UPDATING_DEPENDENCIES.md#pin-actions-from-the-same-release).
 The command reads files only, performs no compatibility lookups, and needs no
 GitHub CLI or credentials. Mismatches and malformed pins report file/line
 locations; absent identities report the configured scope. Aliases refer to their

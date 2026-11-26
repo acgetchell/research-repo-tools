@@ -108,28 +108,9 @@ locked environment. Run `just help` to see the recipes in your project's Justfil
 
 ### Pin Actions from the same release
 
-The v0.3.2 policy checks occurrences of each Action identity independently.
-To check several subpaths against one reviewed release, use a tooling pin that
-supports `[[consistency.releases]]`. See [release availability](#release-availability).
-Add the exact Action identities to `.github/action-updates.toml` and replace
-the example tag and commit with your reviewed values.
-
-```toml
-[actions]
-"owner/repo/init" = "v1.2.3"
-"owner/repo/analyze" = "v1.2.3"
-
-[consistency]
-actions = ["owner/repo/init", "owner/repo/analyze"]
-
-[[consistency.releases]]
-actions = ["owner/repo/init", "owner/repo/analyze"]
-tag = "v1.2.3"
-commit = "0123456789abcdef0123456789abcdef01234567"
-```
-
-Run `just actions-check` to check the pins offline. On update, the updater
-resolves the upstream tag and compares its peeled commit before writing.
+Use `just actions-check` to catch different commits or version comments for
+Actions that must come from one release, such as an initializer and analyzer.
+[Configure the grouped pins][grouped-actions].
 
 ## Capability index
 
@@ -178,9 +159,8 @@ just performance-readme tooling/performance-release.toml
 If only the README step fails, fix the presentation and retry it using retained
 evidence. For a [first stable release][first-release], record current timings.
 If published releases predate the workload, follow the [benchmark series
-procedure][series-guide]. To revalidate the series after publication, pin v0.3.3
-once available on [PyPI][pypi]. The series guide also covers
-[reviewing a preparation PR with a large archived payload][raw-review].
+procedure][series-guide]. For a preparation PR that includes a large raw payload,
+use the [receipt-backed review procedure][raw-review].
 
 ### Releases
 
@@ -249,6 +229,7 @@ BSD-3-Clause. See [LICENSE][license].
 [draft-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md
 [evidence-guide]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/VERIFYING_RELEASE_EVIDENCE.md
 [first-release]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/candidate-reuse-api.md#first-stable-release
+[grouped-actions]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/UPDATING_DEPENDENCIES.md#pin-actions-from-the-same-release
 [github-settings]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/CONFIGURING_GITHUB.md
 [license]: https://github.com/acgetchell/research-repo-tools/blob/main/LICENSE
 [license-badge]: https://badgen.net/github/license/acgetchell/research-repo-tools

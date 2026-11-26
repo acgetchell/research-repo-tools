@@ -4,9 +4,18 @@ Use this guide when upgrading a pinned release or replacing local helpers.
 For first-time setup, follow the [consumer quick start](../README.md#quick-start).
 For a helper-by-helper comparison, use the [capability migration map](#shared-capability-migration).
 
+## Upgrading from v0.3.2 to v0.3.3
+
+Follow [shared Python adoption](UPDATING_DEPENDENCIES.md#shared-python-adoption)
+with `VERSION=0.3.3` and run the consumer's checks. This release supports
+[revalidating a benchmark series after publication](REUSING_BENCHMARKS.md#recovering-a-series-candidate),
+[reviewing a large archived payload](REUSING_BENCHMARKS.md#reviewing-a-large-archived-payload)
+and [checking grouped Actions pins](UPDATING_DEPENDENCIES.md#pin-actions-from-the-same-release).
+Merge the applicable guidance from the release template into your own checklist.
+
 ## Upgrading from v0.3.1 to v0.3.2
 
-After publication, follow [shared Python adoption](UPDATING_DEPENDENCIES.md#shared-python-adoption)
+Follow [shared Python adoption](UPDATING_DEPENDENCIES.md#shared-python-adoption)
 with `VERSION=0.3.2`. Merge `changelog-rebuild` from the matching Justfile
 to [preview and apply a full history rebuild](GENERATING_CHANGELOGS.md#rebuilding-retained-history).
 Benchmark consumers can [preflight a preparation commit](candidate-reuse-api.md#offline-preparation-preflight)
@@ -78,7 +87,7 @@ before retiring its helper. Choose the migration guide for the local code.
 | --- | --- |
 | Tool installers, scanners, paper checks and CI helpers | [Capability map and ownership](#shared-capability-migration) |
 | Notebook checkers that extract Python files | [Notebook adoption](RUNNING_NOTEBOOKS.md#adoption) |
-| Benchmark measurements, retained evidence or published figures | [Performance migration](performance-migration.md) and [document publication](PUBLISHING_REPORTS.md#document-publication-migration) |
+| Benchmark measurements, retained evidence or published figures | [Performance migration](performance-migration.md) and [document publication](performance-migration.md#document-publisher-migration) |
 | Release discovery, metadata and publication wrappers | [Release policy migration](release-policy-migration.md) |
 | Static Cargo example lists | [Cargo example migration](cargo-examples-api.md#migrating-static-cargo-example-validation) |
 

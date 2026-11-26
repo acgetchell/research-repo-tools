@@ -140,8 +140,9 @@ class TestPublishingConsumer(unittest.TestCase):
             patch("research_repo_tools.release_publishing.revalidate_release_target", return_value=draft),
             patch("research_repo_tools.release_publishing._publish_release", return_value=replace(draft, draft=False, immutable=True)) as publish,
         ):
-            with self.assertRaises(ValueError):
+            with contextlib.redirect_stdout(io.StringIO()) as progress, self.assertRaises(ValueError):
                 publish_reviewed_release(settings, "v1.2.3", target=target)
+            self.assertEqual(progress.getvalue().splitlines(), ["Running initial checks on release metadata, CI results, and the GitHub draft."])
             publish.assert_not_called()
             lookup.return_value = draft
             with self.assertRaisesRegex(ValueError, "reviewed inventory"):

@@ -9,7 +9,7 @@ Use the shared CLI's ``coverage report`` command from the consumer root.
 import argparse
 from collections.abc import Iterable
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 from xml.etree import ElementTree as ET
 
 DEFAULT_REPORT = Path("coverage/cobertura.xml")
@@ -108,7 +108,8 @@ def coverage_entries(root: ET.Element) -> Iterable[CoverageEntry]:
     Yields:
         CoverageEntry: Coverage details for each file with coverable lines.
     """
-    files: dict[Path, dict[int, int]] = {}
+    # Report paths can come from a case-sensitive checkout on a different host.
+    files: dict[str, dict[int, int]] = {}
     for class_element in root.findall(".//class"):
         raw_path = class_element.get("filename")
         if not raw_path:
@@ -118,7 +119,7 @@ def coverage_entries(root: ET.Element) -> Iterable[CoverageEntry]:
         if not lines:
             continue
 
-        observed = files.setdefault(Path(raw_path.replace("\\", "/")), {})
+        observed = files.setdefault(Path(raw_path.replace("\\", "/")).as_posix(), {})
         for line in lines:
             hits = _line_hits(line, raw_path)
             raw_number = line.get("number", "")
@@ -126,11 +127,11 @@ def coverage_entries(root: ET.Element) -> Iterable[CoverageEntry]:
                 raise ValueError(f"Coverage report has invalid line number for {raw_path}: {raw_number!r}")
             number = int(raw_number)
             observed[number] = max(observed.get(number, 0), hits)
-    for path, observed in sorted(files.items(), key=lambda item: item[0].as_posix()):
+    for path, observed in sorted(files.items()):
         coverable = len(observed)
         covered = sum(hits > 0 for hits in observed.values())
         coverage = (covered / coverable) * 100
-        yield CoverageEntry(coverage=coverage, coverable=coverable, covered=covered, path=path)
+        yield CoverageEntry(coverage=coverage, coverable=coverable, covered=covered, path=Path(path))
 
 
 def _line_hits(line: ET.Element, raw_path: str) -> int:
@@ -164,8 +165,8 @@ def filter_entries(
     """
     if not prefix:
         return list(entries)
-    prefix_path = Path(prefix.replace("\\", "/"))
-    return [entry for entry in entries if entry.relative_path(relative_to).is_relative_to(prefix_path)]
+    prefix_path = PurePosixPath(prefix.replace("\\", "/"))
+    return [entry for entry in entries if PurePosixPath(entry.relative_path(relative_to).as_posix()).is_relative_to(prefix_path)]
 
 
 def main(argv: list[str] | None = None, *, root: Path | None = None) -> int:

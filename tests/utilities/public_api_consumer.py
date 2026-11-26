@@ -15,7 +15,7 @@ import sys
 import tempfile
 import unittest
 from contextlib import redirect_stdout
-from pathlib import Path
+from pathlib import Path, PureWindowsPath
 from types import MappingProxyType
 from typing import assert_type, override
 from unittest.mock import patch
@@ -60,6 +60,20 @@ class TestEnvironmentExport(ConsumerCase):
 
 
 class TestCoverageReport(ConsumerCase):
+    def test_windows_reader_preserves_case_distinct_files_from_a_linux_report(self) -> None:
+        from xml.etree import ElementTree
+
+        from research_repo_tools.coverage import coverage_entries, filter_entries
+
+        report = ElementTree.fromstring(
+            '<coverage><class filename="src/A.py"><lines><line number="1" hits="0"/></lines></class>'
+            '<class filename="src/a.py"><lines><line number="1" hits="1"/></lines></class></coverage>'
+        )
+        with patch("research_repo_tools.coverage.Path", PureWindowsPath):
+            entries = list(coverage_entries(report))
+            self.assertEqual([entry.format() for entry in entries], ["  0.00%  src/A.py", "100.00%  src/a.py"])
+            self.assertEqual([entry.format() for entry in filter_entries(entries, "src/A.py", self.root)], ["  0.00%  src/A.py"])
+
     def test_file_and_directory_prefixes_report_each_source_line_once(self) -> None:
         (self.root / "coverage.xml").write_bytes(
             b'<coverage><class filename="src/sub/a.py"><lines><line number="1" hits="0"/></lines></class>'

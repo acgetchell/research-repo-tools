@@ -215,7 +215,7 @@ def test_gate_rejects_checkout_event_lifecycle_and_package_mismatches(consumer, 
         publishing.check_reviewed_release(settings, "v1.2.3", event=reviewed)
 
 
-def test_explicit_draft_publication_rechecks_before_one_lifecycle_mutation(consumer, monkeypatch):
+def test_explicit_draft_publication_rechecks_before_one_lifecycle_mutation(consumer, monkeypatch, capsys):
     settings, _, release = consumer
     monkeypatch.setattr(publishing, "lookup_release", lambda *args: replace(release, draft=True))
     commands = []
@@ -225,6 +225,13 @@ def test_explicit_draft_publication_rechecks_before_one_lifecycle_mutation(consu
     def response(root, args):
         if "PATCH" not in args:
             return gh(root, args)
+        metadata = "Release metadata is synchronized at 1.2.3."
+        assert capsys.readouterr().out.splitlines() == [
+            "Running initial checks on release metadata, CI results, and the GitHub draft.",
+            metadata,
+            "Running final checks before publishing the GitHub release.",
+            metadata,
+        ]
         commands.append(("gh", args))
         return json.dumps(
             {

@@ -223,7 +223,7 @@ rejects first-release v6 evidence.
 
 ## Offline preparation preflight
 
-With v0.3.2 installed in a trusted environment, check the clean preparation
+Using a trusted installation of version 0.3.2 or later, check the clean preparation
 commit before merge. Set `checkout` to its absolute path and `preparation_commit`
 to its independently selected full commit ID. Use the acquisition owner's
 original files and separately trusted digests. Run the installed interpreter
@@ -395,8 +395,5 @@ and captured `ReleaseTarget`, then upload that same path through
 asset digest, downloaded-byte, and approval checks. Credential acquisition,
 protected environments, and publication approval remain consumer responsibilities.
 
-The full operational sequence and recovery rules are in
-[Reusing benchmark acquisitions](REUSING_BENCHMARKS.md). Upstream implementation,
-merge, verified supplying PyPI publication, and downstream normal-resolution
-verification are separate completion gates. Local wheels and version edits do
-not establish published availability or unblock downstream adoption.
+For the release sequence and recovery procedures, see
+[Reusing benchmark acquisitions](REUSING_BENCHMARKS.md).

@@ -1,11 +1,11 @@
 """Retain research-repo-tools release evidence and the reviewed draft identity."""
 
 import argparse
-import json
 import os
 import re
 import subprocess
 import sys
+from datetime import datetime
 from pathlib import Path
 from tempfile import TemporaryDirectory
 from time import monotonic, sleep
@@ -60,11 +60,24 @@ def _inspect_release(root: Path) -> dict[str, Any]:
     return {**release_validation._json(proof["manifest"]), "tag": tag, "evidence_artifact": proof["evidence_artifact"]}
 
 
+def _listing(root: Path, endpoint: str, label: str) -> list[dict[str, Any]]:
+    """Read every page before deciding that a release handoff record is absent."""
+    response = run_command_bytes("gh", ["api", "--paginate", "--slurp", f"repos/{REPOSITORY}/{endpoint}"], cwd=root)
+    pages = release_validation.parse_release_json(response.stdout)
+    if not isinstance(pages, list) or not pages or any(not isinstance(page, list) for page in pages):
+        raise ValueError(f"malformed {label} listing")
+    return [release_validation._object(row, f"{label} listing entry") for page in pages for row in page]
+
+
 def _tracker(root: Path, tag: str) -> str | None:
     """Select only a unique open issue with the repository's release tracker title."""
-    pages = run_command_bytes("gh", ["api", "--paginate", "--slurp", f"repos/{REPOSITORY}/issues?state=open&per_page=100"], cwd=root)
     title = f"release: validate and publish research-repo-tools {tag}"
-    matches = [issue["number"] for page in json.loads(pages.stdout) for issue in page if "pull_request" not in issue and issue["title"] == title]
+    matches = []
+    for issue in _listing(root, "issues?state=open&per_page=100", "issue"):
+        if not isinstance(issue.get("title"), str) or type(issue.get("number")) is not int or issue["number"] <= 0:
+            raise ValueError("malformed issue listing entry")
+        if "pull_request" not in issue and issue["title"] == title:
+            matches.append(issue["number"])
     if len(matches) > 1:
         raise ValueError(f"multiple open release trackers match {tag}")
     return str(matches[0]) if matches else None
@@ -72,12 +85,12 @@ def _tracker(root: Path, tag: str) -> str | None:
 
 def _post_summary(root: Path, issue: str, body: str) -> str:
     """Post the summary or return the URL of its existing comment."""
-    pages = run_command_bytes("gh", ["api", "--paginate", "--slurp", f"repos/{REPOSITORY}/issues/{issue}/comments?per_page=100"], cwd=root)
-    for page in json.loads(pages.stdout):
-        for comment in page:
-            match comment:
-                case {"body": stored, "html_url": str(url)} if stored == body:
-                    return url
+    for comment in _listing(root, f"issues/{issue}/comments?per_page=100", "comment"):
+        url = comment.get("html_url")
+        if not isinstance(comment.get("body"), str) or not isinstance(url, str) or not url:
+            raise ValueError("malformed comment listing entry")
+        if comment["body"] == body:
+            return url
     posted = run_command_bytes("gh", ["issue", "comment", issue, "--repo", REPOSITORY, "--body-file", "-"], input=body.encode("utf-8"), cwd=root)
     return posted.stdout.decode("utf-8").strip()
 
@@ -113,20 +126,21 @@ def record_evidence(root: Path, issue: str | None = None) -> str:
 def _require_merged_release(root: Path, tag: str, commit: str) -> None:
     """Identify the release or recovery PR for this exact tagged merge commit."""
     release_assets._stable_tag(tag)
-    endpoint = f"repos/{REPOSITORY}/commits/{release_assets._sha(commit)}/pulls?per_page=100"
-    pages = run_command_bytes("gh", ["api", "--paginate", "--slurp", endpoint], cwd=root)
-    matches = [
-        pr
-        for page in json.loads(pages.stdout)
-        for pr in page
-        if pr["merged_at"]
-        and pr["merge_commit_sha"] == commit
-        and pr["base"]["ref"] == "main"
-        and pr["base"]["repo"]["full_name"] == REPOSITORY
-        and pr["head"]["ref"] in {f"release/{tag}", f"fix/recover-{tag}"}
-        and (pr["head"]["repo"] or {}).get("full_name") == REPOSITORY
-    ]
-    if len(matches) != 1:
+    endpoint = f"commits/{release_assets._sha(commit)}/pulls?per_page=100"
+    matches = 0
+    for pr in _listing(root, endpoint, "pull request"):
+        if "merged_at" not in pr or "merge_commit_sha" not in pr:
+            raise ValueError("malformed pull request listing entry")
+        merged_at = pr["merged_at"]
+        if merged_at is None or pr["merge_commit_sha"] != commit:
+            continue
+        if not isinstance(merged_at, str) or datetime.fromisoformat(merged_at).tzinfo is None:
+            raise ValueError("expected a timestamp with a timezone for the merged pull request")
+        match pr:
+            case {"base": {"ref": "main", "repo": {"full_name": base}}, "head": {"ref": head, "repo": {"full_name": source}}}:
+                if base == source == REPOSITORY and head in (f"release/{tag}", f"fix/recover-{tag}"):
+                    matches += 1
+    if matches != 1:
         raise ValueError(f"expected one merged release or recovery PR into main for remote release tag {tag} at {commit}")
 
 
@@ -138,6 +152,8 @@ def _wait_for_preparation(tag: str, commit: str) -> None:
     print(f"Checking GitHub draft preparation for {tag} at {commit[:7]}...", file=sys.stderr)
     while True:
         result = api(endpoint)
+        if not isinstance(result, dict) or type(result.get("total_count")) is not int or not isinstance(result.get("workflow_runs"), list):
+            raise ValueError("malformed draft preparation run listing")
         runs = result["workflow_runs"]
         if run_id is None and result["total_count"] == 0 and runs == []:
             if monotonic() >= visible_by:
@@ -147,6 +163,8 @@ def _wait_for_preparation(tag: str, commit: str) -> None:
         if result["total_count"] != 1 or len(runs) != 1:
             raise ValueError(f"expected one tag-push preparation run for {tag} at {commit}; inspect the workflow history")
         run = runs[0]
+        if not isinstance(run, dict) or not {"path", "event", "head_branch", "head_sha", "id", "status", "conclusion"} <= run.keys():
+            raise ValueError("malformed draft preparation run")
         if (run["path"], run["event"], run["head_branch"], run["head_sha"]) != (".github/workflows/prepare-release.yml", "push", tag, commit):
             raise ValueError("draft preparation run differs from the expected workflow, tag or commit")
         identifier = run["id"]
@@ -158,7 +176,7 @@ def _wait_for_preparation(tag: str, commit: str) -> None:
                 raise ValueError(f"draft preparation ended with {run['conclusion']}: {url}")
             print(f"Draft preparation passed: {url}", file=sys.stderr)
             return
-        if run["status"] not in {"requested", "queued", "pending", "waiting", "in_progress"}:
+        if run["status"] not in ("requested", "queued", "pending", "waiting", "in_progress"):
             raise ValueError(f"unexpected draft preparation status {run['status']}: {url}")
         if run_id is None:
             print(f"Waiting for draft preparation: {url}", file=sys.stderr)

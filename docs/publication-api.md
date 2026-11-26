@@ -4,7 +4,7 @@ This reference describes current source; check
 [release availability](../README.md#release-availability) before adoption.
 Consumer commands and complete configuration examples live in the
 [task guide](PUBLISHING_REPORTS.md#document-publication). Historical-schema adoption is covered
-in [publication migration](PUBLISHING_REPORTS.md#document-publication-migration).
+in [publication migration](performance-migration.md#document-publisher-migration).
 
 ## Python API
 
