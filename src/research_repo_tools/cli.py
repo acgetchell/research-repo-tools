@@ -17,6 +17,7 @@ from research_repo_tools._console import write_stdout as _write_stdout
 from research_repo_tools._diagnostics import workflow_diagnostic
 from research_repo_tools.process import ExecutableNotFoundError, format_exception_diagnostics
 lazy import research_repo_tools.config as config
+lazy from research_repo_tools.release_assets import ReleaseTarget
 
 
 class _CommandParser(argparse.ArgumentParser):
@@ -207,12 +208,7 @@ def parser() -> argparse.ArgumentParser:
         help="approve a validated draft GitHub Release and trigger its publication workflow",
         description="Approve a validated draft. Ensure exclusive control of draft writers through confirmation. Wait for pending CI checks before invoking.",
     )
-    command.add_argument("tag")
-    command.add_argument("--approve", action="store_true", required=True, help="explicit approval of the reviewed draft")
-    command.add_argument("--reuse-evidence", type=Path, help="revalidate a saved CI reuse approval under the configured opt-in policy")
-    command.add_argument("--target", type=Path, help="original captured draft target; never substitute a replacement release")
-    command.add_argument("--asset-transfer", type=Path, help="require this complete staged batch as the exact reviewed asset inventory")
-    command.add_argument("--transfer-sha256", help="independently retained digest of the complete staged batch")
+    _publish_arguments(command)
     command = release.add_parser("registry", help="require an absent or present exact registry version; never uploads")
     command.add_argument("tag")
     command.add_argument("--expect", choices=("absent", "present"), required=True)
@@ -376,6 +372,51 @@ def parser() -> argparse.ArgumentParser:
     mode.add_argument("--require-online", action="store_true", help="fail if authentication is unavailable; never downgrade")
     command.add_argument("paths", nargs="*", default=[".github"], help="local input paths relative to the consumer root (default: .github)")
     return result
+
+
+def _publish_arguments(command: argparse.ArgumentParser) -> None:
+    """Declare approval and evidence options shared with the maintainer recipe."""
+    command.add_argument("tag")
+    command.add_argument("--approve", action="store_true", required=True, help="explicit approval of the reviewed draft")
+    command.add_argument("--reuse-evidence", type=Path, help="revalidate a saved CI reuse approval under the configured opt-in policy")
+    command.add_argument("--target", type=Path, help="original captured draft target; never substitute a replacement release")
+    command.add_argument("--asset-transfer", type=Path, help="require this complete staged batch as the exact reviewed asset inventory")
+    command.add_argument("--transfer-sha256", help="independently retained digest of the complete staged batch")
+
+
+def _reuse_payload(args: argparse.Namespace, settings: config.Config) -> bytes | None:
+    """Load the bounded CI reuse approval for a release gate or publication."""
+    if args.reuse_evidence is None:
+        return None
+    with settings.path(str(args.reuse_evidence)).open("rb") as stream:
+        payload = stream.read(1024 * 1024 + 1)
+    if len(payload) > 1024 * 1024:
+        raise ValueError("CI reuse approval exceeds the byte limit")
+    return payload
+
+
+def _publish(
+    args: argparse.Namespace, settings: config.Config, target: ReleaseTarget | None, *, expected_assets: frozenset[tuple[str, int, int, str]] | None = None
+) -> None:
+    """Require every supplied source of reviewed asset identities to agree before publication."""
+    from research_repo_tools import release_publishing
+
+    reuse_payload = _reuse_payload(args, settings)
+    if args.asset_transfer is not None or args.transfer_sha256 is not None:
+        if args.asset_transfer is None or args.transfer_sha256 is None or target is None:
+            raise ValueError("reviewed asset publication requires --asset-transfer, --transfer-sha256 and --target")
+        from research_repo_tools.release_staging import _read, _reviewed_inventory
+
+        transfer = _read(settings.path(str(args.asset_transfer)), 1024 * 1024)
+        staged = _reviewed_inventory(target, transfer, args.transfer_sha256)
+        if expected_assets is not None and staged != expected_assets:
+            raise ValueError("staged asset inventory differs from the signed draft inventory")
+        expected_assets = staged
+    if expected_assets is not None:
+        release_publishing.publish_reviewed_release(settings, args.tag, reuse_evidence=reuse_payload, target=target, expected_assets=expected_assets)
+    else:
+        target_options = {"target": target} if target is not None else {}
+        release_publishing.publish_reviewed_release(settings, args.tag, reuse_evidence=reuse_payload, **target_options)
 
 
 def run(args: argparse.Namespace, settings: config.Config) -> int:
@@ -890,12 +931,6 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
             return run(args, settings)
         from research_repo_tools import release_publishing
 
-        reuse_payload: bytes | None = None
-        if getattr(args, "reuse_evidence", None) is not None:
-            with settings.path(str(args.reuse_evidence)).open("rb") as stream:
-                reuse_payload = stream.read(1024 * 1024 + 1)
-            if len(reuse_payload) > 1024 * 1024:
-                raise ValueError("CI reuse approval exceeds the byte limit")
         if args.action == "reuse":
             from research_repo_tools._git_checkout import _in_checkout
             from research_repo_tools.files import _publish_new_file
@@ -943,20 +978,11 @@ def run(args: argparse.Namespace, settings: config.Config) -> int:
                 _load_json(payload, "GitHub release event"), os.environ["GITHUB_REPOSITORY"], os.environ.get("GITHUB_SHA", ""), os.environ.get("GITHUB_REF", "")
             )
             release_publishing.check_reviewed_release(
-                settings, args.tag, event=event, reuse_evidence=reuse_payload, require_crate_asset=args.require_crate_asset, **target_options
+                settings, args.tag, event=event, reuse_evidence=_reuse_payload(args, settings), require_crate_asset=args.require_crate_asset, **target_options
             )
             return 0
         if args.action == "publish":
-            if args.asset_transfer is None and args.transfer_sha256 is None:
-                release_publishing.publish_reviewed_release(settings, args.tag, reuse_evidence=reuse_payload, **target_options)
-                return 0
-            if args.asset_transfer is None or args.transfer_sha256 is None or target is None:
-                raise ValueError("reviewed asset publication requires --asset-transfer, --transfer-sha256 and --target")
-            from research_repo_tools.release_staging import _read, _reviewed_inventory
-
-            transfer = _read(settings.path(str(args.asset_transfer)), 1024 * 1024)
-            assets = _reviewed_inventory(target, transfer, args.transfer_sha256)
-            release_publishing.publish_reviewed_release(settings, args.tag, reuse_evidence=reuse_payload, target=target, expected_assets=assets)
+            _publish(args, settings, target)
             return 0
         if args.action == "registry":
             from research_repo_tools.registry import lookup_version

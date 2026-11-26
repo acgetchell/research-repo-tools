@@ -11,7 +11,7 @@ from tempfile import TemporaryDirectory
 from time import monotonic, sleep
 from typing import Any
 
-from research_repo_tools import release_assets, release_validation
+from research_repo_tools import cli, config, release_assets, release_validation
 from research_repo_tools._console import console_text, write_stdout
 from research_repo_tools._diagnostics import format_exception_diagnostics
 from research_repo_tools._git_checkout import READ_ONLY_OPTIONS, git_context
@@ -57,7 +57,11 @@ def _inspect_release(root: Path) -> dict[str, Any]:
         proof = release_validation._retrieve_evidence(tag, commit, Path(temporary) / "dist", attempts=1, interval=0)
     if release_validation._checkout_identity(root) != (tag, head):
         raise ValueError("checkout changed during evidence inspection; retry from the reviewed release commit")
-    return {**release_validation._json(proof["manifest"]), "tag": tag, "evidence_artifact": proof["evidence_artifact"]}
+    return _evidence_result(proof)
+
+
+def _evidence_result(proof: dict[str, Any]) -> dict[str, Any]:
+    return {**release_validation._json(proof["manifest"]), "tag": proof["tag"], "evidence_artifact": proof["evidence_artifact"]}
 
 
 def _listing(root: Path, endpoint: str, label: str) -> list[dict[str, Any]]:
@@ -95,15 +99,21 @@ def _post_summary(root: Path, issue: str, body: str) -> str:
     return posted.stdout.decode("utf-8").strip()
 
 
+def _evidence_record(root: Path, result: dict[str, Any]) -> tuple[Path, str, str]:
+    """Render the retained run-specific record from authenticated distribution evidence."""
+    tag, run, proof = result["tag"], result["run"], result["evidence_artifact"]
+    summary = render_distribution_summary(result) + f"Signed evidence artifact: {proof['id']}, {proof['digest']}\n"
+    body = f"### {tag} release evidence\n\n```text\n{summary}```"
+    path = _handoff_directory(root, tag) / f"evidence-{run['id']}-{run['run_attempt']}.md"
+    return path, body, summary
+
+
 def record_evidence(root: Path, issue: str | None = None) -> str:
     """Retain verified evidence locally and optionally mirror it to a release issue."""
     if issue is not None and re.fullmatch(r"[1-9][0-9]*", issue) is None:
         raise ValueError("expected a positive release tracker issue number")
     result = _inspect_release(root)
-    tag, run, proof = result["tag"], result["run"], result["evidence_artifact"]
-    summary = render_distribution_summary(result) + f"Signed evidence artifact: {proof['id']}, {proof['digest']}\n"
-    body = f"### {tag} release evidence\n\n```text\n{summary}```"
-    path = _handoff_directory(root, tag) / f"evidence-{run['id']}-{run['run_attempt']}.md"
+    path, body, summary = _evidence_record(root, result)
     payload = (body + "\n").encode("utf-8")
     try:
         _publish_new_file(path, payload)
@@ -114,7 +124,7 @@ def record_evidence(root: Path, issue: str | None = None) -> str:
         return _post_summary(root, issue, body)
     receipt = f"{summary}Saved evidence: {path}"
     try:
-        tracker = _tracker(root, tag)
+        tracker = _tracker(root, result["tag"])
         if tracker is not None:
             receipt += f"\nRelease tracker: {_post_summary(root, tracker, body)}"
     except (OSError, ValueError, subprocess.SubprocessError) as error:
@@ -199,16 +209,39 @@ def capture_draft(root: Path, tag: str) -> Path:
     return path
 
 
+def _publish_draft(root: Path, args: argparse.Namespace) -> None:
+    """Bind the signed draft files to the saved handoff and the final GitHub publication check."""
+    commit = release_assets._remote_commit(root, REPOSITORY, args.tag)
+    target = release_assets._read_target(_target_path(root, args.tag, commit))
+    if (target.repository, target.tag, target.commit) != (REPOSITORY, args.tag, commit):
+        raise ValueError("retained target differs from the requested repository, tag or commit")
+    settings = config.load(root=root)
+    if args.target is not None and release_assets._read_target(settings.path(str(args.target))) != target:
+        raise ValueError("supplied target differs from the retained draft target")
+    print("Verifying draft distributions and signatures against the saved release evidence.", flush=True)
+    document, assets = release_validation._verify_release_assets(args.tag, commit, target.release_id)
+    path, body, _ = _evidence_record(root, _evidence_result(document))
+    expected = (body + "\n").encode("utf-8")
+    with path.open("rb") as stream:
+        if stream.read(len(expected) + 1) != expected:
+            raise ValueError(f"signed draft distributions differ from the saved release evidence: {path}")
+    cli._publish(args, settings, target, expected_assets=assets)
+
+
 def main() -> int:
     """Run one maintainer handoff and print its comment URL or target path."""
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("draft").add_argument("tag")
     commands.add_parser("evidence").add_argument("issue", nargs="?")
+    cli._publish_arguments(commands.add_parser("publish", allow_abbrev=False))
     commands.add_parser("target-path").add_argument("tag")
     args = parser.parse_args()
     root = Path(os.environ.get("RRT_RELEASE_CHECKOUT", ".")).resolve()
     try:
+        if args.command == "publish":
+            _publish_draft(root, args)
+            return 0
         if args.command == "draft":
             output = capture_draft(root, args.tag).as_posix()
         elif args.command == "target-path":

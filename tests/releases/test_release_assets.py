@@ -176,7 +176,8 @@ def mock_remote(monkeypatch, *, commit=COMMIT):
                 predicate = {}
             else:
                 subject = Path(args[2])
-                assert subject.read_bytes() == state["contents"][subject.name]
+                if subject.read_bytes() != state["contents"][subject.name]:
+                    raise subprocess.CalledProcessError(1, ["gh"], stderr="subject differs from signed distribution")
                 predicate = json.loads(state["signed_predicate"])
             run_id, attempt = (123, 1) if origin else (456, 1)
             certificate = {"runInvocationURI": f"https://github.com/{release.REPOSITORY}/actions/runs/{run_id}/attempts/{attempt}", "buildTrigger": "push"}
@@ -684,6 +685,49 @@ def published(remote, tmp_path):
     remote["release"] = {"id": 17, "tag_name": TAG, "draft": False, "prerelease": False, "immutable": True, "assets": assets}
     remote["downloads"] = {asset["id"]: uploaded[asset["name"]] for asset in assets}
     return {"action": "published", "repository": {"full_name": release.REPOSITORY}, "release": remote["release"]}
+
+
+@pytest.mark.parametrize("damage", [None, "distribution", "receipt"])
+def test_maintainer_publish_binds_draft_to_signed_bytes_and_saved_receipt(remote, tmp_path, published, release_handoff, monkeypatch, capsys, damage):
+    from research_repo_tools import release_assets, release_publishing
+
+    root = tmp_path / "checkout"
+    root.mkdir()
+    monkeypatch.setenv("RRT_RELEASE_CHECKOUT", str(root))
+    monkeypatch.setattr(release_handoff.sys, "argv", ["release_handoff.py", "publish", TAG, "--approve"])
+    monkeypatch.setattr(release_assets, "_remote_commit", lambda *args: COMMIT)
+    target = release_assets.ReleaseTarget(release.REPOSITORY, TAG, 17, COMMIT, expected_title=TAG)
+    path = release_handoff._target_path(root, TAG, COMMIT)
+    path.parent.mkdir(parents=True)
+    path.write_bytes(release_assets.serialize_release_target(target))
+    document = json.loads(remote["uploaded"][release.BUNDLE])["evidence"]
+    result = {**json.loads(remote["manifest"]), "tag": TAG, "evidence_artifact": document["evidence_artifact"]}
+    monkeypatch.setattr(release_handoff, "_inspect_release", lambda _: result)
+    monkeypatch.setattr(release_handoff, "_tracker", lambda *args: None)
+    release_handoff.record_evidence(root)
+
+    remote["release"].update(draft=True, immutable=False)
+    assets = remote["release"]["assets"]
+    if damage == "distribution":
+        sdist = next(asset for asset in assets if asset["name"].endswith(".tar.gz"))
+        # Change gzip's timestamp. GitHub reports the new digest and the same size.
+        data = bytearray(remote["downloads"][sdist["id"]])
+        data[4] ^= 1
+        remote["downloads"][sdist["id"]] = bytes(data)
+        sdist["digest"] = f"sha256:{hashlib.sha256(data).hexdigest()}"
+    elif damage == "receipt":
+        receipt = path.parent.parent / "evidence-123-1.md"
+        receipt.write_bytes(receipt.read_bytes().replace(COMMIT.encode(), b"f" * 40))
+    publications = []
+    monkeypatch.setattr(release_publishing, "publish_reviewed_release", lambda settings, tag, **kwargs: publications.append((tag, kwargs)))
+    if damage is None:
+        assert release_handoff.main() == 0
+        expected = frozenset((a["name"], a["id"], a["size"], a["digest"].removeprefix("sha256:")) for a in assets)
+        assert publications == [(TAG, {"reuse_evidence": None, "target": target, "expected_assets": expected})]
+    else:
+        assert release_handoff.main() == 1
+        assert ("subject differs from signed distribution" if damage == "distribution" else "saved release evidence") in capsys.readouterr().err
+        assert not publications
 
 
 @pytest.mark.parametrize("immutable", [False, None, "true"])

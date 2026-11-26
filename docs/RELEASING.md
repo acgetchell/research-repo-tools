@@ -161,9 +161,12 @@ From the clean tagged checkout and a human GitHub CLI session, publish the revie
 just release-publish "$TAG"
 ```
 
-The initial check verifies the release metadata, required CI checks and captured
-draft. The final check repeats those checks immediately before publishing the
-GitHub Release. Its publication triggers the separate PyPI workflow.
+The recipe verifies the wheel, source distribution and signed provenance against
+the evidence saved in step 3. It then checks release metadata, required CI results
+and the captured draft. Immediately before publishing, it rechecks the draft
+and all three asset IDs, sizes and SHA-256 digests. A mismatch stops publication.
+Keep exclusive control of the draft until GitHub confirms publication and triggers
+the separate PyPI workflow.
 
 ### 6. Open the run and approve publishing to PyPI
 

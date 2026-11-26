@@ -350,7 +350,9 @@ def test_common_release_recipes_and_guides_share_argument_contracts(tmp_path):
         for path in [root / "justfile", justfile]:
             result = publishing.run_safe_command("just", ["--justfile", str(path), "--dry-run", recipe, *arguments], cwd=tmp_path)
             assert expected in result.stderr
-            if recipe in {"release-publish", "release-verify"}:
+            if recipe == "release-publish" and path == root / "justfile":
+                assert 'scripts/release_handoff.py publish "$@" --approve' in result.stderr
+            elif recipe in {"release-publish", "release-verify"}:
                 action = recipe.removeprefix("release-")
                 assert f"research-repo-tools release {action} " in result.stderr
                 if path == root / "justfile":
