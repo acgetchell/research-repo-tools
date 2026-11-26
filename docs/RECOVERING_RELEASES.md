@@ -18,7 +18,8 @@ If a tagged checkout predates automatic target lookup, supply its original
 | --- | --- |
 | Metadata prepared, notes missing or a review found a fix | [Preparation corrections](#preparation-corrections) |
 | PR merged, CI pending or the tag push was interrupted | [Inspect the original runs](#inspect-the-original-runs) |
-| Tag pushed, exact main CI passed, draft pending | Run `just release-evidence` and `just release-draft "$TAG"` from the tagged checkout. |
+| Local `main` has advanced past the merged release PR | [Check out the release commit](#check-out-the-release-commit) |
+| Tag pushed, exact main CI passed, draft pending | Save the evidence now. [Confirm preparation in Actions before capturing the draft](RELEASING.md#3-save-the-signed-evidence-and-capture-the-draft). |
 | Preparation failed waiting for CI, before draft creation | [Retry preparation](#preparation-timed-out-waiting-for-main-ci) |
 | Draft creation or asset upload failed or returned an uncertain result | [Reconcile the original draft](#draft-creation-or-upload-failed) |
 | Signed artifacts expired or main CI reran only failed jobs | [Renew the main evidence](#artifact-retention-and-recovery-window) |
@@ -47,21 +48,34 @@ and retry the same reviewed SHA. A tracked correction needs a reviewed PR
 and complete main CI on its merge commit. If the old tag is already on GitHub,
 use the [replacement procedure](#replace-an-unpublished-candidate).
 
+## Check out the release commit
+
+If `main` has moved ahead, use a clean checkout and the `TAG` from step 1.
+For a replacement candidate, use the merged corrective PR's URL in place of `"release/$TAG"`.
+
+```bash
+git fetch origin main &&
+  git switch --detach "$(gh pr view "release/$TAG" --json state,baseRefName,mergeCommit \
+    --jq 'select(.state == "MERGED" and .baseRefName == "main") | .mergeCommit.oid')"
+```
+
+This selects the PR's merge commit and leaves your local `main` where it is.
+Continue from this checkout once the push to `main` for that commit passes CI.
+
 ## Inspect the original runs
 
-Recover `RELEASE_COMMIT` from the [merged release or corrective PR](RELEASING.md#1-synchronize-main-and-wait-for-ci).
-From the repository root, inspect the annotated tag and its peeled commit on
-`origin`, then list the runs for this commit and event.
+From the clean checkout of the merged release or corrective PR, inspect the remote tag
+and list the runs for that commit. If your checkout has moved, [select the release commit first](#check-out-the-release-commit).
 
 ```bash
 git ls-remote origin "refs/tags/$TAG" "refs/tags/$TAG^{}"
-gh run list --workflow ci.yml --event push --branch main --commit "$RELEASE_COMMIT"
-gh run list --workflow prepare-release.yml --event push --branch "$TAG" --commit "$RELEASE_COMMIT"
-gh run list --all --workflow publish.yml --event release --branch "$TAG" --commit "$RELEASE_COMMIT"
+gh run list --workflow ci.yml --event push --branch main --commit "$(git rev-parse HEAD)"
+gh run list --workflow prepare-release.yml --event push --branch "$TAG" --commit "$(git rev-parse HEAD)"
+gh run list --all --workflow publish.yml --event release --branch "$TAG" --commit "$(git rev-parse HEAD)"
 ```
 
 If a tag push was interrupted, compare the remote tag object with
-`git rev-parse "refs/tags/$TAG"` and its peeled SHA with `RELEASE_COMMIT`.
+`git rev-parse "refs/tags/$TAG"` and its peeled SHA with `git rev-parse HEAD`.
 If both match, continue with evidence and draft capture. If the lookup succeeds
 and the remote tag is absent, confirm the local annotated tag and reviewed SHA
 with `git --no-pager show --no-patch "$TAG"` before pushing it. Allow time for
@@ -79,14 +93,36 @@ gh run view "$RUN_ID" --attempt "$ATTEMPT" --log-failed
 
 Keep the original tag. Once the exact complete main-push run passes, confirm the
 failed preparation attempt stopped before draft creation. Set `PREPARATION_RUN_ID`
-to its ID. From the tagged checkout, retry those jobs, save the signed main
-evidence and capture the draft. The last command waits for preparation to succeed.
+to its ID and retry those jobs.
 
 ```bash
-gh run rerun "$PREPARATION_RUN_ID" --failed &&
-  just release-evidence &&
-  just release-draft "$TAG"
+gh run rerun "$PREPARATION_RUN_ID" --failed
 ```
+
+From the tagged checkout, run `just release-evidence`. In Actions, check the new
+attempt of **Prepare GitHub release**. Once it shows **Success**, run `just release-draft "$TAG"`.
+
+## Inspect a draft from the command line
+
+These commands display the draft notes and each attachment's upload state, size and SHA-256 digest.
+
+```bash
+gh release view "$TAG"
+gh release view "$TAG" --json assets --jq '.assets[] | [.name, .state, .size, .digest] | @tsv'
+```
+
+For research-repo-tools, expect exactly three nonempty, uploaded assets. Compare
+the wheel and sdist filenames and digests with the summary saved by `just release-evidence`.
+Save the attestation with the handoff and read the CI run it identifies.
+
+```bash
+REVIEW_DIR=$(mktemp -d "../release-handoffs/research-repo-tools/$TAG/draft-review.XXXXXX") &&
+  gh release download "$TAG" --pattern release-attestation.json --dir "$REVIEW_DIR" &&
+  jq '.evidence.manifest | fromjson | {commit: .run.head_sha, run: .run.id, attempt: .run.run_attempt, files}' "$REVIEW_DIR/release-attestation.json"
+```
+
+Compare the commit, main CI run, attempt and both file hashes with the same summary.
+If anything differs, keep the draft unpublished while you [reconcile its assets](#draft-creation-or-upload-failed).
 
 ## Draft creation or upload failed
 
@@ -147,13 +183,14 @@ gh run download "$PREPARATION_RUN_ID" --name "draft-recovery-$ATTEMPT" \
 
 A successful run leaves its signed attachment on the draft. To identify the
 old assets for cleanup, verify that signature against both downloaded files.
-Set `ASSET_DIR` to their directory. Use the reviewed `TAG` and
-`RELEASE_COMMIT`, and get `PREPARATION_RUN_ID` and `ATTEMPT` from the
+Set `ASSET_DIR` to their directory. Start the command in the reviewed release
+checkout. Get `PREPARATION_RUN_ID` and `ATTEMPT` from the
 [successful tag-push run](#inspect-the-original-runs) that staged these assets.
 
 ```bash
 (
   set -eu
+  commit=$(git rev-parse --verify HEAD)
   cd "${ASSET_DIR:?Set the directory containing the three downloaded assets}"
   repo=acgetchell/research-repo-tools
   predicate="https://github.com/$repo/attestations/release-promotion/v1"
@@ -161,8 +198,8 @@ Set `ASSET_DIR` to their directory. Use the reviewed `TAG` and
   jq -erj '.promotion_bundle' release-attestation.json > promotion.sigstore.json
   for file in "research_repo_tools-${TAG#v}-py3-none-any.whl" "research_repo_tools-${TAG#v}.tar.gz"; do
     gh attestation verify "$file" --bundle promotion.sigstore.json --repo "$repo" \
-      --signer-workflow "$repo/.github/workflows/prepare-release.yml" --signer-digest "${RELEASE_COMMIT:?}" \
-      --source-digest "$RELEASE_COMMIT" --source-ref "refs/tags/${TAG:?}" --deny-self-hosted-runners \
+      --signer-workflow "$repo/.github/workflows/prepare-release.yml" --signer-digest "$commit" \
+      --source-digest "$commit" --source-ref "refs/tags/${TAG:?}" --deny-self-hosted-runners \
       --predicate-type "$predicate" --format json > "$file.verified.json"
     jq -e --arg uri "$invocation" --arg schema "$predicate" --slurpfile proof release-attestation.json '
       length == 1 and ($proof[0].schema == $schema) and (.[0].verificationResult |
@@ -180,7 +217,8 @@ still requires [current evidence](#artifact-retention-and-recovery-window).
 ## Artifact retention and recovery window
 
 The build distributions and signed main evidence are retained for 30 days.
-If main evidence is missing, expired or split across attempts, use
+If main evidence is missing, expired or split across attempts, set `MAIN_RUN_ID`
+to the ID of the [original main-push run](#inspect-the-original-runs). Use
 `gh run rerun "$MAIN_RUN_ID"` to rerun **all** jobs of the original main-push run
 while it is eligible. Wait for the complete attempt, including `release-evidence`.
 Preserve the old summary and record the new attempt, artifact IDs and digests.
@@ -362,10 +400,9 @@ Keep any release tracker open.
 
 ### 8. Wait for the corrected commit on main
 
-After the corrective PR **merges**, switch to a clean, synchronized `main`.
-Use the **merge commit shown on that PR** and wait for its exact
-[main-push CI run](RELEASING.md#1-synchronize-main-and-wait-for-ci). If `main`
-has advanced, check out that merge commit explicitly. Review its release notes.
+After the corrective PR **merges**, [pull main and wait for Package checks](RELEASING.md#1-synchronize-main-and-wait-for-ci)
+for that PR. If your pull includes later changes, [check out the corrective PR's merge commit](#check-out-the-release-commit).
+Review the release notes in the resulting checkout.
 If they omit changes you intend to ship, regenerate the notes on the corrective branch and repeat the PR checks.
 
 ### 9. Replace the local tag
@@ -429,11 +466,17 @@ replacement on the remote. For a local tag mismatch, see [step 9](#9-replace-the
 
 ### 12. Capture and review the replacement draft
 
-Keep publication frozen. Save the signed evidence for the corrected commit,
-then capture the new draft. The second recipe waits for preparation to finish.
+Keep publication frozen. Save the signed main evidence for the corrected commit.
 
 ```bash
-just release-evidence && just release-draft "$TAG"
+just release-evidence
+```
+
+Open **Prepare GitHub release** in Actions. Select the run for the replacement
+tag push and corrected commit. Once it shows **Success**, capture the new draft.
+
+```bash
+just release-draft "$TAG"
 ```
 
 Confirm the saved target identifies the corrected commit and the new draft ID.

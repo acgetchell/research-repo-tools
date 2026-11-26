@@ -590,9 +590,6 @@ Action updates require separate, explicit opt-in targets in
 actions = ["actions/checkout", "owner/repo/subpath"]
 ```
 
-For subpaths that must share one reviewed tag and peeled commit, see
-[Pin Actions from the same release](../README.md#pin-actions-from-the-same-release).
-
 The optional `[consistency]` list declares exact identities that must use the
 same full commit SHA and version comment everywhere in the selected inputs.
 `actions check` requires a nonempty list. Checked identities need not be update
@@ -635,6 +632,31 @@ anchor locations; pins require inline version comments, so folded/block scalars
 are rejected. Keep the allowlist and zizmor gates for their separate policies.
 This offline check is distinct from `update-actions --check`, which resolves
 upstream versions and checks whether updates are available.
+
+### Pin Actions from the same release
+
+When two subpaths in one repository must come from the same release, add a
+release group to `.github/action-updates.toml`. List each identity in
+`consistency.actions` and pin each update target to the group's tag.
+Replace the example tag and commit with the reviewed tag and its peeled commit.
+
+```toml
+[actions]
+"owner/repo/init" = "v1.2.3"
+"owner/repo/analyze" = "v1.2.3"
+
+[consistency]
+actions = ["owner/repo/init", "owner/repo/analyze"]
+
+[[consistency.releases]]
+actions = ["owner/repo/init", "owner/repo/analyze"]
+tag = "v1.2.3"
+commit = "0123456789abcdef0123456789abcdef01234567"
+```
+
+Run `just actions-check` to compare the workflow pins with that tag and commit
+offline. On update, the updater resolves the upstream tag and checks its peeled
+commit before writing.
 
 ### Previewing and applying Actions updates
 

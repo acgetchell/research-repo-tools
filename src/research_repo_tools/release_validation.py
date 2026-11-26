@@ -1153,13 +1153,21 @@ def verify(event: dict[str, Any], commit: str, output: Path) -> None:
     _commit(commit)
     released = _object(event.get("release"), "event.release")
     tag = _stable_tag(released.get("tag_name"))
-    names = distribution_names(tag)
     require_release(released, tag, draft=False)
     release_id = _integer(released.get("id"), "release ID")
+    _verify_release_assets(tag, commit, release_id, output=output)
+    print(f"Verified main-validation and promotion provenance for {tag} at {commit}; ready for the approval-gated upload.")
+
+
+def _verify_release_assets(
+    tag: str, commit: str, release_id: int, *, output: Path | None = None
+) -> tuple[dict[str, Any], frozenset[tuple[str, int, int, str]]]:
+    """Authenticate the draft inventory or retain distributions from an immutable published release."""
+    names = distribution_names(tag)
     _remote_tag(tag, commit)
     current = _release_identity(api(f"releases/{release_id}"))
-    require_release(current, tag, draft=False)
-    if current["immutable"] is not True:
+    require_release(current, tag, draft=output is None)
+    if output is not None and current["immutable"] is not True:
         raise ValueError("PyPI publication requires an immutable GitHub Release")
     assets = current["assets"]
     if (
@@ -1180,9 +1188,8 @@ def verify(event: dict[str, Any], commit: str, output: Path) -> None:
             or re.fullmatch(r"sha256:[0-9a-f]{64}", asset["digest"]) is None
         ):
             raise ValueError("release assets must be uploaded with bounded sizes and SHA-256 digests")
-    proof = output.parent / BUNDLE
-    if proof.exists() or proof.is_symlink() or proof.is_junction():
-        raise FileExistsError(f"release proof already exists: {proof}")
+    if output is not None and os.path.lexists(output.parent / BUNDLE):
+        raise FileExistsError(f"release proof already exists: {output.parent / BUNDLE}")
     with tempfile.TemporaryDirectory() as temporary:
         candidate = Path(temporary) / "dist"
         candidate.mkdir()
@@ -1224,8 +1231,10 @@ def verify(event: dict[str, Any], commit: str, output: Path) -> None:
         _validate_evidence(document, tag, commit, candidate)
         if not _same_json(_release_identity(api(f"releases/{release_id}")), current):
             raise ValueError("release metadata or assets changed during verification; inspect before retrying")
-        _publish_distributions(output, {name: (candidate / name).read_bytes() for name in names}, evidence=(proof, bundle.read_bytes()))
-    print(f"Verified main-validation and promotion provenance for {tag} at {commit}; ready for the approval-gated upload.")
+        if output is not None:
+            _publish_distributions(output, {name: (candidate / name).read_bytes() for name in names}, evidence=(output.parent / BUNDLE, bundle.read_bytes()))
+    inventory = frozenset((asset["name"], asset["id"], asset["size"], asset["digest"].removeprefix("sha256:")) for asset in assets)
+    return document, inventory
 
 
 _diagnostic = redact_release_diagnostic

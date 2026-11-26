@@ -71,13 +71,11 @@ Require verified published dependencies, synchronized metadata and dated
 notes, and the repository's packaging, platform, and scientific checks.
 Run the repository's local security gate on this commit.
 
-If the consumer assigns its archived raw measurements to candidate preflight,
-require successful preflight on the clean preparation commit against the
-original owner receipts and independent digests. Exclude only
-`<report archive>/runs/<verified identity>/run.json` from the local branch
-review. Review every sibling, including declarations, code and interpretation.
-Any in-scope skip blocks the gate. Use the disposable worktree procedure with
-the verified v0.3.3 distribution once published.
+If your review policy assigns one archived raw payload to offline preflight,
+verify it on the clean preparation commit using the original owner receipts
+and independent digests. Use the linked worktree procedure to exclude only
+`<report archive>/runs/<verified identity>/run.json` from local branch review.
+Every sibling must be reviewed. An in-scope skip blocks the gate.
 [Reviewing a large archived payload](https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_BENCHMARKS.md#reviewing-a-large-archived-payload)
 
 Run the repository's local branch review on the preparation commit. If a
@@ -96,38 +94,29 @@ Include validation results and links to any separately retained evidence in the 
 
 ### 1. Synchronize `main`
 
-Set `CI_WORKFLOW` to the filename of the repository's main validation workflow.
-Start with a clean checkout and set `TAG` in this terminal. The first lookup
-gets the merge commit from the release PR. The second selects the CI run only
-if exactly one push run matches that commit. Stop if either lookup fails.
+From a clean checkout, update your local `main` after the release PR merges.
 
 ```sh
-CI_WORKFLOW=ci.yml
-git switch main
-git pull --ff-only origin main
-RELEASE_COMMIT=$(gh pr view "release/${TAG:?Set TAG first}" --json state,baseRefName,mergeCommit \
-  --jq 'select(.state == "MERGED" and .baseRefName == "main") | .mergeCommit.oid')
-MAIN_RUN_ID=$(gh run list --workflow "$CI_WORKFLOW" --event push --branch main --commit "${RELEASE_COMMIT:?Check the merged release PR}" \
-  --limit 2 --json databaseId --jq 'select(length == 1) | .[0].databaseId')
-gh run watch "${MAIN_RUN_ID:?Expected one main-push CI run for the merged commit}" --exit-status
+git switch main && git pull --ff-only origin main
 ```
 
-If the run is not visible yet, repeat the lookup. Investigate multiple matches.
-Continue after all required checks pass, including the package producer and native
-jobs. If `main` has advanced, use `git switch --detach "$RELEASE_COMMIT"` before
-tagging. If benchmarks are required, verify and save acceptance for
-that commit using the original acquisition and publication receipts, and the
-repository's external trusted runtime.
+In GitHub **Actions**, open the push to `main` for the release PR you just merged.
+Wait for the complete validation run to succeed, including the package producer
+and native jobs. Confirm the commit shown on the run matches your local checkout.
+If your pull brought in a later commit, [check out the release commit][release-checkout].
+
+If benchmarks are required, verify and save acceptance for this checkout using
+the original acquisition and publication receipts and the repository's external trusted runtime.
 [Verifying release evidence](https://github.com/acgetchell/research-repo-tools/blob/main/docs/VERIFYING_RELEASE_EVIDENCE.md)
 
 ### 2. Create and verify the annotated tag
 
 ```bash
-just tag "$TAG" --commit "$RELEASE_COMMIT"
+just tag "$TAG"
 ```
 
 Success prints the local tag, reviewed SHA, and annotation or canonical
-changelog link. Use `just tag-preview "$TAG" --commit "$RELEASE_COMMIT"` for
+changelog link. Use `just tag-preview "$TAG"` from the same checkout for
 optional inspection. For a cold managed Cargo cache, run `just release-cargo-fetch`
 and retry the same tag and commit. Projects with additional independent Cargo
 roots can pass `--manifest-path PATH` to fetch each declared lock.
@@ -146,9 +135,10 @@ the exact tagged commit.
 
 ### 5. Create the draft GitHub release
 
-Wait for the tag's preparation workflow to succeed. If it produces RRT draft
+In GitHub **Actions**, open the preparation run triggered by your tag push.
+Confirm it shows **Success** before retrieving the draft. If it produces RRT draft
 receipts, follow the [receipt retrieval command][draft-receipt]
-with `TAG` and `RELEASE_COMMIT` from this release. It saves the original run,
+from this release checkout with the same `TAG`. It saves the original run,
 attempt, draft ID and commit outside the checkout. A retry revalidates those
 same records. If your workflow supplies its own authenticated target, use the
 original file it produced. For workflows that only create a draft, capture it
@@ -156,18 +146,19 @@ once using the [release target handoff][release-target].
 Set `RELEASE_TARGET` to the saved target file for the remaining steps.
 
 [draft-receipt]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md#retrieve-original-preparation-output
+[release-checkout]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/RECOVERING_RELEASES.md#check-out-the-release-commit
 [release-target]: https://github.com/acgetchell/research-repo-tools/blob/main/docs/VERIFYING_RELEASE_EVIDENCE.md#trusted-release-target-handoff
 
 ### 6. Review the draft
 
-Require the expected stable tag, title, generated notes, and complete required
-assets. If the repository attaches benchmarks separately, run its attachment
-recipe with the original acceptance and captured draft target.
-
-```sh
-gh release view "${TAG:?}"
-gh release view "$TAG" --json assets --jq '.assets[] | [.name, .state, .size, .digest] | @tsv'
-```
+Open the draft for your tag in GitHub **Releases**. Confirm the title and
+read the notes or linked changelog as they will appear to users. Under
+**Assets**, check that every required attachment is uploaded and nonempty.
+Compare the names and SHA-256 digests with the retained validation evidence.
+[Command-line draft checks](https://github.com/acgetchell/research-repo-tools/blob/main/docs/RECOVERING_RELEASES.md#inspect-a-draft-from-the-command-line)
+If a required file is missing or differs, leave the draft unpublished.
+If the repository attaches benchmarks separately, run its attachment recipe
+with the original acceptance and captured draft target before approving the inventory.
 
 For the [Cargo publication workflow template](https://github.com/acgetchell/research-repo-tools/blob/main/src/research_repo_tools/templates/publish-crates.yml),
 enable immutable releases and attach the exact `PACKAGE-VERSION.crate` retained
@@ -254,7 +245,7 @@ asset, consumer, and applicable Zenodo verification.
 
 ## Choose where to resume
 
-Set the release tag again and [recover the reviewed SHA and main run](#1-synchronize-main).
+Set the release tag again and find the original push to `main` for the merged release or corrective PR.
 Restore `RELEASE_TARGET` to the original captured file. Reuse the retained
 owner directory, acceptance and receipt when running the same recipes in a new shell.
 
@@ -262,8 +253,9 @@ owner directory, acceptance and receipt when running the same recipes in a new s
 | --- | --- |
 | Notes failed after metadata was prepared | Fix the generator prerequisite and rerun `just changelog-release "$TAG"`. |
 | Acquisition or rendering interrupted | Resume the repository's capture command with its original owner directory and evidence. [Benchmark recovery](https://github.com/acgetchell/research-repo-tools/blob/main/docs/REUSING_BENCHMARKS.md#release-recovery-decisions) |
-| Main CI pending or an external tag prerequisite failed | Wait for the exact CI run or fix the external prerequisite, then retry `just tag "$TAG" --commit "$RELEASE_COMMIT"` with the same reviewed SHA. |
-| Tag preflight requires a tracked metadata correction | Commit and review the correction. Wait for main CI on the new commit and retry `just tag "$TAG" --commit "$RELEASE_COMMIT"` with its SHA. |
+| Local `main` has advanced past the merged release PR | [Check out the release commit][release-checkout] and wait for its push to `main` to pass CI. |
+| Main CI pending or an external tag prerequisite failed | Wait for the release's main CI run or fix the prerequisite, then retry `just tag "$TAG"` from the reviewed checkout. |
+| Tag preflight requires a tracked metadata correction | Merge the corrective PR, [validate and select its checkout](#1-synchronize-main), then retry `just tag "$TAG"`. |
 | Draft retrieval or attachment interrupted | Reuse the original output directory with `just release-assets retrieve`, then retry the configured attachment recipe with that target. [Draft recovery](https://github.com/acgetchell/research-repo-tools/blob/main/docs/PREPARING_DRAFTS.md#retry-and-recovery) |
 | GitHub Release published, registry approval pending | [Open the original publishing run and approve its registry deployment](#8-open-the-publishing-run-and-approve-the-registry-deployment). |
 | Registry upload interrupted | Inspect the original GitHub Release and publishing run. Check the exact registry version with `just release-registry "$TAG" --expect present` and compare any published checksums before deciding whether to retry. |

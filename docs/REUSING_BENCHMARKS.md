@@ -63,7 +63,7 @@ Retain this handoff independently of the release PR. If capture or promotion
 fails after measurement, retry with
 `just performance capture tooling/performance-release.toml --owner "$owner" --promote`.
 For Python adapters, see the [publisher contract and capture hooks](candidate-reuse-api.md#committed-publisher-evidence).
-Commit the generated outputs to the preparation PR. With v0.3.2, run the
+Commit the generated outputs to the preparation PR. Run the
 [offline preflight](candidate-reuse-api.md#offline-preparation-preflight)
 on its clean commit before merging.
 
@@ -78,10 +78,10 @@ Criterion samples does not create independent trials or significance evidence.
 
 ### Reviewing a large archived payload
 
-For v0.3.3 adoption, pin the verified PyPI distribution once published. A
-consumer can assign the **one raw payload for this acquisition** to offline
-preflight and require complete local CodeRabbit review of the remaining PR
-diff. Record that choice in the consumer's review policy before acquisition.
+This procedure requires research-repo-tools 0.3.3 or later. Pin the exact
+published version in the consumer. Before acquisition, record in the consumer's
+review policy that offline preflight verifies **one raw payload for this
+acquisition** and that local CodeRabbit review covers every other changed file.
 Benchmark code, workload and report declarations, envelopes, indexes, figures,
 reports, and scientific interpretation stay in review.
 
@@ -126,12 +126,6 @@ the gate. Repeat on changed inputs or a changed comparison base. Run the
 consumer's security, CI and scientific checks on the full preparation tree.
 After recording the result, discard the disposable staged copy with
 `git worktree remove --force "$review_tree"`.
-
-In a two-file local branch review with CodeRabbit CLI 0.9.7, the provider
-listed both a 2.45 MB synthetic raw payload and its Markdown sibling despite
-a matching negative `reviews.path_filters` entry. With the scoped Git diff
-it reported only the sibling and completed without reuse. Use the Git scope
-when the consumer requires an auditable local exclusion. [CodeRabbit local review](https://docs.coderabbit.ai/cli/index#local-review)
 
 ## Step 2: freeze final release evidence
 
@@ -192,7 +186,7 @@ adoption; consumer migrations do not block upstream publication.
 
 ## Starting a benchmark series after earlier releases
 
-With v0.3.2, use a series when earlier published releases predate the workload.
+Use a series when earlier published releases predate the workload.
 Copy the suite measurement template to `benchmark-series/ID.toml` and point
 the release workflow's `measurement` at that path. Keep the suite declarations,
 local owner context, and schema-2 report from Step 1. Set these top-level fields
@@ -251,8 +245,8 @@ base commit of the measured working tree from the trusted Step 1 handoff.
 Keep the original preparation and independent handoff digests. Follow
 [Step 2](#step-2-freeze-final-release-evidence) and the [attachment procedure](#packaging-approval-and-retries)
 for the reviewed commit. The verifier enumerates history again at acceptance
-and approval. In v0.3.3 it also accepts that history plus the selected
-immutable stable release at the final commit. It verifies the provider ID and
+and approval. After publication, version 0.3.3 or later accepts that history
+plus the selected immutable stable release at the final commit. It verifies the provider ID and
 tag, the resolved commit, and the workload contract from the tagged tree.
 Every earlier record must still match. Added unrelated releases, removed
 records, or changes to a predecessor's ID, commit or contract invalidate the

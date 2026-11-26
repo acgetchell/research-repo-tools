@@ -1,8 +1,8 @@
 # Preparing an unpublished release draft
 
-The planning and authenticated-writer jobs both pin v0.3.1. Confirm the version
-on [PyPI](https://pypi.org/project/research-repo-tools/) and test both jobs in
-the consumer before adopting the workflow.
+Use the same exact published version in the planning and authenticated-writer
+jobs. The tested example pins [research-repo-tools 0.3.1](https://pypi.org/project/research-repo-tools/0.3.1/).
+Test both jobs in the consumer before adopting the workflow.
 
 The [public contract](release-evidence-api.md#draft-preparation) composes retained
 signed evidence with existing captured release targets. Consumer policy owns
@@ -34,11 +34,9 @@ acquisition. Preserve required native dependency preparation as a separate phase
 Tag-only writes and live publishing still require their normal authorization
 and live evidence; fixtures do not establish those results.
 
-The supplying release owns shared installed/native acceptance and representative
-hosted measurements. Each consumer's adoption issue owns its workflow changes
-and focused regressions; its release tracker owns actual handoff, native and
-operational evidence. Complete consumer adoption before declaring that consumer
-ready to release. Consumer migration does not block the supplying publication.
+Record the workflow changes and regression results in the consumer's adoption
+issue. Keep the actual handoff, native checks and operational evidence in its
+release tracker.
 
 ## Read-only verification and an isolated writer
 
@@ -285,14 +283,14 @@ steps = ["Authenticate inert handoff and prepare unpublished draft", "Retain jou
 runner-labels = ["ubuntu-24.04"]
 ```
 
-Observe the full source commit independently, peeling an annotated tag to its
-commit. Use the release guide's `TAG` and `RELEASE_COMMIT` from the merged PR.
-From the consumer root, run its `release-assets` wrapper:
+Run the consumer's `release-assets` wrapper from the reviewed checkout selected
+from the merged PR. Use the same `TAG` you pushed. The command reads the commit
+from that checkout independently of the receipt.
 
 ```sh
 RELEASE_DIR="../release-handoffs/$(basename "$PWD")/${TAG:?Set TAG first}"
 just release-assets retrieve tooling/draft-receipt.toml \
-  --tag "$TAG" --commit "${RELEASE_COMMIT:?Set the reviewed merge SHA first}" --output "$RELEASE_DIR"
+  --tag "$TAG" --commit "$(git rev-parse --verify HEAD)" --output "$RELEASE_DIR"
 RELEASE_TARGET="$RELEASE_DIR/target.json"
 ```
 

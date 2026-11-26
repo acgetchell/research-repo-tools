@@ -426,12 +426,14 @@ def publish_reviewed_release(
         ):
             raise ValueError("release assets differ from the reviewed inventory")
 
+    print("Running initial checks on release metadata, CI results, and the GitHub draft.", flush=True)
     head = _sha(run_git_command(["--no-pager", "rev-parse", "HEAD"], cwd=config.root).stdout.strip())
     release = check_reviewed_release(config, tag, draft=True, reuse_evidence=reuse_evidence, target=target)
     require_draft(release)
     check_inventory(release)
     # Recheck tag and CI here. The final target observation runs the fresh
     # dependency check immediately before the one lifecycle mutation.
+    print("Running final checks before publishing the GitHub release.", flush=True)
     current_head = _check_release_source(config, tag, commit=head, reuse_evidence=reuse_evidence)
     current = _check_reviewed_target(config, tag, current_head, draft=True, target=target)
     require_draft(current)

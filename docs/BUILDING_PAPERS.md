@@ -4,8 +4,6 @@ Set up the consumer environment and its native TeX build before using these
 checks. The consumer owns compilation, scientific content and reference-artifact
 refresh decisions; this guide covers dates, PDF validation and native discovery.
 
-- [Reproducible papers and native dependency discovery](#reproducible-papers-and-native-dependency-discovery)
-
 ## Reproducible papers and native dependency discovery
 
 PDF operations are opt-in. Add `research-repo-tools[papers]==X.Y.Z` to the
@@ -25,8 +23,8 @@ forbid-text = ['\today']
 # reference = "papers/example.pdf" # Enable retained-artifact equivalence.
 ```
 
-The source must contain exactly one uncommented explicit `\date{July 6, 2026}`
-in the canonical English form. Parsing uses a fixed month map and UTC midnight,
+Set exactly one uncommented date in the TeX source, using the form
+`\date{July 6, 2026}` with the paper's actual date. Parsing uses a fixed month map and UTC midnight,
 with no wall clock or locale dependency. A consumer build recipe can use:
 
 ```sh
@@ -71,7 +69,9 @@ encrypted or malformed PDFs fail without replacing output. Structural equivalenc
 compares per-page text, media/crop boxes, rotation and units; it allows different
 native PDF bytes and does not certify rendering or scientific meaning.
 
-Native discovery never installs host packages or modifies process environment:
+### Discover native TeX dependencies
+
+Provision the host dependencies first, then inspect or export their locations.
 
 ```sh
 just tectonic discover

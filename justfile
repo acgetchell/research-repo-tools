@@ -173,8 +173,7 @@ release-notes tag:
 
 # Approve the reviewed draft GitHub Release and trigger registry publication.
 release-publish tag *args:
-    @target=$(uv run --locked python scripts/release_handoff.py target-path "$1") && \
-        uv run --locked research-repo-tools release publish --target "$target" "$@" --approve
+    @uv run --locked python scripts/release_handoff.py publish "$@" --approve
 
 # Recover an unpublished candidate one step at a time: record, notes, tag, push.
 release-recover action tag:

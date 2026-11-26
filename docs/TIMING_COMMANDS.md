@@ -5,8 +5,6 @@ It produces exploratory evidence; it does not qualify a native release benchmark
 or make results from different hosts comparable. [Criterion workflows](RECORDING_PERFORMANCE.md)
 retain their own sampling and release-eligibility requirements.
 
-- [Exploratory command timing](#exploratory-command-timing)
-
 ## Exploratory command timing
 
 Use the `command-time` recipe from the matching installed Just template. Keep
@@ -29,15 +27,8 @@ id = "cargo-version"
 command = ["cargo", "--version"]
 ```
 
-Save it as `tooling/command-timing.toml`. The packaged `command-timing.toml`
-also illustrates an explicit build preflight. Merge this thin recipe from the
-packaged justfile:
-
-```just
-[positional-arguments]
-command-time configuration output:
-    uv run --locked --group dev research-repo-tools performance command-time "$1" --output "$2"
-```
+Save it as `tooling/command-timing.toml` and run it from the consumer root.
+For an example with a build preflight, use `just templates command-timing.toml`.
 
 ```sh
 just command-time tooling/command-timing.toml target/timing-first.json
