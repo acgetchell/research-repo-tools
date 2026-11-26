@@ -5,6 +5,68 @@ All notable changes to this project will be documented in this file.
 The format is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/),
 and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0.html).
 
+## [0.3.3] - 2026-11-26
+
+### Merged Pull Requests
+
+- Streamline release checklists and recovery procedures [#282](https://github.com/acgetchell/research-repo-tools/pull/282)
+- Reverify published benchmark series and preserve report evidence [#280](https://github.com/acgetchell/research-repo-tools/pull/280)
+- Verify staged release assets and clean Cargo packages [#278](https://github.com/acgetchell/research-repo-tools/pull/278)
+
+### Added
+
+- Verify staged release assets and clean Cargo packages [#278](https://github.com/acgetchell/research-repo-tools/pull/278)
+  [`51e98d3`](https://github.com/acgetchell/research-repo-tools/commit/51e98d32d68cb98d8543d22e6e9eb48e92185638)
+
+  - Verify Cargo's default and all-feature archives in separate build directories and retain the matching package bytes.
+  - Bind release review to the original signed Cargo selection, draft and staged asset IDs. Recheck the live source, required checks and asset inventory when
+    publishing.
+  - Validate portable asset names before staging and enforce a reviewed tag and commit across grouped GitHub Actions.
+  - Preserve the registry download deadline when a native DNS wait wakes early on Windows.
+  - Document release recovery and show how to configure the Actions checks.
+
+### Documentation
+
+- Correct setup order, benchmark provenance, and release checks
+  [`b1e07b8`](https://github.com/acgetchell/research-repo-tools/commit/b1e07b80a99948a187f4c333d369c6e187a7545c)
+
+  - Use `uv add --no-sync` so setup installs declared tools before syncing
+    the development environment.
+  - Explain which tooling versions support grouped GitHub Actions pins and post-publication benchmark series verification.
+  - Clarify how benchmarks record source revisions, when worktrees need mutation permission, and how archived reports select their renderer.
+  - Document when Python type hints load optional dependencies.
+  - Describe the digest returned by Cargo archive verification and how
+    publication checks staged assets against the reviewed inventory.
+
+- Streamline release checklists and recovery procedures [#282](https://github.com/acgetchell/research-repo-tools/pull/282)
+  [`821c913`](https://github.com/acgetchell/research-repo-tools/commit/821c91355a226dad192e5e91376615f4585ce541)
+
+#### docs: streamline release checklists and recovery procedures
+
+  Organize the maintainer and consumer checklists around selecting a tag, preparing the release PR, and publishing the reviewed commit. Link interrupted
+  releases to recovery steps for the original run, draft, and registry files.
+
+#### docs: clarify recovery of drafts with expired evidence
+
+#### docs: verify draft assets and renew expired release candidates
+
+### Fixed
+
+- Reverify published benchmark series and preserve report evidence [#280](https://github.com/acgetchell/research-repo-tools/pull/280)
+  [`2f21d77`](https://github.com/acgetchell/research-repo-tools/commit/2f21d77d54457ee54a070c82a655b3d254d76ab1)
+  Closes [#274](https://github.com/acgetchell/research-repo-tools/issues/274), [#275](https://github.com/acgetchell/research-repo-tools/issues/275).
+
+  - Accept an immutable series release at registry approval when its tag,
+    commit, workload contract, and earlier history match the acquisition.
+  - Report skipped CodeRabbit files with lowercase filename fields and
+    document how to review a release with one receipt-verified raw payload.
+  - Preserve physical lines in reports, notebooks, TeX dates, and release
+    notes. Use renderer 4 for new reports and verify older reports with
+    their recorded renderers.
+  - Resolve package type hints on demand, combine equivalent coverage paths,
+    and fingerprint importable packages under linked directories.
+  - Update uv to 0.13.10 and refresh the locked development dependencies.
+
 ## [0.3.2] - 2026-11-23
 
 ### Merged Pull Requests
@@ -33,19 +95,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   Recover the post-tag verification summary before watching the draft workflow. Identify failed uploads by draft and asset ID, preserve the signed attachment,
   and specify when staging can safely retry.
 
-- docs(release): route failed draft creation to retry checks
-
----
-
-- Save verified evidence and capture draft targets with Just
-  [`64d0194`](https://github.com/acgetchell/research-repo-tools/commit/64d0194c51dfb41ce57939dc8ad4dfd1fd2d372a)
-- Wait for draft preparation within the capture recipe
-  [`fc64e46`](https://github.com/acgetchell/research-repo-tools/commit/fc64e469cfb16a61464003d09dc681d13fb09e6b)
-
-### Changed
-
-- Merge the release handoff recipes into release/v0.3.2
-  [`090652a`](https://github.com/acgetchell/research-repo-tools/commit/090652a4801a0b249a4be6cc8e12da3dc569efc2)
+#### docs(release): route failed draft creation to retry checks
 
 ### Documentation
 
@@ -53,14 +103,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
   Document fresh installs and upgrades to v0.3.1 with the matching Justfile and bootstrap helper. Show maintainers how to find the reviewed merge commit and CI
   run and reuse the captured draft ID through publication and verification.
-
-### Fixed
-
-- Retain evidence automatically with or without an issue tracker
-  [`7e4c2d9`](https://github.com/acgetchell/research-repo-tools/commit/7e4c2d91077a2371c68eb28afc7aadf012f74dc6)
-- Preserve tagged dependency evidence and reuse the saved draft target
-  [`1246c94`](https://github.com/acgetchell/research-repo-tools/commit/1246c9400e00159f81b22c95ae04c5428c68547e)
-- Correct recovery for v0.3.2 [`a96f38c`](https://github.com/acgetchell/research-repo-tools/commit/a96f38c3cee3db7743521d9f7f5a5da09184c039)
 
 ## [0.3.1] - 2026-11-21
 
@@ -291,6 +333,7 @@ Older releases are archived by minor series:
 - [0.2.x](docs/archives/changelog/0.2.md)
 - [0.1.x](docs/archives/changelog/0.1.md)
 
+[0.3.3]: https://github.com/acgetchell/research-repo-tools/compare/v0.3.2...v0.3.3
 [0.3.2]: https://github.com/acgetchell/research-repo-tools/compare/v0.3.1...v0.3.2
 [0.3.1]: https://github.com/acgetchell/research-repo-tools/compare/v0.3.0...v0.3.1
 [0.3.0]: https://github.com/acgetchell/research-repo-tools/compare/v0.2.9...v0.3.0
